@@ -15,7 +15,6 @@ import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
 import {
   failClaim,
   type AgentActor,
-  type ResolvedMessageRow,
   type WorkspaceSelector,
 } from './contracts.js';
 
@@ -163,61 +162,5 @@ export class TaskAccessControl {
       };
     }
     return { workspace: ws };
-  }
-
-  /** Validate that the agent may operate on a task identified by
-   *  message id. Returns the message's actual `task_workspace_id` on
-   *  success. Per Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`:
-   *  - The row's workspace is `msg.task_workspace_id` (NOT the
-   *    selector-resolved one).
-   *  - Membership of that workspace is always required, even when no
-   *    selector was passed — otherwise a leaked message id would let
-   *    a non-member mutate the task.
-   *  - If a selector WAS passed and resolves to a different workspace,
-   *    we return `task_not_found` so the caller can't infer existence
-   *    of the row outside their authorized scope.
-   *
-   *  Callers wrap the failure into their own envelope (ClaimResultEntry
-   *  vs TaskMutationResult). */
-  validateMessageIdAccess(
-    actor: AgentActor,
-    msg: ResolvedMessageRow,
-    selector: WorkspaceSelector | undefined,
-  ):
-    | { ok: true; workspaceId: string }
-    | { failure: 'task_not_found' | 'workspace_membership_required'; reason: string } {
-    if (msg.task_number === null || msg.task_workspace_id === null) {
-      // Caller should only invoke this for already-numbered tasks.
-      // Treat as not-a-task so the failure surfaces cleanly.
-      return { failure: 'task_not_found', reason: 'message is not a task' };
-    }
-    const rowWorkspaceId = msg.task_workspace_id;
-    if (selector?.workspaceId && selector.workspaceId !== rowWorkspaceId) {
-      return {
-        failure: 'task_not_found',
-        reason: 'task not found in the specified workspace',
-      };
-    }
-    if (selector?.workspaceName) {
-      const matches = this.workspaces.findAllByName(selector.workspaceName);
-      const ids = new Set(matches.map(m => m.id));
-      if (!ids.has(rowWorkspaceId)) {
-        return {
-          failure: 'task_not_found',
-          reason: 'task not found in the specified workspace',
-        };
-      }
-    }
-    const targetWs = this.workspaces.get(rowWorkspaceId);
-    if (!targetWs) {
-      return { failure: 'task_not_found', reason: 'task workspace not found' };
-    }
-    if (!this.isAgentWorkspaceMember(targetWs, actor.agentId)) {
-      return {
-        failure: 'workspace_membership_required',
-        reason: `agent is not a member of workspace ${targetWs.id}`,
-      };
-    }
-    return { ok: true, workspaceId: rowWorkspaceId };
   }
 }

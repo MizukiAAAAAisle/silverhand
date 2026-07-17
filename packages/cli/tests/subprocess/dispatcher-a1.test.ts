@@ -224,10 +224,10 @@ describe('dispatcher A1 hard guard (real subprocess)', () => {
       command: 'task create',
       flag: 'title',
     });
-    // Message must show the minimal call AND the message-id redirect —
+    // Message must show the minimal call AND the source-message redirect —
     // the report-side bucket is structural, but the agent reads the
     // line right now and decides what to do next.
     expect(body.error.message).toContain('silverhand task create --title');
-    expect(body.error.message).toContain('silverhand task claim --message-id');
+    expect(body.error.message).toContain('--source-message-id');
   });
 }, { timeout: 20_000 });

@@ -328,15 +328,20 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   agentReactMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
   agentCreateChannel: { status: 'enforced', capability: 'create_channels', scope: 'principal conversation\'s workspace' },
   agentListConversationTasks: { status: 'enforced', capability: 'read_tasks', scope: 'effective workspace (workspace_id arg supported)' },
-  agentCreateConversationTasks: { status: 'enforced', capability: 'create_tasks', scope: 'principal conversation\'s workspace' },
+  agentCreateConversationTasks: { status: 'enforced', capability: 'create_tasks', scope: 'principal conversation\'s workspace; `--claim` (atomic self-assign) additionally requires write_tasks' },
   // Task claim/unclaim/status gate INSIDE task-service: the target task's
   // workspace is resolved per-entry deep in the service (esp. claim by
   // message-id → the message's own workspace), so route-level resolution
   // cannot gate correctly. Typed `capability_denied`/`write_tasks` shape
   // preserved in the service result (doc §3, Cindy `0VvD-47mLnkjgDvw`).
-  agentClaimConversationTasks: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate); promotion of a non-task message additionally requires create_tasks' },
+  agentClaimConversationTasks: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate); claims existing tasks only (no message promotion)' },
   agentUnclaimConversationTask: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
   agentUpdateConversationTaskStatus: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
+  // Edit (title/content, optimistic-concurrency CAS) gates INSIDE task-service
+  // on the resolved task workspace; collaborative board artifact so any
+  // write_tasks agent may edit. Detail read gates on read_tasks.
+  agentEditConversationTask: { status: 'enforced', capability: 'write_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
+  agentGetConversationTaskDetail: { status: 'enforced', capability: 'read_tasks', scope: 'target task\'s conversation workspace (service-level gate)' },
   agentUploadAttachment: { status: 'enforced', capability: 'upload_attachments', scope: 'principal conversation\'s workspace' },
   agentLocateAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },
   agentDownloadAttachment: { status: 'enforced', capability: 'read_attachments', scope: 'principal conversation\'s workspace' },

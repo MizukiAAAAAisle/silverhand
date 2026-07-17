@@ -636,6 +636,194 @@ export const migrations: Migration[] = [
         );
     `,
   },
+  {
+    version: 59,
+    name: 'task_edit_source_provenance',
+    up: `
+      -- Task block-1 redesign. A task keeps being a messages row with task_*
+      -- columns; this migration makes its DEFINITION explicitly editable
+      -- (title + content via \`task edit\`) with optimistic concurrency and
+      -- last-editor attribution, and adds an immutable source-message
+      -- provenance link that doubles as a creation mutex.
+
+      -- Immutable provenance: the message that TRIGGERED this task. NULL for a
+      -- self-authored task with no originating message. It is NOT a content
+      -- source — title/content are the task's own definition; this is pure
+      -- provenance + the lock key below.
+      ALTER TABLE messages ADD COLUMN source_message_id TEXT;
+
+      -- Optimistic-concurrency token for \`task edit\` (title/content). Bumped
+      -- ONLY on an edit, so a concurrent status/assignee change never
+      -- spuriously conflicts a title/content edit. NULL for non-task rows.
+      ALTER TABLE messages ADD COLUMN task_revision INTEGER;
+
+      -- Last-editor attribution for the "edited by X · <time>" byline. Set
+      -- ONLY on \`task edit\` (never on status/assignee), so it names who last
+      -- shaped the definition. NULL until the first edit.
+      ALTER TABLE messages ADD COLUMN task_last_editor_kind TEXT
+        CHECK (task_last_editor_kind IS NULL OR task_last_editor_kind IN ('agent', 'user'));
+      ALTER TABLE messages ADD COLUMN task_last_editor_id TEXT;
+      ALTER TABLE messages ADD COLUMN task_last_edited_at INTEGER;
+
+      -- Every existing task starts at revision 0 (concrete, never NULL for a
+      -- task row) so the edit path has no "NULL means 0" compat branch.
+      UPDATE messages SET task_revision = 0 WHERE task_number IS NOT NULL;
+
+      -- Creation mutex + permanent provenance identity: at most ONE task per
+      -- source message, FOR THE LIFETIME OF THAT MESSAGE. source_message_id
+      -- is a permanent identity key, not a lock held only while the task is
+      -- active: once a message has spawned a task, it can never spawn another,
+      -- regardless of that task's status. A closed or done task does NOT
+      -- release its source — to continue the work you reopen the original
+      -- task, you never build a second from the same message. A second create
+      -- from the same source hits this unique index and the service maps it to
+      -- a typed conflict pointing at the existing task (whatever its status).
+      -- NULLs repeat freely in a SQLite unique index, so sourceless tasks and
+      -- all non-task rows (source_message_id IS NULL) are unconstrained; the
+      -- partial predicate just keeps those NULL rows out of the index.
+      CREATE UNIQUE INDEX idx_messages_source_message_id
+        ON messages(source_message_id)
+        WHERE source_message_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 60,
+    name: 'tasks_first_class_aggregate',
+    up: `
+      -- Task-system model redesign. A task becomes a FIRST-CLASS aggregate with
+      -- its own table — it is no longer a \`messages\` row carrying task_*
+      -- annotations. \`id\` is the identity everywhere (REST/events/mutations);
+      -- \`task_number\` is the per-workspace human/CLI resolver.
+      --
+      -- source_message_id / created_event_message_id are RAW ids (NO foreign
+      -- key): a declared source is permanent provenance + the nav discriminant,
+      -- so it must survive deletion of the referenced message (navigation then
+      -- resolves to 'unavailable') rather than be silently nulled by ON DELETE
+      -- SET NULL and reclassify the task to "no source". creator_* are likewise
+      -- RAW immutable provenance (the CHECK requires the id present, so a
+      -- cascade-null would break it). Only workspace/conversation/assignee are
+      -- real FK relationships.
+      CREATE TABLE tasks (
+        id                       TEXT PRIMARY KEY,
+        workspace_id             TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        task_number              INTEGER NOT NULL,
+        conversation_id          TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        thread_root_id           TEXT,
+        title                    TEXT NOT NULL,
+        content                  TEXT NOT NULL DEFAULT '',
+        status                   TEXT NOT NULL,
+        assignee_agent_id        TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        assignee_user_id         TEXT REFERENCES users(id)  ON DELETE SET NULL,
+        creator_kind             TEXT NOT NULL,
+        creator_agent_id         TEXT,
+        creator_user_id          TEXT,
+        source_message_id        TEXT,
+        created_event_message_id TEXT,
+        last_editor_kind         TEXT,
+        last_editor_id           TEXT,
+        last_edited_at           INTEGER,
+        created_at               INTEGER NOT NULL,
+        closed_at                INTEGER,
+        CHECK (status IN ('todo', 'in_progress', 'in_review', 'done', 'closed')),
+        CHECK (task_number > 0),
+        -- At most one assignee (agent XOR user, or neither = unassigned).
+        CHECK (assignee_agent_id IS NULL OR assignee_user_id IS NULL),
+        -- Creator kind pairs EXACTLY with its id column (immutable provenance).
+        -- 'system' = both ids null: a task whose creating agent/user was since
+        -- deleted (from_agent_id/from_user_id are ON DELETE SET NULL — a
+        -- supported product path), degraded exactly as the old store did.
+        CHECK (
+          (creator_kind = 'agent'  AND creator_agent_id IS NOT NULL AND creator_user_id IS NULL) OR
+          (creator_kind = 'user'   AND creator_user_id  IS NOT NULL AND creator_agent_id IS NULL) OR
+          (creator_kind = 'system' AND creator_agent_id IS NULL     AND creator_user_id  IS NULL)
+        ),
+        -- Last-editor is all-null (never edited) or a COMPLETE triple, so the
+        -- "edited by X · <time>" byline can always be fully rendered.
+        CHECK (
+          (last_editor_kind IS NULL AND last_editor_id IS NULL AND last_edited_at IS NULL) OR
+          (last_editor_kind IN ('agent', 'user') AND last_editor_id IS NOT NULL AND last_edited_at IS NOT NULL)
+        ),
+        -- closed_at is set IFF the task is in the terminal 'closed' status
+        -- (mirrors the service: 'done' does NOT set closed_at).
+        CHECK ((status = 'closed') = (closed_at IS NOT NULL))
+      );
+
+      -- Per-workspace monotonic numbering (replaces the old
+      -- uniq_messages_task_workspace_number invariant).
+      CREATE UNIQUE INDEX uniq_tasks_workspace_number ON tasks(workspace_id, task_number);
+      -- Permanent 1:1 source→task mutex (moves off messages).
+      CREATE UNIQUE INDEX uniq_tasks_source_message ON tasks(source_message_id)
+        WHERE source_message_id IS NOT NULL;
+      -- Board queries.
+      CREATE INDEX idx_tasks_workspace_status ON tasks(workspace_id, status);
+      CREATE INDEX idx_tasks_conversation ON tasks(conversation_id);
+
+      -- ── Backfill from the retired "message IS task" rows ────────────────
+      -- Migrated tasks REUSE their old anchor message id as tasks.id (that id
+      -- WAS the task identity), so every historical reference — including
+      -- task system-event metadata.task_message_id — carries forward unchanged.
+      -- We copy ONLY the explicit source_message_id column (never guess the
+      -- anchor's own id as a source). created_event_message_id is derived ONLY
+      -- from the deterministic task_create system event; missing → NULL →
+      -- navigation resolves to 'unavailable'. No message rows are deleted.
+      INSERT INTO tasks (
+        id, workspace_id, task_number, conversation_id, thread_root_id,
+        title, content, status, assignee_agent_id, assignee_user_id,
+        creator_kind, creator_agent_id, creator_user_id,
+        source_message_id, created_event_message_id,
+        last_editor_kind, last_editor_id, last_edited_at,
+        created_at, closed_at
+      )
+      SELECT
+        m.id,
+        COALESCE(m.task_workspace_id, (SELECT c.workspace_id FROM conversations c WHERE c.id = m.conversation_id)),
+        m.task_number,
+        m.conversation_id,
+        m.thread_root_id,
+        COALESCE(
+          NULLIF(TRIM(m.task_title), ''),
+          NULLIF(TRIM(CASE WHEN instr(m.content, char(10)) > 0
+                           THEN substr(m.content, 1, instr(m.content, char(10)) - 1)
+                           ELSE m.content END), ''),
+          '(untitled task)'
+        ),
+        m.content,
+        m.task_status,
+        m.task_assignee_agent_id,
+        m.task_assignee_user_id,
+        -- Creator degrades to 'system' when neither author id survives (the
+        -- creating agent/user was deleted — a supported lifecycle), matching
+        -- the creator-pairing CHECK and the old store's missing-actor handling.
+        CASE WHEN m.from_user_id  IS NOT NULL THEN 'user'
+             WHEN m.from_agent_id IS NOT NULL THEN 'agent'
+             ELSE 'system' END,
+        CASE WHEN m.from_user_id IS NULL THEN m.from_agent_id ELSE NULL END,
+        m.from_user_id,
+        m.source_message_id,
+        (SELECT sm.id FROM messages sm
+           WHERE json_extract(sm.metadata, '$.subtype') = 'task_create'
+             AND json_extract(sm.metadata, '$.task_message_id') = m.id
+           ORDER BY sm.seq, sm.id
+           LIMIT 1),
+        m.task_last_editor_kind,
+        m.task_last_editor_id,
+        m.task_last_edited_at,
+        m.created_at,
+        CASE WHEN m.task_status = 'closed' THEN m.task_closed_at ELSE NULL END
+      FROM messages m
+      WHERE m.task_number IS NOT NULL;
+
+      -- Add the canonical task_id to existing task system-event metadata. For a
+      -- migrated task, tasks.id == the old anchor id == metadata.task_message_id,
+      -- so this is a deterministic copy. Legacy partial rows (no task_message_id)
+      -- are left untouched and keep rendering via the partial reader.
+      UPDATE messages
+        SET metadata = json_set(metadata, '$.task_id', json_extract(metadata, '$.task_message_id'))
+        WHERE json_extract(metadata, '$.subtype') IN
+                ('task_create', 'task_claim', 'task_unclaim', 'task_status')
+          AND json_extract(metadata, '$.task_message_id') IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

@@ -244,10 +244,12 @@ export function readConversationMemberChangeMetadata(
  *    NOT in metadata — needs back-reference to the previous task system
  *    message if a future view wants to render a `before → after` diff.
  *
- * `task_message_id` points at the canonical task body row (the
- * `task_create` system message; same id for every later mutation event
- * on this task), enabling per-task event lookup without relying on
- * workspace-scoped `task_number` ambiguity.
+ * `task_id` (v60+) is the canonical task-aggregate id for per-task event
+ * lookup. The legacy `task_message_id` (pre-v60 events) held the old
+ * body/anchor message id from the "task IS a message" model — same value for
+ * every mutation event on a task; new producers omit it and read `task_id`.
+ * For migrated events the two are equal (a migrated task's id IS its old
+ * anchor id).
  */
 export const TaskSystemMetadataSchema = z.object({
   subtype: z.enum(TASK_SUBTYPES),
@@ -255,7 +257,15 @@ export const TaskSystemMetadataSchema = z.object({
   /** Status snapshot AFTER this mutation. The event type is `subtype`,
    *  not this field — see schema docstring for prior-state semantics. */
   task_status: TaskStatusSchema,
-  task_message_id: z.string(),
+  /** The task identity (`tasks.id`) this event belongs to — the canonical key
+   *  for opening the task from its system event. New producers always write it.
+   *  For migrated events it equals the legacy `task_message_id` (a migrated
+   *  task's id IS its old anchor message id), backfilled by the v60 migration. */
+  task_id: z.string(),
+  /** @deprecated Legacy anchor-message id from the "task IS a message" model.
+   *  Present on pre-v60 events; new producers omit it (a task is no longer a
+   *  message). Read `task_id` instead. */
+  task_message_id: z.string().optional(),
   task_title: z.string(),
   task_assignee: TaskAssigneeDtoSchema.nullable(),
   actor: TaskSystemActorSchema,

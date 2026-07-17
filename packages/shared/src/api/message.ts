@@ -4,7 +4,6 @@ import { z } from 'zod';
 import {
   ConversationKindSchema,
   FromKindSchema,
-  TaskStatusSchema,
 } from '../db/schema.js';
 import {
   MessageAttachmentIdsInputSchema,
@@ -13,7 +12,7 @@ import {
 } from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
-import { TaskAssigneeDtoSchema } from './task.js';
+import { LinkedTaskDtoSchema } from './task.js';
 import { ThreadSummaryInvariantSchema } from './thread-summary.js';
 import { MessageSeqSchema } from '../seq.js';
 
@@ -41,13 +40,13 @@ export const MessageDtoSchema = z.object({
    *  is identified by this root id, not a separate conversation. See
    *  docs/thread-reply-cluster-v1.md. */
   thread_root_id: z.string().nullable(),
-  /** Task metadata — all null when this message is not a task. */
-  task_number: z.number().nullable(),
-  task_status: TaskStatusSchema.nullable(),
-  task_title: z.string().nullable(),
-  task_workspace_id: z.string().nullable(),
-  task_closed_at: z.number().nullable(),
-  task_assignee: TaskAssigneeDtoSchema.nullable(),
+  /** The task LINKED to this message via its immutable source provenance
+   *  (`tasks.source_message_id == this.id`), or null when this message is not a
+   *  task's source. Viewer-invariant (this DTO rides the broadcast
+   *  `conversation:{id}` scope). A `public`-non-member HTTP read gets null
+   *  (boundary strip). Replaces the retired flat `task_*` "message IS task"
+   *  projection. See LinkedTaskDtoSchema. */
+  linked_task: LinkedTaskDtoSchema.nullable(),
 });
 export type MessageDto = z.infer<typeof MessageDtoSchema>;
 
@@ -200,12 +199,6 @@ export const SendMessageInputSchema = z.object({
   /** Reply-cluster target message id. A main-line target opens a cluster;
    *  replying to an existing reply joins that reply's root. */
   reply_to_message_id: z.string().min(1).optional(),
-  /** Send-as-task intent (#task:1124/1125). When true, the same send
-   *  transaction promotes the inserted message into an open `todo` task
-   *  (title derived from the body's first line, no assignee) — the human
-   *  counterpart of an agent's message-promotion. Omitted/false = a plain
-   *  message. Thread targets keep the task anchored in the reply cluster. */
-  as_task: z.boolean().optional(),
 }).refine(hasMessagePayload, {
   message: 'message must include text or at least one attachment',
   path: ['content'],

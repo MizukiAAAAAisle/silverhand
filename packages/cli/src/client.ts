@@ -27,6 +27,7 @@ import {
   type ConversationMembersResponse,
   type CreateTasksInput,
   type CreateTasksResult,
+  type EditTaskInput,
   type McpProbeResult,
   type ScheduleCancelInput,
   type ScheduleCancelOutput,
@@ -35,6 +36,8 @@ import {
   type ScheduleListInput,
   type ScheduleListOutput,
   type SendMessageTarget,
+  type TaskDetailDto,
+  type TaskEditResult,
   type TaskMutationResult,
   type TaskStatus,
   type TaskSummaryDto,
@@ -287,6 +290,34 @@ export class BackendClient {
       'POST',
       internalPaths.agentUpdateConversationTaskStatus(this.env.conversationId, this.env.agentId),
       input,
+    );
+  }
+
+  /** Edit a task's title/content (last-write-wins). The route returns 200
+   *  with the typed envelope, so the caller reads `success` / `code` from
+   *  the result. */
+  editTask(input: EditTaskInput): Promise<TaskEditResult> {
+    return this.request(
+      'POST',
+      internalPaths.agentEditConversationTask(this.env.conversationId, this.env.agentId),
+      input,
+    );
+  }
+
+  getTaskDetail(input: {
+    task_number: number;
+    workspace_id?: string;
+    workspace_name?: string;
+  }): Promise<{ task: TaskDetailDto }> {
+    return this.request(
+      'GET',
+      internalPaths.agentGetConversationTaskDetail(this.env.conversationId, this.env.agentId),
+      undefined,
+      {
+        task_number: input.task_number,
+        workspace_id: input.workspace_id,
+        workspace_name: input.workspace_name,
+      },
     );
   }
 

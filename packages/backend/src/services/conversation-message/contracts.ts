@@ -10,7 +10,6 @@ import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
   AttachmentRefInput,
-  ConversationDto,
   LegacySendMessageTarget,
   MessageDto,
   MessageProjections,
@@ -58,11 +57,6 @@ export interface SendMessageInput {
   staleEventId?: string;
   staleResolutionReason?: AgentSendStaleResolutionReason;
   freshnessBypass?: boolean;
-  /** Human composer `Send as task`: atomically promote this message into
-   *  an open todo task in the send transaction (one canonical row that is
-   *  both message and task anchor). Only the human send route plumbs this;
-   *  the agent route has its own schema and uses `create_tasks` instead. */
-  asTask?: boolean;
 }
 
 export interface SendMessageResult {
@@ -245,29 +239,6 @@ export interface ConversationMessageServiceOptions {
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
-  /** Task-context collaborator for `Send as task`. Narrow role interface
-   *  (not the whole TaskService) so this service depends on the open-task
-   *  creation capability, not the task bounded context's internals. */
-  sendAsTaskWriter: SendAsTaskWriter;
-}
-
-/**
- * The slice of the task context the send path needs for `Send as task`.
- * `createOpenTaskFromMessageInTxn` runs inside the send transaction (DB
- * write, no own transaction); `announceOpenTaskCreated` is the post-commit
- * event publish. TaskService satisfies this structurally.
- */
-export interface SendAsTaskWriter {
-  createOpenTaskFromMessageInTxn(args: {
-    messageId: string;
-    taskWorkspaceId: string;
-  }): { taskNumber: number; title: string };
-  announceOpenTaskCreated(args: {
-    conversation: ConversationDto;
-    messageId: string;
-    taskNumber: number;
-    title: string;
-  }): void;
 }
 
 /**
@@ -301,9 +272,6 @@ export interface SendMessageTxResult {
    *  delivery instead of the main-line channel-member fan-out. */
   threadDelivery: ThreadDeliveryPlan | null;
   skippedFreshnessReason: string | null;
-  /** Non-null when `asTask` promoted this send into an open todo task;
-   *  drives the post-commit `task_changed` announcement. */
-  taskInfo: { taskNumber: number; title: string } | null;
   /** S1 (#task:1276) authoritative projection deltas computed IN this
    *  transaction, attached to the post-commit `message` event. Null when the
    *  send touches no derived projection (a main-line, non-reply message). */

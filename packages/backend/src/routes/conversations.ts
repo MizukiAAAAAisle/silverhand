@@ -265,6 +265,17 @@ export function createConversationReadApp(
           const messagesWithReactions = window.messages.map(message => ({
             ...message,
             reactions: aggregates.get(message.id) ?? null,
+            // `linked_task` is a conversation-visible READ projection (source↔task
+            // linkage + title/status/assignee snapshot), NOT member-gated: on a
+            // PUBLIC channel every reader — member or not — sees the same task
+            // chip. Visibility follows channel read access (public → uniform;
+            // private → members only, and a private non-member never reaches this
+            // window). The member boundary is the MUTATION axis (status picker is
+            // write — the renderer fail-closes it for non-members; Join is the
+            // entry to the writable state) plus the cross-channel task-board
+            // fanout (per-viewer, member-only) — NOT this read projection.
+            // `viewer_reacted` stays neutralized above: it's a PERSONAL relation,
+            // a different class.
           }));
           const rootIds = messagesWithReactions
             .filter(
@@ -865,7 +876,6 @@ export function createConversationMessagingApp(
         target: parsed.data.reply_to_message_id
           ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
           : undefined,
-        asTask: parsed.data.as_task ?? false,
       });
       return c.json({ message: result.message }, 201);
     } catch (err) {

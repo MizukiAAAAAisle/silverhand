@@ -5,15 +5,19 @@ import type {
   MessageRow,
   SavedMessageRow,
   SavedMessageDto,
-  TaskAssigneeDto,
-  TaskStatus,
 } from '@silverhand/shared';
+import {
+  LINKED_TASK_JOINS,
+  LINKED_TASK_SELECT,
+  linkedTaskFromRow,
+  type LinkedTaskProjectionRow,
+} from './message-repo.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-interface JoinedRow extends SavedMessageRow {
+interface JoinedRow extends SavedMessageRow, LinkedTaskProjectionRow {
   // Message columns (prefixed in SELECT alias)
   m_id: string;
   m_conversation_id: string;
@@ -25,14 +29,6 @@ interface JoinedRow extends SavedMessageRow {
   m_seq: number;
   m_created_at: number;
   m_thread_root_id: string | null;
-  m_task_number: number | null;
-  m_task_status: TaskStatus | null;
-  m_task_title: string | null;
-  m_task_workspace_id: string | null;
-  m_task_closed_at: number | null;
-  m_task_assignee_agent_id: string | null;
-  m_task_assignee_user_id: string | null;
-  m_task_assignee_name: string | null;
   workspace_name: string;
   conversation_title: string;
   channel_id: string;
@@ -40,20 +36,6 @@ interface JoinedRow extends SavedMessageRow {
 }
 
 function rowToDto(row: JoinedRow): SavedMessageDto {
-  let assignee: TaskAssigneeDto | null = null;
-  if (row.m_task_assignee_agent_id) {
-    assignee = {
-      type: 'agent',
-      id: row.m_task_assignee_agent_id,
-      name: row.m_task_assignee_name ?? row.m_task_assignee_agent_id,
-    };
-  } else if (row.m_task_assignee_user_id) {
-    assignee = {
-      type: 'user',
-      id: row.m_task_assignee_user_id,
-      name: row.m_task_assignee_user_id,
-    };
-  }
   return {
     id: row.id,
     saved_at: row.saved_at,
@@ -78,12 +60,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
       seq: decodeMessageSeq(row.m_seq),
       created_at: row.m_created_at,
       thread_root_id: row.m_thread_root_id,
-      task_number: row.m_task_number,
-      task_status: row.m_task_status,
-      task_title: row.m_task_title,
-      task_workspace_id: row.m_task_workspace_id,
-      task_closed_at: row.m_task_closed_at,
-      task_assignee: assignee,
+      linked_task: linkedTaskFromRow(row),
     },
   };
 }
@@ -141,14 +118,7 @@ const SELECT_JOINED = `
     m.seq              AS m_seq,
     m.created_at       AS m_created_at,
     m.thread_root_id   AS m_thread_root_id,
-    m.task_number             AS m_task_number,
-    m.task_status             AS m_task_status,
-    m.task_title              AS m_task_title,
-    m.task_workspace_id       AS m_task_workspace_id,
-    m.task_closed_at          AS m_task_closed_at,
-    m.task_assignee_agent_id  AS m_task_assignee_agent_id,
-    m.task_assignee_user_id   AS m_task_assignee_user_id,
-    ta.display_name           AS m_task_assignee_name,
+    ${LINKED_TASK_SELECT},
     w.name             AS workspace_name,
     conv.title         AS conversation_title,
     conv.id            AS channel_id,
@@ -158,7 +128,7 @@ const SELECT_JOINED = `
   JOIN conversations conv ON conv.id = sm.conversation_id
   JOIN workspaces w ON w.id = conv.workspace_id
   LEFT JOIN agents a  ON a.id  = m.from_agent_id
-  LEFT JOIN agents ta ON ta.id = m.task_assignee_agent_id
+  ${LINKED_TASK_JOINS}
 `;
 
 export class SavedMessageRepo {

@@ -1,44 +1,52 @@
-// Task-row persistence gateway: every SQL read and write over the task
-// columns of the `messages` table, plus the joined-row → DTO projection. The
-// facade delegates its public reads (`list` / `getByMessageId`) here and calls
-// the low-level fetch / allocate / stamp helpers inside its own transactions
-// (same `db` handle ⇒ same transaction). No task-lifecycle policy lives here —
-// only row access and the read-side membership gate.
+// Task-aggregate persistence gateway: every SQL read and write over the
+// first-class `tasks` table (v60), plus the row → DTO projection and the
+// per-viewer navigation resolution. The facade delegates its public reads
+// (`list` / `getById`) here and calls the low-level fetch / allocate / stamp
+// helpers inside its own transactions (same `db` handle ⇒ same transaction).
+// No task-lifecycle policy lives here — only row access, the read-side
+// membership gate, and nav resolution.
+import { randomBytes } from 'node:crypto';
 import type { Database as Db } from 'better-sqlite3';
 import type {
-  MessageRow,
   TaskAssigneeDto,
+  TaskCreatorDto,
+  TaskDetailDto,
+  TaskEditorDto,
+  TaskNavDto,
+  TaskNavRef,
   TaskStatus,
   TaskSummaryDto,
 } from '@silverhand/shared';
 import type { ConversationRepo } from '../../repos/conversation-repo.js';
 import {
-  firstLine,
   userCanAccessConversation,
   type ListTasksFilters,
-  type ResolvedMessageRow,
+  type MessageRef,
   type ResolvedTaskRow,
   type TaskActor,
 } from './contracts.js';
 
+/** Fresh opaque task identity (same scheme as message ids). */
+function newTaskId(): string {
+  return randomBytes(12).toString('base64url');
+}
+
 interface TaskJoinedRow {
   id: string;
   conversation_id: string;
-  from_kind: MessageRow['from_kind'];
-  from_agent_id: string | null;
-  from_user_id: string | null;
-  content: string;
   task_number: number;
-  task_status: TaskStatus;
-  task_title: string | null;
-  task_closed_at: number | null;
+  status: TaskStatus;
+  title: string;
+  closed_at: number | null;
   workspace_id: string;
   workspace_name: string;
-  channel_id: string;
   channel_name: string;
   thread_root_id: string | null;
-  task_assignee_agent_id: string | null;
-  task_assignee_user_id: string | null;
+  assignee_agent_id: string | null;
+  assignee_user_id: string | null;
+  creator_kind: 'agent' | 'user' | 'system';
+  creator_agent_id: string | null;
+  creator_user_id: string | null;
   created_at: number;
   conversation_title: string;
   assignee_agent_name: string | null;
@@ -49,37 +57,46 @@ interface TaskJoinedRow {
 
 const SELECT_TASK_JOINED = `
   SELECT
-    m.id                       AS id,
-    m.conversation_id          AS conversation_id,
-    m.from_kind                AS from_kind,
-    m.from_agent_id            AS from_agent_id,
-    m.from_user_id             AS from_user_id,
-    m.content                  AS content,
-    m.task_number              AS task_number,
-    m.task_status              AS task_status,
-    m.task_title               AS task_title,
-    m.task_closed_at           AS task_closed_at,
-    COALESCE(m.task_workspace_id, conv.workspace_id)
-                               AS workspace_id,
-    conv.id                    AS channel_id,
+    t.id                       AS id,
+    t.conversation_id          AS conversation_id,
+    t.task_number              AS task_number,
+    t.status                   AS status,
+    t.title                    AS title,
+    t.closed_at                AS closed_at,
+    t.workspace_id             AS workspace_id,
     conv.title                 AS channel_name,
-    m.thread_root_id           AS thread_root_id,
-    m.task_assignee_agent_id   AS task_assignee_agent_id,
-    m.task_assignee_user_id    AS task_assignee_user_id,
-    m.created_at               AS created_at,
+    t.thread_root_id           AS thread_root_id,
+    t.assignee_agent_id        AS assignee_agent_id,
+    t.assignee_user_id         AS assignee_user_id,
+    t.creator_kind             AS creator_kind,
+    t.creator_agent_id         AS creator_agent_id,
+    t.creator_user_id          AS creator_user_id,
+    t.created_at               AS created_at,
     conv.title                 AS conversation_title,
     w.name                     AS workspace_name,
     aa.display_name            AS assignee_agent_name,
     au.display_name            AS assignee_user_name,
     ca.display_name            AS creator_agent_name,
     cu.display_name            AS creator_user_name
-  FROM messages m
-  JOIN conversations conv ON conv.id = m.conversation_id
-  JOIN workspaces w ON w.id = conv.workspace_id
-  LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
-  LEFT JOIN users au ON au.id = m.task_assignee_user_id
-  LEFT JOIN agents ca ON ca.id = m.from_agent_id
-  LEFT JOIN users cu ON cu.id = m.from_user_id
+  FROM tasks t
+  JOIN conversations conv ON conv.id = t.conversation_id
+  JOIN workspaces w ON w.id = t.workspace_id
+  LEFT JOIN agents aa ON aa.id = t.assignee_agent_id
+  LEFT JOIN users au ON au.id = t.assignee_user_id
+  LEFT JOIN agents ca ON ca.id = t.creator_agent_id
+  LEFT JOIN users cu ON cu.id = t.creator_user_id
+`;
+
+/** The shared column set the mutation paths read as a `ResolvedTaskRow`. */
+const SELECT_RESOLVED_TASK = `
+  SELECT
+    t.id, t.conversation_id AS conversation_id, t.task_number, t.workspace_id,
+    t.status, t.closed_at, t.assignee_agent_id, t.assignee_user_id,
+    t.title, t.content, t.thread_root_id, t.source_message_id,
+    t.created_event_message_id, t.creator_kind, t.creator_agent_id,
+    c.title AS owner_conversation_title
+  FROM tasks t
+  JOIN conversations c ON c.id = t.conversation_id
 `;
 
 export interface TaskStoreDeps {
@@ -97,62 +114,59 @@ export class TaskStore {
   }
 
   list(filters: ListTasksFilters): TaskSummaryDto[] {
-    const clauses: string[] = ['m.task_number IS NOT NULL'];
+    const clauses: string[] = [];
     const args: (string | number)[] = [];
 
     if (filters.actor.kind === 'agent') {
-      // The agent path defaults to the actor's current workspace. The
-      // route layer is responsible for validating that any explicit
-      // `filters.workspaceId` (from the agent's `--workspace-id` flag)
-      // exists AND that the agent is a member — see the agent task list
-      // route in routes.ts (#task:530). Once validated, we honor the
-      // explicit value here so the agent can read a sister workspace's
-      // board.
+      // The agent path defaults to the actor's current workspace. The route
+      // layer validates any explicit `filters.workspaceId` (from the agent's
+      // `--workspace-id` flag) exists AND that the agent is a member. Once
+      // validated, honor the explicit value so the agent can read a sister
+      // workspace's board.
       const conv = this.conversations.get(filters.actor.conversationId);
       if (!conv) return [];
       const effectiveWs = filters.workspaceId ?? conv.workspace_id;
-      clauses.push('m.task_workspace_id = ?');
+      clauses.push('t.workspace_id = ?');
       args.push(effectiveWs);
     } else {
       clauses.push(
         `EXISTS (
           SELECT 1
             FROM conversation_users cu
-           WHERE cu.conversation_id = m.conversation_id
+           WHERE cu.conversation_id = t.conversation_id
              AND cu.user_id = ?
         )`,
       );
       args.push(filters.actor.userId);
       if (filters.workspaceId) {
-        clauses.push('m.task_workspace_id = ?');
+        clauses.push('t.workspace_id = ?');
         args.push(filters.workspaceId);
       }
     }
 
     if (filters.conversationId) {
-      clauses.push('m.conversation_id = ?');
+      clauses.push('t.conversation_id = ?');
       args.push(filters.conversationId);
     }
     if (filters.status && filters.status.length > 0) {
       const placeholders = filters.status.map(() => '?').join(',');
-      clauses.push(`m.task_status IN (${placeholders})`);
+      clauses.push(`t.status IN (${placeholders})`);
       args.push(...filters.status);
     }
     if (filters.taskNumbers && filters.taskNumbers.length > 0) {
       const placeholders = filters.taskNumbers.map(() => '?').join(',');
-      clauses.push(`m.task_number IN (${placeholders})`);
+      clauses.push(`t.task_number IN (${placeholders})`);
       args.push(...filters.taskNumbers);
     }
     if (filters.assigneeAgentId) {
-      clauses.push('m.task_assignee_agent_id = ?');
+      clauses.push('t.assignee_agent_id = ?');
       args.push(filters.assigneeAgentId);
     }
-    // Newest-first: task_number is a monotonic per-workspace sequence, so
-    // DESC surfaces the most recently created tasks at the top — the useful
-    // default for both the desktop kanban columns and the CLI `task list`
-    // (a `limit` then caps to the newest N). Routes that need a specific task
-    // filter by number, so the ordering is purely a list-presentation choice.
-    let sql = `${SELECT_TASK_JOINED} WHERE ${clauses.join(' AND ')} ORDER BY m.task_number DESC`;
+    // Newest-first: task_number is a monotonic per-workspace sequence, so DESC
+    // surfaces the most recently created tasks first — the useful default for
+    // both the desktop kanban columns and the CLI `task list`.
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    let sql = `${SELECT_TASK_JOINED} ${where} ORDER BY t.task_number DESC`;
     if (filters.limit && filters.limit > 0) {
       sql += ' LIMIT ?';
       args.push(filters.limit);
@@ -161,232 +175,493 @@ export class TaskStore {
     return rows.map(r => this.joinedToSummary(r));
   }
 
-  getByMessageId(messageId: string, actor: TaskActor): TaskSummaryDto | null {
+  /**
+   * Read a task summary by its identity (`tasks.id`).
+   *
+   * `authorizedWorkspaceId` is the workspace the CALLER has already resolved and
+   * authorized the actor against (membership verified upstream). When present,
+   * the agent gate is `task.workspace_id === authorizedWorkspaceId` (so a
+   * cross-workspace read the service authorized succeeds, and a leaked task id
+   * still can't escape the authorized scope). When omitted, the legacy gate
+   * applies: the task must live in the agent's CURRENT conversation's workspace.
+   * The user gate (conversation access) is unchanged.
+   */
+  getById(
+    taskId: string,
+    actor: TaskActor,
+    authorizedWorkspaceId?: string,
+  ): TaskSummaryDto | null {
     const row = this.db
-      .prepare<[string], TaskJoinedRow>(
-        `${SELECT_TASK_JOINED} WHERE m.id = ? AND m.task_number IS NOT NULL`,
-      )
-      .get(messageId);
+      .prepare<[string], TaskJoinedRow>(`${SELECT_TASK_JOINED} WHERE t.id = ?`)
+      .get(taskId);
     if (!row) return null;
     if (actor.kind === 'agent') {
-      const conv = this.conversations.get(actor.conversationId);
-      if (!conv) return null;
-      const physicalRow = this.db
-        .prepare<[string], { task_workspace_id: string | null }>(
-          `SELECT task_workspace_id FROM messages WHERE id = ?`,
-        )
-        .get(messageId);
-      if (physicalRow?.task_workspace_id !== conv.workspace_id) return null;
+      if (authorizedWorkspaceId !== undefined) {
+        if (row.workspace_id !== authorizedWorkspaceId) return null;
+      } else {
+        const conv = this.conversations.get(actor.conversationId);
+        if (!conv) return null;
+        if (row.workspace_id !== conv.workspace_id) return null;
+      }
     } else if (!userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
       return null;
     }
     return this.joinedToSummary(row);
   }
 
-  allocateTaskNumber(workspaceId: string): number {
+  /**
+   * Full single-task read for the detail modal: the summary fields plus full
+   * content, last-editor attribution, the raw provenance `source_message_id`,
+   * and the per-viewer-resolved `nav` discriminant. Access to the task reuses
+   * `getById` (same membership gate, including the cross-workspace
+   * `authorizedWorkspaceId` form).
+   */
+  fetchTaskDetail(
+    taskId: string,
+    actor: TaskActor,
+    authorizedWorkspaceId?: string,
+  ): TaskDetailDto | null {
+    const summary = this.getById(taskId, actor, authorizedWorkspaceId);
+    if (!summary) return null;
+    const extra = this.db
+      .prepare<[string], {
+        content: string;
+        source_message_id: string | null;
+        created_event_message_id: string | null;
+        last_edited_at: number | null;
+        last_editor_kind: 'agent' | 'user' | null;
+        last_editor_id: string | null;
+        editor_agent_name: string | null;
+        editor_user_name: string | null;
+      }>(
+        `SELECT t.content,
+                t.source_message_id,
+                t.created_event_message_id,
+                t.last_edited_at,
+                t.last_editor_kind,
+                t.last_editor_id,
+                ea.display_name AS editor_agent_name,
+                eu.display_name AS editor_user_name
+           FROM tasks t
+           LEFT JOIN agents ea ON ea.id = t.last_editor_id AND t.last_editor_kind = 'agent'
+           LEFT JOIN users eu ON eu.id = t.last_editor_id AND t.last_editor_kind = 'user'
+          WHERE t.id = ?`,
+      )
+      .get(taskId);
+    if (!extra) return null;
+
+    return {
+      ...summary,
+      content: extra.content,
+      last_editor: resolveEditor(extra),
+      last_edited_at: extra.last_edited_at,
+      source_message_id: extra.source_message_id,
+      nav: this.resolveNav(actor, extra.source_message_id, extra.created_event_message_id),
+    };
+  }
+
+  /**
+   * Resolve the "View in conversation" navigation discriminant per-viewer.
+   * BRANCH model (never a silent fallback):
+   *   - A DECLARED source that the viewer can read → `source`; a declared
+   *     source the viewer cannot read (or that was deleted) → `unavailable`
+   *     (NEVER falls back to the event — the nav semantic is "go to source").
+   *   - No source: the persisted task-created event, if resolvable/readable →
+   *     `created_event`; else `unavailable`.
+   */
+  private resolveNav(
+    actor: TaskActor,
+    sourceMessageId: string | null,
+    createdEventMessageId: string | null,
+  ): TaskNavDto {
+    if (sourceMessageId !== null) {
+      const ref = this.resolveMessageNavRef(actor, sourceMessageId);
+      return ref ? { kind: 'source', ref } : { kind: 'unavailable' };
+    }
+    if (createdEventMessageId !== null) {
+      const ref = this.resolveMessageNavRef(actor, createdEventMessageId);
+      return ref ? { kind: 'created_event', ref } : { kind: 'unavailable' };
+    }
+    return { kind: 'unavailable' };
+  }
+
+  /** Resolve a message id to a viewer-readable nav ref, or null when the
+   *  message is gone or the viewer cannot read its conversation. `channel_id`
+   *  is the message's own conversation id (threads are reply clusters, not
+   *  standalone conversations). */
+  private resolveMessageNavRef(actor: TaskActor, messageId: string): TaskNavRef | null {
+    const msg = this.db
+      .prepare<[string], { conversation_id: string; thread_root_id: string | null }>(
+        `SELECT conversation_id, thread_root_id FROM messages WHERE id = ?`,
+      )
+      .get(messageId);
+    if (!msg) return null;
+    if (!this.viewerCanAccessConversation(actor, msg.conversation_id)) return null;
+    return {
+      channel_id: msg.conversation_id,
+      thread_root_id: msg.thread_root_id,
+      message_id: messageId,
+    };
+  }
+
+  /** Whether the acting viewer can currently read a conversation (agent =
+   *  member of that conversation; user = member row). */
+  private viewerCanAccessConversation(actor: TaskActor, conversationId: string): boolean {
+    if (actor.kind === 'agent') {
+      return this.conversations.getAgent(conversationId, actor.agentId) != null;
+    }
+    return userCanAccessConversation(this.db, actor.userId, conversationId);
+  }
+
+  /** Next per-workspace monotonic task number (1-based). Guarded by
+   *  `uniq_tasks_workspace_number`; a concurrent create races on that index. */
+  private allocateTaskNumber(workspaceId: string): number {
     const row = this.db
       .prepare<[string], { next: number }>(
         `SELECT COALESCE(MAX(task_number), 0) + 1 AS next
-         FROM messages WHERE task_workspace_id = ?`,
+         FROM tasks WHERE workspace_id = ?`,
       )
       .get(workspaceId);
     return row?.next ?? 1;
   }
 
   /**
-   * The single open-task writer: allocate the next workspace-scoped task
-   * number and stamp an existing message row as an open (`todo`) task
-   * with the given title and NO assignee. Transaction-agnostic — runs
-   * inside the caller's transaction. Shared by `createTasks` and
-   * `createOpenTaskFromMessageInTxn` so there is exactly one place that
-   * defines what "open task" means on the row.
+   * The single task-aggregate creator: allocate the next workspace-scoped task
+   * number and insert the `tasks` row. Transaction-agnostic — runs inside the
+   * caller's transaction (the create txn also emits the task_create event and
+   * backfills `created_event_message_id`). Returns the new task id + number.
+   *
+   * `opts.sourceMessageId` sets the immutable RAW provenance link (permanent 1:1
+   * — the UNIQUE index enforces it; a duplicate throws a SqliteError the caller
+   * maps to `source_conflict`). `opts.claimByAgentId` atomically self-claims:
+   * the row lands `in_progress` + assigned instead of unassigned `todo`.
    */
-  writeOpenTaskRow(
-    messageId: string,
-    taskWorkspaceId: string,
-    title: string,
-  ): number {
-    const nextNumber = this.allocateTaskNumber(taskWorkspaceId);
+  createTaskRow(args: {
+    workspaceId: string;
+    conversationId: string;
+    threadRootId: string | null;
+    title: string;
+    content: string;
+    creatorKind: 'agent' | 'user';
+    creatorAgentId: string | null;
+    creatorUserId: string | null;
+    sourceMessageId: string | null;
+    claimByAgentId: string | null;
+    createdAt: number;
+  }): { id: string; taskNumber: number } {
+    const id = newTaskId();
+    const taskNumber = this.allocateTaskNumber(args.workspaceId);
+    const status: TaskStatus = args.claimByAgentId ? 'in_progress' : 'todo';
     this.db
       .prepare(
-        `UPDATE messages
-         SET task_number = ?,
-             task_status = 'todo',
-             task_title = ?,
-             task_workspace_id = ?
+        `INSERT INTO tasks (
+           id, workspace_id, task_number, conversation_id, thread_root_id,
+           title, content, status, assignee_agent_id, assignee_user_id,
+           creator_kind, creator_agent_id, creator_user_id,
+           source_message_id, created_event_message_id,
+           last_editor_kind, last_editor_id, last_edited_at,
+           created_at, closed_at
+         ) VALUES (
+           @id, @workspace_id, @task_number, @conversation_id, @thread_root_id,
+           @title, @content, @status, @assignee_agent_id, NULL,
+           @creator_kind, @creator_agent_id, @creator_user_id,
+           @source_message_id, NULL,
+           NULL, NULL, NULL,
+           @created_at, NULL
+         )`,
+      )
+      .run({
+        id,
+        workspace_id: args.workspaceId,
+        task_number: taskNumber,
+        conversation_id: args.conversationId,
+        thread_root_id: args.threadRootId,
+        title: args.title,
+        content: args.content,
+        status,
+        assignee_agent_id: args.claimByAgentId,
+        creator_kind: args.creatorKind,
+        creator_agent_id: args.creatorAgentId,
+        creator_user_id: args.creatorUserId,
+        source_message_id: args.sourceMessageId,
+        created_at: args.createdAt,
+      });
+    return { id, taskNumber };
+  }
+
+  /** Stamp the persisted task-created system-event message id (the nav ref for
+   *  a sourceless task). Called in the same txn as `createTaskRow`. */
+  backfillCreatedEvent(taskId: string, messageId: string): void {
+    this.db
+      .prepare(`UPDATE tasks SET created_event_message_id = ? WHERE id = ?`)
+      .run(messageId, taskId);
+  }
+
+  /** Find the task (if any) already bound to a source message. A source is a
+   *  permanent 1:1 identity key, so this returns at most one row regardless of
+   *  the task's status. Used to translate a source-uniqueness conflict into a
+   *  typed `source_conflict` pointing at the existing task. */
+  fetchTaskBySourceMessageId(sourceMessageId: string): {
+    task_number: number;
+    id: string;
+    status: TaskStatus;
+  } | null {
+    const row = this.db
+      .prepare<[string], { task_number: number; id: string; status: TaskStatus }>(
+        `SELECT task_number, id, status FROM tasks WHERE source_message_id = ?`,
+      )
+      .get(sourceMessageId);
+    return row ?? null;
+  }
+
+  /**
+   * Last-write-wins edit of the task definition (title/content), inside the
+   * caller's transaction. A plain UPDATE by task id — no optimistic-concurrency
+   * guard (task edits are low-contention, so CAS/`revision` would not pay off).
+   * A `null` title/content leaves that field unchanged (partial edit); an
+   * empty-string content clears the body. Stamps the last editor; never touches
+   * status or assignee. Returns true when the row existed and was updated.
+   */
+  applyTaskEdit(args: {
+    taskId: string;
+    title: string | null;
+    content: string | null;
+    editorKind: 'agent' | 'user';
+    editorId: string;
+    editedAt: number;
+  }): boolean {
+    const res = this.db
+      .prepare(
+        `UPDATE tasks
+         SET title = COALESCE(?, title),
+             content = COALESCE(?, content),
+             last_editor_kind = ?,
+             last_editor_id = ?,
+             last_edited_at = ?
          WHERE id = ?`,
       )
-      .run(nextNumber, title, taskWorkspaceId, messageId);
-    return nextNumber;
+      .run(
+        args.title,
+        args.content,
+        args.editorKind,
+        args.editorId,
+        args.editedAt,
+        args.taskId,
+      );
+    return res.changes > 0;
   }
 
-  fetchTaskByNumber(
-    taskWorkspaceId: string,
-    taskNumber: number,
-  ): ResolvedTaskRow | null {
+  fetchTaskByNumber(workspaceId: string, taskNumber: number): ResolvedTaskRow | null {
     const row = this.db
       .prepare<[string, number], ResolvedTaskRow>(
-        `SELECT m.id,
-                m.conversation_id AS conversation_id,
-                m.task_number,
-                m.task_workspace_id,
-                m.task_status,
-                m.task_closed_at,
-                m.task_assignee_agent_id,
-                m.task_title,
-                m.content,
-                m.from_kind,
-                m.from_agent_id,
-                c.title AS owner_conversation_title
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         WHERE m.task_workspace_id = ? AND m.task_number = ?`,
+        `${SELECT_RESOLVED_TASK} WHERE t.workspace_id = ? AND t.task_number = ?`,
       )
-      .get(taskWorkspaceId, taskNumber);
+      .get(workspaceId, taskNumber);
     return row ?? null;
   }
 
-  /** Fetch a task row keyed by message id. The message-id form of
-   *  claim/unclaim/status uses this so the row identity stays pinned
-   *  to the message — Cindy `zJ4xdGu3uEo68_k7` Round 2 blocker:
-   *  reaching the row via `fetchTaskByNumber(selectorWs, msg.task_number)`
-   *  would let a `--workspace-id` selector silently retarget the
-   *  mutation onto a same-numbered task in another workspace. The
-   *  message id is the canonical key. */
-  fetchTaskByMessageId(messageId: string): ResolvedTaskRow | null {
+  fetchTaskById(taskId: string): ResolvedTaskRow | null {
     const row = this.db
-      .prepare<[string], ResolvedTaskRow>(
-        `SELECT m.id,
-                m.conversation_id AS conversation_id,
-                m.task_number,
-                m.task_workspace_id,
-                m.task_status,
-                m.task_closed_at,
-                m.task_assignee_agent_id,
-                m.task_title,
-                m.content,
-                m.from_kind,
-                m.from_agent_id,
-                c.title AS owner_conversation_title
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         WHERE m.id = ? AND m.task_number IS NOT NULL`,
-      )
-      .get(messageId);
+      .prepare<[string], ResolvedTaskRow>(`${SELECT_RESOLVED_TASK} WHERE t.id = ?`)
+      .get(taskId);
     return row ?? null;
   }
 
-  fetchMessage(messageId: string): ResolvedMessageRow | null {
+  /** Locate a message for create's thread-target resolution and source
+   *  validation. A message is never a task, so this returns only its location. */
+  fetchMessageRef(messageId: string): MessageRef | null {
     const row = this.db
-      .prepare<[string], ResolvedMessageRow>(
-        `SELECT id, conversation_id AS conversation_id,
-                thread_root_id,
-                from_kind, metadata, content,
-                task_number, task_workspace_id, task_status, task_closed_at,
-                task_assignee_agent_id, task_title
+      .prepare<[string], MessageRef>(
+        `SELECT id, conversation_id AS conversation_id, thread_root_id
          FROM messages WHERE id = ?`,
       )
       .get(messageId);
     return row ?? null;
   }
 
-  refetchTaskSnapshot(messageId: string): {
+  // ── Mutation writes (run inside the caller's transaction) ──────────
+
+  /** Atomic self-claim: assign the agent + advance a `todo` task to
+   *  `in_progress`, but ONLY while unassigned and not terminal. Returns the
+   *  number of rows changed (0 = lost the race / already claimed / terminal). */
+  assignSelf(taskId: string, agentId: string): number {
+    const res = this.db
+      .prepare(
+        `UPDATE tasks
+         SET assignee_agent_id = ?,
+             status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END
+         WHERE id = ?
+           AND assignee_agent_id IS NULL
+           AND status NOT IN ('done', 'closed')`,
+      )
+      .run(agentId, taskId);
+    return res.changes;
+  }
+
+  /** Current assignment snapshot — the claim-miss re-read. */
+  readAssignment(taskId: string): { assignee_agent_id: string | null; status: TaskStatus } | null {
+    const row = this.db
+      .prepare<[string], { assignee_agent_id: string | null; status: TaskStatus }>(
+        `SELECT assignee_agent_id, status FROM tasks WHERE id = ?`,
+      )
+      .get(taskId);
+    return row ?? null;
+  }
+
+  /** Human assign/unassign: set an arbitrary assignee (or null) + advance a
+   *  `todo` task to `in_progress`. Not conditional — the human path validated
+   *  eligibility already. */
+  setAssignee(taskId: string, agentId: string | null): void {
+    this.db
+      .prepare(
+        `UPDATE tasks
+         SET assignee_agent_id = ?,
+             status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END
+         WHERE id = ?`,
+      )
+      .run(agentId, taskId);
+  }
+
+  /** Unclaim: clear the assignee, reset to `todo`, clear any closed timestamp. */
+  unassign(taskId: string): void {
+    this.db
+      .prepare(
+        `UPDATE tasks SET assignee_agent_id = NULL, status = 'todo', closed_at = NULL WHERE id = ?`,
+      )
+      .run(taskId);
+  }
+
+  /** Status transition write. `closedAt` is set IFF the new status is 'closed'
+   *  (the CHECK enforces the invariant). */
+  setStatus(taskId: string, status: TaskStatus, closedAt: number | null): void {
+    this.db
+      .prepare(`UPDATE tasks SET status = ?, closed_at = ? WHERE id = ?`)
+      .run(status, closedAt, taskId);
+  }
+
+  /** Fresh post-mutation snapshot for the broadcast payload. */
+  refetchTaskSnapshot(taskId: string): {
     title: string;
-    task_status: TaskStatus | null;
+    status: TaskStatus;
     closed_at: number | null;
     assignee: TaskAssigneeDto | null;
   } | null {
     const row = this.db
       .prepare<[string], {
-        content: string;
-        task_status: TaskStatus | null;
-        task_closed_at: number | null;
-        task_title: string | null;
-        task_assignee_agent_id: string | null;
-        task_assignee_user_id: string | null;
+        title: string;
+        status: TaskStatus;
+        closed_at: number | null;
+        assignee_agent_id: string | null;
+        assignee_user_id: string | null;
         assignee_agent_name: string | null;
         assignee_user_name: string | null;
       }>(
-        `SELECT m.content,
-                m.task_status,
-                m.task_closed_at,
-                m.task_title,
-                m.task_assignee_agent_id,
-                m.task_assignee_user_id,
+        `SELECT t.title,
+                t.status,
+                t.closed_at,
+                t.assignee_agent_id,
+                t.assignee_user_id,
                 aa.display_name AS assignee_agent_name,
                 au.display_name AS assignee_user_name
-         FROM messages m
-         LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
-         LEFT JOIN users au ON au.id = m.task_assignee_user_id
-         WHERE m.id = ?`,
+         FROM tasks t
+         LEFT JOIN agents aa ON aa.id = t.assignee_agent_id
+         LEFT JOIN users au ON au.id = t.assignee_user_id
+         WHERE t.id = ?`,
       )
-      .get(messageId);
+      .get(taskId);
     if (!row) return null;
-    let assignee: TaskAssigneeDto | null = null;
-    if (row.task_assignee_agent_id) {
-      assignee = {
-        type: 'agent',
-        id: row.task_assignee_agent_id,
-        name: row.assignee_agent_name ?? row.task_assignee_agent_id,
-      };
-    } else if (row.task_assignee_user_id) {
-      assignee = {
-        type: 'user',
-        id: row.task_assignee_user_id,
-        name: row.assignee_user_name ?? row.task_assignee_user_id,
-      };
-    }
     return {
-      title: row.task_title ?? firstLine(row.content),
-      task_status: row.task_status,
-      closed_at: row.task_closed_at,
-      assignee,
+      title: row.title,
+      status: row.status,
+      closed_at: row.closed_at,
+      assignee: assigneeFrom(row),
     };
   }
 
-  joinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
-    let assignee: TaskAssigneeDto | null = null;
-    if (row.task_assignee_agent_id) {
-      assignee = {
-        type: 'agent',
-        id: row.task_assignee_agent_id,
-        name: row.assignee_agent_name ?? row.task_assignee_agent_id,
-      };
-    } else if (row.task_assignee_user_id) {
-      assignee = {
-        type: 'user',
-        id: row.task_assignee_user_id,
-        name: row.assignee_user_name ?? row.task_assignee_user_id,
-      };
-    }
+  private joinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
     return {
-      message_id: row.id,
+      id: row.id,
       task_number: row.task_number,
       workspace_id: row.workspace_id,
       workspace_name: row.workspace_name,
-      channel_id: row.channel_id,
+      channel_id: row.conversation_id,
       channel_name: row.channel_name,
       thread_root_id: row.thread_root_id,
       conversation: { id: row.conversation_id, title: row.conversation_title },
-      status: row.task_status,
-      title: row.task_title ?? firstLine(row.content),
-      assignee,
-      creator:
-        row.from_kind === 'agent' && row.from_agent_id
-          ? {
-              type: 'agent',
-              id: row.from_agent_id,
-              name: row.creator_agent_name ?? row.from_agent_id,
-            }
-          : row.from_kind === 'user'
-            ? {
-                type: 'user',
-                id: row.from_user_id,
-                name: row.creator_user_name ?? row.from_user_id ?? 'user',
-            }
-          : { type: 'system', id: null, name: 'system' },
+      status: row.status,
+      title: row.title,
+      assignee: assigneeFrom(row),
+      creator: creatorFrom(row),
       created_at: row.created_at,
-      closed_at: row.task_closed_at,
+      closed_at: row.closed_at,
     };
   }
+}
+
+/** Build the assignee DTO from a row's assignee columns (name degrades to the
+ *  id when the join is missing — deleted/unlinked actor). */
+function assigneeFrom(row: {
+  assignee_agent_id: string | null;
+  assignee_user_id: string | null;
+  assignee_agent_name: string | null;
+  assignee_user_name: string | null;
+}): TaskAssigneeDto | null {
+  if (row.assignee_agent_id) {
+    return {
+      type: 'agent',
+      id: row.assignee_agent_id,
+      name: row.assignee_agent_name ?? row.assignee_agent_id,
+    };
+  }
+  if (row.assignee_user_id) {
+    return {
+      type: 'user',
+      id: row.assignee_user_id,
+      name: row.assignee_user_name ?? row.assignee_user_id,
+    };
+  }
+  return null;
+}
+
+/** Build the creator DTO from a task row's creator columns. 'system' = the
+ *  creating agent/user was since deleted. */
+function creatorFrom(row: {
+  creator_kind: 'agent' | 'user' | 'system';
+  creator_agent_id: string | null;
+  creator_user_id: string | null;
+  creator_agent_name: string | null;
+  creator_user_name: string | null;
+}): TaskCreatorDto {
+  if (row.creator_kind === 'agent' && row.creator_agent_id) {
+    return {
+      type: 'agent',
+      id: row.creator_agent_id,
+      name: row.creator_agent_name ?? row.creator_agent_id,
+    };
+  }
+  if (row.creator_kind === 'user' && row.creator_user_id) {
+    return {
+      type: 'user',
+      id: row.creator_user_id,
+      name: row.creator_user_name ?? row.creator_user_id,
+    };
+  }
+  return { type: 'system', id: null, name: 'system' };
+}
+
+/** Build the last-editor DTO from a row's attribution columns. Null when the
+ *  task was never edited; name degrades to the id when the attribution join is
+ *  missing (deleted/unlinked actor). */
+function resolveEditor(row: {
+  last_editor_kind: 'agent' | 'user' | null;
+  last_editor_id: string | null;
+  editor_agent_name: string | null;
+  editor_user_name: string | null;
+}): TaskEditorDto | null {
+  if (!row.last_editor_kind || !row.last_editor_id) return null;
+  const name =
+    row.last_editor_kind === 'agent'
+      ? (row.editor_agent_name ?? row.last_editor_id)
+      : (row.editor_user_name ?? row.last_editor_id);
+  return { kind: row.last_editor_kind, id: row.last_editor_id, name };
 }

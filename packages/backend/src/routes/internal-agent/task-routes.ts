@@ -15,6 +15,7 @@ import { requireAgentCapability } from '../capability.js';
 import {
   ClaimTasksInputSchema,
   CreateTasksInputSchema,
+  EditTaskInputSchema,
   ListTasksQuerySchema,
   UnclaimTaskInputSchema,
   UpdateTaskStatusInputSchema,
@@ -129,24 +130,40 @@ export function registerTaskRoutes(
     if (!canPostToConversation(ctx, principal, principal.conversationId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    const createWorkspaceId = conversations.get(principal.conversationId)?.workspace_id;
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'create_tasks',
-        conversations.get(principal.conversationId)?.workspace_id);
+      const denied = requireAgentCapability(c, ctx, principal, 'create_tasks', createWorkspaceId);
+      if (denied) return denied;
+    }
+    // `--claim` self-assigns the created task, which is a task write — gate it
+    // on write_tasks in addition to create_tasks (same capability claim needs).
+    if (parsed.data.claim === true) {
+      const denied = requireAgentCapability(c, ctx, principal, 'write_tasks', createWorkspaceId);
       if (denied) return denied;
     }
     const result = await ctx.taskService.createTasks({
       conversationId: principal.conversationId,
       actor: principal,
-      tasks: parsed.data.tasks,
+      // Map the wire (snake_case) task items to the service contract shape
+      // (camelCase `sourceMessageId`).
+      tasks: parsed.data.tasks.map(item => ({
+        title: item.title,
+        ...(item.body !== undefined ? { body: item.body } : {}),
+        ...(item.source_message_id !== undefined
+          ? { sourceMessageId: item.source_message_id }
+          : {}),
+      })),
+      claim: parsed.data.claim,
       target: parsed.data.target,
       legacyReplyToMessageId: parsed.data.reply_to_message_id,
     });
-    if ('error' in result) {
-      return c.json(
-        { error: result.error },
-        result.error === 'reply_target_not_found' ? 404 : 400,
-      );
-    }
+    // Business failures (source_conflict, source_*_not_found/mismatch, …) AND
+    // success both return HTTP 200 with the typed envelope — mirroring
+    // claim/unclaim/status/edit — so the agent CLI reads the structured
+    // `error` (+ `existing_task`) from the body instead of a thrown HTTP status
+    // that would strip it. `task create` translates a failure envelope into a
+    // NON-zero CliError (never prints failure as success). Malformed input
+    // still fails earlier at the 400 parse gate.
     return c.json(result);
   });
 
@@ -173,14 +190,9 @@ export function registerTaskRoutes(
       ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
     };
     const results = [];
-    for (const taskNumber of parsed.data.task_numbers ?? []) {
+    for (const taskNumber of parsed.data.task_numbers) {
       results.push(
         await ctx.taskService.claimTask({ actor, by: { taskNumber }, workspaceSelector }),
-      );
-    }
-    for (const messageId of parsed.data.message_ids ?? []) {
-      results.push(
-        await ctx.taskService.claimTask({ actor, by: { messageId }, workspaceSelector }),
       );
     }
     return c.json({ results });
@@ -239,5 +251,89 @@ export function registerTaskRoutes(
       workspaceSelector,
     });
     return c.json(result);
+  });
+
+  app.post(internalPaths.agentEditConversationTask(':cid', ':aid'), async c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = EditTaskInputSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    const principal = getAgentPrincipal(c);
+    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    // write_tasks is gated INSIDE the service on the RESOLVED task workspace
+    // (the selector-resolved or current-conversation workspace), mirroring
+    // claim/unclaim/status.
+    const workspaceSelector = {
+      ...(parsed.data.workspace_id ? { workspaceId: parsed.data.workspace_id } : {}),
+      ...(parsed.data.workspace_name ? { workspaceName: parsed.data.workspace_name } : {}),
+    };
+    const result = await ctx.taskService.editTask({
+      actor: principal,
+      by: { taskNumber: parsed.data.task_number },
+      // An omitted flag means "leave unchanged" → null; the service COALESCEs
+      // nulls against the stored value. An explicit empty body ("") clears.
+      title: parsed.data.title ?? null,
+      body: parsed.data.body ?? null,
+      workspaceSelector,
+    });
+    // Always 200 with the typed envelope (like claim/unclaim/status) so the
+    // CLI reads success / code from the body rather than a thrown HTTP error.
+    return c.json(result);
+  });
+
+  app.get(internalPaths.agentGetConversationTaskDetail(':cid', ':aid'), c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const taskNumberRaw = c.req.query('task_number');
+    const taskNumber = taskNumberRaw ? Number(taskNumberRaw) : NaN;
+    if (!Number.isInteger(taskNumber) || taskNumber <= 0) {
+      return c.json({ error: 'task_number required', code: 'invalid_input' }, 400);
+    }
+    const principal = getAgentPrincipal(c);
+    if (!canViewConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    // The agent selects a task by its per-workspace number. Resolve + authorize
+    // the target workspace (selector, default = current conversation's
+    // workspace; agent must be a member — same cross-workspace model as `task
+    // list --workspace-id`), gate `read_tasks` on THAT workspace, then read by
+    // number. A missing task is a 404 (never leak existence outside the agent's
+    // authorized scope).
+    const selector = {
+      ...(c.req.query('workspace_id') ? { workspaceId: c.req.query('workspace_id')! } : {}),
+      ...(c.req.query('workspace_name') ? { workspaceName: c.req.query('workspace_name')! } : {}),
+    };
+    const resolved = ctx.taskService.resolveAgentDetailWorkspace(principal, selector);
+    if (!('workspaceId' in resolved)) {
+      const status =
+        resolved.code === 'workspace_membership_required'
+          ? 403
+          : resolved.code === 'ambiguous_workspace'
+            ? 409
+            : 404;
+      return c.json({ error: resolved.reason, code: resolved.code }, status);
+    }
+    {
+      const denied = requireAgentCapability(c, ctx, principal, 'read_tasks', resolved.workspaceId);
+      if (denied) return denied;
+    }
+    const detail = ctx.taskService.getTaskDetailByNumber(
+      taskNumber,
+      principal,
+      resolved.workspaceId,
+    );
+    if (!detail) return c.json({ error: 'task not found', code: 'not_found' }, 404);
+    return c.json({ task: detail });
   });
 }

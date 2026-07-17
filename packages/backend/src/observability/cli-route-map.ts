@@ -47,6 +47,8 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   { method: 'POST', suffix: 'tasks/claim', noun: 'task', verb: 'claim' },
   { method: 'POST', suffix: 'tasks/unclaim', noun: 'task', verb: 'unclaim' },
   { method: 'POST', suffix: 'tasks/update-status', noun: 'task', verb: 'status' },
+  { method: 'POST', suffix: 'tasks/edit', noun: 'task', verb: 'edit' },
+  { method: 'GET', suffix: 'tasks/detail', noun: 'task', verb: 'detail' },
   // thread
   { method: 'POST', suffix: 'follow-thread', noun: 'thread', verb: 'follow' },
   { method: 'POST', suffix: 'unfollow-thread', noun: 'thread', verb: 'unfollow' },

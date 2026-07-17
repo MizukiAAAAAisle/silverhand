@@ -464,6 +464,14 @@ export interface MessageRow {
   metadata: string | null;
   seq: number;
   created_at: number;
+  // ── DEAD MODEL RESIDUE (v60) ──────────────────────────────────────────
+  // The columns below are from the retired "a message IS a task" model. As of
+  // v60 a task is a first-class `tasks` aggregate (see TaskRow); these columns
+  // are NO LONGER read or written by task code — new task reads/writes go
+  // through `tasks`, and the message-row task chip reads the joined
+  // `linked_task` projection (tasks.source_message_id == messages.id). They are
+  // kept physically only because migrations are append-only; a follow-up
+  // migration drops them. Do NOT reintroduce reads/writes here.
   task_number: number | null;
   task_status: TaskStatus | null;
   task_assignee_agent_id: string | null;
@@ -471,6 +479,18 @@ export interface MessageRow {
   task_title: string | null;
   task_workspace_id: string | null;
   task_closed_at: number | null;
+  /** @deprecated v60 dead residue — provenance now lives on
+   *  `tasks.source_message_id`. */
+  source_message_id: string | null;
+  /** @deprecated v60 dead residue — the old per-message task CAS token; the
+   *  task-edit contract is now plain last-write-wins, so no `revision` exists on
+   *  `tasks` either. Column persists only because message migrations are
+   *  append-only. */
+  task_revision: number | null;
+  /** @deprecated v60 dead residue — now `tasks.last_editor_kind`. */
+  task_last_editor_kind: 'agent' | 'user' | null;
+  task_last_editor_id: string | null;
+  task_last_edited_at: number | null;
   /**
    * Reply-cluster thread anchor (v43). NULL = this message is a root /
    * main-line message; non-NULL = a reply in the thread rooted at that
@@ -478,6 +498,47 @@ export interface MessageRow {
    * See docs/thread-reply-cluster-v1.md.
    */
   thread_root_id: string | null;
+}
+
+/**
+ * First-class task aggregate (v60) — a task is NO LONGER a `messages` row with
+ * `task_*` annotations. `id` is the identity everywhere (REST/events/mutations);
+ * `task_number` is the per-workspace human/CLI resolver. Migrated tasks reuse
+ * their old anchor message id as `id` (that id WAS the task identity), so
+ * historical references and system-event `task_message_id` links carry forward
+ * unchanged. See docs and the v60 migration.
+ *
+ * Invariants (enforced by DB CHECKs, see migration v60): status ∈ enum;
+ * task_number > 0; at most one assignee column set; creator_kind
+ * pairs exactly with its id column ('system' = both id columns null, for tasks
+ * whose creating agent/user was since deleted — a supported lifecycle);
+ * last-editor is all-null or a complete (kind, id, edited_at) triple;
+ * `closed_at IS NOT NULL ⟺ status = 'closed'`.
+ * `source_message_id` / `created_event_message_id` are RAW ids (NOT foreign
+ * keys) — retained verbatim if the referenced message is deleted so navigation
+ * resolves to `unavailable` rather than silently reclassifying.
+ */
+export interface TaskRow {
+  id: string;
+  workspace_id: string;
+  task_number: number;
+  conversation_id: string;
+  thread_root_id: string | null;
+  title: string;
+  content: string;
+  status: TaskStatus;
+  assignee_agent_id: string | null;
+  assignee_user_id: string | null;
+  creator_kind: 'agent' | 'user' | 'system';
+  creator_agent_id: string | null;
+  creator_user_id: string | null;
+  source_message_id: string | null;
+  created_event_message_id: string | null;
+  last_editor_kind: 'agent' | 'user' | null;
+  last_editor_id: string | null;
+  last_edited_at: number | null;
+  created_at: number;
+  closed_at: number | null;
 }
 
 /**

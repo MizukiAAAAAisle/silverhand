@@ -9,9 +9,7 @@ import {
   type AgentCapability,
   type ClaimErrorCode,
   type ClaimResultEntry,
-  type MessageRow,
   type MessageSendTarget,
-  type TaskChangedEvent,
   type TaskMutationErrorCode,
   type TaskMutationResult,
   type TaskStatus,
@@ -32,17 +30,23 @@ export type TaskActor =
 export type UserActor = Extract<TaskActor, { kind: 'user' }>;
 export type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
 
-export type AgentTaskRef = { messageId: string } | { taskNumber: number };
-export type UserTaskRef = { messageId: string };
-export type TaskNarrativeKind = TaskChangedEvent['kind'];
+// H3 identity switch (v60): a task is a first-class aggregate, selected by its
+// per-workspace `task_number` (the agent/CLI resolver) or its `tasks.id` (the
+// human REST path key). The old "select a task by a message id" form is fully
+// retired — a message id may only name a source/nav ref, never a task.
+export type AgentTaskRef = { taskNumber: number };
+export type UserTaskRef = { taskId: string };
 
 export interface CreateTasksInput {
   conversationId: string;
   actor: TaskActor;
-  tasks: { title: string; body?: string }[];
+  tasks: { title: string; body?: string; sourceMessageId?: string }[];
+  /** Agent-only: atomically self-claim the created task(s). Ignored for a
+   *  user actor. */
+  claim?: boolean;
   /** Optional public destination. Omitted / channel keeps task creation on
-   *  the main line; thread anchors the task body under that message's
-   *  reply cluster. */
+   *  the main line; thread places the task's lifecycle events under that
+   *  message's reply cluster. */
   target?: MessageSendTarget;
   /** @deprecated Compatibility alias for old CLI/runtime callers. */
   legacyReplyToMessageId?: string;
@@ -71,6 +75,25 @@ export type UpdateStatusInput =
       actor: AgentActor;
       by: AgentTaskRef;
       status: TaskStatus;
+      workspaceSelector?: WorkspaceSelector;
+    };
+
+/** Service input for `task edit`. `title`/`body` are the new values, with
+ *  `null` meaning "leave this field unchanged" (the route maps an omitted
+ *  flag to null); at least one must be non-null. `body` set to `""` clears
+ *  the content. Last-write-wins — there is no revision/concurrency token. */
+export type EditTaskInput =
+  | {
+      actor: UserActor;
+      by: UserTaskRef;
+      title: string | null;
+      body: string | null;
+    }
+  | {
+      actor: AgentActor;
+      by: AgentTaskRef;
+      title: string | null;
+      body: string | null;
       workspaceSelector?: WorkspaceSelector;
     };
 
@@ -136,43 +159,48 @@ export const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   closed: ['todo', 'in_progress', 'in_review', 'done'],
 };
 
+/** A resolved `tasks` aggregate row, as the mutation paths read it inside their
+ *  transactions. Mirrors the `tasks` table columns the service needs plus the
+ *  owner conversation's title (joined). `title` is NOT NULL in the aggregate, so
+ *  there is no `firstLine(content)` fallback anymore. */
 export interface ResolvedTaskRow {
   id: string;
   conversation_id: string;
   task_number: number;
-  task_workspace_id: string;
-  task_status: TaskStatus;
-  task_closed_at: number | null;
-  task_assignee_agent_id: string | null;
-  task_title: string | null;
+  workspace_id: string;
+  status: TaskStatus;
+  closed_at: number | null;
+  assignee_agent_id: string | null;
+  assignee_user_id: string | null;
+  title: string;
   content: string;
-  owner_conversation_title: string;
+  thread_root_id: string | null;
+  source_message_id: string | null;
+  created_event_message_id: string | null;
   /** Creator origin — used for the "creator may close own stale
    *  unassigned task" exception in `updateStatusAgent`. */
-  from_kind: MessageRow['from_kind'];
-  from_agent_id: string | null;
+  creator_kind: 'agent' | 'user' | 'system';
+  creator_agent_id: string | null;
+  owner_conversation_title: string;
 }
 
-export interface ResolvedMessageRow {
+/** Minimal message locator the create path needs: to resolve a thread target's
+ *  root and to validate a `source_message_id` (existence, conversation, and thus
+ *  workspace + read access). Task columns are gone — a message is never a task. */
+export interface MessageRef {
   id: string;
   conversation_id: string;
   thread_root_id: string | null;
-  from_kind: MessageRow['from_kind'];
-  metadata: string | null;
-  content: string;
-  task_number: number | null;
-  task_workspace_id: string | null;
-  task_status: TaskStatus | null;
-  task_closed_at: number | null;
-  task_assignee_agent_id: string | null;
-  task_title: string | null;
 }
 
 interface ClaimFailureArgs {
   code: ClaimErrorCode;
   reason: string;
   taskNumber?: number;
-  messageId?: string;
+  /** The task identity (`tasks.id`) of a successfully-located task; carried on
+   *  the rare failure that still knows it. Claim selects by number, so most
+   *  failures carry `taskNumber` instead. */
+  id?: string;
   ownerConversation?: { id: string; title: string };
   workspaceCandidates?: string[];
   capability?: AgentCapability;
@@ -186,7 +214,7 @@ export function failClaim(args: ClaimFailureArgs): ClaimResultEntry {
   };
   if (args.capability !== undefined) entry.capability = args.capability;
   if (args.taskNumber !== undefined) entry.task_number = args.taskNumber;
-  if (args.messageId !== undefined) entry.message_id = args.messageId;
+  if (args.id !== undefined) entry.id = args.id;
   if (args.ownerConversation) entry.owner_conversation = args.ownerConversation;
   if (args.workspaceCandidates && args.workspaceCandidates.length > 0) {
     entry.workspace_candidates = args.workspaceCandidates;

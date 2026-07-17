@@ -312,12 +312,16 @@ export const apiPaths = {
   notificationsRead: '/api/notifications/read',
 
   // tasks — human-facing list + mutation endpoints. Per
-  // docs/tasks-design.md. Path key = message id (a task is a
-  // message with task metadata).
+  // docs/tasks-design.md. Path key = task id (`tasks.id`); a task is a
+  // first-class aggregate, not a message (v60).
   tasks: '/api/tasks',
-  taskClaim: (messageId: string) => `/api/tasks/${messageId}/claim`,
-  taskUnclaim: (messageId: string) => `/api/tasks/${messageId}/unclaim`,
-  taskStatus: (messageId: string) => `/api/tasks/${messageId}/status`,
+  taskClaim: (taskId: string) => `/api/tasks/${taskId}/claim`,
+  taskUnclaim: (taskId: string) => `/api/tasks/${taskId}/unclaim`,
+  taskStatus: (taskId: string) => `/api/tasks/${taskId}/status`,
+  /** Human edits a task's title/content (optimistic-concurrency CAS). */
+  taskEdit: (taskId: string) => `/api/tasks/${taskId}/edit`,
+  /** Human reads one task's full detail (content + provenance + nav). */
+  taskDetail: (taskId: string) => `/api/tasks/${taskId}`,
 } as const;
 
 export const probePaths = {
@@ -384,6 +388,12 @@ export const internalPaths = {
     `/internal/conversations/${cid}/agents/${aid}/tasks/unclaim`,
   agentUpdateConversationTaskStatus: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/tasks/update-status`,
+  /** Agent edits a task's title/content (optimistic-concurrency CAS). */
+  agentEditConversationTask: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/tasks/edit`,
+  /** Agent reads one task's full detail (content + provenance + source_ref). */
+  agentGetConversationTaskDetail: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/tasks/detail`,
 
   // Agent-owned schedules (cron-like reminders). Per-agent surface — no
   // channel/thread coupling — but the route is still hung off the

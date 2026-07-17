@@ -343,7 +343,7 @@ describe('MessageRepo', () => {
     ).toThrow(/mutually exclusive/);
   });
 
-  it('hydrates task assignee display names when reading messages', () => {
+  it('projects linked_task (with assignee display name) for a task source message', () => {
     const { db, workspace, channel, agentId } = bootstrapConversation();
     new AgentRepo(db).update(agentId, { display_name: 'Cindy' });
     const repo = new MessageRepo(db);
@@ -352,23 +352,34 @@ describe('MessageRepo', () => {
       fromKind: 'user',
       content: 'please handle this',
     });
+    // A task is a first-class `tasks` row LINKED to the message via
+    // source_message_id — not flat task_* columns on the message.
     db.prepare(
-      `UPDATE messages
-          SET task_number = 1,
-              task_status = 'in_progress',
-              task_title = 'please handle this',
-              task_workspace_id = ?,
-              task_assignee_agent_id = ?
-        WHERE id = ?`,
-    ).run(workspace.id, agentId, msg.id);
+      `INSERT INTO tasks (
+         id, workspace_id, task_number, conversation_id, thread_root_id,
+         title, content, status, assignee_agent_id, assignee_user_id,
+         creator_kind, creator_agent_id, creator_user_id,
+         source_message_id, created_event_message_id,
+         last_editor_kind, last_editor_id, last_edited_at,
+         created_at, closed_at
+       ) VALUES (
+         'task_1', ?, 1, ?, NULL,
+         'please handle this', '', 'in_progress', ?, NULL,
+         'agent', ?, NULL,
+         ?, NULL,
+         NULL, NULL, NULL,
+         1, NULL
+       )`,
+    ).run(workspace.id, channel.id, agentId, agentId, msg.id);
 
     const listed = repo.listForConversation(channel.id);
-    expect(listed[0]?.task_assignee).toMatchObject({
-      type: 'agent',
-      id: agentId,
-      name: 'Cindy',
+    expect(listed[0]?.linked_task).toMatchObject({
+      task_id: 'task_1',
+      task_number: 1,
+      status: 'in_progress',
+      assignee: { type: 'agent', id: agentId, name: 'Cindy' },
     });
-    expect(repo.getById(msg.id)?.task_assignee?.name).toBe('Cindy');
+    expect(repo.getById(msg.id)?.linked_task?.assignee?.name).toBe('Cindy');
   });
 
   it('null metadata round-trips as null, not as the string "null"', () => {

@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 interface SetupResult {
@@ -108,42 +107,6 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].assignee?.id).toBe(agentIds.alice);
   });
 
-  it('claim by message_id promotes a regular message to a task', async () => {
-    t = buildTestApp();
-    const { sessionId, agentIds } = await setup(t);
-    const h = http(t);
-
-    // User posts a normal message; alice promotes it.
-    const viewer = http(t, { [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'teammate' });
-    const userMsg = await (
-      await viewer.post(`/api/channels/${sessionId}/messages`, {
-        content: 'please refactor auth module',
-      })
-    ).json() as any;
-
-    const claim = await (
-      await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
-        { message_ids: [userMsg.message.id] },
-      )
-    ).json() as any;
-    expect(claim.results[0].success).toBe(true);
-    expect(claim.results[0].task_number).toBe(1);
-
-    // The promoted message now lists as a task, title from first line.
-    const listed = await (
-      await http(t).get('/api/tasks')
-    ).json() as any;
-    expect(listed.tasks).toHaveLength(1);
-    expect(listed.tasks[0].title).toBe('please refactor auth module');
-    expect(listed.tasks[0].creator).toMatchObject({
-      type: 'user',
-      id: 'teammate',
-      name: 'Teammate',
-    });
-    expect(listed.tasks[0].creator.name).not.toBe('teammate');
-  });
-
   it('cross-conversation claim within same workspace succeeds (#task:530)', async () => {
     t = buildTestApp();
     const s1 = await setup(t);
@@ -239,7 +202,7 @@ describe('Tasks (PR-T1)', () => {
         { tasks: [{ title: 'review me' }] },
       )
     ).json()) as any;
-    const messageId = created.tasks[0].message_id;
+    const taskId = created.tasks[0].id;
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
@@ -251,7 +214,7 @@ describe('Tasks (PR-T1)', () => {
 
     // Human approve.
     const approve = await (
-      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'done' })
+      await http(t).post(`/api/tasks/${taskId}/status`, { status: 'done' })
     ).json() as any;
     expect(approve.success).toBe(true);
 
@@ -286,7 +249,7 @@ describe('Tasks (PR-T1)', () => {
     expect(ev.task_number).toBe(1);
   });
 
-  it('does NOT fan task_changed to viewer scope — task is not an Activity source in v1 (#task:1227)', async () => {
+  it('fans task_changed to member viewer scope (board), not workspace scope (no private leak)', async () => {
     t = buildTestApp();
     const { sessionId, workspaceId, agentIds } = await setup(t);
     const h = http(t);
@@ -317,13 +280,12 @@ describe('Tasks (PR-T1)', () => {
     unsubWs();
     unsubMember();
 
-    // Task-board paths are unchanged: conversation + workspace scope.
+    // The cross-conversation board fanout is member-gated, so task_changed goes
+    // per-viewer to the channel's human members — NOT workspace-wide (which
+    // would leak a private channel's task snapshot to every workspace member).
     expect(convScope.filter(k => k === 'task_changed')).toHaveLength(2);
-    expect(wsScope.filter(k => k === 'task_changed')).toHaveLength(2);
-    // …but task_changed is NOT fanned to viewer scope: Activity dropped kind=task
-    // in v1 (shiki 2026-06-26), so there is no viewer-scoped consumer. A v2
-    // task_needs_review source would arrive via the notification path, not here.
-    expect(memberViewer.filter(k => k === 'task_changed')).toHaveLength(0);
+    expect(wsScope.filter(k => k === 'task_changed')).toHaveLength(0);
+    expect(memberViewer.filter(k => k === 'task_changed')).toHaveLength(2);
   });
 
   it('system messages fan out to every session member\'s inbox', async () => {
@@ -343,38 +305,7 @@ describe('Tasks (PR-T1)', () => {
     expect(recipients.has(agentIds.bob!)).toBe(true);
   });
 
-  it('bulk agent claim mixes task_numbers + message_ids into aggregated results', async () => {
-    t = buildTestApp();
-    const { sessionId, agentIds } = await setup(t);
-    const h = http(t);
-
-    // create one task by agent
-    await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'numbered task' }] },
-    );
-    // post a regular message for promote-and-claim
-    const viewer = http(t, { [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'teammate' });
-    const userMsg = await (
-      await viewer.post(`/api/channels/${sessionId}/messages`, {
-        content: 'please look into the deadlock',
-      })
-    ).json() as any;
-
-    const claim = await (
-      await h.post(
-        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
-        { task_numbers: [1], message_ids: [userMsg.message.id] },
-      )
-    ).json() as any;
-    expect(claim.results).toHaveLength(2);
-    expect(claim.results[0].success).toBe(true);
-    expect(claim.results[0].task_number).toBe(1);
-    expect(claim.results[1].success).toBe(true);
-    expect(claim.results[1].task_number).toBe(2);
-  });
-
-  it('human POST /api/tasks/:messageId/claim with no agent_id lifts todo→in_progress, leaves assignee null', async () => {
+  it('human POST /api/tasks/:taskId/claim with no agent_id lifts todo→in_progress, leaves assignee null', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -385,10 +316,10 @@ describe('Tasks (PR-T1)', () => {
         { tasks: [{ title: 'plain' }] },
       )
     ).json()) as any;
-    const messageId = created.tasks[0].message_id;
+    const taskId = created.tasks[0].id;
 
     const claim = (await (
-      await http(t).post(`/api/tasks/${messageId}/claim`, {})
+      await http(t).post(`/api/tasks/${taskId}/claim`, {})
     ).json()) as any;
     expect(claim.success).toBe(true);
 
@@ -397,7 +328,7 @@ describe('Tasks (PR-T1)', () => {
     expect(listed.tasks[0].assignee).toBeNull();
   });
 
-  it('human POST /api/tasks/:messageId/unclaim forces status=todo even from in_review', async () => {
+  it('human POST /api/tasks/:taskId/unclaim forces status=todo even from in_review', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -408,7 +339,7 @@ describe('Tasks (PR-T1)', () => {
         { tasks: [{ title: 'review me' }] },
       )
     ).json()) as any;
-    const messageId = created.tasks[0].message_id;
+    const taskId = created.tasks[0].id;
     await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
       { task_numbers: [1] },
@@ -419,7 +350,7 @@ describe('Tasks (PR-T1)', () => {
     );
 
     const unclaim = (await (
-      await http(t).post(`/api/tasks/${messageId}/unclaim`)
+      await http(t).post(`/api/tasks/${taskId}/unclaim`)
     ).json()) as any;
     expect(unclaim.success).toBe(true);
 
@@ -471,7 +402,7 @@ describe('Tasks (PR-T1)', () => {
     expect(afterUnclaim.tasks[0].assignee).toBeNull();
   });
 
-  it('human POST /api/tasks/:messageId/status can jump to any non-current status', async () => {
+  it('human POST /api/tasks/:taskId/status can jump to any non-current status', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -482,17 +413,17 @@ describe('Tasks (PR-T1)', () => {
         { tasks: [{ title: 'shortcut' }] },
       )
     ).json()) as any;
-    const messageId = created.tasks[0].message_id;
+    const taskId = created.tasks[0].id;
 
     const direct = (await (
-      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'done' })
+      await http(t).post(`/api/tasks/${taskId}/status`, { status: 'done' })
     ).json()) as any;
     expect(direct.success).toBe(true);
     const listed = (await (await http(t).get('/api/tasks')).json()) as any;
     expect(listed.tasks[0].status).toBe('done');
   });
 
-  it('human POST /api/tasks/:messageId/status can close and reopen tasks', async () => {
+  it('human POST /api/tasks/:taskId/status can close and reopen tasks', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -504,11 +435,11 @@ describe('Tasks (PR-T1)', () => {
         { tasks: [{ title: 'file later' }] },
       )
     ).json()) as any;
-    const messageId = created.tasks[0].message_id;
+    const taskId = created.tasks[0].id;
     const unsub = t.ctx.events.subscribe(sessionId, e => received.push(e));
 
     const closed = (await (
-      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'closed' })
+      await http(t).post(`/api/tasks/${taskId}/status`, { status: 'closed' })
     ).json()) as any;
     unsub();
     expect(closed.success).toBe(true);
@@ -516,7 +447,7 @@ describe('Tasks (PR-T1)', () => {
     expect(taskChanged).toHaveLength(1);
     expect((taskChanged[0]!.payload as any)).toMatchObject({
       kind: 'status',
-      message_id: messageId,
+      task_id: taskId,
       status: 'closed',
       closed_at: expect.any(Number),
     });
@@ -526,14 +457,14 @@ describe('Tasks (PR-T1)', () => {
     ).json()) as any;
     expect(closedList.tasks).toHaveLength(1);
     expect(closedList.tasks[0]).toMatchObject({
-      message_id: messageId,
+      id: taskId,
       title: 'file later',
       status: 'closed',
       closed_at: expect.any(Number),
     });
 
     const reopened = (await (
-      await http(t).post(`/api/tasks/${messageId}/status`, { status: 'todo' })
+      await http(t).post(`/api/tasks/${taskId}/status`, { status: 'todo' })
     ).json()) as any;
     expect(reopened.success).toBe(true);
     const restored = (await (await http(t).get('/api/tasks?status=todo')).json()) as any;
@@ -654,5 +585,82 @@ describe('Tasks (PR-T1)', () => {
     // Without selector (default = current ws) → 200 with no tasks.
     const ok = await h.get(listPath);
     expect(ok.status).toBe(200);
+  });
+});
+
+describe('Task create/edit/detail routes', () => {
+  let t: TestApp;
+  afterEach(() => t?.cleanup());
+
+  it('agent create with source_message_id + claim links provenance and self-claims', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t);
+    const src = await (
+      await h.post(`/api/channels/${sessionId}/messages`, { content: 'prompt' })
+    ).json() as any;
+
+    const created = await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'derived', source_message_id: src.message.id }], claim: true },
+      )
+    ).json() as any;
+    const taskNumber = created.tasks[0].task_number;
+
+    const detail = await (
+      await h.get(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/detail?task_number=${taskNumber}`,
+      )
+    ).json() as any;
+    expect(detail.task.source_message_id).toBe(src.message.id);
+    expect(detail.task.status).toBe('in_progress');
+    expect(detail.task.assignee.id).toBe(agentIds.alice);
+  });
+
+  it('second create from the same source → 200 typed source_conflict + existing_task', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t);
+    const src = await (
+      await h.post(`/api/channels/${sessionId}/messages`, { content: 'prompt' })
+    ).json() as any;
+    const createPath = `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`;
+    const first = await (
+      await h.post(createPath, { tasks: [{ title: 'first', source_message_id: src.message.id }] })
+    ).json() as any;
+
+    const res = await h.post(createPath, {
+      tasks: [{ title: 'second', source_message_id: src.message.id }],
+    });
+    // The create route returns HTTP 200 with the typed envelope (mirroring
+    // claim/status/edit) so the CLI reads the structured error + existing_task
+    // from the body; the CLI then maps it to a non-zero exit itself.
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.error).toBe('source_conflict');
+    expect(body.existing_task.task_number).toBe(first.tasks[0].task_number);
+  });
+
+  it('human edit + detail round-trips', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t);
+    const created = await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'orig', body: 'orig body' }] },
+      )
+    ).json() as any;
+    const taskId = created.tasks[0].id;
+
+    const edited = await h.post(`/api/tasks/${taskId}/edit`, {
+      title: 'human title',
+    });
+    expect(edited.status).toBe(200);
+
+    const detail = await (await h.get(`/api/tasks/${taskId}`)).json() as any;
+    expect(detail.task.title).toBe('human title');
+    expect(detail.task.content).toBe('orig body');
   });
 });

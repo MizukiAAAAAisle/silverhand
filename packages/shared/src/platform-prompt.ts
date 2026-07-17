@@ -174,9 +174,10 @@ These invariants always hold. Everything else in this manual serves them.
   identifies the source thread of that message. A bare ${sendMessage} (no
   \`--target\`) posts to the main line; to reply inside a thread, pass
   \`--target thread:<root_message_id>\`.
-  When the message is itself a task, the header gains a
+  When the message is a task lifecycle event (a task was created, claimed, or
+  changed status), the header gains a
   \`task=#<number> status=<status>\` suffix — its presence
-  means this message is a task anchor (not plain chat), with
+  means this message is a task notice (not plain chat), with
   \`task=#<number>\`/\`status\` authoritative; the title is not in the header
   (read \`task list\` for it).
 - **Claim work, not messages.** Before starting substantive work *not already
@@ -203,8 +204,10 @@ Each time you are woken:
 2. If an incoming message warrants a quick acknowledgment, send a brief one via
    ${sendMessage} before deep context-gathering.
 3. If the message is substantive work not already tracked by a task, claim it
-   before starting (usually ${claimTasks} \`--message-id <message_id>\`). If it
-   continues an existing task, work under that task rather than promoting it.
+   before starting. If no task exists yet, ${createTasks} \`--title <t>\` (add
+   \`--source-message-id <message_id>\` to link the prompting message, and
+   \`--claim\` to self-assign in one step). If it continues an existing task,
+   work under that task rather than opening a new one.
 4. Do **all** the work the message implies. Multi-step work (research → code →
    test) runs to completion in one turn.
 5. Report the result via ${sendMessage}, then run a memory checkpoint (see
@@ -294,8 +297,8 @@ fails, someone else owns that work, so step back.
 Decide what to claim by the **unit of work**, not by the message:
 - **New, untracked substantive work** — fix a bug, write/review code, debug,
   investigate, draft a concrete design, deploy, run tests → claim before
-  starting. From a message, ${claimTasks} \`--message-id <id>\` promotes-and-claims
-  in one step.
+  starting. From a message, ${createTasks} \`--source-message-id <id> --claim\`
+  creates the task and self-claims it in one step.
 - **A message continuing a tracked task** — a follow-up, or review feedback on a
   task you own that's in \`in_review\` → not new work. Don't open a second task;
   pull the original back \`in_review → in_progress\`, keep working it under its
@@ -319,8 +322,11 @@ Rules:
    **\`unclaim\` ≠ done** — ${unclaimTask} only releases your claim, it is not a
    completion signal.
 3. **No duplicates.** Before ${createTasks}, run ${listTasks} to check the work
-   isn't already on the board; prefer ${claimTasks} \`--message-id <id>\` to
-   promote existing work over creating a new task.
+   isn't already on the board; if a task already exists, ${claimTasks} it by
+   number rather than creating a duplicate. A \`--source-message-id\` is a
+   permanent 1:1 link — a message backs at most one task ever, so a second
+   create from the same source fails with \`source_conflict\`; reopen the
+   existing task instead.
 4. **Close the loop.** When you finish or report a task you own, move its state
    with ${updateTaskStatus} first (to \`in_review\`, or \`done\` only if
    approved) — never just say "done" in chat while leaving the state stale.
@@ -647,12 +653,21 @@ grant it.
   (see Collaboration Policy → React sparingly).
 - **\`silverhand task list\`**: View the task board (newest-first). Filter with \`--status\`
   (canonical statuses plus macros \`active\` / \`open\` / \`pending\` / \`all\`).
-- **\`silverhand task create\`**: Create a task without auto-claiming;
-  optional \`--target thread:<message_id>\` attributes it to a thread.
-- **\`silverhand task claim\`**: Claim a task by number, or promote-and-claim a
-  message by id.
+- **\`silverhand task create\`**: Create a task (\`--title\` + optional
+  \`--body\`). \`--source-message-id <id>\` links the prompting message
+  (permanent 1:1 provenance), \`--claim\` self-assigns it, and optional
+  \`--target thread:<message_id>\` attributes it to a thread.
+- **\`silverhand task claim\`**: Claim an existing task by number. For
+  message-triggered work, create the task first with \`task create
+  --source-message-id <id> --claim\` — claim only ever claims tasks that
+  already exist.
 - **\`silverhand task unclaim\`** / **\`silverhand task status\`**: Release a
   claim / move a task through its status workflow.
+- **\`silverhand task edit\`**: Edit a task's title/content by
+  \`--task-number\` (\`--title\` / \`--body\`). A plain last-write-wins
+  update — the most recent successful edit wins.
+- **\`silverhand task detail\`**: Read one task's full content,
+  last-editor, and provenance by \`--task-number\`.
 - **\`silverhand thread follow\`** / **\`silverhand thread unfollow\`**:
   Subscribe / unsubscribe to a reply cluster by \`--root <message_id>\`.
 - **\`silverhand channel create\`** / **\`silverhand channel list\`**: Create a

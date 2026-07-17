@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readTaskSystemMetadata } from '@silverhand/shared';
+import { readTaskSystemMetadata, type CreateTasksResult } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -125,17 +125,32 @@ function createTask(t: ReturnType<typeof bootstrap>, agentId: string, title: str
   });
 }
 
+/** Extract the created task's identity (`tasks.id`) — the canonical key that
+ *  replaced the old anchor `message_id` when a task became a first-class
+ *  aggregate. */
+function taskId(r: CreateTasksResult): string {
+  if (!('tasks' in r)) throw new Error('createTasks failed');
+  return r.tasks[0]!.id;
+}
+
+/** Re-fetch a task's current state as the local user, keyed by task id. */
+function refetch(t: ReturnType<typeof bootstrap>, id: string) {
+  return t.service.getTaskDetail(id, { kind: 'user', userId: 'local' });
+}
+
 describe('TaskService.createTasks', () => {
   it('agent member creates 2 tasks: monotonic per workspace, broadcasts message + task_changed', async () => {
     const t = bootstrap();
     try {
       const conversationEvents: Array<{ kind: string }> = [];
-      const wsEvents: Array<{ kind: string }> = [];
+      const viewerEvents: Array<{ kind: string }> = [];
       const unsubA = t.events.subscribe(t.channel.id, e =>
         conversationEvents.push({ kind: e.kind }),
       );
-      const unsubB = t.events.subscribeScope(`workspace:${t.workspace.id}`, e =>
-        wsEvents.push({ kind: e.kind }),
+      // Cross-conversation board fanout is per-viewer (member-gated), not
+      // workspace-wide. 'local' is a human member of the task channel.
+      const unsubB = t.events.subscribeScope(`viewer:local`, e =>
+        viewerEvents.push({ kind: e.kind }),
       );
 
       const result = await t.service.createTasks({
@@ -153,13 +168,13 @@ describe('TaskService.createTasks', () => {
       const taskChanges = conversationEvents.filter(e => e.kind === 'task_changed');
       expect(msgEvents.length).toBe(2);
       expect(taskChanges.length).toBe(2);
-      expect(wsEvents.filter(e => e.kind === 'task_changed').length).toBe(2);
+      expect(viewerEvents.filter(e => e.kind === 'task_changed').length).toBe(2);
     } finally {
       t.cleanup();
     }
   });
 
-  it('createTasks with a thread target writes task body and task_create event to that thread stream', async () => {
+  it('createTasks with a thread target places the task + task_create event in that thread stream', async () => {
     const t = bootstrap();
     try {
       const root = t.messages.insertForConversation({
@@ -185,23 +200,24 @@ describe('TaskService.createTasks', () => {
 
       expect('tasks' in result).toBe(true);
       if (!('tasks' in result)) throw new Error();
-      const taskMessageId = result.tasks[0]!.message_id;
+      const id = result.tasks[0]!.id;
+      // The task aggregate row records the thread placement.
       const taskRow = t.db
         .prepare<[string], { thread_root_id: string | null }>(
-          `SELECT thread_root_id FROM messages WHERE id = ?`,
+          `SELECT thread_root_id FROM tasks WHERE id = ?`,
         )
-        .get(taskMessageId);
+        .get(id);
       expect(taskRow?.thread_root_id).toBe(root.id);
       const summaries = t.service.list({
         actor: { kind: 'user', userId: 'local' },
       });
-      expect(summaries.find(x => x.message_id === taskMessageId)).toMatchObject({
+      expect(summaries.find(x => x.id === id)).toMatchObject({
         thread_root_id: root.id,
       });
 
       const createRows = fetchSystemRows(t, 'task_create');
       expect(createRows).toHaveLength(1);
-      expect(readTaskSystemMetadata(createRows[0]!.metadata)?.task_message_id).toBe(taskMessageId);
+      expect(readTaskSystemMetadata(createRows[0]!.metadata)?.task_id).toBe(id);
       expect(createRows[0]!.thread_root_id).toBe(root.id);
     } finally {
       t.cleanup();
@@ -241,9 +257,7 @@ describe('TaskService.createTasks', () => {
       expect(cross).toEqual({ error: 'reply_target_not_found' });
 
       const count = t.db
-        .prepare<[], { count: number }>(
-          `SELECT COUNT(*) AS count FROM messages WHERE task_number IS NOT NULL`,
-        )
+        .prepare<[], { count: number }>(`SELECT COUNT(*) AS count FROM tasks`)
         .get();
       expect(count?.count).toBe(0);
     } finally {
@@ -327,50 +341,14 @@ describe('TaskService.claimTask — agent actor', () => {
   it('self-claim by taskNumber on unassigned task → success, status=in_progress', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.bob.id, 'task-1');
+      const created = await createTask(t, t.bob.id, 'task-1');
+      const id = taskId(created);
       const r = await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
-      expect(r).toMatchObject({ success: true, task_number: 1 });
-      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: 'local' });
-      expect(fresh?.status).toBe('in_progress');
-      expect(fresh?.assignee?.id).toBe(t.alice.id);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('self-claim by messageId where message is already a task → claim semantics', async () => {
-    const t = bootstrap();
-    try {
-      const created = await createTask(t, t.bob.id, 'task-1');
-      if (!('tasks' in created)) throw new Error();
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: created.tasks[0]!.message_id },
-      });
-      expect(r).toMatchObject({ success: true, task_number: 1 });
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('self-claim by messageId where message is not yet a task → promote+claim', async () => {
-    const t = bootstrap();
-    try {
-      const msg = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'agent',
-        fromAgentId: t.bob.id,
-        content: 'a regular message that becomes a task',
-      });
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: msg.id },
-      });
-      expect(r).toMatchObject({ success: true, task_number: 1, message_id: msg.id });
-      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
+      expect(r).toMatchObject({ success: true, task_number: 1, id });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.alice.id);
     } finally {
@@ -424,11 +402,12 @@ describe('TaskService.claimTask — agent actor', () => {
       });
       t.conversations.addAgent(other.id, t.alice.id);
       // create task in `other`
-      await t.service.createTasks({
+      const created = await t.service.createTasks({
         conversationId: other.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
         tasks: [{ title: 'foreign' }],
       });
+      const id = taskId(created);
       // alice claims from `channel`; since both convs share workspace,
       // the cross-channel lift gates this through (#task:530).
       const r = await t.service.claimTask({
@@ -437,7 +416,7 @@ describe('TaskService.claimTask — agent actor', () => {
       });
       expect(r.success).toBe(true);
       // Task now assigned to alice.
-      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: 'local' });
+      const fresh = refetch(t, id);
       expect(fresh?.assignee?.id).toBe(t.alice.id);
       expect(fresh?.conversation.id).toBe(other.id);
     } finally {
@@ -449,10 +428,9 @@ describe('TaskService.claimTask — agent actor', () => {
     const t = bootstrap();
     try {
       const created = await createTask(t, t.alice.id, 'x');
-      if (!('tasks' in created)) throw new Error();
+      const id = taskId(created);
       // mark done directly
-      t.db.prepare(`UPDATE messages SET task_status = 'done' WHERE id = ?`)
-        .run(created.tasks[0]!.message_id);
+      t.db.prepare(`UPDATE tasks SET status = 'done' WHERE id = ?`).run(id);
       const r = await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -468,103 +446,16 @@ describe('TaskService.claimTask — agent actor', () => {
     const t = bootstrap();
     try {
       const created = await createTask(t, t.bob.id, 'x');
-      if (!('tasks' in created)) throw new Error();
+      const id = taskId(created);
       // simulate a task in in_review (could happen if user assigned then agent moved)
-      t.db.prepare(`UPDATE messages SET task_status = 'in_review' WHERE id = ?`)
-        .run(created.tasks[0]!.message_id);
+      t.db.prepare(`UPDATE tasks SET status = 'in_review' WHERE id = ?`).run(id);
       const r = await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: 'local' });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('in_review');
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('claim by messageId, message does not exist → message_not_found', async () => {
-    const t = bootstrap();
-    try {
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: 'no-such-message' },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('message_not_found');
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('claim by messageId, message in another conversation → wrong_conversation (no promote)', async () => {
-    const t = bootstrap();
-    try {
-      const other = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
-        title: 'other',
-      });
-      const msg = t.messages.insertForConversation({
-        conversationId: other.id,
-        fromKind: 'agent',
-        fromAgentId: t.bob.id,
-        content: 'foreign message',
-      });
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: msg.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('wrong_conversation');
-      // verify NO promotion happened
-      const after = t.db
-        .prepare<[string], { task_number: number | null }>(
-          `SELECT task_number FROM messages WHERE id = ?`,
-        )
-        .get(msg.id);
-      expect(after?.task_number).toBe(null);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('claim by messageId, system message → cannot_promote_system_message', async () => {
-    const t = bootstrap();
-    try {
-      const sys = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'system',
-        content: 'system note',
-      });
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: sys.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('cannot_promote_system_message');
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('claim by messageId, thread_anchor → cannot_promote_anchor', async () => {
-    const t = bootstrap();
-    try {
-      const anchor = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'agent',
-        fromAgentId: t.alice.id,
-        content: 'thread anchor',
-        metadata: { subtype: 'thread_anchor' },
-      });
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: anchor.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('cannot_promote_anchor');
     } finally {
       t.cleanup();
     }
@@ -575,14 +466,15 @@ describe('TaskService.claimTask — user actor', () => {
   it('user claim with agentId on todo task → status=in_progress, assignee set', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       const r = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: (await firstMsgId(t)) },
+        by: { taskId: id },
         assignee: { agentId: t.bob.id },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(r.message_id!, { kind: 'user', userId: 'local' });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.bob.id);
     } finally {
@@ -593,14 +485,14 @@ describe('TaskService.claimTask — user actor', () => {
   it('user claim WITHOUT agentId on todo task → status lifts to in_progress, assignee=null', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
-      const msgId = await firstMsgId(t);
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       const r = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msgId },
+        by: { taskId: id },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee).toBe(null);
     } finally {
@@ -611,8 +503,8 @@ describe('TaskService.claimTask — user actor', () => {
   it('user claim with agentId on in_progress task → assignee overridden, status preserved', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
-      const msgId = await firstMsgId(t);
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       // bob claims first
       await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
@@ -621,11 +513,11 @@ describe('TaskService.claimTask — user actor', () => {
       // user reassigns to alice
       const r = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msgId },
+        by: { taskId: id },
         assignee: { agentId: t.alice.id },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.alice.id);
     } finally {
@@ -636,41 +528,16 @@ describe('TaskService.claimTask — user actor', () => {
   it('user claim assigning to agent not in conversation → assignee_not_conversation_member', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       const r = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: (await firstMsgId(t)) },
+        by: { taskId: id },
         assignee: { agentId: outsider.id },
       });
       expect(r.success).toBe(false);
       expect(r.code).toBe('assignee_not_conversation_member');
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('user claim on non-task messageId → not_a_task (no promote for user)', async () => {
-    const t = bootstrap();
-    try {
-      const msg = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'agent',
-        fromAgentId: t.alice.id,
-        content: 'not a task',
-      });
-      const r = await t.service.claimTask({
-        actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msg.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('not_a_task');
-      const after = t.db
-        .prepare<[string], { task_number: number | null }>(
-          `SELECT task_number FROM messages WHERE id = ?`,
-        )
-        .get(msg.id);
-      expect(after?.task_number).toBe(null);
     } finally {
       t.cleanup();
     }
@@ -681,7 +548,8 @@ describe('TaskService.unclaimTask', () => {
   it('agent unclaim of self-owned task → assignee=null, status=todo', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -691,10 +559,7 @@ describe('TaskService.unclaimTask', () => {
         by: { taskNumber: 1 },
       });
       expect(r).toEqual({ success: true });
-      const fresh = t.service.getByMessageId((await firstMsgId(t)), {
-        kind: 'user',
-        userId: 'local',
-      });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('todo');
       expect(fresh?.assignee).toBe(null);
     } finally {
@@ -772,7 +637,8 @@ describe('TaskService.unclaimTask', () => {
   it('user unclaim forces status=todo regardless of prior status', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -783,35 +649,14 @@ describe('TaskService.unclaimTask', () => {
         by: { taskNumber: 1 },
         status: 'in_review',
       });
-      const msgId = await firstMsgId(t);
       const r = await t.service.unclaimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msgId },
+        by: { taskId: id },
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('todo');
       expect(fresh?.assignee).toBe(null);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('user unclaim on non-task messageId → not_a_task', async () => {
-    const t = bootstrap();
-    try {
-      const msg = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'agent',
-        fromAgentId: t.alice.id,
-        content: 'not a task',
-      });
-      const r = await t.service.unclaimTask({
-        actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msg.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('not_a_task');
     } finally {
       t.cleanup();
     }
@@ -841,7 +686,8 @@ describe('TaskService.updateStatus', () => {
   it('agent can close and reopen its own task through status', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -852,12 +698,12 @@ describe('TaskService.updateStatus', () => {
         status: 'closed',
       });
       expect(closed).toEqual({ success: true });
-      let fresh = t.service.list({
+      const closedItem = t.service.list({
         actor: { kind: 'user', userId: 'local' },
         status: ['closed'],
       })[0]!;
-      expect(fresh.status).toBe('closed');
-      expect(fresh.closed_at).toEqual(expect.any(Number));
+      expect(closedItem.status).toBe('closed');
+      expect(closedItem.closed_at).toEqual(expect.any(Number));
 
       const reopened = await t.service.updateStatus({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
@@ -865,9 +711,9 @@ describe('TaskService.updateStatus', () => {
         status: 'todo',
       });
       expect(reopened).toEqual({ success: true });
-      fresh = t.service.getByMessageId(fresh.message_id, { kind: 'user', userId: 'local' })!;
-      expect(fresh.status).toBe('todo');
-      expect(fresh.closed_at).toBeNull();
+      const fresh = refetch(t, id);
+      expect(fresh?.status).toBe('todo');
+      expect(fresh?.closed_at).toBeNull();
     } finally {
       t.cleanup();
     }
@@ -947,15 +793,15 @@ describe('TaskService.updateStatus', () => {
   it('user can override to any non-current status (todo → done)', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
-      const msgId = await firstMsgId(t);
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       const r = await t.service.updateStatus({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msgId },
+        by: { taskId: id },
         status: 'done',
       });
       expect(r.success).toBe(true);
-      const fresh = t.service.getByMessageId(msgId, { kind: 'user', userId: 'local' });
+      const fresh = refetch(t, id);
       expect(fresh?.status).toBe('done');
     } finally {
       t.cleanup();
@@ -965,11 +811,11 @@ describe('TaskService.updateStatus', () => {
   it('user same status → already_at_status', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'x');
-      const msgId = await firstMsgId(t);
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
       const r = await t.service.updateStatus({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msgId },
+        by: { taskId: id },
         status: 'todo',
       });
       expect(r.success).toBe(false);
@@ -1007,23 +853,22 @@ describe('TaskService.updateStatus', () => {
   });
 });
 
-describe('TaskService.list / getByMessageId', () => {
+describe('TaskService.list / getTaskDetail', () => {
   it('closed is a task status with closed_at metadata', async () => {
     const t = bootstrap();
     try {
       const created = await createTask(t, t.alice.id, 'close me');
-      if (!('tasks' in created)) throw new Error();
-      const task = created.tasks[0]!;
+      const id = taskId(created);
       const conversationEvents: Array<{ kind: string; payload?: unknown }> = [];
-      const workspaceEvents: Array<{ kind: string; payload?: unknown }> = [];
+      const viewerEvents: Array<{ kind: string; payload?: unknown }> = [];
       const unsubA = t.events.subscribe(t.channel.id, e => conversationEvents.push(e));
-      const unsubB = t.events.subscribeScope(`workspace:${t.workspace.id}`, e =>
-        workspaceEvents.push(e),
+      const unsubB = t.events.subscribeScope(`viewer:local`, e =>
+        viewerEvents.push(e),
       );
 
       const closed = await t.service.updateStatus({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: task.message_id },
+        by: { taskId: id },
         status: 'closed',
       });
       unsubA();
@@ -1032,7 +877,7 @@ describe('TaskService.list / getByMessageId', () => {
       expect(closed).toEqual({ success: true });
       const conversationTaskChanges = conversationEvents.filter(e => e.kind === 'task_changed');
       expect(conversationTaskChanges).toHaveLength(1);
-      expect(workspaceEvents.map(e => e.kind)).toEqual(['task_changed']);
+      expect(viewerEvents.map(e => e.kind)).toEqual(['task_changed']);
       const event = conversationTaskChanges[0]!.payload as {
         kind: string;
         status: string;
@@ -1048,7 +893,7 @@ describe('TaskService.list / getByMessageId', () => {
       });
       expect(closedList).toHaveLength(1);
       expect(closedList[0]).toMatchObject({
-        message_id: task.message_id,
+        id,
         status: 'closed',
         title: 'close me',
       });
@@ -1056,15 +901,12 @@ describe('TaskService.list / getByMessageId', () => {
 
       const reopened = await t.service.updateStatus({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: task.message_id },
+        by: { taskId: id },
         status: 'todo',
       });
       expect(reopened).toEqual({ success: true });
       expect(t.service.list({ actor: { kind: 'user', userId: 'local' } })).toHaveLength(1);
-      expect(t.service.getByMessageId(task.message_id, {
-        kind: 'user',
-        userId: 'local',
-      })?.closed_at).toBeNull();
+      expect(refetch(t, id)?.closed_at).toBeNull();
     } finally {
       t.cleanup();
     }
@@ -1099,7 +941,7 @@ describe('TaskService.list / getByMessageId', () => {
     }
   });
 
-  it('user list and getByMessageId require conversation membership', async () => {
+  it('user list and getTaskDetail require conversation membership', async () => {
     const t = bootstrapTwoWorkspaces();
     try {
       await createTask(t, t.alice.id, 'visible');
@@ -1108,24 +950,21 @@ describe('TaskService.list / getByMessageId', () => {
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'hidden' }],
       });
-      if (!('tasks' in hidden)) throw new Error();
+      const hiddenId = taskId(hidden);
 
       t.conversations.removeUser(t.ws2Channel.id, 'local');
 
       const list = t.service.list({ actor: { kind: 'user', userId: 'local' } });
       expect(list.map(x => x.title)).toEqual(['visible']);
       expect(
-        t.service.getByMessageId(hidden.tasks[0]!.message_id, {
-          kind: 'user',
-          userId: 'local',
-        }),
+        t.service.getTaskDetail(hiddenId, { kind: 'user', userId: 'local' }),
       ).toBe(null);
     } finally {
       t.cleanup();
     }
   });
 
-  it('user message-id mutations hide tasks outside conversation membership', async () => {
+  it('user task-id mutations hide tasks outside conversation membership', async () => {
     const t = bootstrapTwoWorkspaces();
     try {
       const hidden = await t.service.createTasks({
@@ -1133,32 +972,31 @@ describe('TaskService.list / getByMessageId', () => {
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'hidden' }],
       });
-      if (!('tasks' in hidden)) throw new Error();
-      const messageId = hidden.tasks[0]!.message_id;
+      const hiddenId = taskId(hidden);
 
       t.conversations.removeUser(t.ws2Channel.id, 'local');
 
       const claim = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId },
+        by: { taskId: hiddenId },
       });
       expect(claim.success).toBe(false);
-      expect(claim.code).toBe('not_a_task');
+      expect(claim.code).toBe('task_not_found');
 
       const unclaim = await t.service.unclaimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId },
+        by: { taskId: hiddenId },
       });
       expect(unclaim.success).toBe(false);
-      expect(unclaim.code).toBe('not_a_task');
+      expect(unclaim.code).toBe('task_not_found');
 
       const status = await t.service.updateStatus({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId },
+        by: { taskId: hiddenId },
         status: 'in_review',
       });
       expect(status.success).toBe(false);
-      expect(status.code).toBe('not_a_task');
+      expect(status.code).toBe('task_not_found');
     } finally {
       t.cleanup();
     }
@@ -1293,7 +1131,7 @@ describe('TaskService.list / getByMessageId', () => {
     }
   });
 
-  it('agent getByMessageId for task in another workspace returns null', async () => {
+  it('agent getTaskDetail for task in another workspace returns null', async () => {
     const t = bootstrap();
     try {
       const ws2 = t.workspaces.insert({
@@ -1314,8 +1152,8 @@ describe('TaskService.list / getByMessageId', () => {
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: ch2.id },
         tasks: [{ title: 'foreign' }],
       });
-      if (!('tasks' in created)) throw new Error();
-      const r = t.service.getByMessageId(created.tasks[0]!.message_id, {
+      const id = taskId(created);
+      const r = t.service.getTaskDetail(id, {
         kind: 'agent',
         agentId: t.alice.id,
         conversationId: t.channel.id,
@@ -1473,87 +1311,21 @@ describe('TaskService agent-actor validation', () => {
       t.cleanup();
     }
   });
-
-  it('unclaimTask by messageId: cross-channel (same workspace) → succeeds when assignee', async () => {
-    const t = bootstrap();
-    try {
-      const other = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
-        title: 'other',
-      });
-      t.conversations.addAgent(other.id, t.alice.id);
-      // Create + claim the task in the OTHER conversation.
-      const create = await t.service.createTasks({
-        conversationId: other.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
-        tasks: [{ title: 'foreign' }],
-      });
-      if (!('tasks' in create)) throw new Error();
-      const messageId = create.tasks[0]!.message_id;
-      await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
-        by: { taskNumber: 1 },
-      });
-      // Unclaim from t.channel.id by messageId; new semantics allow
-      // cross-channel within the same workspace.
-      const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId },
-      });
-      expect(r.success).toBe(true);
-      const list = t.service.list({ actor: { kind: 'user', userId: 'local' } });
-      expect(list[0]!.assignee).toBe(null);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('updateStatus by messageId: cross-channel (same workspace) → succeeds when assignee', async () => {
-    const t = bootstrap();
-    try {
-      const other = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
-        title: 'other',
-      });
-      t.conversations.addAgent(other.id, t.alice.id);
-      const create = await t.service.createTasks({
-        conversationId: other.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
-        tasks: [{ title: 'foreign' }],
-      });
-      if (!('tasks' in create)) throw new Error();
-      const messageId = create.tasks[0]!.message_id;
-      await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
-        by: { taskNumber: 1 },
-      });
-      const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId },
-        status: 'in_review',
-      });
-      expect(r.success).toBe(true);
-      const list = t.service.list({ actor: { kind: 'user', userId: 'local' } });
-      expect(list[0]!.status).toBe('in_review');
-    } finally {
-      t.cleanup();
-    }
-  });
 });
 
-describe('TaskService workspace-scope event', () => {
-  it('task_changed fires for both conversation and workspace scopes per mutation', async () => {
+describe('TaskService board-fanout event', () => {
+  it('task_changed fires for both the conversation scope and per-viewer board scope per mutation', async () => {
     const t = bootstrap();
     try {
       const convEvents: string[] = [];
-      const wsEvents: string[] = [];
+      const viewerEvents: string[] = [];
       t.events.subscribe(t.channel.id, e => {
         if (e.kind === 'task_changed') convEvents.push('conv');
       });
-      t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
-        if (e.kind === 'task_changed') wsEvents.push('ws');
+      // Board fanout is per-viewer to the channel's human members, not
+      // workspace-wide. 'local' is a member of the task channel.
+      t.events.subscribeScope(`viewer:local`, e => {
+        if (e.kind === 'task_changed') viewerEvents.push('viewer');
       });
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
@@ -1566,22 +1338,40 @@ describe('TaskService workspace-scope event', () => {
         status: 'in_review',
       });
       expect(convEvents.length).toBe(3);
-      expect(wsEvents.length).toBe(3);
+      expect(viewerEvents.length).toBe(3);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('board fanout never leaks to the workspace scope, nor to a non-member viewer', async () => {
+    const t = bootstrap();
+    try {
+      const wsEvents: string[] = [];
+      const nonMemberEvents: string[] = [];
+      const memberEvents: string[] = [];
+      // The board fanout goes per-viewer to the task channel's HUMAN members
+      // only — never to `workspace:<id>` (which would leak a private channel's
+      // task snapshot to every workspace member).
+      t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
+        if (e.kind === 'task_changed') wsEvents.push('ws');
+      });
+      // A viewer id that is NOT a member of the task channel must receive nothing.
+      t.events.subscribeScope(`viewer:not-a-channel-member`, e => {
+        if (e.kind === 'task_changed') nonMemberEvents.push('leak');
+      });
+      t.events.subscribeScope(`viewer:local`, e => {
+        if (e.kind === 'task_changed') memberEvents.push('ok');
+      });
+      await createTask(t, t.alice.id, 'x');
+      expect(wsEvents).toEqual([]); // no workspace-wide leak
+      expect(nonMemberEvents).toEqual([]); // no leak to non-member viewer
+      expect(memberEvents).toEqual(['ok']); // member's board still live
     } finally {
       t.cleanup();
     }
   });
 });
-
-async function firstMsgId(t: ReturnType<typeof bootstrap>): Promise<string> {
-  const row = t.db
-    .prepare<[], { id: string }>(
-      `SELECT id FROM messages WHERE task_number = 1 ORDER BY created_at ASC LIMIT 1`,
-    )
-    .get();
-  if (!row) throw new Error('no task message found');
-  return row.id;
-}
 
 function fetchSystemMetadata(
   t: ReturnType<typeof bootstrap>,
@@ -1622,7 +1412,7 @@ function fetchSystemRows(
 }
 
 describe('TaskService system message metadata enrichment (PR-2)', () => {
-  it('task_create writes full enriched metadata: subtype, task_message_id, title, status, assignee, actor', async () => {
+  it('task_create writes full enriched metadata: subtype, task_id, title, status, assignee, actor', async () => {
     const t = bootstrap();
     try {
       const result = await t.service.createTasks({
@@ -1639,7 +1429,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       expect(meta).not.toBeNull();
       expect(meta!.subtype).toBe('task_create');
       expect(meta!.task_number).toBe(created.task_number);
-      expect(meta!.task_message_id).toBe(created.message_id);
+      expect(meta!.task_id).toBe(created.id);
       expect(meta!.task_title).toBe('task-create-meta');
       expect(meta!.task_status).toBe('todo');
       expect(meta!.task_assignee).toBeNull();
@@ -1671,43 +1461,47 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       expect(meta!.actor.kind).toBe('agent');
       if (meta!.actor.kind !== 'agent') throw new Error();
       expect(meta!.actor.id).toBe(t.alice.id);
-      expect(meta!.task_message_id).toBeTypeOf('string');
+      expect(meta!.task_id).toBeTypeOf('string');
       expect(meta!.task_title).toBe('task-claim-meta');
     } finally {
       t.cleanup();
     }
   });
 
-  it('task claim/status system messages inherit the task message thread stream', async () => {
+  it('task claim/status system messages inherit the task thread stream', async () => {
     const t = bootstrap();
     try {
-      const taskEvents: unknown[] = [];
-      const unsub = t.events.subscribe(t.channel.id, e => {
-        if (e.kind === 'task_changed') taskEvents.push(e.payload);
-      });
       const root = t.messages.insertForConversation({
         conversationId: t.channel.id,
         fromKind: 'agent',
         fromAgentId: t.bob.id,
         content: 'root message',
       });
-      const taskBody = t.messages.insertForConversation({
+      // Create the task INSIDE root's reply cluster (thread target). Do this
+      // BEFORE subscribing so the 'create' event is not counted — the test
+      // asserts on the claim + status events only.
+      const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        fromKind: 'agent',
-        fromAgentId: t.bob.id,
-        content: 'task inside thread',
-        threadRootId: root.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        tasks: [{ title: 'task inside thread' }],
+        target: { kind: 'thread', message_id: root.id },
+      });
+      const id = taskId(created);
+
+      const taskEvents: unknown[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => {
+        if (e.kind === 'task_changed') taskEvents.push(e.payload);
       });
 
       const claim = await t.service.claimTask({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: taskBody.id },
+        by: { taskNumber: 1 },
       });
-      expect(claim).toMatchObject({ success: true, message_id: taskBody.id });
+      expect(claim).toMatchObject({ success: true, id });
 
       const status = await t.service.updateStatus({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: taskBody.id },
+        by: { taskNumber: 1 },
         status: 'in_review',
       });
       unsub();
@@ -1717,8 +1511,8 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       const statusRows = fetchSystemRows(t, 'task_status');
       expect(claimRows).toHaveLength(1);
       expect(statusRows).toHaveLength(1);
-      expect(readTaskSystemMetadata(claimRows[0]!.metadata)?.task_message_id).toBe(taskBody.id);
-      expect(readTaskSystemMetadata(statusRows[0]!.metadata)?.task_message_id).toBe(taskBody.id);
+      expect(readTaskSystemMetadata(claimRows[0]!.metadata)?.task_id).toBe(id);
+      expect(readTaskSystemMetadata(statusRows[0]!.metadata)?.task_id).toBe(id);
       expect(claimRows[0]!.thread_root_id).toBe(root.id);
       expect(statusRows[0]!.thread_root_id).toBe(root.id);
       expect(taskEvents).toHaveLength(2);
@@ -1796,11 +1590,11 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
   it('user actor produces actor.kind=user with the principal user id on user-driven mutations', async () => {
     const t = bootstrap();
     try {
-      await createTask(t, t.alice.id, 'user-actor-meta');
-      const msgId = await firstMsgId(t);
+      const created = await createTask(t, t.alice.id, 'user-actor-meta');
+      const id = taskId(created);
       await t.service.unclaimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId: msgId },
+        by: { taskId: id },
       });
       const rows = fetchSystemMetadata(t, 'task_unclaim');
       expect(rows.length).toBe(1);
@@ -2027,11 +1821,10 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         actor: { kind: 'user', userId: 'local' },
         tasks: [{ title: 'human task' }],
       });
-      if (!('tasks' in created)) throw new Error();
-      const messageId = created.tasks[0]!.message_id;
+      const id = taskId(created);
       await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
-        by: { messageId },
+        by: { taskId: id },
         assignee: { agentId: t.alice.id },
       });
       // alice advances → assignee path
@@ -2056,9 +1849,8 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         actor: { kind: 'user', userId: 'local' },
         tasks: [{ title: 'human stale' }],
       });
-      if (!('tasks' in created)) throw new Error();
-      const messageId = created.tasks[0]!.message_id;
-      t.db.prepare(`UPDATE messages SET task_status = 'in_progress' WHERE id = ?`).run(messageId);
+      const id = taskId(created);
+      t.db.prepare(`UPDATE tasks SET status = 'in_progress' WHERE id = ?`).run(id);
       const r = await t.service.updateStatus({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -2079,15 +1871,14 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'self stale' }],
       });
-      if (!('tasks' in created)) throw new Error();
-      const messageId = created.tasks[0]!.message_id;
+      const id = taskId(created);
       // Force to in_progress + null-assignee — the in-the-wild shape
       // you'd see after a user-driven unclaim.
       t.db
         .prepare(
-          `UPDATE messages SET task_status = 'in_progress', task_assignee_agent_id = NULL WHERE id = ?`,
+          `UPDATE tasks SET status = 'in_progress', assignee_agent_id = NULL WHERE id = ?`,
         )
-        .run(messageId);
+        .run(id);
       const r = await t.service.updateStatus({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -2107,14 +1898,13 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'alice created' }],
       });
-      if (!('tasks' in created)) throw new Error();
-      const messageId = created.tasks[0]!.message_id;
+      const id = taskId(created);
       // Bob is now the assignee, in_progress.
       t.db
         .prepare(
-          `UPDATE messages SET task_status = 'in_progress', task_assignee_agent_id = ? WHERE id = ?`,
+          `UPDATE tasks SET status = 'in_progress', assignee_agent_id = ? WHERE id = ?`,
         )
-        .run(t.bob.id, messageId);
+        .run(t.bob.id, id);
       const r = await t.service.updateStatus({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
@@ -2122,209 +1912,6 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       });
       expect(r.success).toBe(false);
       expect(r.code).toBe('not_assignee');
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('promotion (--message-id of non-task in current conv) IGNORES workspace selector — Blocker 1', async () => {
-    // Cindy `CZ7Un3P5YATZ1GTq` Blocker 1: an agent who passes a bogus
-    // --workspace-id while trying to PROMOTE a regular message in
-    // their own conversation must still succeed. Promotion only ever
-    // happens in the source conv's workspace; the selector applies
-    // only to lookups of already-numbered tasks. We assert by
-    // (a) using a workspace selector pointing at a different workspace
-    // the actor is NOT a member of, and (b) requiring the call to
-    // succeed and write the task into the SOURCE conv's workspace.
-    const t = bootstrapTwoWorkspaces();
-    try {
-      const msg = t.messages.insertForConversation({
-        conversationId: t.channel.id,
-        fromKind: 'agent',
-        fromAgentId: t.alice.id,
-        content: 'promote me in place',
-      });
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: msg.id },
-        // alice is NOT a member of ws2 — if the selector were applied
-        // this would fail with workspace_membership_required.
-        workspaceSelector: { workspaceId: t.ws2.id },
-      });
-      expect(r.success).toBe(true);
-      const promoted = t.service.getByMessageId(
-        msg.id,
-        { kind: 'user', userId: 'local' },
-      );
-      // Wrote into the source conv's workspace (t.workspace), NOT ws2.
-      expect(promoted?.workspace_id).toBe(t.workspace.id);
-      expect(promoted?.assignee?.id).toBe(t.alice.id);
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  // ── Round 3 Blocker (Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`)
-  //
-  // For the `--message-id` form of claim/unclaim/status, the row
-  // identity is the message id — NOT `(selector-workspace,
-  // msg.task_number)`. A selector that resolves to a different
-  // workspace must NOT silently retarget the mutation onto a
-  // same-numbered task in that workspace. Membership of the message's
-  // own `task_workspace_id` is also always required, so a leaked
-  // message id can't bypass access.
-
-  it('claim --message-id of ws-A task with --workspace-id ws-B (same #N exists) does NOT touch ws-B row', async () => {
-    const t = bootstrapTwoWorkspaces();
-    try {
-      // Add alice as member of both workspaces (so a successful claim
-      // path would not be gated by workspace_membership_required, and
-      // any bug that retargets would actually mutate ws2).
-      t.workspaces.insertMembership(t.ws2.id, t.alice.id);
-
-      // Create #1 in current ws by alice (assignee=alice).
-      const wsCreated = await t.service.createTasks({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        tasks: [{ title: 'ws #1' }],
-      });
-      if (!('tasks' in wsCreated)) throw new Error();
-      const wsMsgId = wsCreated.tasks[0]!.message_id;
-      await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: wsMsgId },
-      });
-
-      // Create #1 in ws2 by bob (assignee=bob, unclaimed by alice).
-      await t.service.createTasks({
-        conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
-        tasks: [{ title: 'ws2 #1' }],
-      });
-      const ws2Before = t.service.list({ actor: { kind: 'user', userId: 'local' } })
-        .find(x => x.workspace_id === t.ws2.id);
-      expect(ws2Before?.assignee).toBeNull();
-
-      // Now alice tries to claim by message-id of ws #1 BUT passes
-      // --workspace-id ws2. Pre-Round-3 bug would resolve selector →
-      // ws2, then fetchTaskByNumber(ws2, msg.task_number=1) → mutate
-      // ws2 #1. Round 3 fix: row identity = wsMsgId; selector
-      // mismatch ⇒ task_not_found; ws2 #1 untouched. wsMsgId is
-      // already claimed by alice so we expect already_claimed
-      // (assignee==self) — but with selector mismatch the row "doesn't
-      // exist" from caller view, so task_not_found wins.
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: wsMsgId },
-        workspaceSelector: { workspaceId: t.ws2.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('task_not_found');
-
-      // ws2 #1 must remain unassigned (NOT mutated to alice).
-      const ws2After = t.service.list({ actor: { kind: 'user', userId: 'local' } })
-        .find(x => x.workspace_id === t.ws2.id);
-      expect(ws2After?.assignee).toBeNull();
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('claim --message-id of a task in another ws WITHOUT selector still fails on membership', async () => {
-    // Without a selector at all, an agent who somehow has a message id
-    // from a workspace it does not belong to must NOT be able to claim.
-    // The selector default ("current workspace") only applies to
-    // task-number lookups and promotion; message-id lookups are global
-    // by row identity and demand membership of the row's workspace.
-    const t = bootstrapTwoWorkspaces();
-    try {
-      // alice is NOT a member of ws2.
-      const ws2Task = await t.service.createTasks({
-        conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
-        tasks: [{ title: 'ws2 #1' }],
-      });
-      if (!('tasks' in ws2Task)) throw new Error();
-      const ws2MsgId = ws2Task.tasks[0]!.message_id;
-
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: ws2MsgId },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('workspace_membership_required');
-    } finally {
-      t.cleanup();
-    }
-  });
-
-  it('unclaim/status --message-id mirror the same row-identity guard', async () => {
-    const t = bootstrapTwoWorkspaces();
-    try {
-      t.workspaces.insertMembership(t.ws2.id, t.alice.id);
-      t.conversations.addAgent(t.ws2Channel.id, t.alice.id);
-
-      // ws #1: alice creates + claims.
-      const wsCreated = await t.service.createTasks({
-        conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        tasks: [{ title: 'ws #1' }],
-      });
-      if (!('tasks' in wsCreated)) throw new Error();
-      const wsMsgId = wsCreated.tasks[0]!.message_id;
-      await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: wsMsgId },
-      });
-
-      // ws2 #1: alice creates + claims (so a buggy retarget would
-      // actually flip ws2 #1 status).
-      const ws2Created = await t.service.createTasks({
-        conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.ws2Channel.id },
-        tasks: [{ title: 'ws2 #1' }],
-      });
-      if (!('tasks' in ws2Created)) throw new Error();
-      const ws2MsgId = ws2Created.tasks[0]!.message_id;
-      await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.ws2Channel.id },
-        by: { messageId: ws2MsgId },
-      });
-
-      // Snapshot ws2 #1's status before.
-      const before = t.service.getByMessageId(ws2MsgId, { kind: 'user', userId: 'local' });
-      expect(before?.status).toBe('in_progress');
-
-      // unclaim by message-id of ws #1 with selector→ws2 must fail and
-      // NOT mutate either row's assignee.
-      const u = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: wsMsgId },
-        workspaceSelector: { workspaceId: t.ws2.id },
-      });
-      expect(u.success).toBe(false);
-      expect(u.code).toBe('task_not_found');
-
-      // status by message-id of ws #1 with selector→ws2 must fail and
-      // NOT mutate ws2 #1 status.
-      const s = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: wsMsgId },
-        status: 'in_review',
-        workspaceSelector: { workspaceId: t.ws2.id },
-      });
-      expect(s.success).toBe(false);
-      expect(s.code).toBe('task_not_found');
-
-      const after = t.service.getByMessageId(ws2MsgId, { kind: 'user', userId: 'local' });
-      expect(after?.status).toBe('in_progress');
-      expect(after?.assignee?.id).toBe(t.alice.id);
-
-      // And the ws #1 row itself is also unchanged (still claimed,
-      // still in_progress).
-      const wsAfter = t.service.getByMessageId(wsMsgId, { kind: 'user', userId: 'local' });
-      expect(wsAfter?.assignee?.id).toBe(t.alice.id);
-      expect(wsAfter?.status).toBe('in_progress');
     } finally {
       t.cleanup();
     }
@@ -2408,85 +1995,15 @@ describe('TaskService — write_tasks capability gate (graded-permissions cut 2)
   });
 });
 
-describe('TaskService — promotion requires create_tasks + write_tasks (Cindy AVTaRcXa3vuAd0W3)', () => {
-  // `claim --message-id <regular message>` promotes-and-claims, which both
-  // CREATES a new task (create_tasks axis) and lands it in_progress +
-  // self-assigned (write_tasks axis). It must require BOTH; a numbered-task
-  // claim still needs only write_tasks. The checker is keyed by capability
-  // so each case can deny exactly one bucket.
+describe('TaskService — claim capability gate (write_tasks)', () => {
+  // Claiming an already-numbered task is pure mutation: it needs write_tasks
+  // only, NOT create_tasks. (Promotion — which used to also require
+  // create_tasks — was removed; a plain message can no longer become a task
+  // via claim.) The checker is keyed by capability so a case can deny exactly
+  // one bucket.
   const denied = new Set<string>();
   const makeT = () =>
     bootstrap((_actor, _ws, cap) => !denied.has(cap));
-
-  const insertRegularMessage = (t: ReturnType<typeof bootstrap>) =>
-    t.messages.insertForConversation({
-      conversationId: t.channel.id,
-      fromKind: 'agent',
-      fromAgentId: t.bob.id,
-      content: 'a regular message that could become a task',
-    });
-
-  it('write-only agent: promotion denied with capability_denied/create_tasks', async () => {
-    denied.clear();
-    denied.add('create_tasks');
-    const t = makeT();
-    try {
-      const msg = insertRegularMessage(t);
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: msg.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('capability_denied');
-      expect(r.capability).toBe('create_tasks');
-      // Nothing was promoted.
-      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
-      expect(fresh).toBe(null);
-    } finally {
-      denied.clear();
-      t.cleanup();
-    }
-  });
-
-  it('create-only agent: promotion denied with capability_denied/write_tasks', async () => {
-    denied.clear();
-    denied.add('write_tasks');
-    const t = makeT();
-    try {
-      const msg = insertRegularMessage(t);
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: msg.id },
-      });
-      expect(r.success).toBe(false);
-      expect(r.code).toBe('capability_denied');
-      expect(r.capability).toBe('write_tasks');
-      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
-      expect(fresh).toBe(null);
-    } finally {
-      denied.clear();
-      t.cleanup();
-    }
-  });
-
-  it('agent with both caps: promotion succeeds', async () => {
-    denied.clear();
-    const t = makeT();
-    try {
-      const msg = insertRegularMessage(t);
-      const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { messageId: msg.id },
-      });
-      expect(r).toMatchObject({ success: true, message_id: msg.id });
-      const fresh = t.service.getByMessageId(msg.id, { kind: 'user', userId: 'local' });
-      expect(fresh?.status).toBe('in_progress');
-      expect(fresh?.assignee?.id).toBe(t.alice.id);
-    } finally {
-      denied.clear();
-      t.cleanup();
-    }
-  });
 
   it('existing numbered-task claim does NOT require create_tasks', async () => {
     // Deny create_tasks but allow write_tasks; claiming an already-numbered
@@ -2505,6 +2022,287 @@ describe('TaskService — promotion requires create_tasks + write_tasks (Cindy A
       expect(r).toMatchObject({ success: true, task_number: 1 });
     } finally {
       denied.clear();
+      t.cleanup();
+    }
+  });
+});
+
+describe('TaskService.createTasks — source provenance + --claim', () => {
+  it('stores source_message_id and self-claims when claim=true', async () => {
+    const t = bootstrap();
+    try {
+      const src = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: 'the prompting message',
+      });
+      const r = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'derived task', body: 'do the thing', sourceMessageId: src.id }],
+        claim: true,
+      });
+      const id = taskId(r);
+      const detail = t.service.getTaskDetail(id, {
+        kind: 'user',
+        userId: 'local',
+      });
+      expect(detail?.source_message_id).toBe(src.id);
+      expect(detail?.content).toBe('do the thing');
+      expect(detail?.status).toBe('in_progress');
+      expect(detail?.assignee?.id).toBe(t.alice.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('empty body stores "" (not a title duplicate)', async () => {
+    const t = bootstrap();
+    try {
+      const r = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'titled but bodyless' }],
+      });
+      const id = taskId(r);
+      const detail = t.service.getTaskDetail(id, {
+        kind: 'user',
+        userId: 'local',
+      });
+      expect(detail?.content).toBe('');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('second task from the same source (any status) → source_conflict + existing_task', async () => {
+    const t = bootstrap();
+    try {
+      const src = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: 'source',
+      });
+      const first = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'first', sourceMessageId: src.id }],
+      });
+      if (!('tasks' in first)) throw new Error('first create failed');
+      // Close the first task — a permanent 1:1 source does NOT release on close.
+      await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: first.tasks[0]!.task_number },
+        status: 'closed',
+      });
+      const second = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'second', sourceMessageId: src.id }],
+      });
+      expect('error' in second && second.error).toBe('source_conflict');
+      if (!('error' in second)) throw new Error('expected conflict');
+      expect(second.existing_task?.task_number).toBe(first.tasks[0]!.task_number);
+      expect(second.existing_task?.status).toBe('closed');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('source message that does not exist → source_message_not_found', async () => {
+    const t = bootstrap();
+    try {
+      const r = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'x', sourceMessageId: 'no-such-message' }],
+      });
+      expect('error' in r && r.error).toBe('source_message_not_found');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('source message in a different conversation (even same workspace) → source_conversation_mismatch', async () => {
+    const t = bootstrap();
+    try {
+      // v1 contract: source and task must share ONE conversation. A sibling
+      // channel in the SAME workspace is not close enough — same-workspace is
+      // not sufficient, only same-conversation is.
+      const sibling = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        workspacePath: t.workspace.workspace_path,
+        title: 'sibling',
+      });
+      t.conversations.addAgent(sibling.id, t.alice.id);
+      const siblingSrc = t.messages.insertForConversation({
+        conversationId: sibling.id,
+        fromKind: 'agent',
+        fromAgentId: t.alice.id,
+        content: 'sibling source',
+      });
+      const r = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'x', sourceMessageId: siblingSrc.id }],
+      });
+      expect('error' in r && r.error).toBe('source_conversation_mismatch');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('nav becomes unavailable once the declared source is gone (never falls back to the created-event nav)', async () => {
+    const t = bootstrap();
+    try {
+      // v1 contract: source shares the task's conversation, so a viewer who can
+      // read the task can read the source — UNLESS the source itself disappears.
+      // Source deletion is the falsifier: nav must go `unavailable`, never
+      // silently fall back to the created-event nav (the nav semantic is
+      // "go to source").
+      const src = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.alice.id,
+        content: 'the source',
+      });
+      const created = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'derived', sourceMessageId: src.id }],
+      });
+      const id = taskId(created);
+      // The source message is removed (the task keeps its immutable provenance id).
+      t.db.prepare('DELETE FROM messages WHERE id = ?').run(src.id);
+      const resolved = t.service.resolveAgentDetailWorkspace(
+        { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        undefined,
+      );
+      if ('code' in resolved) throw new Error('workspace resolve failed');
+      const detail = t.service.getTaskDetail(
+        id,
+        { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        resolved.workspaceId,
+      );
+      expect(detail?.source_message_id).toBe(src.id); // provenance identity kept
+      // A declared source that is gone → unavailable
+      // (never silently falls back to the created-event nav).
+      expect(detail?.nav).toEqual({ kind: 'unavailable' });
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('TaskService.editTask', () => {
+  it('title+body edit stamps last editor and returns full detail', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.alice.id, 'old title');
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'new title',
+        body: 'new content',
+      });
+      expect(r.success).toBe(true);
+      if (!r.success) throw new Error('expected success');
+      expect(r.task.title).toBe('new title');
+      expect(r.task.content).toBe('new content');
+      expect(r.task.last_editor?.kind).toBe('agent');
+      expect(r.task.last_editor?.id).toBe(t.alice.id);
+      expect(r.task.last_edited_at).not.toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('body-only edit leaves title unchanged; empty body clears content', async () => {
+    const t = bootstrap();
+    try {
+      await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'keep me', body: 'original body' }],
+      });
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: null,
+        body: '',
+      });
+      expect(r.success).toBe(true);
+      if (!r.success) throw new Error('expected success');
+      expect(r.task.title).toBe('keep me');
+      expect(r.task.content).toBe('');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('cross-workspace edit by --workspace-id succeeds and returns full detail (row workspace ≠ actor current-conversation workspace)', async () => {
+    const t = bootstrap();
+    try {
+      // Second workspace where alice is a full member with her own channel.
+      const otherWs = t.workspaces.insert({
+        name: 'other',
+        description: null,
+        workspacePath: t.tmp.workspacesRoot,
+        workspaceHostId: t.localHostId,
+      });
+      t.workspaces.insertMembership(otherWs.id, t.alice.id);
+      const otherChannel = t.conversations.insertChannel({
+        workspaceId: otherWs.id,
+        workspacePath: otherWs.workspace_path,
+        title: 'other-main',
+      });
+      t.conversations.addAgent(otherChannel.id, t.alice.id);
+      // Task lives in otherWs (task_number 1 in that workspace).
+      await t.service.createTasks({
+        conversationId: otherChannel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: otherChannel.id },
+        tasks: [{ title: 'foreign task', body: 'foreign body' }],
+      });
+      // Edit it while ACTING from the main-workspace channel, pointing the
+      // selector at the row's own workspace (otherWs) — the row's workspace
+      // authorizes, not the actor's current conversation.
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'edited across workspaces',
+        body: null,
+        workspaceSelector: { workspaceId: otherWs.id },
+      });
+      expect(r.success).toBe(true);
+      if (!r.success) throw new Error('expected cross-workspace success');
+      expect(r.task.title).toBe('edited across workspaces');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('agent with write_tasks but NOT read_tasks is denied — no definition leaks via the edit response', async () => {
+    // read_tasks gates task reads; edit returns the full definition on success.
+    // An agent holding write but not read must be denied BEFORE any content
+    // crosses the boundary.
+    const t = bootstrap((_actor, _workspaceId, capability) => capability !== 'read_tasks');
+    try {
+      await createTask(t, t.alice.id, 'secret title');
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'x',
+        body: null,
+      });
+      expect(r.success).toBe(false);
+      if (r.success) throw new Error('expected capability denial');
+      expect(r.code).toBe('capability_denied');
+      expect('capability' in r && r.capability).toBe('read_tasks');
+      // Nothing readable leaked — the failure carries no `task`.
+      expect('task' in r).toBe(false);
+    } finally {
       t.cleanup();
     }
   });

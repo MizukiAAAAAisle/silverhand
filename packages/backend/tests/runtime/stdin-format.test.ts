@@ -99,7 +99,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     );
   });
 
-  it('appends task=#<n> status=<status> when the row is a task anchor', () => {
+  it('appends task=#<n> status=<status> for a task system-event message', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-task',
@@ -109,8 +109,13 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         from_user_id: 'u1',
         content: 'Fix the flaky test',
         created_at: 0,
-        task_number: 123,
-        task_status: 'todo',
+        // The suffix now derives from the task system-event's own metadata
+        // (v60: a task is a first-class aggregate, not a message column).
+        metadata: JSON.stringify({
+          subtype: 'task_create',
+          task_number: 123,
+          task_status: 'todo',
+        }),
       },
       agentName,
       userName,
@@ -132,8 +137,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         from_user_id: 'u1',
         content: 'just chatting',
         created_at: 0,
-        task_number: null,
-        task_status: null,
+        metadata: null,
       },
       agentName,
       userName,
@@ -144,7 +148,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
     expect(header).not.toContain('status=');
   });
 
-  it('carries the current status for a promoted (in_progress) task', () => {
+  it('carries the current status for a task status-change event (in_progress)', () => {
     const header = formatStdinMessageHeader(
       {
         id: 'm-claimed',
@@ -154,8 +158,11 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         from_user_id: null,
         content: 'work it',
         created_at: 0,
-        task_number: 7,
-        task_status: 'in_progress',
+        metadata: JSON.stringify({
+          subtype: 'task_status',
+          task_number: 7,
+          task_status: 'in_progress',
+        }),
       },
       agentName,
       userName,

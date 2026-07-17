@@ -55,10 +55,12 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (mutually exclusive). |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
-| `silverhand task create` | Create tasks on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). |
-| `silverhand task claim` | Claim tasks by task number or promote-and-claim messages. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
+| `silverhand task create` | Create one task (`--title` + optional `--body`) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4. |
+| `silverhand task claim` | Claim an existing task by task number (to create-and-claim from a message use `task create --source-message-id --claim`). Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
 | `silverhand task status` | Move a task to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
+| `silverhand task edit` | Edit a task's title/content by `--task-number` (last-write-wins; the most recent successful edit wins, no concurrency check). Never touches status/assignee. See §3.4. |
+| `silverhand task detail` | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`) by `--task-number`. |
 | `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). |
 | `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
@@ -346,16 +348,52 @@ Failure modes (typed `code` on the result entry):
   the `workspace_members` row; `agent_home` workspaces use
   `owner_agent_id`.
 
-The legacy `wrong_conversation` code is now only emitted on the
-`--message-id` promotion path: turning a regular message into a task
-must happen in that message's own conversation.
-
 Status update permission also accepts the **creator-self** fallback:
 when the task has no assignee AND the creator is the actor agent
 (`creator.kind === 'agent' && creator.id === actor.agent_id`), the
 agent may update the status without re-claiming. Human-created
 unassigned tasks always require the agent to claim first; the
 `from_kind` distinction is load-bearing.
+
+#### Create provenance + `--claim`
+
+`task create` creates one task per call and accepts an optional
+`--source-message-id <id>` that records the message that
+prompted the task. This is a **permanent 1:1 provenance link**: a message
+backs at most one task for its entire lifetime, regardless of that task's
+status (a `done`/`closed` task does NOT release its source). A second
+create from the same source fails with `code: 'source_conflict'` and an
+`existing_task: { task_number, id, status }` pointer — to continue
+closed work, reopen the existing task rather than re-creating. Other
+create-source failures: `source_message_not_found`, `source_not_accessible`
+(actor cannot read the source's conversation), `source_conversation_mismatch`
+(source lives in a different conversation than the task — v1 requires them to
+share one conversation).
+
+`--claim` atomically self-claims the created task (lands `in_progress`
++ assigned to the actor instead of unassigned `todo`). It requires the
+`write_tasks` capability in addition to `create_tasks`. `task claim` only
+ever claims tasks that already exist; to create and claim in one step, use
+`task create --source-message-id <id> --claim`.
+
+#### `task edit` — last-write-wins definition edits
+
+`task edit` changes a task's current title/content (never status or
+assignee). Provide at least one of `--title` / `--body` (`--body ""`
+clears the content; omitted fields are left unchanged). The edit is a plain
+last-write-wins UPDATE by task id: the most recent successful write wins,
+with **no** optimistic-concurrency guard (no `--expected-revision`, no
+`revision` token, no `conflict` result) — task edits are low-contention and
+the extra round-trip would not pay for itself. A successful edit
+stamps the last editor and returns the full viewer-resolved
+`TaskDetailDto`. Edit authz for agents requires **both** `write_tasks` and
+`read_tasks` on the task's workspace (the result returns the full task
+definition, so write-without-read could exfiltrate content); humans may edit
+as any conversation member — the task definition is a collaborative board
+artifact, with no assignee/creator restriction. The
+agent route always returns HTTP 200 with the typed envelope (like
+claim/unclaim/status); the human route returns 404 when the task does not
+exist, 400 on malformed input.
 
 Cross-conversation ops emit a single `task_cross_op` audit line to
 `backend-<utc>.log` with `{ agent_id, source_conversation_id,
@@ -399,15 +437,16 @@ visibility / `read_messages`:
   `{ "thread_root_id": "<root>", "changed": <bool> }`. An unknown root
   returns `reply_target_not_found` (404).
 - **Create a task in a cluster:** `silverhand task create --title ...
-  --target thread:<message_id>` attributes the new task(s) to that message's
+  --target thread:<message_id>` attributes the new task to that message's
   cluster instead of the main line. The flag is **optional**; omit it (or
-  pass `--target channel`) and the task body lands on the main line
-  (`thread_root_id = NULL`) exactly as before — load-bearing, since most task
-  creation is main-line. It applies to every task in a multi-`--title` call.
-  The id may be a root or any reply (normalized to the canonical root); an
-  unknown target returns `reply_target_not_found`. The task's lifecycle
-  system events (claim, status, move) follow the task-body row's stream, so
-  they attribute to the same cluster automatically.
+  pass `--target channel`) and the task's lifecycle events land on the main
+  line (`thread_root_id = NULL`) — load-bearing, since most task creation is
+  main-line. `task create` makes one task per call. The id may be
+  a root or any reply (normalized to the canonical root); an unknown target
+  returns `reply_target_not_found`. A task is a first-class aggregate, not a
+  message row: `create` inserts the task entity plus a task-created **system
+  event**, and every later lifecycle event (claim, status, move) follows that
+  same cluster automatically. No ordinary body message is written.
 
 ### 3.6 `silverhand message react` — reactions are not messages
 
@@ -461,20 +500,18 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
 
 - `target=channel` is the main line; `target=thread:<root_message_id>` is a
   reply inside that message's cluster.
-- **Task anchor suffix.** When the delivered row is itself a task, the header
+- **Task lifecycle suffix.** When the delivered row is a task **lifecycle
+  system event** (task created, claimed, or status-changed), the header
   gains a trailing ` task=#<number> status=<status>` **inside the brackets**
   (e.g. `… time=<iso> task=#1124 status=todo]`). The suffix is the machine-readable
-  fact that the message **is a task anchor**, not plain chat; `task=#<number>`
+  fact that the message **is a task notice**, not plain chat; `task=#<number>`
   and `status=<status>` are authoritative. It is general to **all** task
-  messages — human `Send as task`, a `task claim --message-id` promotion
-  (`status=in_progress`), and `create_tasks` body rows alike — and is omitted
-  entirely for non-task messages. The **title is deliberately not in the
-  header** (escaping/whitespace); for the precise title read the task
-  DTO/`task list`. Where the title comes from depends on the path: for human
-  `Send as task` and `claim --message-id` promotion it is derived from the
-  message body's first line, so the body opens with the title; `create_tasks`
-  rows can carry an explicit title with a separate body, so there the body's
-  first line is **not** guaranteed to equal the title.
+  lifecycle events — the task-created event of every `task create` (whether or
+  not `--claim` / `--source-message-id` were passed) and each later claim /
+  status event — and is omitted entirely for non-task messages. The **title is
+  deliberately not in the header** (escaping/whitespace); for the precise title
+  read the task DTO/`task list`. A task is a first-class aggregate (own `tasks`
+  row), not a message annotation, so no ordinary body message carries the task.
 
 ### 3.8 `silverhand profile mcp` — per-subject MCP config
 
@@ -641,9 +678,9 @@ Current `subkind` values (CLI-side enum is the source of truth):
 - `missing_required_flag` — a required value-bearing flag was not
   supplied. Example: `silverhand task create` with no `--title`
   redirects the agent to the minimal call shape and to
-  `silverhand task claim --message-id <id>` (for the "promote an
-  existing message" use case). `details` carries
-  `{command, flag}` — both static, code-defined values; safe to
+  `silverhand task create --title "..." --source-message-id <id> --claim`
+  (for the "start a task from an existing message" use case). `details`
+  carries `{command, flag}` — both static, code-defined values; safe to
   log. The daily report aggregates failure buckets on
   `error_subkind + details.command + details.flag` so future copy
   edits to the prose error message do not split the historical
@@ -706,23 +743,27 @@ behavior-neutral until a human owner/admin narrows the set via
 `PUT /api/workspaces/:id/agents/:agentId/capabilities`. Two surfaces:
 
 - **Route-gated commands** (message send, history/search, list-channels,
-  thread/channel create+close, member add, task list/create, attachment
-  upload/locate, schedule create/cancel) return HTTP **403** with a typed
-  body `{ code: 'capability_denied', capability, message, details: { capability } }`.
+  thread/channel create+close, member add, task list/create/detail,
+  attachment upload/locate, schedule create/cancel) return HTTP **403** with
+  a typed body `{ code: 'capability_denied', capability, message, details: { capability } }`.
   `capability_denied` is its own CLI **stable code** (added to `ERROR_CODES`):
   when the backend supplies it explicitly the CLI preserves it verbatim
   (`CliError.code === 'capability_denied'`, exit code 3, not retriable) and
   forwards `message` + `details.capability`. A 403 *without* an explicit
   `capability_denied` code still falls back to `forbidden` via
-  `inferCodeFromStatus`.
-- **Task claim/unclaim/status** gate **inside** the task service (the
-  target task's workspace is resolved per-entry — esp. claim-by-message-id
-  → the message's own workspace), so they surface as a per-entry result
-  with `code: 'capability_denied'` and a `capability` field (the claim call
-  itself is HTTP 200). Promotion of a non-task message via
-  `claim --message-id` additionally requires `create_tasks` (it creates a
-  new task), so a write-only agent is denied `capability_denied/create_tasks`
-  there. Schedule create/cancel gate inside the schedule service and
+  `inferCodeFromStatus`. `task create` gates `create_tasks`; adding `--claim`
+  additionally requires `write_tasks`. `task detail` gates `read_tasks`.
+- **Task claim/unclaim/status/edit** gate **inside** the task service (the
+  target task's workspace is resolved per-entry from the task number +
+  optional workspace selector), so they surface as a per-entry result
+  with `code: 'capability_denied'` and a `capability` field (the call
+  itself is HTTP 200). Claim/unclaim/status require `write_tasks` on the
+  resolved workspace; claim gates on `write_tasks` alone (there is no
+  `create_tasks`-on-claim path — claim only claims existing tasks). **`task
+  edit` requires BOTH `write_tasks` AND
+  `read_tasks`**: its result returns the full task definition (the updated task
+  on success), so write-without-read could exfiltrate task content — the read
+  gate closes that. Schedule create/cancel gate inside the schedule service and
   surface the 403 shape above.
 
 `capability_denied` is **not** retriable — the fix is a human granting the

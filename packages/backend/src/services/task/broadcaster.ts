@@ -1,13 +1,21 @@
 // Post-commit task announcement side-effects: the system narrative message, the
-// `task_changed` conversation + workspace-scope events, best-effort per-recipient
+// `task_changed` conversation + per-viewer board events, best-effort per-recipient
 // delivery, and the cross-conversation audit line. Every task mutation, after it
 // commits, hands its result snapshot here. Nothing in this file decides task
 // policy — it only broadcasts an already-committed change.
+//
+// Split for the create flow (H4): `emitSystemMessage` inserts the task system
+// event INSIDE the caller's transaction so `task create` can backfill the
+// task's `created_event_message_id` in the same write; `publish` fans out the
+// events + delivery AFTER commit. `broadcast` bundles both for the mutation
+// paths (claim/unclaim/status), whose system event has no in-txn dependency.
 import type { Database as Db } from 'better-sqlite3';
 import {
   type ConversationDto,
+  type MessageDto,
   type TaskAssigneeDto,
   type TaskChangedEvent,
+  type TaskMutationKind,
   type TaskStatus,
   type TaskSystemActor,
   taskSystemSubtype,
@@ -19,7 +27,7 @@ import type { ConversationRepo } from '../../repos/conversation-repo.js';
 import type { MessageRepo } from '../../repos/message-repo.js';
 import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
 import type { TaskStore } from './store.js';
-import type { AgentActor, TaskActor, TaskNarrativeKind } from './contracts.js';
+import type { AgentActor, TaskActor } from './contracts.js';
 
 export interface TaskBroadcasterDeps {
   db: Db;
@@ -32,9 +40,28 @@ export interface TaskBroadcasterDeps {
   logger: BackendLogger;
 }
 
+/** The viewer-invariant snapshot of a task after a mutation — everything the
+ *  system event, the `task_changed` payload, and delivery need. */
+export interface TaskEventArgs {
+  conversation: ConversationDto;
+  kind: TaskChangedEvent['kind'];
+  /** The task identity (`tasks.id`) — the key consumers converge on. */
+  taskId: string;
+  taskNumber: number;
+  title: string;
+  /** Status snapshot AFTER this mutation. */
+  status: TaskStatus;
+  assignee: TaskAssigneeDto | null;
+  closedAt: number | null;
+  /** The task's immutable source message id (null when sourceless), so a
+   *  consumer can live-patch that source row's `linked_task` chip. */
+  sourceMessageId: string | null;
+  /** The task's thread placement within its conversation (null = main-line). */
+  threadRootId: string | null;
+}
+
 export class TaskBroadcaster {
   private readonly db: Db;
-  private readonly store: TaskStore;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
   private readonly conversations: ConversationRepo;
@@ -44,7 +71,6 @@ export class TaskBroadcaster {
 
   constructor(deps: TaskBroadcasterDeps) {
     this.db = deps.db;
-    this.store = deps.store;
     this.messages = deps.messages;
     this.agents = deps.agents;
     this.conversations = deps.conversations;
@@ -53,10 +79,8 @@ export class TaskBroadcaster {
     this.logger = deps.logger;
   }
 
-  /** Render a `TaskActor` (UserPrincipal | AgentPrincipal) into the
-   *  structured `TaskSystemActor` we embed in task system metadata.
-   *  Renderers read this to draw an actor pill without parsing
-   *  `message.content`. */
+  /** Render a `TaskActor` into the structured `TaskSystemActor` embedded in task
+   *  system metadata (renderers draw an actor pill without parsing content). */
   private taskSystemActor(actor: TaskActor): TaskSystemActor {
     if (actor.kind === 'user') {
       return { kind: 'user', id: actor.userId, name: 'user' };
@@ -70,9 +94,8 @@ export class TaskBroadcaster {
   }
 
   /** Log a single line per agent task op whenever the call crossed a
-   *  conversation/workspace boundary (the actor's running conversation
-   *  ≠ the task's owner conversation). Lightweight audit trail per
-   *  shiki / Cindy decision — no visible system message hook. */
+   *  conversation/workspace boundary. Lightweight audit trail (no visible
+   *  system message hook). */
   auditCrossOp(args: {
     op: 'claim' | 'unclaim' | 'status';
     actor: AgentActor;
@@ -84,12 +107,9 @@ export class TaskBroadcaster {
   }): void {
     if (args.sourceConv.id === args.ownerConv.id) return;
     const crossWorkspace = args.sourceConv.workspace_id !== args.ownerConv.workspace_id;
-    // warn-level (not info) per Cindy `JLdi59K-TD11CAWy`: backend
-    // default log level since #523 is `warn`, so info lines never make
-    // it to disk. The message text is intentionally framed as an
-    // audit log line, not an exception, so on-call reading
-    // `backend-<utc>.log` recognizes it as routine cross-conv activity
-    // rather than a fault.
+    // warn-level (not info) per Cindy `JLdi59K-TD11CAWy`: backend default log
+    // level is `warn`, so info lines never reach disk. Framed as an audit line,
+    // not an exception.
     this.logger.warn(
       {
         op: 'task_cross_op',
@@ -108,68 +128,44 @@ export class TaskBroadcaster {
     );
   }
 
-  async broadcast(args: {
-    conversation: ConversationDto;
-    kind: TaskNarrativeKind;
-    /** Canonical task body message id — same value for every mutation
-     *  on a given task (the row created by `task_create`). Used to
-     *  anchor cross-thread / cross-workspace task lookups without
-     *  relying on the workspace-scoped `task_number`. */
-    messageId: string;
-    taskNumber: number;
-    title: string;
-    /** Status snapshot AFTER this mutation. */
-    status: TaskStatus;
-    assignee: TaskAssigneeDto | null;
-    closedAt: number | null;
-    /** Who triggered the mutation. Rendered as an actor pill on the
-     *  task event row instead of being parsed back out of `sysMessage`. */
+  /** Insert the task system-event message. Runs inside the CALLER's transaction
+   *  (no own wrapper), so `task create` can capture the returned id and backfill
+   *  `tasks.created_event_message_id` atomically. `kind` never 'edit' (an edit
+   *  emits no system narrative). */
+  emitSystemMessage(args: TaskEventArgs & {
+    kind: TaskMutationKind;
     actor: TaskActor;
     sysMessage: string;
-  }): Promise<void> {
-    const conversationId = args.conversation.id;
-    const taskMessage = this.store.fetchMessage(args.messageId);
-    const threadRootId = taskMessage?.conversation_id === conversationId
-      ? taskMessage.thread_root_id
-      : null;
-
+  }): MessageDto {
     const systemActor: TaskSystemActor = this.taskSystemActor(args.actor);
-    const sysMsg = this.db.transaction(() =>
-      this.messages.insertForConversation({
-        conversationId,
-        fromKind: 'system',
-        content: args.sysMessage,
-        threadRootId,
-        metadata: {
-          subtype: taskSystemSubtype(args.kind),
-          task_number: args.taskNumber,
-          task_status: args.status,
-          task_message_id: args.messageId,
-          task_title: args.title,
-          task_assignee: args.assignee,
-          actor: systemActor,
-        },
-      }),
-    )();
+    return this.messages.insertForConversation({
+      conversationId: args.conversation.id,
+      fromKind: 'system',
+      content: args.sysMessage,
+      threadRootId: args.threadRootId,
+      metadata: {
+        subtype: taskSystemSubtype(args.kind),
+        task_number: args.taskNumber,
+        task_status: args.status,
+        task_id: args.taskId,
+        task_title: args.title,
+        task_assignee: args.assignee,
+        actor: systemActor,
+      },
+    });
+  }
 
-    // Publish FIRST (matches PR-1/PR-2/PR-3 invariant; today's tasks.ts
-    // awaits deliver before publish, this inverts that drift).
+  /** Fan out an already-inserted system event: publish the `message` event, the
+   *  `task_changed` events, and best-effort per-recipient delivery. Called
+   *  AFTER the mutation (and, for create, the event insert) commits. */
+  publish(args: TaskEventArgs, sysMsg: MessageDto): void {
+    const conversationId = args.conversation.id;
     this.events.publish(conversationId, {
       kind: 'message',
       payload: { message: sysMsg },
     });
-    this.publishTaskChanged({
-      conversation: args.conversation,
-      kind: args.kind,
-      messageId: args.messageId,
-      taskNumber: args.taskNumber,
-      title: args.title,
-      status: args.status,
-      assignee: args.assignee,
-      closedAt: args.closedAt,
-    });
+    this.publishTaskChanged(args);
 
-    // Best-effort, fire-and-forget delivery to recipients.
     const recipients = this.conversations.listAgents(conversationId);
     for (const ca of recipients) {
       void this.runtimeHost
@@ -183,40 +179,47 @@ export class TaskBroadcaster {
     }
   }
 
-  publishTaskChanged(args: {
-    conversation: ConversationDto;
-    kind: TaskChangedEvent['kind'];
-    messageId: string;
-    taskNumber: number;
-    title: string;
-    status: TaskStatus;
-    assignee: TaskAssigneeDto | null;
-    closedAt: number | null;
-  }): void {
+  /** Convenience for the mutation paths (claim/unclaim/status): insert the
+   *  system event in its own transaction, then publish + deliver. */
+  async broadcast(args: TaskEventArgs & {
+    kind: TaskMutationKind;
+    actor: TaskActor;
+    sysMessage: string;
+  }): Promise<void> {
+    const sysMsg = this.db.transaction(() => this.emitSystemMessage(args))();
+    this.publish(args, sysMsg);
+  }
+
+  publishTaskChanged(args: TaskEventArgs): void {
     const conversationId = args.conversation.id;
     const workspaceId = args.conversation.workspace_id;
-    // Isolated-thread conversations were retired (#task:1303): a task-bearing
-    // conversation is always a channel-like top-level conversation, so
-    // channel_id is its own id and the vestigial thread fields are null.
-    const channelId = args.conversation.id;
-    const taskMessage = this.store.fetchMessage(args.messageId);
-    const threadRootId = taskMessage?.conversation_id === conversationId
-      ? taskMessage.thread_root_id
-      : null;
+    // A task-bearing conversation is always a channel-like top-level
+    // conversation (#task:1303), so channel_id is its own id.
     const event: TaskChangedEvent = {
       kind: args.kind,
       workspace_id: workspaceId,
-      channel_id: channelId,
-      thread_root_id: threadRootId,
+      channel_id: conversationId,
+      thread_root_id: args.threadRootId,
       conversation_id: conversationId,
       task_number: args.taskNumber,
-      message_id: args.messageId,
+      task_id: args.taskId,
+      source_message_id: args.sourceMessageId,
       status: args.status,
       assignee: args.assignee,
       title: args.title,
       closed_at: args.closedAt,
     };
     this.events.publish(conversationId, { kind: 'task_changed', payload: event });
-    this.events.publishToScope(`workspace:${workspaceId}`, 'task_changed', event);
+    // Cross-conversation board fanout (the workspace task drawer) is the MUTATION
+    // /control axis, so it is member-gated — NOT workspace-wide. Publishing to
+    // `workspace:<id>` would leak a PRIVATE channel's task snapshot (title/status
+    // /assignee + source_message_id) to every workspace member, contradicting the
+    // `task list` conversation-membership gate. Fan out per-viewer to the task
+    // conversation's HUMAN members instead. The public-read axis is served
+    // separately by `conversation:<id>` above + the HTTP `linked_task` projection
+    // — both channel-read-scoped.
+    for (const member of this.conversations.listUsers(conversationId)) {
+      this.events.publishToScope(`viewer:${member.user_id}`, 'task_changed', event);
+    }
   }
 }

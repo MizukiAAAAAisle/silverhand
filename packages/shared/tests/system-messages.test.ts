@@ -113,6 +113,7 @@ describe('readTaskSystemMetadata + readTaskSystemMetadataPartial', () => {
     subtype: 'task_create',
     task_number: 1,
     task_status: 'todo',
+    task_id: 'task-1',
     task_message_id: 'msg-1',
     task_title: 'wire it up',
     task_assignee: null,

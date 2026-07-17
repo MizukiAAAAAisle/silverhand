@@ -1780,6 +1780,59 @@ describe('channel detail is_member + messages viewer_reacted neutralization', ()
     const eyes = msg.reactions.find((r: any) => r.emoji === '👀');
     expect(eyes.viewer_reacted).toBe(true);
   });
+
+  // `linked_task` is a conversation-visible READ projection, NOT member-gated.
+  // On a PUBLIC channel a workspace member browsing as a NON-channel-member
+  // reads the same task chip a member does — unlike `viewer_reacted` (personal
+  // relation, neutralized above). Only mutation + the cross-channel board are
+  // member-gated.
+  it('exposes linked_task to a public non-member (read projection, not member-gated)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const ws = (await (
+      await http(t).post('/api/workspaces', {
+        name: 'eng',
+        member_agent_ids: [agentId],
+      })
+    ).json()) as any;
+    const workspaceId = ws.workspace.id as string;
+    const pub = (await (
+      await http(t).post(`/api/workspaces/${workspaceId}/channels`, {
+        title: 'public-room',
+        member_agent_ids: [agentId],
+        visibility: 'public',
+      })
+    ).json()) as any;
+    const channelId = pub.channel.id as string;
+
+    // A source message from the agent, then a task bound to it via the agent
+    // create route (the agent is a channel member, so source is accessible).
+    const sourceId = new MessageRepo(t.ctx.db).insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'please fix the flaky test',
+    }).id;
+    const created = await http(t).post(
+      `/internal/conversations/${channelId}/agents/${agentId}/tasks/create`,
+      { tasks: [{ title: 'fix flaky test', source_message_id: sourceId }] },
+    );
+    expect(created.status).toBe(200);
+
+    // `teammate` is a workspace member but NOT a channel member.
+    t.ctx.db
+      .prepare('DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?')
+      .run(channelId, 'teammate');
+    const teammate = http(t, {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    });
+    const res = await teammate.get(`/api/channels/${channelId}/messages`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as any;
+    const src = body.messages.find((m: any) => m.id === sourceId);
+    expect(src.linked_task).not.toBeNull();
+    expect(src.linked_task).toMatchObject({ title: 'fix flaky test', status: 'todo' });
+  });
 });
 
 // Self-join a PUBLIC channel: the only non-member channel

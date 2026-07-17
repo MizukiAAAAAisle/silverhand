@@ -1,5 +1,5 @@
 /**
- * `silverhand task` — list, create, claim, unclaim, status.
+ * `silverhand task` — list, create, claim, unclaim, status, edit, detail.
  */
 import type { MessageSendTarget, TaskStatus } from '@silverhand/shared';
 import { CliError } from '../errors.js';
@@ -191,32 +191,49 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
 
 const createCommand: Command = {
   verb: 'create',
-  summary: 'Create one or more tasks (no auto-claim).',
+  summary: 'Create one task (optionally self-claim).',
   help: `silverhand task create --title <title> [--body <body>]
-                         [--title <title> [--body <body>]] ...
+                         [--source-message-id <id>]
+                         [--claim]
                          [--target channel|thread:<message_id>]
 
-Create tasks in the current channel/thread. Repeat --title (and optional
-following --body) to create multiple in one call. Each --body is paired
-with the most recent --title; if omitted, the title is reused as body.
+Create ONE task in the current channel/thread. --title is required; --body is
+optional (an omitted body stores an empty description — the title is NOT
+duplicated into the body). To create several tasks, call this once per task.
 
---target thread:<message_id> (optional) attributes the created task(s) to
-that message's thread (reply cluster) instead of the main line. Omit
---target, or pass --target channel, and the task lands on the main line as
-before. It applies to every task in the call. The id may be a thread root
-or any reply in it; the task is anchored to the cluster's root.
+--source-message-id <id> links the task to the message that prompted it
+(permanent 1:1 provenance). The source message MUST live in the same
+conversation as the task (this command's channel/thread). A message can back
+at most ONE task ever — for its whole lifetime, regardless of that task's
+status. A second create from the same source fails with \`source_conflict\`
+(exit 1); the error's \`details.existing_task\` points at the task that already
+owns it, so hand off to it (or reopen it) rather than re-creating.
 
-If you intend to work on these immediately, follow up with
-\`silverhand task claim --task-number <n>\`.
+--claim (optional) atomically self-claims the created task (lands in_progress
++ assigned to you) instead of leaving it unassigned todo. Requires the
+write_tasks capability in addition to create_tasks. \`task claim\` only claims
+tasks that already exist; this is the one-step create-and-claim.
+
+--target thread:<message_id> (optional) attributes the created task to that
+message's thread (reply cluster) instead of the main line. Omit --target, or
+pass --target channel, and the task lands on the main line. The id may be a
+thread root or any reply in it; the task is anchored to the cluster's root.
 
 Pre-flight failures (exit 1):
   --title not supplied  → missing_required_flag (use the minimal call
-                          shown above; or \`task claim --message-id <id>\`
-                          to promote an existing message)
+                          shown above)
   --message was supplied → flag_removed (use --title / --body)
 
-stdout: CreateTasksResult JSON.`,
-  flags: ['title', 'body', 'target', 'reply-to'] as const,
+Create failures (exit 1, structured stderr — NOT printed as success):
+  source_conflict              → code=conflict, details.existing_task
+  source_message_not_found     → code=not_found
+  source_not_accessible        → code=forbidden
+  source_conversation_mismatch → code=validation_error (source is in a
+                                 different conversation than the task)
+
+stdout (success only): CreateTasksResult JSON.`,
+  flags: ['title', 'body', 'source-message-id', 'target', 'reply-to'] as const,
+  booleanFlags: ['claim'] as const,
   // Agents reach for --message because half of the CLIs in their
   // training data treat it as the canonical "body" flag (gh, git,
   // hub, ...). 5/14 daily report logged one such hit. Routing it
@@ -228,50 +245,113 @@ stdout: CreateTasksResult JSON.`,
     message: {
       replacement: 'title+body',
       hint:
-        'silverhand task create takes --title (required) and --body (optional). ' +
-        'For one task use `silverhand task create --title "..." --body "..."`. ' +
-        'Repeat --title to create multiple in a single call.',
+        'silverhand task create takes --title (required) and --body (optional), ' +
+        'one task per call: `silverhand task create --title "..." --body "..."`.',
     },
   },
   async run({ client, args }) {
-    const titles = flagStringArray(args, 'title');
-    if (!titles || titles.length === 0) {
+    const title = flagString(args, 'title');
+    if (title === undefined) {
       // Daily reports group failures by `error_subkind + details.command +
       // details.flag` rather than by message text. Without a structured
       // subkind here this bucket would be keyed by the literal English
-      // sentence — any future copy edit (e.g. adding the
-      // `task claim --message-id` redirect below) would split the
-      // historical bucket and obscure the trend. The subkind is wide
-      // enough to cover any required-flag-missing case (`--task-number`,
-      // `--message-id`, ...) once we wire those throws the same way.
+      // sentence — any future copy edit would split the historical bucket.
       throw new CliError({
         code: 'validation_error',
         subkind: 'missing_required_flag',
         message:
-          'silverhand task create requires at least one --title. ' +
+          'silverhand task create requires --title. ' +
           'Minimal call: `silverhand task create --title "..." --body "..."`. ' +
-          'If you meant to turn an existing message into a task, use ' +
-          '`silverhand task claim --message-id <id>` instead — it ' +
-          'promotes-and-claims in one call without a fresh title.',
+          'To create a task from an existing message and start it in one ' +
+          'call, use `silverhand task create --title "..." ' +
+          '--source-message-id <id> --claim`.',
         retriable: false,
         details: { command: 'task create', flag: 'title' },
       });
     }
-    const bodiesArr = flagStringArray(args, 'body') ?? [];
-    const tasks = titles.map((title, idx) => {
-      const body = bodiesArr[idx];
-      return body ? { title, body } : { title };
-    });
+    const body = flagString(args, 'body');
+    const sourceMessageId = flagString(args, 'source-message-id');
     const target = parseTaskCreateTarget(
       flagString(args, 'target'),
       flagString(args, 'reply-to'),
     );
-    return client.createTasks({
-      tasks,
+    const claim = flagBool(args, 'claim');
+    const result = await client.createTasks({
+      tasks: [
+        {
+          title,
+          ...(body !== undefined ? { body } : {}),
+          ...(sourceMessageId ? { source_message_id: sourceMessageId } : {}),
+        },
+      ],
+      ...(claim ? { claim: true } : {}),
       ...(target ? { target } : {}),
     });
+    // The route returns 200 with a typed envelope even for business failures
+    // (so `source_conflict` keeps its `existing_task`). `create` is all-or-
+    // nothing: an `error` in the body is a FAILURE and must exit non-zero with
+    // structured stderr — never be printed to stdout as success.
+    if ('error' in result) {
+      throw createFailureToCliError(result);
+    }
+    return result;
   },
 };
+
+/** Translate a create-op failure envelope into a non-zero CliError. The
+ *  stable `code` drives the exit code + retriability; `source_conflict` keeps
+ *  its `existing_task` in `details` so the agent can hand off to the winner. */
+function createFailureToCliError(result: { error: string; existing_task?: unknown }): CliError {
+  switch (result.error) {
+    case 'source_conflict':
+      return new CliError({
+        code: 'conflict',
+        subkind: 'source_conflict',
+        message:
+          'a task already exists for that --source-message-id (permanent 1:1 ' +
+          'provenance). Hand off to the existing task (see details.existing_task) ' +
+          'or reopen it instead of re-creating.',
+        retriable: false,
+        details: {
+          error: result.error,
+          ...(result.existing_task ? { existing_task: result.existing_task } : {}),
+        },
+      });
+    case 'source_not_accessible':
+    case 'not_conversation_member':
+      return new CliError({
+        code: 'forbidden',
+        message: `task create failed: ${result.error}`,
+        retriable: false,
+        details: { error: result.error },
+      });
+    case 'source_message_not_found':
+    case 'reply_target_not_found':
+    case 'conversation_not_found':
+    case 'agent_not_found':
+      return new CliError({
+        code: 'not_found',
+        message: `task create failed: ${result.error}`,
+        retriable: false,
+        details: { error: result.error },
+      });
+    case 'conversation_closed':
+      return new CliError({
+        code: 'conflict',
+        message: 'task create failed: the conversation is closed',
+        retriable: false,
+        details: { error: result.error },
+      });
+    default:
+      // source_conversation_mismatch and any future op error: an input problem.
+      return new CliError({
+        code: 'validation_error',
+        message: `task create failed: ${result.error}`,
+        retriable: false,
+        details: { error: result.error },
+      });
+  }
+}
 
 function parseTaskCreateTarget(
   rawTarget: string | undefined,
@@ -343,16 +423,18 @@ function resolveWorkspaceSelector(
 
 const claimCommand: Command = {
   verb: 'claim',
-  summary: 'Claim tasks by task number, or promote-and-claim by message id.',
-  help: `silverhand task claim (--task-number N [--task-number N ...] |
-                          --message-id <id> [--message-id <id> ...])
+  summary: 'Claim existing tasks by task number.',
+  help: `silverhand task claim --task-number N [--task-number N ...]
                          [--workspace-id <id> | --workspace <name>]
 
-Atomic claim. If a task is already claimed by someone else, the result
-entry has success=false with a reason. Always move on when a claim
-fails — do not retry.
+Atomic claim of tasks that ALREADY exist. If a task is already claimed by
+someone else, the result entry has success=false with a reason. Always
+move on when a claim fails — do not retry.
 
 Claiming a "todo" task auto-advances it to "in_progress".
+
+To create a task from a message and start it in one call, use
+\`silverhand task create --title "..." --source-message-id <id> --claim\`.
 
 Workspace selector (cross-workspace claims):
   --workspace-id <id>   Target a specific workspace by id.
@@ -362,27 +444,22 @@ Workspace selector (cross-workspace claims):
   (default)             The actor's current workspace.
 
 You must be a member of the resolved workspace; otherwise the claim
-fails with \`workspace_membership_required\`. Promotion (--message-id
-of a not-yet-task message) always targets the current conversation
-regardless of the selector — a message can only become a task in its
-own conversation.
+fails with \`workspace_membership_required\`.
 
 stdout: ClaimTasksResult JSON.`,
-  flags: ['task-number', 'message-id', 'workspace-id', 'workspace'] as const,
+  flags: ['task-number', 'workspace-id', 'workspace'] as const,
   async run({ client, args }) {
     const taskNumbers = flagNumberArray(args, 'task-number');
-    const messageIds = flagStringArray(args, 'message-id');
-    if (!taskNumbers && !messageIds) {
+    if (!taskNumbers) {
       throw new CliError({
         code: 'validation_error',
-        message: 'task claim requires --task-number or --message-id (or both)',
+        message: 'task claim requires --task-number',
         retriable: false,
       });
     }
     const selector = resolveWorkspaceSelector(args);
     return client.claimTasks({
-      ...(taskNumbers ? { task_numbers: taskNumbers } : {}),
-      ...(messageIds ? { message_ids: messageIds } : {}),
+      task_numbers: taskNumbers,
       ...selector,
     });
   },
@@ -491,10 +568,103 @@ stdout: TaskMutationResult JSON.`,
   },
 };
 
+const editCommand: Command = {
+  verb: 'edit',
+  summary: "Edit a task's title and/or content (last-write-wins).",
+  help: `silverhand task edit --task-number N
+                        [--title <title>] [--body <body>]
+                        [--workspace-id <id> | --workspace <name>]
+
+Edit the current definition (title and/or content) of an existing task.
+Provide at least one of --title / --body. --body sets the full content;
+pass --body "" to clear it. Fields you omit are left unchanged.
+
+Last-write-wins: the edit is applied directly and the most recent
+successful write wins — there is no concurrency check. It never changes
+status or assignee. The result carries the full updated task detail.
+
+Workspace selector — see \`silverhand task claim --help\`.
+
+stdout: TaskEditResult JSON.`,
+  flags: [
+    'task-number',
+    'title',
+    'body',
+    'workspace-id',
+    'workspace',
+  ] as const,
+  async run({ client, args }) {
+    const taskNumber = flagNumber(args, 'task-number');
+    if (taskNumber === undefined) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'missing_required_flag',
+        message: 'task edit requires --task-number',
+        retriable: false,
+        details: { command: 'task edit', flag: 'task-number' },
+      });
+    }
+    const title = flagString(args, 'title');
+    const body = flagString(args, 'body');
+    if (title === undefined && body === undefined) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'missing_required_flag',
+        message: 'task edit requires at least one of --title or --body',
+        retriable: false,
+        details: { command: 'task edit' },
+      });
+    }
+    const selector = resolveWorkspaceSelector(args);
+    return client.editTask({
+      task_number: taskNumber,
+      ...(title !== undefined ? { title } : {}),
+      ...(body !== undefined ? { body } : {}),
+      ...selector,
+    });
+  },
+};
+
+const detailCommand: Command = {
+  verb: 'detail',
+  summary: "Read one task's full detail (content + provenance).",
+  help: `silverhand task detail --task-number N
+                         [--workspace-id <id> | --workspace <name>]
+
+Read a single task's full definition: title, complete content,
+last-editor attribution, the provenance \`source_message_id\`,
+and a viewer-resolved \`nav\` target for "view in conversation".
+
+--task-number is the task's per-workspace number (the \`task_number\` field
+on each row from \`task list\`, and what \`#task:N\` refers to).
+
+Workspace selector — see \`silverhand task claim --help\`. Defaults to the
+actor's current workspace.
+
+stdout: { "task": TaskDetailDto }`,
+  flags: ['task-number', 'workspace-id', 'workspace'] as const,
+  async run({ client, args }) {
+    const taskNumber = flagNumber(args, 'task-number');
+    if (taskNumber === undefined) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'missing_required_flag',
+        message: 'task detail requires --task-number (from `task list` rows)',
+        retriable: false,
+        details: { command: 'task detail', flag: 'task-number' },
+      });
+    }
+    const selector = resolveWorkspaceSelector(args);
+    return client.getTaskDetail({ task_number: taskNumber, ...selector });
+  },
+};
+
 export const taskCommands: readonly Command[] = [
   listCommand,
   createCommand,
   claimCommand,
   unclaimCommand,
   statusCommand,
+  editCommand,
+  detailCommand,
 ];

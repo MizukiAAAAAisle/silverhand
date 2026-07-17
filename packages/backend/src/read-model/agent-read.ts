@@ -18,7 +18,13 @@
 // module-private.
 import type { BackendContext } from '../context.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
-import { messageRowToDto } from '../repos/message-repo.js';
+import {
+  LINKED_TASK_JOINS,
+  LINKED_TASK_SELECT,
+  linkedTaskFromRow,
+  messageRowToDto,
+  type LinkedTaskProjectionRow,
+} from '../repos/message-repo.js';
 import {
   loadReactionAggregates,
   type ReactionViewer,
@@ -44,8 +50,7 @@ const SEARCH_EXCERPT_CONTEXT_CHARS = 80;
 
 type ConversationDto = NonNullable<ReturnType<ConversationRepo['get']>>;
 
-type HistoryMessageRow = MessageRow & {
-  task_assignee_name: string | null;
+type HistoryMessageRow = MessageRow & LinkedTaskProjectionRow & {
   sender_agent_name: string | null;
 };
 
@@ -229,7 +234,7 @@ function historyRowToMessage(
   includeContent: boolean,
   reactions: ReactionAggregateDto[] | null,
 ): ReadHistoryMessage {
-  const dto = messageRowToDto(row, { assigneeName: row.task_assignee_name });
+  const dto = messageRowToDto(row, { linkedTask: linkedTaskFromRow(row) });
   return {
     message_ref: messageRef(row, target),
     sender: senderRef(row),
@@ -265,10 +270,10 @@ function threadScopeParams(threadRootId: string | null): string[] {
 function historySelectSql(whereSql: string, orderSql: string, limitSql = 'LIMIT ?'): string {
   return `SELECT
             m.*,
-            assignee.display_name AS task_assignee_name,
+            ${LINKED_TASK_SELECT},
             sender.display_name AS sender_agent_name
           FROM messages m
-          LEFT JOIN agents assignee ON assignee.id = m.task_assignee_agent_id
+          ${LINKED_TASK_JOINS}
           LEFT JOIN agents sender ON sender.id = m.from_agent_id
          WHERE ${whereSql}
          ${orderSql}
@@ -728,7 +733,7 @@ export function buildAgentSearchMessagesDto(
     .prepare<Array<string | number>, AgentSearchMessageRow>(
       `SELECT
           m.*,
-          assignee.display_name AS task_assignee_name,
+          ${LINKED_TASK_SELECT},
           sender.display_name AS sender_agent_name,
           conv.workspace_id AS workspace_id,
           conv.kind AS conversation_kind,
@@ -738,7 +743,7 @@ export function buildAgentSearchMessagesDto(
          JOIN conversation_agents ca
            ON ca.conversation_id = conv.id
           AND ca.agent_id = ?
-         LEFT JOIN agents assignee ON assignee.id = m.task_assignee_agent_id
+         ${LINKED_TASK_JOINS}
          LEFT JOIN agents sender ON sender.id = m.from_agent_id
         WHERE ${where.join(' AND ')}
         ORDER BY m.created_at DESC, m.seq DESC

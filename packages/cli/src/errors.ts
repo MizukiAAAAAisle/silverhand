@@ -62,7 +62,11 @@ export type ErrorSubkind =
   | 'invalid_utf8'
   | 'unknown_flag'
   | 'enum_invalid'
-  | 'mutually_exclusive';
+  | 'mutually_exclusive'
+  /** `task create --source-message-id` hit the permanent 1:1 provenance lock:
+   *  another task already owns that source. Carries `details.existing_task` so
+   *  the agent can hand off to the winner instead of retrying. */
+  | 'source_conflict';
 
 export interface CliErrorPayload {
   code: ErrorCode;

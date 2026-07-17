@@ -4,14 +4,17 @@ import { decodeMessageSeq } from '@silverhand/shared';
 import {
   formatAttachmentLabel,
   parseAttachmentLabel,
+  readTaskSystemMetadataPartial,
 } from '@silverhand/shared';
 import type {
   AttachmentSnapshot,
   FromKind,
+  LinkedTaskDto,
   MessageDto,
   MessageRow,
   ReplyBadgeSummary,
   TaskAssigneeDto,
+  TaskStatus,
   ThreadReplier,
   ThreadSummary,
   ThreadSummaryInvariant,
@@ -192,34 +195,84 @@ export interface ListWindowOpts {
   aroundMessageId?: string | null;
 }
 
-type MessageRowWithTaskAssignee = MessageRow & {
-  task_assignee_name: string | null;
-};
+/** A message row joined with the task LINKED to it via that task's immutable
+ *  source provenance (`tasks.source_message_id == messages.id`). The `lt_*`
+ *  columns are the joined `tasks` fields; all null when the message is not a
+ *  task's source. Replaces the retired flat `messages.task_*` "message IS task"
+ *  projection. */
+type MessageRowWithLinkedTask = MessageRow & LinkedTaskProjectionRow;
 
-function messageRowWithTaskAssigneeToDto(
-  row: MessageRowWithTaskAssignee,
-): MessageDto {
-  return messageRowToDto(row, { assigneeName: row.task_assignee_name });
+/** The joined `tasks` columns projected alongside a message row via
+ *  `tasks.source_message_id == messages.id`. All null when the message is not a
+ *  task's source. Shared across every message read path that carries
+ *  `linked_task` (message-repo, saved-message-repo, agent-read) — pair it with
+ *  {@link LINKED_TASK_SELECT} / {@link LINKED_TASK_JOINS} in the query and
+ *  {@link linkedTaskFromRow} in the mapper so the projection never drifts. */
+export interface LinkedTaskProjectionRow {
+  lt_id: string | null;
+  lt_task_number: number | null;
+  lt_title: string | null;
+  lt_status: TaskStatus | null;
+  lt_assignee_agent_id: string | null;
+  lt_assignee_user_id: string | null;
+  lt_assignee_agent_name: string | null;
+  lt_assignee_user_name: string | null;
+}
+
+/** SELECT-list fragment for the linked-task projection. Assumes the joined
+ *  message table is aliased `m` and the joins from {@link LINKED_TASK_JOINS}
+ *  are in scope (`lt` / `lta` / `ltu`). */
+export const LINKED_TASK_SELECT = `lt.id AS lt_id, lt.task_number AS lt_task_number,
+       lt.title AS lt_title, lt.status AS lt_status,
+       lt.assignee_agent_id AS lt_assignee_agent_id,
+       lt.assignee_user_id AS lt_assignee_user_id,
+       lta.display_name AS lt_assignee_agent_name,
+       ltu.display_name AS lt_assignee_user_name`;
+
+/** LEFT JOINs that back {@link LINKED_TASK_SELECT}. Assumes the message table
+ *  is aliased `m`. */
+export const LINKED_TASK_JOINS = `LEFT JOIN tasks lt ON lt.source_message_id = m.id
+       LEFT JOIN agents lta ON lta.id = lt.assignee_agent_id
+       LEFT JOIN users ltu ON ltu.id = lt.assignee_user_id`;
+
+/** Build the `LinkedTaskDto` from a joined message+task row, or null when no
+ *  task sources this message. Viewer-invariant (task facts only — no per-viewer
+ *  capability rides MessageDto). */
+export function linkedTaskFromRow(row: LinkedTaskProjectionRow): LinkedTaskDto | null {
+  if (row.lt_id === null || row.lt_task_number === null || row.lt_status === null) {
+    return null;
+  }
+  let assignee: TaskAssigneeDto | null = null;
+  if (row.lt_assignee_agent_id) {
+    assignee = {
+      type: 'agent',
+      id: row.lt_assignee_agent_id,
+      name: row.lt_assignee_agent_name ?? row.lt_assignee_agent_id,
+    };
+  } else if (row.lt_assignee_user_id) {
+    assignee = {
+      type: 'user',
+      id: row.lt_assignee_user_id,
+      name: row.lt_assignee_user_name ?? row.lt_assignee_user_id,
+    };
+  }
+  return {
+    task_id: row.lt_id,
+    task_number: row.lt_task_number,
+    title: row.lt_title ?? '',
+    status: row.lt_status,
+    assignee,
+  };
+}
+
+function messageRowWithLinkedTaskToDto(row: MessageRowWithLinkedTask): MessageDto {
+  return messageRowToDto(row, { linkedTask: linkedTaskFromRow(row) });
 }
 
 export function messageRowToDto(
   row: MessageRow,
-  opts?: { assigneeName?: string | null },
+  opts?: { linkedTask?: LinkedTaskDto | null },
 ): MessageDto {
-  let assignee: TaskAssigneeDto | null = null;
-  if (row.task_assignee_agent_id) {
-    assignee = {
-      type: 'agent',
-      id: row.task_assignee_agent_id,
-      name: opts?.assigneeName ?? row.task_assignee_agent_id,
-    };
-  } else if (row.task_assignee_user_id) {
-    assignee = {
-      type: 'user',
-      id: row.task_assignee_user_id,
-      name: opts?.assigneeName ?? row.task_assignee_user_id,
-    };
-  }
   const metadata = row.metadata
     ? (JSON.parse(row.metadata) as Record<string, unknown>)
     : null;
@@ -240,12 +293,9 @@ export function messageRowToDto(
     seq: decodeMessageSeq(row.seq),
     created_at: row.created_at,
     thread_root_id: row.thread_root_id,
-    task_number: row.task_number,
-    task_status: row.task_status,
-    task_title: row.task_title,
-    task_workspace_id: row.task_workspace_id,
-    task_closed_at: row.task_closed_at,
-    task_assignee: assignee,
+    // The task linked to this message via its source provenance, or null. A
+    // fresh insert (no join, no opts) is never a task source → null.
+    linked_task: opts?.linkedTask ?? null,
   };
 }
 
@@ -304,6 +354,22 @@ export function extractSubtypeFromRow(
   const metadata = parseMessageMetadata(row.metadata);
   const subtype = metadata?.subtype;
   return typeof subtype === 'string' ? subtype : null;
+}
+
+/** Task-header fields for the stdin meta suffix (`task=#<n> status=<status>`),
+ *  derived from a task system-event's own metadata (`task_create` / `task_claim`
+ *  / `task_unclaim` / `task_status`). Null when the row is not a task system
+ *  event. Replaces the retired flat `messages.task_*` columns as the stdin
+ *  header source (v60): a task is a first-class aggregate, so the header rides
+ *  the immutable system-event snapshot, not message columns. Uses the partial
+ *  reader so legacy pre-enrichment rows still yield the number+status. */
+export function extractTaskHeaderFromRow(
+  row: { metadata: string | null },
+): { task_number: number; task_status: TaskStatus } | null {
+  const partial = readTaskSystemMetadataPartial(parseMessageMetadata(row.metadata));
+  return partial
+    ? { task_number: partial.task_number, task_status: partial.task_status }
+    : null;
 }
 
 function parseMessageMetadata(metadata: string | null): Record<string, unknown> | null {
@@ -378,7 +444,7 @@ export class MessageRepo {
       );
     }
 
-    let rows: MessageRowWithTaskAssignee[];
+    let rows: MessageRowWithLinkedTask[];
 
     if (aroundMessageId !== null) {
       // Resolve anchor seq inside this conversation. We deliberately
@@ -457,7 +523,7 @@ export class MessageRepo {
         : this.existsWithSeq(conversationId, '>', maxSeq, scope);
 
     return {
-      messages: rows.map(r => messageRowWithTaskAssigneeToDto(r)),
+      messages: rows.map(r => messageRowWithLinkedTaskToDto(r)),
       reply_counts_by_root: {},
       has_more_before: hasMoreBefore,
       has_more_after: hasMoreAfter,
@@ -825,7 +891,7 @@ export class MessageRepo {
     beforeSeq: number | null,
     limit: number,
     scope: WindowScope,
-  ): MessageRowWithTaskAssignee[] {
+  ): MessageRowWithLinkedTask[] {
     return this.db
       .prepare<
         [
@@ -839,9 +905,9 @@ export class MessageRepo {
           string | null,
           number,
         ],
-        MessageRowWithTaskAssignee
+        MessageRowWithLinkedTask
       >(
-        `SELECT m.*, aa.display_name AS task_assignee_name
+        `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM (
              SELECT *
                FROM messages
@@ -851,7 +917,7 @@ export class MessageRepo {
               ORDER BY seq DESC
               LIMIT ?
            ) m
-          LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+          ${LINKED_TASK_JOINS}
           ORDER BY m.seq ASC`,
       )
       .all(
@@ -871,7 +937,7 @@ export class MessageRepo {
     afterSeq: number,
     limit: number,
     scope: WindowScope,
-  ): MessageRowWithTaskAssignee[] {
+  ): MessageRowWithLinkedTask[] {
     if (limit <= 0) return [];
     return this.db
       .prepare<
@@ -885,11 +951,11 @@ export class MessageRepo {
           string | null,
           number,
         ],
-        MessageRowWithTaskAssignee
+        MessageRowWithLinkedTask
       >(
-        `SELECT m.*, aa.display_name AS task_assignee_name
+        `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
-           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+           ${LINKED_TASK_JOINS}
           WHERE m.conversation_id = ?
             AND m.seq > ?
             AND ${streamScopePredicate('m.')}
@@ -906,7 +972,7 @@ export class MessageRepo {
     conversationId: string,
     messageId: string,
     scope: WindowScope,
-  ): MessageRowWithTaskAssignee | null {
+  ): MessageRowWithLinkedTask | null {
     const row = this.db
       .prepare<
         [
@@ -918,11 +984,11 @@ export class MessageRepo {
           string | null,
           string | null,
         ],
-        MessageRowWithTaskAssignee
+        MessageRowWithLinkedTask
       >(
-        `SELECT m.*, aa.display_name AS task_assignee_name
+        `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
-           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+           ${LINKED_TASK_JOINS}
           WHERE m.conversation_id = ?
             AND m.id = ?
             AND ${streamScopePredicate('m.')}`,
@@ -997,14 +1063,14 @@ export class MessageRepo {
 
   getById(id: string): MessageDto | null {
     const row = this.db
-      .prepare<[string], MessageRowWithTaskAssignee>(
-        `SELECT m.*, aa.display_name AS task_assignee_name
+      .prepare<[string], MessageRowWithLinkedTask>(
+        `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
-           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+           ${LINKED_TASK_JOINS}
           WHERE m.id = ?`,
       )
       .get(id);
-    return row ? messageRowWithTaskAssigneeToDto(row) : null;
+    return row ? messageRowWithLinkedTaskToDto(row) : null;
   }
 
   /**
@@ -1032,10 +1098,10 @@ export class MessageRepo {
     subtype: string,
   ): MessageDto | null {
     const row = this.db
-      .prepare<[string, string], MessageRowWithTaskAssignee>(
-        `SELECT m.*, aa.display_name AS task_assignee_name
+      .prepare<[string, string], MessageRowWithLinkedTask>(
+        `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
-           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+           ${LINKED_TASK_JOINS}
           WHERE m.conversation_id = ?
             AND m.from_kind = 'system'
             AND json_extract(m.metadata, '$.subtype') = ?
@@ -1043,7 +1109,7 @@ export class MessageRepo {
           LIMIT 1`,
       )
       .get(conversationId, subtype);
-    return row ? messageRowWithTaskAssigneeToDto(row) : null;
+    return row ? messageRowWithLinkedTaskToDto(row) : null;
   }
 
   insertForConversation(params: {
@@ -1138,7 +1204,7 @@ export class MessageRepo {
       Math.max(1, limit),
       { mode: 'all' },
     )
-      .map(messageRowWithTaskAssigneeToDto);
+      .map(messageRowWithLinkedTaskToDto);
   }
 
   /** Stream-scoped variant of `listAfterSeq`: only messages in the given
@@ -1155,11 +1221,11 @@ export class MessageRepo {
     return this.db
       .prepare<
         [string, string | null, number, number],
-        MessageRowWithTaskAssignee
+        MessageRowWithLinkedTask
       >(
-        `SELECT m.*, aa.display_name AS task_assignee_name
+        `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
-           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+           ${LINKED_TASK_JOINS}
           WHERE m.conversation_id = ?
             AND m.thread_root_id IS ?
             AND m.seq > ?
@@ -1167,7 +1233,7 @@ export class MessageRepo {
           LIMIT ?`,
       )
       .all(conversationId, threadRootId, afterSeq, Math.max(1, limit))
-      .map(messageRowWithTaskAssigneeToDto);
+      .map(messageRowWithLinkedTaskToDto);
   }
 
   /** All messages in a thread stream with `seq < beforeSeq`, ordered ASC.
@@ -1184,17 +1250,17 @@ export class MessageRepo {
     beforeSeq: number,
   ): MessageDto[] {
     return this.db
-      .prepare<[string, string, number], MessageRowWithTaskAssignee>(
-        `SELECT m.*, aa.display_name AS task_assignee_name
+      .prepare<[string, string, number], MessageRowWithLinkedTask>(
+        `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
-           LEFT JOIN agents aa ON aa.id = m.task_assignee_agent_id
+           ${LINKED_TASK_JOINS}
           WHERE m.conversation_id = ?
             AND m.thread_root_id IS ?
             AND m.seq < ?
           ORDER BY m.seq ASC`,
       )
       .all(conversationId, threadRootId, beforeSeq)
-      .map(messageRowWithTaskAssigneeToDto);
+      .map(messageRowWithLinkedTaskToDto);
   }
 
   /** Fetch a message by id, scoped to one conversation. Returns null when
@@ -1205,7 +1271,7 @@ export class MessageRepo {
     messageId: string,
   ): MessageDto | null {
     const row = this.fetchById(conversationId, messageId, { mode: 'all' });
-    return row ? messageRowWithTaskAssigneeToDto(row) : null;
+    return row ? messageRowWithLinkedTaskToDto(row) : null;
   }
 
   private reserveNextSeq(conversationId: string): number {

@@ -1075,12 +1075,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
-    sendAsTaskWriter: {
-      createOpenTaskFromMessageInTxn: args =>
-        ctx.taskService.createOpenTaskFromMessageInTxn(args),
-      announceOpenTaskCreated: args =>
-        ctx.taskService.announceOpenTaskCreated(args),
-    },
   });
   ctx.taskService = new TaskService({
     db,

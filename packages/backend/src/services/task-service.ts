@@ -2,9 +2,11 @@ import type { Database as Db } from 'better-sqlite3';
 import {
   type ClaimErrorCode,
   type ClaimResultEntry,
-  type ConversationDto,
   type CreateTasksResult,
+  type MessageDto,
   type TaskAssigneeDto,
+  type TaskDetailDto,
+  type TaskEditResult,
   type TaskMutationResult,
   type TaskStatus,
   type TaskSummaryDto,
@@ -12,11 +14,9 @@ import {
 import { assertActorConversationMatch } from '../auth/principal.js';
 import { TaskStore } from './task/store.js';
 import { TaskAccessControl } from './task/access.js';
-import { TaskBroadcaster } from './task/broadcaster.js';
+import { TaskBroadcaster, type TaskEventArgs } from './task/broadcaster.js';
 import {
   failClaim,
-  firstLine,
-  isThreadAnchor,
   mutationFailure,
   userCanAccessConversation,
   VALID_TRANSITIONS,
@@ -25,6 +25,7 @@ import {
   type AgentTaskRef,
   type ClaimTaskInput,
   type CreateTasksInput,
+  type EditTaskInput,
   type ListTasksFilters,
   type TaskActor,
   type TaskServiceOptions,
@@ -42,6 +43,7 @@ export type {
   AgentCapabilityChecker,
   ClaimTaskInput,
   CreateTasksInput,
+  EditTaskInput,
   ListTasksFilters,
   TaskActor,
   TaskServiceOptions,
@@ -50,48 +52,54 @@ export type {
   WorkspaceSelector,
 } from './task/contracts.js';
 
+/** Failure envelope from the agent detail-workspace resolver. */
+export type AgentDetailWorkspaceFailure = {
+  code:
+    | 'conversation_not_found'
+    | 'unknown_workspace'
+    | 'ambiguous_workspace'
+    | 'workspace_membership_required';
+  reason: string;
+  candidates?: string[];
+};
+
+/** A committed task snapshot built inside a mutation transaction, BEFORE the
+ *  owner conversation is resolved. The post-commit broadcast injects
+ *  `conversation`; the transaction never fabricates one. */
+type PendingTaskEvent = Omit<TaskEventArgs, 'conversation'>;
+
 /**
- * TaskService is the single owner of task create / claim / unclaim /
- * status side effects. Routes translate auth + input shape and call
- * one method per op, parameterized by `actor`. Bulk fan-out (claim
- * with mixed task_numbers + message_ids) lives in the agent route,
- * not here — service is single-target.
+ * TaskService is the single owner of task create / claim / unclaim / status /
+ * edit side effects over the first-class `tasks` aggregate (v60). Routes
+ * translate auth + input shape and call one method per op, parameterized by
+ * `actor`. Bulk fan-out (claim of multiple task numbers) lives in the agent
+ * route, not here — the service is single-target.
+ *
+ * Identity model (H3): the canonical task key is `tasks.id`. HUMAN routes key
+ * by `taskId` (the REST path param, from the board DTO); the AGENT CLI keys by
+ * `task_number` (+ an optional workspace selector), the human/agent-facing
+ * resolver. A message id NEVER selects a task — it may only name a source /
+ * navigation ref.
  *
  * Contract:
  * - Each mutating op runs validate + write inside ONE db.transaction().
- * - After commit, side effects fire in this exact order:
- *     1. insert system narrative message (own small txn)
- *     2. publish 'message' event for the system narrative
- *     3. publish 'task_changed' on conversation scope
- *     4. publishToScope('workspace:<wid>', 'task_changed')
- *     5. best-effort, fire-and-forget per-recipient deliverMessage
- *   Today's tasks.ts awaits deliver before publishing — PR-5 inverts
- *   that to match PR-1/PR-2/PR-3.
- * - For agent ops, target workspace is resolved from the optional
- *   `workspace_id` / `workspace_name` selector or defaults to the
- *   actor's current conversation's workspace. The agent must be a
- *   member of the resolved workspace. Cross-channel within the same
- *   workspace is permitted; the legacy `wrong_conversation` gate is
- *   only retained on the message-id promotion path (a regular
- *   message can only become a task in its own conversation).
- * - Number scope (`task_workspace_id`) is the physical
- *   `conversation.workspace_id`. PR-6 makes agent_home workspaces real,
- *   so task DTO workspace_id is the natural physical scope for regular
- *   and DM alike.
- * - Return shape stays `{success:false, reason, code}` (preserves the
- *   MCP claim_tasks tool contract); typed `code` is additive.
+ * - `task create` is one txn: insert the `tasks` row, emit the `task_create`
+ *   system event, and backfill `created_event_message_id` — then publish +
+ *   deliver AFTER commit. It creates NO ordinary anchor message. Every task
+ *   action's conversational footprint is a system event, never a body message.
+ * - claim/unclaim/status commit the mutation, then broadcast the system event.
+ * - For agent ops, the target workspace resolves from the optional
+ *   `workspace_id` / `workspace_name` selector or defaults to the actor's
+ *   current conversation's workspace; the agent must be a member.
  *
- * This class is the task-lifecycle aggregate root: it owns the mutation
- * transactions and their invariants directly. Peripheral concerns are
- * delegated to collaborators constructed here — `TaskStore` (all task-row
- * SQL + the read queries), `TaskAccessControl` (pre-tx actor / workspace /
- * message-id authorization), and `TaskBroadcaster` (post-commit system
- * narrative, `task_changed` events, delivery, and cross-op audit).
+ * This class is the task-lifecycle aggregate root. Peripheral concerns are
+ * delegated to `TaskStore` (all `tasks` SQL + reads + nav resolution),
+ * `TaskAccessControl` (pre-tx actor / workspace authorization), and
+ * `TaskBroadcaster` (system event, `task_changed`, delivery, cross-op audit).
  */
 export class TaskService {
   private readonly db: Db;
   private readonly conversations: TaskServiceOptions['conversations'];
-  private readonly messages: TaskServiceOptions['messages'];
   private readonly agents: TaskServiceOptions['agents'];
   private readonly canUseCapability: AgentCapabilityChecker;
   private readonly store: TaskStore;
@@ -101,7 +109,6 @@ export class TaskService {
   constructor(opts: TaskServiceOptions) {
     this.db = opts.db;
     this.conversations = opts.conversations;
-    this.messages = opts.messages;
     this.agents = opts.agents;
     this.canUseCapability = opts.canUseCapability;
     this.store = new TaskStore({
@@ -131,8 +138,8 @@ export class TaskService {
     return this.store.list(filters);
   }
 
-  getByMessageId(messageId: string, actor: TaskActor): TaskSummaryDto | null {
-    return this.store.getByMessageId(messageId, actor);
+  getById(taskId: string, actor: TaskActor): TaskSummaryDto | null {
+    return this.store.getById(taskId, actor);
   }
 
   // ── Create ──────────────────────────────────────────────────────
@@ -153,7 +160,7 @@ export class TaskService {
     let threadRootId: string | null = null;
     const targetMessageId = this.taskThreadTargetMessageId(input);
     if (targetMessageId) {
-      const target = this.store.fetchMessage(targetMessageId);
+      const target = this.store.fetchMessageRef(targetMessageId);
       if (!target || target.conversation_id !== input.conversationId) {
         return { error: 'reply_target_not_found' };
       }
@@ -161,109 +168,153 @@ export class TaskService {
     }
 
     const taskWorkspaceId = conversation.workspace_id;
-    const created: { message_id: string; task_number: number; title: string }[] =
-      this.db.transaction(() => {
-        const out: { message_id: string; task_number: number; title: string }[] = [];
-        for (const t of input.tasks) {
-          const msg = this.messages.insertForConversation({
-            conversationId: input.conversationId,
-            fromKind: input.actor.kind,
-            fromAgentId: input.actor.kind === 'agent' ? input.actor.agentId : null,
-            fromUserId: input.actor.kind === 'user' ? input.actor.userId : null,
-            content: t.body && t.body.length > 0 ? t.body : t.title,
-            threadRootId,
-          });
-          const nextNumber = this.store.writeOpenTaskRow(msg.id, taskWorkspaceId, t.title);
-          out.push({ message_id: msg.id, task_number: nextNumber, title: t.title });
-        }
-        return out;
-      })();
 
-    const actorLabel = this.actorLabel(input.actor);
-    for (const t of created) {
-      await this.broadcaster.broadcast({
-        conversation,
-        kind: 'create',
-        messageId: t.message_id,
-        taskNumber: t.task_number,
-        title: t.title,
-        status: 'todo',
-        assignee: null,
-        closedAt: null,
-        actor: input.actor,
-        sysMessage: `${actorLabel} created task #${t.task_number} "${t.title}"`,
-      });
+    // Pre-txn source validation. `source_message_id` is a permanent 1:1
+    // provenance identity: the source must exist, live in the SAME conversation
+    // as the task (v1 contract — so the `linked_task` chip on the source row and
+    // the task's own conversation events converge in one place), be readable by
+    // the actor, and not already back another task. The UNIQUE index is the race
+    // backstop below — it also covers one batch naming the same source twice (the
+    // 2nd INSERT collides and rolls the whole batch back), so no separate typed
+    // pre-check for it.
+    for (const t of input.tasks) {
+      if (!t.sourceMessageId) continue;
+      const srcErr = this.validateTaskSource(input.actor, t.sourceMessageId, input.conversationId);
+      if (srcErr) return srcErr;
     }
 
-    return { tasks: created };
+    // Atomic self-claim only when an agent explicitly asked for it. Humans
+    // create unassigned; a user actor's `claim` is meaningless and ignored.
+    const claimByAgentId =
+      input.claim && input.actor.kind === 'agent' ? input.actor.agentId : null;
+    const status: TaskStatus = claimByAgentId ? 'in_progress' : 'todo';
+    const assignee = claimByAgentId ? this.assigneeDtoForAgent(claimByAgentId) : null;
+    const actorLabel = this.actorLabel(input.actor);
+    const creatorKind = input.actor.kind;
+    const creatorAgentId = input.actor.kind === 'agent' ? input.actor.agentId : null;
+    const creatorUserId = input.actor.kind === 'user' ? input.actor.userId : null;
+    const now = Date.now();
+
+    // H4: task row + task_create event + created_event backfill in ONE txn (the
+    // whole batch is atomic, so a source-uniqueness collision rolls it all
+    // back). Delivery/publish fire only after commit.
+    type Created = {
+      out: { id: string; task_number: number; title: string };
+      sysMsg: MessageDto;
+      eventArgs: TaskEventArgs;
+    };
+    let created: Created[];
+    try {
+      created = this.db.transaction(() => {
+        const rows: Created[] = [];
+        for (const t of input.tasks) {
+          const content = t.body && t.body.length > 0 ? t.body : '';
+          const { id, taskNumber } = this.store.createTaskRow({
+            workspaceId: taskWorkspaceId,
+            conversationId: input.conversationId,
+            threadRootId,
+            title: t.title,
+            content,
+            creatorKind,
+            creatorAgentId,
+            creatorUserId,
+            sourceMessageId: t.sourceMessageId ?? null,
+            claimByAgentId,
+            createdAt: now,
+          });
+          const eventArgs: TaskEventArgs = {
+            conversation,
+            kind: 'create',
+            taskId: id,
+            taskNumber,
+            title: t.title,
+            status,
+            assignee,
+            closedAt: null,
+            sourceMessageId: t.sourceMessageId ?? null,
+            threadRootId,
+          };
+          const sysMsg = this.broadcaster.emitSystemMessage({
+            ...eventArgs,
+            kind: 'create',
+            actor: input.actor,
+            sysMessage: claimByAgentId
+              ? `${actorLabel} created task #${taskNumber} "${t.title}" and claimed it`
+              : `${actorLabel} created task #${taskNumber} "${t.title}"`,
+          });
+          this.store.backfillCreatedEvent(id, sysMsg.id);
+          rows.push({ out: { id, task_number: taskNumber, title: t.title }, sysMsg, eventArgs });
+        }
+        return rows;
+      })();
+    } catch (e) {
+      // UNIQUE(source_message_id) race backstop: a concurrent create bound the
+      // same source between our pre-check and this txn. Map to the typed
+      // conflict pointing at the winner instead of leaking a SqliteError.
+      const conflict = this.sourceConflictFromError(e, input.tasks);
+      if (conflict) return conflict;
+      throw e;
+    }
+
+    for (const c of created) {
+      this.broadcaster.publish(c.eventArgs, c.sysMsg);
+    }
+
+    return { tasks: created.map(c => c.out) };
+  }
+
+  /** Pre-txn validation of a `source_message_id`. Returns a typed failure to
+   *  short-circuit `createTasks`, or null when the source is usable. */
+  private validateTaskSource(
+    actor: TaskActor,
+    sourceMessageId: string,
+    taskConversationId: string,
+  ): CreateTasksResult | null {
+    const src = this.store.fetchMessageRef(sourceMessageId);
+    if (!src) return { error: 'source_message_not_found' };
+    // v1 contract: the source lives in the SAME conversation as the task, so the
+    // `linked_task` chip on the source row and the task's own conversation
+    // events converge in one place (a sibling-conversation source could never
+    // receive the task's live projection). Same-conversation subsumes the old
+    // same-workspace check.
+    if (src.conversation_id !== taskConversationId) {
+      return { error: 'source_conversation_mismatch' };
+    }
+    const accessible =
+      actor.kind === 'agent'
+        ? this.conversations.getAgent(src.conversation_id, actor.agentId) != null
+        : userCanAccessConversation(this.db, actor.userId, src.conversation_id);
+    if (!accessible) return { error: 'source_not_accessible' };
+    const existing = this.store.fetchTaskBySourceMessageId(sourceMessageId);
+    if (existing) {
+      return { error: 'source_conflict', existing_task: existing };
+    }
+    return null;
+  }
+
+  /** Translate a UNIQUE(source_message_id) violation thrown mid-txn into the
+   *  typed `source_conflict` pointing at the task that won the race. Returns
+   *  null if the error is unrelated (caller rethrows). */
+  private sourceConflictFromError(
+    e: unknown,
+    tasks: CreateTasksInput['tasks'],
+  ): CreateTasksResult | null {
+    const code = (e as { code?: string })?.code;
+    const message = e instanceof Error ? e.message : '';
+    const isSourceUnique =
+      code === 'SQLITE_CONSTRAINT_UNIQUE' && message.includes('source_message_id');
+    if (!isSourceUnique) return null;
+    for (const t of tasks) {
+      if (!t.sourceMessageId) continue;
+      const existing = this.store.fetchTaskBySourceMessageId(t.sourceMessageId);
+      if (existing) return { error: 'source_conflict', existing_task: existing };
+    }
+    return { error: 'source_conflict' };
   }
 
   private taskThreadTargetMessageId(input: CreateTasksInput): string | undefined {
     return input.legacyReplyToMessageId
       ?? (input.target?.kind === 'thread' ? input.target.message_id : undefined);
-  }
-
-  // ── Send-as-task (human composer) ────────────────────────────────
-  // `Send as task` promotes the just-sent message into an open todo task
-  // in the SAME transaction as the send, so message + task anchor are
-  // atomic. This is the human/agent-isomorphic create-from-message
-  // operation: it reuses `writeOpenTaskRow` (the one open-task writer,
-  // shared with `createTasks`) and the promotion title rule
-  // (`firstLine(content)`), and never sets an assignee or touches status
-  // beyond `todo`. It deliberately does NOT go through the claim-promote
-  // path (which would force `in_progress` + assignee = claimer).
-
-  /**
-   * Mark an already-inserted message row as an open todo task. MUST be
-   * called inside the caller's transaction (e.g. the send transaction) —
-   * it opens no transaction of its own. Title is derived from the
-   * message body via the same `firstLine` rule as agent promotion.
-   * Throws if the message is missing, is a system row, or is already a
-   * task (callers should only invoke it on a freshly-inserted send).
-   */
-  createOpenTaskFromMessageInTxn(args: {
-    messageId: string;
-    taskWorkspaceId: string;
-  }): { taskNumber: number; title: string } {
-    const msg = this.store.fetchMessage(args.messageId);
-    if (!msg) {
-      throw new Error(`createOpenTaskFromMessage: message ${args.messageId} not found`);
-    }
-    if (msg.from_kind === 'system') {
-      throw new Error('createOpenTaskFromMessage: system message cannot be a task');
-    }
-    if (msg.task_number !== null) {
-      throw new Error('createOpenTaskFromMessage: message is already a task');
-    }
-    const title = firstLine(msg.content);
-    const taskNumber = this.store.writeOpenTaskRow(args.messageId, args.taskWorkspaceId, title);
-    return { taskNumber, title };
-  }
-
-  /**
-   * Post-commit announcement for a send-as-task creation: publishes the
-   * `task_changed` (create) event so the task board / caches surface the
-   * new open task live. It does NOT insert a "created task #N" system
-   * message — for send-as-task the canonical message row IS the task
-   * announcement (contract: one row, no duplicate). The board is a
-   * projection of that row, not a second copy.
-   */
-  announceOpenTaskCreated(args: {
-    conversation: ConversationDto;
-    messageId: string;
-    taskNumber: number;
-    title: string;
-  }): void {
-    this.broadcaster.publishTaskChanged({
-      conversation: args.conversation,
-      kind: 'create',
-      messageId: args.messageId,
-      taskNumber: args.taskNumber,
-      title: args.title,
-      status: 'todo',
-      assignee: null,
-      closedAt: null,
-    });
   }
 
   // ── Claim ───────────────────────────────────────────────────────
@@ -294,105 +345,24 @@ export class TaskService {
     }
     const sourceConv = this.conversations.get(actor.conversationId);
     if (!sourceConv) {
-      return failClaim({
-        code: 'conversation_not_found',
-        reason: 'conversation not found',
-      });
+      return failClaim({ code: 'conversation_not_found', reason: 'conversation not found' });
     }
     const actorErr = this.access.validateAgentActorForClaim(actor);
     if (actorErr) return actorErr;
 
-    // #task:530 Round 2 + Round 3 (Cindy `CZ7Un3P5YATZ1GTq` Blocker 1
-    // + `zJ4xdGu3uEo68_k7` Blocker 4):
-    //  - PROMOTION (message-id of non-task in current conv) → use
-    //    `sourceConv.workspace_id`, skip selector entirely.
-    //  - MESSAGE-ID-PINNED (message-id of already-numbered task) →
-    //    use `msg.task_workspace_id` (the row's own workspace); the
-    //    selector, if any, only validates intent (mismatch ⇒
-    //    `task_not_found`). Membership of `msg.task_workspace_id` is
-    //    ALWAYS required, even without a selector, so a leaked
-    //    message id from another workspace can't bypass access.
-    //  - TASK-NUMBER lookup → resolve selector → workspace, membership
-    //    check via `resolveAgentTaskWorkspace`.
-    // Peek is informational only; the txn re-fetches msg + uses
-    // `UPDATE ... WHERE id = ?` for atomic correctness.
-    let taskWorkspaceId: string | undefined;
-    let skipSelector = false;
-    // Promotion = message-id of a not-yet-task message in the actor's own
-    // conversation (the one path that CREATES a new task). Determined from
-    // the peek so the capability gate below can require `create_tasks`
-    // before the txn. Over-approximating is fail-SAFE: if a concurrent
-    // promote numbers the row between peek and txn, we'd have required
-    // `create_tasks` for what becomes a plain claim — stricter, never
-    // looser. `task_number` only goes null→number, never back, so the
-    // reverse (peek numbered, txn null) cannot happen.
-    let isPromotion = false;
-    if ('messageId' in by) {
-      const peek = this.store.fetchMessage(by.messageId);
-      if (peek) {
-        if (peek.task_number === null && peek.conversation_id === actor.conversationId) {
-          taskWorkspaceId = sourceConv.workspace_id;
-          skipSelector = true;
-          isPromotion = true;
-        } else if (peek.task_number !== null) {
-          const access = this.access.validateMessageIdAccess(actor, peek, workspaceSelector);
-          if ('failure' in access) {
-            return failClaim({
-              code: access.failure,
-              reason: access.reason,
-              messageId: by.messageId,
-            });
-          }
-          taskWorkspaceId = access.workspaceId;
-          skipSelector = true;
-        }
-      }
-    }
-    if (!skipSelector) {
-      const resolved = this.access.resolveAgentTaskWorkspace(
-        actor,
-        sourceConv,
-        workspaceSelector,
-        args =>
-          failClaim({
-            code: args.code,
-            reason: args.reason,
-            workspaceCandidates: args.candidates,
-          }),
-      );
-      if ('failure' in resolved) return resolved.failure;
-      taskWorkspaceId = resolved.workspace.id;
-    }
-    // taskWorkspaceId is definitely assigned in both branches above.
-    const resolvedTaskWorkspaceId = taskWorkspaceId!;
+    const resolved = this.access.resolveAgentTaskWorkspace(
+      actor,
+      sourceConv,
+      workspaceSelector,
+      args =>
+        failClaim({ code: args.code, reason: args.reason, workspaceCandidates: args.candidates }),
+    );
+    if ('failure' in resolved) return resolved.failure;
+    const taskWorkspaceId = resolved.workspace.id;
 
-    // Capability gate on the RESOLVED target workspace (doc §3 — for a
-    // message-id claim this is the message's own workspace, not the
-    // principal's). Typed denial, never downgraded to task_not_found.
-    //
-    // Two axes, checked in dependency order so the denial names the right
-    // bucket:
-    //   - Promotion CREATES a new task (same axis as
-    //     agentCreateConversationTasks → `create_tasks`) AND lands it
-    //     in_progress + self-assigned (a claim → `write_tasks`). It needs
-    //     BOTH. Missing create → `capability_denied/create_tasks`; has
-    //     create but missing write → `capability_denied/write_tasks`.
-    //   - A numbered-task claim is pure mutation → `write_tasks` only
-    //     (NOT tightened to also require create_tasks).
-    // (Cindy `AVTaRcXa3vuAd0W3` — write-only promotion was a create_tasks
-    // bypass.)
-    if (
-      isPromotion &&
-      !this.canUseCapability(actor, resolvedTaskWorkspaceId, 'create_tasks')
-    ) {
-      return failClaim({
-        code: 'capability_denied',
-        capability: 'create_tasks',
-        reason:
-          'agent lacks the create_tasks capability required to promote a message into a new task',
-      });
-    }
-    if (!this.canUseCapability(actor, resolvedTaskWorkspaceId, 'write_tasks')) {
+    // Claim is pure mutation (it never creates a task), so it needs
+    // `write_tasks` only. Typed denial, never downgraded to task_not_found.
+    if (!this.canUseCapability(actor, taskWorkspaceId, 'write_tasks')) {
       return failClaim({
         code: 'capability_denied',
         capability: 'write_tasks',
@@ -402,140 +372,55 @@ export class TaskService {
 
     type ClaimTxOut =
       | { failure: ClaimResultEntry }
-      | {
-          success: true;
-          messageId: string;
-          taskNumber: number;
-          title: string;
-          status: TaskStatus;
-          ownerConversationId: string;
-        };
+      | { success: true; args: PendingTaskEvent; ownerConversationId: string };
 
     const txOut = this.db.transaction((): ClaimTxOut => {
-      let row: ReturnType<TaskStore['fetchTaskByMessageId']>;
-
-      if ('messageId' in by) {
-        const msg = this.store.fetchMessage(by.messageId);
-        if (!msg) {
-          return { failure: failClaim({
-            code: 'message_not_found',
-            reason: 'message not found',
-            messageId: by.messageId,
-          }) };
-        }
-        // Promotion (turning a regular message into a task) is the one
-        // place where the message MUST live in the actor's current
-        // conversation — you can't reach across into another channel
-        // and conjure a task from a message there. Cross-workspace
-        // task ops only apply once the row already has a task_number.
-        if (msg.conversation_id !== actor.conversationId) {
-          return { failure: failClaim({
-            code: 'wrong_conversation',
-            reason: 'message belongs to another conversation; promotion requires the message be in your current conversation',
-            messageId: by.messageId,
-          }) };
-        }
-        if (msg.from_kind === 'system') {
-          return { failure: failClaim({
-            code: 'cannot_promote_system_message',
-            reason: 'system messages cannot become tasks',
-            messageId: by.messageId,
-          }) };
-        }
-        if (isThreadAnchor(msg.metadata)) {
-          return { failure: failClaim({
-            code: 'cannot_promote_anchor',
-            reason: 'thread anchor messages cannot become tasks',
-            messageId: by.messageId,
-          }) };
-        }
-        if (msg.task_number === null) {
-          // Promote + claim atomically inside this txn. Promotion uses
-          // the actor's conversation's workspace (the source conv's),
-          // not the selector — the selector only routes lookups of
-          // already-numbered tasks.
-          const promoteWorkspaceId = sourceConv.workspace_id;
-          const nextNumber = this.store.allocateTaskNumber(promoteWorkspaceId);
-          this.db
-            .prepare(
-              `UPDATE messages
-               SET task_number = ?,
-                   task_status = 'in_progress',
-                   task_title = ?,
-                   task_workspace_id = ?,
-                   task_assignee_agent_id = ?
-               WHERE id = ? AND task_number IS NULL`,
-            )
-            .run(nextNumber, firstLine(msg.content), promoteWorkspaceId, actor.agentId, msg.id);
-          return {
-            success: true,
-            messageId: msg.id,
-            taskNumber: nextNumber,
-            title: firstLine(msg.content),
-            status: 'in_progress',
-            ownerConversationId: msg.conversation_id,
-          };
-        }
-        // Message already a task: row identity is the message id, NOT
-        // (selector-workspace, msg.task_number). Pre-txn we already
-        // ran validateMessageIdAccess; fetch by id so a different
-        // workspace's same-numbered task can never be touched
-        // (Round 3 blocker `zJ4xdGu3uEo68_k7`).
-        row = this.store.fetchTaskByMessageId(msg.id);
-      } else {
-        row = this.store.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
-      }
+      const row = this.store.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
       if (!row) {
         return { failure: failClaim({
           code: 'task_not_found',
           reason: 'task not found',
-          taskNumber: 'taskNumber' in by ? by.taskNumber : undefined,
+          taskNumber: by.taskNumber,
         }) };
       }
-      if (row.task_status === 'done' || row.task_status === 'closed') {
+      if (row.status === 'done' || row.status === 'closed') {
         return { failure: failClaim({
-          code: row.task_status === 'closed' ? 'task_closed' : 'task_done',
-          reason: row.task_status === 'closed' ? 'task is closed' : 'task is already done',
+          code: row.status === 'closed' ? 'task_closed' : 'task_done',
+          reason: row.status === 'closed' ? 'task is closed' : 'task is already done',
           taskNumber: row.task_number,
         }) };
       }
-      const update = this.db
-        .prepare(
-          `UPDATE messages
-           SET task_assignee_agent_id = ?,
-               task_status = CASE WHEN task_status = 'todo' THEN 'in_progress' ELSE task_status END
-           WHERE id = ?
-             AND task_assignee_agent_id IS NULL
-             AND task_status NOT IN ('done', 'closed')`,
-        )
-        .run(actor.agentId, row.id);
-      if (update.changes === 0) {
-        const cur = this.db
-          .prepare<[string], { task_assignee_agent_id: string | null; task_status: TaskStatus }>(
-            `SELECT task_assignee_agent_id, task_status FROM messages WHERE id = ?`,
-          )
-          .get(row.id);
-        const code: ClaimErrorCode = cur?.task_assignee_agent_id
+      const changes = this.store.assignSelf(row.id, actor.agentId);
+      if (changes === 0) {
+        const cur = this.store.readAssignment(row.id);
+        const code: ClaimErrorCode = cur?.assignee_agent_id
           ? 'already_claimed'
-          : cur?.task_status === 'closed'
+          : cur?.status === 'closed'
             ? 'task_closed'
             : 'task_done';
         return { failure: failClaim({
           code,
-          reason: cur?.task_assignee_agent_id
-            ? `already claimed by ${cur.task_assignee_agent_id}`
-            : `task is ${cur?.task_status ?? 'unknown'}`,
+          reason: cur?.assignee_agent_id
+            ? `already claimed by ${cur.assignee_agent_id}`
+            : `task is ${cur?.status ?? 'unknown'}`,
           taskNumber: row.task_number,
         }) };
       }
-      const nextStatus: TaskStatus = row.task_status === 'todo' ? 'in_progress' : row.task_status;
+      const nextStatus: TaskStatus = row.status === 'todo' ? 'in_progress' : row.status;
       return {
         success: true,
-        messageId: row.id,
-        taskNumber: row.task_number,
-        title: row.task_title ?? firstLine(row.content),
-        status: nextStatus,
         ownerConversationId: row.conversation_id,
+        args: {
+          kind: 'claim',
+          taskId: row.id,
+          taskNumber: row.task_number,
+          title: row.title,
+          status: nextStatus,
+          assignee: this.assigneeDtoForAgent(actor.agentId),
+          closedAt: row.closed_at,
+          sourceMessageId: row.source_message_id,
+          threadRootId: row.thread_root_id,
+        },
       };
     })();
 
@@ -546,7 +431,6 @@ export class TaskService {
         ? sourceConv
         : this.conversations.get(txOut.ownerConversationId);
     if (!ownerConv) {
-      // Should never happen — we just read the row inside the txn.
       return failClaim({
         code: 'conversation_not_found',
         reason: 'task owner conversation vanished after commit',
@@ -557,29 +441,14 @@ export class TaskService {
       actor,
       sourceConv,
       ownerConv,
-      taskNumber: txOut.taskNumber,
-      taskWorkspaceId: resolvedTaskWorkspaceId,
+      taskNumber: txOut.args.taskNumber,
+      taskWorkspaceId,
     });
 
-    const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
-    await this.broadcaster.broadcast({
-      conversation: ownerConv,
-      kind: 'claim',
-      messageId: txOut.messageId,
-      taskNumber: txOut.taskNumber,
-      title: fresh?.title ?? txOut.title,
-      status: fresh?.task_status ?? txOut.status,
-      assignee: fresh?.assignee ?? this.assigneeDtoForAgent(actor.agentId),
-      closedAt: fresh?.closed_at ?? null,
-      actor,
-      sysMessage: `${this.actorLabel(actor)} claimed task #${txOut.taskNumber}`,
-    });
+    await this.broadcastFresh(ownerConv, txOut.args, actor,
+      `${this.actorLabel(actor)} claimed task #${txOut.args.taskNumber}`);
 
-    return {
-      success: true,
-      task_number: txOut.taskNumber,
-      message_id: txOut.messageId,
-    };
+    return { success: true, task_number: txOut.args.taskNumber, id: txOut.args.taskId };
   }
 
   private async claimTaskUser(
@@ -589,36 +458,18 @@ export class TaskService {
   ): Promise<ClaimResultEntry> {
     type UserClaimTxOut =
       | { failure: ClaimResultEntry }
-      | {
-          success: true;
-          messageId: string;
-          taskNumber: number;
-          conversationId: string;
-          content: string;
-        };
+      | { success: true; args: PendingTaskEvent; conversationId: string };
 
     const txOut = this.db.transaction((): UserClaimTxOut => {
-      const msg = this.store.fetchMessage(by.messageId);
-      if (!msg || msg.task_number === null || !msg.task_workspace_id) {
-        return { failure: failClaim({
-          code: 'not_a_task',
-          reason: 'not a task',
-          messageId: by.messageId,
-        }) };
+      const row = this.store.fetchTaskById(by.taskId);
+      if (!row || !userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
+        return { failure: failClaim({ code: 'task_not_found', reason: 'task not found' }) };
       }
-      if (!userCanAccessConversation(this.db, actor.userId, msg.conversation_id)) {
+      if (row.status === 'done' || row.status === 'closed') {
         return { failure: failClaim({
-          code: 'not_a_task',
-          reason: 'not a task',
-          messageId: by.messageId,
-        }) };
-      }
-      if (msg.task_status === 'done' || msg.task_status === 'closed') {
-        return { failure: failClaim({
-          code: msg.task_status === 'closed' ? 'task_closed' : 'task_done',
-          reason: msg.task_status === 'closed' ? 'task is closed' : 'task is done',
-          taskNumber: msg.task_number,
-          messageId: by.messageId,
+          code: row.status === 'closed' ? 'task_closed' : 'task_done',
+          reason: row.status === 'closed' ? 'task is closed' : 'task is done',
+          taskNumber: row.task_number,
         }) };
       }
       if (assignee) {
@@ -626,31 +477,31 @@ export class TaskService {
           return { failure: failClaim({
             code: 'assignee_not_conversation_member',
             reason: 'agent not found',
-            messageId: by.messageId,
           }) };
         }
-        if (!this.conversations.getAgent(msg.conversation_id, assignee.agentId)) {
+        if (!this.conversations.getAgent(row.conversation_id, assignee.agentId)) {
           return { failure: failClaim({
             code: 'assignee_not_conversation_member',
             reason: "agent is not a member of this task's conversation",
-            messageId: by.messageId,
           }) };
         }
       }
-      this.db
-        .prepare(
-          `UPDATE messages
-           SET task_assignee_agent_id = ?,
-               task_status = CASE WHEN task_status = 'todo' THEN 'in_progress' ELSE task_status END
-           WHERE id = ?`,
-        )
-        .run(assignee?.agentId ?? null, msg.id);
+      this.store.setAssignee(row.id, assignee?.agentId ?? null);
+      const nextStatus: TaskStatus = row.status === 'todo' ? 'in_progress' : row.status;
       return {
         success: true,
-        messageId: msg.id,
-        taskNumber: msg.task_number,
-        conversationId: msg.conversation_id,
-        content: msg.content,
+        conversationId: row.conversation_id,
+        args: {
+          kind: 'claim',
+          taskId: row.id,
+          taskNumber: row.task_number,
+          title: row.title,
+          status: nextStatus,
+          assignee: assignee ? this.assigneeDtoForAgent(assignee.agentId) : null,
+          closedAt: row.closed_at,
+          sourceMessageId: row.source_message_id,
+          threadRootId: row.thread_root_id,
+        },
       };
     })();
 
@@ -658,29 +509,13 @@ export class TaskService {
 
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
-      const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
       const sysMessage = assignee
-        ? `task #${txOut.taskNumber} assigned to @${this.agentName(assignee.agentId)} (by user)`
-        : `task #${txOut.taskNumber} unassigned (by user)`;
-      await this.broadcaster.broadcast({
-        conversation,
-        kind: 'claim',
-        messageId: txOut.messageId,
-        taskNumber: txOut.taskNumber,
-        title: fresh?.title ?? firstLine(txOut.content),
-        status: fresh?.task_status ?? 'in_progress',
-        assignee: fresh?.assignee ?? null,
-        closedAt: fresh?.closed_at ?? null,
-        actor,
-        sysMessage,
-      });
+        ? `task #${txOut.args.taskNumber} assigned to @${this.agentName(assignee.agentId)} (by user)`
+        : `task #${txOut.args.taskNumber} unassigned (by user)`;
+      await this.broadcastFresh(conversation, txOut.args, actor, sysMessage);
     }
 
-    return {
-      success: true,
-      task_number: txOut.taskNumber,
-      message_id: txOut.messageId,
-    };
+    return { success: true, task_number: txOut.args.taskNumber, id: txOut.args.taskId };
   }
 
   // ── Unclaim ─────────────────────────────────────────────────────
@@ -708,38 +543,16 @@ export class TaskService {
     const actorErr = this.access.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
-    // #task:530 Round 3 (Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`):
-    // for the message-id form of unclaim, the row identity is the
-    // message id — selector cannot retarget onto a same-numbered task
-    // in another workspace. Membership of `msg.task_workspace_id` is
-    // always required even without an explicit selector. Task-number
-    // lookups still flow through the selector resolution.
-    let taskWorkspaceId: string | undefined;
-    let skipSelector = false;
-    if ('messageId' in by) {
-      const peek = this.store.fetchMessage(by.messageId);
-      if (peek && peek.task_number !== null) {
-        const access = this.access.validateMessageIdAccess(actor, peek, workspaceSelector);
-        if ('failure' in access) {
-          return { success: false, code: access.failure, reason: access.reason };
-        }
-        taskWorkspaceId = access.workspaceId;
-        skipSelector = true;
-      }
-    }
-    if (!skipSelector) {
-      const resolved = this.access.resolveAgentTaskWorkspace(
-        actor,
-        sourceConv,
-        workspaceSelector,
-        args => mutationFailure(args),
-      );
-      if ('failure' in resolved) return resolved.failure;
-      taskWorkspaceId = resolved.workspace.id;
-    }
-    const resolvedTaskWorkspaceId = taskWorkspaceId!;
+    const resolved = this.access.resolveAgentTaskWorkspace(
+      actor,
+      sourceConv,
+      workspaceSelector,
+      args => mutationFailure(args),
+    );
+    if ('failure' in resolved) return resolved.failure;
+    const taskWorkspaceId = resolved.workspace.id;
 
-    if (!this.canUseCapability(actor, resolvedTaskWorkspaceId, 'write_tasks')) {
+    if (!this.canUseCapability(actor, taskWorkspaceId, 'write_tasks')) {
       return mutationFailure({
         code: 'capability_denied',
         capability: 'write_tasks',
@@ -749,58 +562,38 @@ export class TaskService {
 
     type UnclaimAgentTxOut =
       | { failure: TaskMutationResult }
-      | {
-          success: true;
-          messageId: string;
-          taskNumber: number;
-          title: string;
-          ownerConversationId: string;
-        };
+      | { success: true; args: PendingTaskEvent; ownerConversationId: string };
 
     const txOut = this.db.transaction((): UnclaimAgentTxOut => {
-      let row: ReturnType<TaskStore['fetchTaskByMessageId']>;
-      if ('messageId' in by) {
-        const msg = this.store.fetchMessage(by.messageId);
-        if (!msg || msg.task_number === null) {
-          return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
-        }
-        // Message-id form: row identity is the message id itself.
-        // validateMessageIdAccess (pre-txn) already authorized this
-        // and pinned the workspace; use msg.id so a selector cannot
-        // retarget the mutation onto a same-numbered task in another
-        // workspace (Round 3 blocker `zJ4xdGu3uEo68_k7`).
-        row = this.store.fetchTaskByMessageId(msg.id);
-      } else {
-        row = this.store.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
-      }
+      const row = this.store.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
-      if (row.task_assignee_agent_id !== actor.agentId) {
+      if (row.assignee_agent_id !== actor.agentId) {
         return { failure: { success: false, code: 'not_assignee', reason: 'not the assignee' } };
       }
-      if (row.task_status === 'done' || row.task_status === 'closed') {
+      if (row.status === 'done' || row.status === 'closed') {
         return { failure: {
           success: false,
-          code: row.task_status === 'closed' ? 'task_closed' : 'task_done',
-          reason: row.task_status === 'closed' ? 'task is closed' : 'task is done',
+          code: row.status === 'closed' ? 'task_closed' : 'task_done',
+          reason: row.status === 'closed' ? 'task is closed' : 'task is done',
         } };
       }
-      this.db
-        .prepare(
-          `UPDATE messages
-           SET task_assignee_agent_id = NULL,
-               task_status = 'todo',
-               task_closed_at = NULL
-           WHERE id = ?`,
-        )
-        .run(row.id);
+      this.store.unassign(row.id);
       return {
         success: true,
-        messageId: row.id,
-        taskNumber: row.task_number,
-        title: row.task_title ?? firstLine(row.content),
         ownerConversationId: row.conversation_id,
+        args: {
+          kind: 'unclaim',
+          taskId: row.id,
+          taskNumber: row.task_number,
+          title: row.title,
+          status: 'todo',
+          assignee: null,
+          closedAt: null,
+          sourceMessageId: row.source_message_id,
+          threadRootId: row.thread_root_id,
+        },
       };
     })();
 
@@ -818,23 +611,12 @@ export class TaskService {
       actor,
       sourceConv,
       ownerConv,
-      taskNumber: txOut.taskNumber,
-      taskWorkspaceId: resolvedTaskWorkspaceId,
+      taskNumber: txOut.args.taskNumber,
+      taskWorkspaceId,
     });
 
-    const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
-    await this.broadcaster.broadcast({
-      conversation: ownerConv,
-      kind: 'unclaim',
-      messageId: txOut.messageId,
-      taskNumber: txOut.taskNumber,
-      title: fresh?.title ?? txOut.title,
-      status: fresh?.task_status ?? 'todo',
-      assignee: fresh?.assignee ?? null,
-      closedAt: fresh?.closed_at ?? null,
-      actor,
-      sysMessage: `task #${txOut.taskNumber} unclaimed (was @${this.agentName(actor.agentId)})`,
-    });
+    await this.broadcastFresh(ownerConv, txOut.args, actor,
+      `task #${txOut.args.taskNumber} unclaimed (was @${this.agentName(actor.agentId)})`);
 
     return { success: true };
   }
@@ -845,40 +627,31 @@ export class TaskService {
   ): Promise<TaskMutationResult> {
     type UnclaimUserTxOut =
       | { failure: TaskMutationResult }
-      | {
-          success: true;
-          messageId: string;
-          taskNumber: number;
-          conversationId: string;
-          content: string;
-        };
+      | { success: true; args: PendingTaskEvent; conversationId: string };
 
     const txOut = this.db.transaction((): UnclaimUserTxOut => {
-      const msg = this.store.fetchMessage(by.messageId);
-      if (!msg || msg.task_number === null) {
-        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
+      const row = this.store.fetchTaskById(by.taskId);
+      if (!row || !userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
+        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
-      if (!userCanAccessConversation(this.db, actor.userId, msg.conversation_id)) {
-        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
-      }
-      if (msg.task_status === 'closed') {
+      if (row.status === 'closed') {
         return { failure: { success: false, code: 'task_closed', reason: 'task is closed' } };
       }
-      this.db
-        .prepare(
-          `UPDATE messages
-           SET task_assignee_agent_id = NULL,
-               task_status = 'todo',
-               task_closed_at = NULL
-           WHERE id = ?`,
-        )
-        .run(msg.id);
+      this.store.unassign(row.id);
       return {
         success: true,
-        messageId: msg.id,
-        taskNumber: msg.task_number,
-        conversationId: msg.conversation_id,
-        content: msg.content,
+        conversationId: row.conversation_id,
+        args: {
+          kind: 'unclaim',
+          taskId: row.id,
+          taskNumber: row.task_number,
+          title: row.title,
+          status: 'todo',
+          assignee: null,
+          closedAt: null,
+          sourceMessageId: row.source_message_id,
+          threadRootId: row.thread_root_id,
+        },
       };
     })();
 
@@ -886,19 +659,8 @@ export class TaskService {
 
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
-      const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
-      await this.broadcaster.broadcast({
-        conversation,
-        kind: 'unclaim',
-        messageId: txOut.messageId,
-        taskNumber: txOut.taskNumber,
-        title: fresh?.title ?? firstLine(txOut.content),
-        status: 'todo',
-        assignee: null,
-        closedAt: fresh?.closed_at ?? null,
-        actor,
-        sysMessage: `task #${txOut.taskNumber} unclaimed (by user)`,
-      });
+      await this.broadcastFresh(conversation, txOut.args, actor,
+        `task #${txOut.args.taskNumber} unclaimed (by user)`);
     }
 
     return { success: true };
@@ -931,35 +693,16 @@ export class TaskService {
     const actorErr = this.access.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
-    // #task:530 Round 3 mirror of unclaim — message-id form pins the
-    // row by message id and always checks `msg.task_workspace_id`
-    // membership (Cindy `zJ4xdGu3uEo68_k7` + `YreWED1qOBStvZxG`).
-    let taskWorkspaceId: string | undefined;
-    let skipSelector = false;
-    if ('messageId' in by) {
-      const peek = this.store.fetchMessage(by.messageId);
-      if (peek && peek.task_number !== null) {
-        const access = this.access.validateMessageIdAccess(actor, peek, workspaceSelector);
-        if ('failure' in access) {
-          return { success: false, code: access.failure, reason: access.reason };
-        }
-        taskWorkspaceId = access.workspaceId;
-        skipSelector = true;
-      }
-    }
-    if (!skipSelector) {
-      const resolved = this.access.resolveAgentTaskWorkspace(
-        actor,
-        sourceConv,
-        workspaceSelector,
-        args => mutationFailure(args),
-      );
-      if ('failure' in resolved) return resolved.failure;
-      taskWorkspaceId = resolved.workspace.id;
-    }
-    const resolvedTaskWorkspaceId = taskWorkspaceId!;
+    const resolved = this.access.resolveAgentTaskWorkspace(
+      actor,
+      sourceConv,
+      workspaceSelector,
+      args => mutationFailure(args),
+    );
+    if ('failure' in resolved) return resolved.failure;
+    const taskWorkspaceId = resolved.workspace.id;
 
-    if (!this.canUseCapability(actor, resolvedTaskWorkspaceId, 'write_tasks')) {
+    if (!this.canUseCapability(actor, taskWorkspaceId, 'write_tasks')) {
       return mutationFailure({
         code: 'capability_denied',
         capability: 'write_tasks',
@@ -969,68 +712,54 @@ export class TaskService {
 
     type StatusAgentTxOut =
       | { failure: TaskMutationResult }
-      | {
-          success: true;
-          messageId: string;
-          taskNumber: number;
-          title: string;
-          assigneeAgentId: string | null;
-          ownerConversationId: string;
-        };
+      | { success: true; args: PendingTaskEvent; ownerConversationId: string };
 
     const txOut = this.db.transaction((): StatusAgentTxOut => {
-      let row: ReturnType<TaskStore['fetchTaskByMessageId']>;
-      if ('messageId' in by) {
-        const msg = this.store.fetchMessage(by.messageId);
-        if (!msg || msg.task_number === null) {
-          return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
-        }
-        // Pin to message id — see unclaim path for rationale.
-        row = this.store.fetchTaskByMessageId(msg.id);
-      } else {
-        row = this.store.fetchTaskByNumber(resolvedTaskWorkspaceId, by.taskNumber);
-      }
+      const row = this.store.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
-      // Permission: assignee==self OR (assignee==null AND creator==self
-      // AND creator is an agent). The creator-self branch lets an
-      // agent complete/advance its own stale unassigned task without
-      // re-claiming; it intentionally never matches human-created rows (Cindy
-      // `S-RgXd_GWAHu4f0E`).
-      const isAssigneeSelf = row.task_assignee_agent_id === actor.agentId;
+      // Permission: assignee==self OR (assignee==null AND creator==self AND
+      // creator is an agent). The creator-self branch lets an agent
+      // complete/advance its own stale unassigned task without re-claiming; it
+      // never matches human-created rows (Cindy `S-RgXd_GWAHu4f0E`).
+      const isAssigneeSelf = row.assignee_agent_id === actor.agentId;
       const isCreatorSelfStale =
-        row.task_assignee_agent_id === null &&
-        row.from_kind === 'agent' &&
-        row.from_agent_id === actor.agentId;
+        row.assignee_agent_id === null &&
+        row.creator_kind === 'agent' &&
+        row.creator_agent_id === actor.agentId;
       if (!isAssigneeSelf && !isCreatorSelfStale) {
         return { failure: {
           success: false,
           code: 'not_assignee',
-          reason:
-            'only the assignee can update status (creator may update own unassigned task)',
+          reason: 'only the assignee can update status (creator may update own unassigned task)',
         } };
       }
-      if (!VALID_TRANSITIONS[row.task_status].includes(status)) {
+      if (!VALID_TRANSITIONS[row.status].includes(status)) {
         return { failure: {
           success: false,
           code: 'invalid_transition',
-          reason: `invalid transition ${row.task_status} → ${status}`,
+          reason: `invalid transition ${row.status} → ${status}`,
         } };
       }
-      const nextClosedAt = status === 'closed'
-        ? (row.task_closed_at ?? Date.now())
-        : null;
-      this.db
-        .prepare(`UPDATE messages SET task_status = ?, task_closed_at = ? WHERE id = ?`)
-        .run(status, nextClosedAt, row.id);
+      const nextClosedAt = status === 'closed' ? (row.closed_at ?? Date.now()) : null;
+      this.store.setStatus(row.id, status, nextClosedAt);
       return {
         success: true,
-        messageId: row.id,
-        taskNumber: row.task_number,
-        title: row.task_title ?? firstLine(row.content),
-        assigneeAgentId: row.task_assignee_agent_id,
         ownerConversationId: row.conversation_id,
+        args: {
+          kind: 'status',
+          taskId: row.id,
+          taskNumber: row.task_number,
+          title: row.title,
+          status,
+          assignee: row.assignee_agent_id
+            ? this.assigneeDtoForAgent(row.assignee_agent_id)
+            : null,
+          closedAt: nextClosedAt,
+          sourceMessageId: row.source_message_id,
+          threadRootId: row.thread_root_id,
+        },
       };
     })();
 
@@ -1048,26 +777,13 @@ export class TaskService {
       actor,
       sourceConv,
       ownerConv,
-      taskNumber: txOut.taskNumber,
-      taskWorkspaceId: resolvedTaskWorkspaceId,
+      taskNumber: txOut.args.taskNumber,
+      taskWorkspaceId,
       status,
     });
 
-    const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
-    await this.broadcaster.broadcast({
-      conversation: ownerConv,
-      kind: 'status',
-      messageId: txOut.messageId,
-      taskNumber: txOut.taskNumber,
-      title: fresh?.title ?? txOut.title,
-      status: fresh?.task_status ?? status,
-      assignee: fresh?.assignee ?? (txOut.assigneeAgentId
-        ? this.assigneeDtoForAgent(txOut.assigneeAgentId)
-        : null),
-      closedAt: fresh?.closed_at ?? null,
-      actor,
-      sysMessage: `task #${txOut.taskNumber} → ${status} (by @${this.agentName(actor.agentId)})`,
-    });
+    await this.broadcastFresh(ownerConv, txOut.args, actor,
+      `task #${txOut.args.taskNumber} → ${status} (by @${this.agentName(actor.agentId)})`);
 
     return { success: true };
   }
@@ -1079,41 +795,38 @@ export class TaskService {
   ): Promise<TaskMutationResult> {
     type StatusUserTxOut =
       | { failure: TaskMutationResult }
-      | {
-          success: true;
-          messageId: string;
-          taskNumber: number;
-          conversationId: string;
-          content: string;
-        };
+      | { success: true; args: PendingTaskEvent; conversationId: string };
 
     const txOut = this.db.transaction((): StatusUserTxOut => {
-      const msg = this.store.fetchMessage(by.messageId);
-      if (!msg || msg.task_number === null) {
-        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
+      const row = this.store.fetchTaskById(by.taskId);
+      if (!row || !userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
+        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
-      if (!userCanAccessConversation(this.db, actor.userId, msg.conversation_id)) {
-        return { failure: { success: false, code: 'not_a_task', reason: 'not a task' } };
-      }
-      if (msg.task_status === status) {
+      if (row.status === status) {
         return { failure: {
           success: false,
           code: 'already_at_status',
           reason: 'task already has that status',
         } };
       }
-      const nextClosedAt = status === 'closed'
-        ? (msg.task_closed_at ?? Date.now())
-        : null;
-      this.db
-        .prepare(`UPDATE messages SET task_status = ?, task_closed_at = ? WHERE id = ?`)
-        .run(status, nextClosedAt, msg.id);
+      const nextClosedAt = status === 'closed' ? (row.closed_at ?? Date.now()) : null;
+      this.store.setStatus(row.id, status, nextClosedAt);
       return {
         success: true,
-        messageId: msg.id,
-        taskNumber: msg.task_number,
-        conversationId: msg.conversation_id,
-        content: msg.content,
+        conversationId: row.conversation_id,
+        args: {
+          kind: 'status',
+          taskId: row.id,
+          taskNumber: row.task_number,
+          title: row.title,
+          status,
+          assignee: row.assignee_agent_id
+            ? this.assigneeDtoForAgent(row.assignee_agent_id)
+            : null,
+          closedAt: nextClosedAt,
+          sourceMessageId: row.source_message_id,
+          threadRootId: row.thread_root_id,
+        },
       };
     })();
 
@@ -1121,28 +834,270 @@ export class TaskService {
 
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
-      const fresh = this.store.refetchTaskSnapshot(txOut.messageId);
-      await this.broadcaster.broadcast({
-        conversation,
-        kind: 'status',
-        messageId: txOut.messageId,
-        taskNumber: txOut.taskNumber,
-        title: fresh?.title ?? firstLine(txOut.content),
-        status,
-        assignee: fresh?.assignee ?? null,
-        closedAt: fresh?.closed_at ?? null,
-        actor,
-        sysMessage: `task #${txOut.taskNumber} → ${status} (by user)`,
-      });
+      await this.broadcastFresh(conversation, txOut.args, actor,
+        `task #${txOut.args.taskNumber} → ${status} (by user)`);
     }
 
     return { success: true };
   }
 
+  // ── Edit (title / content) ─────────────────────────────────────
+
+  async editTask(input: EditTaskInput): Promise<TaskEditResult> {
+    if (input.actor.kind === 'agent') {
+      return this.editTaskAgent(
+        input.actor,
+        input.by as AgentTaskRef,
+        input.title,
+        input.body,
+        (input as Extract<EditTaskInput, { actor: AgentActor }>).workspaceSelector,
+      );
+    }
+    return this.editTaskUser(
+      input.actor,
+      input.by as UserTaskRef,
+      input.title,
+      input.body,
+    );
+  }
+
+  private async editTaskAgent(
+    actor: AgentActor,
+    by: AgentTaskRef,
+    title: string | null,
+    body: string | null,
+    workspaceSelector: WorkspaceSelector | undefined,
+  ): Promise<TaskEditResult> {
+    const sourceConv = this.conversations.get(actor.conversationId);
+    if (!sourceConv) {
+      return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
+    }
+    if (!this.agents.get(actor.agentId)) {
+      return { success: false, code: 'agent_not_found', reason: 'agent not found' };
+    }
+    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
+      return {
+        success: false,
+        code: 'not_conversation_member',
+        reason: 'agent is not a member of this conversation',
+      };
+    }
+
+    const resolved = this.access.resolveAgentTaskWorkspace(
+      actor,
+      sourceConv,
+      workspaceSelector,
+      (args): TaskEditResult => ({
+        success: false,
+        code: args.code,
+        reason: args.reason,
+        ...(args.candidates && args.candidates.length > 0
+          ? { workspace_candidates: args.candidates }
+          : {}),
+      }),
+    );
+    if ('failure' in resolved) return resolved.failure;
+    const taskWorkspaceId = resolved.workspace.id;
+
+    // Edit is BOTH a mutation and a read: on success it returns the full
+    // viewer-resolved TaskDetailDto. So the response exercises `read_tasks` in
+    // addition to `write_tasks` — an agent with write but not read could
+    // otherwise exfiltrate task content through the edit response. Require BOTH;
+    // report whichever is missing.
+    if (!this.canUseCapability(actor, taskWorkspaceId, 'write_tasks')) {
+      return {
+        success: false,
+        code: 'capability_denied',
+        capability: 'write_tasks',
+        reason: 'agent lacks the write_tasks capability in the target workspace',
+      };
+    }
+    if (!this.canUseCapability(actor, taskWorkspaceId, 'read_tasks')) {
+      return {
+        success: false,
+        code: 'capability_denied',
+        capability: 'read_tasks',
+        reason:
+          'agent lacks the read_tasks capability in the target workspace ' +
+          '(task edit returns the full definition, which read_tasks gates)',
+      };
+    }
+
+    return this.applyTaskEdit(actor, by, title, body, taskWorkspaceId);
+  }
+
+  private async editTaskUser(
+    actor: UserActor,
+    by: UserTaskRef,
+    title: string | null,
+    body: string | null,
+  ): Promise<TaskEditResult> {
+    const peek = this.store.fetchTaskById(by.taskId);
+    if (!peek || !userCanAccessConversation(this.db, actor.userId, peek.conversation_id)) {
+      return { success: false, code: 'task_not_found', reason: 'task not found' };
+    }
+    return this.applyTaskEdit(actor, by, title, body, peek.workspace_id);
+  }
+
+  /** Shared edit apply: a plain last-write-wins UPDATE (no revision/CAS), then a
+   *  thin `edit` event (NO system narrative — an edit is a definition tweak, not
+   *  a lifecycle step) and the full viewer-resolved detail returned so an open
+   *  view refreshes in place. */
+  private async applyTaskEdit(
+    actor: TaskActor,
+    by: AgentTaskRef | UserTaskRef,
+    title: string | null,
+    body: string | null,
+    taskWorkspaceId: string,
+  ): Promise<TaskEditResult> {
+    const editorKind = actor.kind;
+    const editorId = actor.kind === 'agent' ? actor.agentId : actor.userId;
+    const editedAt = Date.now();
+
+    type EditTxOut =
+      | { failure: TaskEditResult }
+      | { success: true; args: PendingTaskEvent; ownerConversationId: string };
+
+    const txOut = this.db.transaction((): EditTxOut => {
+      const row =
+        'taskId' in by
+          ? this.store.fetchTaskById(by.taskId)
+          : this.store.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
+      if (!row) {
+        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
+      }
+      const updated = this.store.applyTaskEdit({
+        taskId: row.id,
+        title,
+        content: body,
+        editorKind,
+        editorId,
+        editedAt,
+      });
+      if (!updated) {
+        // The row vanished between fetch and update within the txn — degrade to
+        // a typed not-found rather than a false success.
+        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
+      }
+      return {
+        success: true,
+        ownerConversationId: row.conversation_id,
+        args: {
+          kind: 'edit',
+          taskId: row.id,
+          taskNumber: row.task_number,
+          title: row.title,
+          status: row.status,
+          assignee: null,
+          closedAt: row.closed_at,
+          sourceMessageId: row.source_message_id,
+          threadRootId: row.thread_root_id,
+        },
+      };
+    })();
+
+    if ('failure' in txOut) return txOut.failure;
+
+    const ownerConv = this.conversations.get(txOut.ownerConversationId);
+    if (ownerConv) {
+      const fresh = this.store.refetchTaskSnapshot(txOut.args.taskId);
+      this.broadcaster.publishTaskChanged({
+        ...txOut.args,
+        conversation: ownerConv,
+        title: fresh?.title ?? txOut.args.title,
+        status: fresh?.status ?? txOut.args.status,
+        assignee: fresh?.assignee ?? null,
+        closedAt: fresh?.closed_at ?? txOut.args.closedAt,
+      });
+    }
+
+    // Resolve the full detail against the ALREADY-authorized task workspace (not
+    // the actor's current conversation) so a cross-workspace edit still returns
+    // its `task`.
+    const detail = this.store.fetchTaskDetail(txOut.args.taskId, actor, taskWorkspaceId);
+    if (!detail) {
+      return { success: false, code: 'task_not_found', reason: 'task not found' };
+    }
+    return { success: true, task: detail };
+  }
+
+  // ── Detail read ────────────────────────────────────────────────
+
+  /**
+   * Resolve the workspace an AGENT is authorized to read a task in, from the
+   * optional `--workspace-id` / `--workspace` selector (defaults to the actor's
+   * current conversation's workspace). The route gates `read_tasks` on the
+   * returned workspace before fetching by task number.
+   */
+  resolveAgentDetailWorkspace(
+    actor: AgentActor,
+    selector: WorkspaceSelector | undefined,
+  ): { workspaceId: string } | AgentDetailWorkspaceFailure {
+    const sourceConv = this.conversations.get(actor.conversationId);
+    if (!sourceConv) {
+      return { code: 'conversation_not_found', reason: 'conversation not found' };
+    }
+    const resolved = this.access.resolveAgentTaskWorkspace(
+      actor,
+      sourceConv,
+      selector,
+      (args): AgentDetailWorkspaceFailure => ({
+        code: args.code,
+        reason: args.reason,
+        ...(args.candidates ? { candidates: args.candidates } : {}),
+      }),
+    );
+    if ('failure' in resolved) return resolved.failure;
+    return { workspaceId: resolved.workspace.id };
+  }
+
+  /** Human detail read, keyed by task id (the REST path param). */
+  getTaskDetail(
+    taskId: string,
+    actor: TaskActor,
+    authorizedWorkspaceId?: string,
+  ): TaskDetailDto | null {
+    return this.store.fetchTaskDetail(taskId, actor, authorizedWorkspaceId);
+  }
+
+  /** Agent detail read, keyed by task number in an already-authorized
+   *  workspace (the CLI resolver). Returns null when no such task exists. */
+  getTaskDetailByNumber(
+    taskNumber: number,
+    actor: TaskActor,
+    authorizedWorkspaceId: string,
+  ): TaskDetailDto | null {
+    const row = this.store.fetchTaskByNumber(authorizedWorkspaceId, taskNumber);
+    if (!row) return null;
+    return this.store.fetchTaskDetail(row.id, actor, authorizedWorkspaceId);
+  }
+
+  // ── Broadcast helper ───────────────────────────────────────────
+
+  /** Refetch the post-mutation snapshot and broadcast the system event +
+   *  `task_changed`. Shared by every mutation path so the wire payload always
+   *  reflects committed state. */
+  private async broadcastFresh(
+    ownerConv: TaskEventArgs['conversation'],
+    args: PendingTaskEvent,
+    actor: TaskActor,
+    sysMessage: string,
+  ): Promise<void> {
+    const fresh = this.store.refetchTaskSnapshot(args.taskId);
+    await this.broadcaster.broadcast({
+      ...args,
+      conversation: ownerConv,
+      kind: args.kind === 'edit' ? 'status' : args.kind,
+      title: fresh?.title ?? args.title,
+      status: fresh?.status ?? args.status,
+      assignee: fresh?.assignee ?? args.assignee,
+      closedAt: fresh?.closed_at ?? args.closedAt,
+      actor,
+      sysMessage,
+    });
+  }
+
   // ── Actor formatting ───────────────────────────────────────────
-  // Small `AgentRepo`-backed label helpers used by the mutation methods to
-  // build system-message text and assignee DTOs. Kept on the facade (not the
-  // broadcaster) because their callers are the mutation bodies here.
 
   private actorLabel(actor: TaskActor): string {
     if (actor.kind === 'user') return 'user';
