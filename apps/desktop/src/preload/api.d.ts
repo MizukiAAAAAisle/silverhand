@@ -599,13 +599,6 @@ declare global {
         reqId: string,
         outcome: 'closed-panel' | 'background-app',
       ): void;
-      /**
-       * D4.a Commit 2 — fired by the App menu's "Connect to backend…"
-       * item so the renderer can mount the Setup Wizard modal/route.
-       * Main focuses the window before emitting; the handler only
-       * needs to open the Wizard UI.
-       */
-      onNavigateSetupWizard(handler: () => void): () => void;
       savePngExport(input: {
         pngBytes: Uint8Array;
         suggestedName: string;

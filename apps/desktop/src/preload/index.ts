@@ -514,13 +514,6 @@ const api = {
   ): void => {
     ipcRenderer.send('shortcut:contextual-close-result', reqId, outcome);
   },
-  /** D4.a Commit 2 — fired by the App menu's "Connect to backend…"
-   *  item. Renderer mounts the Setup Wizard modal in response. */
-  onNavigateSetupWizard: (handler: () => void): (() => void) => {
-    const listener = (_event: IpcRendererEvent) => handler();
-    ipcRenderer.on('navigate:setupWizard', listener);
-    return () => ipcRenderer.off('navigate:setupWizard', listener);
-  },
   showSystemNotification: (opts: {
     title: string;
     body: string;

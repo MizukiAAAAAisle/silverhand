@@ -36,7 +36,6 @@ import {
 import { RegistrationGate } from '@/features/me/RegistrationGate';
 import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
 import { AppStatusBanner } from '@/features/me/AppStatusBanner';
-import { SetupWizardModal } from '@/features/setup/SetupWizard';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
@@ -150,56 +149,34 @@ export function App(): JSX.Element {
   // call dozens more hooks than the pre-registration render and React
   // would crash with "Rendered more hooks than during the previous
   // render".
-  //
-  // D4.a Commit 2 — `SetupWizardModal` is mounted at this fixed
-  // position regardless of branch so the App menu's
-  // "Connect to backend…" item can pop it open in any state (pre-auth
-  // registration gate, loading, or post-auth shell). The modal owns
-  // its own hooks; App's hook order is unchanged.
   if (!viewer.data) {
     return (
-      <>
-        <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
-          Loading…
-        </div>
-        <SetupWizardModal />
-      </>
+      <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
+        Loading…
+      </div>
     );
   }
   // D4.a Commit 5d-fixup (Cindy P1-2): backend-unreachable gate
-  // takes precedence over the registration / setup wizard. The
+  // takes precedence over the registration gate. The
   // user MUST repair the connection (or clear the saved profile)
   // before any further auth state can be inferred — pretending the
   // user is "unauthenticated, signup_enabled=false" would push them
   // toward the wrong CTA.
   if (isBackendUnreachable(viewer.data)) {
     return (
-      <>
-        <BackendUnreachableGate
-          serverUrl={viewer.data.server_url}
-          message={viewer.data.message}
-          onRetry={() => {
-            void viewer.refetch();
-          }}
-        />
-        <SetupWizardModal />
-      </>
+      <BackendUnreachableGate
+        serverUrl={viewer.data.server_url}
+        message={viewer.data.message}
+        onRetry={() => {
+          void viewer.refetch();
+        }}
+      />
     );
   }
   if (isRegistrationRequired(viewer.data)) {
-    return (
-      <>
-        <RegistrationGate signupEnabled={viewer.data.signup_enabled} />
-        <SetupWizardModal />
-      </>
-    );
+    return <RegistrationGate signupEnabled={viewer.data.signup_enabled} />;
   }
-  return (
-    <>
-      <RegisteredAppShell />
-      <SetupWizardModal />
-    </>
-  );
+  return <RegisteredAppShell />;
 }
 
 function RegisteredAppShell(): JSX.Element {

@@ -88,7 +88,6 @@ const agentHub = {
   logout: vi.fn(),
   onShutdownProgress: vi.fn(() => () => {}),
   onAppearanceUpdated: vi.fn(() => () => {}),
-  onNavigateSetupWizard: vi.fn(() => () => {}),
   onNavigateSettings: vi.fn(() => () => {}),
   onBackendInfoUpdated: vi.fn(() => () => {}),
   getAppearance: vi.fn(() => Promise.resolve({ theme: 'system' })),

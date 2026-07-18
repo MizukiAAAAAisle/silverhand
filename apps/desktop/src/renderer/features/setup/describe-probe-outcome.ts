@@ -1,16 +1,16 @@
 /**
  * D4.a Commit 2 — pure mapper from `DesktopProbeServerInfoResult` to
- * the visual banner the Setup Wizard surfaces after a test connection.
+ * the visual banner surfaced after a test connection.
  *
  * Why a pure mapper (mirrors `describeSaveServerUrlOutcome` from
- * D3.c): the Wizard MUST render distinct copy per outcome arm so the
- * operator sees actionable diagnostics instead of a generic "failed"
- * blob. Extracting the mapping lets us pin each arm in unit tests so a
- * future "let's simplify the copy" refactor cannot collapse two arms
- * that imply different remediation paths.
+ * D3.c): connection UIs MUST render distinct copy per outcome arm so
+ * the operator sees actionable diagnostics instead of a generic
+ * "failed" blob. Extracting the mapping lets us pin each arm in unit
+ * tests so a future "let's simplify the copy" refactor cannot collapse
+ * two arms that imply different remediation paths.
  *
- * No JSX here — callers (`SetupWizard.tsx`) render the
- * `{ tone, title, description }` triple however they want.
+ * No JSX here — callers (`ConnectionPane`, `BackendUnreachableGate`)
+ * render the `{ tone, title, description }` triple however they want.
  */
 import type { DesktopProbeServerInfoResult } from '../../../preload/api';
 

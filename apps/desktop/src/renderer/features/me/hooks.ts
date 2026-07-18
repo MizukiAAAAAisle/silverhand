@@ -52,9 +52,6 @@ import {
  * logout returns a factory-default shell", expand this list.
  */
 const IDENTITY_BOUND_KEYS: ReadonlyArray<string> = [
-  // Setup wizard pin — must clear so the next session's gate logic
-  // re-derives from the actual auth state, never inherits a stuck open.
-  'silverhand:open-setup-wizard',
   // Last-viewed Settings sub-section — identity-bound because it
   // reveals what the previous viewer was looking at when they signed
   // out. Defaulting back to the wizard-recommended landing tab is
