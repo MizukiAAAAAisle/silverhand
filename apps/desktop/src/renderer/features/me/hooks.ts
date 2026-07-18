@@ -153,7 +153,7 @@ export function isBackendUnreachable(body: ViewerState): body is BackendUnreacha
  * called out.
  */
 export function mapAuthStateToViewer(
-  state: Awaited<ReturnType<typeof window.agentHub.getAuthState>>,
+  state: Awaited<ReturnType<typeof window.silverhand.getAuthState>>,
 ): ViewerState {
   if (state.status === 'authenticated') return state.user;
   if (state.status === 'backend_unreachable') {
@@ -180,7 +180,7 @@ export function useViewerUser() {
   const query = useQuery({
     queryKey: meKey,
     queryFn: async (): Promise<ViewerState> =>
-      mapAuthStateToViewer(await window.agentHub.getAuthState()),
+      mapAuthStateToViewer(await window.silverhand.getAuthState()),
     staleTime: 30 * 1000,
   });
   useEffect(() => {
@@ -195,7 +195,7 @@ export function useViewerUser() {
   return query;
 }
 
-export function authResultToUser(result: Awaited<ReturnType<typeof window.agentHub.signup>>): UserDto {
+export function authResultToUser(result: Awaited<ReturnType<typeof window.silverhand.signup>>): UserDto {
   if (result.ok) return result.user;
   // D4.a Commit 5d-fixup (Cindy P1-2): preserve the typed
   // backend-unreachable signal end-to-end. `status: 0` is the
@@ -212,7 +212,7 @@ export function useSignupUser() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: AuthSignupInput) =>
-      authResultToUser(await window.agentHub.signup(input)),
+      authResultToUser(await window.silverhand.signup(input)),
     onSuccess: dto => {
       cacheViewer(qc, dto);
     },
@@ -223,7 +223,7 @@ export function useLoginUser() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (input: AuthLoginInput) =>
-      authResultToUser(await window.agentHub.login(input)),
+      authResultToUser(await window.silverhand.login(input)),
     onSuccess: dto => {
       cacheViewer(qc, dto);
     },
@@ -233,7 +233,7 @@ export function useLoginUser() {
 export function useLogout() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => window.agentHub.logout(),
+    mutationFn: () => window.silverhand.logout(),
     onSuccess: () => {
       clearCurrentUser();
       clearViewerLocalState();

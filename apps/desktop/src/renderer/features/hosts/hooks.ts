@@ -112,7 +112,7 @@ async function fetchHosts(): Promise<HostListResponse> {
 }
 
 async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
-  const info = await window.agentHub.getBackendInfo();
+  const info = await window.silverhand.getBackendInfo();
   if (!info) {
     return {
       mode: 'embedded',
@@ -828,7 +828,7 @@ export function useDisconnectHostMutation(hostId: string) {
 
 /**
  * App-managed credential rotation. Wraps the main-process
- * `window.agentHub.rotateHostToken` IPC, which updates the local
+ * `window.silverhand.rotateHostToken` IPC, which updates the local
  * daemon-config's host token in place. Token bytes NEVER enter the
  * renderer — the IPC returns `DesktopHostMutationResult` with fresh
  * `BackendInfo` fields but no credential payload.
@@ -847,7 +847,7 @@ export function useRotateHostTokenMutation(hostId: string) {
   const qc = useQueryClient();
   return useMutation<void, Error, void>({
     mutationFn: async () => {
-      const result = await window.agentHub.rotateHostToken({ hostId });
+      const result = await window.silverhand.rotateHostToken({ hostId });
       if (!result.ok) {
         throw new Error(result.message ?? result.code);
       }
@@ -861,7 +861,7 @@ export function useRotateHostTokenMutation(hostId: string) {
 }
 
 /**
- * App-managed soft revoke. Wraps `window.agentHub.revokeHost`, which
+ * App-managed soft revoke. Wraps `window.silverhand.revokeHost`, which
  * writes `revoked_at`, invalidates the credential, force-drops any
  * live WS, and preserves agents/workspaces (per doc §5.3). NOT a
  * lexical alias of Delete — Delete is the user-managed terminal verb
@@ -876,7 +876,7 @@ export function useRevokeComputerMutation(hostId: string) {
   const qc = useQueryClient();
   return useMutation<void, Error, void>({
     mutationFn: async () => {
-      const result = await window.agentHub.revokeHost({ hostId });
+      const result = await window.silverhand.revokeHost({ hostId });
       if (!result.ok) {
         throw new Error(result.message ?? result.code);
       }

@@ -195,7 +195,7 @@ export function useNotificationToasts(
               (id): id is string => typeof id === 'string',
             );
             if (stringIds.length > 0) {
-              void window.agentHub.dismissSystemNotifications(stringIds);
+              void window.silverhand.dismissSystemNotifications(stringIds);
             }
           }
         }
@@ -213,7 +213,7 @@ export function useNotificationToasts(
   // `notificationId` originally passed to `showSystemNotification`
   // back here when the user clicks the OS-level alert.
   useEffect(() => {
-    return window.agentHub.onNotificationClicked(handleClickById);
+    return window.silverhand.onNotificationClicked(handleClickById);
   }, [handleClickById]);
 
   useEffect(() => {
@@ -273,7 +273,7 @@ export function useNotificationToasts(
 
       // System notification — main process suppresses ordinary alerts when an
       // Electron window is focused; direct human mentions opt out via `force`.
-      void window.agentHub.showSystemNotification({
+      void window.silverhand.showSystemNotification({
         title: 'Silverhand',
         body: buildSystemNotificationBody(n),
         force: isViewerMention,

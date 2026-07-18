@@ -2,7 +2,7 @@
  * D4.a Commit 6 (2) — App.tsx gate-order rendering pin.
  *
  * Cindy `MqA4uoNcRByKcf9E` boundary lock: "Renderer state-machine
- * tests, mocked agentHub — `useViewerUser` three arms, App.tsx gate
+ * tests, mocked silverhand — `useViewerUser` three arms, App.tsx gate
  * order".
  *
  * **What this file pins.** App.tsx renders a strict 4-way gate based
@@ -68,12 +68,12 @@ const SIG_REG_PASSWORD_FIELD = 'type="password"';
 const SIG_REG_SIGNUP_AUTOCOMPLETE = 'autoComplete="new-password"';
 const SIG_REG_LOGIN_AUTOCOMPLETE = 'autoComplete="current-password"';
 
-// Minimal agentHub stub. App.tsx pulls in many components that
-// reference `window.agentHub.*` at module-evaluation time
+// Minimal silverhand stub. App.tsx pulls in many components that
+// reference `window.silverhand.*` at module-evaluation time
 // (preload-typed methods exposed by the preload bridge). We stub
 // the whole `window` object so any unsolicited access surfaces as
-// `agentHub.<method> is not a function` rather than `undefined`.
-const agentHub = {
+// `silverhand.<method> is not a function` rather than `undefined`.
+const silverhand = {
   getDesktopBuildConfig: vi.fn(() => Promise.resolve({
     remote_only: false,
     allow_insecure_remote: false,
@@ -108,10 +108,10 @@ function userDto(overrides: Partial<UserDto> = {}): UserDto {
 }
 
 async function renderApp(viewer: ViewerState | undefined): Promise<string> {
-  // Late-import so the agentHub stub is installed before App.tsx is
+  // Late-import so the silverhand stub is installed before App.tsx is
   // evaluated. App.tsx pulls in `useAppearance` and a handful of
   // module-scope `useQuery` consumers; they call into
-  // `window.agentHub.*` lazily, but a bare top-of-file `import` would
+  // `window.silverhand.*` lazily, but a bare top-of-file `import` would
   // still evaluate them before `vi.stubGlobal` ran.
   const { App } = await import('@/App');
   const qc = new QueryClient({
@@ -132,8 +132,8 @@ beforeEach(() => {
   // loading branch where we deliberately want `viewer.data` to stay
   // undefined. Individual tests primed via `qc.setQueryData(['me'], ...)`
   // bypass queryFn entirely.
-  agentHub.getAuthState.mockReturnValue(new Promise(() => {}));
-  vi.stubGlobal('window', { agentHub });
+  silverhand.getAuthState.mockReturnValue(new Promise(() => {}));
+  vi.stubGlobal('window', { silverhand });
   // localStorage is touched by App.tsx (last-channel maps). Stub a
   // tiny in-memory shim so module-level hydration doesn't throw.
   const store = new Map<string, string>();
@@ -152,7 +152,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
-  agentHub.getAuthState.mockReset();
+  silverhand.getAuthState.mockReset();
 });
 
 describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {

@@ -100,7 +100,7 @@ export interface OpenAttachmentDeps {
 
 const defaultDeps: OpenAttachmentDeps = {
   fetchBytes: id => fetchAttachmentBytes(id),
-  open: input => window.agentHub.openAttachmentExternal(input),
+  open: input => window.silverhand.openAttachmentExternal(input),
   toastError: msg => {
     toast.error(msg);
   },

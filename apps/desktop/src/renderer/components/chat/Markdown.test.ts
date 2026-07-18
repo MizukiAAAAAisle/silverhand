@@ -1317,7 +1317,7 @@ describe('Markdown task refs', () => {
     // branch. Also asserts no internal scheme leaks into the rendered
     // HTML — previously the malformed path could fall through to a
     // plain `<a href="silverhand-task:0">`, which on click would call
-    // `window.agentHub.openExternal` and shell out our internal URL.
+    // `window.silverhand.openExternal` and shell out our internal URL.
     //
     // Note: `#task:1.5` is intentionally NOT tested here. By markdown
     // convention (matches `#conv:` behavior), the period terminates

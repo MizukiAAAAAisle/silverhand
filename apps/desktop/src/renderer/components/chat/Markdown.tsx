@@ -310,7 +310,7 @@ function MarkdownInner({
               // through agent-supplied markdown the tokenizer never
               // touched. Render the original child text inertly rather
               // than fall through to the plain-link branch — that branch
-              // calls `window.agentHub.openExternal(href)` on click,
+              // calls `window.silverhand.openExternal(href)` on click,
               // which would shell out our internal scheme.
               const raw = href.slice(TASK_PREFIX.length);
               const taskNumber = Number.parseInt(raw, 10);
@@ -352,7 +352,7 @@ function MarkdownInner({
                 href={href}
                 onClick={e => {
                   e.preventDefault();
-                  if (href) void window.agentHub.openExternal(href);
+                  if (href) void window.silverhand.openExternal(href);
                 }}
               >
                 {children}

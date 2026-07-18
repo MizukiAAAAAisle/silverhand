@@ -50,7 +50,7 @@ export function WorkspaceContextMenu({
         <AppContextMenuItem
           icon={<FolderOpen className="size-3.5" />}
           onSelect={() => {
-            void window.agentHub.showItemInFolder(workspacePath);
+            void window.silverhand.showItemInFolder(workspacePath);
           }}
         >
           Open in Finder

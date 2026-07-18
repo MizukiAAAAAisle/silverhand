@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api, apiUpload, fetchAttachmentBytes } from './api';
 
-const agentHub = {
+const silverhand = {
   getBackendInfo: vi.fn(),
   backendRequest: vi.fn(),
   backendUpload: vi.fn(),
@@ -9,10 +9,10 @@ const agentHub = {
 
 describe('renderer API proxy', () => {
   beforeEach(() => {
-    agentHub.getBackendInfo.mockReset();
-    agentHub.backendRequest.mockReset();
-    agentHub.backendUpload.mockReset();
-    vi.stubGlobal('window', { agentHub });
+    silverhand.getBackendInfo.mockReset();
+    silverhand.backendRequest.mockReset();
+    silverhand.backendUpload.mockReset();
+    vi.stubGlobal('window', { silverhand });
   });
 
   afterEach(() => {
@@ -20,7 +20,7 @@ describe('renderer API proxy', () => {
   });
 
   it('sends ordinary API calls through the main-process proxy', async () => {
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 200,
       statusText: 'OK',
       headers: { 'content-type': 'application/json' },
@@ -34,17 +34,17 @@ describe('renderer API proxy', () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    expect(agentHub.backendRequest).toHaveBeenCalledWith({
+    expect(silverhand.backendRequest).toHaveBeenCalledWith({
       path: '/api/example',
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       bodyText: JSON.stringify({ a: 1 }),
     });
-    expect(agentHub.getBackendInfo).not.toHaveBeenCalled();
+    expect(silverhand.getBackendInfo).not.toHaveBeenCalled();
   });
 
   it('surfaces proxy failures as ApiError without retrying legacy auth', async () => {
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 401,
       statusText: 'Unauthorized',
       headers: { 'content-type': 'application/json' },
@@ -57,7 +57,7 @@ describe('renderer API proxy', () => {
       body: JSON.stringify({ error: 'unauthorized' }),
     } satisfies Partial<ApiError>);
 
-    expect(agentHub.backendRequest).toHaveBeenCalledTimes(1);
+    expect(silverhand.backendRequest).toHaveBeenCalledTimes(1);
   });
 
   it('serializes multipart uploads for the main-process proxy', async () => {
@@ -69,7 +69,7 @@ describe('renderer API proxy', () => {
         type: 'text/plain',
       }),
     );
-    agentHub.backendUpload.mockResolvedValueOnce({
+    silverhand.backendUpload.mockResolvedValueOnce({
       status: 200,
       statusText: 'OK',
       headers: { 'content-type': 'application/json' },
@@ -80,8 +80,8 @@ describe('renderer API proxy', () => {
       id: 'att-1',
     });
 
-    expect(agentHub.backendUpload).toHaveBeenCalledTimes(1);
-    const input = agentHub.backendUpload.mock.calls[0]?.[0];
+    expect(silverhand.backendUpload).toHaveBeenCalledTimes(1);
+    const input = silverhand.backendUpload.mock.calls[0]?.[0];
     expect(input).toMatchObject({
       path: '/api/upload',
       fields: [{ name: 'title', value: 'draft' }],
@@ -99,10 +99,10 @@ describe('renderer API proxy', () => {
 
 describe('ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable kind', () => {
   beforeEach(() => {
-    agentHub.getBackendInfo.mockReset();
-    agentHub.backendRequest.mockReset();
-    agentHub.backendUpload.mockReset();
-    vi.stubGlobal('window', { agentHub });
+    silverhand.getBackendInfo.mockReset();
+    silverhand.backendRequest.mockReset();
+    silverhand.backendUpload.mockReset();
+    vi.stubGlobal('window', { silverhand });
   });
 
   afterEach(() => {
@@ -110,7 +110,7 @@ describe('ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable ki
   });
 
   it('default kind for ordinary HTTP errors is "http" (regression bait)', async () => {
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 404,
       statusText: 'Not Found',
       headers: {},
@@ -134,7 +134,7 @@ describe('ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable ki
     // is the load-bearing pin for that contract. A regression that
     // dropped the special case in `assertOk` would surface as the
     // kind defaulting to `'http'` and the gate failing to render.
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 0,
       statusText: 'Network Error',
       headers: { 'content-type': 'application/json' },
@@ -163,7 +163,7 @@ describe('ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable ki
     // Pin: even when the proxy doesn't supply statusText, the kind
     // discriminator survives. Renderer copy can still display
     // "Network Error" via a fallback constant.
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 0,
       statusText: '',
       headers: {},
@@ -184,7 +184,7 @@ describe('ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable ki
   });
 
   it('apiUpload also tags status: 0 as backend_unreachable (symmetric handling)', async () => {
-    agentHub.backendUpload.mockResolvedValueOnce({
+    silverhand.backendUpload.mockResolvedValueOnce({
       status: 0,
       statusText: 'Network Error',
       headers: {},
@@ -218,10 +218,10 @@ describe('ApiError — D4.a Commit 5d-fixup (Cindy P1-2): backend_unreachable ki
 
 describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', () => {
   beforeEach(() => {
-    agentHub.getBackendInfo.mockReset();
-    agentHub.backendRequest.mockReset();
-    agentHub.backendUpload.mockReset();
-    vi.stubGlobal('window', { agentHub });
+    silverhand.getBackendInfo.mockReset();
+    silverhand.backendRequest.mockReset();
+    silverhand.backendUpload.mockReset();
+    vi.stubGlobal('window', { silverhand });
   });
 
   afterEach(() => {
@@ -238,7 +238,7 @@ describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', ()
     // Falsifier for a regression that switched back to `fetchBackendBlob`
     // (which constructs a Blob + createObjectURL). This handler ships
     // bytes to IPC — it MUST bypass the display-URL builder entirely.
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 200,
       statusText: 'OK',
       headers: {
@@ -250,7 +250,7 @@ describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', ()
 
     const result = await fetchAttachmentBytes('att_1');
 
-    expect(agentHub.backendRequest).toHaveBeenCalledWith({
+    expect(silverhand.backendRequest).toHaveBeenCalledWith({
       path: '/api/attachments/att_1',
       responseType: 'arrayBuffer',
     });
@@ -266,7 +266,7 @@ describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', ()
     // itself would be pinned in memory until every consumer released
     // its reference. Defensive copy = owned lifetime.
     const transport = new Uint8Array([9, 8, 7, 6]);
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 200,
       statusText: 'OK',
       headers: { 'content-type': 'application/octet-stream' },
@@ -291,7 +291,7 @@ describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', ()
     // `vi.restoreAllMocks()` in `afterEach`.
     const createObjectURL = vi.spyOn(URL, 'createObjectURL');
 
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 200,
       statusText: 'OK',
       headers: { 'content-type': 'text/plain' },
@@ -304,7 +304,7 @@ describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', ()
   });
 
   it('empty body still returns a well-formed owned Uint8Array (no throw, length 0)', async () => {
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 200,
       statusText: 'OK',
       headers: { 'content-type': 'application/octet-stream' },
@@ -317,7 +317,7 @@ describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', ()
   });
 
   it('surfaces backend errors as ApiError (no silent fallthrough)', async () => {
-    agentHub.backendRequest.mockResolvedValueOnce({
+    silverhand.backendRequest.mockResolvedValueOnce({
       status: 404,
       statusText: 'Not Found',
       headers: {},

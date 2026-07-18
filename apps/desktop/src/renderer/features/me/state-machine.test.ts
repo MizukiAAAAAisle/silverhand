@@ -2,7 +2,7 @@
  * D4.a Commit 6 (2) — renderer state-machine tests.
  *
  * Cindy `MqA4uoNcRByKcf9E` boundary lock: "Renderer state-machine
- * tests, mocked agentHub — `useViewerUser` three arms, App.tsx gate
+ * tests, mocked silverhand — `useViewerUser` three arms, App.tsx gate
  * order".
  *
  * Two layers tested here:
@@ -28,7 +28,7 @@
  *      level error handler can branch on it identically to the
  *      boot-time gate.
  *
- * The agentHub IPC is mocked via `vi.stubGlobal('window', ...)` —
+ * The silverhand IPC is mocked via `vi.stubGlobal('window', ...)` —
  * the same pattern as `apps/desktop/src/renderer/lib/api.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -256,13 +256,13 @@ describe('authResultToUser — signup/login result → ApiError kind mapping', (
 
 describe('useViewerUser ← mapAuthStateToViewer wiring (end-to-end through React Query queryFn)', () => {
   // We don't render the hook in a DOM here — instead we exercise
-  // the queryFn body indirectly by invoking the agentHub mock and
+  // the queryFn body indirectly by invoking the silverhand mock and
   // feeding its result through `mapAuthStateToViewer`. The
   // `useViewerUser` body in `hooks.ts` is now a one-liner around
   // the mapper, so this is a faithful end-to-end pin without the
   // React-DOM weight.
 
-  const agentHub = {
+  const silverhand = {
     getAuthState: vi.fn(),
     signup: vi.fn(),
     login: vi.fn(),
@@ -270,11 +270,11 @@ describe('useViewerUser ← mapAuthStateToViewer wiring (end-to-end through Reac
   };
 
   beforeEach(() => {
-    agentHub.getAuthState.mockReset();
-    agentHub.signup.mockReset();
-    agentHub.login.mockReset();
-    agentHub.logout.mockReset();
-    vi.stubGlobal('window', { agentHub });
+    silverhand.getAuthState.mockReset();
+    silverhand.signup.mockReset();
+    silverhand.login.mockReset();
+    silverhand.logout.mockReset();
+    vi.stubGlobal('window', { silverhand });
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -282,22 +282,22 @@ describe('useViewerUser ← mapAuthStateToViewer wiring (end-to-end through Reac
 
   it('IPC authenticated → ViewerState carries the user', async () => {
     const user = userDto({ id: 'u-wire', display_name: 'Wire' });
-    agentHub.getAuthState.mockResolvedValueOnce({
+    silverhand.getAuthState.mockResolvedValueOnce({
       status: 'authenticated',
       signup_enabled: true,
       user,
     });
-    const viewer = mapAuthStateToViewer(await window.agentHub.getAuthState());
+    const viewer = mapAuthStateToViewer(await window.silverhand.getAuthState());
     expect(viewer).toBe(user);
   });
 
   it('IPC backend_unreachable → ViewerState carries server_url + message, no signup_enabled', async () => {
-    agentHub.getAuthState.mockResolvedValueOnce({
+    silverhand.getAuthState.mockResolvedValueOnce({
       status: 'backend_unreachable',
       server_url: 'https://down.example.test',
       message: 'connect ECONNREFUSED 127.0.0.1:443',
     });
-    const viewer = mapAuthStateToViewer(await window.agentHub.getAuthState());
+    const viewer = mapAuthStateToViewer(await window.silverhand.getAuthState());
     expect(isBackendUnreachable(viewer)).toBe(true);
     if (!isBackendUnreachable(viewer)) throw new Error('unreachable');
     expect(viewer.server_url).toBe('https://down.example.test');
@@ -305,11 +305,11 @@ describe('useViewerUser ← mapAuthStateToViewer wiring (end-to-end through Reac
   });
 
   it('IPC unauthenticated → ViewerState is SetupRequired with signup_enabled', async () => {
-    agentHub.getAuthState.mockResolvedValueOnce({
+    silverhand.getAuthState.mockResolvedValueOnce({
       status: 'unauthenticated',
       signup_enabled: false,
     });
-    const viewer = mapAuthStateToViewer(await window.agentHub.getAuthState());
+    const viewer = mapAuthStateToViewer(await window.silverhand.getAuthState());
     expect(isRegistrationRequired(viewer)).toBe(true);
     if (!isRegistrationRequired(viewer)) throw new Error('unreachable');
     expect(viewer.signup_enabled).toBe(false);

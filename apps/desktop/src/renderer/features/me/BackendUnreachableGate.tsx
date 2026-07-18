@@ -64,7 +64,7 @@ export function BackendUnreachableGate({
 
   useEffect(() => {
     let cancelled = false;
-    window.agentHub.getDesktopBuildConfig()
+    window.silverhand.getDesktopBuildConfig()
       .then(config => {
         if (!cancelled) setAllowInsecureRemote(config.allow_insecure_remote);
       })
@@ -101,7 +101,7 @@ export function BackendUnreachableGate({
     setSaving(true);
     setBanner(null);
     try {
-      const result = await window.agentHub.saveServerConnectionProfile({
+      const result = await window.silverhand.saveServerConnectionProfile({
         serverUrl: trimmed,
       });
       setBanner(describeProfileSaveForGate(result));

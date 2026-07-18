@@ -564,4 +564,4 @@ const api = {
     ipcRenderer.invoke('export:copyPng', input),
 };
 
-contextBridge.exposeInMainWorld('agentHub', api);
+contextBridge.exposeInMainWorld('silverhand', api);

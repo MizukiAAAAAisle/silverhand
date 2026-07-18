@@ -195,7 +195,7 @@ export function ConnectionPane(): JSX.Element {
   const [allowInsecureRemote, setAllowInsecureRemote] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    window.agentHub.getDesktopBuildConfig()
+    window.silverhand.getDesktopBuildConfig()
       .then(config => {
         if (!cancelled) setAllowInsecureRemote(config.allow_insecure_remote);
       })
@@ -219,13 +219,13 @@ export function ConnectionPane(): JSX.Element {
           source: 'profile',
           result: await saveServerConnectionProfileWithSettingsRetry({
             serverUrl,
-            save: input => window.agentHub.saveServerConnectionProfile(input),
+            save: input => window.silverhand.saveServerConnectionProfile(input),
           }),
         };
       }
       return {
         source: 'daemon_reload',
-        result: await window.agentHub.saveServerUrl({ serverUrl }),
+        result: await window.silverhand.saveServerUrl({ serverUrl }),
       };
     },
     onSuccess: saveResult => {

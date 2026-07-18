@@ -504,7 +504,7 @@ Notes:
 
 ```
 authenticated user → desktop Settings → Local host → Revoke
-[renderer] window.agentHub.revokeHost({ hostId })
+[renderer] window.silverhand.revokeHost({ hostId })
 [main]   POST /api/hosts/:id/revoke (Authorization: Bearer <user_token>)
 [server] BEGIN
            mark host.revoked_at = now (only when not already revoked)

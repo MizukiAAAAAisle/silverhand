@@ -478,7 +478,7 @@ export interface DesktopEventWsDiagnostic {
 
 declare global {
   interface Window {
-    agentHub: {
+    silverhand: {
       getDesktopBuildConfig(): Promise<DesktopBuildConfig>;
       getBackendInfo(): Promise<BackendInfo | null>;
       getAuthState(): Promise<DesktopAuthState>;

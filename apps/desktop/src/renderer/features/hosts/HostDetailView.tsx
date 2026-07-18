@@ -425,7 +425,7 @@ function ConnectionSection({
 /**
  * The app-managed counterpart to `ConnectionSection`. Rotates the
  * backend-issued host token in local daemon-config via a main-process
- * IPC (`window.agentHub.rotateHostToken`) — token bytes NEVER enter
+ * IPC (`window.silverhand.rotateHostToken`) — token bytes NEVER enter
  * the renderer. Deliberately NOT merged with `ConnectionSection`: the
  * two target different daemon layers (local config vs. server-issued
  * connect-token) and their copy is different.

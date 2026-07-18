@@ -937,7 +937,7 @@ export function onWsFrame(listener: WsClientListener): () => void {
 
 function recordEventWsDiagnostic(input: EventWsDiagnostic): void {
   if (typeof window === 'undefined') return;
-  const recorder = window.agentHub?.recordEventWsDiagnostic;
+  const recorder = window.silverhand?.recordEventWsDiagnostic;
   if (!recorder) return;
   void recorder(input).catch(() => {
     // Diagnostics must never affect the live WS delivery path.

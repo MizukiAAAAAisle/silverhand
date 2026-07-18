@@ -55,7 +55,7 @@ export interface SaveAttachmentDeps {
 
 const defaultDeps: SaveAttachmentDeps = {
   fetchBytes: id => fetchAttachmentBytes(id),
-  save: input => window.agentHub.saveAttachment(input),
+  save: input => window.silverhand.saveAttachment(input),
   toastSuccess: msg => {
     toast.success(msg);
   },

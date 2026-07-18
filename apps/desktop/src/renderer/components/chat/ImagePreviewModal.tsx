@@ -362,7 +362,7 @@ export function ImagePreviewModal({
     if (!pngBytes || busy) return;
     setBusy(true);
     try {
-      const result = await window.agentHub.copyPngExport({ pngBytes });
+      const result = await window.silverhand.copyPngExport({ pngBytes });
       if (result.ok) {
         toast.success('图片已复制到剪贴板');
         onExportComplete?.();
@@ -379,7 +379,7 @@ export function ImagePreviewModal({
     if (!pngBytes || busy) return;
     setBusy(true);
     try {
-      const result = await window.agentHub.savePngExport({
+      const result = await window.silverhand.savePngExport({
         pngBytes,
         suggestedName,
       });

@@ -52,7 +52,7 @@ export class ApiError extends Error {
 
 async function getInfo(forceRefresh = false): Promise<BackendInfo> {
   if (cachedInfo && !forceRefresh) return cachedInfo;
-  const info = await window.agentHub.getBackendInfo();
+  const info = await window.silverhand.getBackendInfo();
   if (!info) throw new Error('backend not ready');
   cachedInfo = info;
   return info;
@@ -124,7 +124,7 @@ export async function api<T = unknown>(
   init: RequestInit = {},
 ): Promise<T> {
   throwIfAborted(init.signal);
-  const res = await window.agentHub.backendRequest({
+  const res = await window.silverhand.backendRequest({
     path,
     method: init.method,
     headers: headersFromInit(init),
@@ -161,7 +161,7 @@ export async function apiUpload<T = unknown>(
       bytes,
     });
   }
-  const res = await window.agentHub.backendUpload({ path, fields, files });
+  const res = await window.silverhand.backendUpload({ path, fields, files });
   assertOk(res);
   return JSON.parse(textResponseBody(res)) as T;
 }
@@ -175,7 +175,7 @@ export async function fetchBackendBlob(path: string): Promise<{
   contentType: string;
   filename: string | null;
 }> {
-  const res = await window.agentHub.backendRequest({
+  const res = await window.silverhand.backendRequest({
     path,
     responseType: 'arrayBuffer',
   });
@@ -209,7 +209,7 @@ export async function fetchAttachmentBytes(attachmentId: string): Promise<{
   contentType: string;
   filename: string | null;
 }> {
-  const res = await window.agentHub.backendRequest({
+  const res = await window.silverhand.backendRequest({
     path: `/api/attachments/${encodeURIComponent(attachmentId)}`,
     responseType: 'arrayBuffer',
   });

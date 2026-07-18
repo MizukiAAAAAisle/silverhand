@@ -251,7 +251,7 @@ export function CreateWorkspaceDialog({
   };
 
   const pickDirectory = async () => {
-    const path = await window.agentHub.pickDirectory();
+    const path = await window.silverhand.pickDirectory();
     if (path) setWorkspacePath(path);
   };
 

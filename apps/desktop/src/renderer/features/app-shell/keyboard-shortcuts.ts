@@ -226,7 +226,7 @@ export function useContextualCloseResponder(
   const stateRef = useRef({ route, nav });
   stateRef.current = { route, nav };
   useEffect(() => {
-    const api = window.agentHub;
+    const api = window.silverhand;
     if (!api.onContextualClose || !api.respondContextualClose) return;
     return api.onContextualClose(reqId => {
       const { route, nav } = stateRef.current;

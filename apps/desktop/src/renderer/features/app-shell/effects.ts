@@ -53,7 +53,7 @@ export function useAppShellGlobalSync(): void {
 export function useShutdownProgress(): string | null {
   const [shutdownStep, setShutdownStep] = useState<string | null>(null);
   useEffect(() => {
-    return window.agentHub.onShutdownProgress(step => setShutdownStep(step));
+    return window.silverhand.onShutdownProgress(step => setShutdownStep(step));
   }, []);
   return shutdownStep;
 }
@@ -88,7 +88,7 @@ export function useDockBadge(
     return total;
   }, [messageUnreadSummary]);
   useEffect(() => {
-    void window.agentHub.setBadgeCount(dockBadgeCount);
+    void window.silverhand.setBadgeCount(dockBadgeCount);
   }, [dockBadgeCount]);
 }
 
@@ -133,6 +133,6 @@ export function useLayoutKeyboardShortcuts(
  */
 export function useSettingsMenuNav(toSettings: () => void): void {
   useEffect(() => {
-    return window.agentHub.onNavigateSettings(() => toSettings());
+    return window.silverhand.onNavigateSettings(() => toSettings());
   }, [toSettings]);
 }

@@ -54,7 +54,7 @@ export function Lightbox({
     try {
       const blob = await fetch(src).then(r => r.blob());
       const bytes = new Uint8Array(await blob.arrayBuffer());
-      const result = await window.agentHub.copyPngExport({ pngBytes: bytes });
+      const result = await window.silverhand.copyPngExport({ pngBytes: bytes });
       if (result.ok) {
         toast.success('图片已复制到剪贴板');
       } else {
