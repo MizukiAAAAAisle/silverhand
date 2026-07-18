@@ -301,6 +301,42 @@ function readSideSection(): SideSectionItem['id'] {
   return 'activity';
 }
 
+/** Event that redirects an ALREADY-mounted docked agent panel to a section.
+ *  The fresh-open / different-agent cases remount and read the section from
+ *  localStorage on mount; this event only covers "the panel already sits on
+ *  this agent but another tab". Carries `agentId` so a panel showing a
+ *  different agent ignores it. */
+const AGENT_SIDE_SECTION_FOCUS_EVENT = 'silverhand:agent-side-section-focus';
+
+interface AgentSideSectionFocusDetail {
+  agentId: string;
+  section: SideSectionItem['id'];
+}
+
+/**
+ * Open-intent for the docked agent panel's section. Persists the choice as the
+ * SoT — so the next reopen honors it too, keeping the sticky section in sync
+ * with an explicit jump (cross-panel contract, #task:1539) — AND signals any
+ * already-mounted panel for `agentId` to switch reactively. Call it right
+ * before `openAgentPanel(agentId)` when a caller must land on a specific tab
+ * (e.g. the Activity bubble → Activity), regardless of the last-used tab.
+ */
+export function focusAgentSideSection(
+  agentId: string,
+  section: SideSectionItem['id'],
+): void {
+  try {
+    localStorage.setItem(SIDE_SECTION_STORAGE_KEY, section);
+  } catch {
+    /* private mode / quota — the reactive event still fires */
+  }
+  window.dispatchEvent(
+    new CustomEvent<AgentSideSectionFocusDetail>(AGENT_SIDE_SECTION_FOCUS_EVENT, {
+      detail: { agentId, section },
+    }),
+  );
+}
+
 /**
  * Bare panel chrome (header + close) used by the side variant's loading /
  * error states so they still read as a dockable panel, not a full page.
@@ -379,6 +415,19 @@ function AgentSidePanel({
       /* ignore */
     }
   }, [section]);
+  // Honor a `focusAgentSideSection` jump when this panel is ALREADY mounted for
+  // the target agent (closed / different-agent opens remount and read the
+  // section on mount instead). Keeps "click a bubble agent → Activity"
+  // converging even when the panel already sits on another tab.
+  useEffect(() => {
+    const onFocus = (e: Event): void => {
+      const detail = (e as CustomEvent<AgentSideSectionFocusDetail>).detail;
+      if (detail && detail.agentId === agent.id) setSection(detail.section);
+    };
+    window.addEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
+    return () =>
+      window.removeEventListener(AGENT_SIDE_SECTION_FOCUS_EVENT, onFocus);
+  }, [agent.id]);
 
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
 

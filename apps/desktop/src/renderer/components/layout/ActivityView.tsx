@@ -613,12 +613,13 @@ function ActivityRow({
           {relTime(item.timestamp)}
         </span>
         {clearSource ? (
-          // Hover-only source-routed clear (via `clearSource`: directed → by
+          // Always-visible source-routed clear (via `clearSource`: directed → by
           // notification_id; ambient → explicit stream-head clear, §9.10) — clears
-          // WITHOUT navigating (hover ≠ read). A row-level action: `self-center`
-          // floats it to the whole item's vertical center regardless of text-row
-          // count; width is always reserved (opacity, not display) so hover-reveal
-          // never reflows the row.
+          // WITHOUT navigating. Constantly present (not hover-revealed) because
+          // users missed the hover-only affordance (shiki #task:1539); kept calm
+          // at rest (secondary ink + subtle border) and only emphasized on hover,
+          // so persistence doesn't add row volume. `self-center` floats it to the
+          // whole item's vertical center regardless of text-row count.
           <button
             type="button"
             title="Mark as read"
@@ -627,7 +628,7 @@ function ActivityRow({
               e.stopPropagation();
               clearItem.mutate(clearSource);
             }}
-            className="grid size-7 shrink-0 self-center place-items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-text-secondary opacity-0 transition-opacity hover:border-[color:var(--border-control-hover)] hover:text-text-primary group-hover:opacity-100"
+            className="grid size-7 shrink-0 self-center place-items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary"
           >
             <Check className="size-4" />
           </button>

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle,
   Brain,
   ChevronDown,
   ChevronUp,
@@ -11,6 +10,8 @@ import type { AgentDto, AgentRunState } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentRunStates } from '@/features/channels/hooks';
+import { useNav } from '@/router';
+import { focusAgentSideSection } from '@/features/agents/AgentView';
 
 // ── Time helpers ─────────────────────────────────────────────────────────
 
@@ -176,6 +177,16 @@ export function ComposerActivityHeader({
 }: ComposerActivityHeaderProps): JSX.Element | null {
   const { data: runStates = [] } = useAgentRunStates(conversationId);
   const [expanded, setExpanded] = useState(false);
+  const { openAgentPanel } = useNav();
+  // Click a bubble agent's avatar → open its docked side panel on Activity,
+  // regardless of the panel's last-used tab (#task:1539). The avatar carries the
+  // canonical `agentId` (never re-derived); `focusAgentSideSection` syncs the
+  // sticky section AND reactively redirects an already-open panel so all cases
+  // (closed / other agent / same agent on another tab) converge on Activity.
+  const openAgentActivity = (agentId: string): void => {
+    focusAgentSideSection(agentId, 'activity');
+    openAgentPanel(agentId);
+  };
 
   const agentsById = useMemo(() => {
     const m = new Map<string, AgentDto>();
@@ -215,9 +226,7 @@ export function ComposerActivityHeader({
       ? `${tool.name} ×${tool.count}`
       : tool.name
     : showCompaction
-      ? subject.compactionStale
-        ? 'Compacting · 慢'
-        : 'Compacting'
+      ? 'Compacting'
       : null;
   const snippetKindLabel =
     subject.activitySnippet && !badge
@@ -228,11 +237,7 @@ export function ComposerActivityHeader({
   const snippet =
     subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
   const extra = active.length - 1;
-  const StatusIcon = showCompaction
-    ? subject.compactionStale
-      ? AlertTriangle
-      : Layers
-    : Loader2;
+  const StatusIcon = showCompaction ? Layers : Loader2;
 
   return (
     <div
@@ -266,38 +271,74 @@ export function ComposerActivityHeader({
                 state={state}
                 agent={agentsById.get(state.agentId)}
                 avatarObjectUrl={agentAvatarUrls.get(state.agentId) ?? null}
+                onOpenActivity={openAgentActivity}
               />
             ))}
           </div>
         </>
       ) : (
-        // Resting line — fixed slots + one elastic, truncating middle.
-        <button
-          type="button"
+        // Resting line — fixed slots + one elastic, truncating middle. The row
+        // is a `div[role=button]` (expands) so it can host the avatar's own
+        // button (open-Activity) without nesting `<button>` in `<button>` —
+        // the "whole row clickable + inner interactive child" pattern.
+        <div
+          role="button"
+          tabIndex={0}
           onClick={() => setExpanded(true)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setExpanded(true);
+            }
+          }}
           aria-expanded={false}
           aria-label={`${subjectName} 运行中 — 展开运行详情`}
           title={`${subjectName}: ${snippet}`}
-          className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
+          className="flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
         >
-          <AgentAvatar
-            runtime={subjectAgent?.runtime ?? 'claude'}
-            size={AVATAR_PX.xs}
-            className="shrink-0"
-            avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
-            alt={subjectAgent?.display_name || subjectAgent?.name}
-          />
+          {/* Avatar opens the agent's docked Activity panel — the app-wide
+              "click an agent avatar → open its panel" convention. stopPropagation
+              so it doesn't also expand the bubble. No hover chrome (shiki #task:1539
+              dogfood — cursor-pointer is enough); the focus-visible ring stays as the
+              borderless avatar's ONLY keyboard-focus a11y signal. */}
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              openAgentActivity(subject.agentId);
+            }}
+            title={`打开 ${subjectName} 的 Activity`}
+            aria-label={`打开 ${subjectName} 的 Activity`}
+            className="shrink-0 cursor-pointer outline-none ring-[color:var(--border-control-hover)] focus-visible:ring-2"
+          >
+            <AgentAvatar
+              runtime={subjectAgent?.runtime ?? 'claude'}
+              size={AVATAR_PX.xs}
+              className="shrink-0"
+              avatarObjectUrl={agentAvatarUrls.get(subject.agentId) ?? null}
+              alt={subjectAgent?.display_name || subjectAgent?.name}
+            />
+          </button>
           <StatusIcon
             className={
               'size-3 shrink-0 ' +
-              (showCompaction
-                ? subject.compactionStale
-                  ? 'text-warning'
-                  : 'text-text-muted'
-                : 'animate-spin text-accent')
+              (showCompaction ? 'text-text-muted' : 'animate-spin text-accent')
             }
           />
-          <span className="shrink-0 font-medium text-accent">{subjectName}</span>
+          {/* The name is a second click target for the same open-Activity
+              action (shiki #task:1539) — text uses focus-visible:underline as its
+              idiomatic keyboard-focus signal, no hover chrome. */}
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              openAgentActivity(subject.agentId);
+            }}
+            title={`打开 ${subjectName} 的 Activity`}
+            className="shrink-0 cursor-pointer font-medium text-accent outline-none focus-visible:underline"
+          >
+            {subjectName}
+          </button>
           {badge ? (
             <span className="shrink-0 rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[10px] leading-4 text-text-muted">
               {badge}
@@ -321,7 +362,7 @@ export function ComposerActivityHeader({
             {formatMs(subjectElapsedMs)}
           </span>
           <ChevronDown className="size-3 shrink-0 text-text-muted/60" />
-        </button>
+        </div>
       )}
     </div>
   );
@@ -331,10 +372,12 @@ function ActivityDetailRow({
   state,
   agent,
   avatarObjectUrl,
+  onOpenActivity,
 }: {
   state: AgentRunState;
   agent: AgentDto | undefined;
   avatarObjectUrl: string | null;
+  onOpenActivity: (agentId: string) => void;
 }): JSX.Element {
   const elapsedMs = useLiveMs(state.startedAt);
   const compactionElapsedMs = useLiveMs(state.compactingSince ?? state.startedAt);
@@ -350,24 +393,37 @@ function ActivityDetailRow({
   const toolEntries = Object.entries(state.toolCallCounts ?? {}).filter(
     ([, count]) => count > 0,
   );
-  const compactionText = state.compactionStale
-    ? 'Compaction is taking unusually long'
-    : 'Compacting…';
-  const CompactionIcon = state.compactionStale ? AlertTriangle : Layers;
+  const compactionText = 'Compacting…';
+  const CompactionIcon = Layers;
 
   return (
     <div className="flex w-full min-w-0 items-start gap-2 rounded-[var(--control-radius)] px-2 py-1 text-xs">
       <span className="pt-0.5">
-        <AgentAvatar
-          runtime={runtime}
-          size={AVATAR_PX.xs}
-          avatarObjectUrl={avatarObjectUrl}
-          alt={agent?.display_name || agent?.name}
-        />
+        <button
+          type="button"
+          onClick={() => onOpenActivity(state.agentId)}
+          title={`打开 ${name} 的 Activity`}
+          aria-label={`打开 ${name} 的 Activity`}
+          className="block shrink-0 cursor-pointer outline-none ring-[color:var(--border-control-hover)] focus-visible:ring-2"
+        >
+          <AgentAvatar
+            runtime={runtime}
+            size={AVATAR_PX.xs}
+            avatarObjectUrl={avatarObjectUrl}
+            alt={agent?.display_name || agent?.name}
+          />
+        </button>
       </span>
       <span className="min-w-0 flex-1 space-y-1">
         <span className="flex min-w-0 items-center gap-1.5 leading-5">
-          <span className="shrink-0 font-medium text-accent">{name}</span>
+          <button
+            type="button"
+            onClick={() => onOpenActivity(state.agentId)}
+            title={`打开 ${name} 的 Activity`}
+            className="shrink-0 cursor-pointer font-medium text-accent outline-none focus-visible:underline"
+          >
+            {name}
+          </button>
           <Loader2 className="size-3 shrink-0 animate-spin text-text-muted" />
           {snippetKindLabel ? (
             <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-[10px] leading-4 text-text-muted">
@@ -383,12 +439,7 @@ function ActivityDetailRow({
           </span>
         </span>
         {state.compacting ? (
-          <span
-            className={
-              'flex min-w-0 items-center gap-1.5 leading-5 ' +
-              (state.compactionStale ? 'text-warning' : 'text-text-muted')
-            }
-          >
+          <span className="flex min-w-0 items-center gap-1.5 leading-5 text-text-muted">
             <CompactionIcon className="size-3 shrink-0" />
             <span className="truncate">{compactionText}</span>
             <span className="shrink-0 tabular-nums text-current/70">
