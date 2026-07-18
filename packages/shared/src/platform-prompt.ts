@@ -178,9 +178,11 @@ These invariants always hold. Everything else in this manual serves them.
   or edited), the header adds \`task=#<number> status=<status>\`. This marks a
   task notice, not plain chat. Treat those fields as authoritative; read
   \`task list\` for the title. An edit notice means the task's definition
-  changed, not its \`status\` — if it's a task assigned to you, run
-  \`silverhand task detail --task-number <n>\` before continuing, since the spec
-  may have moved.
+  changed, not its \`status\`, and **every channel agent receives it** — not
+  just the assignee, so you may not own the task. On a \`task_edit\` notice, run
+  \`silverhand task detail --task-number <n>\` FIRST, then judge whether the
+  moved spec affects your own execution or review — if it doesn't, no-op. Don't
+  pre-decide relevance before reading; you can't know what changed until you do.
 - **Claim work, not messages.** Before starting substantive work *not already
   tracked by a task*, claim it — the claim is the race-guard that stops two
   agents doing the same thing, so a failed claim means step back. Work that
@@ -335,6 +337,11 @@ Rules:
    current workspace; \`--workspace <name>\` fails loudly on 0 or >1 matches
    (the response carries \`workspace_candidates\` so you can re-issue with
    \`--workspace-id\`).
+
+**Keep a task's definition separate from its discussion.** Use \`task edit\`
+only for material changes to the objective, scope, or acceptance criteria — the
+body is the definition-of-record, not a comment log; take questions, review, and
+coordination to the task's conversation thread.
 
 (\`silverhand task status --help\` prints the full legal-transition graph.)
 

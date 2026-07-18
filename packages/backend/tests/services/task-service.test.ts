@@ -2307,13 +2307,18 @@ describe('TaskService.editTask', () => {
     }
   });
 
-  it('a real edit fires a task_edit event (+ task_changed) and wakes ONLY the assignee', async () => {
+  it('a real edit fires a task_edit event (+ task_changed) and wakes EVERY channel agent except the editor', async () => {
     const t = bootstrap();
     try {
       // Body carries a sentinel so we can prove it never leaks into the notice
       // (neither the message content nor its metadata). Bob owns the task
-      // (self-claim → assignee=bob, in_progress); Alice edits the title.
+      // (self-claim → assignee=bob, in_progress); Alice edits the title. Carol
+      // is a third channel member who is NEITHER assignee NOR editor — she
+      // proves the wake widened past assignee-only (#task:1542).
       const SENTINEL = 'SENTINEL_BODY_do_not_leak_9f3a';
+      const carol = t.agents.create({ name: 'carol', runtime: 'claude' }, t.localHostId, 'local');
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
       await t.service.createTasks({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
@@ -2365,10 +2370,13 @@ describe('TaskService.editTask', () => {
       expect(convKinds.filter(k => k === 'message').length).toBe(1);
       expect(convKinds.filter(k => k === 'task_changed').length).toBe(1);
 
-      // Wake targets the assignee (bob) ONLY — never the editor (alice), never
-      // every member.
-      expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.bob.id]);
-      expect(t.fake.delivered[0]!.conversationId).toBe(t.channel.id);
+      // Wake reaches every channel agent EXCEPT the editor (alice): the
+      // assignee (bob) AND the uninvolved member (carol), each exactly once.
+      const woken = t.fake.delivered.map(d => d.agentId).sort();
+      expect(woken).toEqual([t.bob.id, carol.id].sort());
+      expect(woken).not.toContain(t.alice.id); // editor never self-woken
+      expect(new Set(woken).size).toBe(woken.length); // each at most once
+      expect(t.fake.delivered.every(d => d.conversationId === t.channel.id)).toBe(true);
     } finally {
       t.cleanup();
     }
@@ -2414,7 +2422,7 @@ describe('TaskService.editTask', () => {
     }
   });
 
-  it('a self-edit by the assignee fires the event but does NOT wake (no self-wake loop)', async () => {
+  it('a self-edit by the assignee skips only the editor and still wakes the other members', async () => {
     const t = bootstrap();
     try {
       await createTask(t, t.bob.id, 'old');
@@ -2433,14 +2441,15 @@ describe('TaskService.editTask', () => {
       expect(r.success).toBe(true);
       // The durable event still fires (history + board)…
       expect(fetchSystemMetadata(t, 'task_edit').length).toBe(1);
-      // …but the editor IS the assignee, so no wake.
-      expect(t.fake.delivered).toEqual([]);
+      // …and every OTHER channel agent is woken; only the editor (bob, who here
+      // is also the assignee) is skipped — no self-wake loop.
+      expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.alice.id]);
     } finally {
       t.cleanup();
     }
   });
 
-  it('an edit to a terminal (closed) task fires the event but does NOT wake', async () => {
+  it('an edit to a terminal (closed) task STILL wakes the members (its spec change may affect dependents/reviewers)', async () => {
     const t = bootstrap();
     try {
       await createTask(t, t.bob.id, 'old');
@@ -2463,8 +2472,63 @@ describe('TaskService.editTask', () => {
       });
       expect(r.success).toBe(true);
       expect(fetchSystemMetadata(t, 'task_edit').length).toBe(1);
-      // Nobody is building a closed task → no wake even though an assignee exists.
-      expect(t.fake.delivered).toEqual([]);
+      // Terminal no longer gates the wake (#task:1542): a closed task's spec
+      // change still wakes every channel agent except the editor (alice) — here
+      // that's bob, even though the task is done being executed.
+      expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.bob.id]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('an edit to an UNASSIGNED task still wakes every channel agent except the editor', async () => {
+    const t = bootstrap();
+    try {
+      // Never claimed → no assignee. The wake used to require an agent assignee;
+      // #task:1542 drops that, so the edit still wakes the members who might
+      // pick the task up.
+      await createTask(t, t.bob.id, 'unowned');
+      t.fake.delivered = [];
+
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'edited while unassigned',
+        body: null,
+      });
+      expect(r.success).toBe(true);
+      expect(fetchSystemMetadata(t, 'task_edit').length).toBe(1);
+      // Editor is alice → bob (the only other agent) is woken despite no assignee.
+      expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.bob.id]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a human editor is not an agent, so EVERY channel agent is woken (no self-skip)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.bob.id, 'old');
+      const id = taskId(created);
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      t.fake.delivered = [];
+
+      const r = await t.service.editTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        title: 'human refines the spec',
+        body: null,
+      });
+      expect(r.success).toBe(true);
+      expect(fetchSystemMetadata(t, 'task_edit').length).toBe(1);
+      // The editor-skip only excludes an AGENT editor; a human editor skips
+      // no one, so both channel agents are woken, each exactly once.
+      const woken = t.fake.delivered.map(d => d.agentId).sort();
+      expect(woken).toEqual([t.alice.id, t.bob.id].sort());
+      expect(new Set(woken).size).toBe(woken.length);
     } finally {
       t.cleanup();
     }

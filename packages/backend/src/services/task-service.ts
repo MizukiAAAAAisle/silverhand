@@ -942,10 +942,11 @@ export class TaskService {
   /** Shared edit apply: a plain last-write-wins UPDATE (no revision/CAS), gated
    *  by a canonical no-op guard, then — only on a real change — a `task_edit`
    *  system event emitted in the SAME transaction (atomic with the UPDATE) and,
-   *  after commit, published to the conversation + delivered to the assignee
-   *  (publishEdit owns the two-axis split). The full viewer-resolved detail is
-   *  returned so an open view refreshes in place. A same-value save is a full
-   *  no-op: no UPDATE, no last_editor stamp, no event, no wake — it still returns
+   *  after commit, published to the conversation + delivered to every channel
+   *  agent except the editor (publishEdit owns the two-axis split). The full
+   *  viewer-resolved detail is returned so an open view refreshes in place. A
+   *  same-value save is a full no-op: no UPDATE, no last_editor stamp, no event,
+   *  no wake — it still returns
    *  the current detail (idempotent). */
   private async applyTaskEdit(
     actor: TaskActor,
@@ -1060,8 +1061,9 @@ export class TaskService {
 
     if (txOut.kind === 'failure') return txOut.failure;
     if (txOut.kind === 'changed') {
-      // Post-commit: conversation-visible publish + board patch + assignee-only
-      // targeted wake. Never before commit — the event must reflect durable state.
+      // Post-commit: conversation-visible publish + board patch + all-member
+      // wake (every channel agent except the editor). Never before commit — the
+      // event must reflect durable state.
       this.broadcaster.publishEdit(txOut.eventArgs, txOut.sysMsg, actor);
     }
 

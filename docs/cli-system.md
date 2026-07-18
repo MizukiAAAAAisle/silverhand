@@ -403,6 +403,19 @@ owner_conversation_id, task_workspace_id, task_number, cross_workspace }`.
 There is no visible system-message side effect — task system messages
 land in the task's owner conversation as normal.
 
+**Definition vs. discussion routing (product boundary).** A task carries only
+its *definition* + workflow state — there is deliberately **no task comment /
+task conversation** model; all discussion stays in the single channel/thread
+conversation system. The agent-facing contract routes by intent: a material
+objective/scope/acceptance change → `task edit` (definition-of-record, not an
+append-only log); questions / review / coordination *about* a task → the task's
+conversation thread. To open/find that thread, read `nav` from `task detail` —
+`nav.kind` `source`/`created_event` gives `nav.ref.message_id` for
+`--target thread:<message_id>` (an anchor already in a thread joins that root,
+no nesting); `nav.kind = unavailable` has no honest anchor, so post to the
+current conversation and cite `#task:<n>` in chat text only. This is mirrored in
+the platform prompt (kept in sync per the CLI/prompt maintenance rule).
+
 ### 3.5 Reply clusters: pull, follow/unfollow
 
 A thread is a **reply cluster** — replies under one message in a channel,
@@ -518,12 +531,17 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
   for the precise title read the task DTO/`task list`. A task is a first-class
   aggregate (own `tasks` row), not a message annotation, so no ordinary body
   message carries the task.
-  - **Edit delivery is targeted.** The `task_edit` event is durable + visible to
+  - **Edit wake is channel-wide.** The `task_edit` event is durable + visible to
     everyone with read access to the task's conversation (and live-patches the
-    board), but the runtime **wake** (`deliverMessage`) goes to the current
-    **assignee agent only**, and only while the task is non-terminal and the
-    editor is not that same assignee — so an idle agent, a done/closed task, or a
-    self-edit produces no wake.
+    board), and the runtime **wake** (`deliverMessage`) reaches **every channel
+    agent member except the editor** — not just the assignee, and regardless of
+    assignee / has-assignee / terminal status (#task:1542). A dependent or
+    reviewer who doesn't own the task is woken too; an unassigned or done/closed
+    task's spec change still wakes the members who may act on it; a self-edit
+    wakes the other members but never the editor; a human editor wakes every
+    agent. Each woken agent re-reads `task detail` to judge impact, then no-ops
+    if the moved spec doesn't affect it. (A same-value save is still a full
+    no-op — no event, no wake.)
 
 ### 3.8 `silverhand profile mcp` — per-subject MCP config
 

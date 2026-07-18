@@ -61,13 +61,16 @@ export interface TaskEventArgs {
 }
 
 /** Workflow transitions — the events that broadcast to EVERY conversation agent
- *  (`broadcast` → `publish`). `edit` is deliberately excluded: a definition
- *  change is not a coordination fact and must not wake idle agents. */
+ *  (`broadcast` → `publish`), the actor included. `edit` is routed separately
+ *  (`publishEdit`) — not because it wakes fewer agents (since #task:1542 it
+ *  wakes every member too) but because it alone skips the editor's own
+ *  self-wake. */
 export type TaskWorkflowKind = Extract<TaskMutationKind, 'claim' | 'unclaim' | 'status'>;
-/** Kinds the all-member `publish` fan-out accepts: workflow + `create`, i.e.
- *  everything EXCEPT `edit`. `edit` has its own targeted path (`publishEdit`),
- *  so the type forbids it from ever reaching the all-member deliver loop — a
- *  future refactor that tried would fail to compile, not silently wake everyone. */
+/** Kinds the `publish` fan-out accepts: workflow + `create`, i.e. everything
+ *  EXCEPT `edit`. `edit` fans out to the same all-member set but through
+ *  `publishEdit` (which excludes the editor), so the type keeps it off the
+ *  editor-blind `publish` path — a refactor that routed edit here would fail to
+ *  compile, not silently self-wake the editor. */
 export type TaskPublishKind = Exclude<TaskMutationKind, 'edit'>;
 
 export class TaskBroadcaster {
@@ -167,9 +170,10 @@ export class TaskBroadcaster {
 
   /** Fan out an already-inserted system event: publish the `message` event, the
    *  `task_changed` events, and best-effort per-recipient delivery to EVERY
-   *  conversation agent. Called AFTER the mutation (and, for create, the event
-   *  insert) commits. Rejects `edit` at the type level — a definition change
-   *  wakes only its assignee (`publishEdit`), never every member. */
+   *  conversation agent (the actor included). Called AFTER the mutation (and,
+   *  for create, the event insert) commits. Rejects `edit` at the type level —
+   *  edit fans out to the same all-member set but skips the editor, so it routes
+   *  through `publishEdit`. */
   publish(args: TaskEventArgs & { kind: TaskPublishKind }, sysMsg: MessageDto): void {
     const conversationId = args.conversation.id;
     this.events.publish(conversationId, {
@@ -177,31 +181,45 @@ export class TaskBroadcaster {
       payload: { message: sysMsg },
     });
     this.publishTaskChanged(args);
+    this.deliverToConversationAgents(conversationId, sysMsg.id);
+  }
 
-    const recipients = this.conversations.listAgents(conversationId);
-    for (const ca of recipients) {
+  /** Best-effort runtime wake: deliver an already-inserted system message to
+   *  every agent member of the conversation, optionally skipping one agent (the
+   *  editor, to avoid a self-wake). `listAgents` yields each member once, so
+   *  every recipient is delivered at most once; a failure is logged, never
+   *  thrown (fan-out is best-effort side-effect, not part of the mutation). */
+  private deliverToConversationAgents(
+    conversationId: string,
+    sysMsgId: string,
+    excludeAgentId: string | null = null,
+  ): void {
+    for (const ca of this.conversations.listAgents(conversationId)) {
+      if (ca.agent_id === excludeAgentId) continue;
       void this.runtimeHost
-        .deliverMessage(conversationId, ca.agent_id, sysMsg.id)
+        .deliverMessage(conversationId, ca.agent_id, sysMsgId)
         .catch(err => {
           this.logger.warn(
-            { err, conversationId, agentId: ca.agent_id, messageId: sysMsg.id },
+            { err, conversationId, agentId: ca.agent_id, messageId: sysMsgId },
             'task-service: deliverMessage failed',
           );
         });
     }
   }
 
-  /** Fan out an already-inserted `task_edit` event. Splits the two axes a
-   *  definition change lives on:
+  /** Fan out an already-inserted `task_edit` event across its two axes:
    *   - CONVERSATION-visible (READ axis): the `message` event + `task_changed`
    *     go to everyone with read access, exactly like the workflow events — the
    *     edit is durable conversation history and live-patches the board/chip.
-   *   - RUNTIME WAKE (attention axis): `deliverMessage` goes to the CURRENT
-   *     assignee agent ONLY, and only while the task is still executable
-   *     (non-terminal) and the editor is not that same assignee. No assignee /
-   *     a human assignee / a done|closed task / a self-edit → durable event +
-   *     board only, no wake. This targets "whoever is building to this spec"
-   *     without spending idle agents' attention or looping a self-wake. */
+   *   - RUNTIME WAKE (attention axis): `deliverMessage` wakes EVERY channel
+   *     agent member EXCEPT the editor (#task:1542). A definition change is a
+   *     channel-coordination fact — dependents build to the spec, reviewers vet
+   *     it — so wake is no longer gated on assignee / has-assignee / terminal
+   *     status; an unassigned or done/closed task's spec change still wakes the
+   *     members who may act on it. The editor is skipped to avoid a self-wake
+   *     loop; a human editor is not an agent, so every agent is woken. Each
+   *     woken agent re-reads `task detail` to judge whether the moved spec
+   *     affects its own execution or review. */
   publishEdit(args: TaskEventArgs & { kind: 'edit' }, sysMsg: MessageDto, editor: TaskActor): void {
     const conversationId = args.conversation.id;
     this.events.publish(conversationId, {
@@ -209,21 +227,11 @@ export class TaskBroadcaster {
       payload: { message: sysMsg },
     });
     this.publishTaskChanged(args);
-
-    const assignee = args.assignee;
-    const terminal = args.status === 'done' || args.status === 'closed';
-    const editorIsAssignee =
-      editor.kind === 'agent' && assignee?.type === 'agent' && editor.agentId === assignee.id;
-    if (assignee?.type === 'agent' && !terminal && !editorIsAssignee) {
-      void this.runtimeHost
-        .deliverMessage(conversationId, assignee.id, sysMsg.id)
-        .catch(err => {
-          this.logger.warn(
-            { err, conversationId, agentId: assignee.id, messageId: sysMsg.id },
-            'task-service: edit deliverMessage failed',
-          );
-        });
-    }
+    this.deliverToConversationAgents(
+      conversationId,
+      sysMsg.id,
+      editor.kind === 'agent' ? editor.agentId : null,
+    );
   }
 
   /** Convenience for the workflow paths (claim/unclaim/status): insert the
