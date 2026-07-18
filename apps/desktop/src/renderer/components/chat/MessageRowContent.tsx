@@ -91,6 +91,7 @@ export function MessageRowContent({
       </header>
 
       <div
+        data-message-body
         className={
           'text-sm text-text-primary ' + (alignRight ? 'text-right' : '')
         }

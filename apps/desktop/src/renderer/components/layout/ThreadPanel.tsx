@@ -11,6 +11,7 @@ import {
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { Composer } from '@/components/chat/Composer';
+import { SelectionQuoteToolbar } from '@/components/chat/SelectionQuoteToolbar';
 import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
 import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleton';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
@@ -960,6 +961,11 @@ export function ThreadPanel({
           ) : null}
         </div>
       )}
+
+      <SelectionQuoteToolbar
+        boundaryRef={scrollRef}
+        draftKey={`${channelId}#cluster#${rootMessageId}`}
+      />
 
       {gate.showComposer ? (
         <Composer

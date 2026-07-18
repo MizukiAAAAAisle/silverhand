@@ -47,6 +47,7 @@ import {
   type CachedPendingAttachment,
   type ComposerDraftSnapshot,
 } from '@/lib/composer-draft-cache';
+import { onQuoteToComposer, spliceQuoteIntoDraft } from '@/lib/quote-to-composer';
 import { Lightbox } from './Lightbox';
 import { ComposerActivityHeader } from './ComposerActivityHeader';
 
@@ -412,6 +413,32 @@ export function Composer({
     || send.isPending
     || pending.some(p => p.state === 'uploading')
     || (!draft.trim() && pending.filter(p => p.state === 'done').length === 0);
+
+  /** Insert a passage quoted from a message as a Markdown blockquote at
+   *  the caret (#task:1544), routed here by the SelectionQuoteToolbar via
+   *  the `draftKey`-keyed window-event bus. Mirrors the mention/label
+   *  insert idiom: splice → updateDraft → defer focus + caret past the
+   *  controlled re-render. Disabled/archived composers ignore quotes. */
+  useEffect(() => {
+    if (disabled) return;
+    return onQuoteToComposer(draftKey, text => {
+      const el = ref.current;
+      const pos = el?.selectionStart ?? caretRef.current;
+      const { text: nextDraft, caret: nextCaret } = spliceQuoteIntoDraft(
+        draftRef.current,
+        pos,
+        text,
+      );
+      updateDraft(nextDraft, nextCaret);
+      requestAnimationFrame(() => {
+        const node = ref.current;
+        if (!node) return;
+        node.focus();
+        node.setSelectionRange(nextCaret, nextCaret);
+        updateCaret(nextCaret);
+      });
+    });
+  }, [draftKey, disabled]);
 
   /** Insert an attachment's label (e.g. `Image #1`) as plain text at the
    *  caret so the user can describe it inline (#task:1324). The body reference

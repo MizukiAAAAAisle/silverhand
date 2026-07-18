@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { Composer } from '@/components/chat/Composer';
+import { SelectionQuoteToolbar } from '@/components/chat/SelectionQuoteToolbar';
 import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
 import { QuotedMessagePreview } from '@/components/chat/QuotedMessagePreview';
 import { findThreadAnchor, readAnchorMessageId } from '@/components/chat/threadAnchor';
@@ -574,6 +575,9 @@ function ActiveChannelView({
   // ⌘F opens the find. Channel is the primary pane, so it also claims ⌘F when
   // focus is nowhere specific (see useInlineFindHotkey).
   const findRootRef = useRef<HTMLElement>(null);
+  // Scopes the text-selection Quote/Copy toolbar to this channel's message
+  // list (#task:1544) so a selection routes to the main composer.
+  const messageAreaRef = useRef<HTMLDivElement>(null);
   useInlineFindHotkey({
     rootRef: findRootRef,
     enabled: findAvailable,
@@ -845,7 +849,10 @@ function ActiveChannelView({
             can float out-of-flow at the bottom (above the composer). The
             scroller's viewport height never changes when the dock shows /
             hides / grows — no content judder. */}
-        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <div
+          ref={messageAreaRef}
+          className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+        >
           <MessageList
             channelId={conversation.id}
             workspaceId={conversation.workspace_id}
@@ -895,6 +902,10 @@ function ActiveChannelView({
             onOpenChannelRef={onOpenChannelRef ? handleOpenChannelRef : undefined}
             searchQuery={find.highlightQuery}
             searchActiveMessageId={find.activeMessageId}
+          />
+          <SelectionQuoteToolbar
+            boundaryRef={messageAreaRef}
+            draftKey={conversation.id}
           />
         </div>
 
