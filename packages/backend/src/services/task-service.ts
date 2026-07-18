@@ -201,7 +201,7 @@ export class TaskService {
     type Created = {
       out: { id: string; task_number: number; title: string };
       sysMsg: MessageDto;
-      eventArgs: TaskEventArgs;
+      eventArgs: TaskEventArgs & { kind: 'create' };
     };
     let created: Created[];
     try {
@@ -222,7 +222,7 @@ export class TaskService {
             claimByAgentId,
             createdAt: now,
           });
-          const eventArgs: TaskEventArgs = {
+          const eventArgs: TaskEventArgs & { kind: 'create' } = {
             conversation,
             kind: 'create',
             taskId: id,
@@ -939,10 +939,14 @@ export class TaskService {
     return this.applyTaskEdit(actor, by, title, body, peek.workspace_id);
   }
 
-  /** Shared edit apply: a plain last-write-wins UPDATE (no revision/CAS), then a
-   *  thin `edit` event (NO system narrative — an edit is a definition tweak, not
-   *  a lifecycle step) and the full viewer-resolved detail returned so an open
-   *  view refreshes in place. */
+  /** Shared edit apply: a plain last-write-wins UPDATE (no revision/CAS), gated
+   *  by a canonical no-op guard, then — only on a real change — a `task_edit`
+   *  system event emitted in the SAME transaction (atomic with the UPDATE) and,
+   *  after commit, published to the conversation + delivered to the assignee
+   *  (publishEdit owns the two-axis split). The full viewer-resolved detail is
+   *  returned so an open view refreshes in place. A same-value save is a full
+   *  no-op: no UPDATE, no last_editor stamp, no event, no wake — it still returns
+   *  the current detail (idempotent). */
   private async applyTaskEdit(
     actor: TaskActor,
     by: AgentTaskRef | UserTaskRef,
@@ -955,8 +959,14 @@ export class TaskService {
     const editedAt = Date.now();
 
     type EditTxOut =
-      | { failure: TaskEditResult }
-      | { success: true; args: PendingTaskEvent; ownerConversationId: string };
+      | { kind: 'failure'; failure: TaskEditResult }
+      | { kind: 'noop'; taskId: string }
+      | {
+          kind: 'changed';
+          taskId: string;
+          eventArgs: TaskEventArgs & { kind: 'edit' };
+          sysMsg: MessageDto;
+        };
 
     const txOut = this.db.transaction((): EditTxOut => {
       const row =
@@ -964,8 +974,37 @@ export class TaskService {
           ? this.store.fetchTaskById(by.taskId)
           : this.store.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
       if (!row) {
-        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
+        return {
+          kind: 'failure',
+          failure: { success: false, code: 'task_not_found', reason: 'task not found' },
+        };
       }
+
+      // Resolve the owner conversation BEFORE any write. It's a pure read with no
+      // dependency on the edit, so doing it here means a missing owner returns a
+      // typed failure while NOTHING has been written — there is no path that
+      // commits the UPDATE without its `task_edit` anchor (the atomicity contract).
+      const ownerConv = this.conversations.get(row.conversation_id);
+      if (!ownerConv) {
+        return {
+          kind: 'failure',
+          failure: { success: false, code: 'task_not_found', reason: 'task not found' },
+        };
+      }
+
+      // Canonical no-op guard: fire an edit event ONLY when a canonical
+      // title/content value actually changes. `title` arrives already normalized
+      // (TaskTitleSchema at the API boundary) and stored titles are normalized
+      // too, so `!==` is a valid canonical comparison; a null field means "leave
+      // unchanged". A same-value save (onBlur re-save, idempotent CLI edit) writes
+      // NOTHING — no UPDATE, no last_editor stamp, no event, no wake — so it
+      // cannot manufacture attention cost.
+      const titleChanges = title !== null && title !== row.title;
+      const contentChanges = body !== null && body !== row.content;
+      if (!titleChanges && !contentChanges) {
+        return { kind: 'noop', taskId: row.id };
+      }
+
       const updated = this.store.applyTaskEdit({
         taskId: row.id,
         title,
@@ -975,46 +1014,62 @@ export class TaskService {
         editedAt,
       });
       if (!updated) {
-        // The row vanished between fetch and update within the txn — degrade to
-        // a typed not-found rather than a false success.
-        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
+        // The row vanished between fetch and update within the txn — the UPDATE
+        // matched 0 rows, so NOTHING was written; a typed not-found is safe here
+        // (no orphaned write to roll back).
+        return {
+          kind: 'failure',
+          failure: { success: false, code: 'task_not_found', reason: 'task not found' },
+        };
       }
-      return {
-        success: true,
-        ownerConversationId: row.conversation_id,
-        args: {
-          kind: 'edit',
-          taskId: row.id,
-          taskNumber: row.task_number,
-          title: row.title,
-          status: row.status,
-          assignee: null,
-          closedAt: row.closed_at,
-          sourceMessageId: row.source_message_id,
-          threadRootId: row.thread_root_id,
-        },
+
+      // Post-UPDATE, any invariant failure MUST throw (→ rollback), never return
+      // normally — a normal return would COMMIT the edit without its notice. The
+      // row was just updated in THIS txn, so a null snapshot is a hard invariant
+      // violation, not a degrade: we do NOT fall back to `row`'s pre-edit title
+      // (that would emit an event carrying the stale title).
+      const snap = this.store.refetchTaskSnapshot(row.id);
+      if (!snap) {
+        throw new Error(
+          `task_edit invariant: snapshot missing for just-updated task ${row.id}`,
+        );
+      }
+      // AFTER snapshot: an edit never moves status/assignee, but the title may
+      // have changed. emitSystemMessage runs in THIS txn (its no-own-wrapper
+      // contract) so UPDATE + notice INSERT commit atomically.
+      const eventArgs: TaskEventArgs & { kind: 'edit' } = {
+        conversation: ownerConv,
+        kind: 'edit',
+        taskId: row.id,
+        taskNumber: row.task_number,
+        title: snap.title,
+        status: snap.status,
+        assignee: snap.assignee,
+        closedAt: snap.closed_at,
+        sourceMessageId: row.source_message_id,
+        threadRootId: row.thread_root_id,
       };
+      const sysMsg = this.broadcaster.emitSystemMessage({
+        ...eventArgs,
+        kind: 'edit',
+        actor,
+        sysMessage: `${this.actorLabel(actor)} edited task #${row.task_number} "${eventArgs.title}"`,
+      });
+      return { kind: 'changed', taskId: row.id, eventArgs, sysMsg };
     })();
 
-    if ('failure' in txOut) return txOut.failure;
-
-    const ownerConv = this.conversations.get(txOut.ownerConversationId);
-    if (ownerConv) {
-      const fresh = this.store.refetchTaskSnapshot(txOut.args.taskId);
-      this.broadcaster.publishTaskChanged({
-        ...txOut.args,
-        conversation: ownerConv,
-        title: fresh?.title ?? txOut.args.title,
-        status: fresh?.status ?? txOut.args.status,
-        assignee: fresh?.assignee ?? null,
-        closedAt: fresh?.closed_at ?? txOut.args.closedAt,
-      });
+    if (txOut.kind === 'failure') return txOut.failure;
+    if (txOut.kind === 'changed') {
+      // Post-commit: conversation-visible publish + board patch + assignee-only
+      // targeted wake. Never before commit — the event must reflect durable state.
+      this.broadcaster.publishEdit(txOut.eventArgs, txOut.sysMsg, actor);
     }
 
-    // Resolve the full detail against the ALREADY-authorized task workspace (not
-    // the actor's current conversation) so a cross-workspace edit still returns
-    // its `task`.
-    const detail = this.store.fetchTaskDetail(txOut.args.taskId, actor, taskWorkspaceId);
+    // Both changed and no-op return the full viewer-resolved detail (edit's
+    // response contract), resolved against the ALREADY-authorized task workspace
+    // (not the actor's current conversation) so a cross-workspace edit still
+    // returns its `task`.
+    const detail = this.store.fetchTaskDetail(txOut.taskId, actor, taskWorkspaceId);
     if (!detail) {
       return { success: false, code: 'task_not_found', reason: 'task not found' };
     }
@@ -1083,11 +1138,20 @@ export class TaskService {
     actor: TaskActor,
     sysMessage: string,
   ): Promise<void> {
+    const { kind } = args;
+    // broadcastFresh serves only the workflow paths (claim/unclaim/status).
+    // `create` publishes directly and `edit` uses publishEdit, so neither is a
+    // legal kind here. Asserting it both guards at runtime and narrows `kind` to
+    // the workflow union `broadcast` accepts — the type now forbids an edit from
+    // reaching the all-member deliver loop.
+    if (kind === 'create' || kind === 'edit') {
+      throw new Error(`broadcastFresh received non-workflow kind: ${kind}`);
+    }
     const fresh = this.store.refetchTaskSnapshot(args.taskId);
     await this.broadcaster.broadcast({
       ...args,
       conversation: ownerConv,
-      kind: args.kind === 'edit' ? 'status' : args.kind,
+      kind,
       title: fresh?.title ?? args.title,
       status: fresh?.status ?? args.status,
       assignee: fresh?.assignee ?? args.assignee,

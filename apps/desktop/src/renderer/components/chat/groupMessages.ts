@@ -82,12 +82,16 @@ import {
  *  task_* family), so the cluster's left rail read as noise on a lone
  *  rename row. They now render standalone, without the cluster chrome. The
  *  task_* family keeps the activity-strip treatment because those genuinely
- *  arrive in bursts during active work. */
+ *  arrive in bursts during active work. `task_edit` (#task:1531) joins the
+ *  family for the same reason — a definition change is part of the same
+ *  work burst (create → edit → claim), so excluding it would split a run
+ *  into cluster / standalone / cluster. */
 export const CLUSTERABLE_SUBTYPES: ReadonlySet<SystemSubtype> = new Set<SystemSubtype>([
   'task_create',
   'task_claim',
   'task_unclaim',
   'task_status',
+  'task_edit',
 ]);
 
 /** 5-minute window between consecutive activity events to remain in

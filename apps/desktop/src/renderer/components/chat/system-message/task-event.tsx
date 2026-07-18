@@ -14,18 +14,21 @@ import { type RendererProps, useUserResolver } from './shared';
 
 /**
  * Inline row for `task_create` / `task_claim` / `task_unclaim` /
- * `task_status` system messages. Each row appears at its real position
- * in the message stream — same-task events are NOT connected by a
- * line; visual continuity comes from the `#task:N` chip identity and
- * its hover popover (already wired in PR-4 infra).
+ * `task_status` / `task_edit` system messages. Each row appears at its
+ * real position in the message stream — same-task events are NOT
+ * connected by a line; visual continuity comes from the `#task:N` chip
+ * identity and its hover popover (already wired in PR-4 infra).
  *
  * Three sub-shapes (chosen by a defensive metadata cascade —
  * `readTaskSystemMetadata` → `readTaskSystemMetadataPartial` →
  * total fallback):
  *  - Full enriched metadata: `<dot> <actor> <verb> <chip>` for
- *    create/claim/unclaim; `<dot> <actor> moved <chip> → <status pill>`
- *    for status transitions. PR-9 unified actor position to the front
- *    across all four subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`).
+ *    create/claim/unclaim/edit (`task_edit` → "edited" — a definition
+ *    change, NOT a status move, so it takes the plain verb shape and
+ *    the dot reflects the task's CURRENT status like create/claim, no
+ *    `→ pill`); `<dot> <actor> moved <chip> → <status pill>` for status
+ *    transitions. PR-9 unified actor position to the front across the
+ *    subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`).
  *  - Partial legacy metadata (pre-PR-2 rows: subtype + task_number +
  *    task_status only): degraded row keeps the dot + chip + verb (or
  *    `→ pill` for status), drops the actor pill / inline title — we
@@ -107,7 +110,9 @@ function TaskEventBody({
       ? 'created'
       : subtype === 'task_claim'
         ? 'claimed'
-        : 'unclaimed';
+        : subtype === 'task_edit'
+          ? 'edited'
+          : 'unclaimed';
   return (
     <>
       <span className="font-medium text-text-primary">{actorLabel}</span>
@@ -194,7 +199,7 @@ function TaskEventLegacyFallback({ content }: { content: string }): JSX.Element 
  *  - dot uses `subtype === 'task_unclaim' ? 'unclaim' : task_status`
  *    — same rule as the enriched row; `subtype` is in legacy metadata.
  *  - chip is just `#task:N` (no inline title).
- *  - body shows `{verb}` (create/claim/unclaim) or `→ {pill}`
+ *  - body shows `{verb}` (create/claim/unclaim/edit) or `→ {pill}`
  *    (status); no actor pill.
  */
 function TaskEventRowDegraded({
@@ -223,7 +228,9 @@ function TaskEventRowDegraded({
               ? 'created'
               : meta.subtype === 'task_claim'
                 ? 'claimed'
-                : 'unclaimed'}
+                : meta.subtype === 'task_edit'
+                  ? 'edited'
+                  : 'unclaimed'}
           </span>
           <TaskRef taskNumber={meta.task_number} />
         </>

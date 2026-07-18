@@ -2306,4 +2306,223 @@ describe('TaskService.editTask', () => {
       t.cleanup();
     }
   });
+
+  it('a real edit fires a task_edit event (+ task_changed) and wakes ONLY the assignee', async () => {
+    const t = bootstrap();
+    try {
+      // Body carries a sentinel so we can prove it never leaks into the notice
+      // (neither the message content nor its metadata). Bob owns the task
+      // (self-claim → assignee=bob, in_progress); Alice edits the title.
+      const SENTINEL = 'SENTINEL_BODY_do_not_leak_9f3a';
+      await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        tasks: [{ title: 'old title', body: SENTINEL }],
+      });
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      t.fake.delivered = []; // isolate the edit wake from create/claim deliveries
+
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'new title',
+        body: null,
+      });
+      unsub();
+      expect(r.success).toBe(true);
+
+      // Durable + conversation-visible: exactly one task_edit system message,
+      // one message event, one task_changed.
+      const rows = fetchSystemMetadata(t, 'task_edit');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta?.subtype).toBe('task_edit');
+      expect(meta?.task_status).toBe('in_progress'); // an edit never moves status
+      expect(meta?.task_title).toBe('new title');
+      // The body never leaks into the notice — assert against the FULL message
+      // row (content AND metadata), not just metadata (which structurally can't
+      // hold it). The task body still holds the sentinel; the notice must not.
+      const editRow = t.db
+        .prepare<[], { content: string; metadata: string | null }>(
+          `SELECT content, metadata FROM messages
+           WHERE from_kind = 'system'
+             AND json_extract(metadata, '$.subtype') = 'task_edit'
+           ORDER BY created_at DESC, id DESC LIMIT 1`,
+        )
+        .get();
+      expect(editRow).toBeTruthy();
+      expect(editRow!.content).not.toContain(SENTINEL);
+      expect(editRow!.metadata ?? '').not.toContain(SENTINEL);
+      // The body itself is untouched by a title-only edit — the sentinel still
+      // lives on the task, it just never reached the notice.
+      expect(refetch(t, rows[0]!.task_id as string)?.content).toBe(SENTINEL);
+      expect(convKinds.filter(k => k === 'message').length).toBe(1);
+      expect(convKinds.filter(k => k === 'task_changed').length).toBe(1);
+
+      // Wake targets the assignee (bob) ONLY — never the editor (alice), never
+      // every member.
+      expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.bob.id]);
+      expect(t.fake.delivered[0]!.conversationId).toBe(t.channel.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a same-value save is a full no-op: no event, no task_changed, no wake, no last_editor stamp', async () => {
+    const t = bootstrap();
+    try {
+      await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'same title', body: 'same body' }],
+      });
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      t.fake.delivered = [];
+
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'same title', // canonically identical to stored
+        body: 'same body',
+      });
+      unsub();
+
+      // Idempotent: still returns the current detail…
+      expect(r.success).toBe(true);
+      if (!r.success) throw new Error('expected success');
+      expect(r.task.title).toBe('same title');
+      // …but wrote NOTHING: no task_edit event, no task_changed, no wake, and the
+      // last_editor was never stamped (the claim doesn't stamp it either).
+      expect(fetchSystemMetadata(t, 'task_edit').length).toBe(0);
+      expect(convKinds).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+      expect(r.task.last_editor).toBeNull();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a self-edit by the assignee fires the event but does NOT wake (no self-wake loop)', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.bob.id, 'old');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      t.fake.delivered = [];
+
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'bob edits his own task',
+        body: null,
+      });
+      expect(r.success).toBe(true);
+      // The durable event still fires (history + board)…
+      expect(fetchSystemMetadata(t, 'task_edit').length).toBe(1);
+      // …but the editor IS the assignee, so no wake.
+      expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('an edit to a terminal (closed) task fires the event but does NOT wake', async () => {
+    const t = bootstrap();
+    try {
+      await createTask(t, t.bob.id, 'old');
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      await t.service.updateStatus({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        status: 'closed',
+      });
+      t.fake.delivered = [];
+
+      const r = await t.service.editTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+        title: 'edited after close',
+        body: null,
+      });
+      expect(r.success).toBe(true);
+      expect(fetchSystemMetadata(t, 'task_edit').length).toBe(1);
+      // Nobody is building a closed task → no wake even though an assignee exists.
+      expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('notice INSERT failure rolls back the whole edit (proves UPDATE + INSERT share one txn)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        tasks: [{ title: 'orig title', body: 'orig body' }],
+      });
+      const id = taskId(created);
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      t.fake.delivered = [];
+      // Fault injection: make the task_edit notice INSERT throw — it is the first
+      // (and only) insertForConversation the edit performs, after create/claim
+      // already ran. If the UPDATE and this INSERT truly share ONE transaction,
+      // the thrown insert rolls the UPDATE back too. This falsifies "atomicity"
+      // by behavior, not by reading the code layout — it fails the day someone
+      // moves emitSystemMessage out of the transaction.
+      const insertSpy = vi
+        .spyOn(t.messages, 'insertForConversation')
+        .mockImplementationOnce(() => {
+          throw new Error('injected notice insert failure');
+        });
+
+      await expect(
+        t.service.editTask({
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+          title: 'edited title',
+          body: 'edited body',
+        }),
+      ).rejects.toThrow('injected notice insert failure');
+      unsub();
+      expect(insertSpy).toHaveBeenCalledTimes(1);
+      insertSpy.mockRestore();
+
+      // The UPDATE rolled back with the failed INSERT: title/content AND the
+      // last_editor stamp are all still the pre-edit values.
+      const after = refetch(t, id);
+      expect(after?.title).toBe('orig title');
+      expect(after?.content).toBe('orig body');
+      expect(after?.last_editor).toBeNull();
+      // No durable event, no conversation publish, no wake — nothing escaped.
+      expect(fetchSystemMetadata(t, 'task_edit').length).toBe(0);
+      expect(convKinds).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
 });

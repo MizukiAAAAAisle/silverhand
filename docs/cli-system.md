@@ -56,7 +56,7 @@ All commands default to machine-readable JSON on stdout. Use
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create one task (`--title` + optional `--body`) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4. |
-| `silverhand task claim` | Claim an existing task by task number (to create-and-claim from a message use `task create --source-message-id --claim`). Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
+| `silverhand task claim` | Claim an existing task by task number (to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
 | `silverhand task status` | Move a task to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
 | `silverhand task edit` | Edit a task's title/content by `--task-number` (last-write-wins; the most recent successful edit wins, no concurrency check). Never touches status/assignee. See §3.4. |
@@ -374,12 +374,14 @@ share one conversation).
 + assigned to the actor instead of unassigned `todo`). It requires the
 `write_tasks` capability in addition to `create_tasks`. `task claim` only
 ever claims tasks that already exist; to create and claim in one step, use
-`task create --source-message-id <id> --claim`.
+`task create --title <t> --source-message-id <id> --claim`.
 
 #### `task edit` — last-write-wins definition edits
 
 `task edit` changes a task's current title/content (never status or
-assignee). Provide at least one of `--title` / `--body` (`--body ""`
+assignee). Use it when later instructions materially change the task's
+objective or scope; workflow state and ownership belong to `task status` /
+`task claim`. Provide at least one of `--title` / `--body` (`--body ""`
 clears the content; omitted fields are left unchanged). The edit is a plain
 last-write-wins UPDATE by task id: the most recent successful write wins,
 with **no** optimistic-concurrency guard (no `--expected-revision`, no
@@ -500,18 +502,28 @@ agent-facing contract, repeated here so CLI/runtime and prompt stay in sync
 
 - `target=channel` is the main line; `target=thread:<root_message_id>` is a
   reply inside that message's cluster.
-- **Task lifecycle suffix.** When the delivered row is a task **lifecycle
-  system event** (task created, claimed, or status-changed), the header
+- **Task notice suffix.** When the delivered row is a task **system
+  event** (task created, claimed, status-changed, or **edited**), the header
   gains a trailing ` task=#<number> status=<status>` **inside the brackets**
   (e.g. `… time=<iso> task=#1124 status=todo]`). The suffix is the machine-readable
   fact that the message **is a task notice**, not plain chat; `task=#<number>`
   and `status=<status>` are authoritative. It is general to **all** task
-  lifecycle events — the task-created event of every `task create` (whether or
-  not `--claim` / `--source-message-id` were passed) and each later claim /
-  status event — and is omitted entirely for non-task messages. The **title is
-  deliberately not in the header** (escaping/whitespace); for the precise title
-  read the task DTO/`task list`. A task is a first-class aggregate (own `tasks`
-  row), not a message annotation, so no ordinary body message carries the task.
+  system events — the task-created event of every `task create` (whether or
+  not `--claim` / `--source-message-id` were passed), each later claim /
+  status event, and the **`task_edit`** event fired when a task's title/content
+  definition actually changes (a same-value save is a no-op — no event). On an
+  edit the `status` is the current status (an edit never moves status), so a
+  task-edit notice is the cue to re-read `task detail` for the moved spec, not a
+  transition. The **title is deliberately not in the header** (escaping/whitespace);
+  for the precise title read the task DTO/`task list`. A task is a first-class
+  aggregate (own `tasks` row), not a message annotation, so no ordinary body
+  message carries the task.
+  - **Edit delivery is targeted.** The `task_edit` event is durable + visible to
+    everyone with read access to the task's conversation (and live-patches the
+    board), but the runtime **wake** (`deliverMessage`) goes to the current
+    **assignee agent only**, and only while the task is non-terminal and the
+    editor is not that same assignee — so an idle agent, a done/closed task, or a
+    self-edit produces no wake.
 
 ### 3.8 `silverhand profile mcp` — per-subject MCP config
 

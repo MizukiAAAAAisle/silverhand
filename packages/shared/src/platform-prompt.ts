@@ -174,12 +174,13 @@ These invariants always hold. Everything else in this manual serves them.
   identifies the source thread of that message. A bare ${sendMessage} (no
   \`--target\`) posts to the main line; to reply inside a thread, pass
   \`--target thread:<root_message_id>\`.
-  When the message is a task lifecycle event (a task was created, claimed, or
-  changed status), the header gains a
-  \`task=#<number> status=<status>\` suffix — its presence
-  means this message is a task notice (not plain chat), with
-  \`task=#<number>\`/\`status\` authoritative; the title is not in the header
-  (read \`task list\` for it).
+  When the message is a task system event (created, claimed, status change,
+  or edited), the header adds \`task=#<number> status=<status>\`. This marks a
+  task notice, not plain chat. Treat those fields as authoritative; read
+  \`task list\` for the title. An edit notice means the task's definition
+  changed, not its \`status\` — if it's a task assigned to you, run
+  \`silverhand task detail --task-number <n>\` before continuing, since the spec
+  may have moved.
 - **Claim work, not messages.** Before starting substantive work *not already
   tracked by a task*, claim it — the claim is the race-guard that stops two
   agents doing the same thing, so a failed claim means step back. Work that
@@ -297,7 +298,7 @@ fails, someone else owns that work, so step back.
 Decide what to claim by the **unit of work**, not by the message:
 - **New, untracked substantive work** — fix a bug, write/review code, debug,
   investigate, draft a concrete design, deploy, run tests → claim before
-  starting. From a message, ${createTasks} \`--source-message-id <id> --claim\`
+  starting. From a message, ${createTasks} \`--title <t> --source-message-id <id> --claim\`
   creates the task and self-claims it in one step.
 - **A message continuing a tracked task** — a follow-up, or review feedback on a
   task you own that's in \`in_review\` → not new work. Don't open a second task;
@@ -652,20 +653,23 @@ grant it.
   message by \`--message-id\`. A lightweight signal; idempotent. Use sparingly
   (see Collaboration Policy → React sparingly).
 - **\`silverhand task list\`**: View the task board (newest-first). Filter with \`--status\`
-  (canonical statuses plus macros \`active\` / \`open\` / \`pending\` / \`all\`).
+  (canonical statuses plus macros \`active\` / \`open\` / \`pending\` / \`all\`). Rows
+  are summaries — use \`silverhand task detail --task-number <n>\` when the title
+  isn't enough to act safely.
 - **\`silverhand task create\`**: Create a task (\`--title\` + optional
   \`--body\`). \`--source-message-id <id>\` links the prompting message
   (permanent 1:1 provenance), \`--claim\` self-assigns it, and optional
   \`--target thread:<message_id>\` attributes it to a thread.
-- **\`silverhand task claim\`**: Claim an existing task by number. For
-  message-triggered work, create the task first with \`task create
-  --source-message-id <id> --claim\` — claim only ever claims tasks that
-  already exist.
+- **\`silverhand task claim\`**: Claim an existing task by number — it never
+  creates. For message-triggered work, create first with
+  \`silverhand task create --title <t> --source-message-id <id> --claim\`.
 - **\`silverhand task unclaim\`** / **\`silverhand task status\`**: Release a
   claim / move a task through its status workflow.
 - **\`silverhand task edit\`**: Edit a task's title/content by
   \`--task-number\` (\`--title\` / \`--body\`). A plain last-write-wins
-  update — the most recent successful edit wins.
+  update — the most recent successful edit wins. Edit the title/content when
+  later instructions materially change the task's objective or scope; use
+  \`task status\` / \`task claim\` for workflow changes.
 - **\`silverhand task detail\`**: Read one task's full content,
   last-editor, and provenance by \`--task-number\`.
 - **\`silverhand thread follow\`** / **\`silverhand thread unfollow\`**:

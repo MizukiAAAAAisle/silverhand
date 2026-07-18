@@ -53,11 +53,15 @@ export const SYSTEM_SUBTYPES = [
   'task_claim',
   'task_unclaim',
   'task_status',
+  'task_edit',
 ] as const;
 export type SystemSubtype = typeof SYSTEM_SUBTYPES[number];
 
-/** Task mutation kinds — drives `taskSystemSubtype(kind)` → `task_${kind}`. */
-export const TASK_MUTATION_KINDS = ['create', 'claim', 'unclaim', 'status'] as const;
+/** Task mutation kinds — drives `taskSystemSubtype(kind)` → `task_${kind}`.
+ *  `edit` is a definition change (title/content), distinct from the workflow
+ *  transitions (claim/unclaim/status): its event exists so an agent building to
+ *  the task's spec learns the definition changed and re-reads `task detail`. */
+export const TASK_MUTATION_KINDS = ['create', 'claim', 'unclaim', 'status', 'edit'] as const;
 export type TaskMutationKind = typeof TASK_MUTATION_KINDS[number];
 
 /** Task subtypes — must match `\`task_${TaskMutationKind}\`` exactly
@@ -69,6 +73,7 @@ export const TASK_SUBTYPES = [
   'task_claim',
   'task_unclaim',
   'task_status',
+  'task_edit',
 ] as const;
 export type TaskSubtype = typeof TASK_SUBTYPES[number];
 
@@ -232,8 +237,8 @@ export function readConversationMemberChangeMetadata(
 
 /**
  * Metadata shape for `task_create` / `task_claim` / `task_unclaim` /
- * `task_status` system messages. The `task_status` field is the status
- * snapshot AFTER this mutation — the event TYPE is `subtype`. Examples:
+ * `task_status` / `task_edit` system messages. The `task_status` field is the
+ * status snapshot AFTER this mutation — the event TYPE is `subtype`. Examples:
  *
  *  - `subtype = task_create`: genesis event; `task_status = 'todo'`.
  *  - `subtype = task_claim`: prior state was `todo` (claim's domain);
@@ -243,6 +248,11 @@ export function readConversationMemberChangeMetadata(
  *  - `subtype = task_status`: arbitrary transition; the prior state is
  *    NOT in metadata — needs back-reference to the previous task system
  *    message if a future view wants to render a `before → after` diff.
+ *  - `subtype = task_edit`: a title/content DEFINITION change; `task_status`
+ *    is the CURRENT status (an edit never moves status), so it is NOT a
+ *    transition. The metadata deliberately carries NO body/content — a reader
+ *    (or a woken assignee) pulls the current definition via `task detail`.
+ *    Fired ONLY on a real canonical change; a same-value save emits nothing.
  *
  * `task_id` (v60+) is the canonical task-aggregate id for per-task event
  * lookup. The legacy `task_message_id` (pre-v60 events) held the old

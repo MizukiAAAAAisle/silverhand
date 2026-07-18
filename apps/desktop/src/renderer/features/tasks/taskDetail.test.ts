@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskDetailDto, TaskSummaryDto } from '@silverhand/shared';
-import {
-  buildTaskEditPayload,
-  drawerShouldCloseOnEscape,
-  resolveTaskJumpTarget,
-} from './taskDetail';
+import { drawerShouldCloseOnEscape, resolveTaskJumpTarget } from './taskDetail';
 
 function summary(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   return {
@@ -92,36 +88,5 @@ describe('drawerShouldCloseOnEscape', () => {
   it('defers (does NOT close the drawer) while a detail modal is open', () => {
     // Escape belongs to the top layer: the modal closes, the drawer stays.
     expect(drawerShouldCloseOnEscape(true)).toBe(false);
-  });
-});
-
-describe('buildTaskEditPayload', () => {
-  const base = { title: 'Original', content: 'Original body' };
-
-  it('sends nothing when neither field changed', () => {
-    expect(
-      buildTaskEditPayload(base, { title: 'Original', body: 'Original body' }),
-    ).toEqual({});
-  });
-
-  it('omits an unchanged title on a body-only edit (legacy fallback stays independent)', () => {
-    // A legacy null-title task shows firstLine(content) as `base.title`.
-    // Editing only the body must NOT echo that fallback back as an explicit
-    // title — the backend materializes it independently.
-    expect(
-      buildTaskEditPayload(base, { title: 'Original', body: 'New body' }),
-    ).toEqual({ body: 'New body' });
-  });
-
-  it('sends only the trimmed title on a title-only edit', () => {
-    expect(
-      buildTaskEditPayload(base, { title: '  Renamed  ', body: 'Original body' }),
-    ).toEqual({ title: 'Renamed' });
-  });
-
-  it('sends both fields when both changed', () => {
-    expect(
-      buildTaskEditPayload(base, { title: 'Renamed', body: 'New body' }),
-    ).toEqual({ title: 'Renamed', body: 'New body' });
   });
 });

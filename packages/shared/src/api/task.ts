@@ -21,8 +21,17 @@ export const TASK_TITLE_MAX_LEN = 200;
  *  column directly; this is the task-domain bound. */
 export const TASK_CONTENT_MAX_LEN = 10000;
 
-/** A task title: trimmed, non-empty, capped. */
-export const TaskTitleSchema = z.string().trim().min(1).max(TASK_TITLE_MAX_LEN);
+/** A task title: trimmed, interior whitespace runs collapsed to single
+ *  spaces, then non-empty + length-capped AFTER normalization. A title is a
+ *  single-line string, and this is the ONE authority for that invariant —
+ *  shared by create and both edit paths, so CLI `--title` and the UI textarea
+ *  are normalized identically (no second normalization anywhere else). The
+ *  length cap measures the canonical (collapsed) form, so raw runs of
+ *  whitespace never count against it. */
+export const TaskTitleSchema = z
+  .string()
+  .transform((s) => s.trim().replace(/\s+/g, ' '))
+  .pipe(z.string().min(1).max(TASK_TITLE_MAX_LEN));
 /** A task body/content: any string up to the cap, INCLUDING `""` (an empty
  *  body clears the description). Omission is normalized to `""` by the
  *  service — the stored/read `content` is always a string, never null. */

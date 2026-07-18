@@ -60,6 +60,16 @@ export interface TaskEventArgs {
   threadRootId: string | null;
 }
 
+/** Workflow transitions — the events that broadcast to EVERY conversation agent
+ *  (`broadcast` → `publish`). `edit` is deliberately excluded: a definition
+ *  change is not a coordination fact and must not wake idle agents. */
+export type TaskWorkflowKind = Extract<TaskMutationKind, 'claim' | 'unclaim' | 'status'>;
+/** Kinds the all-member `publish` fan-out accepts: workflow + `create`, i.e.
+ *  everything EXCEPT `edit`. `edit` has its own targeted path (`publishEdit`),
+ *  so the type forbids it from ever reaching the all-member deliver loop — a
+ *  future refactor that tried would fail to compile, not silently wake everyone. */
+export type TaskPublishKind = Exclude<TaskMutationKind, 'edit'>;
+
 export class TaskBroadcaster {
   private readonly db: Db;
   private readonly messages: MessageRepo;
@@ -130,8 +140,8 @@ export class TaskBroadcaster {
 
   /** Insert the task system-event message. Runs inside the CALLER's transaction
    *  (no own wrapper), so `task create` can capture the returned id and backfill
-   *  `tasks.created_event_message_id` atomically. `kind` never 'edit' (an edit
-   *  emits no system narrative). */
+   *  `tasks.created_event_message_id` atomically, and `task edit` can commit the
+   *  UPDATE and this INSERT together (a committed edit always has its anchor). */
   emitSystemMessage(args: TaskEventArgs & {
     kind: TaskMutationKind;
     actor: TaskActor;
@@ -156,9 +166,11 @@ export class TaskBroadcaster {
   }
 
   /** Fan out an already-inserted system event: publish the `message` event, the
-   *  `task_changed` events, and best-effort per-recipient delivery. Called
-   *  AFTER the mutation (and, for create, the event insert) commits. */
-  publish(args: TaskEventArgs, sysMsg: MessageDto): void {
+   *  `task_changed` events, and best-effort per-recipient delivery to EVERY
+   *  conversation agent. Called AFTER the mutation (and, for create, the event
+   *  insert) commits. Rejects `edit` at the type level — a definition change
+   *  wakes only its assignee (`publishEdit`), never every member. */
+  publish(args: TaskEventArgs & { kind: TaskPublishKind }, sysMsg: MessageDto): void {
     const conversationId = args.conversation.id;
     this.events.publish(conversationId, {
       kind: 'message',
@@ -179,10 +191,47 @@ export class TaskBroadcaster {
     }
   }
 
-  /** Convenience for the mutation paths (claim/unclaim/status): insert the
-   *  system event in its own transaction, then publish + deliver. */
+  /** Fan out an already-inserted `task_edit` event. Splits the two axes a
+   *  definition change lives on:
+   *   - CONVERSATION-visible (READ axis): the `message` event + `task_changed`
+   *     go to everyone with read access, exactly like the workflow events — the
+   *     edit is durable conversation history and live-patches the board/chip.
+   *   - RUNTIME WAKE (attention axis): `deliverMessage` goes to the CURRENT
+   *     assignee agent ONLY, and only while the task is still executable
+   *     (non-terminal) and the editor is not that same assignee. No assignee /
+   *     a human assignee / a done|closed task / a self-edit → durable event +
+   *     board only, no wake. This targets "whoever is building to this spec"
+   *     without spending idle agents' attention or looping a self-wake. */
+  publishEdit(args: TaskEventArgs & { kind: 'edit' }, sysMsg: MessageDto, editor: TaskActor): void {
+    const conversationId = args.conversation.id;
+    this.events.publish(conversationId, {
+      kind: 'message',
+      payload: { message: sysMsg },
+    });
+    this.publishTaskChanged(args);
+
+    const assignee = args.assignee;
+    const terminal = args.status === 'done' || args.status === 'closed';
+    const editorIsAssignee =
+      editor.kind === 'agent' && assignee?.type === 'agent' && editor.agentId === assignee.id;
+    if (assignee?.type === 'agent' && !terminal && !editorIsAssignee) {
+      void this.runtimeHost
+        .deliverMessage(conversationId, assignee.id, sysMsg.id)
+        .catch(err => {
+          this.logger.warn(
+            { err, conversationId, agentId: assignee.id, messageId: sysMsg.id },
+            'task-service: edit deliverMessage failed',
+          );
+        });
+    }
+  }
+
+  /** Convenience for the workflow paths (claim/unclaim/status): insert the
+   *  system event in its own transaction, then publish + deliver to all members.
+   *  Typed to workflow kinds only — `create` publishes directly and `edit` uses
+   *  `publishEdit`, so neither routes here. */
   async broadcast(args: TaskEventArgs & {
-    kind: TaskMutationKind;
+    kind: TaskWorkflowKind;
     actor: TaskActor;
     sysMessage: string;
   }): Promise<void> {

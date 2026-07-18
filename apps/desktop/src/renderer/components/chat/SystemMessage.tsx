@@ -122,6 +122,9 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   task_claim: TaskEventRow,
   task_unclaim: TaskEventRow,
   task_status: TaskEventRow,
+  // task_edit (#task:1531): a title/content definition change — same row
+  // as the rest of the task_* family, rendered with an "edited" verb.
+  task_edit: TaskEventRow,
   // P0 (PR-3): inline audit row + RotateCcw icon (no longer a toast).
   session_cleared: SessionClearedCard,
   // P1 (PR-4): flat banner with left warning accent + actionable pills.

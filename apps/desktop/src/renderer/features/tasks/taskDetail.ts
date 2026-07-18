@@ -53,24 +53,3 @@ export function resolveTaskJumpTarget(
 export function drawerShouldCloseOnEscape(detailModalOpen: boolean): boolean {
   return !detailModalOpen;
 }
-
-/**
- * Build the `task edit` payload from ONLY the fields the user changed.
- *
- * Omitting an unchanged title is load-bearing: a legacy task whose title
- * was never set displays a server-computed `firstLine(content)` fallback.
- * A body-only edit must NOT send that fallback back as an explicit title —
- * the backend materializes the fallback independently. Sending it would
- * freeze the fallback as the title even as the body (and thus the intended
- * fallback) changes. So: title/body are each included only when they
- * actually differ from the authoritative base.
- */
-export function buildTaskEditPayload(
-  base: { title: string; content: string },
-  next: { title: string; body: string },
-): { title?: string; body?: string } {
-  const out: { title?: string; body?: string } = {};
-  if (next.title !== base.title) out.title = next.title.trim();
-  if (next.body !== base.content) out.body = next.body;
-  return out;
-}

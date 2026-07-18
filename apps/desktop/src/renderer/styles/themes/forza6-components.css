@@ -1044,7 +1044,7 @@
    for follow, the Bell → BellOff icon swap. (Earlier #1109 painted an
    inverted-ink fill here; intentionally dropped.) */
 
-/* ── Close-icon poster sticker (#task:1199) ──────────────────────────
+/* ── Corner-action poster sticker (#task:1199) ───────────────────────
    shiki: give the X close button a forza6 poster sticker across modals
    (channel/workspace settings, new workspace, new agent — all via the
    generic DialogContent close), the conversation side panel (AgentView),
@@ -1053,11 +1053,18 @@
    paper body + 2px ink border + 0 radius + hard ink drop shadow that
    grows on the hover lift. The hook paints identity only — each consumer
    keeps its own size / position (`p-1` / `size-6/7/8` / absolute corner).
-   The X glyph drops to full ink so it reads as the sticker's stamp, and
-   `opacity:1` overrides the dialog close's resting `opacity-70`. Focus is
+   The glyph drops to full ink so it reads as the sticker's stamp, and
+   `opacity:1` overrides the dialog control's resting `opacity-70`. Focus is
    an `outline` (not box-shadow) so it never collides with the drop
-   shadow. Other themes keep the JSX icon-button defaults. */
-[data-theme='forza6'] [data-sticker-close] {
+   shadow. Other themes keep the JSX icon-button defaults.
+
+   The `data-task-view-jump` peer (the task detail's "View in conversation"
+   jump) is a close-button peer: it shares this exact sticker via the `:is(...)`
+   family, and DialogContent seats both in one `items-center` flex corner
+   cluster — so spacing/centering come from the cluster, NOT per-theme box math
+   (the 2px border grows both boxes symmetrically and `items-center` keeps their
+   glyphs co-linear). No positional override. */
+[data-theme='forza6'] :is([data-sticker-close], [data-task-view-jump]) {
   background-color: var(--bg-floating);
   border: 2px solid var(--forza6-ink);
   border-radius: 0;
@@ -1066,13 +1073,13 @@
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
 }
-[data-theme='forza6'] [data-sticker-close]:hover:not(:disabled) {
+[data-theme='forza6'] :is([data-sticker-close], [data-task-view-jump]):hover:not(:disabled) {
   background-color: var(--bg-floating);
   color: var(--forza6-ink);
   transform: translateY(-1px);
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
 }
-[data-theme='forza6'] [data-sticker-close]:focus-visible {
+[data-theme='forza6'] :is([data-sticker-close], [data-task-view-jump]):focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }
