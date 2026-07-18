@@ -2497,17 +2497,6 @@ function buildAppMenu(): Menu {
             accelerator: 'CmdOrCtrl+,',
             click: () => openSettings(),
           },
-          {
-            // D4.a Commit 2 — explicit-user-action entry to the Setup
-            // Wizard. Lives in the App submenu (where Settings is) so
-            // it's discoverable in the same place users look for
-            // configuration. No accelerator on purpose — Commit 3's
-            // boot-gate will offer the same affordance from the
-            // pre-auth screen, and we don't want a stray shortcut
-            // popping the modal mid-conversation.
-            label: 'Connect to backend…',
-            click: () => openSetupWizard(),
-          },
           { type: 'separator' },
           { role: 'services' },
           { type: 'separator' },
@@ -2591,38 +2580,6 @@ function openSettings(): void {
   win.focus();
   const send = (): void => {
     if (!win.isDestroyed()) win.webContents.send('navigate:settings');
-  };
-  if (win.webContents.isLoading()) {
-    win.webContents.once('did-finish-load', send);
-  } else {
-    send();
-  }
-}
-
-/**
- * D4.a Commit 2 — analog of {@link openSettings} for the Setup Wizard.
- * Fires `navigate:setupWizard` so the renderer can mount the Wizard
- * (a modal at the App level — see `apps/desktop/src/renderer/features/setup/SetupWizard.tsx`).
- *
- * Triggered by the App menu's "Connect to backend…" item. This is the
- * **only** discovery path for the Wizard in Commit 2 — the explicit
- * boot-time decision (no profile → require Wizard) lands in Commit 3.
- *
- * The "explicit user action" trigger discipline (Cindy v2 slicing) is
- * preserved: a user has to deliberately pick the menu item; there is
- * no auto-popup, no after-first-launch nudge.
- */
-function openSetupWizard(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    createWindow();
-  }
-  const win = mainWindow;
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
-  const send = (): void => {
-    if (!win.isDestroyed()) win.webContents.send('navigate:setupWizard');
   };
   if (win.webContents.isLoading()) {
     win.webContents.once('did-finish-load', send);

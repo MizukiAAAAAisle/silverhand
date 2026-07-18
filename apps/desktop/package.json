@@ -1,5 +1,6 @@
 {
   "name": "@silverhand/desktop",
+  "productName": "Silverhand",
   "version": "0.1.0",
   "private": true,
   "description": "Silverhand — multi-agent coding hub (Electron desktop client)",
