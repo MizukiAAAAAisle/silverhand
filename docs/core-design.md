@@ -575,6 +575,14 @@ Initial inbox 不拼进 system prompt；spawn-time 未投递消息通过
 
 #### 平台层 prompt 模板（基于 slock 全文研读，2026-05-01）
 
+> **2026-07-18 更新：下方模板仅保留为历史设计记录，不再是实现合同。**
+> 当前 section 顺序与 memory authoring 合同以
+> [`platform-prompt-design.md`](./platform-prompt-design.md) 和
+> [`agent-system-prompt-memory.md`](./agent-system-prompt-memory.md) 为准。
+> 尤其 MEMORY.md 现在是精简的 recovery index / knowledge router，详细
+> domain knowledge 通过 notes/docs 渐进式披露；不要照抄下方
+> “self-sufficient knowledge body” 或手动启动读取的旧措辞。
+
 > 要点：slock 的 system prompt 不是"几条提醒"，而是一份完整的**操作手册**——明示了 agent 必须遵守的关键规则、启动后必须执行的步骤、压缩安全策略、协作礼仪、记忆管理结构。我们要把同等覆盖度的内容塞进平台 prompt，不能只丢一句"互相礼貌点"。
 
 ```markdown

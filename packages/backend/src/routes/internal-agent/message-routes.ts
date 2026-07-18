@@ -68,6 +68,13 @@ export function registerMessageRoutes(
         conversations.get(principal.conversationId)?.workspace_id);
       if (denied) return denied;
     }
+    if (parsed.data.stale_event_id !== undefined) {
+      c.set(
+        'cliStaleResolutionReason',
+        parsed.data.stale_resolution_reason
+        ?? (parsed.data.freshness_bypass ? 'force_send' : 'unattributed'),
+      );
+    }
     try {
       const result = await ctx.conversationMessageService.sendMessage({
         conversationId: principal.conversationId,
@@ -118,6 +125,7 @@ export function registerMessageRoutes(
         conversations.get(principal.conversationId)?.workspace_id);
       if (denied) return denied;
     }
+    c.set('cliStaleResolutionReason', parsed.data.resolution_reason);
     ctx.conversationMessageService.resolveStaleMessage({
       conversationId: principal.conversationId,
       actor: principal,

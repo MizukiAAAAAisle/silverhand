@@ -11,6 +11,8 @@
  *   - Privacy: the line records `query_keys` (a sorted name set) but
  *     never values; nothing leaks the auth token.
  *   - Failures expose the backend's stable `error_code`.
+ *   - Stale-message disposal attempts carry one validated, low-cardinality
+ *     reason on both success and failure; ordinary sends do not.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -112,6 +114,109 @@ describe('cli invoke middleware', () => {
     // `status` collapses to one entry even though we passed it twice.
     // `task_number` shows up alongside it. Sorted by key name.
     expect(line!.payload.query_keys).toEqual(['status', 'task_number']);
+  });
+
+  it.each([
+    ['unaffected', { stale_resolution_reason: 'unaffected' }],
+    ['revised', { stale_resolution_reason: 'revised' }],
+    ['force_send', { freshness_bypass: true }],
+    ['unattributed', {}],
+  ] as const)(
+    'records stale_resolution_reason=%s on a successful correlated resend',
+    async (expectedReason, fields) => {
+      const { conversationId, agentId } = await setupAgent(t!);
+      const h = http(t!);
+
+      const res = await h.post(
+        `/internal/conversations/${conversationId}/agents/${agentId}/send-message`,
+        {
+          content: 'resolved draft',
+          stale_event_id: `evt-${expectedReason}`,
+          ...fields,
+        },
+      );
+      expect(res.status).toBe(200);
+
+      const line = captured.lines.find(l => l.payload.category === 'cli.invoke');
+      expect(line?.payload).toMatchObject({
+        noun: 'message',
+        verb: 'send',
+        status: 'success',
+        stale_resolution_reason: expectedReason,
+      });
+    },
+  );
+
+  it('records the stale resolution reason when a resend collides again', async () => {
+    const { conversationId, agentId } = await setupAgent(t!);
+    const h = http(t!);
+    const path =
+      `/internal/conversations/${conversationId}/agents/${agentId}/send-message`;
+
+    expect((await h.post(path, { content: 'newer context' })).status).toBe(200);
+    const res = await h.post(path, {
+      content: 'still stale draft',
+      seen_up_to_seq: 0,
+      stream_key: 'main',
+      stale_event_id: 'evt-prior-conflict',
+      stale_resolution_reason: 'revised',
+    });
+    expect(res.status).toBe(409);
+
+    const lines = captured.lines.filter(l => l.payload.category === 'cli.invoke');
+    expect(lines.at(-1)?.payload).toMatchObject({
+      noun: 'message',
+      verb: 'send',
+      status: 'failure',
+      stale_resolution_reason: 'revised',
+    });
+  });
+
+  it('records obsolete resolution and omits uncorrelated send reasons', async () => {
+    const { conversationId, agentId } = await setupAgent(t!);
+    const h = http(t!);
+    const base = `/internal/conversations/${conversationId}/agents/${agentId}`;
+
+    expect((await h.post(`${base}/send-message`, {
+      content: 'ordinary send',
+      // A reason without a stale event is not an actual disposal attempt and
+      // must not enter the report denominator.
+      stale_resolution_reason: 'revised',
+    })).status).toBe(200);
+    expect((await h.post(`${base}/stale-message-resolution`, {
+      stale_event_id: 'evt-obsolete',
+      resolution_reason: 'obsolete',
+    })).status).toBe(200);
+
+    const lines = captured.lines.filter(l => l.payload.category === 'cli.invoke');
+    expect(lines[0]?.payload.stale_resolution_reason).toBeUndefined();
+    expect(lines[1]?.payload).toMatchObject({
+      noun: 'message',
+      verb: 'stale-resolve',
+      status: 'success',
+      stale_resolution_reason: 'obsolete',
+    });
+  });
+
+  it('does not classify input rejected before the freshness authority', async () => {
+    const { conversationId, agentId } = await setupAgent(t!);
+    const h = http(t!);
+
+    const res = await h.post(
+      `/internal/conversations/${conversationId}/agents/${agentId}/send-message`,
+      {
+        content: 'invalid target draft',
+        target: { kind: 'channel' },
+        reply_to_message_id: 'legacy-target',
+        stale_event_id: 'evt-never-attempted',
+        stale_resolution_reason: 'revised',
+      },
+    );
+    expect(res.status).toBe(400);
+
+    const line = captured.lines.find(l => l.payload.category === 'cli.invoke');
+    expect(line?.payload.status).toBe('failure');
+    expect(line?.payload.stale_resolution_reason).toBeUndefined();
   });
 
   it('marks 4xx responses as failure and surfaces backend error_code', async () => {

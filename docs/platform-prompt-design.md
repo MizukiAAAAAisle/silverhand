@@ -51,8 +51,8 @@ present.
    servers live; managed via `silverhand profile …`. Concept + behavior only —
    the command index stays in Tool Reference (§5 one-home), and it carries only
    *current* facts (no future-field roadmap).
-5. **Knowledge Model** — L1/L2 by scope, what to record, compaction-checkpoint
-   discipline.
+5. **Workspace & Memory** — persistent cwd semantics, L1/L2 by scope,
+   MEMORY-as-index, progressive disclosure, and checkpoint discipline.
 6. **Collaboration Policy** — When to speak / How to report.
 7. **Work Coordination** — Tasks → Threads → Channels → Members.
 8. **Capabilities** — Attachments, History and search, Schedules.
@@ -66,7 +66,7 @@ present.
 **Ordering invariants:**
 
 - The contract (1–2) precedes everything. Never demote it below references.
-- **Your Profile** sits right after This Context and before Knowledge Model:
+- **Your Profile** sits right after This Context and before Workspace & Memory:
   identity/global-config is more foundational than workspace memory but is not an
   Operating Contract invariant. It is a fixed cognitive entry point for the
   agent's own profile surface — each new profile capability fills in its
@@ -97,9 +97,21 @@ be a deliberate, called-out decision — never a side effect of rewording.
   interpolation.
 - **System-no-reply** — "don't reply to a `type=system` message unless it
   explicitly asks you to." Without it agents reply to every system notice.
-- **Compaction checkpoint discipline** — MEMORY.md must stand alone as the
-  recovery point; keep it a short index (target under 10KB; 16KB inject cap);
-  detailed history goes to `notes/work-log.md`.
+- **Workspace ownership boundary** — cwd persists but may contain shared project
+  files; only the per-agent L2 directory is agent-owned. The prompt must not
+  teach agents to treat the whole workspace as exclusively theirs or arbitrary
+  cwd files as additional private-memory tiers. Within that boundary, agents
+  choose the workspace layout and create files/directories that fit the work.
+- **Progressive memory disclosure** — MEMORY.md must stand alone as the recovery
+  index, not the knowledge body. It keeps immediate rules, high-cost traps,
+  topic → source routes, and live handoff state; details live in flexible,
+  domain-specific notes or repository docs. Note names and subdirectories are
+  agent-chosen, not a fixed schema. Target under 10KB; 16KB is the hard inject
+  cap.
+- **Checkpoint cleanup** — significant durable learning updates notes; MEMORY
+  changes only when a rule, route, or live handoff changes. `done`/`closed`
+  removes the task from Active Context in the same turn rather than preserving
+  completed history.
 
 ## 4. Security-critical code — never weaken
 
@@ -147,8 +159,8 @@ so the agent doesn't clobber an existing file.
   command guidance must keep `cli-system.md` and the platform prompt in sync *in
   the same change*. A pure prose reorg that changes no command/flag/behavior fact
   (like the 9-section restructure) does not require a `cli-system.md` edit.
-- **Three-file model ↔ `docs/agent-system-prompt-memory.md`.** The Knowledge
-  Model section and the injection blocks (`renderInjectedFile`,
+- **Three-file model ↔ `docs/agent-system-prompt-memory.md`.** The Workspace &
+  Memory section and the injection blocks (`renderInjectedFile`,
   `renderWorkspaceMemoryIndex`) must agree with the L1/L2 contract there.
 
 ## 7. Test discipline

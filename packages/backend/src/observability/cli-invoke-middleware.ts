@@ -5,12 +5,14 @@
  * Mounted on `/internal/conversations/:cid/agents/:aid/*` (the family
  * of agent-principal routes). For every request:
  *   - on entry: capture `{conversationId, agentId, noun, verb, request_id, query_keys}`
- *   - on exit:  add `{http_status, duration_ms, status, error_code?}`
+ *   - on exit:  add `{http_status, duration_ms, status, error_code?,
+ *               stale_resolution_reason?}`
  *               and write to `ctx.loggers.cli` with category `cli.invoke`
  *
  * What we deliberately do NOT log here:
  *   - request bodies (message content, attachment bytes, task titles)
- *   - flag values (only the set of query-string keys observed)
+ *   - arbitrary flag values (the sole allowlisted semantic value is the
+ *     validated, low-cardinality `stale_resolution_reason` enum)
  *   - the bearer token / authorization header
  *
  * The cli-trace endpoint itself is excluded (its handler writes a
@@ -61,7 +63,7 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
 
     // Make the request id available to handlers/middlewares that want
     // to correlate downstream backend logs to the same CLI call.
-    c.set('cliRequestId' as never, requestId);
+    c.set('cliRequestId', requestId);
 
     let httpStatus = 0;
     let errorCode: string | undefined;
@@ -84,6 +86,7 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
       }
       const conversationId = c.req.param('cid') ?? null;
       const agentId = c.req.param('aid') ?? null;
+      const staleResolutionReason = c.get('cliStaleResolutionReason');
       const payload = {
         category: 'cli.invoke',
         request_id: requestId,
@@ -103,6 +106,13 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
         duration_ms: durationMs,
         status,
         ...(errorCode ? { error_code: errorCode } : {}),
+        // Route handlers set this only after validating and authorizing a
+        // request carrying a stale event. Unlike `flags_seen`, this records
+        // the disposal attempt that reached the freshness authority, including daemon-
+        // supplied `force_send` and reason-less `unattributed` retries.
+        ...(staleResolutionReason
+          ? { stale_resolution_reason: staleResolutionReason }
+          : {}),
         // Schema-validation field summary, sanitized: only `path`
         // (joined dotted) and `code` (zod tag like `too_small`,
         // `invalid_type`). NEVER `received` / `minimum` / `message`

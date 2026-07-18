@@ -1006,7 +1006,7 @@ routes do not expose log-level mutation.
   `/internal/conversations/:cid/agents/:aid/...` route. Emitted by the
   Hono middleware in
   `packages/backend/src/observability/cli-invoke-middleware.ts`. Fields:
-  `{ts, level, category, request_id, conversationId, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?}`.
+  `{ts, level, category, request_id, conversationId, agentId, noun, verb, method, route_suffix, query_keys, http_status, duration_ms, status, error_code?, error_issues?, stale_resolution_reason?}`.
   `route_suffix` is the *matched route pattern* — never the raw URL
   path — so wildcard segments like `attachments/<id>/locate` collapse
   to `attachments/*/locate` and ids never leak. The `query_keys` array
@@ -1016,6 +1016,12 @@ routes do not expose log-level mutation.
   `[{path: 'every_seconds', code: 'too_small'}]`) — *never* `received`,
   `minimum`, or `message`, since those can carry user-supplied values.
   Capped at 16 entries per line.
+  `stale_resolution_reason` is present only when a validated, authorized
+  request carrying a stale event attempts disposal: `unaffected`, `revised`,
+  `obsolete`, `force_send`, or `unattributed`. The daemon supplies a stale
+  event only while one is pending. The reason is recorded on both success and
+  failure, so reports can measure disposition outcomes without inspecting
+  message bodies or stale event ids. Ordinary sends omit it.
 - `cli.preflight_failure` — one line per CLI invocation that errors
   out before reaching any business route (`unknown noun`, strict-flag
   rejection, removed-flag use, dispatcher hard-guard rejection,
@@ -1031,8 +1037,9 @@ Privacy contract:
 
 - No request bodies are logged (message content, attachment bytes,
   task titles, etc.).
-- No flag values are logged — only flag names (`flags_seen`) and
-  query-string keys (`query_keys`).
+- No arbitrary flag values are logged — only flag names (`flags_seen`) and
+  query-string keys (`query_keys`). The sole allowlisted semantic value is the
+  closed `stale_resolution_reason` enum above; raw CLI input is never copied.
 - The CLI's `details` payload (e.g. `{positional, rest}` for
   `unexpected_arguments`) stays in local stderr and is **never**
   forwarded to the backend `cli-trace` reporter.

@@ -1,6 +1,6 @@
 # Agent system prompt + memory model
 
-Locked design as of 2026-05-20. Authoritative for `system_prompt.md`,
+Current design, last revised 2026-07-18. Authoritative for `system_prompt.md`,
 `MEMORY.md`, `notes/`, and the platform prompt assembly that injects them
 on every spawn.
 
@@ -54,6 +54,44 @@ decide where to write by **scope**:
 - **Workspace-scoped** (collaboration patterns, project facts, work
   logs) → that workspace's L2 `MEMORY.md` / `notes/`.
 
+## L2 authoring contract: index first, detail on demand
+
+The workspace root is persistent and may contain shared repositories,
+worktrees, artifacts, and task files. It is not exclusively owned by one agent.
+The private authoring boundary is the agent's own
+`<workspace>/.silverhand/agents/<id>/` L2 directory. Before running git or a
+package manager, the agent must select the intended project/worktree inside the
+workspace rather than treating cwd layout as a fixed schema or arbitrary cwd
+files as additional private-memory tiers. Within that boundary, the agent may
+create whatever files and directories the work requires.
+
+`MEMORY.md` must stand alone as the recovery entry point and knowledge router,
+not the complete knowledge body. Keep only:
+
+- rules and high-cost traps that must be loaded immediately;
+- a Key Knowledge index (`topic → file/section + read trigger`);
+- current Active Context needed to resume real work.
+
+Put explanation, evidence, architecture, important decision history, and
+domain detail in flexibly named, domain-specific `notes/` files or canonical
+repository docs. Notes may use any useful files or subdirectories; examples are
+not a required layout.
+Task status remains on the task board and commit inventories remain in git.
+When a durable note or organization path is added, update the MEMORY index so
+future sessions can discover it.
+
+The agent records durable user preferences, project/domain facts, important
+decisions and failed approaches, workspace/channel context, and collaboration
+patterns proactively. A significant interaction updates the relevant note;
+MEMORY changes only when an immediate rule, knowledge route, or live handoff
+changes. A `done`/`closed` task notice removes that task from Active Context in
+the same turn. Only reusable lessons move to notes; completed-task timelines do
+not remain in MEMORY. Rewriting an entry as `DONE` and keeping it is an explicit
+anti-pattern, not a valid status update.
+
+The injected file should target less than 10KB / roughly 80–120 lines. The
+16KB reader cap is a truncation boundary, not an authoring target.
+
 ## Why no L2 system_prompt
 
 The previous design seeded an L2 `system_prompt.md` snapshot per
@@ -94,8 +132,9 @@ sections:
 ## Workspace Memory Index ← workspaceMemoryIndex (paths only)
 ```
 
-These render after the session-context block and before the bulk of
-the operating manual, so the agent sees them up-front.
+These render as the injected tail of the operating manual. The runtime
+re-injects the tail on every spawn, so compaction recovery always includes the
+current L1 role, active L2 index, and paths to other workspace indexes.
 
 ## Onboarding contract
 

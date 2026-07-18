@@ -65,16 +65,42 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('unique value to add');
   });
 
-  it('keeps MEMORY.md as a compact index and sends detailed history to notes', () => {
+  it('defines a flexible workspace and progressive MEMORY index contract', () => {
     const text = prompt();
-    expect(text).toMatch(/stand alone as your recovery point/);
-    expect(text).toContain('target under 10KB');
-    expect(text).toMatch(/short, scannable index/);
+    expect(text).toContain('## Workspace & Memory');
+    expect(text).toMatch(/working directory \(`cwd`\) is persistent across sessions/);
+    expect(text).toMatch(/flexible workspace, not a fixed schema/);
+    expect(text).toMatch(/Create files or directories as the work requires/);
+    expect(text).toMatch(/no required workspace layout/);
+    expect(text).toMatch(/not[^.]+exclusively owned directory/);
+    expect(text).toMatch(/choose the specific project directory or worktree/);
+    expect(text).toMatch(/arbitrary cwd files as additional agent-memory tiers/);
+    expect(text).toMatch(/private\s+agent\s+memory belongs in L1\/L2/);
+    expect(text).not.toMatch(/three storage surfaces across two scopes/);
+    expect(text).not.toMatch(/future-you/);
+    expect(text).toMatch(/MEMORY\.md is the entry point/);
+    expect(text).toMatch(/MEMORY\.md must stand alone as the recovery index/);
+    expect(text).toContain('Use progressive disclosure');
+    expect(text).toContain('**Key Knowledge** index');
+    expect(text).toContain('**Active Context**');
+    expect(text).toMatch(/target under 10KB/i);
+    expect(text).toContain('over 16KB is truncated on inject');
+    expect(text).toMatch(/Notes have no required schema/);
+    expect(text).toMatch(/Organize[\s\S]*?to fit the work/);
+    expect(text).toMatch(/including domain-specific notes/);
+    expect(text).toMatch(/examples, not a required layout/);
+    expect(text).toContain('`<domain>.md`');
+    expect(text).toContain('**Important work history**');
+    expect(text).toContain('**Workspace/channel context**');
+    expect(text).toContain('**Other agents**');
+    expect(text).toMatch(/Task status belongs on the task board/);
+    expect(text).toMatch(/commit inventories belong in git/);
+    expect(text).toMatch(/After a significant interaction or durable learning/);
+    expect(text).toMatch(/`done` \/ `closed` task notice is a cleanup trigger/);
+    expect(text).toMatch(/remove that task from\s+Active Context before stopping/);
+    expect(text).toMatch(/Do not rewrite the entry\s+as `DONE`/);
     expect(text).toContain('run a memory checkpoint');
-    expect(text).toMatch(/update the relevant notes file/);
-    expect(text).toMatch(/otherwise leave it/);
-    expect(text).toContain('./.silverhand/agents/agent-1/notes/work-log.md');
-    expect(text).toMatch(/append per-task\s+bullets/);
+    expect(text).toContain('./.silverhand/agents/agent-1/notes/');
     expect(text).not.toContain(
       "Keep MEMORY.md complete enough that compression preserves",
     );
@@ -269,14 +295,14 @@ describe('buildPlatformPrompt', () => {
     expect(text).not.toContain('auth failure');
   });
 
-  it('renders a concept-only Profile section between This Context and Knowledge Model', () => {
+  it('renders a concept-only Profile section before Workspace & Memory', () => {
     const text = prompt();
     // Section present and positioned per the skeleton (§2): after This
-    // Context, before Knowledge Model — identity/global config is more
+    // Context, before Workspace & Memory — identity/global config is more
     // foundational than workspace memory.
     const ctxIdx = text.indexOf('## This Context');
     const profileIdx = text.indexOf('## Your Profile');
-    const kmIdx = text.indexOf('## Knowledge Model');
+    const kmIdx = text.indexOf('## Workspace & Memory');
     expect(ctxIdx).toBeGreaterThan(-1);
     expect(profileIdx).toBeGreaterThan(ctxIdx);
     expect(kmIdx).toBeGreaterThan(profileIdx);
@@ -1055,14 +1081,14 @@ describe('buildPlatformPrompt — three-file model', () => {
   });
 
   it('renders the L1/L2 split chosen by scope of guidance', () => {
-    // The Knowledge Model section teaches the L1 (identity, global) vs L2
+    // The Workspace & Memory section teaches the L1 (identity, global) vs L2
     // (workspace memory, local) split and that the layer is chosen by the
     // SCOPE of the guidance. Contract guard: if the prompt drifts away from
     // this model, force a deliberate re-locking decision.
     const text = withInjections({});
     expect(text).toMatch(/L1 — identity \(global\)/);
-    expect(text).toMatch(/L2 — workspace memory \(local\)/);
-    expect(text).toMatch(/Choose the layer by the \*scope\*/);
+    expect(text).toMatch(/L2 — workspace memory \(agent-owned\)/);
+    expect(text).toMatch(/durable agent knowledge by scope/);
   });
 
   it('drops every "DM-only / redirect-to-DM" write-side restriction', () => {

@@ -1,5 +1,6 @@
 import type { Context, Hono } from 'hono';
 import {
+  type AgentStaleResolutionReason,
   apiPaths,
   probePaths,
   X_SILVERHAND_PRINCIPAL_HEADER,
@@ -28,6 +29,11 @@ export type AppEnv = {
   Variables: {
     /** Optional: absent in the registration-required state. */
     principal?: Principal;
+    /** Correlates one verified internal CLI request with its audit line. */
+    cliRequestId?: string;
+    /** Low-cardinality outcome intent for a stale-message disposal attempt.
+     *  Set only after the internal route validates and authorizes the request. */
+    cliStaleResolutionReason?: AgentStaleResolutionReason | 'unattributed';
   };
 };
 
