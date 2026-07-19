@@ -246,7 +246,7 @@ function SelectionQuoteButton({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] px-2 py-1 font-medium text-text-primary transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] px-2 py-1 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
     >
       {icon}
       <span>{label}</span>
