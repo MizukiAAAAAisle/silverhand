@@ -7,7 +7,7 @@ import {
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { ClipboardCopy, Quote } from 'lucide-react';
+import { Copy, TextQuote } from 'lucide-react';
 import {
   clampToolbarCenterX,
   requestQuoteToComposer,
@@ -210,15 +210,19 @@ export function SelectionQuoteToolbar({
       // button handler reads it.
       onMouseDown={event => event.preventDefault()}
       style={{ position: 'fixed', top, left: centerX, transform }}
-      className="z-[80] flex items-center gap-0.5 rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-popover"
+      // Frame goes through the control token cluster (not a hardcoded 1px
+      // hairline) so forza6 gets its 2px hard-ink poster frame + 0 radius
+      // while warm/slack keep their softer 1px + 6px surface. Matches the
+      // Lightbox / ImagePreviewModal / SelectionToolbar floating idiom.
+      className="z-[80] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-1 text-xs text-text-primary shadow-popover"
     >
       <SelectionQuoteButton
-        icon={<Quote className="size-3.5" />}
+        icon={<TextQuote className="size-3.5" />}
         label="Quote"
         onClick={runQuote}
       />
       <SelectionQuoteButton
-        icon={<ClipboardCopy className="size-3.5" />}
+        icon={<Copy className="size-3.5" />}
         label="Copy"
         onClick={runCopy}
       />
@@ -242,7 +246,7 @@ function SelectionQuoteButton({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className="inline-flex items-center gap-1 rounded-[calc(var(--floating-radius)-2px)] px-2 py-1 font-medium text-text-primary transition-colors hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] px-2 py-1 font-medium text-text-primary transition-colors hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
     >
       {icon}
       <span>{label}</span>
