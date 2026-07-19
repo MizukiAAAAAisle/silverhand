@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/input';
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge';
+import { Markdown } from '@/components/chat/Markdown';
 import { useEditTask, useTaskDetail } from '@/features/tasks/hooks';
 import {
   resolveTaskJumpTarget,
@@ -262,9 +263,7 @@ function TaskDetailBody({
           <div className="flex items-start gap-2">
             <div className="min-w-0 flex-1">
               {detail && detail.content.trim() ? (
-                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-primary">
-                  {detail.content}
-                </p>
+                <Markdown content={detail.content} />
               ) : (
                 <p className="text-sm italic text-text-muted">No description.</p>
               )}
