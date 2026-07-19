@@ -262,7 +262,7 @@ describe('desktop protocol purity catalogue', () => {
     );
     expect(afterPackScript).toMatch(/rewriteRemoteOnlyAsar/);
     expect(afterPackScript).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
-    expect(afterPackScript).toMatch(/package\.remote-only\.json/);
+    expect(afterPackScript).toMatch(/package\.remote-only\.generated\.json/);
     expect(afterPackScript).toMatch(/ElectronAsarIntegrity/);
   });
 

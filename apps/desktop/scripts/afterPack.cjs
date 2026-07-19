@@ -91,7 +91,10 @@ async function rewriteRemoteOnlyAsar(context, appPath) {
   const asarPath = path.join(resourcesDir, "app.asar");
   const remoteOnlyPackagePath = path.join(
     context.packager.projectDir,
-    "package.remote-only.json",
+    // package.sh injects the canonical release version into this generated
+    // manifest. Reusing the tracked versionless template here would undo the
+    // electron-builder rename-copy and make app.getVersion() drift.
+    "package.remote-only.generated.json",
   );
   if (!fs.existsSync(asarPath)) {
     throw new Error(`[afterPack] remote-only asar not found: ${asarPath}`);
