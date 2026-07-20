@@ -174,6 +174,57 @@ describe('QoderDriver.parseLine', () => {
     ).toEqual([]);
   });
 
+  it('projects model queue updates as visible runtime activity', () => {
+    const driver = new QoderDriver();
+
+    expect(
+      driver.parseLine(
+        JSON.stringify({
+          type: 'system',
+          subtype: 'model_queue_status',
+          status: 'queued',
+          queue_count: 573,
+          wait_time_ms: 747_048,
+          request_id: 'must-not-surface',
+        }),
+      ),
+    ).toEqual([
+      {
+        kind: 'thinking',
+        text: 'Qoder model request queued (queue size 573, estimated wait 12m 27s)',
+      },
+    ]);
+
+    expect(
+      driver.parseLine(
+        JSON.stringify({
+          type: 'system',
+          subtype: 'model_queue_status',
+          status: 'ready',
+        }),
+      ),
+    ).toEqual([
+      { kind: 'thinking', text: 'Qoder model is available; resuming request' },
+    ]);
+  });
+
+  it('keeps malformed queue metadata bounded and does not expose identifiers', () => {
+    expect(
+      new QoderDriver().parseLine(
+        JSON.stringify({
+          type: 'system',
+          subtype: 'model_queue_status',
+          status: 'queued',
+          queue_count: 'many',
+          wait_time_ms: -1,
+          request_id: 'request-secret',
+        }),
+      ),
+    ).toEqual([
+      { kind: 'thinking', text: 'Qoder model request queued' },
+    ]);
+  });
+
   it('projects assistant thinking / text / tool_use blocks', () => {
     const events = new QoderDriver().parseLine(
       JSON.stringify({

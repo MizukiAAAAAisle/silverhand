@@ -31,6 +31,57 @@ const DISALLOWED_TOOLS = [
   'UpdateGoal',
 ].join(',');
 
+function queueStatusEvent(line: string): ParsedEvent | null {
+  if (!line.includes('"model_queue_status"')) return null;
+
+  let frame: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(line) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    frame = parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+
+  if (frame.type !== 'system' || frame.subtype !== 'model_queue_status') {
+    return null;
+  }
+
+  if (frame.status === 'ready') {
+    return {
+      kind: 'thinking',
+      text: 'Qoder model is available; resuming request',
+    };
+  }
+  if (frame.status !== 'queued') return null;
+
+  const details: string[] = [];
+  if (
+    typeof frame.queue_count === 'number'
+    && Number.isInteger(frame.queue_count)
+    && frame.queue_count >= 0
+  ) {
+    details.push(`queue size ${frame.queue_count}`);
+  }
+  if (
+    typeof frame.wait_time_ms === 'number'
+    && Number.isFinite(frame.wait_time_ms)
+    && frame.wait_time_ms >= 0
+  ) {
+    const seconds = Math.round(frame.wait_time_ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    details.push(
+      `estimated wait ${minutes > 0 ? `${minutes}m ` : ''}${remainingSeconds}s`,
+    );
+  }
+
+  const suffix = details.length > 0 ? ` (${details.join(', ')})` : '';
+  return { kind: 'thinking', text: `Qoder model request queued${suffix}` };
+}
+
 /**
  * Qoder CLI driver (`qodercli`).
  *
@@ -123,6 +174,8 @@ export class QoderDriver implements Driver {
   }
 
   parseLine(line: string): ParsedEvent[] {
+    const queueStatus = queueStatusEvent(line);
+    if (queueStatus) return [queueStatus];
     return parseStreamJsonLine(line, { runtimeLabel: 'Qoder' });
   }
 
