@@ -124,6 +124,15 @@ bytes and decodes them as UTF-8 with **no normalization** — no BOM
 stripping, no CRLF→LF translation, no trim. The bytes the agent wrote
 are the bytes that reach the database.
 
+**Oversized bodies auto-convert to an attachment.** A body larger than
+64KiB (UTF-8 bytes, `MAX_MESSAGE_CONTENT_BYTES` in `@silverhand/shared`)
+is automatically uploaded as a `text/plain` attachment and the visible
+body is replaced with a short pointer line. The backend independently
+rejects oversized raw `content` with `413` / `content_too_large` as a
+backstop for clients that skip the conversion. If the send fails after
+the upload (e.g. `message_stale`), the uploaded attachment survives and
+can be reused on the retry via `--attachment <id>`.
+
 `--target` selects the destination stream; omit it to post to the
 channel main line. `--target thread:<message_id>` sends into that
 message's reply cluster within the current conversation: a main-line id

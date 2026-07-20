@@ -5,6 +5,7 @@
 // part of the public @silverhand/shared surface.
 import { z } from 'zod';
 import { AttachmentRefInputSchema } from './attachment.js';
+import { MAX_MESSAGE_ATTACHMENTS } from '../chat-limits.js';
 
 export const SearchOptionalStringSchema = z.preprocess(
   value => (typeof value === 'string' && value.trim() === '' ? undefined : value),
@@ -20,7 +21,7 @@ export const SearchOptionalStringSchema = z.preprocess(
  *  trust boundary, not on composer discipline. */
 export const MessageAttachmentIdsInputSchema = z
   .array(z.union([z.string().min(1), AttachmentRefInputSchema]))
-  .max(20)
+  .max(MAX_MESSAGE_ATTACHMENTS)
   .refine(
     entries => {
       const labels = entries

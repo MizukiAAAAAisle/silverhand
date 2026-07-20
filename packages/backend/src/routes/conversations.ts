@@ -10,6 +10,7 @@
 // mount-run. Auth/principal is inherited from the parent api app middleware.
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import {
   apiPaths,
   ArchiveChannelInputSchema,
@@ -22,6 +23,11 @@ import {
   UpdateChannelInputSchema,
   SendMessageInputSchema,
   TEMP_CONVERSATION_DEBUG_WINDOW_MS,
+  MAX_MESSAGE_CONTENT_BYTES,
+  MAX_MESSAGE_CONTENT_LABEL,
+  MESSAGE_SEND_MAX_BODY_BYTES,
+  messageContentByteLength,
+  messageContentExceedsLimit,
 } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
@@ -831,7 +837,24 @@ export function createConversationMessagingApp(
     }
   });
 
-  app.post(apiPaths.channelMessages(':id'), async c => {
+  // Pre-parse bound: reject oversized request bodies (declared or
+  // chunked) before buffering/JSON.parse — non-compliant clients must
+  // not be able to feed a multi-MB body into the parser. The precise
+  // UTF-8 content cap is enforced after parse.
+  const sendBodyLimit = bodyLimit({
+    maxSize: MESSAGE_SEND_MAX_BODY_BYTES,
+    onError: c =>
+      c.json(
+        {
+          error: 'request body exceeds message-send bound',
+          code: 'content_too_large',
+          max_body_bytes: MESSAGE_SEND_MAX_BODY_BYTES,
+        },
+        413,
+      ),
+  });
+
+  app.post(apiPaths.channelMessages(':id'), sendBodyLimit, async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'channel id required' }, 400);
     const channel = conversations.getChannelLike(id);
@@ -839,10 +862,30 @@ export function createConversationMessagingApp(
     if (!canPostToConversation(ctx, getUserPrincipal(c), channel.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const body = await c.req.json().catch(() => ({}));
+    // `bodyLimit` signals a chunked-body overflow by erroring the wrapped
+    // stream mid-read; rethrow it so the middleware's post-`next()` check
+    // converts it to the 413, instead of swallowing it into `{}` → 400.
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (err) {
+      if (err instanceof Error && err.name === 'BodyLimitError') throw err;
+      body = {};
+    }
     const parsed = SendMessageInputSchema.safeParse(body);
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
+    }
+    if (messageContentExceedsLimit(parsed.data.content)) {
+      return c.json(
+        {
+          error: `message content exceeds ${MAX_MESSAGE_CONTENT_LABEL} limit`,
+          code: 'content_too_large',
+          max_bytes: MAX_MESSAGE_CONTENT_BYTES,
+          actual_bytes: messageContentByteLength(parsed.data.content),
+        },
+        413,
+      );
     }
     // Send-message delivery is best-effort: `sendMessage` always persists the
     // message and returns 201, while per-agent runtime fan-out is wrapped in a

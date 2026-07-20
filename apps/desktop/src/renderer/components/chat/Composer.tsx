@@ -12,6 +12,10 @@ import {
 import { Hash, Paperclip, X } from 'lucide-react';
 import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
 import { isGenericMimeHint, mimeFromFilename } from '@silverhand/shared';
+import {
+  MAX_ATTACHMENTS,
+  shouldInterceptOversizedPaste,
+} from './oversize-paste';
 import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
@@ -73,7 +77,6 @@ interface ComposerProps {
 }
 
 const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
-const MAX_ATTACHMENTS = 20; // Matches backend SendMessageInputSchema cap.
 type PendingAttachment = CachedPendingAttachment;
 
 /**
@@ -627,9 +630,28 @@ export function Composer({
     // paste keeps its native behaviour and IME composition isn't
     // disrupted.
     const files = e.clipboardData?.files;
-    if (!files || files.length === 0) return;
-    e.preventDefault();
-    addFiles(files);
+    if (files && files.length > 0) {
+      e.preventDefault();
+      addFiles(files);
+      return;
+    }
+    // Oversized text paste: never let a multi-MB string enter the
+    // textarea or the message pipeline (the backend rejects it and
+    // rendering it pins the renderer). Convert it to a text attachment
+    // through the normal pending-upload flow. See
+    // `shouldInterceptOversizedPaste` for the capacity guard: at
+    // capacity the text falls through to the native paste (draft keeps
+    // it) and the submit-time conversion in `useSendMessage` remains
+    // the authority.
+    const text = e.clipboardData?.getData('text/plain') ?? '';
+    if (shouldInterceptOversizedPaste(text, pendingRef.current.length)) {
+      e.preventDefault();
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const file = new File([text], `pasted-text-${stamp}.txt`, {
+        type: 'text/plain',
+      });
+      addFiles([file]);
+    }
   }
 
   // Escape suppresses the menu for the current trigger token. Tracked

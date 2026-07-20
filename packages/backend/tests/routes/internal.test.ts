@@ -328,3 +328,92 @@ describe('POST /internal/.../create-channel', () => {
     expect(r.status).toBe(404);
   });
 });
+
+describe('agent send-message — content byte cap', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('rejects content over 64KiB (UTF-8 bytes) with 413 content_too_large', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t);
+    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const r = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      { content: 'a'.repeat(64 * 1024 + 1) },
+      { headers: authHeaders(token) },
+    );
+    expect(r.status).toBe(413);
+    const body = await r.json() as any;
+    expect(body.code).toBe('content_too_large');
+    expect(body.max_bytes).toBe(64 * 1024);
+  });
+});
+
+describe('agent send-message — pre-parse body bound', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('rejects an oversized declared body (explicit Content-Length) before the handler', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t);
+    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    // Build the body by hand with an explicit Content-Length so this
+    // exercises the limiter's header fast-path, not the streaming
+    // counter (the in-memory Request the json helper builds carries no
+    // Content-Length header).
+    const raw = JSON.stringify({ content: 'a'.repeat(2 * 1024 * 1024) });
+    const r = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      undefined,
+      {
+        body: raw,
+        headers: {
+          ...authHeaders(token),
+          'content-type': 'application/json',
+          'content-length': String(Buffer.byteLength(raw)),
+        },
+      },
+    );
+    expect(r.status).toBe(413);
+    const body = await r.json() as any;
+    expect(body.code).toBe('content_too_large');
+    expect(body.max_body_bytes).toBeDefined();
+  });
+
+  it('rejects an oversized chunked body without Content-Length before the handler', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t);
+    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const payload = Buffer.from(
+      JSON.stringify({ content: 'a'.repeat(2 * 1024 * 1024) }),
+      'utf8',
+    );
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < payload.byteLength; i += 64 * 1024) {
+          controller.enqueue(payload.subarray(i, i + 64 * 1024));
+        }
+        controller.close();
+      },
+    });
+    const r = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      undefined,
+      {
+        body: stream,
+        // duplex is required for stream request bodies in Node's fetch.
+        duplex: 'half',
+        headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      } as RequestInit,
+    );
+    expect(r.status).toBe(413);
+    const body = await r.json() as any;
+    expect(body.code).toBe('content_too_large');
+  });
+});

@@ -7,6 +7,13 @@ import type {
   SendMessageTarget,
 } from '@silverhand/shared';
 import {
+  MAX_MESSAGE_CONTENT_LABEL,
+  messageContentExceedsLimit,
+} from '@silverhand/shared';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
   HostClient,
   HostClientError,
   type AgentMessageSendParams,
@@ -14,6 +21,7 @@ import {
   type AgentStreamObservedParams,
 } from '@silverhand/host';
 import { CliError, mapHttpError } from '../errors.js';
+import type { BackendClient } from '../client.js';
 import {
   flagBool,
   flagNumber,
@@ -59,6 +67,10 @@ The single-quoted heredoc delimiter (\`<<'SILVERHAND_EOF'\`) disables
 shell expansion of \`$\`, backticks, and \`\\\`. The body is read as
 raw bytes, decoded as UTF-8, and posted to the backend with **no
 normalization** — no BOM stripping, no CRLF→LF, no trim.
+
+Bodies larger than 64KiB (UTF-8 bytes) are automatically uploaded as a
+\`text/plain\` attachment; the visible body becomes a short pointer
+line. The backend rejects oversized raw content with 413.
 
 Flags:
   --target channel|thread:<id>
@@ -125,7 +137,7 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
     },
   },
   async run({ env, client, args }) {
-    const attachmentIds = flagStringArray(args, 'attachment');
+    let attachmentIds = flagStringArray(args, 'attachment');
     const hasAttachments = (attachmentIds?.length ?? 0) > 0;
     let content = '';
 
@@ -208,6 +220,18 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
           retriable: false,
           details: { encoding: 'utf8' },
         });
+      }
+
+      // Oversized bodies never enter the message pipeline (they would be
+      // rejected by the backend's content byte cap, and multi-MB text
+      // pins the desktop renderer). Convert to a text attachment
+      // automatically and keep a short pointer line as the visible body.
+      if (messageContentExceedsLimit(content)) {
+        const uploaded = await uploadBodyAsAttachment(client, buffer);
+        attachmentIds = [...(attachmentIds ?? []), uploaded.id];
+        content =
+          `已将较长内容作为文本附件发送（${uploaded.filename}，` +
+          `${formatByteSize(uploaded.size)}；正文超过 ${MAX_MESSAGE_CONTENT_LABEL} 上限）`;
       }
     }
 
@@ -727,6 +751,34 @@ async function readAllStdin(): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+/** Spool an oversized stdin body to a temp file and upload it as a
+ *  `text/plain` attachment. The temp file is best-effort removed; the
+ *  attachment itself survives a later failed send and can be reused by
+ *  passing its id to `--attachment` on the retry. */
+async function uploadBodyAsAttachment(
+  client: BackendClient,
+  body: Buffer,
+): Promise<{ id: string; filename: string; size: number }> {
+  const dir = await mkdtemp(join(tmpdir(), 'silverhand-body-'));
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const tmpPath = join(dir, `message-body-${stamp}.txt`);
+  try {
+    await writeFile(tmpPath, body);
+    const att = await client.uploadAttachment({
+      path: tmpPath,
+      contentType: 'text/plain; charset=utf-8',
+    });
+    return { id: att.id, filename: att.filename, size: att.size };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+function formatByteSize(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.ceil(n / 1024)} KB`;
 }
 
 function parseHistoryTarget(

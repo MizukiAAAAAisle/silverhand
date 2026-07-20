@@ -1612,3 +1612,35 @@ describe('Markdown mermaid fences (#task:1322)', () => {
     expect(html).toContain('graph TD');
   });
 });
+
+describe('oversized-content guard (#task:1550)', () => {
+  const CAP = 64 * 1024;
+
+  it('renders over-cap content as a bounded plain preview, never through the markdown pipeline', () => {
+    const content = '# heading\n```js\ncode\n```\n' + 'x'.repeat(CAP);
+    const html = render(content);
+    expect(html).toContain('内容过长');
+    expect(html).toContain('复制全文');
+    // Heavy pipeline untouched: no heading, no code-block chrome.
+    expect(html).not.toContain('<h1');
+    expect(html).not.toContain('class="code-block"');
+    // Preview is hard-bounded (4000 chars + chrome), not the full body.
+    expect(html.length).toBeLessThan(10_000);
+  });
+
+  it('renders exactly-at-cap content through the normal markdown pipeline', () => {
+    const pad = 'a'.repeat(CAP - '# t\n\n'.length);
+    const content = '# t\n\n' + pad;
+    const html = render(content);
+    expect(html).toContain('<h1');
+    expect(html).not.toContain('内容过长');
+  });
+
+  it('covers the 140KiB legacy system-message shape (bytes, not code units)', () => {
+    // CJK: 48k chars ≈ 140KiB UTF-8 — under the cap in UTF-16 units,
+    // over it in bytes. Must hit the guard.
+    const html = render('汉'.repeat(48_000));
+    expect(html).toContain('内容过长');
+    expect(html).not.toContain('<h1');
+  });
+});

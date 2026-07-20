@@ -6,6 +6,10 @@ import rehypeHighlight from 'rehype-highlight';
 import { AtSign, Check, Copy, Hash } from 'lucide-react';
 import { rehypeHighlightTerm } from './rehypeHighlightTerm';
 import type { AgentDto, UserDto } from '@silverhand/shared';
+import {
+  messageContentByteLength,
+  messageContentExceedsLimit,
+} from '@silverhand/shared';
 import { Mention } from './Mention';
 import { MermaidDiagram } from './MermaidDiagram';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
@@ -130,6 +134,18 @@ function MarkdownInner({
   mermaidSvgByCode,
   searchQuery,
 }: MarkdownProps): JSX.Element {
+  // Oversized guard: legacy DB rows may hold multi-MB content that
+  // predates the send-side byte cap. Feeding it to ReactMarkdown pins
+  // the renderer process (observed as 99% CPU + heartbeat loss), so
+  // anything over the cap renders as a bounded plain-text preview.
+  const oversizedBytes = useMemo(
+    () =>
+      messageContentExceedsLimit(content)
+        ? messageContentByteLength(content)
+        : null,
+    [content],
+  );
+
   // Plugin instance is recreated per render but is a thin closure;
   // remark instantiates the transformer once per `process` call so
   // the cost is negligible. Memoizing it doesn't help because react-
@@ -152,6 +168,10 @@ function MarkdownInner({
         : [rehypeHighlight],
     [trimmedTerm],
   );
+
+  if (oversizedBytes !== null) {
+    return <OversizedContent content={content} bytes={oversizedBytes} />;
+  }
 
   return (
     <div className="markdown-body">
@@ -701,6 +721,48 @@ function canStartRef(text: string, index: number, lastRefEnd: number): boolean {
     return lastRefEnd === index - 1;
   }
   return !/[\w]/.test(prev);
+}
+
+const OVERSIZED_PREVIEW_CHARS = 4000;
+
+/** Bounded plain-text rendering for legacy oversized message rows.
+ *  Never touches the markdown pipeline; full content stays retrievable
+ *  via copy. */
+function OversizedContent({
+  content,
+  bytes,
+}: {
+  content: string;
+  bytes: number;
+}): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  const onCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard denied; ignore */
+    }
+  }, [content]);
+  const label =
+    bytes >= 1024 * 1024
+      ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+      : `${Math.round(bytes / 1024)} KB`;
+  return (
+    <div className="markdown-body">
+      <div className="flex items-center gap-2 text-xs opacity-60">
+        <span>内容过长 · {label} · 已截断预览</span>
+        <button type="button" onClick={onCopy} className="underline hover:opacity-80">
+          {copied ? '已复制' : '复制全文'}
+        </button>
+      </div>
+      <pre className="whitespace-pre-wrap break-words">
+        {content.slice(0, OVERSIZED_PREVIEW_CHARS)}
+        {'\n…'}
+      </pre>
+    </div>
+  );
 }
 
 function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {

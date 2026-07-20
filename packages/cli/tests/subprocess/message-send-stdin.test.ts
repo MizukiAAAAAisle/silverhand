@@ -349,19 +349,55 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
       });
     }
 
-    it('handles a 256KB body without truncation or chunk-boundary corruption', async () => {
+    it('handles a near-cap body without truncation or chunk-boundary corruption', async () => {
       captured.length = 0;
       // Repeating UTF-8 multibyte chars to maximize the chance that a
       // codepoint straddles a chunk boundary inside Node's stdin.
-      const chunk = '中文测试 — emoji 🚀 — '.repeat(20_000);
+      // Stays just under the 64KiB content cap so it does NOT trigger
+      // the auto-attachment conversion.
+      const chunk = '中文测试 — emoji 🚀 — '.repeat(1_900);
       const bytes = Buffer.from(chunk, 'utf8');
-      expect(bytes.byteLength).toBeGreaterThan(256 * 1024);
+      expect(bytes.byteLength).toBeGreaterThan(56 * 1024);
+      expect(bytes.byteLength).toBeLessThanOrEqual(64 * 1024);
       const r = await runSend({ stdin: bytes });
       expect(r.code, r.stderr).toBe(0);
       const reqBody = JSON.parse(captured[0]!.bodyBytes.toString('utf8')) as {
         content: string;
       };
       expect(Buffer.from(reqBody.content, 'utf8').equals(bytes)).toBe(true);
+    }, 30_000);
+
+    it('auto-converts a body over 64KiB into a text attachment', async () => {
+      captured.length = 0;
+      const chunk = '中文测试 — emoji 🚀 — '.repeat(20_000);
+      const bytes = Buffer.from(chunk, 'utf8');
+      expect(bytes.byteLength).toBeGreaterThan(64 * 1024);
+      // First request is the multipart upload; queue an AttachmentDto
+      // for it. The follow-up send gets the default message reply.
+      nextSendResponse = {
+        status: 200,
+        body: {
+          id: 'att-big',
+          filename: 'message-body-x.txt',
+          size: bytes.byteLength,
+          content_type: 'text/plain; charset=utf-8',
+        },
+      };
+      const r = await runSend({ stdin: bytes });
+      expect(r.code, r.stderr).toBe(0);
+      expect(captured.length).toBe(2);
+      const upload = captured[0]!;
+      expect(upload.path).toBe('/internal/conversations/conv-1/agents/agent-1/attachments');
+      // Multipart body carries the original bytes verbatim.
+      expect(upload.bodyBytes.includes(bytes)).toBe(true);
+      const send = captured[1]!;
+      const reqBody = JSON.parse(send.bodyBytes.toString('utf8')) as {
+        content: string;
+        attachment_ids?: string[];
+      };
+      expect(reqBody.attachment_ids).toEqual(['att-big']);
+      expect(Buffer.byteLength(reqBody.content, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+      expect(reqBody.content).toContain('附件');
     }, 30_000);
   });
 

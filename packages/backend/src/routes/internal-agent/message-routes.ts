@@ -2,6 +2,7 @@
 // search. All hang off the calling conversation; the internal principal
 // middleware (cid+aid → AgentPrincipal) authenticates before these run.
 import type { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import {
   getAgentPrincipal,
   type AppEnv,
@@ -26,6 +27,11 @@ import {
   AgentSendMessageInputSchema,
   internalPaths,
   normalizeAttachmentRefs,
+  MAX_MESSAGE_CONTENT_BYTES,
+  MAX_MESSAGE_CONTENT_LABEL,
+  MESSAGE_SEND_MAX_BODY_BYTES,
+  messageContentByteLength,
+  messageContentExceedsLimit,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 
@@ -35,13 +41,38 @@ export function registerMessageRoutes(
 ): void {
   const { ctx, conversations } = deps;
 
-  app.post(internalPaths.agentSendConversationMessage(':cid', ':aid'), async c => {
+  // Pre-parse bound: reject oversized request bodies (declared or
+  // chunked) before buffering/JSON.parse. The precise UTF-8 content
+  // cap is enforced after parse.
+  const sendBodyLimit = bodyLimit({
+    maxSize: MESSAGE_SEND_MAX_BODY_BYTES,
+    onError: c =>
+      c.json(
+        {
+          error: 'request body exceeds message-send bound',
+          code: 'content_too_large',
+          max_body_bytes: MESSAGE_SEND_MAX_BODY_BYTES,
+        },
+        413,
+      ),
+  });
+
+  app.post(internalPaths.agentSendConversationMessage(':cid', ':aid'), sendBodyLimit, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
       return c.json({ error: 'conversation id and agent id required' }, 400);
     }
-    const body = await c.req.json().catch(() => ({}));
+    // `bodyLimit` signals a chunked-body overflow by erroring the wrapped
+    // stream mid-read; rethrow it so the middleware's post-`next()` check
+    // converts it to the 413, instead of swallowing it into `{}` → 400.
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (err) {
+      if (err instanceof Error && err.name === 'BodyLimitError') throw err;
+      body = {};
+    }
     const parsed = AgentSendMessageInputSchema.safeParse(body);
     if (!parsed.success) {
       ctx.logger.warn(
@@ -57,6 +88,17 @@ export function registerMessageRoutes(
           code: 'target_conflict',
         },
         400,
+      );
+    }
+    if (messageContentExceedsLimit(parsed.data.content)) {
+      return c.json(
+        {
+          error: `message content exceeds ${MAX_MESSAGE_CONTENT_LABEL} limit; send it as an attachment instead`,
+          code: 'content_too_large',
+          max_bytes: MAX_MESSAGE_CONTENT_BYTES,
+          actual_bytes: messageContentByteLength(parsed.data.content),
+        },
+        413,
       );
     }
     const principal = getAgentPrincipal(c);

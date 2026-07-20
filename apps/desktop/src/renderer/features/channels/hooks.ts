@@ -29,12 +29,17 @@ import type {
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
 } from '@silverhand/shared';
-import { apiPaths } from '@silverhand/shared';
+import {
+  apiPaths,
+  MAX_MESSAGE_ATTACHMENTS,
+  MAX_MESSAGE_CONTENT_LABEL,
+  messageContentExceedsLimit,
+} from '@silverhand/shared';
 import {
   type PendingMessage,
   isCommittedMessage,
 } from '@/features/channels/pending-message';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, apiUpload } from '@/lib/api';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { getCurrentUserId } from '@/lib/current-user';
 import { useInterest } from '@/features/realtime/interest-registry';
@@ -917,25 +922,11 @@ export function useSendMessage(
     mutationFn: async (input: SendMessageInput) => {
       if (!channelId) throw new Error('no channel selected');
       const path = apiPaths.channelMessages(channelId);
-      const body: {
-        content: string;
-        attachment_ids?: Array<string | AttachmentRefInput>;
-        reply_to_message_id?: string;
-      } = {
-        content: input.content,
-      };
-      if (input.attachments && input.attachments.length > 0) {
-        // Send `{id, label}` when the composer assigned a stable label, bare id
-        // otherwise. The backend normalizes the union and echoes the label —
-        // never recomputes it — so chip / body / payload / suffix stay in sync
-        // (#task:1324).
-        body.attachment_ids = input.attachments.map(a =>
-          a.label ? { id: a.id, label: a.label } : a.id,
-        );
-      }
-      if (threadRootId) {
-        body.reply_to_message_id = threadRootId;
-      }
+      const body = await prepareSendMessageBody({
+        channelId,
+        input,
+        threadRootId,
+      });
       const res = await api<{ message: MessageDto }>(
         path,
         { method: 'POST', body: JSON.stringify(body) },
@@ -1034,6 +1025,89 @@ export function useSendMessage(
       }
     },
   });
+}
+
+/** Upload the final oversized draft as a `text/plain` attachment in the
+ *  target channel. Exported for tests. */
+export async function uploadContentAsTextAttachment(
+  channelId: string,
+  content: string,
+): Promise<AttachmentDto> {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const file = new File([content], `message-body-${stamp}.txt`, {
+    type: 'text/plain',
+  });
+  const form = new FormData();
+  form.append('file', file, file.name);
+  return await apiUpload<AttachmentDto>(
+    apiPaths.channelAttachments(channelId),
+    form,
+  );
+}
+
+export interface PreparedSendBody {
+  content: string;
+  attachment_ids?: Array<string | AttachmentRefInput>;
+  reply_to_message_id?: string;
+}
+
+/**
+ * Build the send-message request body from the final draft. This is the
+ * authoritative oversized-content conversion point: whatever path
+ * produced the draft (multiple pastes, quote insertion, restored
+ * draft), content over the byte cap is uploaded as a text attachment
+ * and replaced by a short pointer line — the backend would 413 it.
+ * Exactly-at-cap content is sent as-is.
+ */
+export async function prepareSendMessageBody(opts: {
+  channelId: string;
+  input: SendMessageInput;
+  threadRootId?: string | null;
+  /** Injectable for tests; defaults to the real channel upload. */
+  uploadText?: typeof uploadContentAsTextAttachment;
+}): Promise<PreparedSendBody> {
+  const upload = opts.uploadText ?? uploadContentAsTextAttachment;
+  let content = opts.input.content;
+  let convertedAttachment: AttachmentDto | null = null;
+  if (messageContentExceedsLimit(content)) {
+    // Capacity check BEFORE uploading: with the composer already at the
+    // attachment cap there is no slot for the auto-converted body, and
+    // uploading first would leave an invisible orphan attachment on
+    // every retry (the send would only fail later at the schema's
+    // max-count). Fail fast; the composer's error path restores the
+    // draft and pending list intact.
+    if ((opts.input.attachments?.length ?? 0) >= MAX_MESSAGE_ATTACHMENTS) {
+      throw new Error(
+        `正文超过 ${MAX_MESSAGE_CONTENT_LABEL} 需要自动转为附件，但附件已达 ${MAX_MESSAGE_ATTACHMENTS} 个上限——请移除一个附件或缩短正文后重试`,
+      );
+    }
+    convertedAttachment = await upload(opts.channelId, content);
+    const kb = Math.round(convertedAttachment.size / 1024);
+    content = `已将较长内容作为文本附件发送（${convertedAttachment.filename}，${kb} KB）`;
+  }
+  const body: PreparedSendBody = { content };
+  const attachmentRefs: Array<string | AttachmentRefInput> = [];
+  if (opts.input.attachments && opts.input.attachments.length > 0) {
+    // Send `{id, label}` when the composer assigned a stable label, bare id
+    // otherwise. The backend normalizes the union and echoes the label —
+    // never recomputes it — so chip / body / payload / suffix stay in sync
+    // (#task:1324).
+    attachmentRefs.push(
+      ...opts.input.attachments.map(a =>
+        a.label ? { id: a.id, label: a.label } : a.id,
+      ),
+    );
+  }
+  if (convertedAttachment) {
+    attachmentRefs.push(convertedAttachment.id);
+  }
+  if (attachmentRefs.length > 0) {
+    body.attachment_ids = attachmentRefs;
+  }
+  if (opts.threadRootId) {
+    body.reply_to_message_id = opts.threadRootId;
+  }
+  return body;
 }
 
 export function useStartAgent(

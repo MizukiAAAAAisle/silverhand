@@ -127,3 +127,110 @@ describe('GET /api/channels/:id/messages — reply_summaries_by_root (P1)', () =
     }
   });
 });
+
+describe('POST /api/channels/:id/messages — content byte cap', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('rejects content over 64KiB (UTF-8 bytes) with 413 content_too_large', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const r = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      { content: 'a'.repeat(64 * 1024 + 1) },
+    );
+    expect(r.status).toBe(413);
+    const body = await r.json() as any;
+    expect(body.code).toBe('content_too_large');
+    expect(body.max_bytes).toBe(64 * 1024);
+    expect(body.actual_bytes).toBe(64 * 1024 + 1);
+  });
+
+  it('measures the cap in UTF-8 bytes, not UTF-16 code units', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    // 30k CJK chars = 30k UTF-16 code units but ~90KB UTF-8 bytes.
+    const r = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      { content: '汉'.repeat(30_000) },
+    );
+    expect(r.status).toBe(413);
+    const body = await r.json() as any;
+    expect(body.code).toBe('content_too_large');
+    expect(body.actual_bytes).toBe(90_000);
+  });
+
+  it('accepts content exactly at the 64KiB boundary', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const r = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      { content: 'a'.repeat(64 * 1024) },
+    );
+    expect(r.status).toBe(201);
+  });
+});
+
+describe('POST /api/channels/:id/messages — pre-parse body bound', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('rejects an oversized body with a declared Content-Length before the handler', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const body = JSON.stringify({ content: 'a'.repeat(2 * 1024 * 1024) });
+    const r = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      undefined,
+      {
+        body,
+        headers: {
+          'content-type': 'application/json',
+          'content-length': String(Buffer.byteLength(body)),
+        },
+      },
+    );
+    expect(r.status).toBe(413);
+    const parsed = await r.json() as any;
+    expect(parsed.code).toBe('content_too_large');
+    expect(parsed.max_body_bytes).toBeDefined();
+  });
+
+  it('rejects an oversized chunked body without Content-Length before the handler', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+    const payload = Buffer.from(
+      JSON.stringify({ content: 'a'.repeat(2 * 1024 * 1024) }),
+      'utf8',
+    );
+    // Stream the body in chunks with no Content-Length header — the
+    // limiter must count bytes as they arrive and cut off mid-stream.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < payload.byteLength; i += 64 * 1024) {
+          controller.enqueue(payload.subarray(i, i + 64 * 1024));
+        }
+        controller.close();
+      },
+    });
+    const r = await http(t).post(
+      `/api/channels/${channelId}/messages`,
+      undefined,
+      {
+        body: stream,
+        // duplex is required for stream request bodies in Node's fetch.
+        duplex: 'half',
+        headers: { 'content-type': 'application/json' },
+      } as RequestInit,
+    );
+    expect(r.status).toBe(413);
+    const parsed = await r.json() as any;
+    expect(parsed.code).toBe('content_too_large');
+  });
+});
