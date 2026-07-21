@@ -457,6 +457,10 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
     expect(details.unseen_count).toBeUndefined();
     expect(details.current_seq).toBeGreaterThan(seenUpToSeq);
     expect(typeof details.hint).toBe('string');
+    expect(details.hint).toContain(
+      'wait for pending messages to arrive through normal delivery',
+    );
+    expect(details.hint).not.toContain('read them');
     const raw = JSON.stringify(details);
     expect(raw).not.toContain('newer 0');
     expect(raw).not.toContain('newer 11');

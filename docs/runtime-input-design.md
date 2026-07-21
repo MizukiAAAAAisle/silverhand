@@ -309,7 +309,7 @@ Claude 保持 tool-boundary 写入（steer 有真实收益，不降级为 turn-b
   "stream_key": "main",
   "seen_up_to_seq": 12,
   "current_seq": 30,
-  "hint": "unseen messages arrive as regular input; read them, then retry/resolve"
+  "hint": "wait for pending messages to arrive through normal delivery; then retry or discard"
 }
 ```
 

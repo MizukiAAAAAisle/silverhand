@@ -335,7 +335,7 @@ export function conversationMessageServiceErrorResponse(
               : 'main',
             seen_up_to_seq: err.seenUpToSeq,
             current_seq: err.currentSeq,
-            hint: 'unseen messages are queued for normal delivery; they arrive as regular input (steer runtimes this turn, boundary runtimes next turn) — read them, then retry with --stale-resolution or drop via message stale-resolve',
+            hint: 'wait for pending messages to arrive through normal delivery; then retry with --stale-resolution or discard via message stale-resolve',
           },
         },
       },
