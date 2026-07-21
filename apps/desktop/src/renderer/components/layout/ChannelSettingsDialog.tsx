@@ -39,10 +39,13 @@
  * Unified action buttons: Visibility, Archive and Leave are the SAME full-width
  * settings-action button — one `variant="outline"` carrying
  * `data-channel-settings-action` (the forza6 poster-sticker hook), no
- * per-button frame divergence. The Visibility action shows ONLY the executable
- * label (`Make private` / `Make public`) — no current-state row or glyph (the
- * header already carries the Lock/# identity). Save (rename) is the only solid
- * `default` primary; the three action buttons never compete with it.
+ * per-button frame divergence. Each carries a leading glyph of the state/action
+ * it commits to (matching Archive / Leave in the same group, shiki 2026-07-21):
+ * the Visibility action shows the TARGET-state glyph — `LockOpen` for
+ * `Make public`, `Lock` for `Make private` (one lock metaphor, open ↔ closed) —
+ * the way Archive shows `Archive` / `ArchiveRestore`.
+ * Save (rename) is the only solid `default` primary; the three action buttons
+ * never compete with it.
  *
  * Destructive weight lives at the CONFIRM step, not the resting row: the
  * resting Leave button is the same neutral action button as the others; only
@@ -50,7 +53,7 @@
  * until the moment the choice is committed.
  */
 import { Fragment, useEffect, useState, type FormEvent } from 'react';
-import { Archive, ArchiveRestore, Loader2, LogOut } from 'lucide-react';
+import { Archive, ArchiveRestore, Loader2, Lock, LockOpen, LogOut } from 'lucide-react';
 import type {
   ChannelLeaveBlockedReason,
   ConversationVisibility,
@@ -276,7 +279,13 @@ export function ChannelSettingsDialog({
             disabled={visSaving}
             onClick={() => void handleToggleVisibility()}
           >
-            {visSaving ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {visSaving ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : isPrivate ? (
+              <LockOpen className="size-3.5" />
+            ) : (
+              <Lock className="size-3.5" />
+            )}
             {isPrivate ? 'Make public' : 'Make private'}
           </Button>
           {visError ? <p className="text-xs text-error">{visError}</p> : null}
