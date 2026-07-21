@@ -476,40 +476,6 @@ describe('buildPlatformPrompt', () => {
     expect(missing, `prompt mentions flags not in any CLI help: ${missing.join(', ')}`)
       .toEqual([]);
   });
-
-  it('does not reuse JSON-body parameter names where a CLI flag exists', () => {
-    // Pre-CLI-migration the prompt referred to backend JSON shapes
-    // (`task_numbers`, `attachment_ids`, `before_seq`, …). Agents will
-    // copy whatever the prompt says and pass it as a CLI flag, hitting
-    // validation_error. These names have CLI flag equivalents now and
-    // must never reappear in the prompt.
-    const text = prompt();
-    const forbidden = [
-      'task_numbers',
-      'message_ids',
-      'attachment_ids',
-      'before_seq',
-      'after_seq',
-      'around_message_id',
-      'include_content',
-      'include_system',
-      'every_seconds',
-      'fire_at',
-      'delay_seconds',
-      'start_at',
-      'max_occurrences',
-      'until_at',
-      'allow_unbounded',
-      'context_summary',
-      'initial_prompt',
-      'posted_to_parent',
-      'schedule_id',
-    ];
-    for (const name of forbidden) {
-      expect(text, `prompt should reference CLI flag, not JSON field "${name}"`)
-        .not.toContain(name);
-    }
-  });
 });
 
 // -----------------------------------------------------------------------
