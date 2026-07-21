@@ -1,4 +1,4 @@
-import { type FocusEvent, useCallback, useEffect, useState } from 'react';
+import { type FocusEvent, useCallback, useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { Bookmark, Check, Download, FileText, SmilePlus, User } from 'lucide-react';
@@ -1167,9 +1167,22 @@ function AttachmentTile({
   );
   const [error, setError] = useState<string | null>(null);
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  // Terminal "this image can't be decoded" flag. A first `onError` is treated
+  // as a stale/evicted blob url and retried ONCE (see onImgError); a second is
+  // taken as "the bytes themselves won't decode" and lands here so we stop
+  // retrying. `retriedRef` carries the once-flag across renders without
+  // triggering one. Both reset when the tile is pointed at a new attachment.
+  const [decodeFailed, setDecodeFailed] = useState(false);
+  const retriedRef = useRef(false);
 
   useEffect(() => {
-    if (!isImage || imageUrl) return;
+    retriedRef.current = false;
+    setDecodeFailed(false);
+    setError(null);
+  }, [attachment.id]);
+
+  useEffect(() => {
+    if (!isImage || imageUrl || decodeFailed) return;
     let cancelled = false;
     loadAttachmentBlobUrl(attachment.id)
       .then(url => {
@@ -1183,11 +1196,22 @@ function AttachmentTile({
     return () => {
       cancelled = true;
     };
-  }, [attachment.id, isImage, imageUrl]);
+  }, [attachment.id, isImage, imageUrl, decodeFailed]);
 
-  // Recover from an evicted-and-revoked URL: drop our stale value
-  // and let the effect above re-fetch through loadAttachmentBlobUrl.
+  // Bound the image-error recovery. The FIRST error may be a stale blob url
+  // that was evicted + revoked out from under us — drop it and let the effect
+  // re-fetch a fresh one, ONCE. A SECOND error (after a known-fresh url) means
+  // the bytes are undecodable by Chromium (e.g. a `.tiff`), so we go terminal
+  // instead of looping fetch → error → fetch forever — the unbounded version
+  // repainted a broken <img> every frame and flickered the whole UI
+  // (#task:1581). A decode-failed image then degrades to the downloadable
+  // file chip below rather than a dead preview box.
   function onImgError(): void {
+    if (retriedRef.current) {
+      setDecodeFailed(true);
+      return;
+    }
+    retriedRef.current = true;
     setImageUrl(null);
   }
 
@@ -1216,7 +1240,7 @@ function AttachmentTile({
     });
   }
 
-  if (isImage) {
+  if (isImage && !decodeFailed) {
     return (
       <div className="flex flex-col gap-1">
         <button
