@@ -302,9 +302,14 @@ export function CreateAgentDialog({
           />
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ag-model" className="font-semibold">
-              Model
-            </Label>
+            {/* No `htmlFor` → the caption is a plain visual label, not a
+                click target. A `<label htmlFor="ag-model">` forwards its click
+                to the Combobox input (id `ag-model`), whose `onClick` opens the
+                suggestions dropdown — so clicking the "Model" text popped the
+                list open (shiki 2026-07-21). The input carries its own
+                `aria-label="Model"`, so a11y naming is unaffected. Matches the
+                edit form's bare `<Label>Model</Label>` (RuntimeConfigEditor). */}
+            <Label className="font-semibold">Model</Label>
             <Combobox
               id="ag-model"
               ariaLabel="Model"

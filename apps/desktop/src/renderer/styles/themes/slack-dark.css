@@ -474,3 +474,38 @@
   stroke-width: 2.5;
   margin-right: 0.1em;
 }
+
+/* ── Task-board card lift (shiki 2026-07-21: "卡片跟背景色太接近了…被淹没了") ──
+   slack's `--bg-base` == `--bg-primary` (#1A1D21), so a card on `--bg-base`
+   was the EXACT colour of its column — invisible but for the 0.06 hairline.
+   Lift it onto `--bg-floating` (#2C2D30, the brightest dark surface) with the
+   `--card-shadow` and the 10%-white `--border`, so the card reads as a raised
+   tile. Hover brightens the border to accent + deepens the shadow (structural,
+   the ground stays put). forza6 paints its own flat poster card via this same
+   selector, so this is slack-only; it also converges the two boards' cards. */
+[data-theme='slack-dark'] [data-tasks-board] [data-task-number] {
+  background: var(--bg-floating);
+  border-color: var(--border);
+  box-shadow: var(--card-shadow);
+}
+[data-theme='slack-dark'] [data-tasks-board] [data-task-number]:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-popover);
+}
+
+/* ── Task-board column lane (shiki 2026-07-21: "task column 的背景色和整体
+   background 太接近了") ──
+   `--bg-primary` == `--bg-base` (#1A1D21) here, so the column was the exact
+   colour of the page — invisible but for its 0.06 hairline. Lift the lane to
+   `--bg-elevated` (#232529, the one-step container surface); the card sits a
+   further step brighter on `--bg-floating` (#2C2D30, above), so the stack
+   becomes page(#1A1D21) < column(#232529) < card(#2C2D30) — Slack's own
+   ascending-elevation ladder, one step each. Firmer `--border` edge too. This
+   mirrors how forza6 differentiates its column (there a 2px ink border carries
+   it — shiki); in dark theme "raised = lighter" does the same job. (0,2,0)
+   beats the Tailwind utilities; the later global `[data-drop-target]` rule
+   still wins the drag wash on source order. */
+[data-theme='slack-dark'] [data-tasks-column] {
+  background-color: var(--bg-elevated);
+  border-color: var(--border);
+}

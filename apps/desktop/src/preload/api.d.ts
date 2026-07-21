@@ -488,6 +488,8 @@ declare global {
       backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
       backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
       recordEventWsDiagnostic(input: DesktopEventWsDiagnostic): Promise<void>;
+      /** Toggle trackpad pinch-to-zoom for this frame (see preload impl). */
+      setPinchZoom(enabled: boolean): void;
       rotateHostToken(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       revokeHost(input: { hostId: string }): Promise<DesktopHostMutationResult>;
       getHostProxyConfig(input: {

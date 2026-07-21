@@ -3,6 +3,8 @@ import {
   CheckSquare,
   ChevronDown,
   ChevronRight,
+  Clock,
+  Hash,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
@@ -432,25 +434,31 @@ function TaskCard({
         <span className="block min-w-0 text-xs text-text-primary [overflow-wrap:anywhere]">
           {task.title}
         </span>
-        {/* Row 3: assignee · in conversation · created (inline meta,
-            mirrors the popover layout — see TaskRef.TaskPopoverBody).
-            `flex-wrap` (#task:918): narrow cards let each segment drop
-            to a new line instead of overflowing. */}
-        <div className="mt-1 flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[10px] text-text-muted">
+        {/* Row 3: assignee · channel · created — inline meta. Separators are
+            icons, not `·` glyphs (shiki 2026-07-21): the channel gets a `#`
+            (dropping the "in " prose) and the timestamp a clock, so the row
+            self-delimits by identity glyph + gap instead of middots.
+            `flex-wrap` (#task:918): narrow cards let each segment drop to a new
+            line instead of overflowing. */}
+        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-text-muted">
           <span className="shrink-0 text-text-secondary">
             {task.assignee ? `@${task.assignee.name}` : (
               <span className="italic">unassigned</span>
             )}
           </span>
-          <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
           <span
-            className="min-w-0 truncate text-text-secondary"
+            className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
             title={task.conversation.title}
           >
-            in {task.conversation.title}
+            <Hash className="size-3 shrink-0 text-text-muted" />
+            <span className="min-w-0 truncate">{task.conversation.title}</span>
           </span>
-          <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
-          <span className="shrink-0" title={absolute}>{relative}</span>
+          {/* Time pinned to the row's right edge (`ml-auto`) — shiki
+              2026-07-21. On wrap it still right-aligns on its own line. */}
+          <span className="ml-auto inline-flex shrink-0 items-center gap-0.5" title={absolute}>
+            <Clock className="size-3 shrink-0" />
+            {relative}
+          </span>
         </div>
       </div>
       </div>

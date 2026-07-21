@@ -214,7 +214,7 @@ export function SelectionQuoteToolbar({
       // hairline) so forza6 gets its 2px hard-ink poster frame + 0 radius
       // while warm/slack keep their softer 1px + 6px surface. Matches the
       // Lightbox / ImagePreviewModal / SelectionToolbar floating idiom.
-      className="z-[80] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-1 text-xs text-text-primary shadow-popover"
+      className="z-[80] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
     >
       <SelectionQuoteButton
         icon={<TextQuote className="size-3.5" />}
@@ -246,7 +246,15 @@ function SelectionQuoteButton({
       onClick={onClick}
       title={label}
       aria-label={label}
-      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] px-2 py-1 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      // Concentric radius (shiki 2026-07-21): the hover fill is inset from the
+      // toolbar's rounded frame by the container's border + padding, so for the
+      // corners to share a center the inner radius must be
+      // `outer − border-width − padding`, not a flat `--control-radius`. The
+      // container is `rounded-[--floating-radius]` + `border-[--control-border-width]`
+      // + `p-0.5` (2px), so: warm 10−1−2=7, slack 6−1−2=3, forza6 0−2−2→0.
+      // Clamped at 0 so forza6's hard corners never go negative. Keep the `2px`
+      // in sync with the container's `p-0.5` if that padding changes.
+      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))_-_var(--control-border-width)_-_2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
     >
       {icon}
       <span>{label}</span>

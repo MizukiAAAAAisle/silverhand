@@ -645,3 +645,44 @@
   stroke-width: 2.5;
   margin-right: 0.1em;
 }
+
+/* ── Task-board card lift (shiki 2026-07-21: "卡片跟背景色太接近了…被淹没了") ──
+   The kanban card must read as a distinct object above its column, not a
+   near-invisible tile. The card previously sat on `--bg-base` (#F8F6F2), only
+   ~one level off the column's `--bg-primary` (#F3EFE8) behind a 0.1 hairline,
+   so it sank into the board. Lift it onto the bright paper surface
+   (`--bg-floating`, white) with the soft `--card-shadow` and the warmer
+   `--border`, so each card floats off the cream. Hover deepens the lift —
+   structural (accent border + bigger shadow), not a colour flip; the paper
+   ground stays put. forza6 paints its own flat poster card via this same
+   `[data-tasks-board] [data-task-number]` selector, so this is warm-only.
+   Both boards (TasksSection + WorkspaceTasksDrawer) carry the hooks, so this
+   also converges the two cards, which had drifted to opposite fills. */
+[data-theme='warm-script'] [data-tasks-board] [data-task-number] {
+  background: var(--bg-floating);
+  border-color: var(--border);
+  box-shadow: var(--card-shadow);
+}
+[data-theme='warm-script'] [data-tasks-board] [data-task-number]:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-popover);
+}
+
+/* ── Task-board column lane (shiki 2026-07-21: "task column 的背景色和整体
+   background 太接近了") ──
+   The column sat on `--bg-primary` (#F3EFE8), only ~5 levels off the page's
+   `--bg-base` (#F8F6F2), so the lane barely read against the ground. Deepen
+   it to `--bg-elevated` (#EAE6DE, the recessed-tray surface) + a full
+   `--border` edge (vs the old 0.1 hairline) so the lane reads as a distinct
+   trough; cards then lift out of it on `--bg-floating` white (above),
+   giving page > column(recessed) > card(floating). This mirrors how forza6
+   differentiates its column — there a 2px ink border carries it (shiki), here
+   a deeper fill + firmer edge in warm-script's softer paper language.
+   `[data-theme] [attr]` = (0,2,0) beats the Tailwind
+   `bg-bg-primary`/`border-border-subtle` utilities; the later global
+   `[data-tasks-column][data-drop-target]` rule (also (0,2,0)) still wins the
+   drag wash on source order (theme @imports precede the global body). */
+[data-theme='warm-script'] [data-tasks-column] {
+  background-color: var(--bg-elevated);
+  border-color: var(--border);
+}
