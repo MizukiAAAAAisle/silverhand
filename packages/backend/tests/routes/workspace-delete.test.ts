@@ -141,9 +141,9 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     );
     const realStop = t.fake.stop.bind(t.fake);
     vi.spyOn(t.fake, 'stop').mockImplementation(
-      async (cid: string, aid: string, mode: any, directive?: string) => {
-        timeline.push(`stop:${cid}:${aid}:${mode}`);
-        return realStop(cid, aid, mode, directive);
+      async (cid: string, aid: string) => {
+        timeline.push(`stop:${cid}:${aid}`);
+        return realStop(cid, aid);
       },
     );
     const realDelete = WorkspaceRepo.prototype.delete;
@@ -160,7 +160,7 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
 
     // The fan-out actually fired with the expected reason / mode.
     expect(timeline).toContain(`resolve:${channelId}:conversation_closed`);
-    expect(timeline).toContain(`stop:${channelId}:${agentId}:hard`);
+    expect(timeline).toContain(`stop:${channelId}:${agentId}`);
 
     // ORDERING: every resolve/stop precedes the repo delete.
     const deleteIdx = timeline.indexOf('delete');
@@ -232,7 +232,6 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     expect(t.fake.stops).toContainEqual({
       conversationId: channelId,
       agentId,
-      mode: 'hard',
       directive: undefined,
     });
     expect(warnSpy).toHaveBeenCalledWith(

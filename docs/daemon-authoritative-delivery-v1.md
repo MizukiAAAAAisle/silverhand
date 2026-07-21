@@ -177,7 +177,8 @@ is updated in `updateRunStateFromParsed` with byte-for-byte the same transitions
 the backend coordinator applies in `onParsedEvent` (`tool_call +1`,
 `tool_output −1` clamped, `turn_end → 0`, `compaction_started/finished`). The
 daemon also owns `handle.driver` with the full classification surface
-(`busyDeliveryMode: gated|direct|none`, `oneShot`, `kickoffMode`,
+(`releaseProfile`（#task:1558 起取代三值 `busyDeliveryMode`，见
+[`runtime-input-design.md`](./runtime-input-design.md) §3.2）, `oneShot`, `kickoffMode`,
 `readyToEncode()`), and already flushes startup batches through
 `consumeStartupDelivery` (encode → write stdin → emit `runtime_delivery_consumed`,
 deferring the ack to `session_init` for `requires_first_message`).

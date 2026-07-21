@@ -46,6 +46,12 @@ class FakeConversationManager {
     if (this.startError) throw this.startError;
   }
 
+  pendingDrives: Array<{ conversationId: string; agentId: string }> = [];
+  async deliverPending(conversationId: string, agentId: string): Promise<boolean> {
+    this.pendingDrives.push({ conversationId, agentId });
+    return true;
+  }
+
   async deliverMessage(
     conversationId: string,
     agentId: string,
@@ -732,7 +738,6 @@ describe('ConversationMessageService.sendMessage', () => {
         staleEventId: expect.any(String),
         seenUpToSeq: observed.seq,
         currentSeq: newer.seq,
-        newerMessages: [expect.objectContaining({ content: 'conflicting update' })],
       });
       unsub();
 
@@ -749,7 +754,6 @@ describe('ConversationMessageService.sendMessage', () => {
           actorId: t.alice.id,
           seenUpToSeq: observed.seq,
           currentSeq: newer.seq,
-          newerMessageCount: 1,
         }),
         'conversation-message-service: freshness CAS rejected',
       );
@@ -944,7 +948,7 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
-  it('stale reply reports newer_messages from the same thread stream only', async () => {
+  it('stale reply scopes the unseen count to the same thread stream and materializes the window as normal observe deliveries', async () => {
     const t = bootstrap();
     try {
       const root = t.messages.insertForConversation({
@@ -961,8 +965,8 @@ describe('ConversationMessageService.sendMessage', () => {
         seenUpToSeq: 0,
       });
       // a concurrent main-line message advances the conversation-global seq
-      // but is in a DIFFERENT stream — it must NOT appear in the thread's
-      // stale newer_messages.
+      // but is in a DIFFERENT stream — it must NOT count into the thread's
+      // unseen window.
       t.messages.insertForConversation({
         conversationId: t.channel.id,
         fromKind: 'user',
@@ -986,10 +990,130 @@ describe('ConversationMessageService.sendMessage', () => {
       ).rejects.toMatchObject({
         code: 'message_stale',
         currentSeq: secondReply.seq,
-        newerMessages: [
-          expect.objectContaining({ content: 'newer thread reply' }),
-        ],
       });
+      // Contract 3 (no signal-only deadlock): the window rows the signal
+      // asks alice to wait for now exist as NORMAL observe deliveries —
+      // the same rows a later follow-backfill would ensureDelivery
+      // idempotently.
+      const pendingForAlice = t.conversationInboxes.listPending(
+        t.channel.id,
+        t.alice.id,
+      );
+      expect(
+        pendingForAlice.filter(pi => pi.message.id === secondReply.id),
+      ).toHaveLength(1);
+      expect(
+        pendingForAlice.find(pi => pi.message.id === secondReply.id)!.deliveryKind,
+      ).toBe('observe');
+      // C1-gate P1-1: the rows must MOVE, not just exist — the 409 path
+      // drives the live delivery plane so a mid-turn agent (no future
+      // ready_for_drain guarantee) still receives the window.
+      await new Promise(res => setImmediate(res));
+      expect(t.fake.pendingDrives).toContainEqual({
+        conversationId: t.channel.id,
+        agentId: t.alice.id,
+      });
+      // Successful retry runs follow-backfill — it must hit the SAME row,
+      // never a second one.
+      // ensureDelivery is idempotent — use it as the row lookup.
+      const before = t.conversationInboxes.ensureDelivery(
+        t.channel.id,
+        t.alice.id,
+        secondReply.id,
+      ).inboxId;
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'informed retry',
+        target: { kind: 'thread', message_id: root.id },
+        seenUpToSeq: secondReply.seq,
+      });
+      expect(
+        t.conversationInboxes.ensureDelivery(t.channel.id, t.alice.id, secondReply.id)
+          .inboxId,
+      ).toBe(before);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('C1-gate P1-2: materialization failure fails CLOSED — no fabricated message_stale signal', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'root',
+      });
+      const firstReply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        content: 'prior reply',
+        target: { kind: 'thread', message_id: root.id },
+        seenUpToSeq: 0,
+      });
+      t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'newer reply',
+        threadRootId: root.id,
+      });
+      vi.spyOn(t.conversationInboxes, 'ensureDelivery').mockImplementation(() => {
+        throw new Error('disk full');
+      });
+      // A signal that promises "wait for delivery" while the delivery row
+      // could not be created is a fabricated promise — the send must fail
+      // with the underlying error, NOT message_stale.
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          content: 'stale draft',
+          target: { kind: 'thread', message_id: root.id },
+          seenUpToSeq: firstReply.message.seq,
+        }),
+      ).rejects.toThrowError('disk full');
+      vi.restoreAllMocks();
+    } finally {
+      vi.restoreAllMocks();
+      t.cleanup();
+    }
+  });
+
+  it('bypass sends return stream_head_before as the merge prerequisite; normal sends do not (countgame bypass-hole P1)', async () => {
+    const t = bootstrap();
+    try {
+      const observed = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'observed',
+      });
+      const gap = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'unseen gap',
+      });
+
+      const forced = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'forced',
+        seenUpToSeq: observed.seq,
+        freshnessBypass: true,
+      });
+      // The head at insert time = everything freshness-relevant the
+      // sender skipped — the daemon merges the own seq once its observed
+      // covers this value (sender is excluded from its own fan-out, so
+      // the forced seq never arrives by inbox).
+      expect(forced.streamHeadBeforeSend).toBe(gap.seq);
+
+      const normal = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'normal',
+        seenUpToSeq: forced.message.seq,
+      });
+      expect(normal.streamHeadBeforeSend).toBeUndefined();
     } finally {
       t.cleanup();
     }

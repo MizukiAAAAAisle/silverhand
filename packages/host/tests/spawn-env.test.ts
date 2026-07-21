@@ -21,7 +21,7 @@ function makeDriver(applyEnv: Driver['applyEnv']): Driver {
     encodeInterruptControl: () => '',
     oneShot: false,
     kickoffMode: 'self_init',
-    busyDeliveryMode: 'defer',
+    releaseProfile: 'tool-boundary-steer',
   } as unknown as Driver;
 }
 

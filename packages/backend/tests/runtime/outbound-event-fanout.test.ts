@@ -27,7 +27,6 @@ import { RuntimeEventHandler, type EventPublisher } from '../../src/runtime/even
 import {
   ClearSessionExitTimeoutError,
   ClearSessionInProgressError,
-  DEFAULT_SOFT_DIRECTIVE,
 } from '../../src/runtime/agent-runtime-host.js';
 import {
   OutboundRuntimeEventFanout,
@@ -1635,67 +1634,19 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  // ── P2 (D4.b post-review) — soft stop default directive ──
-  //
-  // Pins the `RuntimeStopParamsSchema.superRefine` contract that
-  // soft stops MUST carry `soft_directive`. Pre-fix,
-  // `OutboundRuntimeEventFanout.stop` forwarded `softDirective`
-  // only when not undefined — so `stop(..., 'soft')` with no
-  // directive sent `{mode:'soft'}` and got rejected daemon-side
-  // (`runtime_stop_params_invalid`). The fix mirrors
-  // `DaemonAgentRuntimeHost.stop` and substitutes
-  // `DEFAULT_SOFT_DIRECTIVE` when the caller omits one — both
-  // deployment adapters now produce the same wire envelope (R4 —
-  // same envelope, transport-only divergence).
-  //
-  // Three arms: hard MUST omit `soft_directive`; soft with no
-  // directive substitutes the default; soft with explicit
-  // directive forwards it verbatim.
-  it('soft stop without directive substitutes DEFAULT_SOFT_DIRECTIVE; hard stop omits it', async () => {
+  it('stop dispatches the hard-only wire shape (#task:1558 — soft arm deleted)', async () => {
     const fix = makeFixture();
     try {
-      await fix.fanout.stop(fix.channelId, fix.agentId, 'hard');
-      await fix.fanout.stop(fix.channelId, fix.agentId, 'soft');
-      await fix.fanout.stop(
-        fix.channelId,
-        fix.agentId,
-        'soft',
-        'explicit caller directive',
-      );
+      await fix.fanout.stop(fix.channelId, fix.agentId);
 
       const stops = fix.transport.calls.filter(c => c.kind === 'runtime_stop');
-      expect(stops).toHaveLength(3);
-
-      // Arm 1: hard — soft_directive must NOT appear on the wire
-      // (superRefine treats its presence on hard as invalid).
+      expect(stops).toHaveLength(1);
       expect(stops[0]!.params).toEqual({
         conversation_id: fix.channelId,
         agent_id: fix.agentId,
         mode: 'hard',
       });
       expect('soft_directive' in stops[0]!.params).toBe(false);
-
-      // Arm 2: soft, no caller directive — substitute default.
-      // Pin the exact text so a future module rename / refactor
-      // that silently swaps the constant fails this assertion.
-      expect(stops[1]!.params).toEqual({
-        conversation_id: fix.channelId,
-        agent_id: fix.agentId,
-        mode: 'soft',
-        soft_directive: DEFAULT_SOFT_DIRECTIVE,
-      });
-      expect(stops[1]!.params.soft_directive).toBe(
-        '[user requested a course correction — pause your current direction and ' +
-          'wait for the next instruction]',
-      );
-
-      // Arm 3: soft, explicit caller directive — forward verbatim.
-      expect(stops[2]!.params).toEqual({
-        conversation_id: fix.channelId,
-        agent_id: fix.agentId,
-        mode: 'soft',
-        soft_directive: 'explicit caller directive',
-      });
     } finally {
       fix.cleanup();
     }

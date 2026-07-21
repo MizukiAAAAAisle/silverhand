@@ -185,21 +185,6 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'runtime_stop' },
   },
   {
-    name: 'request/runtime_stop-soft',
-    description: 'Soft stop — daemon writes directive text into stdin.',
-    frame: enc({
-      id: 'req-stop-soft',
-      intent: 'runtime_stop',
-      params: {
-        conversation_id: C,
-        agent_id: A,
-        mode: 'soft',
-        soft_directive: '[the user wants you to stop]',
-      },
-    }),
-    kind: { kind: 'request', intent: 'runtime_stop' },
-  },
-  {
     name: 'request/runtime_deliver-message',
     description:
       '#task:1417 Stage 2 daemon-authoritative delivery — kind=message, batch of delivery_ids, carries spawn_options for the no-handle spawn arm.',
@@ -576,7 +561,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 8,
+        protocol_version: 9,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -774,55 +759,6 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     frame: enc({
       id: 'req-stop-hard-nr',
       result: { mode: 'hard', stopped: false, exit_code: null },
-    }),
-    kind: { kind: 'response_success', intent: 'runtime_stop' },
-  },
-  {
-    name: 'response/runtime_stop-soft-delivered',
-    description: 'Soft stop result — directive line written, no reason.',
-    frame: enc({
-      id: 'req-stop-soft',
-      result: { mode: 'soft', directive_delivered: true },
-    }),
-    kind: { kind: 'response_success', intent: 'runtime_stop' },
-  },
-  {
-    name: 'response/runtime_stop-soft-not_running',
-    description: 'Soft stop result — runtime not live; directive not delivered.',
-    frame: enc({
-      id: 'req-stop-soft-nr',
-      result: {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'not_running',
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'runtime_stop' },
-  },
-  {
-    name: 'response/runtime_stop-soft-write_failed',
-    description: 'Soft stop result — stdin write failed mid-directive.',
-    frame: enc({
-      id: 'req-stop-soft-wf',
-      result: {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'write_failed',
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'runtime_stop' },
-  },
-  {
-    name: 'response/runtime_stop-soft-driver_refused',
-    description:
-      'Soft stop result — driver returned null encode (config / programming error).',
-    frame: enc({
-      id: 'req-stop-soft-dr',
-      result: {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'driver_refused',
-      },
     }),
     kind: { kind: 'response_success', intent: 'runtime_stop' },
   },
@@ -2168,7 +2104,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 8,
+      protocol_version: 9,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',
@@ -2568,6 +2504,19 @@ const EVENTS: WireFixture[] = [
       conversation_id: C,
       agent_id: A,
       parsed: { kind: 'compaction_finished' },
+      ts: TS,
+    }),
+    kind: { kind: 'event' },
+  },
+  {
+    name: 'event/runtime_parsed_event-input_lifecycle',
+    description:
+      'ParsedEvent fanout — per-payload input lifecycle echoed by the runtime (#task:1557).',
+    frame: enc({
+      event: 'runtime_parsed_event',
+      conversation_id: C,
+      agent_id: A,
+      parsed: { kind: 'input_lifecycle', commandUuid: 'uuid-42', state: 'started' },
       ts: TS,
     }),
     kind: { kind: 'event' },

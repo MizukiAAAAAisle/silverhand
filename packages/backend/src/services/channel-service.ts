@@ -486,7 +486,7 @@ export class ChannelService {
     if (input.archived) {
       this.runtimeHost.resolveConversationRuns(updated.id, 'conversation_closed');
       for (const ca of this.conversations.listAgents(updated.id)) {
-        void this.runtimeHost.stop(updated.id, ca.agent_id, 'hard').catch(err =>
+        void this.runtimeHost.stop(updated.id, ca.agent_id).catch(err =>
           this.logger.warn(
             { channelId: updated.id, agentId: ca.agent_id, err },
             'archive channel: runtime stop failed (continuing)',

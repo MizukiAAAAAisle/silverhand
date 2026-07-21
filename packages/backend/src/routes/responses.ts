@@ -311,6 +311,16 @@ export function conversationMessageServiceErrorResponse(
     );
   }
   if (err instanceof MessageFreshnessError) {
+    // Signal-only stale contract (thread MzSv_f1u0e0xbKmH, shiki seq 1205):
+    // the 409 carries pointer metadata only — NEVER message bodies, and
+    // deliberately NO unseen count: a count would have to be computed over
+    // the freshness universe (excluding exempt rows) — a second definition
+    // of the same universe that can only drift. seen/current is the
+    // authoritative delta. Bodies
+    // are released exactly once, through the normal inbox/admission face;
+    // the observed boundary advances via admission evidence, not via this
+    // response. The hint tells the agent what to do: wait for the queued
+    // normal input, then retry or resolve.
     return c.json(
       {
         error: {
@@ -320,9 +330,12 @@ export function conversationMessageServiceErrorResponse(
             subkind: err.code,
             conversation_id: err.conversationId,
             stale_event_id: err.staleEventId,
+            stream_key: err.threadRootId
+              ? `thread:${err.threadRootId}`
+              : 'main',
             seen_up_to_seq: err.seenUpToSeq,
             current_seq: err.currentSeq,
-            newer_messages: err.newerMessages,
+            hint: 'unseen messages are queued for normal delivery; they arrive as regular input (steer runtimes this turn, boundary runtimes next turn) — read them, then retry with --stale-resolution or drop via message stale-resolve',
           },
         },
       },

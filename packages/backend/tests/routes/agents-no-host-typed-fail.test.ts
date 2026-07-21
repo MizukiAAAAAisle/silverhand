@@ -149,7 +149,7 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       );
       expect(res.status).toBe(200);
       expect(t.fake.stops).toMatchObject([
-        { conversationId: channelId, agentId, mode: 'hard' },
+        { conversationId: channelId, agentId },
       ]);
     });
 
@@ -161,6 +161,43 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       }).post(`/api/channels/${channelId}/agents/${agentId}/stop`);
       expect(res.status).toBe(403);
       expect(t.fake.stops).toHaveLength(0);
+    });
+
+    it("stop rejects an explicit mode:'soft' body with 400 and zero stop calls (#task:1558 P1 — no silent soft→hard upgrade)", async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/stop`,
+        { mode: 'soft' },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: string };
+      expect(body.error).toContain('soft stop was removed');
+      expect(t.fake.stops).toHaveLength(0);
+    });
+
+    it('stop rejects a body carrying a directive with 400 and zero stop calls (#task:1558 P1)', async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/stop`,
+        { mode: 'hard', directive: 'please wrap up' },
+      );
+      expect(res.status).toBe(400);
+      expect(t.fake.stops).toHaveLength(0);
+    });
+
+    it("stop still accepts an explicit mode:'hard' body (#task:1558)", async () => {
+      t = buildTestApp();
+      const { channelId, agentId } = await createChannelWithAgent(t);
+      const res = await http(t).post(
+        `/api/channels/${channelId}/agents/${agentId}/stop`,
+        { mode: 'hard' },
+      );
+      expect(res.status).toBe(200);
+      expect(t.fake.stops).toMatchObject([
+        { conversationId: channelId, agentId },
+      ]);
     });
 
     it('start → host_attach_pending (503) when transport_no_connection fires after placement resolves', async () => {
@@ -401,7 +438,6 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       expect(body.stopped).toBe(1);
       expect(t.fake.stops).toHaveLength(1);
       expect(t.fake.stops[0]!.conversationId).toBe(channelId);
-      expect(t.fake.stops[0]!.mode).toBe('hard');
     });
   });
 

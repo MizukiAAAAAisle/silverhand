@@ -15,7 +15,7 @@ import {
  *
  * 1. **One-shot.** `cursor-agent --print` processes a single positional
  *    prompt then exits — there's no persistent stdin loop. Therefore
- *    `oneShot = true`, `busyDeliveryMode = 'none'`. ConversationManager
+ *    `oneShot = true`, `releaseProfile = 'one-shot'`. ConversationManager
  *    drains the inbox synchronously *before* spawn (into
  *    `spawnCtx.initialPrompt`) and respawns the process when more
  *    messages arrive.
@@ -30,7 +30,7 @@ export class CursorDriver implements Driver {
   readonly kind = 'cursor' as const;
   readonly binary = 'cursor-agent';
   readonly kickoffMode = 'self_inits' as const;
-  readonly busyDeliveryMode = 'none' as const;
+  readonly releaseProfile = 'one-shot' as const;
   readonly oneShot = true;
   readonly supportsNativeStandingPrompt = false;
   readonly initLivenessSilenceMs = 30 * 1000;

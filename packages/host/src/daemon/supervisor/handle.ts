@@ -109,6 +109,14 @@ export interface ActivitySnippetBuffer {
   text: string;
 }
 
+/** Bound for `RuntimeHandle.inputPayloadUuids` (#task:1557). Payloads
+ *  whose lifecycle never echoes back (non-claude runtimes, dropped
+ *  frames) would otherwise accumulate for the handle's lifetime. */
+export const INPUT_PAYLOAD_UUID_CAP = 200;
+
+/** Signal-only stale contract: the 409 exposes NO bodies, so it never
+ *  moves the observed cursor. The daemon only remembers the event id (to
+ *  correlate the agent's resolution) and the head it conflicted with. */
 export interface PendingStaleEvent {
   id: string;
   currentSeq: number;
@@ -154,6 +162,14 @@ export interface RuntimeHandle {
    *  writes. Each value is an {@link ObservedSeq}, minted at the daemon
    *  observation boundary (delivery admit / stale response / send commit). */
   observedSeqByStream: Map<string, ObservedSeq>;
+  /** Deferred watermark merges for the agent's own `--anyway` sends
+   *  (countgame P1): a bypass inserts seq S with the stream head at P
+   *  (everything freshness-relevant the sender skipped). S itself never
+   *  comes back through the inbox (sender excluded from fan-out), so once
+   *  observed >= P the own seq merges into the watermark — otherwise the
+   *  sender is permanently stale on its own head in a quiet stream.
+   *  In-memory, bounded, dropped with the handle. */
+  pendingBypassMergeByStream: Map<string, Array<{ prereq: number; ownSeq: number }>>;
   /** High-water seq, per stream, for a batch delivered mid-turn but not
    *  yet admitted as precedent context for a new model action. Flushed
    *  into `observedSeqByStream` at the next turn boundary. */
@@ -182,9 +198,51 @@ export interface RuntimeHandle {
    *  This covers the pre-first-output window where runState is still
    *  null but the model is already thinking. */
   inputTurnActive: boolean;
+  /** #task:1558 Commit B (`next-turn-batch`, docs/runtime-input-design.md
+   *  §3.4): set the moment a payload is written to the runtime, cleared
+   *  only by the parsed terminal `turn_end` (or runtime resolution).
+   *  Covers the write→first-activity gap where `inputTurnActive` alone
+   *  would let a second payload slip in as another future turn. */
+  nextTurnReserved: boolean;
+  /** Wall-clock ms when `nextTurnReserved` was last armed; null while not
+   *  reserved. Diagnostics only (§3.4 fail-closed follow-up): a lost
+   *  `turn_end` keeps the reservation — and the deferred queue — held
+   *  forever BY DESIGN (never write without a proven boundary); this
+   *  timestamp lets the defer path emit a stall diagnostic so an operator
+   *  can see the held state instead of silent starvation. */
+  nextTurnReservedAt: number | null;
+  /** One-shot latch so the stall diagnostic logs once per reservation,
+   *  not once per deferred delivery. Reset when the reservation clears. */
+  reservationStallWarned: boolean;
+  /** Pending stall-check timer (#task:1563 Cindy P1-1). Armed when an
+   *  entry defers under a held reservation so the diagnostic fires on
+   *  TIMEOUT — a non-empty queue with no further inflow must still get
+   *  its warn. Cleared on turn_end / re-arm / resolution / exit;
+   *  unref'd; fires at most the warn, never a write. */
+  reservationStallTimer: NodeJS.Timeout | null;
+  /** Monotonic count of parsed terminal `turn_end`s. Snapshot before a
+   *  stdin write and compare after: a write completion may only arm
+   *  `nextTurnReserved` if no terminal crossed the await window —
+   *  otherwise a fast runtime's already-finished turn would be
+   *  overwritten back into "reserved" and the queue held forever
+   *  (#1558 final-gate P1-1). */
+  turnEndCount: number;
   /** Most recent stale-send event returned to this runtime. Consumed by
    *  the next send or by `message stale-resolve`. */
   pendingStaleEvent: PendingStaleEvent | null;
+  /** #task:1557 Phase 1 instrument: payload uuid → the delivery ids that
+   *  payload carried, written at encode time and read/pruned when the
+   *  runtime echoes `command_lifecycle` frames (claude). Observation
+   *  only — never drives run-state or freshness in Phase 1. Bounded:
+   *  oldest entries are dropped past `INPUT_PAYLOAD_UUID_CAP`. */
+  inputPayloadUuids: Map<
+    string,
+    {
+      deliveryIds: number[];
+      coveredSeqByStream: Array<[string, number]>;
+      mintedAt: number;
+    }
+  >;
   /** Current execution phase. Updated in-place by Supervisor as
    *  the process moves through its lifecycle. */
   phase: RuntimePhase;
@@ -220,6 +278,15 @@ export interface RuntimeHandle {
    *  critical section as `startupDelivery` via `clearStartupGate`,
    *  so the `(null, true)` interleaving is impossible. */
   startupAwaitingInit: boolean;
+  /** In-flight latch for `consumeStartupDelivery` (#task:1563). The
+   *  consume awaits `writeStdinPayload`, and `dispatchParsedLine` runs
+   *  synchronously OUTSIDE the lifecycle lock — a `session_init` parsed
+   *  during that await window used to re-enter the consume via
+   *  `tryConsumeStartupDelivery` (gate still non-null, awaitingInit not
+   *  yet set) and write the SAME batch to stdin twice → duplicate
+   *  exposure + double consumed. Set for the duration of one consume
+   *  attempt; re-entries no-op while it holds. */
+  startupConsumeInFlight: boolean;
   /** Whether `runtime_ready_for_drain` has been emitted for this run.
    *  Step-0 mutex (Cindy): we emit at most one per (conv,agent,run);
    *  re-spawn resets via a fresh handle. */
@@ -229,7 +296,7 @@ export interface RuntimeHandle {
    *  3c init-watchdog cancellation. */
   initObserved: boolean;
   /** Cached cli session id from the latest `session_init`. Backend
-   *  re-uses it on resume; daemon holds it so delivery/soft-stop can
+   *  re-uses it on resume; daemon holds it so delivery can
    *  surface its presence (3c gating). */
   cliSessionId: string | null;
   /** Residue from line-splitting stdout chunks. The daemon hands

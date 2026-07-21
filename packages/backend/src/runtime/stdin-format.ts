@@ -1,7 +1,7 @@
 /**
  * Stdin-message formatters used by every (conv, agent) delivery path —
- * live deliveries, inbox drain at spawn, gated/combined batches, and the
- * soft-stop directive. Lifted out of the (now-removed)
+ * live deliveries, inbox drain at spawn, and gated/combined batches.
+ * Lifted out of the (now-removed)
  * `conversation-manager.ts` during the daemon cutover so both runtime
  * paths used byte-identical wire format. The legacy CM runtime was
  * deleted in #task:512 cleanup Commit B; these formatters are now the

@@ -135,6 +135,9 @@ export function registerMessageRoutes(
         message_id: result.message.id,
         message_seq: result.message.seq,
         thread_root_id: result.message.thread_root_id,
+        ...(result.streamHeadBeforeSend !== undefined
+          ? { stream_head_before: result.streamHeadBeforeSend }
+          : {}),
       });
     } catch (err) {
       const mapped = conversationMessageServiceErrorResponse(c, err);

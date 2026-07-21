@@ -104,6 +104,12 @@ export const AgentSendMessageOutputSchema = z.object({
    *  uses it to learn the reply-target stream of the new message and of
    *  the message it replied to. */
   thread_root_id: z.string().nullable(),
+  /** Present only on `freshness_bypass` sends: the stream head just
+   *  before this message was inserted. The daemon merges the sender's
+   *  own seq into its observed watermark once real admission evidence
+   *  covers this value — without it, a bypass in a quiet stream leaves
+   *  the sender permanently stale on its own head. */
+  stream_head_before: z.number().int().nonnegative().optional(),
 });
 export type AgentSendMessageOutput = z.infer<typeof AgentSendMessageOutputSchema>;
 

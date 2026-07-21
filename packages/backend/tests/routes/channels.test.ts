@@ -285,7 +285,6 @@ describe('workspace metadata and membership routes', () => {
       channelIds.map(channelId => ({
         conversationId: channelId,
         agentId,
-        mode: 'hard',
       })),
     ));
     for (const channelId of channelIds) {

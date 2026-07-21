@@ -589,6 +589,25 @@ export class RuntimeEventHandler {
         });
         return;
       case 'runtime_parsed_event':
+        // #task:1557 Phase 1: `input_lifecycle` is a diagnostics-only
+        // signal — record a sanitized structured log and STOP. It must
+        // not reach the `agent_event` SSE (renderer Events panel /
+        // agent-event listeners), conversation activity, or any
+        // business callback below.
+        if (frame.parsed.kind === 'input_lifecycle') {
+          this.logger.info(
+            {
+              kind: 'runtime',
+              action: 'input_lifecycle',
+              conversationId: frame.conversation_id,
+              agentId: frame.agent_id,
+              state: frame.parsed.state,
+              command_uuid: frame.parsed.commandUuid,
+            },
+            'runtime input lifecycle (diagnostics only)',
+          );
+          return;
+        }
         // Project to the historical `agent_event` SSE shape so the
         // renderer's Events panel and the agent-event listeners can't
         // tell which runtime produced the publish. MUST run

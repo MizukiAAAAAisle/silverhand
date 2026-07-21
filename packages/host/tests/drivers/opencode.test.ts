@@ -62,7 +62,7 @@ describe('OpenCodeDriver static config', () => {
     const d = new OpenCodeDriver();
     expect(d.kind).toBe('opencode');
     expect(d.binary).toBe('opencode');
-    expect(d.busyDeliveryMode).toBe('gated');
+    expect(d.releaseProfile).toBe('prompt-boundary');
     expect(d.oneShot).toBe(false);
     expect(d.supportsNativeStandingPrompt).toBe(true);
   });
@@ -271,6 +271,102 @@ describe('OpenCodeDriver ACP handshake', () => {
           }),
         ),
       ).toEqual([{ kind: 'session_init', sessionId: 'ses_existing' }]);
+      expect(d.readyToEncode()).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('OpenCodeDriver prompt-boundary contract (#task:1565, probed on opencode 1.18.1)', () => {
+  // Live-protocol probe findings that make these falsifiers load-bearing:
+  //  - opencode ACCEPTS a second session/prompt while one is active (no
+  //    error), queues it FIFO, but then HOLDS BOTH RPC responses until the
+  //    whole queued run completes (both settled in the same instant with
+  //    merged usage). Under runtime-side queuing, "prompt response" stops
+  //    being a per-turn boundary — so the client-side single-in-flight
+  //    rule is a CORRECTNESS invariant, not politeness.
+  //  - session/cancel settles the active prompt's response with
+  //    stopReason:'cancelled' (a result, not an error), and the session
+  //    accepts new prompts afterward — no wedge.
+  async function readyDriver(): Promise<{
+    d: OpenCodeDriver;
+    io: CapturedIO;
+    cleanup: () => void;
+  }> {
+    const { ctx, cleanup } = makeSpawnCtx();
+    const d = new OpenCodeDriver();
+    const io = makeIO(ctx);
+    d.bindIO(io);
+    await tick();
+    d.parseLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }));
+    d.parseLine(
+      JSON.stringify({ jsonrpc: '2.0', id: 2, result: { sessionId: 'ses_1' } }),
+    );
+    d.parseLine(
+      JSON.stringify({ jsonrpc: '2.0', id: 3, result: { configOptions: [] } }),
+    );
+    return { d, io, cleanup };
+  }
+
+  it('single-in-flight falsifier: encode while a prompt is active returns null — a second live prompt would collapse response granularity (probed)', async () => {
+    const { d, cleanup } = await readyDriver();
+    try {
+      const first = d.encodeStdinMessage('prompt A', null);
+      expect(first).not.toBeNull();
+      // Boundary closed: the daemon MUST NOT be able to mint a second
+      // in-flight prompt; deliveries defer instead.
+      expect(d.readyToEncode()).toBe(false);
+      expect(d.encodeStdinMessage('prompt B', null)).toBeNull();
+      // Response settles the boundary; encode works again.
+      d.parseLine(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: JSON.parse(first!).id,
+          result: { stopReason: 'end_turn' },
+        }),
+      );
+      expect(d.readyToEncode()).toBe(true);
+      expect(d.encodeStdinMessage('prompt B', null)).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('a cancelled prompt still settles the boundary: stopReason=cancelled result → turn_end, ready again (no wedge)', async () => {
+    const { d, cleanup } = await readyDriver();
+    try {
+      const first = d.encodeStdinMessage('long task', null);
+      const events = d.parseLine(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: JSON.parse(first!).id,
+          result: {
+            stopReason: 'cancelled',
+            usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          },
+        }),
+      );
+      expect(events).toEqual([{ kind: 'turn_end', sessionId: 'ses_1' }]);
+      expect(d.readyToEncode()).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('an error response to the active prompt settles the boundary too: error event + turn_end', async () => {
+    const { d, cleanup } = await readyDriver();
+    try {
+      const first = d.encodeStdinMessage('task', null);
+      const events = d.parseLine(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: JSON.parse(first!).id,
+          error: { code: -32000, message: 'model backend unavailable' },
+        }),
+      );
+      expect(events.some(e => e.kind === 'error')).toBe(true);
+      expect(events.some(e => e.kind === 'turn_end')).toBe(true);
       expect(d.readyToEncode()).toBe(true);
     } finally {
       cleanup();

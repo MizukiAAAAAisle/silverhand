@@ -109,18 +109,23 @@ import type { RunStateCache, RuntimePhase } from './run-state-cache.js';
  * import the full `Driver` interface here — the coordinator only needs
  * these fields, and narrowing the type makes the test seam smaller.
  *
- * Source: `Driver.busyDeliveryMode` + `Driver.oneShot` + `Driver.kickoffMode`
+ * Source: `Driver.releaseProfile` + `Driver.oneShot` + `Driver.kickoffMode`
  * from `@silverhand/host/drivers`.
  */
 export interface DriverDeliveryView {
   /** Runtime label used only for user-visible stuck-watchdog copy.
-   *  Optional so tests can keep small fixtures; gated drivers default
-   *  to `claude`, direct drivers to `runtime`. */
+   *  Optional so tests can keep small fixtures; boundary-releasing
+   *  profiles default to `claude`, immediate ones to `runtime`. */
   runtime?: string;
-  /** `gated` (Claude — only at safe boundaries), `direct` (Codex —
-   *  push immediately), or `none` (Cursor / oneShot — never push, must
-   *  respawn). */
-  busyDeliveryMode: 'gated' | 'direct' | 'none';
+  /** Release profile (docs/runtime-input-design.md §3.2). The
+   *  coordinator only uses it for the cosmetic watchdog label
+   *  fallback; release scheduling is daemon-owned. */
+  releaseProfile:
+    | 'native-steer'
+    | 'tool-boundary-steer'
+    | 'next-turn-batch'
+    | 'prompt-boundary'
+    | 'one-shot';
   /** True if the runtime exits after a single turn (cursor). */
   oneShot: boolean;
   /** `requires_first_message` (claude — `system.init` only fires once
@@ -221,7 +226,7 @@ export interface LiveDeliveryRequest {
  * `rollbackInFlightForOwner` (paired with the daemon's owner-scoped
  * `cleanupDeferredForOwner`).
  *
- * The coordinator no longer short-circuits oneShot (`busyDeliveryMode
+ * The coordinator no longer short-circuits oneShot (`releaseProfile
  * === 'none'`) locally: after Stage 2b removed the cache lifecycle
  * projection the coordinator has NO live proof, so a oneShot batch is
  * dispatched like any non-gated driver and the daemon decides —
@@ -930,7 +935,11 @@ function maxDeliveredUpToSeq(
 
 function waitingSnippet(driver: DriverDeliveryView, thresholdMs: number): string {
   const seconds = Math.max(1, Math.round(thresholdMs / 1000));
-  const runtime = driver.runtime ?? (driver.busyDeliveryMode === 'gated' ? 'claude' : 'runtime');
+  const runtime =
+    driver.runtime ??
+    (driver.releaseProfile === 'native-steer' || driver.releaseProfile === 'one-shot'
+      ? 'runtime'
+      : 'claude');
   return `Waiting for ${runtime} response (${seconds}s+)`;
 }
 

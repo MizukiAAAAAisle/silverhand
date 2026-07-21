@@ -1131,20 +1131,10 @@ export function useStopAgent(
   channelId: string | null,
 ) {
   return useMutation({
-    mutationFn: async (params: {
-      agentId: string;
-      mode?: 'soft' | 'hard';
-      directive?: string;
-      }) => {
+    mutationFn: async (params: { agentId: string }) => {
       if (!channelId) throw new Error('no channel selected');
       const path = apiPaths.channelAgentStop(channelId, params.agentId);
-      await api(path, {
-        method: 'POST',
-        body: JSON.stringify({
-          mode: params.mode ?? 'hard',
-          ...(params.directive ? { directive: params.directive } : {}),
-        }),
-      });
+      await api(path, { method: 'POST' });
     },
   });
 }

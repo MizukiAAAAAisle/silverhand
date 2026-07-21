@@ -12,13 +12,13 @@ import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { AttachmentService } from './attachment-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { assertActorConversationMatch } from '../auth/principal.js';
 import {
   POLICIES,
   REPLIED,
-  STALE_MESSAGE_LIMIT,
   ConversationError,
   TargetError,
   PolicyError,
@@ -99,6 +99,7 @@ export class ConversationMessageService {
   private readonly logger: BackendLogger;
   private readonly threadFollow: ThreadFollowManager;
   private readonly delivery: MessageDeliveryCoordinator;
+  private readonly conversationInboxes: ConversationInboxRepo;
 
   constructor(opts: ConversationMessageServiceOptions) {
     this.db = opts.db;
@@ -109,6 +110,7 @@ export class ConversationMessageService {
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
+    this.conversationInboxes = opts.conversationInboxes;
     this.threadFollow = new ThreadFollowManager({
       db: opts.db,
       conversations: opts.conversations,
@@ -178,6 +180,14 @@ export class ConversationMessageService {
         this.assertStreamKeyConsistent(input, threadRootId);
         const attachmentRefs = input.attachmentRefs ?? [];
         const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentRefs);
+        // Merge prerequisite for a bypass send (countgame P1): the head at
+        // insert time is exactly "everything freshness-relevant the sender
+        // skipped past". The daemon merges the sender's own seq into its
+        // watermark once observed covers this value.
+        const streamHeadBeforeSend =
+          input.actor.kind === 'agent' && input.freshnessBypass
+            ? this.messages.streamHeadLatestSeq(targetConversation.id, threadRootId)
+            : null;
         const { message, skippedFreshnessReason } =
           this.insertMessageWithFreshnessIfApplicable({
             input,
@@ -241,18 +251,37 @@ export class ConversationMessageService {
               : [],
           threadDelivery,
           skippedFreshnessReason,
+          streamHeadBeforeSend,
           projections,
         };
       })();
     } catch (err) {
       if (err instanceof MessageFreshnessGuardError) {
         const staleEventId = randomUUID();
-        const newerMessages = this.messages.listAfterSeqInStream(
-          err.conversationId,
-          err.threadRootId,
-          err.seenUpToSeq,
-          STALE_MESSAGE_LIMIT,
-        );
+        // Signal-only stale contract (thread MzSv_f1u0e0xbKmH, shiki
+        // seq 1205): the 409 carries NO message bodies — bodies are
+        // released exactly once, through the normal inbox/admission face.
+        // The agent waits for its queued input (steer = this turn,
+        // next-turn-batch = the next boundary), observed advances via
+        // admission evidence, then it retries/resolves.
+        //
+        // Diff-set guarantee for that wait (contract 3): a thread send by
+        // a non-follower is CAS-rejected while the prior replies have no
+        // inbox rows yet (follow/backfill only runs on the successful
+        // retry). Materialize the SAME observe deliveries the backfill
+        // would create — idempotent with it — so the signal always has a
+        // normal delivery to wait for. Main-line windows already have
+        // deliveries (fan-out) or are the agent's own/system rows handled
+        // by the universe-alignment rules.
+        if (input.actor.kind === 'agent') {
+          this.materializeAndDispatchThreadWindow({
+            agentId: input.actor.agentId,
+            conversationId: err.conversationId,
+            threadRootId: err.threadRootId,
+            seenUpToSeq: err.seenUpToSeq,
+            currentSeq: err.currentSeq,
+          });
+        }
         this.logger.warn(
           {
             staleEventId,
@@ -261,7 +290,6 @@ export class ConversationMessageService {
             actorId: input.actor.kind === 'agent' ? input.actor.agentId : input.actor.userId,
             seenUpToSeq: err.seenUpToSeq,
             currentSeq: err.currentSeq,
-            newerMessageCount: newerMessages.length,
             priorStaleEventId: input.staleEventId ?? null,
             priorStaleResolutionReason: input.staleResolutionReason ?? null,
           },
@@ -271,7 +299,6 @@ export class ConversationMessageService {
           err.conversationId,
           err.seenUpToSeq,
           err.currentSeq,
-          newerMessages,
           staleEventId,
           err.threadRootId,
         );
@@ -422,6 +449,9 @@ export class ConversationMessageService {
     return {
       message: txResult.message,
       targetConversationId: txResult.targetConversation.id,
+      ...(txResult.streamHeadBeforeSend !== null
+        ? { streamHeadBeforeSend: txResult.streamHeadBeforeSend }
+        : {}),
     };
   }
 
@@ -568,6 +598,69 @@ export class ConversationMessageService {
       `stream_key assertion ${input.assertedStreamKey} does not match `
         + `resolved stream ${canonical}`,
     );
+  }
+
+  /**
+   * Signal-only stale support (contract 3): for a THREAD stream, ensure
+   * each non-own window message has the same `observe` delivery a later
+   * auto-follow backfill would create (idempotent with it —
+   * `ensureDelivery` hits the same row), then TRIGGER live delivery so
+   * the rows actually move — a mid-turn agent has no future
+   * ready_for_drain guarantee, so a bare pending row could sit forever
+   * (Cindy C1-gate P1-1). Main-line fan-out already creates deliveries at
+   * send time; own messages advance observed at send commit.
+   *
+   * Custody creation FAILS CLOSED (Cindy C1-gate P1-2): if the rows
+   * cannot be materialized, the error propagates and NO message_stale
+   * signal is returned — a signal that tells the agent to wait for a
+   * delivery that does not exist would be a fabricated promise. The
+   * dispatch leg stays best-effort: once the durable rows exist, the
+   * normal delivery machinery (reattach replay, next drain) owns
+   * recovery, exactly as for any other pending row.
+   */
+  private materializeAndDispatchThreadWindow(args: {
+    agentId: string;
+    conversationId: string;
+    threadRootId: string | null;
+    seenUpToSeq: number;
+    currentSeq: number;
+  }): void {
+    if (args.threadRootId === null) return;
+    const materialized = this.db.transaction(() => {
+      const window = this.messages.listStreamWindowMeta(
+        args.conversationId,
+        args.threadRootId,
+        args.seenUpToSeq,
+        args.currentSeq,
+      );
+      let count = 0;
+      for (const msg of window) {
+        const own =
+          msg.from_kind === 'agent' && msg.from_agent_id === args.agentId;
+        if (own) continue;
+        this.conversationInboxes.ensureDelivery(
+          args.conversationId,
+          args.agentId,
+          msg.id,
+          'observe',
+        );
+        count += 1;
+      }
+      return count;
+    })();
+    if (materialized === 0) return;
+    void this.runtimeHost
+      .deliverPending(args.conversationId, args.agentId)
+      .catch(err => {
+        this.logger.warn(
+          {
+            conversationId: args.conversationId,
+            agentId: args.agentId,
+            error_message: (err as Error).message,
+          },
+          'conversation-message-service: thread window dispatch failed; rows stay pending for the normal drain',
+        );
+      });
   }
 
   private logStaleResolution(args: {

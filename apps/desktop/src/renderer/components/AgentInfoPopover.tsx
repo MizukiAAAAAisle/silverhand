@@ -337,7 +337,7 @@ function AgentManagementActions({
   };
   const restart = async (): Promise<void> => {
     if (pending) return;
-    await stop.mutateAsync({ agentId: agent.id, mode: 'hard' });
+    await stop.mutateAsync({ agentId: agent.id });
     try {
       await start.mutateAsync(agent.id);
     } catch {
@@ -346,7 +346,7 @@ function AgentManagementActions({
   };
   const stopAgent = (): void => {
     if (pending) return;
-    stop.mutate({ agentId: agent.id, mode: 'hard' });
+    stop.mutate({ agentId: agent.id });
   };
   const clear = async (): Promise<void> => {
     await clearSession.mutateAsync(agent.id);

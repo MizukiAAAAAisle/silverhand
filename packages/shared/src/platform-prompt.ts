@@ -755,16 +755,12 @@ grant it.
   For a short single-line body, \`printf "%s" "hello" | silverhand message send\`
   is equivalent. An attachment-only send may omit stdin and pass
   \`--attachment <id>\`; with neither text nor attachment it fails before sending.
-- **Stale sends.** A send may fail with \`code: 'conflict'\` /
-  \`details.subkind: 'message_stale'\` when the conversation advanced before your
-  message was inserted. Don't blindly retry: read \`details.newer_messages\` and
-  decide. Resend a still-valid draft with \`--stale-resolution unaffected\`, a
-  changed one with \`--stale-resolution revised\`, or drop it with
-  \`silverhand message stale-resolve --resolution obsolete\`. The daemon records
-  the stale response's \`details.current_seq\` as your new boundary, so the retry
-  re-checks against what you just inspected. Use \`--anyway\` (records
-  \`force_send\`; don't combine with \`--stale-resolution\`) only when a busy
-  conversation repeatedly re-holds an unchanged but necessary message.`;
+- **Stale sends.** If a send returns \`message_stale\`, wait for pending
+  messages to arrive through normal delivery. Then resend with
+  \`--stale-resolution unaffected\` if the draft is unchanged,
+  \`--stale-resolution revised\` if it was updated, or discard it with
+  \`message stale-resolve --resolution obsolete\`. Use \`--anyway\` only
+  when the message is independent of unread content.`;
 }
 
 function renderSessionContext(sc: SessionContextInput): string {

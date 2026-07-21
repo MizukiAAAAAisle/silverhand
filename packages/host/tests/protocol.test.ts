@@ -583,63 +583,33 @@ describe('protocol — runtime_* events', () => {
   });
 });
 
-describe('protocol — runtime_stop step 2 shape (Cindy `vqDWkLFF6pAeIE5t`)', () => {
-  it('soft mode requires soft_directive', () => {
-    const ok = RuntimeStopParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'soft',
-      soft_directive: 'please stop',
-    });
-    expect(ok.success).toBe(true);
-
-    const missing = RuntimeStopParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'soft',
-    });
-    expect(missing.success).toBe(false);
-  });
-
-  it('hard mode rejects soft_directive (would-be misuse caught at the wire)', () => {
+describe('protocol — runtime_stop shape (hard-only since #task:1558)', () => {
+  it('accepts the hard-stop params shape', () => {
     const ok = RuntimeStopParamsSchema.safeParse({
       conversation_id: 'c1',
       agent_id: 'a1',
       mode: 'hard',
     });
     expect(ok.success).toBe(true);
-
-    const conflated = RuntimeStopParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'hard',
-      soft_directive: 'whatever',
-    });
-    expect(conflated.success).toBe(false);
   });
 
-  it('soft_directive empty string fails .min(1) (Option A v2 — Cindy `wYjG20JdGjLpwq8K`)', () => {
-    // Option A v2: soft_directive is now unencoded text, not stream-json
-    // bytes. Empty string is a caller bug (backend always synthesizes
-    // non-empty directive phrasing) — fail at schema validation, not
-    // at stdin encode.
-    const r = RuntimeStopParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'soft',
-      soft_directive: '',
-    });
-    expect(r.success).toBe(false);
-  });
-
-  it('soft_directive explicit undefined fails the same as missing', () => {
-    const r = RuntimeStopParamsSchema.safeParse({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'soft',
-      soft_directive: undefined,
-    });
-    expect(r.success).toBe(false);
+  it("rejects the retired mode:'soft' arm and soft_directive field", () => {
+    expect(
+      RuntimeStopParamsSchema.safeParse({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'soft',
+        soft_directive: 'please stop',
+      }).success,
+    ).toBe(false);
+    expect(
+      RuntimeStopParamsSchema.safeParse({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+        soft_directive: 'whatever',
+      }).success,
+    ).toBe(false);
   });
 
   it('hard result shape: { mode:"hard", stopped, exit_code }', () => {
@@ -657,8 +627,7 @@ describe('protocol — runtime_stop step 2 shape (Cindy `vqDWkLFF6pAeIE5t`)', ()
         exit_code: null,
       }).success,
     ).toBe(true);
-    // Flat shape that conflated the two modes used to parse;
-    // discriminated union forces the `mode` discriminator.
+    // The `mode` literal stays required on the wire.
     expect(
       RuntimeStopResultSchema.safeParse({
         stopped: true,
@@ -667,70 +636,13 @@ describe('protocol — runtime_stop step 2 shape (Cindy `vqDWkLFF6pAeIE5t`)', ()
     ).toBe(false);
   });
 
-  it('soft result shape: { mode:"soft", directive_delivered, reason? }', () => {
+  it('rejects the retired soft result variant', () => {
     expect(
       RuntimeStopResultSchema.safeParse({
         mode: 'soft',
         directive_delivered: true,
       }).success,
-    ).toBe(true);
-    expect(
-      RuntimeStopResultSchema.safeParse({
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'write_failed',
-      }).success,
-    ).toBe(true);
-    // Unknown reason rejected.
-    expect(
-      RuntimeStopResultSchema.safeParse({
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'oops',
-      }).success,
     ).toBe(false);
-    // Cross-mode field leakage rejected.
-    expect(
-      RuntimeStopResultSchema.safeParse({
-        mode: 'soft',
-        directive_delivered: true,
-        exit_code: 137,
-      }).success,
-    ).toBe(false);
-  });
-
-  it('soft result superRefine — directive_delivered=false REQUIRES a typed reason (Cindy `eMcEhycw8fQwucis`)', () => {
-    // Without the refinement a bare `optional()` would let this parse,
-    // letting backend silently emit `delivered:false` with no diagnostic
-    // hint — which is exactly the soft-stop misuse we tightened the
-    // result shape to prevent.
-    const missing = RuntimeStopResultSchema.safeParse({
-      mode: 'soft',
-      directive_delivered: false,
-    });
-    expect(missing.success).toBe(false);
-
-    // All three reason enum values must satisfy the refinement.
-    for (const reason of ['not_running', 'write_failed', 'driver_refused'] as const) {
-      const ok = RuntimeStopResultSchema.safeParse({
-        mode: 'soft',
-        directive_delivered: false,
-        reason,
-      });
-      expect(ok.success, `reason ${reason}`).toBe(true);
-    }
-  });
-
-  it('soft result superRefine — directive_delivered=true FORBIDS a reason (Cindy `eMcEhycw8fQwucis`)', () => {
-    // Pairing the success flag with a failure reason is incoherent —
-    // backend would have to decide which one to trust. The refinement
-    // makes that combination unrepresentable on the wire.
-    const conflicted = RuntimeStopResultSchema.safeParse({
-      mode: 'soft',
-      directive_delivered: true,
-      reason: 'write_failed',
-    });
-    expect(conflicted.success).toBe(false);
   });
 });
 

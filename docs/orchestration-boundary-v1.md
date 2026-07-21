@@ -99,8 +99,7 @@ Server owns and is the only writer of:
   bytes; those bytes are not server inputs. Server
   owns hydration; the **driver-specific stdin encoding** is
   daemon-side (`packages/host/src/protocol.ts:300-310` + `:387-417`).
-  Same rule for the `runtime_deliver.text` delivery batch and
-  `soft_directive` on `runtime_stop`.
+  Same rule for the `runtime_deliver.text` delivery batch.
 - Inbox row writes (`ensureDelivery`, `listPending`, `markDelivered`)
   — daemon never opens the inbox repo.
 - **Activity log JSONL persistence** (`runtime/activity-log-writer.ts`):
@@ -258,7 +257,7 @@ daemon, no reply — server fans out via the activity log / renderer event bus.
 | Intent | Request params | Response arms |
 |--------|----------------|---------------|
 | `runtime_start` | `{ conversation_id, agent_id, options }` where `options` carries typed server metadata: `agent: { id, name, home_dir }`, `workspace: { id, name, kind, path }`, `workspace_memory_index[]`, `session: { conversation_id, kind, title, parent_conversation_id?, parent_title?, spawned_by_agent_id?, members[] }`, `driver: { kind, cli_session_id?, model?, reasoning_effort?, fast_mode? }`, and `env_policy` (§4.3). `runtime_start` is a message-less lifecycle command only — it carries no inbox rows and no delivery semantics; message delivery (including spawn-with-batch) goes through `runtime_deliver`. See `daemon-authoritative-delivery-v1.md` §10.2.1. | discriminated by `started`: `{ started: true, pid, started_at }` / `{ started: false, reason: 'init_cooldown', cooldown_until }`. Success means only "the daemon has/created the handle" — not ready, deliverable, or safe-boundary. |
-| `runtime_stop` | `{ conversation_id, agent_id, mode: 'soft' \| 'hard', soft_directive? }`: `soft_directive` is **required** when `mode === 'soft'` (unencoded text, daemon encodes), **forbidden** when `mode === 'hard'` | discriminated by `mode`: `hard: { mode: 'hard', stopped, exit_code: number \| null }` (`exit_code` required-nullable — real value may ride on `runtime_exit` event when SIGTERM cascade still pending) / `soft: { mode: 'soft', directive_delivered, reason? in ['not_running' \| 'write_failed' \| 'driver_refused'] }` where `reason` is **required iff `directive_delivered === false`** and **forbidden iff `=== true`**. **`directive_delivered === false` does NOT mean stopped** — soft never terminates the runtime. |
+| `runtime_stop` | `{ conversation_id, agent_id, mode: 'hard' }` (`mode` is a wire literal; the former `mode:'soft'` stdin-directive arm was deleted in #task:1558 — no product entry point) | `{ mode: 'hard', stopped, exit_code: number \| null }` (`exit_code` required-nullable — real value may ride on `runtime_exit` event when SIGTERM cascade still pending) |
 | `runtime_clear_session` | `{ conversation_id, agent_id }` | `{ cleared: boolean }` |
 | `runtime_deliver` | `{ conversation_id, agent_id, delivery_ids[], delivered_up_to_seq?, deliveries?, kind: 'message' \| 'schedule_fire', text, spawn_options }` where `text` is the server-hydrated *unencoded* delivery text (the daemon's driver instance encodes via `encodeStdinMessage(text, cliSessionId)` before writing stdin) and `spawn_options` is consulted **only** if the daemon must spawn. The sole message-delivery command; the daemon inspects the real handle and picks spawn / write / enqueue / refuse. | a synchronous **custody disposition**, NOT a delivery ack: `{ disposition: 'spawning', pid, started_at }` / `{ disposition: 'admitted', pid, started_at }` / `{ disposition: 'deferred', pid, started_at }` / `{ disposition: 'refused', reason: 'startup_pending' \| 'draining' \| 'cooldown' (+ cooldown_until on cooldown) }`. "Sent to daemon" ≠ ack: rows stay in-flight (owner=connection) on `spawning`/`admitted`/`deferred`; `refused` rolls the batch back to pending (retriable). `delivered_at` moves **only** on the async `runtime_delivery_consumed` event. Full mechanism owned by `daemon-authoritative-delivery-v1.md` §10–§11. |
 | `runtime_status` | `{ conversation_id?, agent_id? }` (both optional) | `{ runtimes: RuntimeStateDto[] }` — cache snapshot constrained by filter; empty filter = full snapshot known to this daemon. Filter is a narrowing operator, not a topology key; host placement is decided server-side before the call. |
@@ -444,10 +443,9 @@ returns that cache path. Embedded mode may keep the current
 local-path-resolution shortcut as an optimization, but the contract
 the agent sees is "a local path readable by its normal file tools".
 
-### 4.5 Delivery bundle (per `runtime_deliver` / per soft_directive)
+### 4.5 Delivery bundle (per `runtime_deliver`)
 
-`runtime_deliver` / `runtime_stop.soft_directive`
-all carry an unencoded delivery text bundle. **Boundary lock**:
+`runtime_deliver` carries an unencoded delivery text bundle. **Boundary lock**:
 server hydrates the text from DB rows; the daemon's
 in-process driver instance — which holds authoritative driver state
 (cli_session_id, codex thread state, readiness) — does the
@@ -458,8 +456,7 @@ and writes to stdin. Backend MUST NOT pre-encode (see
 Server-side hydration produces (and ships in `text`):
 
 - `delivery_ids[]` — inbox row ids covered by this batch. The
-  all-or-nothing markDelivered rule applies to `runtime_deliver`
-  (`soft_directive` is a single non-inbox directive).
+  all-or-nothing markDelivered rule applies to `runtime_deliver`.
 - `text` — the unencoded per-delivery text. Server-side helpers today:
   `formatInboxBatch` (multi-row batched drain),
   `formatLiveMessage` (single live delivery), plus

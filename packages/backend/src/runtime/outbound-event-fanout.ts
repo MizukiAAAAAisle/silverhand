@@ -41,7 +41,6 @@ import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import {
   CLEAR_SESSION_EXIT_TIMEOUT_MS,
   ClearSessionInProgressError,
-  DEFAULT_SOFT_DIRECTIVE,
   type ClearSessionResult,
   type ReapIdleRuntimesOptions,
   type ReapIdleRuntimesResult,
@@ -416,33 +415,11 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    * D4.b-4: dispatch `runtime_stop` over the outbound WS. The
    * standalone backend owns the projection of the resulting
    * `runtime_exit` event (`RuntimeStatusProjector.runtimeExit`).
-   *
-   * Per `RuntimeStopParamsSchema`'s `superRefine`:
-   *   - `mode='hard'` MUST omit `soft_directive`.
-   *   - `mode='soft'` REQUIRES a `soft_directive`. When the caller
-   *     doesn't pass one we substitute `DEFAULT_SOFT_DIRECTIVE`,
-   *     mirroring the single outbound runtime-host contract so every
-   *     attached daemon transport lands the same default phrasing on the wire.
-   *     Sending soft
-   *     without a directive would otherwise hit
-   *     `daemon → runtime_stop_params_invalid` and fail the user.
    */
-  async stop(
-    conversationId: string,
-    agentId: string,
-    mode: 'soft' | 'hard',
-    softDirective?: string,
-  ): Promise<void> {
+  async stop(conversationId: string, agentId: string): Promise<void> {
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_stop');
-    await this.dispatchStop(
-      hostId,
-      connectionId,
-      conversationId,
-      agentId,
-      mode,
-      softDirective,
-    );
+    await this.dispatchStop(hostId, connectionId, conversationId, agentId);
   }
 
   private async dispatchStop(
@@ -450,22 +427,12 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     expectedConnectionId: string,
     conversationId: string,
     agentId: string,
-    mode: 'soft' | 'hard',
-    softDirective?: string,
   ): Promise<void> {
-    const params: RuntimeStopParams =
-      mode === 'soft'
-        ? {
-            conversation_id: conversationId,
-            agent_id: agentId,
-            mode,
-            soft_directive: softDirective ?? DEFAULT_SOFT_DIRECTIVE,
-          }
-        : {
-            conversation_id: conversationId,
-            agent_id: agentId,
-            mode,
-          };
+    const params: RuntimeStopParams = {
+      conversation_id: conversationId,
+      agent_id: agentId,
+      mode: 'hard',
+    };
     await this.requireTransport().sendCommand(hostId, 'runtime_stop', params, {
       expectedConnectionId,
     });
@@ -534,7 +501,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
             selectedConnectionId,
             entry.conversationId,
             entry.agentId,
-            'hard',
           );
           result.reaped++;
         } catch (err) {
@@ -761,6 +727,13 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           kind: 'message',
           payload: { message: auditMessage },
         });
+        // Universe alignment (design doc §5.2): the cleared agent needs
+        // the audit row too — without one, its observed cursor could
+        // never pass this head-bump under the signal-only stale contract
+        // (its old session died; nothing else delivers this row). Row
+        // only, NO dispatch: the fresh session drains it at next spawn —
+        // clearing a session must not auto-respawn the runtime.
+        this.inboxRepo.ensureDelivery(conversationId, agentId, auditMessage.id);
         for (const ca of this.conversations.listAgents(conversationId)) {
           if (ca.agent_id === agentId) continue;
           await this.deliverMessage(
@@ -918,7 +891,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           driver: {
             runtime: batch.agentRuntime,
             oneShot: batch.driver.oneShot,
-            busyDeliveryMode: batch.driver.busyDeliveryMode,
+            releaseProfile: batch.driver.releaseProfile,
             kickoffMode: batch.driver.kickoffMode,
           },
         },
@@ -1628,7 +1601,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           driver: {
             runtime: batch.agentRuntime,
             oneShot: batch.driver.oneShot,
-            busyDeliveryMode: batch.driver.busyDeliveryMode,
+            releaseProfile: batch.driver.releaseProfile,
             kickoffMode: batch.driver.kickoffMode,
           },
         }],
@@ -1692,7 +1665,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           driver: {
             runtime: batch.agentRuntime,
             oneShot: batch.driver.oneShot,
-            busyDeliveryMode: batch.driver.busyDeliveryMode,
+            releaseProfile: batch.driver.releaseProfile,
             kickoffMode: batch.driver.kickoffMode,
           },
         }],

@@ -44,7 +44,7 @@ export class ClaudeDriver implements Driver {
   readonly kind = 'claude' as const;
   readonly binary = 'claude';
   readonly kickoffMode = 'requires_first_message' as const;
-  readonly busyDeliveryMode = 'gated' as const;
+  readonly releaseProfile = 'tool-boundary-steer' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 30 * 1000;
@@ -85,8 +85,21 @@ export class ClaudeDriver implements Driver {
     return env;
   }
 
-  encodeStdinMessage(content: string, cliSessionId: string | null): string {
-    return encodeStreamJsonUserMessage(content, cliSessionId);
+  encodeStdinMessage(
+    content: string,
+    cliSessionId: string | null,
+    opts?: { payloadUuid?: string },
+  ): string {
+    // #task:1558 B' (product decision, thread 2026-07-20): send an
+    // explicit `priority:"next"` on every user frame. The A/B runs
+    // showed identical behavior with and without it on 2.1.210, but
+    // the explicit field states our tool-boundary-steer intent and
+    // guards against a future default-behavior change; first-frame
+    // priority on an idle session was probed and behaves normally.
+    // Undocumented-field maintenance cost is tracked in the design doc.
+    return encodeStreamJsonUserMessage(content, cliSessionId, opts?.payloadUuid, {
+      priority: 'next',
+    });
   }
 
   encodeInterruptControl(): string {

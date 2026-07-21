@@ -164,16 +164,23 @@ Freshness conflict (exit 1, code `conflict`):
   never queries the current DB seq at send time.
 - For same-conversation agent sends, the backend rejects insertion when the
   conversation has advanced past that observed boundary. The stderr JSON uses
-  `code: "conflict"` with `details.subkind: "message_stale"` and includes
-  `details.newer_messages` (bounded recent messages after the observed seq).
-- Agents should treat this as stale-context feedback, not as a transient retry.
-  Read `details.newer_messages`, then choose whether to send a revised message
-  or stay silent. Do **not** immediately resubmit the same body.
-- If the reviewed newer messages do not change the draft and the message still
-  adds value, resend normally with
-  `--stale-resolution unaffected`; that send still goes through the freshness
-  guard. If the newer messages changed the draft, send the revised text with
-  `--stale-resolution revised`. If the newer messages made the draft
+  `code: "conflict"` with `details.subkind: "message_stale"`.
+- **The 409 is signal-only** (single-release-face contract): it carries
+  `stream_key`, `seen_up_to_seq`, `current_seq`, and a hint —
+  never message bodies. The unseen messages are already queued for NORMAL
+  delivery and arrive as regular input: steer runtimes (codex/claude) receive
+  them within the current turn; boundary runtimes (qoder) receive them as one
+  batch after the current turn ends. Message bodies reach the model through
+  exactly one input face.
+- Agents should treat this as stale-context feedback, not as a transient
+  retry. Wait for the queued input to arrive, read it, then decide. Do
+  **not** immediately resubmit the same body — the observed boundary only
+  advances when the unseen content is actually admitted, so an uninformed
+  retry conflicts again by design.
+- If the newly-arrived messages do not change the draft and the message still
+  adds value, resend with `--stale-resolution unaffected`; that send still
+  goes through the freshness guard. If they changed the draft, send the
+  revised text with `--stale-resolution revised`. If they made the draft
   unnecessary, do not send; instead run
   `silverhand message stale-resolve --resolution obsolete`.
 - If a busy conversation repeatedly re-holds an unchanged but necessary
@@ -181,11 +188,6 @@ Freshness conflict (exit 1, code `conflict`):
   escape hatch for that send only; use it sparingly, not as the default reaction
   to `message_stale`. `--anyway` records the stale resolution as `force_send`;
   do not combine it with `--stale-resolution`.
-- On a `message_stale` response, the daemon advances the runtime's observed
-  boundary to `details.current_seq` because those newer messages have been
-  shown in the error details. A revised or unchanged retry therefore re-checks
-  against that newly observed state; if the conversation advances again, it can
-  still be held again.
 - The daemon also records `details.stale_event_id` for that runtime. The next
   send consumes that pending event exactly once and attaches the chosen stale
   resolution reason for observability. Omitting `--stale-resolution` never

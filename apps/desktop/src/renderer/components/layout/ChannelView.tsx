@@ -434,7 +434,7 @@ function ActiveChannelView({
   const restartAgents = useCallback(async () => {
     if (agentActionDisabled) return;
     for (const agent of channelAgents) {
-      await stopAgent.mutateAsync({ agentId: agent.agent_id, mode: 'hard' });
+      await stopAgent.mutateAsync({ agentId: agent.agent_id });
     }
     try {
       for (const agentId of agentIds) {
@@ -447,7 +447,7 @@ function ActiveChannelView({
   const stopAgents = useCallback(async () => {
     if (agentActionDisabled) return;
     for (const agentId of agentIds) {
-      await stopAgent.mutateAsync({ agentId, mode: 'hard' });
+      await stopAgent.mutateAsync({ agentId });
     }
   }, [agentActionDisabled, agentIds, stopAgent]);
   // The roster/agent strip is a member surface — hidden for a

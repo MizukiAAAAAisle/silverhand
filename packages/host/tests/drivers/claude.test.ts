@@ -158,3 +158,56 @@ describe('ClaudeDriver.parseLine', () => {
     });
   });
 });
+
+describe('ClaudeDriver — input payload uuid + command_lifecycle (#task:1557)', () => {
+  it('stamps payloadUuid and explicit priority:"next" onto the stdin user frame', () => {
+    const encoded = new ClaudeDriver().encodeStdinMessage('hello', 'sess-1', {
+      payloadUuid: 'uuid-42',
+    });
+    const frame = JSON.parse(encoded!);
+    expect(frame.uuid).toBe('uuid-42');
+    expect(frame.session_id).toBe('sess-1');
+    expect(frame.message.content[0].text).toBe('hello');
+    // Product decision (thread 2026-07-20): explicit steer intent on
+    // every frame, guarded against future default-behavior changes.
+    expect(frame.priority).toBe('next');
+  });
+
+  it('omits the uuid field entirely when no payloadUuid is given (priority still present)', () => {
+    const encoded = new ClaudeDriver().encodeStdinMessage('hello', null);
+    const frame = JSON.parse(encoded!);
+    expect('uuid' in frame).toBe(false);
+    expect(frame.priority).toBe('next');
+  });
+
+  it.each(['queued', 'started', 'completed'] as const)(
+    'parses command_lifecycle %s into input_lifecycle',
+    state => {
+      const events = new ClaudeDriver().parseLine(
+        JSON.stringify({
+          type: 'command_lifecycle',
+          command_uuid: 'uuid-42',
+          state,
+          uuid: 'frame-own-id',
+        }),
+      );
+      expect(events).toEqual([
+        { kind: 'input_lifecycle', commandUuid: 'uuid-42', state },
+      ]);
+    },
+  );
+
+  it('drops command_lifecycle frames with unknown state or missing uuid', () => {
+    const driver = new ClaudeDriver();
+    expect(
+      driver.parseLine(
+        JSON.stringify({ type: 'command_lifecycle', command_uuid: 'u', state: 'x' }),
+      ),
+    ).toEqual([]);
+    expect(
+      driver.parseLine(
+        JSON.stringify({ type: 'command_lifecycle', state: 'started' }),
+      ),
+    ).toEqual([]);
+  });
+});

@@ -150,7 +150,7 @@ export async function deleteAgent(
   //    is safe to run before the purge fail-closed gate.
   for (const live of impact.running_conversation_agents) {
     await ctx.runtimeHost
-      .stop(live.conversation_id, id, 'hard')
+      .stop(live.conversation_id, id)
       .catch(err =>
         ctx.logger.warn(
           { conversationId: live.conversation_id, agentId: id, err },
@@ -220,7 +220,7 @@ export async function deleteAgentControlPlaneOnly(
   const impact = computeDeleteImpact(deps, agentId);
   for (const live of impact.running_conversation_agents) {
     await ctx.runtimeHost
-      .stop(live.conversation_id, agentId, 'hard')
+      .stop(live.conversation_id, agentId)
       .catch(err =>
         ctx.logger.warn(
           { conversationId: live.conversation_id, agentId, err },

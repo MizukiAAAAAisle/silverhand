@@ -49,7 +49,7 @@ describe('CursorDriver static config', () => {
     const d = new CursorDriver();
     expect(d.kind).toBe('cursor');
     expect(d.binary).toBe('cursor-agent');
-    expect(d.busyDeliveryMode).toBe('none');
+    expect(d.releaseProfile).toBe('one-shot');
     expect(d.oneShot).toBe(true);
     expect(d.supportsNativeStandingPrompt).toBe(false);
   });

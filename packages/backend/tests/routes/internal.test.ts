@@ -417,3 +417,66 @@ describe('agent send-message — pre-parse body bound', () => {
     expect(body.code).toBe('content_too_large');
   });
 });
+
+describe('agent send-message — signal-only stale contract (#task:1561)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('the 409 carries NO bodies — only stream/range/count signal metadata', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t);
+    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const first = await (await http(t).post(
+      `/api/channels/${conversationId}/messages`,
+      { content: 'observed boundary' },
+    )).json() as any;
+    const seenUpToSeq = first.message.seq as number;
+    for (let i = 0; i < 12; i++) {
+      await http(t).post(
+        `/api/channels/${conversationId}/messages`,
+        { content: `newer ${i}` },
+      );
+    }
+    const r = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      { content: 'stale draft', seen_up_to_seq: seenUpToSeq },
+      { headers: authHeaders(token) },
+    );
+    expect(r.status).toBe(409);
+    const details = ((await r.json()) as any).error.details;
+    expect(details.subkind).toBe('message_stale');
+    // Signal only: no body-bearing fields at all — the unseen content is
+    // released exactly once through normal delivery.
+    expect(details.newer_messages).toBeUndefined();
+    expect(details.returned_through_seq).toBeUndefined();
+    expect(details.stream_key).toBe('main');
+    expect(details.seen_up_to_seq).toBe(seenUpToSeq);
+    expect(details.unseen_count).toBeUndefined();
+    expect(details.current_seq).toBeGreaterThan(seenUpToSeq);
+    expect(typeof details.hint).toBe('string');
+    const raw = JSON.stringify(details);
+    expect(raw).not.toContain('newer 0');
+    expect(raw).not.toContain('newer 11');
+
+    // The 409 must not disarm the CAS: an uninformed retry with the same
+    // boundary still conflicts — only real admission unlocks it.
+    const r2 = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      { content: 'stale draft 2', seen_up_to_seq: seenUpToSeq },
+      { headers: authHeaders(token) },
+    );
+    expect(r2.status).toBe(409);
+
+    // With the true head as boundary (normal delivery would have carried
+    // the agent here), the send goes through.
+    const r3 = await http(t).post(
+      `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
+      { content: 'fresh send', seen_up_to_seq: details.current_seq },
+      { headers: authHeaders(token) },
+    );
+    expect(r3.status).toBe(200);
+  });
+});

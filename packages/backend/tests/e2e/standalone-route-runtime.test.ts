@@ -66,7 +66,7 @@ function makeSessionInitDriver(sessionId: string): Driver {
     kind: 'claude',
     binary: FIXTURE,
     kickoffMode: 'self_inits',
-    busyDeliveryMode: 'direct',
+    releaseProfile: 'native-steer',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -343,7 +343,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     const stopRes = await postJson(
       `${baseUrl}/api/channels/${env.conversationId}/agents/${env.agentId}/stop`,
       env.bearer,
-      { mode: 'hard' },
+      {},
     );
     expect(stopRes.status).toBe(200);
     expect(stopRes.body).toMatchObject({ ok: true });
@@ -446,7 +446,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     const res = await postJson(
       `${harness.serverUrl}/api/channels/${env.conversationId}/agents/${env.agentId}/stop`,
       env.bearer,
-      { mode: 'hard' },
+      {},
     );
 
     expect(res.status).toBe(503);

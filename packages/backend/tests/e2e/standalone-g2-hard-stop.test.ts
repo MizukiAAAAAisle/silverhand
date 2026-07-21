@@ -64,7 +64,7 @@ function makeSessionInitDriver(sessionId: string): Driver {
     kind: 'claude',
     binary: FIXTURE,
     kickoffMode: 'self_inits',
-    busyDeliveryMode: 'direct',
+    releaseProfile: 'native-steer',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -248,7 +248,6 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       await harness.backend.context.runtimeHost.stop(
         conversationId,
         agentId,
-        'hard',
       );
 
       // Observable #1 (wire): a `runtime_exit` outbound frame

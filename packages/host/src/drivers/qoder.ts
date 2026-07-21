@@ -127,7 +127,7 @@ export class QoderDriver implements Driver {
   readonly kind = 'qoder' as const;
   readonly binary = 'qodercli';
   readonly kickoffMode = 'requires_first_message' as const;
-  readonly busyDeliveryMode = 'gated' as const;
+  readonly releaseProfile = 'next-turn-batch' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 30 * 1000;

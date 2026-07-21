@@ -257,7 +257,7 @@ export async function addConversationMember(
           metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
         });
       })();
-      effects.push(() => publishMemberAdded(deps.ctx, conversation, message));
+      effects.push(() => publishMemberAdded(deps.ctx, deps.conversations, conversation, message));
     }
     await runPostCommitEffects(effects, deps.ctx.logger);
     return { ok: true, members: deps.membership.listMembers(conversation.id) };
@@ -317,7 +317,7 @@ export async function addConversationMember(
     }
     const message = write.message;
     if (message) {
-      effects.push(() => publishMemberAdded(deps.ctx, conversation, message));
+      effects.push(() => publishMemberAdded(deps.ctx, deps.conversations, conversation, message));
     }
   }
   await runPostCommitEffects(effects, deps.ctx.logger);
@@ -343,16 +343,45 @@ function publishViewerWorkspacesChanged(
 }
 
 /**
+ * Universe alignment (design doc §5.2): a membership system message bumps
+ * the conversation's main stream head, so EVERY agent member needs a
+ * normal inbox delivery to advance past it — under the signal-only stale
+ * contract, a head-bump without a delivery would leave agents 409-blocked
+ * on a row that never arrives. Same shape as the rename/task-notice
+ * fan-outs; best-effort per agent (a failed leg leaves that row pending
+ * for the next drain, it never blocks the mutation).
+ */
+function deliverSystemMessageToConversationAgents(
+  ctx: BackendContext,
+  conversations: ConversationRepo,
+  conversationId: string,
+  messageId: string,
+): void {
+  for (const ca of conversations.listAgents(conversationId)) {
+    void ctx.runtimeHost
+      .deliverMessage(conversationId, ca.agent_id, messageId)
+      .catch(err => {
+        ctx.logger.warn(
+          { conversationId, agentId: ca.agent_id, messageId, err },
+          'membership notice delivery failed; row stays pending',
+        );
+      });
+  }
+}
+
+/**
  * Post-commit publish for a member-added system message. Order is preserved
  * verbatim from the original route helper (spec §7 ruling ⑥): `message` →
  * `conversation_members_changed` → `workspace_channels_changed`.
  */
 function publishMemberAdded(
   ctx: BackendContext,
+  conversations: ConversationRepo,
   conversation: { id: string; workspace_id: string },
   message: ReturnType<MessageRepo['insertForConversation']>,
 ): void {
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
+  deliverSystemMessageToConversationAgents(ctx, conversations, conversation.id, message.id);
   ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {
@@ -750,7 +779,7 @@ export async function removeConversationMember(
   // The success path awaits until stop settles; a failure is caught and we
   // continue to the removal.
   await deps.ctx.runtimeHost
-    .stop(conversation.id, agent.id, 'hard')
+    .stop(conversation.id, agent.id)
     .catch(err =>
       deps.ctx.logger.warn(
         { conversationId: conversation.id, agentId: agent.id, err },
@@ -770,7 +799,7 @@ export async function removeConversationMember(
     });
   })();
 
-  const effects: PostCommitEffect[] = [() => publishMemberRemoved(deps.ctx, conversation, message)];
+  const effects: PostCommitEffect[] = [() => publishMemberRemoved(deps.ctx, deps.conversations, conversation, message)];
   await runPostCommitEffects(effects, deps.ctx.logger);
   return { ok: true, members: deps.membership.listMembers(conversation.id) };
 }
@@ -782,10 +811,14 @@ export async function removeConversationMember(
  */
 export function publishMemberRemoved(
   ctx: BackendContext,
+  conversations: ConversationRepo,
   conversation: { id: string; workspace_id: string },
   message: ReturnType<MessageRepo['insertForConversation']>,
 ): void {
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
+  // The removed member no longer appears in listAgents, so the remaining
+  // agents get the row and the departed one is naturally excluded.
+  deliverSystemMessageToConversationAgents(ctx, conversations, conversation.id, message.id);
   ctx.events.publishSide(conversation.id, {
     kind: 'conversation_members_changed',
     payload: {

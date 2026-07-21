@@ -103,6 +103,19 @@ export const ParsedEventSchema = z.discriminatedUnion('kind', [
     .strict(),
   z
     .object({
+      /** Per-payload input lifecycle reported by the runtime itself
+       *  (Claude `command_lifecycle` frames, #task:1557 Phase 1
+       *  instrument). `commandUuid` echoes the `uuid` the daemon put on
+       *  the stdin user frame, so the supervisor can correlate which
+       *  delivery/batch the runtime queued/admitted. Observation only:
+       *  it never drives run-state or freshness in Phase 1. */
+      kind: z.literal('input_lifecycle'),
+      commandUuid: z.string().min(1),
+      state: z.enum(['queued', 'started', 'completed']),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal('error'),
       message: z.string(),
       code: z.string().optional(),
@@ -137,6 +150,7 @@ export const PARSED_EVENT_KINDS = [
   'turn_end',
   'compaction_started',
   'compaction_finished',
+  'input_lifecycle',
   'error',
   'unknown',
 ] as const satisfies ReadonlyArray<ParsedEvent['kind']>;

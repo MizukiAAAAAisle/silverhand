@@ -24,10 +24,15 @@ export type StreamJsonErrorClassifier = (
 ) => { code?: string; fatal?: boolean };
 
 /** Encode one user turn for the runtime's stdin (the kickoff/notify
- *  message). Identical across Claude-shaped runtimes. */
+ *  message). Identical across Claude-shaped runtimes. `payloadUuid`
+ *  (Claude, #task:1557) stamps the frame's `uuid` so the runtime's
+ *  `command_lifecycle` frames can be correlated back to the payload;
+ *  runtimes that don't echo it (qoder, #task:1556) simply omit it. */
 export function encodeStreamJsonUserMessage(
   content: string,
   cliSessionId: string | null,
+  payloadUuid?: string,
+  extra?: { priority?: 'next' },
 ): string {
   return JSON.stringify({
     type: 'user',
@@ -36,6 +41,8 @@ export function encodeStreamJsonUserMessage(
       content: [{ type: 'text', text: content }],
     },
     ...(cliSessionId ? { session_id: cliSessionId } : {}),
+    ...(payloadUuid ? { uuid: payloadUuid } : {}),
+    ...(extra?.priority ? { priority: extra.priority } : {}),
   });
 }
 
@@ -166,6 +173,28 @@ export function parseStreamJsonLine(
         sessionId:
           typeof event.session_id === 'string' ? event.session_id : undefined,
       });
+      break;
+    }
+
+    case 'command_lifecycle': {
+      // Claude emits per-input lifecycle frames keyed by the stdin
+      // frame's `uuid` (observed as `command_uuid`): queued → started →
+      // completed. `started` is the strongest per-payload admission
+      // evidence available (#task:1556/#task:1557). Other states (or
+      // absent uuid) are dropped like any unmodeled frame.
+      const commandUuid =
+        typeof event.command_uuid === 'string' && event.command_uuid.length > 0
+          ? event.command_uuid
+          : null;
+      const state =
+        event.state === 'queued' ||
+        event.state === 'started' ||
+        event.state === 'completed'
+          ? event.state
+          : null;
+      if (commandUuid && state) {
+        events.push({ kind: 'input_lifecycle', commandUuid, state });
+      }
       break;
     }
 

@@ -411,9 +411,6 @@ describe('wire contract — fixture catalogue invariants', () => {
     schema?._def?.schema ?? schema;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const literalValue = (schema: any): unknown => schema?._def?.value;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const innerOptional = (schema: any): any =>
-    schema?._def?.innerType ?? schema;
 
   it('runtime_start.result covers every `started` arm (success/cooldown)', () => {
     const arms = RuntimeStartResultSchema.options.map((o) =>
@@ -439,88 +436,33 @@ describe('wire contract — fixture catalogue invariants', () => {
     ).toEqual([]);
   });
 
-  it('runtime_stop.params covers every `mode` (soft/hard)', () => {
-    // RuntimeStopParamsSchema = z.object(...).strict().superRefine(...)
-    // ZodEffects wraps the underlying ZodObject — unwrap to reach .shape.
+  it('runtime_stop.params has a hard-mode fixture (mode narrowed to literal since #task:1558)', () => {
     const inner = unwrapEffects(RuntimeStopParamsSchema);
-    const modes: readonly string[] = inner.shape.mode.options;
-    const missing = modes.filter(
-      (mode) =>
-        !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'request' ||
-            f.kind.intent !== 'runtime_stop'
-          )
-            return false;
-          const parsed = JSON.parse(f.frame) as {
-            params?: { mode?: string };
-          };
-          return parsed.params?.mode === mode;
-        }),
-    );
-    expect(
-      missing,
-      `runtime_stop param modes missing fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    const mode = String(literalValue(inner.shape.mode));
+    expect(mode).toBe('hard');
+    const covered = wireFixtures.some((f) => {
+      if (f.kind.kind !== 'request' || f.kind.intent !== 'runtime_stop')
+        return false;
+      const parsed = JSON.parse(f.frame) as { params?: { mode?: string } };
+      return parsed.params?.mode === mode;
+    });
+    expect(covered, 'runtime_stop hard param fixture missing').toBe(true);
   });
 
-  it('runtime_stop.result covers every `mode` arm (soft/hard)', () => {
-    // RuntimeStopResultSchema = z.discriminatedUnion('mode', [...]).superRefine(...)
+  it('runtime_stop.result has a hard-mode fixture (single arm since #task:1558)', () => {
     const inner = unwrapEffects(RuntimeStopResultSchema);
-    const modes = inner.options.map((o: { shape: { mode: unknown } }) =>
-      String(literalValue(o.shape.mode)),
-    );
-    const missing = modes.filter(
-      (mode: string) =>
-        !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'runtime_stop'
-          )
-            return false;
-          const parsed = JSON.parse(f.frame) as {
-            result?: { mode?: string };
-          };
-          return parsed.result?.mode === mode;
-        }),
-    );
-    expect(
-      missing,
-      `runtime_stop result modes missing fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
-  });
-
-  it('runtime_stop.result soft arm covers every `reason` enum slot', () => {
-    // The soft arm's `reason` is `z.enum(...).optional()`. Drill in,
-    // unwrap optional, then read .options. New enum value here =>
-    // mandatory new fixture.
-    const inner = unwrapEffects(RuntimeStopResultSchema);
-    const softArm = inner.options.find(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (o: any) => literalValue(o.shape.mode) === 'soft',
-    );
-    const reasons: readonly string[] = innerOptional(softArm.shape.reason)
-      .options;
-    const missing = reasons.filter(
-      (reason) =>
-        !wireFixtures.some((f) => {
-          if (
-            f.kind.kind !== 'response_success' ||
-            f.kind.intent !== 'runtime_stop'
-          )
-            return false;
-          const parsed = JSON.parse(f.frame) as {
-            result?: { mode?: string; reason?: string };
-          };
-          return (
-            parsed.result?.mode === 'soft' && parsed.result?.reason === reason
-          );
-        }),
-    );
-    expect(
-      missing,
-      `runtime_stop soft reasons missing fixture: ${missing.join(', ')}`,
-    ).toEqual([]);
+    const mode = String(literalValue(inner.shape.mode));
+    expect(mode).toBe('hard');
+    const covered = wireFixtures.some((f) => {
+      if (
+        f.kind.kind !== 'response_success' ||
+        f.kind.intent !== 'runtime_stop'
+      )
+        return false;
+      const parsed = JSON.parse(f.frame) as { result?: { mode?: string } };
+      return parsed.result?.mode === mode;
+    });
+    expect(covered, 'runtime_stop hard result fixture missing').toBe(true);
   });
 
   it('runtime_deliver.result covers every `disposition` arm (spawning/admitted/refused)', () => {

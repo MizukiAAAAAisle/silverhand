@@ -29,21 +29,6 @@ export interface StartOptions {
   model?: string | null;
 }
 
-/**
- * Default `soft_directive` shipped on `runtime_stop({mode:'soft'})` when
- * the caller doesn't supply one.
- *
- * Per `RuntimeStopParamsSchema.superRefine` (`packages/host/src/protocol.ts`):
- * `mode='soft'` REQUIRES `soft_directive`; "backend MUST supply the
- * directive bytes (default phrasing is backend's responsibility)".
- * `OutboundRuntimeEventFanout` must mirror this default across every
- * attached daemon transport. Hard stops MUST omit
- * `soft_directive`; this constant is irrelevant there.
- */
-export const DEFAULT_SOFT_DIRECTIVE =
-  '[user requested a course correction — pause your current direction and ' +
-  'wait for the next instruction]';
-
 /** Pre-clear snapshot returned by `clearSession()`. Callers use this
  *  to decide whether to publish an audit message and what to log. */
 export interface ClearSessionResult {
@@ -148,19 +133,9 @@ export interface AgentRuntimeHost {
   ): Promise<void>;
 
   /**
-   * Stop the (conv, agent) runtime.
-   *
-   * @param mode `'soft'` requests graceful shutdown (e.g. claude
-   *   `/exit` directive), `'hard'` SIGTERMs then SIGKILLs.
-   * @param softDirective free-form directive text passed to soft
-   *   shutdown protocols (driver-specific).
+   * Stop the (conv, agent) runtime: SIGTERM then SIGKILL.
    */
-  stop(
-    conversationId: string,
-    agentId: string,
-    mode?: 'soft' | 'hard',
-    softDirective?: string,
-  ): Promise<void>;
+  stop(conversationId: string, agentId: string): Promise<void>;
 
   /**
    * Clear the persisted `cli_session_id` for (conv, agent) so the next
@@ -204,6 +179,14 @@ export interface AgentRuntimeHost {
    * Hand a message to the (conv, agent) runtime. Persists to inbox if
    * the runtime is offline; injects via `runtime_deliver` if running.
    */
+  /**
+   * Drive delivery of EVERYTHING currently pending for (conv, agent)
+   * through the live delivery plane (`runtime_deliver`). Returns true if
+   * a batch was submitted. Used when durable rows were created outside
+   * the normal send fan-out (e.g. thread-window materialization on a
+   * freshness 409) and must not wait for a future spawn/drain trigger.
+   */
+  deliverPending(conversationId: string, agentId: string): Promise<boolean>;
   deliverMessage(
     conversationId: string,
     agentId: string,

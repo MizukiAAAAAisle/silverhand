@@ -108,6 +108,7 @@ import type {
   RuntimePhase,
   StartupDeliveryState,
 } from './handle.js';
+import { INPUT_PAYLOAD_UUID_CAP } from './handle.js';
 import { combineGatedBatch, SEND_MESSAGE_TOOL } from './gated-combine.js';
 
 // ── Configurable timing knobs ──────────────────────────────────────
@@ -124,6 +125,15 @@ export const DEFAULT_SIGTERM_TO_SIGKILL_MS = 5_000;
  *  exited regardless of the OS's response. Real `kill -9` lands
  *  within ms; this is a safety budget for stuck zombies. */
 export const DEFAULT_SIGKILL_TIMEOUT_MS = 10_000;
+
+// ── Bounded deferred-batch snapshot (doc I4/§3.3, #1558 final-gate P1-2) ──
+//
+// A drain-all flush must not compose an unbounded stdin payload: cap the
+// prefix by entry count and total UTF-8 text bytes; the remainder stays
+// queued IN ORDER for the next boundary. Initial values — mechanism
+// first, tuning from real distributions later (doc §9).
+export const DEFERRED_BATCH_MAX_ENTRIES = 20;
+export const DEFERRED_BATCH_MAX_TEXT_BYTES = 256 * 1024;
 
 // ── 3c-b init watchdog + retry/cooldown + compaction knobs ─────────
 //
@@ -214,6 +224,9 @@ export interface SupervisorOptions {
   now?: () => number;
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
+  /** #task:1563 test seam: override the next-turn reservation stall warn
+   *  threshold (default {@link NEXT_TURN_RESERVATION_STALL_WARN_MS}). */
+  reservationStallWarnMs?: number;
   /** Daemon-owned runtime pidfile context. Production `runDaemon`
    *  supplies both fields; unit tests can leave `runtimePidRootDir`
    *  null/undefined to disable filesystem pidfiles. */
@@ -273,8 +286,96 @@ function key(conversationId: string, agentId: string): string {
  *  Stage 3, §11.3). Byte-for-byte the coordinator's retired `isSafeBoundary`:
  *  no outstanding tool uses and not compacting. The daemon already tracks
  *  `handle.busy` in `updateRunStateFromParsed`, so this reads local truth. */
-function handleAtSafeBoundary(handle: RuntimeHandle): boolean {
-  return handle.busy.outstandingToolUses === 0 && !handle.busy.compacting;
+/** Commit A of #task:1558 (docs/runtime-input-design.md §3.2.1): the
+ *  supervisor dispatches on the driver's declared release profile, never
+ *  on runtime kind. Behavior-preserving mapping for now — the boundary-
+ *  gated set reproduces the legacy boundary-gated
+ *  semantics; Commit B gives `next-turn-batch` its own turn_end release,
+ *  and Commit C deletes the legacy predicate entirely. */
+function profileUsesBoundaryGate(handle: RuntimeHandle): boolean {
+  switch (handle.driver.releaseProfile) {
+    case 'tool-boundary-steer':
+    case 'next-turn-batch':
+    case 'prompt-boundary':
+      return true;
+    case 'native-steer':
+    case 'one-shot':
+      return false;
+    default:
+      // Fail closed (doc §3.2.1): a malformed or not-yet-wired profile
+      // must never fall through to an implicit write. Throwing keeps
+      // custody at the backend (the deliver command fails, rows stay
+      // un-acked).
+      throw new Error(
+        `unknown releaseProfile ${String(
+          (handle.driver as { releaseProfile?: unknown }).releaseProfile,
+        )} — refusing live input (fail closed)`,
+      );
+  }
+}
+
+/** Per-profile release boundary (#task:1558 Commits B/B').
+ *  - `next-turn-batch` (qoder, #1556: one stdin payload = one queued
+ *    future turn): releases only when no turn is active AND no write
+ *    reservation is pending — transport-safe tool boundaries are NOT
+ *    its release boundary.
+ *  - `tool-boundary-steer` (B' A/B-validated, notes claude-ab-results):
+ *    immediate write — the runtime itself admits at its next tool
+ *    boundary (we send an explicit `priority:"next"`). The single
+ *    `!compacting` term is a MIGRATION-PERIOD CONSERVATIVE HOLD for the
+ *    one scenario the experiments did not cover — it is not an
+ *    evidence-backed guard and must not be re-shared across profiles;
+ *    delete or harden it once compaction-time write evidence exists.
+ *  - `prompt-boundary` (ACP, Commit C): the protocol's own prompt
+ *    readiness (`driverReadyToEncode`) is the release boundary.
+ *  - The unified transport-safe predicate (`handleAtSafeBoundary`) was
+ *    deleted in Commit C — no profile consumes it. */
+/** Per-stream max seq covered by a startup batch — the same derivation
+ *  `admitDeliveryBatch` uses (structured deliveries, else the scalar
+ *  main-stream high-water). Recorded on the payload uuid so a runtime
+ *  `started(uuid)` echo can promote observed for exactly this coverage
+ *  (#task:1558 B'). */
+function coveredSeqPairsForBatch(batch: StartupDeliveryState): Array<[string, number]> {
+  const byStream = new Map<string, number>();
+  if (batch.deliveries && batch.deliveries.length > 0) {
+    for (const delivery of batch.deliveries) {
+      const streamKey = streamKeyForMessage(delivery.thread_root_id);
+      const seq = safeSeq(delivery.seq);
+      if (seq === null) continue;
+      const prev = byStream.get(streamKey);
+      if (prev === undefined || seq > prev) byStream.set(streamKey, seq);
+    }
+  } else if (safeSeq(batch.deliveredUpToSeq) !== null) {
+    byStream.set(MAIN_STREAM_KEY, batch.deliveredUpToSeq as number);
+  }
+  return [...byStream.entries()];
+}
+
+function strategyBoundaryOpen(handle: RuntimeHandle): boolean {
+  switch (handle.driver.releaseProfile) {
+    case 'next-turn-batch':
+      return handle.nextTurnReserved !== true && handle.inputTurnActive !== true;
+    case 'tool-boundary-steer':
+      // Migration-period conservative hold (docs §3.2): compaction is
+      // the one scenario the B' experiments did not cover.
+      return handle.busy.compacting !== true;
+    case 'prompt-boundary':
+      // ACP's protocol-owned readiness: one active session/prompt at a
+      // time, surfaced by the driver itself.
+      return driverReadyToEncode(handle.driver);
+    case 'native-steer':
+    case 'one-shot':
+      // Always open here — the write-in-flight slot and the oneShot
+      // spawn path own their serialization.
+      return true;
+    default:
+      // Fail closed (doc §3.2.1) — see profileUsesBoundaryGate.
+      throw new Error(
+        `unknown releaseProfile ${String(
+          (handle.driver as { releaseProfile?: unknown }).releaseProfile,
+        )} — refusing live input (fail closed)`,
+      );
+  }
 }
 
 /** Idempotency key for a deferred batch: the delivery-id SET (order-
@@ -282,6 +383,46 @@ function handleAtSafeBoundary(handle: RuntimeHandle): boolean {
  *  same batch cannot double-queue (§11.4). */
 function deferredDedupKey(ids: readonly number[]): string {
   return [...ids].sort((a, b) => a - b).join(',');
+}
+
+/** Conservative per-entry byte budget for the combined payload's wrapping
+ *  overhead: `combineGatedBatch`'s '\n\n---\n\n' separators plus the
+ *  header/footer instruction lines and JSON string escaping headroom.
+ *  Generous by design — the cap protects boundedness, not precision. */
+const DEFERRED_BATCH_PER_ENTRY_OVERHEAD_BYTES = 512;
+
+/** #task:1563 (doc §3.4): a `next-turn-batch` reservation armed at write
+ *  time is cleared only by a parsed terminal `turn_end`; if that terminal
+ *  is lost the boundary stays closed and every delivery defers forever.
+ *  The hold IS the fail-closed contract — this threshold only decides when
+ *  to surface the stall diagnostically, never when to force a write.
+ *  120s is far past any real qoder turn-start latency. */
+const NEXT_TURN_RESERVATION_STALL_WARN_MS = 120 * 1000;
+
+/** Bounded snapshot of the deferred queue (doc I4/§3.3): take the longest
+ *  prefix within the entry/byte caps (always at least one entry so a
+ *  single oversized entry still drains), leave the remainder queued in
+ *  order for the next boundary. Byte accounting includes a conservative
+ *  per-entry wrapping budget so the FINAL combined payload — not just
+ *  the raw texts — stays bounded. */
+function spliceBoundedDeferredPrefix(queue: DeferredEntry[]): DeferredEntry[] {
+  let take = 0;
+  let bytes = 0;
+  for (const entry of queue) {
+    const entryBytes =
+      Buffer.byteLength(entry.text, 'utf8') +
+      DEFERRED_BATCH_PER_ENTRY_OVERHEAD_BYTES;
+    if (
+      take > 0 &&
+      (take >= DEFERRED_BATCH_MAX_ENTRIES ||
+        bytes + entryBytes > DEFERRED_BATCH_MAX_TEXT_BYTES)
+    ) {
+      break;
+    }
+    take += 1;
+    bytes += entryBytes;
+  }
+  return queue.splice(0, Math.max(1, take));
 }
 
 /** Fold a drained deferred batch into a single `StartupDeliveryState` for the
@@ -502,6 +643,7 @@ export class Supervisor implements SupervisorContract {
   private readonly now: () => number;
   private readonly sigtermToSigkillMs: number;
   private readonly sigkillTimeoutMs: number;
+  private readonly reservationStallWarnMs: number;
   private readonly daemonInstanceId: string | null;
   private readonly runtimePidRootDir: string | null;
   private readonly proxyConfigPath: () => string | null;
@@ -517,8 +659,8 @@ export class Supervisor implements SupervisorContract {
   /** Per-(conv, agent) lifecycle serialization (Cindy plan v2 issue
    *  #6 + tightening `ixAq6GPTn4fVSpCF`). Each entry is the tail
    *  promise for the *most recent* lifecycle operation on that key;
-   *  new ops queue behind it. delivery/soft-stop intentionally DO NOT
-   *  participate — they gate via `handle.startupDelivery` / `phase`
+   *  new ops queue behind it. delivery intentionally DOES NOT
+   *  participate — it gates via `handle.startupDelivery` / `phase`
    *  instead. */
   private readonly lifecycleTails = new Map<string, Promise<void>>();
   private readonly initWatchdogMs: number | null;
@@ -546,6 +688,8 @@ export class Supervisor implements SupervisorContract {
     this.sigtermToSigkillMs =
       opts.sigtermToSigkillMs ?? DEFAULT_SIGTERM_TO_SIGKILL_MS;
     this.sigkillTimeoutMs = opts.sigkillTimeoutMs ?? DEFAULT_SIGKILL_TIMEOUT_MS;
+    this.reservationStallWarnMs =
+      opts.reservationStallWarnMs ?? NEXT_TURN_RESERVATION_STALL_WARN_MS;
     this.daemonInstanceId = opts.daemonInstanceId ?? null;
     this.runtimePidRootDir = opts.runtimePidRootDir ?? null;
     const proxyConfigPath = opts.proxyConfigPath ?? null;
@@ -574,6 +718,29 @@ export class Supervisor implements SupervisorContract {
    *  and log when it actually moves. No turn side-effect — shared by the
    *  send path (which additionally marks the turn) and the pull-observe
    *  intent (which must NOT start a turn). */
+  /** #task:1557 Phase 1: mint a stable uuid for one encoded stdin
+   *  payload and remember which delivery ids it carried. Claude echoes
+   *  the uuid back on `command_lifecycle` frames; other runtimes never
+   *  reference it. Bounded FIFO — observation only. */
+  private mintInputPayloadUuid(
+    handle: RuntimeHandle,
+    deliveryIds: readonly number[],
+    coveredSeqByStream: ReadonlyArray<readonly [string, number]> = [],
+  ): string {
+    const uuid = randomUUID();
+    handle.inputPayloadUuids.set(uuid, {
+      deliveryIds: [...deliveryIds],
+      coveredSeqByStream: coveredSeqByStream.map(([k, v]) => [k, v] as [string, number]),
+      mintedAt: Date.now(),
+    });
+    while (handle.inputPayloadUuids.size > INPUT_PAYLOAD_UUID_CAP) {
+      const oldest = handle.inputPayloadUuids.keys().next().value;
+      if (oldest === undefined) break;
+      handle.inputPayloadUuids.delete(oldest);
+    }
+    return uuid;
+  }
+
   private recordObservedStream(
     handle: RuntimeHandle,
     streamKey: string,
@@ -606,6 +773,51 @@ export class Supervisor implements SupervisorContract {
       },
       'runtime freshness observed seq advanced',
     );
+    this.drainBypassMerges(handle, streamKey);
+  }
+
+  /** Countgame P1 (bypass hole): merge the agent's own forced seqs into
+   *  the watermark once real admission evidence covers their prerequisite
+   *  head. Iterative (a merged own seq can satisfy the next entry's
+   *  prerequisite — chained bypasses). Own seqs need no admission
+   *  evidence: the sender authored them. */
+  private drainBypassMerges(handle: RuntimeHandle, streamKey: string): void {
+    const entries = handle.pendingBypassMergeByStream.get(streamKey);
+    if (!entries || entries.length === 0) return;
+    let current = handle.observedSeqByStream.get(streamKey);
+    if (current === undefined) return;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let i = 0; i < entries.length; i += 1) {
+        const entry = entries[i]!;
+        if (entry.prereq <= (current as number)) {
+          entries.splice(i, 1);
+          if (entry.ownSeq > (current as number)) {
+            current = decodeObservedSeq(entry.ownSeq);
+            handle.observedSeqByStream.set(streamKey, current);
+            this.logger.warn(
+              {
+                kind: 'process',
+                action: 'freshness_observed_seq_advanced',
+                conversationId: handle.conversationId,
+                agent_id: handle.agentId,
+                source: 'bypass_own_seq_merged',
+                stream_key: streamKey,
+                observed_seq: entry.ownSeq,
+                merge_prereq: entry.prereq,
+              },
+              'runtime freshness observed seq advanced',
+            );
+          }
+          changed = true;
+          break;
+        }
+      }
+    }
+    if (entries.length === 0) {
+      handle.pendingBypassMergeByStream.delete(streamKey);
+    }
   }
 
   private advanceObservedStream(
@@ -1052,15 +1264,12 @@ export class Supervisor implements SupervisorContract {
       const bodyText = await safeReadResponseText(res);
       const stale = res.status === 409 ? extractStaleConflict(bodyText) : null;
       if (stale) {
+        // Signal-only contract: the 409 exposed NO bodies, so the observed
+        // cursor does not move here. The unseen window arrives through the
+        // normal delivery face (steer = this turn, next-turn-batch = next
+        // boundary); admission evidence advances the cursor, and only then
+        // does a retry pass the CAS.
         handle.pendingStaleEvent = stale;
-        if (useFreshnessBoundary) {
-          this.advanceObservedStream(
-            handle,
-            targetStreamKey,
-            stale.currentSeq,
-            'message_stale_response',
-          );
-        }
       } else if (pendingStale) {
         handle.pendingStaleEvent = null;
       }
@@ -1090,13 +1299,50 @@ export class Supervisor implements SupervisorContract {
     // message. An UNKNOWN-target send only records the mapping above;
     // advancing observed for a stream we have never read would defeat the
     // dumb-loop guard.
-    if (useFreshnessBoundary && typeof messageSeq === 'number') {
+    //
+    // A `freshness_bypass` (--anyway) success proves NOTHING (Cindy
+    // countgame P1-B): no CAS ran, so jumping observed to our own seq
+    // would silently swallow every unseen message in between (live trace:
+    // 11→15/11→16 across an unadmitted 12–14) and permanently disarm the
+    // guard. The forced message lands, but the cursor holds — the gap
+    // stays armed until real admission evidence covers it.
+    //
+    // The own seq is NOT abandoned, though (Cindy follow-up P1): the
+    // sender is excluded from its own fan-out, so nothing ever delivers
+    // seq S back — holding forever would leave a permanent self-made
+    // freshness hole (quiet stream: observed converges to the pre-bypass
+    // head while head = S). The backend tells us the head at insert time
+    // (`stream_head_before` = everything relevant we skipped); once
+    // observed covers it, the own seq merges via `drainBypassMerges`.
+    if (
+      !params.freshness_bypass &&
+      useFreshnessBoundary &&
+      typeof messageSeq === 'number'
+    ) {
       this.advanceObservedStream(
         handle,
         targetStreamKey,
         messageSeq,
         'message_send_commit',
       );
+    } else if (
+      params.freshness_bypass &&
+      targetStreamKey !== undefined &&
+      typeof messageSeq === 'number'
+    ) {
+      const headBefore = json['stream_head_before'];
+      if (typeof headBefore === 'number' && Number.isSafeInteger(headBefore)) {
+        const entries =
+          handle.pendingBypassMergeByStream.get(targetStreamKey) ?? [];
+        entries.push({ prereq: headBefore, ownSeq: messageSeq });
+        // Bounded: chained bypasses beyond the cap drop the OLDEST entry —
+        // degradation is the pre-fix behavior for that seq (recoverable
+        // via any later message), never unbounded growth.
+        while (entries.length > 32) entries.shift();
+        handle.pendingBypassMergeByStream.set(targetStreamKey, entries);
+        // No gap at all (or already caught up): merge immediately.
+        this.drainBypassMerges(handle, targetStreamKey);
+      }
     }
     handle.pendingStaleEvent = null;
     return {
@@ -1495,11 +1741,18 @@ export class Supervisor implements SupervisorContract {
       lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
       observedSeqByStream: new Map(),
       pendingAdmissionSeqByStream: new Map(),
+      pendingBypassMergeByStream: new Map(),
       replyTargetStreamByMessageId: new Map(),
       defaultReplyTarget: CHANNEL_DEFAULT_REPLY_TARGET,
       pendingDefaultReplyTarget: undefined,
       inputTurnActive: driver.oneShot && !!params.startup_delivery,
+      nextTurnReserved: false,
+      nextTurnReservedAt: null,
+      reservationStallWarned: false,
+      reservationStallTimer: null,
+      turnEndCount: 0,
       pendingStaleEvent: null,
+      inputPayloadUuids: new Map(),
       phase: startupBatch ? 'startup_pending' : 'spawning',
       outputPaused: false,
       exitCode: null,
@@ -1508,6 +1761,7 @@ export class Supervisor implements SupervisorContract {
       // 3b additions
       startupDelivery: startupBatch,
       startupAwaitingInit: false,
+      startupConsumeInFlight: false,
       readyForDrainEmitted: false,
       initObserved: false,
       cliSessionId: spawnCtx.cliSessionId,
@@ -1698,6 +1952,20 @@ export class Supervisor implements SupervisorContract {
     // re-evaluate `ready_for_drain` exactly once.
     const batch = handle.startupDelivery;
     if (!batch) return; // gate already cleared by another path
+    handle.startupConsumeInFlight = true;
+    try {
+      await this.consumeStartupDeliveryLatched(handle, batch);
+    } finally {
+      handle.startupConsumeInFlight = false;
+    }
+  }
+
+  /** Body of {@link consumeStartupDelivery}; runs under the
+   *  `startupConsumeInFlight` latch. */
+  private async consumeStartupDeliveryLatched(
+    handle: RuntimeHandle,
+    batch: StartupDeliveryState,
+  ): Promise<void> {
     const deliveryIds = batch.deliveryIds;
 
     if (handle.phase === 'exited' || handle.phase === 'draining') {
@@ -1727,7 +1995,14 @@ export class Supervisor implements SupervisorContract {
       return;
     }
 
-    const encoded = handle.driver.encodeStdinMessage(batch.text, handle.cliSessionId);
+    const payloadUuid = this.mintInputPayloadUuid(
+      handle,
+      deliveryIds,
+      coveredSeqPairsForBatch(batch),
+    );
+    const encoded = handle.driver.encodeStdinMessage(batch.text, handle.cliSessionId, {
+      payloadUuid,
+    });
     if (encoded === null) {
       // Driver claims ready_to_encode but still refused. This is a
       // driver-author bug; fail loud per Cindy `0G5uJBydO_4qt_2r`.
@@ -1772,7 +2047,26 @@ export class Supervisor implements SupervisorContract {
       // (Cindy: same-invariant race that the pre-#1417 `runtime_wake` path
       // avoided by snapshotting first).
       const admitNow = this.shouldAdmitDeliveryImmediately(handle);
+      const turnEndsBeforeWrite = handle.turnEndCount;
       await this.writeStdinPayload(handle, encoded);
+      if (
+        handle.driver.releaseProfile === 'next-turn-batch' &&
+        handle.turnEndCount === turnEndsBeforeWrite
+      ) {
+        // §3.4 step 2: reserve the next turn the instant the write
+        // lands — do NOT wait for the runtime's first activity frame.
+        // Guarded by the turn-end snapshot: if the terminal for this
+        // very write crossed the await window (fast runtime), arming
+        // now would overwrite a finished turn back into "reserved" and
+        // hold the queue forever (#1558 final-gate P1-1).
+        handle.nextTurnReserved = true;
+        handle.nextTurnReservedAt = this.now();
+        handle.reservationStallWarned = false;
+        // Fresh reservation: drop any stall timer from the previous one
+        // and re-schedule if a bounded-prefix remainder is still queued.
+        this.clearReservationStallTimer(handle);
+        this.scheduleReservationStallCheck(handle);
+      }
       this.admitDeliveryBatch(
         handle,
         batch.deliveries,
@@ -1849,6 +2143,12 @@ export class Supervisor implements SupervisorContract {
   private tryConsumeStartupDelivery(handle: RuntimeHandle): void {
     if (!handle.startupDelivery) return;
     if (handle.startupAwaitingInit) return; // write done, awaiting init
+    // #task:1563: a consume is mid-write (dispatchParsedLine runs outside
+    // the lifecycle lock, so session_init can land inside that await
+    // window). Re-entering would write the SAME batch to stdin twice —
+    // duplicate exposure + double consumed. The in-flight consume settles
+    // on its own (initObserved is already true by now).
+    if (handle.startupConsumeInFlight) return;
     if (!driverReadyToEncode(handle.driver)) return;
     void this.consumeStartupDelivery(handle);
   }
@@ -1954,15 +2254,6 @@ export class Supervisor implements SupervisorContract {
   // ── runtime_stop ───────────────────────────────────────────────
 
   async stop(params: RuntimeStopParams): Promise<RuntimeStopResult> {
-    if (params.mode === 'soft') {
-      // Soft stop bypasses the lifecycle lock (Cindy plan v2 issue
-      // #6): soft is a directive WRITE, not a lifecycle transition,
-      // so it must be deliverable mid-start / mid-stop / mid-retry
-      // without blocking on the lock. The write itself gates on
-      // `handle.phase` (`not_running` / `draining` arms) which is
-      // already the right interlock.
-      return this.softStopHandle(params);
-    }
     const k = key(params.conversation_id, params.agent_id);
     return this.withLifecycleLock(k, async () => {
       const handle = this.handles.get(k);
@@ -1974,114 +2265,7 @@ export class Supervisor implements SupervisorContract {
   }
 
   /**
-   * Soft stop: write the backend-supplied directive text to the
-   * child's stdin so the agent can finish the current turn gracefully.
-   * The runtime is NOT terminated — backend reacts to the next
-   * `turn_end` or `runtime_exit` (Cindy: result must not conflate
-   * "process stopped" with "directive written"; the .superRefine on
-   * RuntimeStopResultSchema enforces the `directive_delivered` ↔
-   * `reason` pairing at the protocol layer).
-   *
-   * Option A v2 (Cindy `UMGu36zoTDVuKWXi` + `wYjG20JdGjLpwq8K`):
-   * daemon owns the driver instance with state, so it encodes the
-   * directive text via `handle.driver.encodeStdinMessage(text,
-   * cliSessionId)` instead of writing pre-encoded bytes from backend.
-   *
-   * Pre-`readyToEncode()` mapping: Cindy explicitly opted to NOT extend
-   * the soft `reason` enum with a new `driver_not_ready` arm — soft
-   * stop pre-handshake is rare and the directive can't be retried by
-   * backend the way a delivery can, so the encode-null pre-ready case maps
-   * to the existing `driver_refused`. Logged distinctly so operators
-   * can tell the two arms apart on inspection.
-   *
-   * `driver.encodeInterruptControl` is intentionally NOT called here:
-   * soft stop is a user-message inject, not a protocol-level interrupt.
-   */
-  private async softStopHandle(
-    params: RuntimeStopParams,
-  ): Promise<RuntimeStopResult> {
-    const k = key(params.conversation_id, params.agent_id);
-    const handle = this.handles.get(k);
-    if (!handle || handle.phase === 'exited' || handle.phase === 'draining') {
-      return {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'not_running',
-      };
-    }
-    if (params.soft_directive === undefined) {
-      // Schema disallows this at parse time, but defend at runtime
-      // too in case a caller bypassed validation.
-      return {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'driver_refused',
-      };
-    }
-    if (!driverReadyToEncode(handle.driver)) {
-      this.logger.info(
-        {
-          kind: 'process',
-          action: 'soft_stop_driver_not_ready',
-          pid: handle.pid,
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-        },
-        'soft stop refused: driver not ready to encode (mapping to driver_refused per Cindy `wYjG20JdGjLpwq8K`)',
-      );
-      return {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'driver_refused',
-      };
-    }
-    const encoded = handle.driver.encodeStdinMessage(
-      params.soft_directive,
-      handle.cliSessionId,
-    );
-    if (encoded === null) {
-      this.logger.warn(
-        {
-          kind: 'process',
-          action: 'soft_stop_driver_refused',
-          pid: handle.pid,
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          text_bytes: params.soft_directive.length,
-        },
-        'soft stop encode returned null after driver claimed ready (driver bug?)',
-      );
-      return {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'driver_refused',
-      };
-    }
-    try {
-      await this.writeStdinPayload(handle, encoded);
-    } catch (err) {
-      this.logger.warn(
-        {
-          kind: 'process',
-          action: 'soft_stop_write_failed',
-          pid: handle.pid,
-          conversationId: handle.conversationId,
-          agent_id: handle.agentId,
-          error_message: (err as Error).message,
-        },
-        'soft stop directive write failed',
-      );
-      return {
-        mode: 'soft',
-        directive_delivered: false,
-        reason: 'write_failed',
-      };
-    }
-    return { mode: 'soft', directive_delivered: true };
-  }
-
-  /**
-   * Internal helper shared by `stop({mode:'hard'})` and `stopAll`.
+   * Internal helper shared by `stop()` and `stopAll`.
    * Initiates the SIGTERM → SIGKILL cascade and resolves only AFTER
    * the child has actually exited (or the SIGKILL timeout fired).
    * The returned `exit_code` is whatever the OS surfaced via the
@@ -2294,23 +2478,33 @@ export class Supervisor implements SupervisorContract {
         handle.driver.oneShot ||
         handle.phase === 'spawning' ||
         handle.phase === 'startup_pending' ||
-        !driverReadyToEncode(handle.driver)
+        (!driverReadyToEncode(handle.driver) && !handle.initObserved)
       ) {
         // Startup-phase or live oneShot — DELIBERATELY NOT folded into the
         // daemon deferred queue (§11.2). Each already has a lossless
         // DB-backed re-drive: `runtime_ready_for_drain` once the handle is
         // ready + its startup batch consumed (spawning/startup_pending/
-        // not-ready-to-encode), or exit→respawn-with-batch for a live
-        // oneShot. Taking volatile daemon custody here would be strictly
-        // worse on crash-safety for zero benefit, so we refuse and let the
-        // backend keep the rows pending and resubmit.
+        // pre-init not-ready-to-encode), or exit→respawn-with-batch for a
+        // live oneShot. Taking volatile daemon custody here would be
+        // strictly worse on crash-safety for zero benefit, so we refuse
+        // and let the backend keep the rows pending and resubmit.
+        //
+        // POST-init `!readyToEncode` is NOT this arm (#task:1565): for a
+        // prompt-boundary runtime the encoder goes un-ready on EVERY
+        // active prompt, and `ready_for_drain` is once-per-run — refusing
+        // here would starve the rows until an unrelated live delivery.
+        // Those land in the DEFER arm below (boundary closed), custody in
+        // the daemon queue, flushed when the prompt response reopens.
         return { disposition: 'refused', reason: 'startup_pending' };
       }
 
-      // Here: phase === 'ready', driver ready to encode, not oneShot.
-      const gated = handle.driver.busyDeliveryMode === 'gated';
+      // Here: phase === 'ready', not oneShot. The driver is ready to
+      // encode OR (post-init, gated profile) its boundary is closed —
+      // the defer arm below takes the closed-boundary case before the
+      // admit arm can reach the encoder.
+      const gated = profileUsesBoundaryGate(handle);
       const writeInFlight = handle.startupDelivery !== null;
-      const boundaryOpen = handleAtSafeBoundary(handle);
+      const boundaryOpen = strategyBoundaryOpen(handle);
 
       // ── DEFER arm: ready, but cannot take the write RIGHT NOW (§11.3) ──
       // Two custody-into-daemon-queue cases, both keep the rows in-flight:
@@ -2324,6 +2518,7 @@ export class Supervisor implements SupervisorContract {
       // flush emits.
       if (writeInFlight || (gated && !boundaryOpen)) {
         this.enqueueDeferred(handle, params, ctx.owner);
+        this.scheduleReservationStallCheck(handle);
         return {
           disposition: 'deferred',
           pid: handle.pid,
@@ -2379,6 +2574,63 @@ export class Supervisor implements SupervisorContract {
         { kind: 'process', action: 'deferred_owner_cleanup', owner, discarded },
         'discarded deferred deliveries for dropped connection owner',
       );
+    }
+  }
+
+  /** Stall diagnostics for a `next-turn-batch` reservation (#task:1563,
+   *  doc §3.4; Cindy P1-1: timeout-triggered, not inflow-triggered — a
+   *  non-empty deferred queue with no further deliveries must still get
+   *  its warn). Scheduled when an entry defers under a held reservation
+   *  and on a re-arm that leaves a queue remainder. The timer only ever
+   *  logs: it never writes and never releases the hold. One-shot per
+   *  reservation via `reservationStallWarned`; latch and timer reset when
+   *  the next write re-arms. */
+  private scheduleReservationStallCheck(handle: RuntimeHandle): void {
+    if (!handle.nextTurnReserved || handle.nextTurnReservedAt === null) return;
+    if (handle.reservationStallWarned) return;
+    if (handle.reservationStallTimer !== null) return;
+    if (handle.deferredQueue.length === 0) return;
+    const remaining =
+      this.reservationStallWarnMs - (this.now() - handle.nextTurnReservedAt);
+    if (remaining <= 0) {
+      this.warnReservationStall(handle);
+      return;
+    }
+    handle.reservationStallTimer = setTimeout(() => {
+      handle.reservationStallTimer = null;
+      // Re-check LIVE state: the handle may have been replaced, the
+      // reservation released, or the queue drained since scheduling.
+      const live = this.handles.get(key(handle.conversationId, handle.agentId));
+      if (live !== handle) return;
+      if (!handle.nextTurnReserved || handle.reservationStallWarned) return;
+      if (handle.deferredQueue.length === 0) return;
+      this.warnReservationStall(handle);
+    }, remaining);
+    handle.reservationStallTimer.unref();
+  }
+
+  private warnReservationStall(handle: RuntimeHandle): void {
+    handle.reservationStallWarned = true;
+    this.logger.warn(
+      {
+        kind: 'process',
+        action: 'next_turn_reservation_stalled',
+        conversation_id: handle.conversationId,
+        agent_id: handle.agentId,
+        reservation_age_ms:
+          handle.nextTurnReservedAt === null
+            ? null
+            : this.now() - handle.nextTurnReservedAt,
+        deferred_queue_depth: handle.deferredQueue.length,
+      },
+      'next-turn reservation held past stall threshold; deliveries deferring until terminal turn_end (fail closed, no write)',
+    );
+  }
+
+  private clearReservationStallTimer(handle: RuntimeHandle): void {
+    if (handle.reservationStallTimer !== null) {
+      clearTimeout(handle.reservationStallTimer);
+      handle.reservationStallTimer = null;
     }
   }
 
@@ -2472,14 +2724,14 @@ export class Supervisor implements SupervisorContract {
       // A write is still in flight — the post-write re-drive will retry once
       // the slot clears. Never stomp a batch mid-consume.
       if (live.startupDelivery !== null) return;
-      const gated = live.driver.busyDeliveryMode === 'gated';
+      const gated = profileUsesBoundaryGate(live);
       // Still mid-turn for a gated driver — wait for the next boundary.
-      if (gated && !handleAtSafeBoundary(live)) return;
+      if (gated && !strategyBoundaryOpen(live)) return;
 
       live.flushingDeferred = true;
       try {
         const batch = gated
-          ? live.deferredQueue.splice(0) // drain all
+          ? spliceBoundedDeferredPrefix(live.deferredQueue) // bounded prefix (I4)
           : live.deferredQueue.splice(0, 1); // FIFO one
         if (batch.length === 0) return;
         live.startupDelivery = combineDeferredBatch(batch, gated);
@@ -2804,6 +3056,17 @@ export class Supervisor implements SupervisorContract {
     // fanout.
     this.observeInitProgress(handle, line);
 
+    // Boundary-reopen detection must bracket the PARSE itself, not only
+    // the per-event busy transitions (#task:1565): a prompt-boundary
+    // driver (ACP) settles its active prompt INSIDE parseLine — the
+    // driver-owned `readyToEncode` flips true before any event is
+    // dispatched, so the per-event edge check in
+    // `updateRunStateFromParsed` reads "was already open" and never
+    // fires. Snapshot the boundary before parsing and drive the queue
+    // if the parse (or its events) reopened it. `maybeScheduleDeferredFlush`
+    // is guarded: no-op when the queue is empty or a flush is running.
+    const boundaryOpenBeforeParse = strategyBoundaryOpen(handle);
+
     let events: ParsedEvent[];
     try {
       events = handle.driver.parseLine(line);
@@ -2850,6 +3113,13 @@ export class Supervisor implements SupervisorContract {
       // separately (non-droppable, payload-bounded).
       this.updateRunStateFromParsed(handle, validated.data);
       this.emitParsedEvent(handle, validated.data);
+    }
+    // Parse-bracketed reopen edge (#task:1565): the ACP prompt response
+    // flipped `readyToEncode` inside parseLine, invisible to the
+    // per-event edge check above. Idempotent with that check — the
+    // flush scheduler no-ops on an empty queue or an active flush.
+    if (!boundaryOpenBeforeParse && strategyBoundaryOpen(handle)) {
+      this.maybeScheduleDeferredFlush(handle);
     }
   }
 
@@ -2998,7 +3268,7 @@ export class Supervisor implements SupervisorContract {
     // transition; if this event reopens the boundary, flush any deferred
     // batch — symmetric to the retired coordinator's
     // `if (!wasSafe && nowSafe && pending.length) flush()`.
-    const wasSafeBoundary = handleAtSafeBoundary(handle);
+    const wasBoundaryOpen = strategyBoundaryOpen(handle);
 
     switch (parsed.kind) {
       case 'thinking':
@@ -3063,6 +3333,11 @@ export class Supervisor implements SupervisorContract {
       case 'turn_end':
         handle.busy.outstandingToolUses = 0;
         handle.busy.compacting = false;
+        handle.nextTurnReserved = false;
+        handle.nextTurnReservedAt = null;
+        handle.reservationStallWarned = false;
+        this.clearReservationStallTimer(handle);
+        handle.turnEndCount += 1;
         // Cindy `YW2BGWryWjfymPkU` B3: turn_end is a terminal
         // transition — go through `resolveRun` so the terminal
         // state lands, then `handle.runState` is cleared so the
@@ -3070,6 +3345,54 @@ export class Supervisor implements SupervisorContract {
         // terminalReason.
         this.resolveRun(handle, 'turn_ended');
         break;
+      case 'input_lifecycle': {
+        // #task:1557 Phase 1: pure observation. Correlate the runtime's
+        // per-payload lifecycle back to the delivery ids we stamped at
+        // encode time; log it, prune on completion, change nothing else.
+        const mapped = handle.inputPayloadUuids.get(parsed.commandUuid);
+        this.logger.info(
+          {
+            kind: 'process',
+            action: 'input_lifecycle',
+            pid: handle.pid,
+            conversationId: handle.conversationId,
+            agent_id: handle.agentId,
+            command_uuid: parsed.commandUuid,
+            state: parsed.state,
+            delivery_ids: mapped ? [...mapped.deliveryIds] : null,
+            correlated: mapped !== undefined,
+          },
+          'runtime input lifecycle observed',
+        );
+        // `input_lifecycle` is GENERATION-BOUNDARY evidence by contract
+        // (#task:1561 round 2, action-snapshot invariant): drivers may
+        // only emit it from a signal proving the payload became precedent
+        // context for the NEXT model generation — never from a
+        // write/transport/RPC ack (that misnaming caused countgame round
+        // 2's false-fresh duplicates). Sources, pinned by driver tests:
+        //   - claude: the runtime's own `command_lifecycle` frames
+        //     (write lands at a proven tool boundary; B' #task:1558).
+        //   - codex: the `item/started {type:'userMessage'}` echo of our
+        //     `clientUserMessageId` — emitted when codex drains
+        //     pending_input into model history, between the previous
+        //     generation and the next sampling request.
+        // Promote observed for exactly the covered streams/seqs
+        // (monotonic; already-admitted coverage is a no-op).
+        if (parsed.state === 'started' && mapped) {
+          for (const [streamKey, seq] of mapped.coveredSeqByStream) {
+            this.advanceObservedStream(
+              handle,
+              streamKey,
+              seq,
+              'input_lifecycle_started',
+            );
+          }
+        }
+        if (parsed.state === 'completed') {
+          handle.inputPayloadUuids.delete(parsed.commandUuid);
+        }
+        break;
+      }
       case 'error':
         if (parsed.fatal !== true) {
           this.transitionRunState(handle, {
@@ -3088,7 +3411,7 @@ export class Supervisor implements SupervisorContract {
     // If the busy transition just reopened a safe boundary, drive the
     // daemon mid-turn queue (#task:1417 Stage 3, §11.4). Guarded/no-op when
     // the queue is empty or a flush is already running.
-    if (!wasSafeBoundary && handleAtSafeBoundary(handle)) {
+    if (!wasBoundaryOpen && strategyBoundaryOpen(handle)) {
       this.maybeScheduleDeferredFlush(handle);
     }
   }
@@ -3332,6 +3655,10 @@ export class Supervisor implements SupervisorContract {
     handle.busy.outstandingToolUses = 0;
     handle.busy.compacting = false;
     handle.inputTurnActive = false;
+    handle.nextTurnReserved = false;
+    handle.nextTurnReservedAt = null;
+    handle.reservationStallWarned = false;
+    this.clearReservationStallTimer(handle);
     handle.defaultReplyTarget = CHANNEL_DEFAULT_REPLY_TARGET;
     handle.pendingDefaultReplyTarget = undefined;
   }
@@ -3527,6 +3854,7 @@ export class Supervisor implements SupervisorContract {
       }
       handle.deferredQueue = [];
     }
+    this.clearReservationStallTimer(handle);
 
     // 3c-b retry branch (Cindy plan v2 issue #3 + override precedence
     // `-pdNvRYOWip5e9yA`): if the init watchdog killed the child AND
@@ -3650,7 +3978,7 @@ export class Supervisor implements SupervisorContract {
    *
    * NOTE (Cindy `YW2BGWryWjfymPkU` B3): this method does NOT carry
    * `terminalReason`. Every terminal transition (turn_end, hard
-   * stop, crash, soft-stop-induced replied) MUST go through
+   * stop, crash) MUST go through
    * `resolveRun` instead, which (a) maps reason → terminal status
    * per CM and (b) clears `handle.runState` so the next run starts
    * fresh. Passing terminalReason through here would let a
@@ -3995,7 +4323,7 @@ export class Supervisor implements SupervisorContract {
    * #6 + tightening `ixAq6GPTn4fVSpCF`:
    *
    *   - Covers ONLY lifecycle mutations: start, hard stop, clearSession,
-   *     internal retry respawn. delivery/soft-stop/output-pause go around.
+   *     internal retry respawn. delivery/output-pause go around.
    *   - Per-key, not global — different (conv, agent) ops parallelize.
    *   - Survives previous-op failure: a rejected predecessor must not
    *     wedge the queue. We swallow the previous tail's rejection at
@@ -4115,7 +4443,7 @@ function phaseToStatus(phase: RuntimePhase): AgentRunState['status'] {
  *
  * Lifted to a module-level helper rather than an instance method so
  * `consumeStartupDelivery` / `tryConsumeStartupDelivery` /
- * `maybeEmitReadyForDrain` / `deliver` / `softStopHandle` can call it
+ * `maybeEmitReadyForDrain` / `deliver` can call it
  * without re-establishing `this` binding.
  */
 function driverReadyToEncode(driver: Driver): boolean {

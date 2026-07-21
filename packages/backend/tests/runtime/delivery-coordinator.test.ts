@@ -158,19 +158,19 @@ function makeCacheView(
 
 const DRIVER_DIRECT: DriverDeliveryView = {
   runtime: 'codex',
-  busyDeliveryMode: 'direct',
+  releaseProfile: 'native-steer',
   oneShot: false,
   kickoffMode: 'self_inits',
 };
 const DRIVER_GATED: DriverDeliveryView = {
   runtime: 'claude',
-  busyDeliveryMode: 'gated',
+  releaseProfile: 'tool-boundary-steer',
   oneShot: false,
   kickoffMode: 'requires_first_message',
 };
 const DRIVER_NONE: DriverDeliveryView = {
   runtime: 'cursor',
-  busyDeliveryMode: 'none',
+  releaseProfile: 'one-shot',
   oneShot: true,
   kickoffMode: 'self_inits',
 };
@@ -229,6 +229,8 @@ function parsed(kind: ParsedEvent['kind']): ParsedEvent {
       return { kind, sessionId: 's1' };
     case 'error':
       return { kind, message: 'oops' };
+    case 'input_lifecycle':
+      return { kind, commandUuid: 'uuid-1', state: 'started' };
     case 'unknown':
       return { kind, raw: '' };
   }

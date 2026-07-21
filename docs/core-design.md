@@ -223,7 +223,7 @@ Claude Code 在 turn 进行中，stdin 不是任何时刻都能塞东西的（�
 - 消息进 inbox 时，**不立即 push**；状态机检测到 safe boundary 时调 A 档一次性把整批 inbox push 出去
 - 没到 boundary 时（gated 分支 return），消息留 inbox 等下个 boundary
 
-所以 `busyDeliveryMode` 的 `gated`（Claude）vs `direct`（codex 等）不是"全推/降级推"，而是"**等机会推/立刻推**"。两者最终都走 A 档。
+所以投递节奏不是"全推/降级推"，而是"**等机会推/立刻推**"。两者最终都走 A 档。（历史注：三值 `busyDeliveryMode` 已由 per-driver `releaseProfile` 取代，语义见 [`runtime-input-design.md`](./runtime-input-design.md) §3.2。）
 
 #### Lifecycle lock 与 Clear session
 

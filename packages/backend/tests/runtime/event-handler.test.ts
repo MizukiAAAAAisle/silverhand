@@ -994,6 +994,76 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     expect(payload.event.text).toBe('hello world');
   });
 
+  it('input_lifecycle is diagnostics-only: no agent_event SSE, no activity, no callbacks (#task:1557)', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({
+      runtimes: [
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          pid: 1234,
+          phase: 'ready',
+          run_state: null,
+          started_at: 1700000000000,
+        },
+      ],
+    });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const activityCalls: unknown[] = [];
+    const conversationActivity: ConversationActivitySink = {
+      recordParsedEvent(params) {
+        activityCalls.push(params);
+        return null;
+      },
+      upsertTextBlock() {
+        throw new Error('not used');
+      },
+      recordParsedEventDropped() {
+        throw new Error('not used');
+      },
+    };
+    const logs: Array<Record<string, unknown>> = [];
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      conversationActivity,
+      logger: {
+        info: (fields: Record<string, unknown>) => {
+          logs.push(fields);
+        },
+        warn: () => {},
+        error: () => {},
+      } as never,
+    });
+    await handler.start();
+    for (const state of ['queued', 'started', 'completed'] as const) {
+      emit({
+        event: 'runtime_parsed_event',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        parsed: { kind: 'input_lifecycle', commandUuid: 'uuid-9', state } as never,
+        ts: 1700000001000,
+      });
+    }
+    // Nothing user-visible: no agent_event publish, no activity row.
+    expect(published.filter(p => p.kind === 'agent_event')).toEqual([]);
+    expect(activityCalls).toEqual([]);
+    // Diagnostics exist: one sanitized structured log per frame.
+    const lifecycleLogs = logs.filter(l => l['action'] === 'input_lifecycle');
+    expect(lifecycleLogs).toHaveLength(3);
+    expect(lifecycleLogs[0]).toMatchObject({
+      conversationId: 'c1',
+      agentId: 'a1',
+      state: 'queued',
+      command_uuid: 'uuid-9',
+    });
+  });
+
   it('persists parsed event before publishing canonical conversation_activity', async () => {
     const cache = new RunStateCache();
     const { client, emit } = makeFakeClient();

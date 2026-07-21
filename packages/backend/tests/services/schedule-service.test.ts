@@ -1058,8 +1058,11 @@ describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
     const after = f.schedules.get(s.id);
     expect(after?.status).toBe('failed');
     expect(after?.failure_reason).toContain('target_conversation_unavailable');
-    // No deliver/start to the missing target.
-    expect(f.fake.delivered.length).toBe(0);
+    // No deliver/start to the missing target; the ONLY delivery is the
+    // owner-DM notice row (universe alignment §5.2 — the notice bumps the
+    // DM head, so the owner needs a normal delivery to advance past it).
+    expect(f.fake.delivered.map(d => d.conversationId)).toEqual([f.homeDmId]);
+    expect(f.fake.delivered[0]!.agentId).toBe(f.ownerAgentId);
     expect(f.fake.starts.length).toBe(0);
     // Owner gets a heads-up in their agent_home DM so they don't keep
     // waiting on a wake that will never land. This is a lifecycle

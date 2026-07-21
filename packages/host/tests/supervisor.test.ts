@@ -2,7 +2,7 @@
  * Supervisor 3a — spawn / output / hard stop / exit / status.
  *
  * Scope locked with Cindy in `jhH-vC1s_1J_jTLu`: this suite covers
- * execution-plane behavior only. Parse / deliver / soft stop / watchdog
+ * execution-plane behavior only. Parse / deliver / watchdog
  * / lifecycle-lock land in 3b/3c with their own test suites.
  *
  * Test strategy: substitute a fake `Driver` whose `binary` points at
@@ -98,8 +98,8 @@ function silentLogger(): DaemonLogger {
  * write to stderr, or to ignore SIGTERM).
  *
  * Option A v2 (Cindy `UMGu36zoTDVuKWXi`): daemon now calls
- * `encodeStdinMessage` itself for `deliver` (spawn + write arms) /
- * `softStop`. The previous default of returning `null` would now
+ * `encodeStdinMessage` itself for `deliver` (spawn + write arms).
+ * The previous default of returning `null` would now
  * surface as `driver_refused` and break every supervisor test that
  * exercises stdin writes. We mimic the real claude driver by
  * encoding the text into a stream-json `{"type":"user", …}` line so
@@ -122,7 +122,7 @@ function makeFakeDriver(extraArgs: string[] = []): Driver {
     kind: 'claude',
     binary: FIXTURE, // resolveBinary stub returns this verbatim
     kickoffMode: 'self_inits',
-    busyDeliveryMode: 'direct',
+    releaseProfile: 'native-steer',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -1021,7 +1021,7 @@ describe('Supervisor 3a — stopAll / closeActivityLog', () => {
   });
 });
 
-describe('Supervisor 3b — deliver WRITE arm / soft stop write payload to stdin', () => {
+describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
   it('deliver on a live runtime writes the encoded payload to stdin and returns admitted, settling onto runtime_delivery_consumed', async () => {
     // 3b lifts the 3a stub: the WRITE arm now writes the opaque
     // payload to the child's stdin (+ '\n') and returns admitted on
@@ -1089,46 +1089,6 @@ describe('Supervisor 3b — deliver WRITE arm / soft stop write payload to stdin
     expect(res.disposition).toBe('spawning');
     await supervisor.stop({ conversation_id: 'cX', agent_id: 'aX', mode: 'hard' });
   });
-
-  it('soft stop writes the directive payload to stdin and returns directive_delivered:true without a reason', async () => {
-    const { supervisor, events } = makeSupervisor({
-      driverArgs: ['--echo-stdin'],
-    });
-    await supervisor.start(baseStartParams);
-    await waitFor(() =>
-      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
-    );
-    const res = await supervisor.stop({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'soft',
-      soft_directive: 'please stop',
-    });
-    expect(res).toEqual({ mode: 'soft', directive_delivered: true });
-    await waitFor(() =>
-      events.some(
-        e =>
-          e.event === 'runtime_output' &&
-          e.chunk.includes('STDIN:{"type":"user"'),
-      ),
-    );
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
-  });
-
-  it('soft stop on unknown returns not_running with a reason', async () => {
-    const { supervisor } = makeSupervisor();
-    const res = await supervisor.stop({
-      conversation_id: 'cX',
-      agent_id: 'aX',
-      mode: 'soft',
-      soft_directive: 'whatever',
-    });
-    expect(res).toEqual({
-      mode: 'soft',
-      directive_delivered: false,
-      reason: 'not_running',
-    });
-  });
 });
 
 describe('Supervisor 3b — clearSession behavior', () => {
@@ -1172,7 +1132,7 @@ function makeProgrammableDriver(
     kind: 'claude',
     binary: FIXTURE,
     kickoffMode,
-    busyDeliveryMode: 'direct',
+    releaseProfile: 'native-steer',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -1183,8 +1143,8 @@ function makeProgrammableDriver(
     // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): daemon calls
     // encodeStdinMessage directly. A null return surfaces as
     // `driver_refused`, which would break tests that exercise the
-    // stdin write path (deferred startup_delivery consume, soft stop
-    // pre-ready, etc). Mirror the claude driver's stream-json shape.
+    // stdin write path (deferred startup_delivery consume, etc).
+    // Mirror the claude driver's stream-json shape.
     encodeStdinMessage: (text: string) => encodeStreamJsonUser(text),
     encodeInterruptControl: () => null,
     parseLine: () => {
@@ -1201,6 +1161,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
   emitRawRuntimeOutput?: boolean;
+  logger?: DaemonLogger;
 } = {}): {
   supervisor: Supervisor;
   events: EventFrame[];
@@ -1214,7 +1175,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
   ): ChildProcess => realSpawn(execPath, [bin, ...args.slice(1)], options);
   const supervisor = new Supervisor({
     emit: spy.emit,
-    logger: silentLogger(),
+    logger: opts.logger ?? silentLogger(),
     driverFor: () => driver,
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
@@ -1266,6 +1227,116 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
         e => e.event === 'runtime_output' && e.chunk.includes('READY'),
       ),
     ).toBe(true);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('correlates runtime lifecycle frames to the minted payload uuid end-to-end (#task:1557)', async () => {
+    const captured: Array<string | undefined> = [];
+    const { driver, setNextParse } = makeProgrammableDriver();
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (text, sess, opts) => {
+      captured.push(opts?.payloadUuid);
+      return baseEncode(text, sess, opts);
+    };
+    const logs: Array<Record<string, unknown>> = [];
+    const logger: DaemonLogger = {
+      info: (fields: unknown) => {
+        if (fields && typeof fields === 'object') logs.push(fields as Record<string, unknown>);
+      },
+      warn: (fields: unknown) => {
+        if (fields && typeof fields === 'object') logs.push(fields as Record<string, unknown>);
+      },
+      error: () => {},
+    } as unknown as DaemonLogger;
+    const { supervisor, events } = makeSupervisorWithDriver(driver, { logger });
+
+    await supervisor.start(baseStartParams);
+    await waitForRuntimeReady(events);
+
+    // Delivery #1: the supervisor mints a uuid for the lifecycle-capable
+    // driver and hands it to the encoder.
+    await supervisor.deliver({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [21],
+      kind: 'message',
+      text: 'first payload',
+      delivered_up_to_seq: 21,
+      spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+    await waitForDeliveryConsumed(events, 21);
+    const uuidA = captured[0];
+    expect(uuidA).toBeTruthy();
+
+    // Delivery #2's stdin echo triggers parseLine, which replays the
+    // runtime's lifecycle for payload A (queued → started → completed).
+    setNextParse([
+      { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'queued' },
+      { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'started' },
+      { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'completed' },
+    ]);
+    await supervisor.deliver({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [22],
+      kind: 'message',
+      text: 'second payload',
+      delivered_up_to_seq: 22,
+      spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+    await waitFor(() =>
+      logs.some(
+        l => l['action'] === 'input_lifecycle' && l['state'] === 'completed',
+      ),
+    );
+    const lifecycleLogs = logs.filter(l => l['action'] === 'input_lifecycle');
+    expect(lifecycleLogs).toHaveLength(3);
+    for (const entry of lifecycleLogs) {
+      expect(entry['command_uuid']).toBe(uuidA);
+      expect(entry['correlated']).toBe(true);
+      expect(entry['delivery_ids']).toEqual([21]);
+    }
+
+    // completed pruned the mapping: replaying `started` for uuidA on
+    // delivery #3's echo must log correlated:false.
+    setNextParse([
+      { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'started' },
+    ]);
+    await supervisor.deliver({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [23],
+      kind: 'message',
+      text: 'third payload',
+      delivered_up_to_seq: 23,
+      spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+    await waitFor(() =>
+      logs.some(
+        l =>
+          l['action'] === 'input_lifecycle' &&
+          l['state'] === 'started' &&
+          l['correlated'] === false,
+      ),
+    );
+    const uncorrelated = logs.find(
+      l => l['action'] === 'input_lifecycle' && l['correlated'] === false,
+    );
+    expect(uncorrelated?.['delivery_ids']).toBeNull();
+
+    // Zero behavior change: lifecycle frames drove no run-state tool
+    // transition and no freshness advance of their own. Only the first
+    // delivery's startup admission advances observed (deliveries 2/3
+    // arrive mid-turn and park in pending admission) — the three
+    // lifecycle frames add exactly nothing on top of that.
+    expect(
+      events.some(
+        e => e.event === 'runtime_state' && e.state?.status === 'tool_running',
+      ),
+    ).toBe(false);
+    expect(
+      logs.filter(l => l['action'] === 'freshness_observed_seq_advanced').length,
+    ).toBe(1);
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 
@@ -3124,7 +3195,7 @@ function makeStatefulCodexLikeDriver(): {
     kind: 'codex',
     binary: FIXTURE,
     kickoffMode: 'self_inits',
-    busyDeliveryMode: 'direct',
+    releaseProfile: 'native-steer',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,
@@ -3189,7 +3260,7 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
       kind: 'codex',
       binary: FIXTURE,
       kickoffMode: 'self_inits',
-      busyDeliveryMode: 'direct',
+      releaseProfile: 'native-steer',
       oneShot: false,
       supportsNativeStandingPrompt: true,
       initLivenessSilenceMs: 30_000,
@@ -3364,7 +3435,7 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
 });
 
 describe('Supervisor — daemon-owned freshness boundary', () => {
-  it('advances observed seq and carries the stale event after a 409 response', async () => {
+  it('carries the stale event and holds the boundary when the 409 window is empty', async () => {
     const { supervisor, events } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
@@ -3427,9 +3498,423 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(retry).toMatchObject({ ok: true, message_id: 'm14' });
       expect(postedBodies).toHaveLength(2);
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(12);
-      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(13);
+      // Empty `newer_messages` window: nothing was shown, so the observed
+      // boundary must NOT advance to current_seq (13) — it stays at 12
+      // and the CAS remains armed for the unseen message.
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(12);
       expect(postedBodies[1]?.['stale_event_id']).toBe('stale-1');
       expect(postedBodies[1]?.['stale_resolution_reason']).toBe('revised');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('countgame round-2 falsifier (#task:1561): old action with locked snapshot gets a REAL signal-only 409; only after the userMessage-echo lifecycle does the informed resend pass CAS', async () => {
+    const captured: Array<string | undefined> = [];
+    const { driver, setNextParse } = makeProgrammableDriver();
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (text, sess, opts) => {
+      captured.push(opts?.payloadUuid);
+      return baseEncode(text, sess, opts);
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    const postedBodies: Record<string, unknown>[] = [];
+    // CAS-aware fake backend (Cindy P1): the conversation head is at
+    // seq 11 (M2 already landed). A send whose seen_up_to_seq trails the
+    // head gets the production signal-only 409 shape — no bodies, no
+    // count; a fresh send gets 200. This makes the falsifier end-to-end:
+    // an unconditionally-200 fake had blessed exactly the round-2 bug.
+    let backendHeadSeq = 11;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+        const seen = body['seen_up_to_seq'];
+        if (
+          body['freshness_bypass'] !== true &&
+          typeof seen === 'number' &&
+          seen < backendHeadSeq
+        ) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: `message is stale: conversation advanced from seq ${seen} to ${backendHeadSeq} before send`,
+                retriable: false,
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: `se-${postedBodies.length}`,
+                  stream_key: 'main',
+                  seen_up_to_seq: seen,
+                  current_seq: backendHeadSeq,
+                  hint: 'unseen messages are queued for normal delivery',
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        backendHeadSeq += 1;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${postedBodies.length}`,
+            message_seq: backendHeadSeq,
+            thread_root_id: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      // M1 (seq 10) admitted at boundary → observed MAIN=10, turn active.
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [10], kind: 'message',
+        text: 'M1', delivered_up_to_seq: 10, spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 10);
+
+      // M2 (seq 11) steered mid-turn: written into the active turn. The
+      // JSON-RPC response to that steer is a TRANSPORT ack and (round-2
+      // contract) produces NO parsed event at all — coverage stays parked
+      // in pendingAdmission (#1471), observed stays 10.
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [11], kind: 'message',
+        text: 'M2', delivered_up_to_seq: 11, spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 11);
+      const uuidM2 = captured[captured.length - 1];
+      expect(uuidM2).toBeTruthy();
+
+      // The already-in-flight action's send carries the LOCKED snapshot
+      // (seen=10) and the backend CAS MUST stale it — this is the exact
+      // event round 2 let through three times.
+      const send1 = await supervisor.agentMessageSend({
+        conversation_id: 'c1', agent_id: 'a1', content: '0-old-draft',
+      });
+      expect(send1.ok).toBe(false);
+      expect(send1.ok === false && send1.status).toBe(409);
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(10);
+
+      // Generation-boundary evidence: codex drains pending_input into
+      // model history and echoes our clientUserMessageId on
+      // item/started(userMessage) — the driver maps it to
+      // input_lifecycle started; the real completed follows as its own
+      // frame (Cindy P2). NOW observed promotes to 11.
+      setNextParse([
+        { kind: 'input_lifecycle', commandUuid: uuidM2!, state: 'started' },
+      ]);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [12], kind: 'message',
+        text: 'tick', spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 12);
+      setNextParse([
+        { kind: 'input_lifecycle', commandUuid: uuidM2!, state: 'completed' },
+      ]);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [13], kind: 'message',
+        text: 'tick2', spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 13);
+
+      // The informed resend (revised draft under the recorded stale
+      // event) carries seen=11 and passes CAS.
+      const send2 = await supervisor.agentMessageSend({
+        conversation_id: 'c1', agent_id: 'a1', content: '1',
+        stale_resolution_reason: 'revised',
+      });
+      expect(send2.ok).toBe(true);
+      const informed = postedBodies[postedBodies.length - 1]!;
+      expect(informed['seen_up_to_seq']).toBe(11);
+      expect(informed['stale_resolution_reason']).toBe('revised');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .catch(() => undefined);
+    }
+  });
+
+  it('countgame P1-B falsifier: a bypass holds the watermark across the gap, then the own seq MERGES once the gap is admitted (no permanent hole)', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits');
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        const isBypass = postedBodies[postedBodies.length - 1]?.['freshness_bypass'] === true;
+        // Backend accepts the bypass send at seq 15, with the stream head
+        // at insert time (14) as the merge prerequisite — everything the
+        // sender skipped past.
+        return new Response(
+          JSON.stringify(
+            isBypass
+              ? {
+                  message_id: 'forced',
+                  message_seq: 15,
+                  thread_root_id: null,
+                  stream_head_before: 14,
+                }
+              : { message_id: `m${postedBodies.length}`, thread_root_id: null },
+          ),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [11], kind: 'message',
+        text: 'seed observed at 11', delivered_up_to_seq: 11,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 11);
+
+      const forced = await supervisor.agentMessageSend({
+        conversation_id: 'c1', agent_id: 'a1',
+        content: 'forced past the gap',
+        freshness_bypass: true,
+      });
+      expect(forced.ok).toBe(true);
+
+      // Arm 1 — no immediate swallow (live regression 11→15/11→16): the
+      // forced message lands but the cursor HOLDS; the next normal send
+      // still declares seen=11 while 12–14 are unadmitted.
+      const next = await supervisor.agentMessageSend({
+        conversation_id: 'c1', agent_id: 'a1', content: 'next normal send',
+      });
+      expect(next.ok).toBe(true);
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(11);
+
+      // Arm 2 — no permanent hole (Cindy follow-up P1): the sender is
+      // excluded from its own fan-out, so seq 15 never arrives by inbox.
+      // When the REAL gap (12..14) is legitimately admitted, observed
+      // must converge THROUGH the prerequisite to the own seq 15 — not
+      // stall at 14 with head=15 forever.
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [14], kind: 'message',
+        text: 'gap batch 12..14', delivered_up_to_seq: 14,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 14);
+      // Mid-turn write is not evidence (#1471): promote the pending gap
+      // at the next parsed turn boundary (turn_end → new-turn thinking).
+      // Seq-less tick deliveries flush the preset parse events via the
+      // fixture's stdin echo without touching observed themselves.
+      setNextParse([{ kind: 'turn_end' }]);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [90], kind: 'message',
+        text: 'tick1', spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitFor(() =>
+        events.some(
+          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end',
+        ),
+      );
+      setNextParse([{ kind: 'thinking', text: 'new turn' }]);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [91], kind: 'message',
+        text: 'tick2', spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitFor(() =>
+        events.some(
+          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'thinking',
+        ),
+      );
+
+      const converged = await supervisor.agentMessageSend({
+        conversation_id: 'c1', agent_id: 'a1', content: 'post-gap send',
+      });
+      expect(converged.ok).toBe(true);
+      expect(postedBodies[postedBodies.length - 1]?.['seen_up_to_seq']).toBe(15);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .catch(() => undefined);
+    }
+  });
+
+  it('signal-only 409 never moves the observed cursor (#task:1561): an uninformed retry keeps the old boundary', async () => {
+    const { supervisor, events } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (postedBodies.length === 1) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: 'stale-s',
+                  stream_key: 'main',
+                  seen_up_to_seq: 12,
+                  current_seq: 30,
+                  hint: 'wait for normal delivery',
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ message_id: 'm31', message_seq: 31 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [12],
+        kind: 'message',
+        text: 'seed observed at 12',
+        delivered_up_to_seq: 12,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 12);
+
+      const stale = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '1',
+      });
+      expect(stale).toMatchObject({ ok: false, status: 409 });
+
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '2',
+        stale_resolution_reason: 'revised',
+      });
+      // Nothing was shown by the 409 (no bodies on the wire), so the
+      // retry's boundary is STILL 12 — the CAS stays armed until the
+      // unseen window arrives through normal delivery and admission
+      // evidence advances the cursor. The retry also correlates the
+      // pending stale event exactly once.
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(12);
+      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-s');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('fails closed on a malformed stale window: the observed cursor does not move', async () => {
+    const { supervisor, events } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    // Two consecutive degenerate 409 shapes: (1) malformed seen + entries
+    // without usable seq; (2) seen absent entirely + empty window. Neither
+    // yields evidence of what was shown, so neither may move the cursor.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        postedBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        if (postedBodies.length === 1) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: 'stale-m',
+                  seen_up_to_seq: 'not-a-number',
+                  current_seq: 30,
+                  newer_messages: [{}, { seq: 'x' }],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (postedBodies.length === 2) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: 'stale-n',
+                  current_seq: 30,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ message_id: 'm31', message_seq: 31 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [12],
+        kind: 'message',
+        text: 'seed observed at 12',
+        delivered_up_to_seq: 12,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 12);
+
+      const stale = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '1',
+      });
+      expect(stale).toMatchObject({ ok: false, status: 409 });
+
+      const stale2 = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '2',
+        stale_resolution_reason: 'revised',
+      });
+      expect(stale2).toMatchObject({ ok: false, status: 409 });
+      // Cursor unchanged after shape (1): still the delivery boundary.
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(12);
+      expect(postedBodies[1]?.['stale_event_id']).toBe('stale-m');
+
+      await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: '3',
+        stale_resolution_reason: 'revised',
+      });
+      // Cursor unchanged after shape (2) as well: never 30.
+      expect(postedBodies[2]?.['seen_up_to_seq']).toBe(12);
+      expect(postedBodies[2]?.['stale_event_id']).toBe('stale-n');
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
@@ -3671,11 +4156,11 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     //   2. `delivery-consumed != model-seen`: both M1+M2 fire
     //      runtime_delivery_consumed, but only M1 advances observed
     //      until the next parsed turn-start.
-    //   3. Gated `busyDeliveryMode` is intentional. Reverting to the
+    //   3. The boundary-gated profile is intentional. Reverting to the
     //      default `direct` picks a different consumeStartupDelivery
     //      entry and no longer exercises the deferred-queue path that
     //      broke countgame1.
-    // The countgame1 regression path (claude, `busyDeliveryMode='gated'`):
+    // The countgame1 regression path (boundary-gated profile):
     //   1. M1 delivered idle → SPAWN arm admits → observed=10, inputTurnActive=true
     //   2. Model emits tool_call → busy.outstandingToolUses=1 → boundary closed
     //   3. M2 delivered mid-tool_call → gated && !boundaryOpen → `deferred`
@@ -3718,7 +4203,10 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     // Real claude driver is `gated` (tests/../drivers/claude.ts). The default
     // fake is `direct`; override so this test exercises the actual
     // countgame1 code path (deferred queue + boundary-reopen flush).
-    const driver: Driver = { ...baseDriver, busyDeliveryMode: 'gated' };
+    // #1471's invariant (mid-turn writes must not advance observed
+    // before turn-start) lives on tool-boundary-steer in the final
+    // tree — the only profile that writes during an active turn.
+    const driver: Driver = { ...baseDriver, releaseProfile: 'tool-boundary-steer' };
     const spy = makeEmitSpy();
     const supervisor = new Supervisor({
       emit: spy.emit,
@@ -3801,8 +4289,9 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
         ),
       );
 
-      // ── M2 delivered mid-tool_call — gated && !boundaryOpen → deferred.
-      // Pre-fix and post-fix both take this arm; the regression is in step 5.
+      // ── M2 delivered mid-tool_call — tool-boundary-steer writes
+      // IMMEDIATELY (B'); the admission decision (turn active → pending)
+      // is the invariant under test in step 5.
       driver.parseLine = () => [];
       const midToolCallDeliver = await supervisor.deliver({
         conversation_id: 'c1',
@@ -3813,14 +4302,19 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
         delivered_up_to_seq: 11,
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
-      expect(midToolCallDeliver).toMatchObject({ disposition: 'deferred' });
+      expect(midToolCallDeliver).toMatchObject({ disposition: 'admitted' });
+      await waitForDeliveryConsumed(spy.events, 11);
 
-      // ── tool_output → outstandingToolUses=0 → handleAtSafeBoundary
-      // reopens → maybeScheduleDeferredFlush → flushDeferred →
-      // consumeStartupDelivery drains M2. inputTurnActive still true.
+      // ── tool_output resolves; the model keeps working the same turn.
       driver.parseLine = () => [{ kind: 'tool_output', name: 'Bash' }];
       stub.stdout.emit('data', 'TOOL_OUT\n');
-      await waitForDeliveryConsumed(spy.events, 11);
+      await waitFor(() =>
+        spy.events.some(
+          e =>
+            e.event === 'runtime_parsed_event' &&
+            e.parsed.kind === 'tool_output',
+        ),
+      );
       driver.parseLine = () => [];
 
       // Custody unchanged: consumed for both, direct/gated alike.
@@ -3973,7 +4467,10 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     ): ChildProcess => stub as unknown as ChildProcess;
 
     const { driver: baseDriver } = makeProgrammableDriver([], 'self_inits');
-    const driver: Driver = { ...baseDriver, busyDeliveryMode: 'gated' };
+    // #1471's invariant (mid-turn writes must not advance observed
+    // before turn-start) lives on tool-boundary-steer in the final
+    // tree — the only profile that writes during an active turn.
+    const driver: Driver = { ...baseDriver, releaseProfile: 'tool-boundary-steer' };
     const spy = makeEmitSpy();
     const supervisor = new Supervisor({
       emit: spy.emit,
@@ -4048,7 +4545,17 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
         ),
       );
 
+      // ── Race sequencing. Park M2's write BEFORE delivering, so the
+      // immediate tool-boundary-steer write is captured in flight; then
+      // interleave turn_end so `resolveRun` flips inputTurnActive=false
+      // WHILE the write's promise is still awaiting. Pre-fix: a
+      // post-await read of `shouldAdmitDeliveryImmediately(handle)`
+      // would return true (turn just ended) → admit immediately →
+      // observed=11 → send seen=11, no 409. With the pre-await
+      // snapshot: decision taken as false (turn active) → pending →
+      // observed stays 10 → send seen=10, 409.
       driver.parseLine = () => [];
+      stub.parkWrites = true;
       const midToolCallDeliver = await supervisor.deliver({
         conversation_id: 'c1',
         agent_id: 'a1',
@@ -4058,22 +4565,8 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
         delivered_up_to_seq: 11,
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
-      expect(midToolCallDeliver).toMatchObject({ disposition: 'deferred' });
-
-      // ── Race sequencing. Park M2's write, then emit tool_output +
-      // turn_end back-to-back so `resolveRun` flips inputTurnActive=false
-      // WHILE the write's promise is still awaiting. Only then release
-      // the write. Pre-fix: `shouldAdmitDeliveryImmediately(handle)` read
-      // after the await would return true (turn just ended) → admit
-      // immediately → observed=11 → mid-turn send seen=11, no 409. With
-      // the pre-await snapshot: decision taken as false (turn active)
-      // → queue to pending → observed stays 10 → send seen=10, 409.
-      stub.parkWrites = true;
-      driver.parseLine = () => [{ kind: 'tool_output', name: 'Bash' }];
-      stub.stdout.emit('data', 'TOOL_OUT\n');
-      // Wait for flushDeferred to reach stdin.write (the callback lands
-      // in pendingWriteCb). This proves the M2 write is genuinely
-      // in-flight before we interleave turn_end.
+      expect(midToolCallDeliver).toMatchObject({ disposition: 'admitted' });
+      // The write is genuinely in flight before we interleave turn_end.
       await waitFor(() => stub.pendingWriteCb !== null, 1_000);
 
       driver.parseLine = () => [{ kind: 'turn_end' }];
@@ -5091,7 +5584,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       kind: 'cursor',
       binary: FIXTURE,
       kickoffMode: 'self_inits',
-      busyDeliveryMode: 'none',
+      releaseProfile: 'one-shot',
       oneShot: true,
       supportsNativeStandingPrompt: false,
       initLivenessSilenceMs: 30_000,
@@ -5163,13 +5656,24 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
 describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
   /** A stub child whose stdin.write settles on setImmediate, so a
    *  write-in-flight window is observable, and whose stdout we drive by
-   *  hand. `kill` resolves the exit promptly for cleanup. */
+   *  hand. `kill` resolves the exit promptly for cleanup. Written lines
+   *  are captured; `parkWrites` holds a write's completion callback until
+   *  `resolveParkedWrite` so a test can interleave parses inside the
+   *  write await window (#task:1563 P1-2 falsifier). */
   class DriveStub extends EventEmitter {
     readonly pid = 55_555;
     readonly stdout = new EventEmitter();
     readonly stderr = new EventEmitter();
+    readonly written: string[] = [];
+    parkWrites = false;
+    pendingWriteCb: ((err?: Error | null) => void) | null = null;
     readonly stdin = {
-      write: (_line: string, cb?: (err?: Error | null) => void): boolean => {
+      write: (line: string, cb?: (err?: Error | null) => void): boolean => {
+        this.written.push(line);
+        if (this.parkWrites) {
+          this.pendingWriteCb = cb ?? null;
+          return true;
+        }
         setImmediate(() => cb?.());
         return true;
       },
@@ -5177,22 +5681,40 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       destroyed: false,
       once: () => {},
     };
+    resolveParkedWrite(): void {
+      const cb = this.pendingWriteCb;
+      this.pendingWriteCb = null;
+      cb?.();
+    }
     kill(_sig?: NodeJS.Signals | number): boolean {
       setImmediate(() => this.emit('exit', 0, null));
       return true;
     }
   }
 
-  function makeDriven(busyDeliveryMode: 'gated' | 'direct') {
-    const stub = new DriveStub();
+  function makeDriven(
+    mode: 'gated' | 'direct',
+    profile?: Driver['releaseProfile'],
+    logger?: DaemonLogger,
+    opts: { reservationStallWarnMs?: number; parkFirstWrite?: boolean } = {},
+  ) {
+    // Fresh stub per spawn: a respawn on the SAME emitter would leave the
+    // dead handle's stdout listener attached and double-consume nextParse.
+    let stub = new DriveStub();
+    if (opts.parkFirstWrite) stub.parkWrites = true;
     const base = makeProgrammableDriver(
       [],
-      busyDeliveryMode === 'gated' ? 'requires_first_message' : 'self_inits',
+      mode === 'gated' ? 'requires_first_message' : 'self_inits',
     ).driver;
     let nextParse: ParsedEvent[] = [];
     const driver: Driver = {
       ...base,
-      busyDeliveryMode,
+      releaseProfile:
+        profile ??
+        // Default legacy mapping: the old boundary-gated queue behavior
+        // (defer mid-turn, drain-all at turn_end) lives on
+        // next-turn-batch in the final tree.
+        (mode === 'gated' ? 'next-turn-batch' : 'native-steer'),
       parseLine: () => {
         const out = nextParse;
         nextParse = [];
@@ -5200,16 +5722,24 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       },
     };
     const spy = makeEmitSpy();
+    let firstSpawn = true;
     const supervisor = new Supervisor({
       emit: spy.emit,
-      logger: silentLogger(),
+      logger: logger ?? silentLogger(),
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
-      spawnFn: () => stub as unknown as ChildProcess,
+      spawnFn: () => {
+        if (!firstSpawn) stub = new DriveStub();
+        firstSpawn = false;
+        return stub as unknown as ChildProcess;
+      },
       runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
+      ...(opts.reservationStallWarnMs !== undefined
+        ? { reservationStallWarnMs: opts.reservationStallWarnMs }
+        : {}),
     });
     /** Emit one stdout line whose parse yields `events`. */
     const drive = (events: ParsedEvent[]) => {
@@ -5233,7 +5763,17 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         e =>
           e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id),
       );
-    return { stub, supervisor, events: spy.events, drive, deliver, consumedFor };
+    return {
+      get stub() {
+        return stub;
+      },
+      supervisor,
+      events: spy.events,
+      drive,
+      deliver,
+      consumedFor,
+      driver,
+    };
   }
 
   it('gated: mid-turn deliveries DEFER (no ack), then flush combined into ONE consumed', async () => {
@@ -5278,6 +5818,606 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     expect(combined[0]!.event === 'runtime_delivery_consumed' &&
       [...combined[0]!.delivery_ids].sort()).toEqual([2, 3]);
 
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('P-A falsifier (#task:1558): N mid-turn inputs to a next-turn-batch runtime form exactly ONE follow-up batch, even with the transport-safe boundary open', async () => {
+    const h = makeDriven('gated', 'next-turn-batch');
+    // Spawn-with-batch [1]; write #1 arms the reservation AT THE WRITE
+    // (§3.4 step 2) — before any runtime activity frame exists.
+    const spawn0 = await h.deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await waitForDeliveryConsumed(h.events, 1);
+
+    // The P-A trap: NO tool_call is in flight, so the legacy transport-
+    // safe predicate is open the whole time. Under the old unified gate
+    // these three would be written immediately, queuing three future
+    // turns inside the runtime (#1556). They must DEFER instead.
+    for (const id of [2, 3, 4]) {
+      const d = await h.deliver([id]);
+      expect(d.disposition).toBe('deferred');
+    }
+    // Mid-turn activity (thinking = provider/model working, still no
+    // tool) must not trigger a flush either.
+    h.drive([{ kind: 'thinking', text: 'working' }]);
+    await wait(30);
+    expect(h.consumedFor(2)).toHaveLength(0);
+    expect(h.consumedFor(3)).toHaveLength(0);
+    expect(h.consumedFor(4)).toHaveLength(0);
+
+    // Terminal turn_end releases: the whole queue drains as ONE
+    // combined write / ONE consumed covering [2,3,4].
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 2);
+    const combined = h.events.filter(
+      e =>
+        e.event === 'runtime_delivery_consumed' &&
+        (e.delivery_ids.includes(2) ||
+          e.delivery_ids.includes(3) ||
+          e.delivery_ids.includes(4)),
+    );
+    expect(combined).toHaveLength(1);
+    expect(
+      combined[0]!.event === 'runtime_delivery_consumed' &&
+        [...combined[0]!.delivery_ids].sort(),
+    ).toEqual([2, 3, 4]);
+
+    // The flush write re-armed the reservation: a delivery right after
+    // it still defers until the NEXT turn_end.
+    const d5 = await h.deliver([5]);
+    expect(d5.disposition).toBe('deferred');
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 5);
+
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('reservation stall falsifier (#task:1563 §3.4/§8, Cindy P1-1): ONE deferred entry with NO further inflow gets exactly one timeout-driven warn — zero writes; late turn_end flushes and the re-arm resets the latch', async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const logger = {
+      info: () => {},
+      warn: (f: unknown) => {
+        if (f && typeof f === 'object') logs.push(f as Record<string, unknown>);
+      },
+      error: () => {},
+    } as unknown as DaemonLogger;
+    const h = makeDriven('gated', 'next-turn-batch', logger, {
+      reservationStallWarnMs: 80,
+    });
+    const stallLogs = () =>
+      logs.filter(l => l['action'] === 'next_turn_reservation_stalled');
+
+    // Spawn-with-batch [1]; the write arms the reservation.
+    const spawn0 = await h.deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await waitForDeliveryConsumed(h.events, 1);
+
+    // ONE delivery defers; below the threshold the queue is silent.
+    const d2 = await h.deliver([2]);
+    expect(d2.disposition).toBe('deferred');
+    expect(stallLogs()).toHaveLength(0);
+
+    // Cindy P1-1: NO further inflow. The timeout alone must surface the
+    // stall — the queued entry is waiting even though nothing new
+    // arrives to re-trigger a check.
+    await waitFor(() => stallLogs().length === 1);
+    // Exactly one warn (one-shot latch), and STILL zero writes: the
+    // diagnostic never forces a release (fail closed).
+    await wait(200);
+    expect(stallLogs()).toHaveLength(1);
+    expect(h.consumedFor(2)).toHaveLength(0);
+    expect(stallLogs()[0]!['deferred_queue_depth']).toBe(1);
+
+    // A delivery arriving during the already-warned stall defers quietly.
+    const d3 = await h.deliver([3]);
+    expect(d3.disposition).toBe('deferred');
+    expect(stallLogs()).toHaveLength(1);
+
+    // Recovery: the terminal arrives late → normal combined flush of the
+    // whole queue, ONE consumed covering [2,3].
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 2);
+    const combined = h.events.filter(
+      e =>
+        e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(2),
+    );
+    expect(combined).toHaveLength(1);
+    expect(
+      combined[0]!.event === 'runtime_delivery_consumed' &&
+        [...combined[0]!.delivery_ids].sort(),
+    ).toEqual([2, 3]);
+
+    // The flush write re-armed the reservation AND reset the latch: a
+    // new deferred entry under the new reservation stalls → second warn.
+    const d5 = await h.deliver([5]);
+    expect(d5.disposition).toBe('deferred');
+    await waitFor(() => stallLogs().length === 2);
+    expect(h.consumedFor(5)).toHaveLength(0);
+
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('startup double-write falsifier (#task:1563 Cindy P1-2): session_init parsed inside the startup write await window must not re-enter the consume — stdin written ONCE, consumed ONCE', async () => {
+    // The race: `dispatchParsedLine` runs synchronously from the stdout
+    // data listener, OUTSIDE the lifecycle lock. A session_init landing
+    // while `consumeStartupDelivery` is awaiting `writeStdinPayload`
+    // used to re-enter the consume via `tryConsumeStartupDelivery`
+    // (gate non-null, awaitingInit not yet set) → the SAME batch written
+    // to stdin twice + double consumed. `startupConsumeInFlight` guards
+    // exactly that seam.
+    const h = makeDriven('gated', 'next-turn-batch', undefined, {
+      parkFirstWrite: true,
+    });
+    const spawn0 = await h.deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+
+    // The startup write is parked mid-flight.
+    await waitFor(() => h.stub.pendingWriteCb !== null);
+    expect(h.stub.written).toHaveLength(1);
+
+    // session_init lands INSIDE the write await window.
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await wait(30);
+    // No re-entry: the same batch must NOT have been written again.
+    expect(h.stub.written).toHaveLength(1);
+
+    // Release the parked write; the in-flight consume settles on its own
+    // (initObserved is already true) — exactly one consumed.
+    h.stub.parkWrites = false;
+    h.stub.resolveParkedWrite();
+    await waitForDeliveryConsumed(h.events, 1);
+    await wait(30);
+    expect(h.consumedFor(1)).toHaveLength(1);
+    expect(h.stub.written).toHaveLength(1);
+
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('crash/restart convergence (#task:1563 §8): reservation + deferred queue die with the runtime — per-entry child_exit settle, never consumed; respawn-with-batch admits and re-arms the reservation', async () => {
+    const h = makeDriven('gated', 'next-turn-batch');
+    const spawn0 = await h.deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await waitForDeliveryConsumed(h.events, 1);
+
+    // Reservation held → mid-turn deliveries defer into daemon custody.
+    const d2 = await h.deliver([2]);
+    const d3 = await h.deliver([3]);
+    expect(d2.disposition).toBe('deferred');
+    expect(d3.disposition).toBe('deferred');
+
+    // Crash with the reservation still held. The in-memory reservation
+    // and queue die with the handle; each deferred entry settles as
+    // `child_exit` (custody back to backend → rows roll to pending),
+    // and NO consumed is ever emitted for them.
+    h.stub.emit('exit', 1, null);
+    await waitFor(() =>
+      h.events.some(
+        e =>
+          e.event === 'runtime_delivery_failed' &&
+          e.delivery_ids.includes(3) &&
+          e.reason === 'child_exit',
+      ),
+    );
+    expect(
+      h.events.some(
+        e =>
+          e.event === 'runtime_delivery_failed' &&
+          e.delivery_ids.includes(2) &&
+          e.reason === 'child_exit',
+      ),
+    ).toBe(true);
+    expect(h.consumedFor(2)).toHaveLength(0);
+    expect(h.consumedFor(3)).toHaveLength(0);
+
+    // Backend re-drive after rollback: respawn-with-batch admits [2,3]
+    // as the startup batch (one consumed covering both).
+    const respawn = await h.deliver([2, 3]);
+    expect(respawn.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's2' }]);
+    await waitForDeliveryConsumed(h.events, 2);
+    const combined = h.events.filter(
+      e =>
+        e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(2),
+    );
+    expect(combined).toHaveLength(1);
+    expect(
+      combined[0]!.event === 'runtime_delivery_consumed' &&
+        [...combined[0]!.delivery_ids].sort(),
+    ).toEqual([2, 3]);
+
+    // The startup write re-armed the reservation on the NEW handle: the
+    // next delivery defers until its turn_end — restart converges to the
+    // exact same contract, no special casing.
+    const d4 = await h.deliver([4]);
+    expect(d4.disposition).toBe('deferred');
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 4);
+
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('prompt-boundary falsifier (#task:1565): deliveries during an active prompt DEFER with observed locked; the prompt response reopens the boundary → ONE combined prompt, batch-boundary admission', async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const logger = {
+      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      error: () => {},
+    } as unknown as DaemonLogger;
+    const h = makeDriven('direct', 'prompt-boundary', logger);
+    // Mirror AcpClient's single-in-flight prompt gate: encode closes the
+    // boundary (activePromptRequestId set), the prompt RESPONSE — parsed
+    // as turn_end — reopens it. This is a correctness invariant probed on
+    // opencode 1.18.1: a second live prompt gets queued runtime-side and
+    // BOTH responses are held to the end of the whole run, so per-prompt
+    // boundaries only exist in the one-at-a-time regime.
+    let promptActive = false;
+    const baseEncode = h.driver.encodeStdinMessage.bind(h.driver);
+    h.driver.encodeStdinMessage = (text, sess, opts) => {
+      promptActive = true;
+      return baseEncode(text, sess, opts);
+    };
+    const baseParse = h.driver.parseLine.bind(h.driver);
+    h.driver.parseLine = line => {
+      const events = baseParse(line);
+      if (events.some(e => e.kind === 'turn_end')) promptActive = false;
+      return events;
+    };
+    h.driver.readyToEncode = () => !promptActive;
+
+    const deliverSeq = (id: number, seq: number) =>
+      h.supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [id], kind: 'message',
+        text: `m${id}`, delivered_up_to_seq: seq,
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+    const advancedTo = (seq: number) =>
+      logs.some(
+        l =>
+          l['action'] === 'freshness_observed_seq_advanced' &&
+          l['observed_seq'] === seq,
+      );
+
+    // Spawn-with-batch [1] (seq 10): the write IS the prompt → boundary
+    // closes, observed=10 becomes the new action snapshot.
+    const spawn0 = await deliverSeq(1, 10);
+    expect(spawn0.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await waitForDeliveryConsumed(h.events, 1);
+    expect(promptActive).toBe(true);
+
+    // Mid-prompt deliveries DEFER (boundary closed) and the snapshot
+    // stays locked: no advancement to 11/12, no consumed.
+    const d2 = await deliverSeq(2, 11);
+    const d3 = await deliverSeq(3, 12);
+    expect(d2.disposition).toBe('deferred');
+    expect(d3.disposition).toBe('deferred');
+    await wait(30);
+    expect(h.consumedFor(2)).toHaveLength(0);
+    expect(h.consumedFor(3)).toHaveLength(0);
+    expect(advancedTo(11)).toBe(false);
+    expect(advancedTo(12)).toBe(false);
+
+    // The prompt RESPONSE (parsed turn_end) reopens the boundary: the
+    // whole queue flushes as ONE combined prompt / ONE consumed, and the
+    // batch admits at the boundary — constructive batch-boundary
+    // evidence advances observed to 12 for the NEXT generation snapshot.
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 2);
+    const combined = h.events.filter(
+      e =>
+        e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(2),
+    );
+    expect(combined).toHaveLength(1);
+    // FIFO is part of the acceptance contract (no reorder): assert the
+    // consumed id ORDER verbatim — no .sort() masking — and that the
+    // combined payload writes m2 before m3 on the wire.
+    expect(
+      combined[0]!.event === 'runtime_delivery_consumed' &&
+        [...combined[0]!.delivery_ids],
+    ).toEqual([2, 3]);
+    const combinedWrite = h.stub.written.find(
+      w => w.includes('m2') && w.includes('m3'),
+    );
+    expect(combinedWrite).toBeTruthy();
+    expect(combinedWrite!.indexOf('m2')).toBeLessThan(combinedWrite!.indexOf('m3'));
+    await waitFor(() => advancedTo(12));
+
+    // The flush write opened the NEXT prompt: boundary closed again, a
+    // new delivery defers until that prompt's response.
+    expect(promptActive).toBe(true);
+    const d4 = await deliverSeq(4, 13);
+    expect(d4.disposition).toBe('deferred');
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 4);
+
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it("B' (#task:1558): tool-boundary-steer writes immediately mid-turn (compaction is the only hold) and started(uuid) promotes observed", async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const logger = {
+      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      error: () => {},
+    } as unknown as DaemonLogger;
+    const h = makeDriven('gated', 'tool-boundary-steer', logger);
+    const minted: Array<string | undefined> = [];
+    const baseEncode = h.driver.encodeStdinMessage.bind(h.driver);
+    h.driver.encodeStdinMessage = (text, sess, opts) => {
+      minted.push(opts?.payloadUuid);
+      return baseEncode(text, sess, opts);
+    };
+
+    // Spawn with seq so the turn becomes active (admission with seq).
+    const spawn0 = await h.supervisor.deliver({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [1],
+      kind: 'message',
+      text: 'first',
+      delivered_up_to_seq: 10,
+      spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+    expect(spawn0.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await waitForDeliveryConsumed(h.events, 1);
+
+    // Mid-turn with an OUTSTANDING tool call — the legacy predicate is
+    // closed. tool-boundary-steer must still write immediately.
+    h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
+    await waitFor(() =>
+      h.events.some(
+        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call',
+      ),
+    );
+    const d2 = await h.supervisor.deliver({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [2],
+      kind: 'message',
+      text: 'steer me in',
+      delivered_up_to_seq: 11,
+      spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+    expect(d2.disposition).toBe('admitted');
+    await waitForDeliveryConsumed(h.events, 2);
+    const uuid2 = minted[minted.length - 1];
+    expect(uuid2).toBeTruthy();
+    // Mid-turn write: observed must NOT have advanced to 11 yet.
+    expect(
+      logs.some(
+        l =>
+          l['action'] === 'freshness_observed_seq_advanced' &&
+          l['observed_seq'] === 11,
+      ),
+    ).toBe(false);
+
+    // Runtime echoes started(uuid): the payload became precedent —
+    // observed promotes to the covered seq immediately.
+    h.drive([{ kind: 'input_lifecycle', commandUuid: uuid2!, state: 'started' }]);
+    await waitFor(() =>
+      logs.some(
+        l =>
+          l['action'] === 'freshness_observed_seq_advanced' &&
+          l['source'] === 'input_lifecycle_started' &&
+          l['observed_seq'] === 11,
+      ),
+    );
+
+    // Compaction is the one migration-period hold: deliveries defer
+    // while compacting and flush at compaction_finished.
+    h.drive([{ kind: 'compaction_started' }]);
+    await waitFor(() =>
+      h.events.some(
+        e =>
+          e.event === 'runtime_parsed_event' &&
+          e.parsed.kind === 'compaction_started',
+      ),
+    );
+    const d3 = await h.supervisor.deliver({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      delivery_ids: [3],
+      kind: 'message',
+      text: 'wait for compaction',
+      delivered_up_to_seq: 12,
+      spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+    expect(d3.disposition).toBe('deferred');
+    h.drive([{ kind: 'compaction_finished' }]);
+    await waitForDeliveryConsumed(h.events, 3);
+
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('P1-1 falsifier (#1558 final gate): a turn_end crossing the write await window must not be overwritten back into reserved', async () => {
+    // Fast-runtime interleaving: the flush write's callback is parked;
+    // the turn generated by that very write completes (turn_end parsed)
+    // BEFORE the write callback resolves. The late completion must NOT
+    // re-arm the reservation — otherwise the queue is held forever.
+    class ParkedStub extends EventEmitter {
+      readonly pid = 57_001;
+      readonly stdout = new EventEmitter();
+      readonly stderr = new EventEmitter();
+      parkWrites = false;
+      pendingWriteCb: ((err?: Error | null) => void) | null = null;
+      readonly stdin = {
+        write: (_l: string, cb?: (err?: Error | null) => void): boolean => {
+          if (this.parkWrites) { this.pendingWriteCb = cb ?? null; }
+          else setImmediate(() => cb?.());
+          return true;
+        },
+        end: () => {}, destroyed: false, once: () => {},
+      };
+      resolveParkedWrite(): void { const cb = this.pendingWriteCb; this.pendingWriteCb = null; cb?.(); }
+      kill(): boolean { setImmediate(() => this.emit('exit', 0, null)); return true; }
+    }
+    const stub = new ParkedStub();
+    const base = makeProgrammableDriver([], 'self_inits').driver;
+    let nextParse: ParsedEvent[] = [];
+    const driver: Driver = {
+      ...base,
+      releaseProfile: 'next-turn-batch',
+      parseLine: () => { const out = nextParse; nextParse = []; return out; },
+    };
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveBinary: async (_k, fb) => fb,
+      spawnFn: () => stub as unknown as ChildProcess,
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+    const drive = (events: ParsedEvent[]) => { nextParse = events; stub.stdout.emit('data', 'line\n'); };
+    const deliver = (ids: number[]) => supervisor.deliver({
+      conversation_id: 'c1', agent_id: 'a1', delivery_ids: ids, kind: 'message',
+      text: `m-${ids.join('_')}`, spawn_options: baseStartParams.options,
+    }, { owner: 'test-owner' });
+
+    // Spawn-with-batch [1]: park its write, complete its turn (turn_end)
+    // while the write callback is parked, THEN resolve the write.
+    stub.parkWrites = true;
+    const spawn0 = await deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+    await waitFor(() => stub.pendingWriteCb !== null, 1_000);
+    drive([{ kind: 'turn_end' }]);
+    await waitFor(() =>
+      spy.events.some(
+        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end',
+      ),
+    );
+    stub.parkWrites = false;
+    stub.resolveParkedWrite();
+    await waitForDeliveryConsumed(spy.events, 1);
+
+    // The reservation must NOT be armed by the late write completion:
+    // a fresh delivery on the (idle, terminal-crossed) runtime must be
+    // written immediately, not held forever.
+    const d2 = await deliver([2]);
+    expect(d2.disposition).toBe('admitted');
+    await waitForDeliveryConsumed(spy.events, 2);
+    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('P1-2 falsifier (#1558 final gate): a drain-all flush takes a bounded prefix and leaves the ordered remainder for the next boundary', async () => {
+    const h = makeDriven('gated', 'next-turn-batch');
+    const spawn0 = await h.deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await waitForDeliveryConsumed(h.events, 1);
+
+    // Queue more entries than DEFERRED_BATCH_MAX_ENTRIES (20) mid-turn.
+    const ids = Array.from({ length: 23 }, (_, i) => 100 + i);
+    for (const id of ids) {
+      const d = await h.deliver([id]);
+      expect(d.disposition).toBe('deferred');
+    }
+
+    // First turn_end: exactly the first 20 drain as ONE combined
+    // consumed; 3 remain queued in order.
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 100);
+    const firstBatch = h.events.filter(
+      e =>
+        e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(100),
+    );
+    expect(firstBatch).toHaveLength(1);
+    expect(
+      firstBatch[0]!.event === 'runtime_delivery_consumed' &&
+        [...firstBatch[0]!.delivery_ids].sort((a, b) => a - b),
+    ).toEqual(ids.slice(0, 20));
+    expect(h.consumedFor(120)).toHaveLength(0);
+
+    // Next turn_end: the ordered remainder [120,121,122] drains.
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 120);
+    const secondBatch = h.events.filter(
+      e =>
+        e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(120),
+    );
+    expect(
+      secondBatch[0]!.event === 'runtime_delivery_consumed' &&
+        [...secondBatch[0]!.delivery_ids].sort((a, b) => a - b),
+    ).toEqual([120, 121, 122]);
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+
+  it('P1-3 falsifier (#1558 final gate): an unknown releaseProfile fails closed on live input — deliver rejects, zero consumed', async () => {
+    const h = makeDriven('direct', 'native-steer');
+    // Runtime comes up healthy on a valid profile (spawn/kickoff is not
+    // a live-release decision), THEN the profile goes bogus — as a
+    // mis-wired future driver would be at live-delivery time.
+    const spawn0 = await h.deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+    await waitForDeliveryConsumed(h.events, 1);
+    (h.driver as { releaseProfile: string }).releaseProfile = 'bogus-profile';
+
+    // Live delivery must fail closed: the deliver command rejects
+    // (custody stays with the backend, rows un-acked) and nothing is
+    // written to the runtime.
+    await expect(h.deliver([2])).rejects.toThrow(/unknown releaseProfile/);
+    await wait(50);
+    expect(h.consumedFor(2)).toHaveLength(0);
+
+    (h.driver as { releaseProfile: string }).releaseProfile = 'native-steer';
+    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+      .catch(() => undefined);
+  });
+
+  it('P1-2 byte-axis falsifier (#1558): the bytes cap splits the prefix and a single oversized entry still drains alone', async () => {
+    const h = makeDriven('gated', 'next-turn-batch');
+    const spawn0 = await h.deliver([1]);
+    expect(spawn0.disposition).toBe('spawning');
+    h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+    await waitForDeliveryConsumed(h.events, 1);
+
+    const deliverText = (id: number, text: string) =>
+      h.supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [id], kind: 'message',
+        text, spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+
+    // Five 60KiB entries: with the 512B per-entry wrapping budget the
+    // 256KiB cap admits exactly four; the fifth waits.
+    const big = 'x'.repeat(60 * 1024);
+    for (const id of [201, 202, 203, 204, 205]) {
+      const d = await deliverText(id, big);
+      expect(d.disposition).toBe('deferred');
+    }
+    // A single entry larger than the whole cap must still drain alone
+    // (never wedges the queue).
+    const oversized = 'y'.repeat(300 * 1024);
+    const d6 = await deliverText(206, oversized);
+    expect(d6.disposition).toBe('deferred');
+
+    // turn_end #1 → [201..204] as ONE consumed (bytes cap, not count cap).
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 201);
+    const batch1 = h.events.filter(
+      e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(201),
+    );
+    expect(
+      batch1[0]!.event === 'runtime_delivery_consumed' &&
+        [...batch1[0]!.delivery_ids].sort((a, b) => a - b),
+    ).toEqual([201, 202, 203, 204]);
+    expect(h.consumedFor(205)).toHaveLength(0);
+
+    // turn_end #2 → [205] alone? No: 205 (60KiB) + 206 (300KiB) — 205
+    // fits, adding 206 would blow the cap → [205] drains, 206 waits.
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 205);
+    expect(h.consumedFor(206)).toHaveLength(0);
+
+    // turn_end #3 → the single oversized 206 drains ALONE (at-least-one).
+    h.drive([{ kind: 'turn_end' }]);
+    await waitForDeliveryConsumed(h.events, 206);
     await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
 

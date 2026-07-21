@@ -1597,7 +1597,6 @@ describe('POST /api/agents/:id/stop', () => {
     const body = await res.json() as any;
     expect(body.stopped).toBe(1);
     expect(t.fake.stops).toHaveLength(1);
-    expect(t.fake.stops[0]!.mode).toBe('hard');
   });
 
   it('no-op (200, stopped:0) when nothing is running', async () => {
@@ -1705,6 +1704,6 @@ describe('DELETE /api/agents/:id (full flow)', () => {
     expect(workspaces.workspaces.find((w: any) => w.name === 'engineering')).toBeDefined();
 
     // running conversation_agent was stopped (hard) — at least one stop call
-    expect(t.fake.stops.some(s => s.agentId === created.agent.id && s.mode === 'hard')).toBe(true);
+    expect(t.fake.stops.some(s => s.agentId === created.agent.id)).toBe(true);
   });
 });

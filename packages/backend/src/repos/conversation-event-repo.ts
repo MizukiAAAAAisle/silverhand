@@ -46,6 +46,10 @@ export class ConversationEventRepo {
   }): ConversationActivityEvent | null {
     const sanitized = sanitizeParsedEventForBroadcast(params.event);
     if (sanitized.kind === 'unknown') return null;
+    // #task:1557 Phase 1: input_lifecycle is a diagnostics-only signal
+    // (daemon log + wire fanout). Three rows per payload would flood
+    // the activity timeline with no user meaning — skip persistence.
+    if (sanitized.kind === 'input_lifecycle') return null;
     const kind = sanitized.kind as ConversationEventKind;
     const payload = payloadForParsedEvent(sanitized);
     return this.insert({
@@ -301,6 +305,8 @@ function payloadForParsedEvent(event: ParsedEvent): ConversationActivityPayload 
     case 'compaction_started':
     case 'compaction_finished':
       return null;
+    case 'input_lifecycle':
+      return { command_uuid: event.commandUuid, state: event.state };
     case 'error':
       return {
         message: event.message,

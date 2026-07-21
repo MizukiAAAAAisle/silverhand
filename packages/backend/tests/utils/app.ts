@@ -95,8 +95,6 @@ export class FakeConversationManager implements AgentRuntimeHost {
   stops: Array<{
     conversationId: string;
     agentId: string;
-    mode: 'soft' | 'hard';
-    directive?: string;
   }> = [];
   clearedSessions: Array<{
     conversationId: string;
@@ -169,14 +167,14 @@ export class FakeConversationManager implements AgentRuntimeHost {
     if (this.startError) throw this.startError;
     this.starts.push({ conversationId, agentId });
   }
-  async stop(
-    conversationId: string,
-    agentId: string,
-    mode: 'soft' | 'hard' = 'hard',
-    directive?: string,
-  ): Promise<void> {
-    this.stops.push({ conversationId, agentId, mode, directive });
+  async stop(conversationId: string, agentId: string): Promise<void> {
+    this.stops.push({ conversationId, agentId });
     if (this.stopError) throw this.stopError;
+  }
+  pendingDrives: Array<{ conversationId: string; agentId: string }> = [];
+  async deliverPending(conversationId: string, agentId: string): Promise<boolean> {
+    this.pendingDrives.push({ conversationId, agentId });
+    return true;
   }
   async clearSession(
     conversationId: string,

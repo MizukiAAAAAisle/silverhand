@@ -1127,14 +1127,26 @@ export class MessageRepo {
      *  root message id routes this message into that thread's stream.
      *  See docs/thread-reply-cluster-v1.md. */
     threadRootId?: string | null;
+    /** Signal-only universe alignment (design doc §5.2): a TRUE value
+     *  keeps this row OUT of the freshness universe — the stream head is
+     *  not advanced, so agents are never CAS-blocked on it. Reserved for
+     *  rows that are deliberately not delivered to every agent member
+     *  (today: schedule_fire, an owner-scoped self-wake). Pairs with the
+     *  `head <= seen` CAS relaxation: the exempt row's own delivery may
+     *  push the recipient's observed PAST the head. */
+    freshnessExempt?: boolean;
   }): MessageDto {
     return this.db.transaction(() => {
       const seq = this.reserveNextSeq(params.conversationId);
       const message = this.insertForConversationAtSeq(params, seq);
-      // Stream-head maintenance invariant: EVERY insert advances its
-      // stream's head (main when threadRootId is null), or the head drifts
-      // behind messages.seq and the per-stream freshness CAS misfires.
-      this.bumpStreamHead(params.conversationId, params.threadRootId ?? null, seq);
+      // Stream-head maintenance invariant: every NON-EXEMPT insert
+      // advances its stream's head (main when threadRootId is null), or
+      // the head drifts behind messages.seq and the per-stream freshness
+      // CAS misfires. Exempt rows deliberately leave the head behind —
+      // they are outside the freshness universe (§5.2).
+      if (params.freshnessExempt !== true) {
+        this.bumpStreamHead(params.conversationId, params.threadRootId ?? null, seq);
+      }
       return message;
     })();
   }
@@ -1207,33 +1219,36 @@ export class MessageRepo {
       .map(messageRowWithLinkedTaskToDto);
   }
 
-  /** Stream-scoped variant of `listAfterSeq`: only messages in the given
-   *  stream (`threadRootId` NULL = main line). Used to build a
-   *  freshness-stale `newer_messages` list that stays inside the actor's
-   *  own target stream — a conversation-global list would leak replies from
-   *  threads the actor never followed. (doc §6.4) */
-  listAfterSeqInStream(
+  /** Metadata-only stream window `(afterSeq, throughSeq]` (signal-only
+   *  stale contract): the exact unseen set a freshness 409 refers to.
+   *  Bounded above by the CAS-rejected `currentSeq` so the count/set is
+   *  self-consistent with the 409's declared head. No bodies — bodies
+   *  travel only through the normal delivery face. */
+  listStreamWindowMeta(
     conversationId: string,
     threadRootId: string | null,
     afterSeq: number,
-    limit = 10,
-  ): MessageDto[] {
+    throughSeq: number,
+  ): Array<{
+    id: string;
+    seq: number;
+    from_kind: string;
+    from_agent_id: string | null;
+  }> {
     return this.db
       .prepare<
         [string, string | null, number, number],
-        MessageRowWithLinkedTask
+        { id: string; seq: number; from_kind: string; from_agent_id: string | null }
       >(
-        `SELECT m.*, ${LINKED_TASK_SELECT}
-           FROM messages m
-           ${LINKED_TASK_JOINS}
-          WHERE m.conversation_id = ?
-            AND m.thread_root_id IS ?
-            AND m.seq > ?
-          ORDER BY m.seq ASC
-          LIMIT ?`,
+        `SELECT id, seq, from_kind, from_agent_id
+           FROM messages
+          WHERE conversation_id = ?
+            AND thread_root_id IS ?
+            AND seq > ?
+            AND seq <= ?
+          ORDER BY seq ASC`,
       )
-      .all(conversationId, threadRootId, afterSeq, Math.max(1, limit))
-      .map(messageRowWithLinkedTaskToDto);
+      .all(conversationId, threadRootId, afterSeq, throughSeq);
   }
 
   /** All messages in a thread stream with `seq < beforeSeq`, ordered ASC.
@@ -1370,11 +1385,16 @@ export class MessageRepo {
     seenStreamSeq: number,
     newSeq: number,
   ): boolean {
+    // `latest_seq <= seen` (not `=`): freshness-exempt rows (§5.2, e.g.
+    // schedule_fire) allocate seqs without bumping the head, and their
+    // normal delivery legitimately advances the recipient's observed
+    // cursor PAST the head. seen ≥ head still means "saw everything
+    // freshness-relevant" — strictly more information, never less.
     const advanced = this.db
       .prepare<[number, string, string | null, number]>(
         `UPDATE conversation_stream_heads
             SET latest_seq = ?
-          WHERE conversation_id = ? AND thread_root_id IS ? AND latest_seq = ?`,
+          WHERE conversation_id = ? AND thread_root_id IS ? AND latest_seq <= ?`,
       )
       .run(newSeq, conversationId, threadRootId, seenStreamSeq).changes;
     if (advanced === 1) return true;

@@ -43,7 +43,7 @@ export class CodexDriver implements Driver {
   readonly kind = 'codex' as const;
   readonly binary = 'codex';
   readonly kickoffMode = 'self_inits' as const;
-  readonly busyDeliveryMode = 'direct' as const;
+  readonly releaseProfile = 'native-steer' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 60 * 1000;
@@ -119,27 +119,45 @@ export class CodexDriver implements Driver {
     });
   }
 
-  encodeStdinMessage(text: string, _cliSessionId: string | null): string | null {
+  encodeStdinMessage(
+    text: string,
+    _cliSessionId: string | null,
+    opts?: { payloadUuid?: string },
+  ): string | null {
     if (!this.threadId) return null;
+    const id = this.nextRequestId();
+    // #task:1561 round 2: the payload uuid rides codex's native
+    // `clientUserMessageId` (schema-confirmed on both turn/steer and
+    // turn/start, 0.144.4). Codex echoes it as `clientId` on the
+    // `item/started {type:'userMessage'}` it emits when the input is
+    // drained into model history — right before the NEXT sampling
+    // request is constructed. THAT echo is the generation-boundary
+    // evidence (see handleItemEvent); the JSON-RPC response to this
+    // request is a transport ack and must never become evidence.
+    const clientUserMessageId = opts?.payloadUuid
+      ? { clientUserMessageId: opts.payloadUuid }
+      : {};
     if (this.activeTurnId) {
       return JSON.stringify({
         jsonrpc: '2.0',
-        id: this.nextRequestId(),
+        id,
         method: 'turn/steer',
         params: {
           threadId: this.threadId,
           expectedTurnId: this.activeTurnId,
           input: [{ type: 'text', text }],
+          ...clientUserMessageId,
         },
       });
     }
     return JSON.stringify({
       jsonrpc: '2.0',
-      id: this.nextRequestId(),
+      id,
       method: 'turn/start',
       params: {
         threadId: this.threadId,
         input: [{ type: 'text', text }],
+        ...clientUserMessageId,
       },
     });
   }
@@ -331,6 +349,36 @@ export class CodexDriver implements Driver {
     const isStarted = method === 'item/started';
     const isCompleted = method === 'item/completed';
     switch (item.type) {
+      case 'userMessage':
+        // Generation-boundary evidence (#task:1561 round 2): codex emits
+        // this item when it drains `pending_input` into model history —
+        // AFTER any in-flight sampling, BEFORE constructing the next
+        // sampling request. The echoed `clientId` is our payload uuid
+        // (stamped via `clientUserMessageId` at encode). This is the
+        // real per-input lifecycle: the payload provably becomes
+        // precedent context for the NEXT generation. Upstream emits
+        // started and completed as separate real frames — map each 1:1,
+        // never fabricate the pair from one frame (Cindy P2: a faked
+        // completed makes the real one arrive uncorrelated). The earlier
+        // RPC-response mirror was a transport ack and let
+        // already-generated sends pass CAS (countgame round 2).
+        if (typeof item.clientId === 'string') {
+          if (isStarted) {
+            events.push({
+              kind: 'input_lifecycle',
+              commandUuid: item.clientId,
+              state: 'started',
+            });
+          }
+          if (isCompleted) {
+            events.push({
+              kind: 'input_lifecycle',
+              commandUuid: item.clientId,
+              state: 'completed',
+            });
+          }
+        }
+        break;
       case 'reasoning':
         if (
           isCompleted &&

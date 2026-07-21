@@ -982,7 +982,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
       return c.json({ stopped: 0 });
     }
     const settled = await Promise.allSettled(
-      live.map(s => ctx.runtimeHost.stop(s.conversation_id, id, 'hard')),
+      live.map(s => ctx.runtimeHost.stop(s.conversation_id, id)),
     );
     const failures: { conversationId: string; err: unknown }[] = [];
     let successCount = 0;

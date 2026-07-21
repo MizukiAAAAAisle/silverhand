@@ -30,12 +30,7 @@ export interface OutboundAgentRuntimeProjection {
    * which clears pid and flips status while preserving
    * `cli_session_id` for the next `--resume`.
    */
-  stop(
-    conversationId: string,
-    agentId: string,
-    mode: 'soft' | 'hard',
-    softDirective?: string,
-  ): Promise<void>;
+  stop(conversationId: string, agentId: string): Promise<void>;
   /**
    * D4.c C7 — dispatch `runtime_clear_session` over the outbound
    * WS, bounded-wait for the resulting `runtime_exit` projection
@@ -131,15 +126,18 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
     throw this.unavailable('start', { conversationId, agentId });
   }
 
-  async stop(
-    conversationId: string,
-    agentId: string,
-    mode: 'soft' | 'hard' = 'hard',
-    softDirective?: string,
-  ): Promise<void> {
+  async deliverPending(conversationId: string, agentId: string): Promise<boolean> {
     const projection = this.projection?.();
     if (projection) {
-      await projection.stop(conversationId, agentId, mode, softDirective);
+      return projection.deliverPending(conversationId, agentId);
+    }
+    throw this.unavailable('deliverPending', { conversationId, agentId });
+  }
+
+  async stop(conversationId: string, agentId: string): Promise<void> {
+    const projection = this.projection?.();
+    if (projection) {
+      await projection.stop(conversationId, agentId);
       return;
     }
     throw this.unavailable('stop', { conversationId, agentId });

@@ -66,7 +66,7 @@ export function makeParitySessionInitDriver(sessionId: string): Driver {
     kind: 'claude',
     binary: PARITY_FIXTURE,
     kickoffMode: 'self_inits',
-    busyDeliveryMode: 'direct',
+    releaseProfile: 'native-steer',
     oneShot: false,
     supportsNativeStandingPrompt: true,
     initLivenessSilenceMs: 30_000,

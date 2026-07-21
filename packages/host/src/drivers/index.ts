@@ -78,17 +78,16 @@ export interface Driver {
    * pre-init inbox row is safe to mark delivered.
    */
   readonly kickoffMode: 'self_inits' | 'requires_first_message';
-  /**
-   * How busy-time deliveries to this driver are routed:
-   *  - `gated`:  push only at safe boundaries (Claude — no outstanding
-   *              tool_uses + non-compacting state)
-   *  - `direct`: push immediately, runtime is forgiving (Codex steers
-   *              mid-turn via `turn/steer`)
-   *  - `none`:   driver doesn't accept stdin notifications at all; new
-   *              messages queue to inbox and the runtime is respawned
-   *              with them as kickoff (Cursor, Copilot, Gemini)
-   */
-  readonly busyDeliveryMode: 'gated' | 'direct' | 'none';
+  /** Release profile (docs/runtime-input-design.md §3.2, #task:1558):
+   *  how the daemon releases live input to this runtime and what counts
+   *  as admission. The legacy three-value `busyDeliveryMode` was removed
+   *  in Commit C — release scheduling dispatches on this profile only. */
+  readonly releaseProfile:
+    | 'native-steer'
+    | 'tool-boundary-steer'
+    | 'next-turn-batch'
+    | 'prompt-boundary'
+    | 'one-shot';
   /** True if the runtime exits after a single turn and must be
    *  respawned for each new kickoff (cursor-agent --print). False for
    *  long-lived stream-json runtimes (claude, codex). */
@@ -109,8 +108,16 @@ export interface Driver {
   applyEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
   /** Encode one notification message for the agent's stdin. Returns
    *  null when the runtime doesn't accept stdin notifications (oneShot
-   *  drivers) — the host supervisor treats null as "queue to inbox instead". */
-  encodeStdinMessage(content: string, cliSessionId: string | null): string | null;
+   *  drivers) — the host supervisor treats null as "queue to inbox instead".
+   *  `opts.payloadUuid` (#task:1557): a stable id the supervisor minted
+   *  for this payload; drivers whose runtime echoes per-input lifecycle
+   *  frames (claude) stamp it on the wire frame so those frames correlate
+   *  back to the payload. Drivers without that protocol ignore it. */
+  encodeStdinMessage(
+    content: string,
+    cliSessionId: string | null,
+    opts?: { payloadUuid?: string },
+  ): string | null;
   /** Encode a clean-cancel control message. Null = no protocol-level
    *  interrupt; the host supervisor falls through to SIGTERM/SIGKILL. */
   encodeInterruptControl(): string | null;

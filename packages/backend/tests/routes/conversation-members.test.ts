@@ -271,6 +271,16 @@ describe('POST /api/conversations/:id/members', () => {
         channel_id: channelId,
       },
     });
+    // Universe alignment (§5.2): the member-added notice bumps the main
+    // stream head, so EVERY agent member must get a normal delivery —
+    // under the signal-only stale contract an undelivered head-bump would
+    // 409-block their sends forever.
+    const noticeDeliveries = t.fake.delivered.filter(
+      d => d.conversationId === channelId,
+    );
+    expect(noticeDeliveries.map(d => d.agentId).sort()).toEqual(
+      [alice.agentId, bob.agentId].sort(),
+    );
 
     const duplicate = await http(t).post(membersPath(channelId), {
       kind: 'agent',
@@ -858,8 +868,13 @@ describe('DELETE /api/conversations/:id/members/agents/:agentId', () => {
     expect(t.fake.stops).toContainEqual({
       conversationId: channelId,
       agentId: bob.agentId,
-      mode: 'hard',
     });
+    // Remaining agents get the member-removed notice as a normal delivery
+    // (the departed agent is naturally absent from listAgents).
+    const removalDeliveries = t.fake.delivered.filter(
+      d => d.conversationId === channelId && d.agentId === alice.agentId,
+    );
+    expect(removalDeliveries.length).toBeGreaterThan(0);
     const memberRemovedMessage = conversationEvents.find(e => e.kind === 'message');
     expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',

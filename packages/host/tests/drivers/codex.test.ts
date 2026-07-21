@@ -73,7 +73,7 @@ describe('CodexDriver static config', () => {
     const d = new CodexDriver();
     expect(d.kind).toBe('codex');
     expect(d.binary).toBe('codex');
-    expect(d.busyDeliveryMode).toBe('direct');
+    expect(d.releaseProfile).toBe('native-steer');
     expect(d.oneShot).toBe(false);
     expect(d.supportsNativeStandingPrompt).toBe(true);
   });
@@ -209,6 +209,173 @@ describe('CodexDriver.buildArgs', () => {
     } finally {
       cleanup();
     }
+  });
+});
+
+describe('CodexDriver input lifecycle = userMessage clientId echo, never the RPC ack (#task:1561 round 2)', () => {
+  // Countgame round 2: the turn/steer JSON-RPC response is a TRANSPORT
+  // ack (codex only promises the input joined the active turn, not that
+  // in-flight generation re-conditions on it) — it must emit NO
+  // lifecycle. The real generation-boundary evidence is codex's echo of
+  // our `clientUserMessageId` on `item/started {type:'userMessage'}`,
+  // emitted when pending_input drains into model history right before
+  // the next sampling request.
+  let cleanup: (() => void) | null = null;
+  afterEach(() => {
+    cleanup?.();
+    cleanup = null;
+  });
+
+  function readyDriver(): { driver: CodexDriver; io: ReturnType<typeof makeIO> } {
+    const built = makeSpawnCtx();
+    cleanup = built.cleanup;
+    const io = makeIO(built.ctx);
+    const driver = new CodexDriver();
+    driver.bindIO(io);
+    driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'thread/started',
+        params: { thread: { id: 'thread-abc' } },
+      }),
+    );
+    return { driver, io };
+  }
+
+  it('stamps payloadUuid as clientUserMessageId on turn/steer and emits NO lifecycle from the RPC response', () => {
+    const { driver } = readyDriver();
+    // Enter a turn so encode takes the steer arm.
+    driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'turn/started',
+        params: { turn: { id: 'turn-1' } },
+      }),
+    );
+    const encoded = driver.encodeStdinMessage('mid-turn input', 'thread-abc', {
+      payloadUuid: 'uuid-A',
+    });
+    expect(encoded).not.toBeNull();
+    const frame = JSON.parse(encoded!);
+    expect(frame.method).toBe('turn/steer');
+    expect(frame.params.clientUserMessageId).toBe('uuid-A');
+
+    // Transport ack: silent.
+    const events = driver.parseLine(
+      JSON.stringify({ jsonrpc: '2.0', id: frame.id, result: {} }),
+    );
+    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
+  });
+
+  it('stamps clientUserMessageId on turn/start too', () => {
+    const { driver } = readyDriver();
+    const encoded = driver.encodeStdinMessage('kick off', 'thread-abc', {
+      payloadUuid: 'uuid-K',
+    });
+    const frame = JSON.parse(encoded!);
+    expect(frame.method).toBe('turn/start');
+    expect(frame.params.clientUserMessageId).toBe('uuid-K');
+    // An unstamped submission omits the field entirely.
+    const bare = JSON.parse(driver.encodeStdinMessage('bare', 'thread-abc')!);
+    expect('clientUserMessageId' in bare.params).toBe(false);
+  });
+
+  it('the userMessage echo maps 1:1 — item/started → started, item/completed → completed (real two-frame timing)', () => {
+    const { driver } = readyDriver();
+    const startedEvents = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/started',
+        params: {
+          item: {
+            type: 'userMessage',
+            id: 'item-7',
+            clientId: 'uuid-A',
+            content: [{ type: 'text', text: 'mid-turn input' }],
+          },
+        },
+      }),
+    );
+    expect(startedEvents.filter(e => e.kind === 'input_lifecycle')).toEqual([
+      { kind: 'input_lifecycle', commandUuid: 'uuid-A', state: 'started' },
+    ]);
+    // The real completed arrives as its OWN frame later — mapped then,
+    // never fabricated at started (Cindy P2: a faked completed would
+    // make the real one arrive uncorrelated after the supervisor prune).
+    const completedEvents = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/completed',
+        params: {
+          item: {
+            type: 'userMessage',
+            id: 'item-7',
+            clientId: 'uuid-A',
+            content: [{ type: 'text', text: 'mid-turn input' }],
+          },
+        },
+      }),
+    );
+    expect(completedEvents.filter(e => e.kind === 'input_lifecycle')).toEqual([
+      { kind: 'input_lifecycle', commandUuid: 'uuid-A', state: 'completed' },
+    ]);
+  });
+
+  it('a userMessage item without clientId (not ours) emits no lifecycle', () => {
+    const { driver } = readyDriver();
+    const events = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'item/started',
+        params: {
+          item: {
+            type: 'userMessage',
+            id: 'item-8',
+            content: [{ type: 'text', text: 'typed by human' }],
+          },
+        },
+      }),
+    );
+    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
+  });
+
+  it('a steer response carrying a turn id still updates activeTurnId (generic result handling)', () => {
+    const { driver } = readyDriver();
+    const first = driver.encodeStdinMessage('kick off', 'thread-abc', {
+      payloadUuid: 'uuid-K',
+    });
+    const firstFrame = JSON.parse(first!);
+    expect(firstFrame.method).toBe('turn/start');
+    // Response carries the new turn id via the generic result branch.
+    const events = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: firstFrame.id,
+        result: { turn: { id: 'turn-9' } },
+      }),
+    );
+    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
+    // Next encode steers into the announced turn.
+    const second = driver.encodeStdinMessage('mid-turn', 'thread-abc');
+    expect(JSON.parse(second!).method).toBe('turn/steer');
+    expect(JSON.parse(second!).params.expectedTurnId).toBe('turn-9');
+  });
+
+  it('an error response emits only the error event, no lifecycle frames', () => {
+    const { driver } = readyDriver();
+    const encoded = driver.encodeStdinMessage('input', 'thread-abc', {
+      payloadUuid: 'uuid-B',
+    });
+    const frame = JSON.parse(encoded!);
+    const events = driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: frame.id,
+        error: { message: 'steer rejected' },
+      }),
+    );
+    expect(events.filter(e => e.kind === 'input_lifecycle')).toEqual([]);
+    expect(events.some(e => e.kind === 'error')).toBe(true);
   });
 });
 

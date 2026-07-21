@@ -151,8 +151,15 @@ import {
 // only SENDS a non-baseline token to a daemon that advertised it — so an old
 // daemon (closed enum, no capability) is never handed a value it would reject.
 // Result: adding Ultra / any future effort value never disconnects any peer.
+//
+// v9 (#task:1558): `runtime_stop` loses its `mode:'soft'` stdin-directive arm
+// (params `soft_directive` field + soft result variant deleted; `mode` narrows
+// to the literal `'hard'`). A v8 peer sending soft would be strict-rejected by
+// a v9 daemon, and the v9 params schema no longer validates v8's enum — fail
+// loud at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (7→8). No shim —
+// soft stop had no product entry point.
 
-export const HOST_PROTOCOL_VERSION = 8;
+export const HOST_PROTOCOL_VERSION = 9;
 
 // ── capability tokens ────────────────────────────────────────────────
 //
@@ -529,8 +536,7 @@ export type AgentStreamObservedResult = z.infer<
 /**
  * Live-delivery text — the unencoded message text the daemon will
  * hand to its in-process driver's `encodeStdinMessage(text, ...)`
- * just before writing to stdin. Used by `runtime_deliver.text` /
- * `runtime_stop.soft_directive`.
+ * just before writing to stdin. Used by `runtime_deliver.text`.
  *
  * Why text and not pre-encoded stream-json bytes (Option A v2 — Cindy
  * `UMGu36zoTDVuKWXi`): stateful drivers (codex) carry `threadId` /
@@ -544,7 +550,7 @@ export type AgentStreamObservedResult = z.infer<
  * process owns the driver state.
  *
  * `.min(1)` is intentional (Cindy `wYjG20JdGjLpwq8K`): every backend
- * call site (formatInboxBatch / combineGated / soft directive) yields
+ * call site (formatInboxBatch / combineGated) yields
  * non-empty text. An empty string reaching the daemon is a caller
  * bug — fail loudly at schema validation, not at stdin encode.
  */
@@ -820,113 +826,36 @@ export type RuntimeStartResult = z.infer<typeof RuntimeStartResultSchema>;
 // ── runtime_stop ────────────────────────────────────────────────────
 
 /**
- * Stop a (conv, agent) runtime. Two modes with distinct semantics
- * (locked by Cindy `vqDWkLFF6pAeIE5t` step 2 plan reply):
+ * Stop a (conv, agent) runtime: SIGTERM 5s → SIGKILL cascade. Result
+ * reports the process termination outcome via `{ stopped, exit_code }`.
  *
- *  - **`hard`** — SIGTERM 5s → SIGKILL cascade. Result reports the
- *    process termination outcome via `{ stopped, exit_code }`.
- *  - **`soft`** — inject a directive user message into stdin (e.g.
- *    "[the user wants you to stop]") and let the agent wrap up.
- *    Backend MUST supply the directive in `soft_directive`. Result
- *    reports the write outcome via `{ directive_delivered, reason? }`.
- *    The runtime is NOT terminated by a soft stop; the agent's next
- *    `turn_end` or `runtime_exit` is what backend should react to.
- *
- * Why the result is a discriminated union rather than a flat object:
- * conflating "process stopped" with "directive written" lets backend
- * misinterpret a soft `write_failed` as "agent is now stopped" and
- * flip DB / SSE state incorrectly. Splitting on `mode` makes that
- * misuse a compile-time error.
+ * `mode` stays on the wire as a literal `'hard'` so the field name is
+ * stable if a graceful mode ever returns. The former `mode:'soft'`
+ * stdin-directive arm was removed (#task:1558, shiki decision
+ * `mUnNmEyo10T-vnaU`): it had no product entry point and no external
+ * contract.
  */
 export const RuntimeStopParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
-    mode: z.enum(['soft', 'hard']),
-    /** Unencoded directive text the daemon will hand to its driver's
-     *  `encodeStdinMessage(text, cliSessionId)` and write to stdin
-     *  as a user message. ONLY allowed when `mode === 'soft'`.
-     *  Option A v2 (Cindy `UMGu36zoTDVuKWXi`): backend no longer
-     *  pre-encodes — daemon owns the driver instance with state. */
-    soft_directive: RuntimeMessageTextSchema.optional(),
+    mode: z.literal('hard'),
   })
-  .strict()
-  .superRefine((val, ctx) => {
-    if (val.mode === 'hard' && val.soft_directive !== undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['soft_directive'],
-        message:
-          "soft_directive is only valid when mode === 'soft'; hard mode kills the process and ignores stdin.",
-      });
-    }
-    if (val.mode === 'soft' && val.soft_directive === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['soft_directive'],
-        message:
-          "soft_directive is required when mode === 'soft'; backend MUST supply the directive bytes (default phrasing is backend's responsibility).",
-      });
-    }
-  });
+  .strict();
 export type RuntimeStopParams = z.infer<typeof RuntimeStopParamsSchema>;
 
 export const RuntimeStopResultSchema = z
-  .discriminatedUnion('mode', [
-    z
-      .object({
-        mode: z.literal('hard'),
-        /** Whether the runtime was actually live and got the signal.
-         *  False = nothing to stop (already exited / never started). */
-        stopped: z.boolean(),
-        /** Final exit code if known at response time. SIGTERM cascade
-         *  may not have completed; daemon may report `null` and let the
-         *  `runtime_exit` event carry the real value. */
-        exit_code: z.number().int().nullable(),
-      })
-      .strict(),
-    z
-      .object({
-        mode: z.literal('soft'),
-        /** Whether the directive line was written to the child's stdin.
-         *  False = runtime not running, write failed, or driver refused.
-         *  IMPORTANT: directive_delivered === false does NOT mean the
-         *  runtime is stopped — backend must NOT flip DB / SSE state
-         *  to a stopped status on a soft failure. */
-        directive_delivered: z.boolean(),
-        /** Why the directive wasn't delivered. REQUIRED when
-         *  directive_delivered === false; FORBIDDEN when
-         *  directive_delivered === true. The pairing is enforced by
-         *  the .superRefine() below (Cindy `eMcEhycw8fQwucis`) — a
-         *  bare `optional()` would let backend silently emit either
-         *  `{delivered:false}` (no reason) or
-         *  `{delivered:true, reason:'write_failed'}`, both of which
-         *  defeat the whole point of the discriminated soft result. */
-        reason: z
-          .enum(['not_running', 'write_failed', 'driver_refused'])
-          .optional(),
-      })
-      .strict(),
-  ])
-  .superRefine((val, ctx) => {
-    if (val.mode !== 'soft') return;
-    if (val.directive_delivered === false && val.reason === undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['reason'],
-        message:
-          "soft result with directive_delivered=false must carry a typed reason ('not_running' | 'write_failed' | 'driver_refused')",
-      });
-    }
-    if (val.directive_delivered === true && val.reason !== undefined) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['reason'],
-        message:
-          'soft result with directive_delivered=true must not carry a reason',
-      });
-    }
-  });
+  .object({
+    mode: z.literal('hard'),
+    /** Whether the runtime was actually live and got the signal.
+     *  False = nothing to stop (already exited / never started). */
+    stopped: z.boolean(),
+    /** Final exit code if known at response time. SIGTERM cascade
+     *  may not have completed; daemon may report `null` and let the
+     *  `runtime_exit` event carry the real value. */
+    exit_code: z.number().int().nullable(),
+  })
+  .strict();
 export type RuntimeStopResult = z.infer<typeof RuntimeStopResultSchema>;
 
 // ── runtime_deliver (Stage 2, #task:1417) ───────────────────────────

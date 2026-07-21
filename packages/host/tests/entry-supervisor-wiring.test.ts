@@ -57,9 +57,9 @@ const DAEMON_ENTRY = resolve(HERE, '../src/daemon/entry.ts');
 
 /** Field names that MUST NOT appear in any daemon JSONL line.
  *  Mirrors the daemon log contract: no payload, no env, no stdout /
- *  stderr chunk content, no soft_directive, no text (Option A v2 —
+ *  stderr chunk content, no text (Option A v2 —
  *  Cindy `UMGu36zoTDVuKWXi`: `runtime_wake.text` /
- *  `runtime_start.startup_delivery.text` / `runtime_stop.soft_directive`
+ *  `runtime_start.startup_delivery.text`
  *  carry raw user / agent message bytes the daemon will encode via
  *  its in-process driver; the daemon must never log the text). We
  *  grep on the JSON-key form (`"<name>":`) so unrelated occurrences
@@ -141,7 +141,7 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
     await client.close();
     await handle.kill({ gracefulMs: 2_000 });
 
-    // Log contract: no payload/env/stdout/stderr/chunk/soft_directive
+    // Log contract: no payload/env/stdout/stderr/chunk
     // keys anywhere in the daemon JSONL written during this boot.
     // We check post-shutdown so the close-out / shutting_down lines
     // are also covered.

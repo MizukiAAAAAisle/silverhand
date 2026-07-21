@@ -1210,17 +1210,23 @@ export function createConversationRuntimeApp(
     if (!canEditAgent(ctx, getUserPrincipal(c), agentId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
+    // Soft stop was removed (#task:1558). A stale caller asking for the
+    // pause semantics must fail loud — silently upgrading a "pause"
+    // request to an irreversible hard kill is worse than a 4xx.
     const body = await c.req.json().catch(() => ({}));
-    const mode: 'soft' | 'hard' = body?.mode === 'soft' ? 'soft' : 'hard';
-    const directive =
-      typeof body?.directive === 'string' ? body.directive : undefined;
+    if (body?.mode === 'soft' || body?.directive !== undefined) {
+      return c.json(
+        { error: 'soft stop was removed; only hard stop is supported' },
+        400,
+      );
+    }
     ctx.logger.info(
-      { conversationId, agentId, mode, hasDirective: !!directive },
+      { conversationId, agentId },
       'api: stop agent requested',
     );
     // Same standalone daemon-host behavior as startConversationAgent.
     try {
-      await ctx.runtimeHost.stop(conversationId, agentId, mode, directive);
+      await ctx.runtimeHost.stop(conversationId, agentId);
       return c.json({ ok: true });
     } catch (err) {
       const mapped = placementErrorResponse(c, err);

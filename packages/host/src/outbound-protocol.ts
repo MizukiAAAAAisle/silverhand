@@ -198,7 +198,12 @@ const FrameIdSchema = z.string().min(1);
 // `runtime_start` is now an OPEN string, and new effort values are negotiated
 // via the `runtime.codex.reasoning.v1` capability, so adding one no longer
 // touches the wire framing. See the two-layer note at HOST_PROTOCOL_VERSION.
-export const OUTBOUND_PROTOCOL_VERSION = 7;
+//
+// v8 (#task:1558): `runtime_stop` loses its `mode:'soft'` arm (params
+// `soft_directive` deleted, `mode` narrows to literal `'hard'`, soft result
+// variant removed). Strict schemas break in both directions — fail loud at
+// attach. Bumps alongside HOST_PROTOCOL_VERSION (8→9).
+export const OUTBOUND_PROTOCOL_VERSION = 8;
 
 // ── server → daemon command catalogue ──────────────────────────────
 

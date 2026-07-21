@@ -81,7 +81,7 @@ export class OpenCodeDriver implements Driver {
   readonly kind = 'opencode' as const;
   readonly binary = 'opencode';
   readonly kickoffMode = 'self_inits' as const;
-  readonly busyDeliveryMode = 'gated' as const;
+  readonly releaseProfile = 'prompt-boundary' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 30 * 1000;

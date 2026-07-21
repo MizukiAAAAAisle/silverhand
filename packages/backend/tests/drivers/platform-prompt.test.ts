@@ -260,9 +260,18 @@ describe('buildPlatformPrompt', () => {
     expect(text).toContain('exit code 1 as a user/input');
     expect(text).toMatch(/2 as a\s+temporary error/);
     expect(text).toContain('3 as a failure');
-    expect(text).toContain("details.subkind: 'message_stale'");
-    expect(text).toContain('details.newer_messages');
-    expect(text).toMatch(/Don't blindly/);
+    // Stale-sends section (#task:1561, final form ratified by shiki:
+    // positive operational path only — no wire-shape exposition, no
+    // history counter-example, no runtime-arrival differences). Gate
+    // BOTH directions: the current guidance is present AND the dead
+    // body-carrying fields are gone (the countgaming regression came
+    // from the prompt still teaching "read newer_messages, retry;
+    // if repeatedly held use --anyway").
+    expect(text).toContain('If a send returns `message_stale`');
+    expect(text).toContain('wait for pending\n  messages to arrive through normal delivery');
+    expect(text).toContain('independent of unread content');
+    expect(text).not.toContain('newer_messages');
+    expect(text).not.toContain('returned_through_seq');
     expect(text).toContain('--stale-resolution unaffected');
     expect(text).toContain('--stale-resolution revised');
     expect(text).toContain('message stale-resolve --resolution obsolete');

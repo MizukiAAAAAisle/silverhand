@@ -273,13 +273,14 @@ function removeWorkspaceMemberAndConversationRows(
 
 async function publishWorkspaceMemberRemovalEffects(
   ctx: BackendContext,
+  conversations: ConversationRepo,
   input: {
     removed: RemovedConversationPublish[];
     viewerEvent?: { userId: string; workspaceId: string };
   },
 ): Promise<void> {
   const effects: PostCommitEffect[] = input.removed.map(
-    ({ conversation, message }) => () => publishMemberRemoved(ctx, conversation, message),
+    ({ conversation, message }) => () => publishMemberRemoved(ctx, conversations, conversation, message),
   );
   const viewerEvent = input.viewerEvent;
   if (viewerEvent) {
@@ -327,7 +328,7 @@ async function removeWorkspaceHumanMember(
     removeWorkspaceMember: () =>
       workspaces.removeUserMember(input.workspaceId, input.user.id),
   });
-  await publishWorkspaceMemberRemovalEffects(ctx, {
+  await publishWorkspaceMemberRemovalEffects(ctx, conversations, {
     removed,
     viewerEvent: { userId: input.user.id, workspaceId: input.workspaceId },
   });
@@ -495,7 +496,7 @@ export function createWorkspaceMembershipApp(
     );
     for (const conversation of targets) {
       await ctx.runtimeHost
-        .stop(conversation.id, agentId, 'hard')
+        .stop(conversation.id, agentId)
         .catch(err =>
           ctx.logger.warn(
             { conversationId: conversation.id, agentId, err },
@@ -511,7 +512,7 @@ export function createWorkspaceMembershipApp(
       member,
       removeWorkspaceMember: () => workspaces.removeMember(workspace.id, agentId),
     });
-    await publishWorkspaceMemberRemovalEffects(ctx, { removed });
+    await publishWorkspaceMemberRemovalEffects(ctx, conversations, { removed });
     return c.body(null, 204);
   });
 

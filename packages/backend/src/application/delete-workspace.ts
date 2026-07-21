@@ -92,7 +92,7 @@ export async function deleteWorkspace(
   for (const conversation of workspaceConversations) {
     ctx.runtimeHost.resolveConversationRuns(conversation.id, 'conversation_closed');
     for (const ca of conversations.listAgents(conversation.id)) {
-      void ctx.runtimeHost.stop(conversation.id, ca.agent_id, 'hard').catch(err =>
+      void ctx.runtimeHost.stop(conversation.id, ca.agent_id).catch(err =>
         ctx.logger.warn(
           {
             workspaceId: workspace.id,

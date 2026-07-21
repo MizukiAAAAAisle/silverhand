@@ -751,6 +751,13 @@ export class ScheduleService {
       conversationId: targetConvId,
       fromKind: 'system',
       content: body,
+      // Out of the freshness universe (design doc §5.2): a schedule fire
+      // is the owner's self-wake, not channel discourse — it is delivered
+      // ONLY to the owner below, so bumping the stream head would leave
+      // every other agent member CAS-blocked on a row that never arrives
+      // (a signal-only 409 deadlock). Fan-out to all members instead
+      // would wake every agent per fire — a product regression.
+      freshnessExempt: true,
       metadata: {
         subtype: systemSubtype('schedule_fire'),
         schedule_id: dto.id,
@@ -831,6 +838,18 @@ export class ScheduleService {
         fromKind: 'system',
         content,
       });
+      // Universe alignment (§5.2): this row bumps the DM's stream head, so
+      // the owner agent must have a normal delivery to advance past it —
+      // without one, its next DM send would 409 forever under the
+      // signal-only contract. Best-effort like the rest of this notice.
+      void this.runtimeHost
+        .deliverMessage(home.dm_channel_id, dto.owner_agent_id, msg.id)
+        .catch(err => {
+          this.logger.warn(
+            { scheduleId: dto.id, err },
+            'schedule-service: target-dead notice delivery failed; row stays pending',
+          );
+        });
       this.events.publish(home.dm_channel_id, {
         kind: 'message',
         payload: { message: msg },

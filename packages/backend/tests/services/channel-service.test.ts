@@ -44,9 +44,9 @@ class FakeConversationManager {
   getAgentRunStates(): never[] {
     return [];
   }
-  stops: Array<{ conversationId: string; agentId: string; mode: string }> = [];
-  async stop(conversationId: string, agentId: string, mode: string): Promise<void> {
-    this.stops.push({ conversationId, agentId, mode });
+  stops: Array<{ conversationId: string; agentId: string }> = [];
+  async stop(conversationId: string, agentId: string): Promise<void> {
+    this.stops.push({ conversationId, agentId });
   }
   async stopAll(): Promise<void> {}
   reconcileOnBoot(): void {}
@@ -606,7 +606,6 @@ describe('ChannelService.setArchived', () => {
       // hard-stop issued for both agents in the channel (order-independent).
       expect(t.fake.stops).toHaveLength(2);
       expect(t.fake.stops.every(s => s.conversationId === t.source.id)).toBe(true);
-      expect(t.fake.stops.every(s => s.mode === 'hard')).toBe(true);
       expect(new Set(t.fake.stops.map(s => s.agentId))).toEqual(
         new Set([t.alice.id, t.bob.id]),
       );

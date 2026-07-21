@@ -62,6 +62,13 @@ export interface SendMessageInput {
 export interface SendMessageResult {
   message: MessageDto;
   targetConversationId: string;
+  /** Stream head at the moment BEFORE this message was inserted. Only set
+   *  for agent `freshnessBypass` sends: the daemon uses it as the merge
+   *  prerequisite for the sender's own seq — once its observed cursor
+   *  covers everything freshness-relevant below the forced message, the
+   *  own seq joins the watermark (countgame P1: without this, a bypass in
+   *  a quiet stream leaves the sender permanently stale on its own head). */
+  streamHeadBeforeSend?: number;
 }
 
 export type NormalizedMessageTarget =
@@ -196,10 +203,8 @@ export class MessageFreshnessError extends Error {
     public readonly conversationId: string,
     public readonly seenUpToSeq: number,
     public readonly currentSeq: number,
-    public readonly newerMessages: MessageDto[],
     public readonly staleEventId: string,
-    /** Target stream the CAS was scoped to (NULL = main line). The
-     *  `newerMessages` list is drawn from this stream only. */
+    /** Target stream the CAS was scoped to (NULL = main line). */
     public readonly threadRootId: string | null = null,
   ) {
     super(
@@ -276,6 +281,7 @@ export interface SendMessageTxResult {
    *  transaction, attached to the post-commit `message` event. Null when the
    *  send touches no derived projection (a main-line, non-reply message). */
   projections: MessageProjections | null;
+  streamHeadBeforeSend: number | null;
 }
 
 export const REPLIED: AgentRunTerminalReason = 'replied';
