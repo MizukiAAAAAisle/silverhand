@@ -5,6 +5,16 @@ import {
   type InjectedFileContent,
 } from '@silverhand/shared';
 
+// Scope of this suite (ratified by shiki, #task:1575): the platform
+// prompt's PROSE is not a test contract — manual wording changes are
+// requirement changes and carry their own review. What stays tested:
+//   1. template LOGIC — output that varies with input (paths, session
+//      context, members, injected memory, fences);
+//   2. injection hardening — untrusted text must not break the
+//      rendered structure;
+//   3. code-derived consistency — prompt flag mentions ⊆ real CLI
+//      flags, no retired JSON field names that would mis-route agents.
+
 function prompt(): string {
   return buildPlatformPrompt({
     agentId: 'agent-1',
@@ -26,85 +36,10 @@ function prompt(): string {
 }
 
 describe('buildPlatformPrompt', () => {
-  it('requires visible replies through the silverhand CLI', () => {
-    const text = prompt();
-    expect(text).toContain('Reply only through the CLI.');
-    expect(text).toContain('invisible to the conversation');
-    expect(text).toContain('silverhand message send');
-  });
-
-  it('keeps system announcements informational unless explicitly requested', () => {
-    const text = prompt();
-    expect(text).toContain('type=system');
-    expect(text).toMatch(/unless it explicitly asks you to/);
-  });
-
   it('renders conversation ids in the context block', () => {
     const regular = prompt();
     expect(regular).toContain('Conversation id: `conv-channel-1`');
     expect(regular).not.toContain('Parent channel conversation id');
-  });
-
-  it('avoids generic platform wording in the rendered agent manual', () => {
-    const text = prompt();
-    expect(text).toContain('via Silverhand');
-    expect(text).toContain('Silverhand notice');
-    expect(text).not.toContain('via the Silverhand chat platform');
-    expect(text).not.toContain('platform announcements');
-    expect(text).not.toContain('The platform shows what you did');
-  });
-
-  it('hardens multi-agent etiquette against ping loops', () => {
-    const text = prompt();
-    expect(text).toContain('### When to speak');
-    expect(text).toMatch(/never reply to your own message/);
-    expect(text).toMatch(
-      /Never acknowledge, summarize, or restate another agent's\s+work/,
-    );
-    expect(text).toMatch(/Send a message only when you have actionable\s+content/);
-    expect(text).not.toContain('unique value to add');
-  });
-
-  it('defines a flexible workspace and progressive MEMORY index contract', () => {
-    const text = prompt();
-    expect(text).toContain('## Workspace & Memory');
-    expect(text).toMatch(/working directory \(`cwd`\) is persistent across sessions/);
-    expect(text).toMatch(/flexible workspace, not a fixed schema/);
-    expect(text).toMatch(/Create files or directories as the work requires/);
-    expect(text).toMatch(/no required workspace layout/);
-    expect(text).toMatch(/not[^.]+exclusively owned directory/);
-    expect(text).toMatch(/choose the specific project directory or worktree/);
-    expect(text).toMatch(/arbitrary cwd files as additional agent-memory tiers/);
-    expect(text).toMatch(/private\s+agent\s+memory belongs in L1\/L2/);
-    expect(text).not.toMatch(/three storage surfaces across two scopes/);
-    expect(text).not.toMatch(/future-you/);
-    expect(text).toMatch(/MEMORY\.md is the entry point/);
-    expect(text).toMatch(/MEMORY\.md must stand alone as the recovery index/);
-    expect(text).toContain('Use progressive disclosure');
-    expect(text).toContain('**Key Knowledge** index');
-    expect(text).toContain('**Active Context**');
-    expect(text).toMatch(/target under 10KB/i);
-    expect(text).toContain('over 16KB is truncated on inject');
-    expect(text).toMatch(/Notes have no required schema/);
-    expect(text).toMatch(/Organize[\s\S]*?to fit the work/);
-    expect(text).toMatch(/including domain-specific notes/);
-    expect(text).toMatch(/examples, not a required layout/);
-    expect(text).toContain('`<domain>.md`');
-    expect(text).toContain('**Important work history**');
-    expect(text).toContain('**Workspace/channel context**');
-    expect(text).toContain('**Other agents**');
-    expect(text).toMatch(/Task status belongs on the task board/);
-    expect(text).toMatch(/commit inventories belong in git/);
-    expect(text).toMatch(/After a significant interaction or durable learning/);
-    expect(text).toMatch(/`done` \/ `closed` task notice is a cleanup trigger/);
-    expect(text).toMatch(/remove that task from\s+Active Context before stopping/);
-    expect(text).toMatch(/Do not rewrite the entry\s+as `DONE`/);
-    expect(text).toContain('run a memory checkpoint');
-    expect(text).toContain('./.silverhand/agents/agent-1/notes/');
-    expect(text).not.toContain(
-      "Keep MEMORY.md complete enough that compression preserves",
-    );
-    expect(text).not.toContain('After completing significant work, update notes');
   });
 
   it('renders the active profile path and the L1/L2 split in Active Profile Files', () => {
@@ -114,9 +49,7 @@ describe('buildPlatformPrompt', () => {
     // header was removed when system_prompt.md moved to L1-only.
     expect(regular).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
     expect(regular).toContain('./.silverhand/agents/agent-1/MEMORY.md');
-    expect(regular).toMatch(/only when a task needs cross-workspace\s+context/);
     expect(regular).toContain('./.silverhand/agents/agent-1/notes/');
-    expect(regular).toMatch(/These paths are internal\s+working context/);
 
     const dm = buildPlatformPrompt({
       agentId: 'agent-1',
@@ -168,395 +101,11 @@ describe('buildPlatformPrompt', () => {
     expect(messy).not.toContain('//agents');
   });
 
-  it('requires work-driven claiming and task state updates before reporting completion', () => {
-    const text = prompt();
-    expect(text).toContain('**Claim work, not messages.**');
-    expect(text).toMatch(/substantive work \*not already/);
-    expect(text).toContain('tracked by a task');
-    expect(text).toContain('race-guard');
-    expect(text).toMatch(/review feedback on a\s+task you own/);
-    expect(text).toMatch(/not new work/);
-    expect(text).toMatch(/Don't open a second task/);
-    expect(text).toContain('Plain Q&A');
-    expect(text).toContain('conversation');
-    expect(text).toContain('status checks');
-    expect(text).toContain('clarifications');
-    expect(text).toContain('need no claim');
-    expect(text).toContain('**A failed claim means stop.**');
-    expect(text).toMatch(/Close the loop\./);
-    expect(text).toMatch(/`silverhand task status` first/);
-    expect(text).toMatch(/leaving the state stale/);
-    // #task:530: workspace selector guidance must be present so agents
-    // discover --workspace-id / --workspace from the prompt alone.
-    expect(text).toContain('--workspace-id');
-    expect(text).toContain('Cross-workspace ops are opt-in');
-  });
-
-  it('includes schedule tool usage guidance and wake handling', () => {
-    const text = prompt();
-    expect(text).toContain('## Schedules');
-    expect(text).toContain('`silverhand schedule create`');
-    expect(text).toContain('`silverhand schedule list`');
-    expect(text).toContain('`silverhand schedule cancel`');
-    expect(text).toContain('future time');
-    expect(text).toContain('Where it fires');
-    expect(text).toContain("metadata.subtype = 'schedule_fire'");
-    expect(text).toMatch(/report via\s+`silverhand message send`/);
-    // cron 5-field syntax / max-occurrences detail now lives in `--help`,
-    // not the prompt (#task:1094 slimming).
-    expect(text).not.toContain('strict 5-field UNIX syntax');
-  });
-
-  it('teaches CJK-punctuation URL wrapping and search-first historical references', () => {
-    // Two slock imports (#task:1091):
-    //  - wrap a URL next to non-ASCII punctuation in <...> / markdown so the
-    //    trailing full-width comma isn't swallowed into the link.
-    //  - when the user references a past discussion not in hand, search
-    //    first and cite the source (or say it wasn't found).
-    const text = prompt();
-    expect(text).toContain('URLs next to non-ASCII punctuation');
-    expect(text).toContain('swallowed into the link');
-    expect(text).toContain('<http://127.0.0.1:3000>');
-    expect(text).toContain(
-      'When the user refers to a past discussion, decision, or owner',
-    );
-    expect(text).toContain('search before you answer');
-    expect(text).toMatch(/say so rather than\s+guessing/);
-
-    // Peek/pull semantics relocated from Threads into History (#task:1094):
-    // reading a thread is a pull that advances the read boundary.
-    expect(text).toContain('--target thread:<root_message_id>');
-    expect(text).toContain('is a **pull**');
-    expect(text).toContain('advances your read boundary');
-  });
-
-  it('renders the silverhand CLI command manual', () => {
-    const text = buildPlatformPrompt({
-      agentId: 'agent-1',
-      agentName: 'Cindy',
-      runtime: 'codex',
-      activeProfileDir: './.silverhand/agents/agent-1',
-      roleSystemPrompt: '_role_',
-      currentMemory: { kind: 'missing' },
-      workspaceMemoryIndex: [],
-      sessionContext: {
-        conversationId: 'conv-channel-1',
-        channelName: 'silverhand',
-        channelKind: 'regular',
-        sessionTitle: 'member activity',
-        members: [],
-        selfAgentId: 'agent-1',
-      },
-    });
-
-    expect(text).toContain('## Tool Reference (silverhand CLI)');
-    expect(text).toMatch(
-      /Use the silverhand CLI for all chat \/ task \/ workspace/,
-    );
-    expect(text).toMatch(/Subcommands default\s+to `--json`/);
-    expect(text).toMatch(/stderr is the primary failure context/);
-    expect(text).toMatch(/exits\s+non-zero/);
-    expect(text).toMatch(/stable\s+`code` and `retriable` flag/);
-    expect(text).toContain('exit code 1 as a user/input');
-    expect(text).toMatch(/2 as a\s+temporary error/);
-    expect(text).toContain('3 as a failure');
-    // Stale-sends section (#task:1561, final form ratified by shiki:
-    // positive operational path only — no wire-shape exposition, no
-    // history counter-example, no runtime-arrival differences). Gate
-    // BOTH directions: the current guidance is present AND the dead
-    // body-carrying fields are gone (the countgaming regression came
-    // from the prompt still teaching "read newer_messages, retry;
-    // if repeatedly held use --anyway").
-    expect(text).toContain('If a send returns `message_stale`');
-    expect(text).toContain('wait for pending\n  messages to arrive through normal delivery');
-    expect(text).toContain('independent of unread content');
-    expect(text).not.toContain('newer_messages');
-    expect(text).not.toContain('returned_through_seq');
-    expect(text).toContain('--stale-resolution unaffected');
-    expect(text).toContain('--stale-resolution revised');
-    expect(text).toContain('message stale-resolve --resolution obsolete');
-    expect(text).toContain('--anyway');
-    expect(text).toContain('silverhand <noun> <verb> --help');
-    // Dependent silverhand commands run one at a time, but independent
-    // reads may still run in parallel (#task:1091).
-    expect(text).toContain('Run *dependent* silverhand commands one at a time');
-    expect(text).toContain('claim-then-act');
-    expect(text).toMatch(/Independent reads/);
-    expect(text).toContain('**`silverhand message send`**: Send a message');
-    expect(text).toMatch(/\*\*`silverhand message react`\*\*/);
-    expect(text).toMatch(/GitHub-Flavored Markdown — headings, lists, tables/);
-    expect(text).toMatch(/\*\*`silverhand task list`\*\*: View the task board/);
-    expect(text).toMatch(/\*\*`silverhand schedule create`\*\*/);
-    expect(text).toMatch(/\*\*`silverhand schedule list`\*\*/);
-    expect(text).toMatch(/\*\*`silverhand schedule cancel`\*\*/);
-    expect(text).toMatch(/\*\*`silverhand file upload`\*\*/);
-    expect(text).toContain("<<'SILVERHAND_EOF'");
-    expect(text).toMatch(/`silverhand task status` first/);
-    expect(text).not.toContain('mcp_chat_send_message');
-    expect(text).not.toContain('mcp__chat__');
-    expect(text).not.toContain('All cross-agent interaction is through MCP tools');
-    // Check the four real env-var names by name. A bare `SILVERHAND_`
-    // prefix would falsely flag the recommended heredoc delimiter
-    // `SILVERHAND_EOF` in the message-send section.
-    expect(text).not.toMatch(
-      /SILVERHAND_(?:AUTH_TOKEN|CONVERSATION_ID|AGENT_ID|SERVER_URL)\b/,
-    );
-    expect(text).not.toContain('auth failure');
-  });
-
-  it('renders a concept-only Profile section before Workspace & Memory', () => {
-    const text = prompt();
-    // Section present and positioned per the skeleton (§2): after This
-    // Context, before Workspace & Memory — identity/global config is more
-    // foundational than workspace memory.
-    const ctxIdx = text.indexOf('## This Context');
-    const profileIdx = text.indexOf('## Your Profile');
-    const kmIdx = text.indexOf('## Workspace & Memory');
-    expect(ctxIdx).toBeGreaterThan(-1);
-    expect(profileIdx).toBeGreaterThan(ctxIdx);
-    expect(kmIdx).toBeGreaterThan(profileIdx);
-
-    const section = text.slice(profileIdx, kmIdx);
-    // Concept + behavior: own global (L1) config, cross-workspace, and a
-    // pointer to the CLI surface.
-    expect(section).toMatch(/global \(L1\)/);
-    expect(section).toMatch(/across every workspace/);
-    expect(section).toMatch(/silverhand profile/);
-    // §5 one-home: the section must NOT re-list the mcp verb index — that
-    // lives only in Tool Reference.
-    expect(section).not.toMatch(/get\|set\|add/);
-    // §5 no-future-residue: only current facts, no roadmap fields.
-    expect(section).not.toMatch(/avatar|display.?name|description/i);
-  });
-
-  it('keeps the profile mcp verb index in exactly one home (Tool Reference)', () => {
-    const text = prompt();
-    // The full verb index string must appear once, not duplicated into the
-    // Profile concept section (§5 one-home-per-fact).
-    const occurrences = text.split('get|set|add|remove|clear|validate|probe').length - 1;
-    expect(occurrences).toBe(1);
-  });
-
-  it('uses current thread terminology and gates agent-created top-level channels', () => {
-    const text = prompt();
-    expect(text).toContain('## Threads');
-    expect(text).toContain('focused side-discussions attached to a specific message');
-    expect(text).toContain('--target thread:<message_id>');
-    expect(text).toContain('Use real `msg_id` values');
-    expect(text).toContain('`silverhand thread follow`');
-    expect(text).toContain('`silverhand thread unfollow --root <message_id>`');
-    expect(text).toContain('`silverhand channel create`');
-    expect(text).toContain('**Only** call `silverhand channel create`');
-    expect(text).toContain('explicitly');
-    expect(text).toContain('When isolation');
-    expect(text).toContain('or a separate context is genuinely needed');
-    expect(text).toContain('current workspace');
-    expect(text).not.toContain('`mcp__chat__spawn_child_session`');
-    expect(text).not.toContain('`mcp__chat__create_session`');
-  });
-
-  it('teaches the thread model (shared context, current stream, current ids)', () => {
-    // The thread model the agent must internalize:
-    //   1. A thread is attached to one message, shares channel context and
-    //      the current session, and keeps related replies out of the main line.
-    //   2. Start/join and reply with `--target thread:<message_id>`; a bare
-    //      send posts to the main line. Use current `msg_id` /
-    //      `target=thread:<root>` terminology, not old `msg=` or `:shortid`.
-    //   3. Follow/unfollow controls inbox delivery. Channel creation policy
-    //      lives under Channels, not in this section.
-    //
-    // We deliberately do NOT teach runtime delivery semantics (delivery /
-    // auto-start). The agent default-assumes "the message reaches the
-    // target" and need not reason about runtime state.
-    const text = prompt();
-    expect(text).toMatch(/share\s+this channel's context/);
-    expect(text).toContain('current session');
-    expect(text).toContain('Use real `msg_id` values');
-    expect(text).toContain('--target thread:<message_id>');
-    expect(text).toContain('target=channel|thread:<root_message_id>');
-    expect(text).toContain('target=thread:<root_message_id>');
-    expect(text).toMatch(/bare[\s\S]*?posts to the\s+main line/);
-    expect(text).toContain('replies never nest');
-    expect(text).toContain('auto-follows you');
-    expect(text).toContain('Unfollow only when your work there is clearly complete');
-    // Peek (`message history --target thread:`) now lives under History and
-    // search, and task-in-thread under Tasks — relocated out of the Threads
-    // base definition (#task:1094). Asserted in their own sections below.
-    expect(text).toContain('`silverhand channel create`');
-    expect(text).not.toContain('silverhand thread create');
-    expect(text).not.toContain('silverhand thread close');
-    expect(text).not.toContain('Use the `msg=` field');
-    expect(text).not.toContain(':shortid');
-
-    // Drift guard: the OLD independent-session model must never return.
-    expect(text).not.toContain('Threads run as separate agent sessions');
-    expect(text).not.toContain('does not see any of that');
-    // Drift guard: the retired default-target mechanism must not return — a
-    // bare send posts to the main line; thread replies are explicit.
-    expect(text).not.toMatch(/stay\s+in a thread by default/);
-    expect(text).not.toContain('ambiguous_default_target');
-    expect(text).not.toContain('candidate_targets');
-    // Drift guard: the Channels section must not redirect isolation/parallel
-    // work back to `thread create`, and the command index must not describe
-    // the legacy thread commands as a normal "open a thread" affordance —
-    // both pull the agent back into the retired thread=isolated-session model.
-    expect(text).not.toContain(
-      'use `silverhand thread create` for those cases',
-    );
-    expect(text).not.toContain('Open a Thread from the current channel');
-    // Drift guard: never reintroduce runtime-delivery vocabulary.
-    expect(text).not.toContain('auto-wake');
-    expect(text).not.toContain('auto-start');
-    expect(text).not.toMatch(/woken automatically/i);
-    expect(text).not.toContain('--no-wake');
-  });
-
-  it('teaches the #conv:<id> sigil for inline conversation references', () => {
-    const text = prompt();
-    // PR-4 commit 4 unified the sigil docs under a single Formatting
-    // heading per @shiki direction (msg `gTMLaOKaVGwhatkj`). Section
-    // anchor pins that heading shape so future rewrites can't silently
-    // reintroduce a per-sigil heading.
-    expect(text).toMatch(/^## Formatting Reference\s*$/m);
-    // Each grammar must keep its sub-heading anchor; tests below
-    // assert the per-grammar bullets and the closing summary.
-    expect(text).toMatch(/^### Reference grammars\s*$/m);
-    expect(text).toMatch(/^### Rules\s*$/m);
-    expect(text).toContain('`#conv:<conversation_id>`');
-    expect(text).toMatch(/#conv:qdQwBXDqcq_GE63-/);
-
-    // The prompt is a pure output-format contract, not a UI behavior
-    // explanation. Per @shiki + @Cindy reviews on `8f2f046` / `d4fbf1c`,
-    // the agent doesn't need to know how the recipient's UI renders
-    // the sigil — it only needs to know which token to write where.
-    // Forbid every interaction-leaning verb that snuck in earlier
-    // drafts. NOTE: use `\s+` not a literal space so line-wrapped
-    // matches like "side\npane" still trip the guard.
-    expect(text).not.toMatch(/\bside\s+pane\b/i);
-    expect(text).not.toMatch(/\bprimary\s+pane\b/i);
-    expect(text).not.toContain('clickable pill');
-    expect(text).not.toContain('placeholder with a');
-    expect(text).not.toContain('Recipients without access');
-    expect(text).not.toMatch(/can click it open/);
-    expect(text).not.toMatch(/click it to open/);
-    expect(text).not.toMatch(/without losing their\s+current view/);
-    expect(text).not.toMatch(/without taking them away\s+from their primary pane/);
-    // PR-4 commit 1 review (Cindy, msg `bVRspMv1pSWXCFOc`): the WIP
-    // heading rewrite snuck in a "Silverhand auto renders these tokens
-    // as clickable elements" line. The whole point of the sigil section
-    // is a pure chat-output contract — no renderer/click behavior leaks
-    // back. Forbid the exact phrasing plus the broader vocabulary so a
-    // future rewording can't re-introduce it.
-    expect(text).not.toMatch(/auto renders/i);
-    expect(text).not.toMatch(/clickable elements/i);
-    expect(text).not.toMatch(/\bclickable\b/i);
-
-    // Lists every CLI field that returns a conversation-shaped id, so
-    // the agent doesn't have to guess (channel_id was missing in
-    // earlier drafts even though `silverhand channel create` returns it).
-    expect(text).toContain('`conversation_id`');
-    expect(text).toContain('`channel_id`');
-    expect(text).toContain('`hit.message_ref.conversation_id`');
-
-    // Hard scope boundary: chat text only. Without this an agent will
-    // happily write `--target conversation:#conv:<id>` and 404. The
-    // unified Formatting section enforces this for ALL grammars via
-    // a "do not wrap any of them in CLI arguments" clause; we still
-    // assert that `#conv:` is one of the grammars covered by that
-    // boundary so a future rewrite can't silently drop coverage.
-    expect(text).toMatch(/Do not.*wrap.*in CLI arguments/i);
-    expect(text).toContain('`#conv:<conversation_id>`');
-    // And the explicit "what NOT to wrap" list — message ids are the
-    // most likely confusion since they appear right next to
-    // conversation ids in CLI output. The phrase shows up inside a
-    // bold-marked clause (`**Do not**\s+wrap…`) so we tolerate
-    // markdown emphasis between the words.
-    expect(text).toMatch(/do not\W+wrap message ids/i);
-
-    // Application points across the rest of the prompt.
-    expect(text).toContain('announcing the new channel as');
-    expect(text).toContain('`#conv:<channel_id>`');
-    expect(text).toContain(
-      'When you cite a hit back in chat',
-    );
-    expect(text).toContain('`#conv:<hit.message_ref.conversation_id>`');
-    expect(text).toMatch(/Message ids stay raw/);
-
-    // Earlier wordings that must never come back (drift guard).
-    expect(text).not.toContain('announcing the new channel title\nand ID');
-    // The sigil section earlier listed an exact char count — agents
-    // don't generate ids, they copy them; binding length here just
-    // adds maintenance.
-    expect(text).not.toMatch(/16-character id/);
-
-    // Hard cutover: the legacy `#~<id>` form must not appear anywhere
-    // in the rendered prompt. We dropped backward-compat alias support
-    // in PR-4 commit 1 per @shiki direction.
-    expect(text).not.toContain('#~');
-  });
-
-  it('teaches the #task:<n> sigil and groups all grammars under Formatting', () => {
-    const text = prompt();
-    // Same-section neighbor of `#conv:<id>`. PR-4 commit 4: unified
-    // Formatting section enumerates all four reference grammars
-    // (`@<handle>`, `#<channel_name>`, `#conv:<id>`, `#task:<n>`)
-    // with per-form scenarios and a closing summary.
-    expect(text).toMatch(/^## Formatting Reference\s*$/m);
-    expect(text).toContain('`#task:<n>`');
-    // Concrete example uses a real task number alongside #conv: so
-    // both grammars reinforce each other in one mental model.
-    expect(text).toMatch(/#task:5/);
-    // Each of the four grammars gets its own bullet under Reference
-    // grammars; assert they're all present.
-    expect(text).toContain('`@<handle>`');
-    expect(text).toContain('`#<channel_name>`');
-    expect(text).toContain('`#conv:<conversation_id>`');
-    expect(text).toContain('`#task:<n>`');
-    // Workspace-scoped invariant — prevents agents from assuming task
-    // numbers are global like message ids.
-    expect(text).toMatch(/workspace-scoped/i);
-    // Leading-zero rejection mirrors the tokenizer/URL parser
-    // contract; surfacing it here keeps the prompt and the renderer
-    // aligned.
-    expect(text).toMatch(/leading zero|#task:05 is invalid/i);
-
-    // Pure output-contract drift guards — same vocabulary blocks the
-    // sigil section now applies to the whole Formatting section.
-    // No UI behavior, no rendered shape, no click affordance.
-    expect(text).not.toMatch(/\bclickable\b/i);
-    expect(text).not.toMatch(/\bdrawer\b/i);
-    expect(text).not.toMatch(/\bpopover\b/i);
-    expect(text).not.toMatch(/\bhover\b/i);
-    expect(text).not.toMatch(/\bskeleton\b/i);
-    expect(text).not.toMatch(/scroll(s|ed)?\s+(into\s+view|to)/i);
-    expect(text).not.toMatch(/auto renders/i);
-    expect(text).not.toMatch(/clickable elements/i);
-
-    // Boundary clauses: pure-text-only and don't-mix. The summary
-    // contrasts the chat sigil against the canonical CLI flag form
-    // so the agent doesn't write `--task-number #task:5`. The flag
-    // example wraps onto a new line in the rendered prompt
-    // (`--task-number\n  5`), so we allow whitespace between flag
-    // and value.
-    expect(text).toMatch(/Do not.*wrap.*in CLI arguments/i);
-    expect(text).toContain('#task:5');
-    expect(text).toMatch(/--task-number\s+5\b/);
-
-    // Channel-name semantics: scope = current workspace, ambiguous
-    // names render inert (frontend keys lookup by channel `title` and
-    // surfaces a sentinel for duplicate titles). The prompt should
-    // describe the contract without leaning on UI-shape vocabulary;
-    // "inert" is the output contract the renderer enforces.
-    expect(text).toMatch(/ambiguous/i);
-    expect(text).toMatch(/inert/i);
-  });
-
   // ── Members block (PR-B) ────────────────────────────────────────
   //
-  // The platform prompt teaches agents who else is in the channel by
-  // rendering each participant as a key:value line under "Members in
-  // this conversation:" — locked with @shiki + @Cindy. Agents must
-  // also be told that `@<name>` is the only valid mention form.
+  // The Members block is TEMPLATE OUTPUT keyed off session-context
+  // input: each participant renders as a key:value line, self marked,
+  // display_name JSON-quoted because it is untrusted profile text.
 
   function memberPrompt(): string {
     return buildPlatformPrompt({
@@ -603,6 +152,9 @@ describe('buildPlatformPrompt', () => {
   it('renders the locked Members block in key:value form, with self marked', () => {
     const text = memberPrompt();
     expect(text).toContain('Members in this conversation:');
+    // The mention-rule line renders together with the block (its absence
+    // for an empty member list is asserted below).
+    expect(text).toContain('- Mention rule:');
     // Self row: agent + runtime + self: true. display_name is wrapped
     // in JSON-quoted form (untrusted profile text — see the
     // renderMemberLine docstring).
@@ -622,18 +174,6 @@ describe('buildPlatformPrompt', () => {
     );
     expect(text).not.toMatch(/name: shiki[^\n]*runtime:/);
     expect(text).not.toMatch(/name: shiki[^\n]*self: true/);
-  });
-
-  it('teaches the mention rule positively without printing the wrong form', () => {
-    const text = memberPrompt();
-    expect(text).toContain(
-      'Mention rule: use `@<name>` only. `display_name` is for recognition, not mentioning.',
-    );
-    // Drift guard: putting the bad form in the prompt risks the model
-    // treating it as a known-but-failing pattern. The rule is stated
-    // positively and must never re-introduce the negative phrasing.
-    expect(text).not.toMatch(/@<display_name> will not resolve/);
-    expect(text).not.toMatch(/@<display_name>/);
   });
 
   it('omits the Members block when no participants are present', () => {
@@ -878,18 +418,6 @@ describe('buildPlatformPrompt', () => {
     expect(ruleMatches).toHaveLength(1);
   });
 
-  it('drops legacy "Other members in this channel/thread" wording', () => {
-    // Pre-PR-B the section used a different shape:
-    //   - Other members in this channel/thread:
-    //     - `@cindy` (codex)
-    // PR-B replaced that with the Members + key:value block. Drift
-    // guard: never resurrect the legacy rendering.
-    const text = memberPrompt();
-    expect(text).not.toContain('Other members in this channel/thread');
-    expect(text).not.toContain("(none — you're solo)");
-    expect(text).not.toMatch(/^\s+- `@\w+`\s+\(\w+\)$/m);
-  });
-
   // ── Drift guard ───────────────────────────────────────────────────────
   //
   // The platform prompt teaches agents to invoke the `silverhand` CLI by
@@ -897,12 +425,8 @@ describe('buildPlatformPrompt', () => {
   // CLI command's `--help`, agents will hit a validation_error or
   // mis-route on first call. Rather than enumerate flags by hand, derive
   // the truth from `packages/cli`'s `COMMAND_GROUPS` and assert prompt
-  // flags ⊆ CLI flags.
-  //
-  // Non-flag mentions (decision rules, anti-patterns, semantic guidance)
-  // are still verified by the per-section `it()` blocks above. The
-  // guard here only blocks pure flag-name drift, which is the failure
-  // mode that surfaced in the May 2026 review.
+  // flags ⊆ CLI flags. These are code-derived consistency checks (they
+  // fire when the CLI surface moves), not prose locks.
 
   /** Extract every `--xxx` token from a string. Word-bounded so we
    *  don't pick up `--<placeholder>` markdown nor stray double dashes. */
@@ -1071,15 +595,6 @@ describe('buildPlatformPrompt — three-file model', () => {
     expect(text).toContain('- project-foo — `/abs/foo/.silverhand/agents/a1/MEMORY.md`');
   });
 
-  it('drops the legacy "read MEMORY.md first" startup instruction', () => {
-    // The three-file model auto-injects MEMORY, so the agent does NOT
-    // need to issue Read calls at startup. If the prompt re-grows those
-    // instructions, this regression test will fail.
-    const text = withInjections({});
-    expect(text).not.toContain('Read your active profile');
-    expect(text).not.toMatch(/Read `[^`]*MEMORY\.md` first/);
-  });
-
   it('does not announce L2 system_prompt.md path (system_prompt is L1-only)', () => {
     const text = withInjections({});
     // The legacy Active Profile Files section listed
@@ -1087,46 +602,6 @@ describe('buildPlatformPrompt — three-file model', () => {
     // It must now point at L1, not L2.
     expect(text).not.toContain('./.silverhand/agents/agent-1/system_prompt.md');
     expect(text).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
-  });
-
-  it('renders the L1/L2 split chosen by scope of guidance', () => {
-    // The Workspace & Memory section teaches the L1 (identity, global) vs L2
-    // (workspace memory, local) split and that the layer is chosen by the
-    // SCOPE of the guidance. Contract guard: if the prompt drifts away from
-    // this model, force a deliberate re-locking decision.
-    const text = withInjections({});
-    expect(text).toMatch(/L1 — identity \(global\)/);
-    expect(text).toMatch(/L2 — workspace memory \(agent-owned\)/);
-    expect(text).toMatch(/durable agent knowledge by scope/);
-  });
-
-  it('drops every "DM-only / redirect-to-DM" write-side restriction', () => {
-    // R1 drift guard — shiki retracted the DM-only edit restriction. The
-    // new invariant is "L1 is the only place system_prompt.md exists",
-    // not "only the DM may edit it". Agents pick the layer by SCOPE of
-    // the guidance, not by which conversation they happen to be in.
-    for (const kind of ['dm', 'regular'] as const) {
-      const text = withInjections({ channelKind: kind });
-      expect(text).not.toMatch(/redirect them to your DM/i);
-      expect(text).not.toMatch(/DM-only/i);
-      expect(text).not.toMatch(/only this DM may edit/i);
-      expect(text).not.toMatch(/this DM is the \*\*only\*\* place/i);
-      expect(text).not.toMatch(/Treat L1[\s\S]*`system_prompt\.md` as read-only/);
-      expect(text).not.toMatch(/do NOT modify your global system_prompt\.md from here/i);
-    }
-  });
-
-  it('has no Workspace Consensus concept anywhere in the prompt', () => {
-    // The workspace Consensus concept was removed: agents rarely edited
-    // the shared CONSENSUS.md and it blurred per-agent memory. No channel
-    // kind should render the section, a CONSENSUS.md reference, or any
-    // consensus prose — for either regular workspaces or DMs.
-    for (const kind of ['dm', 'regular'] as const) {
-      const text = withInjections({ channelKind: kind });
-      expect(text).not.toContain('Workspace Consensus');
-      expect(text).not.toContain('CONSENSUS.md');
-      expect(text).not.toContain('consensus');
-    }
   });
 
   it('uses a longer fence when injected content contains triple backticks', () => {
