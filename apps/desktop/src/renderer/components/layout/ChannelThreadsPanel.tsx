@@ -1,5 +1,9 @@
-import { Loader2, X } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
+import {
+  SidePanelHeader,
+  SidePanelHeaderTitle,
+} from '@/components/layout/SidePanelHeader';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import type { StreamUnreadDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
@@ -105,28 +109,18 @@ export function ChannelThreadsPanel({
       data-pane="threads-list"
       className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
-        <ThreadIcon className="size-3.5 shrink-0 text-text-muted" />
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-sm font-medium text-text-primary">
-            Threads
-          </div>
-          <div className="truncate text-xs text-text-muted">
-            {parentTitle ? `#${parentTitle} · ` : ''}
-            {threads.length} {threads.length === 1 ? 'thread' : 'threads'}
-          </div>
-        </div>
-        <button
-          type="button"
-          aria-label="Close"
-          title="Close"
-          onClick={onClose}
-          data-sticker-close
-          className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
-        >
-          <X className="size-3.5" />
-        </button>
-      </header>
+      <SidePanelHeader onClose={onClose}>
+        <SidePanelHeaderTitle
+          icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
+          title="Threads"
+          subtitle={
+            <>
+              {parentTitle ? `#${parentTitle} · ` : ''}
+              {threads.length} {threads.length === 1 ? 'thread' : 'threads'}
+            </>
+          }
+        />
+      </SidePanelHeader>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {isLoading ? (

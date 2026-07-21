@@ -5,7 +5,6 @@ import {
   FolderTree,
   Lock,
   User,
-  X,
 } from 'lucide-react';
 import type {
   AgentDto,
@@ -15,6 +14,7 @@ import type {
 import { cn } from '@/lib/cn';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
+import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
 import { AgentHeader } from './AgentHeader';
 import { AgentProfileCard } from './AgentProfileCard';
 import { AgentSchedulesCard } from './AgentSchedulesCard';
@@ -342,9 +342,14 @@ export function focusAgentSideSection(
  * error states so they still read as a dockable panel, not a full page.
  */
 function SidePanelShell({
+  header,
   onClose,
   children,
 }: {
+  /** Identity content rendered at the START of the fixed-height header row
+   *  (avatar + name/description). Omitted for the loading / error states,
+   *  which show only the close affordance. */
+  header?: React.ReactNode;
   onClose?: () => void;
   children: React.ReactNode;
 }): JSX.Element {
@@ -356,20 +361,14 @@ function SidePanelShell({
         boxShadow: 'var(--card-shadow, none)',
       }}
     >
-      <header className="flex items-center justify-end border-b border-border-subtle px-3 py-2.5">
-        {onClose ? (
-          <button
-            type="button"
-            onClick={onClose}
-            title="关闭"
-            aria-label="关闭"
-            data-sticker-close
-            className="grid place-items-center p-1 text-text-muted transition-colors hover:text-text-primary"
-          >
-            <X className="size-4" />
-          </button>
-        ) : null}
-      </header>
+      {/* Header row is the shared `SidePanelHeader` (components/layout), so the
+          agent panel's height is locked to the channel header's `h-12` (48px)
+          structurally — the same row every side panel (thread / threads /
+          attachments) flows through. This is what closed the old 51px drift
+          (shiki 2026-07-21). Only the card `<section>` frame is panel-specific.
+          `header` (avatar + name/description) is omitted for the loading / error
+          states, which show only the close affordance. */}
+      <SidePanelHeader onClose={onClose}>{header}</SidePanelHeader>
       <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </section>
   );
@@ -446,59 +445,42 @@ function AgentSidePanel({
     );
 
   return (
-    <section
-      className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-chat"
-      style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
-      }}
-    >
-      {/* identity header — slim, square sticker avatar (forza6), no hero */}
-      {/* identity header — slim, square sticker avatar (forza6), no hero */}
-      <header className="flex items-center gap-2.5 border-b border-border-subtle px-3 py-2.5">
-        <AgentAvatar
-          runtime={agent.runtime}
-          size={AVATAR_PX.md}
-          avatarObjectUrl={avatarObjectUrl}
-          alt={agent.display_name || agent.name}
-        />
-        <div className="min-w-0 flex-1 overflow-hidden">
-          {/* line 1: handle + description on one line. The handle stays intact
-              (`shrink-0`); the description takes the remaining width and
-              ellipsis-truncates on overflow (shiki). Two-line block height is
-              fixed regardless of description length. */}
-          <div className="flex items-baseline gap-1.5">
-            <span className="shrink-0 text-[13px] font-semibold leading-tight text-text-primary">
-              {agent.display_name || agent.name}
-            </span>
-            {agent.description ? (
-              <span
-                className="min-w-0 flex-1 truncate text-[12px] font-normal leading-tight text-text-muted"
-                title={agent.description}
-              >
-                {agent.description}
+    <SidePanelShell
+      onClose={onClose}
+      header={
+        <>
+          <AgentAvatar
+            runtime={agent.runtime}
+            size={AVATAR_PX.md}
+            avatarObjectUrl={avatarObjectUrl}
+            alt={agent.display_name || agent.name}
+          />
+          <div className="min-w-0 flex-1 overflow-hidden">
+            {/* line 1: handle + description on one line. The handle stays intact
+                (`shrink-0`); the description takes the remaining width and
+                ellipsis-truncates on overflow (shiki). Two-line block height is
+                fixed regardless of description length. */}
+            <div className="flex items-baseline gap-1.5">
+              <span className="shrink-0 text-[13px] font-semibold leading-tight text-text-primary">
+                {agent.display_name || agent.name}
               </span>
-            ) : null}
+              {agent.description ? (
+                <span
+                  className="min-w-0 flex-1 truncate text-[12px] font-normal leading-tight text-text-muted"
+                  title={agent.description}
+                >
+                  {agent.description}
+                </span>
+              ) : null}
+            </div>
+            <p className="truncate text-[11px] capitalize leading-tight text-text-muted">
+              {agent.runtime}
+              {agent.model ? ` · ${agent.model}` : ''}
+            </p>
           </div>
-          <p className="truncate text-[11px] capitalize leading-tight text-text-muted">
-            {agent.runtime}
-            {agent.model ? ` · ${agent.model}` : ''}
-          </p>
-        </div>
-        {onClose ? (
-          <button
-            type="button"
-            onClick={onClose}
-            title="关闭"
-            aria-label="关闭"
-            data-sticker-close
-            className="grid shrink-0 place-items-center p-1 text-text-muted transition-colors hover:text-text-primary"
-          >
-            <X className="size-4" />
-          </button>
-        ) : null}
-      </header>
-
+        </>
+      }
+    >
       {/* horizontal tab bar. Quiet selection (mirrors AgentSidebar's "not a
           primary nav surface" stance): ink underline + bolder text only, no
           fill — the forza6 ink-fill reversal is reserved for sidebar `#`
@@ -600,7 +582,7 @@ function AgentSidePanel({
           </div>
         )}
       </div>
-    </section>
+    </SidePanelShell>
   );
 }
 

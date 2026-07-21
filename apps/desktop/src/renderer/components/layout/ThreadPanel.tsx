@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, ArrowUpRight, Bell, BellOff, Search, X } from 'lucide-react';
+import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
@@ -14,6 +14,10 @@ import { Composer } from '@/components/chat/Composer';
 import { SelectionQuoteToolbar } from '@/components/chat/SelectionQuoteToolbar';
 import { ChannelJoinBar } from '@/components/chat/ChannelJoinBar';
 import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleton';
+import {
+  SidePanelHeader,
+  SidePanelHeaderTitle,
+} from '@/components/layout/SidePanelHeader';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
@@ -763,82 +767,73 @@ export function ThreadPanel({
       data-pane="thread"
       className="relative flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
-        <ThreadIcon className="size-3.5 shrink-0 text-text-muted" />
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-sm font-medium text-text-primary">
-            {parentTitle || 'Thread'}
-          </div>
-          <div className="truncate text-xs text-text-muted">
-            Thread · {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
-          </div>
-        </div>
-        <div
-          data-channel-actions
-          className="ml-auto flex shrink-0 items-center gap-1.5"
-        >
-          {findAvailable ? (
-            <button
-              type="button"
-              onClick={find.open ? find.close : find.openFind}
-              aria-label="Search this thread"
-              aria-pressed={find.open}
-              title="Search this thread"
-              className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
-                (find.open
-                  ? 'bg-bg-hover text-text-primary'
-                  : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
-              }
-            >
-              <Search className="size-3.5" />
-            </button>
-          ) : null}
-          {followers.data && canParticipate ? (
-            <button
-              type="button"
-              aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
-              aria-pressed={viewerFollowing}
-              title={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
-              onClick={toggleFollow}
-              disabled={followPending}
-              className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 ' +
-                (viewerFollowing
-                  ? 'text-text-primary hover:text-text-primary'
-                  : 'text-text-muted hover:text-text-primary')
-              }
-            >
-              {viewerFollowing ? (
-                <BellOff className="size-3.5" />
-              ) : (
-                <Bell className="size-3.5" />
-              )}
-            </button>
-          ) : null}
-          {onViewInChannel ? (
-            <button
-              type="button"
-              aria-label="View in channel"
-              title="View in channel"
-              onClick={onViewInChannel}
-              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
-            >
-              <ArrowUpRight className="size-3.5" />
-            </button>
-          ) : null}
-          <button
-            type="button"
-            aria-label="Close"
-            title="Close"
-            onClick={onClose}
-            data-sticker-close
-            className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      </header>
+      <SidePanelHeader
+        onClose={onClose}
+        actions={
+          <>
+            {findAvailable ? (
+              <button
+                type="button"
+                onClick={find.open ? find.close : find.openFind}
+                aria-label="Search this thread"
+                aria-pressed={find.open}
+                title="Search this thread"
+                className={
+                  'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
+                  (find.open
+                    ? 'bg-bg-hover text-text-primary'
+                    : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
+                }
+              >
+                <Search className="size-3.5" />
+              </button>
+            ) : null}
+            {followers.data && canParticipate ? (
+              <button
+                type="button"
+                aria-label={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
+                aria-pressed={viewerFollowing}
+                title={viewerFollowing ? 'Unfollow thread' : 'Follow thread'}
+                onClick={toggleFollow}
+                disabled={followPending}
+                className={
+                  'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] hover:bg-bg-hover disabled:opacity-50 ' +
+                  (viewerFollowing
+                    ? 'text-text-primary hover:text-text-primary'
+                    : 'text-text-muted hover:text-text-primary')
+                }
+              >
+                {viewerFollowing ? (
+                  <BellOff className="size-3.5" />
+                ) : (
+                  <Bell className="size-3.5" />
+                )}
+              </button>
+            ) : null}
+            {onViewInChannel ? (
+              <button
+                type="button"
+                aria-label="View in channel"
+                title="View in channel"
+                onClick={onViewInChannel}
+                className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              >
+                <ArrowUpRight className="size-3.5" />
+              </button>
+            ) : null}
+          </>
+        }
+      >
+        <SidePanelHeaderTitle
+          icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
+          title={parentTitle || 'Thread'}
+          subtitle={
+            <>
+              Thread · {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
+            </>
+          }
+        />
+      </SidePanelHeader>
 
       {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
           the reply scroller. Anchored just below the h-12 header (`top-12`) and

@@ -13,7 +13,6 @@ import {
   Loader2,
   Paperclip,
   Users,
-  X,
 } from 'lucide-react';
 import type {
   AgentDto,
@@ -26,6 +25,10 @@ import type {
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
+import {
+  SidePanelHeader,
+  SidePanelHeaderTitle,
+} from '@/components/layout/SidePanelHeader';
 import {
   INITIAL_ATTACHMENTS_WINDOW,
   reduceAttachmentsWindow,
@@ -186,27 +189,13 @@ export function ChannelAttachmentsPanel({
       data-pane="attachments-list"
       className="flex h-full min-h-0 w-full flex-col bg-[var(--bg-chat,transparent)]"
     >
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
-        <Paperclip className="size-3.5 shrink-0 text-text-muted" />
-        <div className="min-w-0 flex-1 leading-tight">
-          <div className="truncate text-sm font-medium text-text-primary">
-            Attachments
-          </div>
-          <div className="truncate text-xs text-text-muted">
-            {parentTitle ? `#${parentTitle}` : ''}
-          </div>
-        </div>
-        <button
-          type="button"
-          aria-label="Close"
-          title="Close"
-          onClick={onClose}
-          data-sticker-close
-          className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
-        >
-          <X className="size-3.5" />
-        </button>
-      </header>
+      <SidePanelHeader onClose={onClose}>
+        <SidePanelHeaderTitle
+          icon={<Paperclip className="size-3.5 shrink-0 text-text-muted" />}
+          title="Attachments"
+          subtitle={parentTitle ? `#${parentTitle}` : ''}
+        />
+      </SidePanelHeader>
 
       {showFilterBar ? (
         <div

@@ -1,0 +1,116 @@
+import { X } from 'lucide-react';
+
+/**
+ * The fixed-height header row shared by every right-pane side panel — the agent
+ * profile panel, the thread panel, the threads list, and the attachments list.
+ *
+ * Locks the header-height contract to the channel header's `h-12` (48px)
+ * *structurally*, so no panel can drift the way the agent panel did
+ * (shiki 2026-07-21: it had crept to 51px from an auto-height `py-2.5` + a 28px
+ * avatar / two-line block, against the channel's 48px). Height, the bottom
+ * hairline, the horizontal padding, the close affordance, and the forza6 sticker
+ * hooks (`data-channel-actions` / `data-sticker-close`) all live here once
+ * instead of being re-typed — and re-drifted — per panel.
+ *
+ * Only the header is shared, not the frame: each panel keeps its own outer
+ * element because those genuinely differ (the thread panel is a
+ * `<aside ref … data-pane>` with a positioned find-bar overlay; the agent panel
+ * is a card `<section>` with `--card-radius` / `--card-shadow`). Forcing one
+ * frame component would degrade into a soup of element / ref / bg / card props;
+ * the drift-prone thing is the header row, so that is what we hoist.
+ */
+export function SidePanelHeader({
+  children,
+  actions,
+  onClose,
+}: {
+  /** Leading/main header content — usually an icon + `<SidePanelHeaderTitle>`,
+   *  or a custom identity block (avatar + name/description). It carries the
+   *  row's free width (`flex-1`), so the trailing controls pin right. */
+  children: React.ReactNode;
+  /** Extra trailing controls rendered before the close button (search, follow,
+   *  view-in-channel…). When present they + the close button form the forza6
+   *  `data-channel-actions` sticker cluster, matching the channel header. */
+  actions?: React.ReactNode;
+  onClose?: () => void;
+}): JSX.Element {
+  const closeButton = onClose ? <SidePanelCloseButton onClose={onClose} /> : null;
+
+  return (
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle px-3">
+      {children}
+      {actions ? (
+        // Actions + close share the forza6 `[data-channel-actions]` sticker
+        // cluster (same hook the channel header uses) so the poster theme paints
+        // them as one row of stickers. The `flex-1` header content pins the
+        // cluster right, so no `ml-auto` is needed on the close button here.
+        <div
+          data-channel-actions
+          className="ml-auto flex shrink-0 items-center gap-1.5"
+        >
+          {actions}
+          {closeButton}
+        </div>
+      ) : onClose ? (
+        // Close-only panels keep the button standalone (no `data-channel-actions`
+        // wrapper) — matching the pre-existing markup so forza6 styles it purely
+        // through `[data-sticker-close]`, not the cluster rule. `ml-auto` pins it
+        // right even when there is no `flex-1` header content (loading / error).
+        <SidePanelCloseButton onClose={onClose} className="ml-auto" />
+      ) : null}
+    </header>
+  );
+}
+
+function SidePanelCloseButton({
+  onClose,
+  className = '',
+}: {
+  onClose: () => void;
+  className?: string;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label="Close"
+      title="Close"
+      onClick={onClose}
+      data-sticker-close
+      className={
+        'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+        className
+      }
+    >
+      <X className="size-3.5" />
+    </button>
+  );
+}
+
+/**
+ * The icon + title / subtitle idiom shared by the thread, threads-list, and
+ * attachments panels. The title truncates; the subtitle is optional. Pass this
+ * as `SidePanelHeader`'s children.
+ */
+export function SidePanelHeaderTitle({
+  icon,
+  title,
+  subtitle,
+}: {
+  icon?: React.ReactNode;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+}): JSX.Element {
+  return (
+    <>
+      {icon}
+      <div className="min-w-0 flex-1 leading-tight">
+        <div className="truncate text-sm font-medium text-text-primary">
+          {title}
+        </div>
+        {subtitle ? (
+          <div className="truncate text-xs text-text-muted">{subtitle}</div>
+        ) : null}
+      </div>
+    </>
+  );
+}
