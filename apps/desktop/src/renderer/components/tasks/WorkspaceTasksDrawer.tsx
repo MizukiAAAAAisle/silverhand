@@ -794,13 +794,18 @@ function TaskCard({
         <span className="block min-w-0 text-xs text-text-primary [overflow-wrap:anywhere]">
           {task.title}
         </span>
-        {/* Row 3: assignee · channel · created — inline meta. Separators are
-            icons, not `·` glyphs (shiki 2026-07-21): the channel gets a `#`
-            (dropping the "in " prose) and the timestamp a clock, so the row
-            self-delimits by identity glyph + gap instead of middots. The
-            conversation span keeps `min-w-0 truncate` so it still ellipsizes
-            when forced onto a single line with siblings. */}
-        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-text-muted">
+        {/* Row 3: assignee · channel · created — inline meta, single line.
+            Separators are icons, not `·` glyphs (shiki 2026-07-21): the
+            channel gets a `#` (dropping the "in " prose) and the timestamp a
+            clock, so the row self-delimits by identity glyph + gap instead of
+            middots. NO `flex-wrap` here (unlike Row 1): with wrap, flex would
+            drop the `ml-auto` time onto its own line the moment the channel
+            title got long, growing the card height (shiki 2026-07-23 "底部有时
+            候会导致换行"). Single line instead → the conversation span is the
+            only shrink target (`min-w-0 truncate`), so a long channel title
+            ellipsizes (full name on hover via `title`) while assignee + time
+            stay pinned. 稳定 > 自适应. */}
+        <div className="mt-1 flex items-center gap-x-2 text-[10px] text-text-muted">
           <span className="shrink-0 text-text-secondary">
             {task.assignee ? `@${task.assignee.name}` : (
               <span className="italic">unassigned</span>
@@ -813,8 +818,7 @@ function TaskCard({
             <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
             <span className="min-w-0 truncate">{task.conversation.title}</span>
           </span>
-          {/* Time pinned to the row's right edge (`ml-auto`) — shiki
-              2026-07-21. On wrap it still right-aligns on its own line. */}
+          {/* Time pinned to the row's right edge (`ml-auto`), single line. */}
           <span className="ml-auto inline-flex shrink-0 items-center gap-0.5" title={absolute}>
             <Clock className="size-3 shrink-0" />
             {relative}
