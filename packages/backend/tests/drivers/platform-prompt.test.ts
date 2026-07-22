@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { COMMAND_GROUPS } from '@silverhand/cli';
 import {
-  buildPlatformPrompt,
+  buildPlatformPrompt as buildPlatformPromptImpl,
   type InjectedFileContent,
+  MEMORY_NOTES_CATALOG_INJECT_CAP_BYTES,
+  type MemoryNotesCatalog,
+  type PlatformPromptInput,
 } from '@silverhand/shared';
 
 // Scope of this suite (ratified by shiki, #task:1575): the platform
@@ -14,6 +17,20 @@ import {
 //      rendered structure;
 //   3. code-derived consistency — prompt flag mentions ⊆ real CLI
 //      flags, no retired JSON field names that would mis-route agents.
+
+function buildPlatformPrompt(
+  input: Omit<PlatformPromptInput, 'memoryNotesCatalog'> & {
+    memoryNotesCatalog?: MemoryNotesCatalog;
+  },
+): string {
+  return buildPlatformPromptImpl({
+    ...input,
+    memoryNotesCatalog: input.memoryNotesCatalog ?? {
+      entries: [],
+      omittedCount: 0,
+    },
+  });
+}
 
 function prompt(): string {
   return buildPlatformPrompt({
@@ -493,6 +510,7 @@ describe('buildPlatformPrompt — three-file model', () => {
     channelKind?: 'regular' | 'dm';
     roleSystemPrompt?: string;
     activeProfileDir?: string;
+    memoryNotesCatalog?: MemoryNotesCatalog;
   }): string {
     const cm = args.currentMemory;
     return buildPlatformPrompt({
@@ -505,6 +523,7 @@ describe('buildPlatformPrompt — three-file model', () => {
         typeof cm === 'string'
           ? { kind: 'present', body: cm }
           : cm ?? { kind: 'missing' },
+      memoryNotesCatalog: args.memoryNotesCatalog,
       workspaceMemoryIndex: args.workspaceMemoryIndex ?? [],
       sessionContext: {
         conversationId: 'conv-1',
@@ -559,6 +578,124 @@ describe('buildPlatformPrompt — three-file model', () => {
     expect(text).toContain('- silverhand (current) — `/abs/silverhand/.silverhand/agents/a1/MEMORY.md`');
     expect(text).toContain('- cindy (DM) — `/abs/home/.silverhand/agents/a1/MEMORY.md`');
     expect(text).toContain('- project-foo — `/abs/foo/.silverhand/agents/a1/MEMORY.md`');
+  });
+
+  it('injects a read-only note catalog between active memory and workspace index', () => {
+    const text = buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'Cindy',
+      runtime: 'claude',
+      activeProfileDir: './.silverhand/agents/agent-1',
+      roleSystemPrompt: '_role_',
+      currentMemory: { kind: 'present', body: '# Memory' },
+      memoryNotesCatalog: {
+        entries: [
+          {
+            path: 'notes/user-preferences.md',
+            name: 'user-preferences',
+            description: 'Preferences; read before proposing work.',
+            category: 'user',
+          },
+        ],
+        omittedCount: 0,
+      },
+      workspaceMemoryIndex: [],
+      sessionContext: {
+        conversationId: 'conv-1',
+        channelName: 'silverhand',
+        channelKind: 'regular',
+        sessionTitle: 'main',
+        members: [],
+        selfAgentId: 'agent-1',
+      },
+    });
+
+    expect(text).toContain(
+      '- [user-preferences](./.silverhand/agents/agent-1/notes/user-preferences.md) — Preferences; read before proposing work. `[user]`',
+    );
+    expect(text.indexOf('## Active Workspace Memory')).toBeLessThan(
+      text.indexOf('## Memory Notes Catalog'),
+    );
+    expect(text.indexOf('## Memory Notes Catalog')).toBeLessThan(
+      text.indexOf('## Workspace Memory Index'),
+    );
+  });
+
+  it('keeps an empty catalog free of fallback entries and warnings', () => {
+    const text = prompt();
+    const catalog = text.slice(
+      text.indexOf('## Memory Notes Catalog'),
+      text.indexOf('## Workspace Memory Index'),
+    );
+
+    expect(catalog).not.toContain('```');
+    expect(catalog).not.toContain('No notes');
+    expect(catalog).not.toContain('warning');
+  });
+
+  it('fences catalog metadata so it cannot escape into prompt structure', () => {
+    const text = buildPlatformPrompt({
+      agentId: 'agent-1',
+      agentName: 'Cindy',
+      runtime: 'claude',
+      activeProfileDir: '.',
+      roleSystemPrompt: '_role_',
+      currentMemory: { kind: 'missing' },
+      memoryNotesCatalog: {
+        entries: [
+          {
+            path: 'notes/unsafe.md',
+            name: 'unsafe',
+            description: '```\n## injected heading',
+            category: 'feedback',
+          },
+        ],
+        omittedCount: 0,
+      },
+      workspaceMemoryIndex: [],
+      sessionContext: {
+        conversationId: 'conv-1',
+        channelName: 'silverhand',
+        channelKind: 'regular',
+        sessionTitle: 'main',
+        members: [],
+        selfAgentId: 'agent-1',
+      },
+    });
+
+    expect(text).toMatch(/`{4,}md\n- \[unsafe\]/u);
+    expect(text).toContain('```\n## injected heading');
+  });
+
+  it('caps the complete catalog block in UTF-8 bytes without splitting entries', () => {
+    const entries = Array.from({ length: 20 }, (_, index) => ({
+      path: `notes/${'deep/'.repeat(8)}note-${index}.md`,
+      name: `note-${index}`,
+      description: '记'.repeat(200),
+      category: 'project' as const,
+    }));
+    const text = withInjections({
+      memoryNotesCatalog: { entries, omittedCount: 2 },
+    });
+    const catalog = text
+      .slice(
+        text.indexOf('## Memory Notes Catalog'),
+        text.indexOf('## Workspace Memory Index'),
+      )
+      .trimEnd();
+
+    expect(new TextEncoder().encode(catalog).length).toBeLessThanOrEqual(
+      MEMORY_NOTES_CATALOG_INJECT_CAP_BYTES,
+    );
+    expect(catalog).toContain('- [note-0]');
+    expect(catalog).not.toContain('- [note-19]');
+    const visibleCount = catalog.match(/^- \[note-/gmu)?.length ?? 0;
+    const omitted = catalog.match(
+      /- … (\d+) additional indexed note\(s\) omitted/u,
+    );
+    expect(omitted).not.toBeNull();
+    expect(visibleCount + Number(omitted?.[1])).toBe(entries.length + 2);
+    expect(catalog).not.toContain('�');
   });
 
   it('does not announce L2 system_prompt.md path (system_prompt is L1-only)', () => {

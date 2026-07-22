@@ -1,6 +1,6 @@
 # Agent system prompt + memory model
 
-Current design, last revised 2026-07-18. Authoritative for `system_prompt.md`,
+Current design, last revised 2026-07-22. Authoritative for `system_prompt.md`,
 `MEMORY.md`, `notes/`, and the platform prompt assembly that injects them
 on every spawn.
 
@@ -23,6 +23,9 @@ on every spawn.
 - Common context (role, current workspace memory) is loaded for the
   agent on every spawn so it does not need to issue Read calls to recover
   its baseline.
+- Current-workspace notes are discoverable through a daemon-generated metadata
+  catalog; note bodies remain on disk and load only when their retrieval hooks
+  match the task.
 - Cross-workspace navigation is path-only: the agent sees an *index* of
   every workspace it belongs to, not the contents — opening a peer
   workspace's MEMORY.md is intentional, not implicit.
@@ -69,16 +72,35 @@ create whatever files and directories the work requires.
 not the complete knowledge body. Keep only:
 
 - rules and high-cost traps that must be loaded immediately;
-- a Key Knowledge index (`topic → file/section + read trigger`);
+- a Key Knowledge index containing only pinned high-priority
+  `topic → file/section + read trigger` routes;
 - current Active Context needed to resume real work.
 
 Put explanation, evidence, architecture, important decision history, and
 domain detail in flexibly named, domain-specific `notes/` files or canonical
 repository docs. Notes may use any useful files or subdirectories; examples are
-not a required layout.
+not a required layout. Every new Markdown note, and an existing note when it is
+materially updated, declares a stable unique `name`, a retrieval-oriented
+`description`, and `metadata.category` (`user`, `feedback`, or `project`) in
+YAML frontmatter. Descriptions name concrete surfaces, symbols, workflows,
+failure modes, and when the note should be read; they are not generic topic
+summaries and are limited to 200 characters. Other top-level or `metadata`
+fields are allowed and ignored by the catalog projection.
+
+At spawn, daemon-host scans the current L2 `notes/**/*.md` without following
+symlinks and derives a read-only Memory Notes Catalog. Files without valid
+frontmatter stay unchanged on disk and are silently absent from the catalog.
+After the first path-sorted declaration, duplicate names are silently omitted.
+The injected catalog is capped at 20 entries and 4KB UTF-8 for the complete
+rendered block. Both limits omit only complete entries and include the omitted
+count in the rendered budget. The catalog carries metadata and paths only;
+note bodies never enter the prompt automatically.
+
+Ordinary notes need no duplicate MEMORY pointer; MEMORY pins only high-priority
+triggers or active handoffs that must remain prominent every session.
 Task status remains on the task board and commit inventories remain in git.
-When a durable note or organization path is added, update the MEMORY index so
-future sessions can discover it.
+When a note is unusually important on every spawn, pin one retrieval pointer in
+MEMORY; ordinary notes rely on the generated catalog.
 
 The agent records durable user preferences, project/domain facts, important
 decisions and failed approaches, workspace/channel context, and collaboration
@@ -108,8 +130,8 @@ exactly one `system_prompt.md` per agent.
 
 ## Spawn-time prompt assembly
 
-`ConversationManager.buildPromptContext(conversation, workspace, agent)`
-loads the three pieces and hands them to `buildPlatformPrompt`:
+Daemon prompt-context assembly loads four local projections and hands them to
+`buildPlatformPrompt`:
 
 1. **Role (L1)** — `readFile(~/.silverhand/agents/<agent.id>/system_prompt.md)`,
    missing → empty string. Rendered as the trailing **Initial role**
@@ -117,7 +139,10 @@ loads the three pieces and hands them to `buildPlatformPrompt`:
 2. **Current workspace MEMORY.md** — `readFileWithCap(<active L2>/MEMORY.md, 16 KB)`.
    Cap is hard: oversize files are UTF-8-safely truncated and tagged
    `\n…(truncated)`. Missing → empty → renderer shows the missing-hint.
-3. **Workspace memory index** — for every workspace the agent is a
+3. **Current workspace note catalog** — recursively enumerate the active L2
+   `notes/**/*.md`, parse valid frontmatter locally, and derive metadata-only
+   entries. No note bytes cross the server protocol.
+4. **Workspace memory index** — for every workspace the agent is a
    member of (`WorkspaceRepo.listForAgent(agentId)`), build
    `{label, memoryPath}`. The current workspace's label is suffixed
    with ` (current)`. Renderer notes that the current workspace's
@@ -129,12 +154,14 @@ sections:
 ```
 ## Initial role          ← roleSystemPrompt (L1)
 ## Active Workspace Memory ← currentMemory (L2 of active workspace)
+## Memory Notes Catalog  ← current workspace note metadata (daemon-derived)
 ## Workspace Memory Index ← workspaceMemoryIndex (paths only)
 ```
 
 These render as the injected tail of the operating manual. The runtime
 re-injects the tail on every spawn, so compaction recovery always includes the
-current L1 role, active L2 index, and paths to other workspace indexes.
+current L1 role, active L2 recovery index, current note catalog, and paths to
+other workspace indexes.
 
 ## Onboarding contract
 
@@ -195,6 +222,9 @@ Manual. There is no programmatic migration script:
   the guidance, not by which channel they happen to be in.
 - **Do not auto-inject MEMORY.md from peer workspaces.** Cross-context
   pollution risk; the workspace memory index is path-only on purpose.
+- **Do not auto-inject note bodies.** The current-workspace catalog is a
+  retrieval surface, not another context dump. Peer-workspace notes are not
+  enumerated.
 - **Do not push agent-side `Read MEMORY.md first` instructions** —
   content is already in the prompt; the second read is wasted budget.
 - **Do not add a host-id filter inside `buildWorkspaceMemoryIndex`.**

@@ -361,8 +361,9 @@ but per-spawn driver options.
 `notes_index[]`. The byte content of `system_prompt.md` and `MEMORY.md`
 lives on daemon-host disk and is read locally at spawn time (§4.6).
 notes/ is daemon-host local working storage; server does not enumerate
-or ship the index (see §6 guardrail 1). If a future prompt block wants
-to hint about notes, the **daemon** enumerates and renders locally.
+or ship the index (see §6 guardrail 1). The **daemon** enumerates current-L2
+note frontmatter locally and hands a metadata-only catalog to the shared prompt
+renderer; no note body or catalog crosses the server protocol.
 
 ### 4.3 Env policy (per spawn)
 
@@ -498,6 +499,7 @@ keyed entirely by typed metadata received in §4.0–§4.3:
 |--------|--------------------------------|-----|-----|
 | Agent identity (L1) | `<agent.home_dir>/system_prompt.md` | none (file is small) | "Initial role" block in per-spawn `system-prompt.md` |
 | Workspace memory (L2) | `<workspace.path>/.silverhand/agents/<agent.id>/MEMORY.md` | `MEMORY_INJECT_CAP_BYTES` (16KB) | "Active Workspace Memory" block |
+| Workspace note catalog (L2) | `<workspace.path>/.silverhand/agents/<agent.id>/notes/**/*.md` | 16KB frontmatter read cap per note + 20 injected entries + 4KB UTF-8 complete rendered block; bodies excluded | "Memory Notes Catalog" block |
 | Memory index | use each `workspace_memory_index[].path` to render `<path>/.silverhand/agents/<agent.id>/MEMORY.md` | path-only, no read | "Workspace Memory Index" block (paths only, current workspace's MEMORY.md is the one read above) |
 
 The shared formatter helper that renders the final prompt text

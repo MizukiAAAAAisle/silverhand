@@ -60,6 +60,9 @@ export interface PlatformPromptInput {
    *  create-one hint, `unreadable` shows an explicit error so the agent
    *  does not falsely conclude the file is absent. */
   currentMemory: InjectedFileContent;
+  /** Daemon-derived catalog of the current L2 notes directory. Note bodies
+   *  remain on disk and are never included in this projection. */
+  memoryNotesCatalog: MemoryNotesCatalog;
   /** Index of every workspace this agent is a member of. The current
    *  workspace's entry is labeled with " (current)". Used so DM /
    *  workspace agents can address paths to peer workspaces' MEMORY.md
@@ -78,6 +81,25 @@ export interface WorkspaceMemoryIndexEntry {
    *  as the workspace (host equality is enforced as a membership
    *  precondition, not at runtime). */
   memoryPath: string;
+}
+
+export type MemoryNoteCategory = 'user' | 'feedback' | 'project';
+
+/** Hard UTF-8 budget for the complete injected Memory Notes Catalog block. */
+export const MEMORY_NOTES_CATALOG_INJECT_CAP_BYTES = 4 * 1024;
+
+export interface MemoryNoteCatalogEntry {
+  /** Path relative to the active L2 directory, always under notes/. */
+  path: string;
+  name: string;
+  description: string;
+  category: MemoryNoteCategory;
+}
+
+export interface MemoryNotesCatalog {
+  entries: MemoryNoteCatalogEntry[];
+  /** Number of additional indexed entries omitted by the injection cap. */
+  omittedCount: number;
 }
 
 export interface SessionContextInput {
@@ -102,6 +124,7 @@ export interface DriverPromptContext {
   activeProfileDir: string;
   roleSystemPrompt: string;
   currentMemory: InjectedFileContent;
+  memoryNotesCatalog: MemoryNotesCatalog;
   workspaceMemoryIndex: WorkspaceMemoryIndexEntry[];
   sessionContext: SessionContextInput;
 }
@@ -151,6 +174,10 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
     missingHint:
       'No MEMORY.md exists yet. Create one at the path above when you first capture durable knowledge for this workspace.',
   });
+  const memoryNotesCatalogBlock = renderMemoryNotesCatalog(
+    input.memoryNotesCatalog,
+    profileDir,
+  );
   const memoryIndexBlock = renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
 
   return `You are **@${input.agentName}**, an agent collaborating with humans and
@@ -245,7 +272,8 @@ Organize durable agent knowledge by scope:
   working-style guidance from the user → update here.
 - **L2 — workspace memory (agent-owned).** \`${memoryPath}\` plus
   \`${notesDir}/\` hold your durable knowledge about *this* workspace. The
-  current MEMORY.md is auto-injected below as **Active Workspace Memory**.
+  current MEMORY.md is auto-injected below as **Active Workspace Memory**;
+  indexed note metadata appears in the read-only **Memory Notes Catalog**.
 - Other workspaces appear in **Workspace Memory Index** as paths only. Open one
   only when a task needs cross-workspace context. These paths are internal
   working context; don't mention them to the user unless asked.
@@ -257,14 +285,15 @@ knowledge base. Keep it concise and easy to scan. It should tell a future
 session:
 
 - the core rules and high-cost, easy-to-repeat mistakes to obey immediately;
-- the **Key Knowledge** index — topic → file/section, plus when to read it;
+- the **Key Knowledge** index — only pinned high-priority topic → source routes;
 - the **Active Context** needed to resume real in-progress work.
 
 Use progressive disclosure: move explanations, evidence, architecture, and
-history into notes or repository docs, and leave a pointer in MEMORY.md. A
-recovery index is sufficient when it tells you what matters now and where to
-load detail; it does not need to duplicate that detail. Target under 10KB /
-~80-120 lines (over 16KB is truncated on inject).
+history into notes or repository docs. The generated catalog makes ordinary
+notes discoverable; add a one-line pointer to MEMORY.md only for a high-priority
+trigger or active handoff that must be prominent every session. Never put the
+note body in MEMORY.md. Target under 10KB / ~80-120 lines (over 16KB is
+truncated on inject).
 
 ### What to remember
 
@@ -281,17 +310,34 @@ Task status belongs on the task board; commit inventories belong in git; public
 or enforceable project contracts belong in repository docs/code. Record only
 the durable lesson or live handoff that those authorities do not preserve.
 
-Notes have no required schema. Organize \`${notesDir}/\` to fit the work, using
-descriptive files or subdirectories — including domain-specific notes — when
-useful. Names such as \`user-preferences.md\`, \`project.md\`, \`channels.md\`,
-\`work-log.md\`, and \`<domain>.md\` are examples, not a required layout. If you
-add important long-lived organization, update MEMORY.md's Key Knowledge index
-so it can be found later.
+Organize \`${notesDir}/\` to fit the work, using descriptive files or
+subdirectories — including domain-specific notes — when useful. Names such as
+\`user-preferences.md\`, \`project.md\`, \`channels.md\`, \`work-log.md\`, and
+\`<domain>.md\` are examples, not a required layout.
+
+Every new Markdown note, and any existing note you materially update, must start
+with this frontmatter:
+
+\`\`\`yaml
+---
+name: stable-note-name
+description: Concrete surfaces, symbols, workflows, and failure modes that should trigger reading this note; include when to read it.
+metadata:
+  category: project # user | feedback | project
+---
+\`\`\`
+
+Keep \`name\` unique and stable. Write \`description\` for retrieval, not as a
+vague topic summary, and keep it at 200 characters or fewer. Other top-level or
+\`metadata\` fields are allowed. The daemon derives the catalog on the next
+spawn; never edit the generated catalog. Notes without valid frontmatter stay
+on disk but do not appear in the catalog.
 
 ### Checkpoint discipline
 
 The runtime periodically compresses conversation history, but **Initial role
-and Active Workspace Memory are re-injected on every spawn**.
+and Active Workspace Memory, plus the Memory Notes Catalog, are re-injected on
+every spawn**.
 
 - MEMORY.md must stand alone as the recovery index: it should preserve the
   immediate rules, live handoff, and routes needed to load deeper knowledge,
@@ -540,6 +586,8 @@ link syntax — otherwise the trailing punctuation is swallowed into the link.
 
 ${memoryBlock}
 
+${memoryNotesCatalogBlock}
+
 ${memoryIndexBlock}
 
 ## Initial role (your assignment in this workspace/channel)
@@ -559,6 +607,7 @@ export function buildSystemPromptFor(
     activeProfileDir: ctx.activeProfileDir,
     roleSystemPrompt: ctx.roleSystemPrompt,
     currentMemory: ctx.currentMemory,
+    memoryNotesCatalog: ctx.memoryNotesCatalog,
     workspaceMemoryIndex: ctx.workspaceMemoryIndex,
     sessionContext: ctx.sessionContext,
   });
@@ -652,6 +701,62 @@ function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): strin
   }
   const body = entries.map(e => `- ${e.label} — \`${e.memoryPath}\``).join('\n');
   return `${header}\n\n${body}`;
+}
+
+function renderMemoryNotesCatalog(
+  catalog: MemoryNotesCatalog,
+  profileDir: string,
+): string {
+  const header =
+    '## Memory Notes Catalog\n\n' +
+    'Workspace notes available for progressive disclosure. Read a linked note ' +
+    'when its description is relevant to the work.';
+  if (catalog.entries.length === 0) return header;
+
+  const entryLines = catalog.entries.map(entry => {
+    const path = profilePath(profileDir, entry.path);
+    return `- [${escapeCatalogText(entry.name)}](${escapeCatalogLink(path)}) — ${escapeCatalogText(entry.description)} \`[${entry.category}]\``;
+  });
+
+  for (let visibleCount = entryLines.length; visibleCount >= 0; visibleCount -= 1) {
+    const omittedCount =
+      catalog.omittedCount + entryLines.length - visibleCount;
+    const lines = entryLines.slice(0, visibleCount);
+    if (omittedCount > 0) {
+      lines.push(`- … ${omittedCount} additional indexed note(s) omitted`);
+    }
+    const rendered = renderCatalogBlock(header, lines);
+    if (utf8ByteLength(rendered) <= MEMORY_NOTES_CATALOG_INJECT_CAP_BYTES) {
+      return rendered;
+    }
+  }
+
+  // The fixed header is deliberately much smaller than the cap. Keep the
+  // section structurally valid even if an impossible numeric omission count
+  // or a future header change exhausts the remaining budget.
+  return header;
+}
+
+function renderCatalogBlock(header: string, lines: string[]): string {
+  const body = lines.join('\n');
+  const fence = pickFence(body);
+  return `${header}\n\n${fence}md\n${body}\n${fence}`;
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+function escapeCatalogText(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('[', '\\[').replaceAll(']', '\\]');
+}
+
+function escapeCatalogLink(value: string): string {
+  return value
+    .replaceAll('\\', '/')
+    .replaceAll(' ', '%20')
+    .replaceAll('(', '%28')
+    .replaceAll(')', '%29');
 }
 
 function renderSilverhandCliManual(): string {

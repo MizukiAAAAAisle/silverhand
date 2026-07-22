@@ -74,6 +74,11 @@ describe('materializeAgent — §4.6 decision tree', () => {
     expect(existsSync(join(agentDir, 'notes/user-preferences.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/project.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/work-log.md'))).toBe(true);
+    expect(
+      readFileSync(join(agentDir, 'notes/user-preferences.md'), 'utf8'),
+    ).toMatch(
+      /^---\nname: user-preferences\ndescription: [^\n]+\nmetadata:\n  category: user\n---\n/u,
+    );
 
     // Sentinel carries identity plus materialization-time runtime provenance.
     const sentinelPath = join(agentDir, AGENT_HOME_SENTINEL_FILENAME);

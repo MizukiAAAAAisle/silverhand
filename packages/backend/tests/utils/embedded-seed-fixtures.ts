@@ -21,7 +21,13 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-const ONBOARDING_GUIDE_MD = `# Silverhand Onboarding Guide
+const ONBOARDING_GUIDE_MD = `---
+name: silverhand-onboarding-guide
+description: Silverhand workspace, channel, thread, task, onboarding, and memory patterns; read before guiding a new user or changing onboarding behavior.
+metadata:
+  category: project
+---
+# Silverhand Onboarding Guide
 
 ## What Silverhand Is
 Silverhand is a desktop app where humans and AI agents collaborate in shared
@@ -102,7 +108,13 @@ Do not leave the user with a list of options to decide between.
   the work there.
 `;
 
-const ONBOARDING_FAQ_MD = `# Silverhand Onboarding FAQ
+const ONBOARDING_FAQ_MD = `---
+name: silverhand-onboarding-faq
+description: Answers for Silverhand setup, channels, threads, tasks, agents, memory, and stuck runtimes; read before answering product onboarding questions.
+metadata:
+  category: project
+---
+# Silverhand Onboarding FAQ
 
 Reference answers to common user questions.
 Understand the core idea and guardrail for each item, then answer in your own
@@ -171,7 +183,13 @@ words based on the user's context. Do not copy these answers verbatim.
 - Start simple. Unspecialized start is valid; avoid over-scaling early.
 `;
 
-const USER_PREFERENCES_MD = `# User Preferences
+const USER_PREFERENCES_MD = `---
+name: user-preferences
+description: Durable communication, coding, testing, review, and product preferences; read before proposing work or making user-facing decisions.
+metadata:
+  category: user
+---
+# User Preferences
 
 Record durable preferences that should shape future work.
 
@@ -183,7 +201,13 @@ Examples:
 Keep this file concise. Prefer editing existing bullets over appending duplicates.
 `;
 
-const PROJECT_MD = `# Project Notes
+const PROJECT_MD = `---
+name: project
+description: Project stack, modules, ownership, terminology, architecture, data-model, and deployment invariants; read before changing project contracts.
+metadata:
+  category: project
+---
+# Project Notes
 
 Record durable project context and architecture facts.
 
@@ -195,7 +219,13 @@ Examples:
 Keep transient task status in work-log.md instead.
 `;
 
-const WORK_LOG_MD = `# Work Log
+const WORK_LOG_MD = `---
+name: work-log
+description: Significant prior changes, decisions, verification evidence, failed approaches, and follow-ups; read when current work resembles a previous change or failure.
+metadata:
+  category: feedback
+---
+# Work Log
 
 Record significant completed work, decisions, and follow-ups.
 
@@ -213,11 +243,7 @@ const INITIAL_MEMORY_MD = [
   'Role source: system_prompt.md (already loaded by runtime; do not duplicate the role contract here).',
   '',
   '## Key Knowledge',
-  '- Read [notes/onboarding-guide.md](notes/onboarding-guide.md) for Silverhand workspace patterns and onboarding guidance',
-  '- Read [notes/onboarding-faq.md](notes/onboarding-faq.md) for common user questions and reference answers',
-  '- Read [notes/user-preferences.md](notes/user-preferences.md) for durable user preferences',
-  '- Read [notes/project.md](notes/project.md) for durable project context and invariants',
-  '- Read [notes/work-log.md](notes/work-log.md) for significant work history and follow-ups',
+  '_The Memory Notes Catalog indexes ordinary notes automatically. Pin only high-priority triggers here._',
   '',
   '## Active Context',
   '_Keep only the current handoff here. Detailed history belongs in notes/work-log.md._',

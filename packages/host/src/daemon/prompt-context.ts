@@ -9,6 +9,7 @@ import type {
   ResolvedStartOptions,
   ResolvedWorkspaceRef,
 } from './runtime-start-resolve.js';
+import { readMemoryNotesCatalog } from './memory-notes-catalog.js';
 
 export const MEMORY_INJECT_CAP_BYTES = 16 * 1024;
 
@@ -46,10 +47,12 @@ export async function buildPromptContextFromRuntimeStartOptions(
     'utf-8',
   ).catch(() => '');
 
+  const currentMemoryDir = memoryDirFor(options.workspace, options.agent.id);
   const currentMemory = await readFileWithCap(
-    join(memoryDirFor(options.workspace, options.agent.id), 'MEMORY.md'),
+    join(currentMemoryDir, 'MEMORY.md'),
     MEMORY_INJECT_CAP_BYTES,
   );
+  const memoryNotesCatalog = await readMemoryNotesCatalog(currentMemoryDir);
 
   return {
     agentId: options.agent.id,
@@ -57,6 +60,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
     activeProfileDir: activeProfilePromptDir(options.workspace, options.agent.id),
     roleSystemPrompt,
     currentMemory,
+    memoryNotesCatalog,
     workspaceMemoryIndex: buildWorkspaceMemoryIndexFromRuntimeStartOptions(
       options,
     ),

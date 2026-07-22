@@ -60,8 +60,8 @@ present.
    CLI contract + one-line-per-command index + pitfalls.
 10. **Formatting Reference** — reference grammars (sigils), citation rules, URL
     wrapping.
-11. **Injected tail** — Active Workspace Memory → Workspace Memory Index →
-    Initial role.
+11. **Injected tail** — Active Workspace Memory → Memory Notes Catalog →
+    Workspace Memory Index → Initial role.
 
 **Ordering invariants:**
 
@@ -104,10 +104,14 @@ be a deliberate, called-out decision — never a side effect of rewording.
   choose the workspace layout and create files/directories that fit the work.
 - **Progressive memory disclosure** — MEMORY.md must stand alone as the recovery
   index, not the knowledge body. It keeps immediate rules, high-cost traps,
-  topic → source routes, and live handoff state; details live in flexible,
-  domain-specific notes or repository docs. Note names and subdirectories are
-  agent-chosen, not a fixed schema. Target under 10KB; 16KB is the hard inject
-  cap.
+  pinned topic → source routes, and live handoff state; details live in
+  flexible, domain-specific notes or repository docs. The daemon-generated
+  Memory Notes Catalog exposes note metadata on every spawn, while bodies stay
+  on disk and are read only when a description matches the work. Note names and
+  subdirectories are agent-chosen, not a fixed layout. The catalog injects at
+  most 20 entries with descriptions capped at 200 characters, and the
+  complete rendered catalog block has a separate 4KB UTF-8 hard cap; MEMORY.md
+  targets under 10KB and has its own 16KB hard inject cap.
 - **Checkpoint cleanup** — significant durable learning updates notes; MEMORY
   changes only when a rule, route, or live handoff changes. `done`/`closed`
   removes the task from Active Context in the same turn rather than preserving
@@ -136,6 +140,11 @@ The `renderInjectedFile` `unreadable` branch is also load-bearing: a present-but
 unreadable file renders an explicit error, never the "missing — create one" hint,
 so the agent doesn't clobber an existing file.
 
+The Memory Notes Catalog body is also fenced with `pickFence`. Frontmatter and
+paths are agent-editable input; they must not be able to escape into top-level
+prompt structure. The scanner validates indexed frontmatter, skips symlinks,
+and injects metadata only — never note bodies.
+
 ## 5. Design principles
 
 - **One home per fact.** Each rule lives in exactly one authoritative section.
@@ -160,8 +169,9 @@ so the agent doesn't clobber an existing file.
   the same change*. A pure prose reorg that changes no command/flag/behavior fact
   (like the 9-section restructure) does not require a `cli-system.md` edit.
 - **Three-file model ↔ `docs/agent-system-prompt-memory.md`.** The Workspace &
-  Memory section and the injection blocks (`renderInjectedFile`,
-  `renderWorkspaceMemoryIndex`) must agree with the L1/L2 contract there.
+  Memory section and the injection blocks (`renderInjectedFile`, the memory
+  notes catalog, `renderWorkspaceMemoryIndex`) must agree with the L1/L2
+  contract there.
 
 ## 7. Test discipline
 

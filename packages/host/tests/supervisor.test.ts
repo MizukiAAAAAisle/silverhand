@@ -394,9 +394,23 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     const workspacePath = join(dir, 'workspace');
     const memoryDir = join(workspacePath, '.silverhand', 'agents', 'a1');
     mkdirSync(agentHome, { recursive: true });
-    mkdirSync(memoryDir, { recursive: true });
+    mkdirSync(join(memoryDir, 'notes'), { recursive: true });
     writeFileSync(join(agentHome, 'system_prompt.md'), 'ROLE_D2G', 'utf8');
     writeFileSync(join(memoryDir, 'MEMORY.md'), 'MEMORY_D2G', 'utf8');
+    writeFileSync(
+      join(memoryDir, 'notes', 'runtime.md'),
+      [
+        '---',
+        'name: runtime-evidence',
+        'description: Runtime spawn evidence; read before changing hydration.',
+        'metadata:',
+        '  category: project',
+        '---',
+        '# Runtime evidence',
+        'NOTE_BODY_MUST_NOT_BE_INJECTED',
+      ].join('\n'),
+      'utf8',
+    );
 
     let promptText = '';
     const captured: { ctx?: DriverSpawnContext } = {};
@@ -444,6 +458,10 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       expect(ctx.systemPromptPath).toMatch(/spawn-.+system-prompt\.md$/);
       expect(promptText).toContain('ROLE_D2G');
       expect(promptText).toContain('MEMORY_D2G');
+      expect(promptText).toContain('## Memory Notes Catalog');
+      expect(promptText).toContain('runtime-evidence');
+      expect(promptText).toContain('Runtime spawn evidence');
+      expect(promptText).not.toContain('NOTE_BODY_MUST_NOT_BE_INJECTED');
       expect(promptText).not.toContain('CONSENSUS_D2G');
       await waitFor(() =>
         spy.events.some(e => e.event === 'runtime_delivery_consumed'),
