@@ -137,6 +137,15 @@ daemon 本地:  queued ──边界到达──▶ (claim) ──write──▶ 
 | `next-turn-batch` | 无 steer、无 prompt admission 协议：等 turn 结束，积压合成一个 payload 作下一 turn 输入 | Qoder（`priority:"next"` 实测无效——headless handler 不读该字段，#task:1556，勿走 Claude 路径） | **构造性**（§3.4：write reservation + parsed `turn_end`） | FIFO 逐 turn 消费已由二进制 + 双黑盒实验证实（#task:1556） |
 | `one-shot` | 不支持 live input | Cursor | 不适用 | 不在此模型内 |
 
+**ACP v2 前瞻约束（#task:1591，2026-07-22）**：v2 Draft 将
+`session/prompt` 响应改为“已接纳”，并通过 `user_message` 回放消息插入位置，
+但 core schema 尚无 steer mode/capability 或插入时限；tracking RFD 明确将
+steering 与 queueing 视为后续独立议题。`user_message` 只证明消息进入 session
+history，不证明它已成为当前/下一次模型 generation 的 precedent。因此
+`protocolVersion: 2` 本身不得触发 profile 升级；只有 runtime 明确声明 steer
+能力，且真实 probe 证明 mid-run 插入时序与可关联的 generation-boundary evidence，
+才能从 `prompt-boundary` 升档。
+
 术语澄清（gate 讨论定版）：现有 `outstandingToolUses === 0 && !compacting` 是
 **transport-safe boundary**。它既**不是 next-turn boundary**（模型 thinking、
 provider 排队、两个 tool 之间它都为 true，拿它当 Qoder 的释放判据正是 P-A 的
