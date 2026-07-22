@@ -74,7 +74,7 @@ export function MessageReactions({
               data-reaction-add
               aria-label="Add reaction"
               title="Add reaction"
-              className="flex h-[18px] items-center rounded-[var(--chip-radius)] bg-[var(--reaction-chip-bg)] px-2 text-text-muted transition-colors hover:bg-[var(--reaction-chip-bg-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              className="flex h-[18px] items-center rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 text-text-muted transition-colors hover:bg-[var(--chip-bg-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
             >
               <SmilePlus className="size-3.5" />
             </button>

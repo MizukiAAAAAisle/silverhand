@@ -1,7 +1,7 @@
 import { type FocusEvent, useCallback, useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Bookmark, Check, Download, FileText, SmilePlus, User } from 'lucide-react';
+import { Bookmark, Check, Clock, Download, FileText, SmilePlus, User } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
@@ -531,7 +531,7 @@ export function MessageItem({
         onClick={() => onStartThread(message, threadFirstUnreadId ?? undefined)}
         title={replyBadgeTitle}
         aria-label={replyBadgeTitle}
-        className="inline-flex h-[18px] items-center gap-1.5 border border-border-subtle px-2 text-xs text-text-muted transition-colors hover:border-[color:var(--border-control-hover)] hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="inline-flex h-[18px] items-center gap-1.5 rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 text-xs leading-none text-text-muted transition-colors hover:bg-[var(--chip-bg-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
         {enrichedReply ? (
           <>
@@ -546,21 +546,18 @@ export function MessageItem({
               ) : null}
             </span>
             <span className="font-medium">{replyBadgeLabel}</span>
-            <span className="text-text-muted">·</span>
             {threadUnreadNode ?? (
-              <span className="text-text-muted">{replyRelativeTime}</span>
+              <span className="inline-flex items-center gap-0.5 text-text-muted">
+                <Clock className="size-3 shrink-0" />
+                {replyRelativeTime}
+              </span>
             )}
           </>
         ) : (
           <>
             <ThreadIcon className="size-3.5 shrink-0" />
             <span>{replyBadgeLabel}</span>
-            {threadUnreadNode ? (
-              <>
-                <span className="text-text-muted">·</span>
-                {threadUnreadNode}
-              </>
-            ) : null}
+            {threadUnreadNode}
           </>
         )}
       </button>

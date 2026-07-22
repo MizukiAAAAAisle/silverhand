@@ -46,8 +46,8 @@ export function reactionChipClass(
     (agg.viewer_reacted
       ? 'bg-[var(--accent-soft)]'
       : interactive
-        ? 'bg-[var(--reaction-chip-bg)] hover:bg-[var(--reaction-chip-bg-hover)]'
-        : 'bg-[var(--reaction-chip-bg)]')
+        ? 'bg-[var(--chip-bg)] hover:bg-[var(--chip-bg-hover)]'
+        : 'bg-[var(--chip-bg)]')
   );
 }
 

@@ -318,11 +318,12 @@
      饱和填色 + 软形是状态语义的一种表达），等开 pill-radius 那一波再统一。 */
   --control-radius: 0;
   --chip-radius: 0;
-  /* Reaction-chip neutral fills (poster ink, no brand pink). The viewer's
-     own reaction uses `--accent-soft` (faint pink) for a stronger fill —
-     identity state only, kept to the lightest tint. */
-  --reaction-chip-bg: rgba(15, 31, 29, 0.06);
-  --reaction-chip-bg-hover: rgba(15, 31, 29, 0.12);
+  /* Bottom-row chip fill — shared by reaction chips and the thread-reply
+     pill (poster ink, no brand pink). The viewer's own reaction uses
+     `--accent-soft` (faint pink) for a stronger fill — identity state only,
+     kept to the lightest tint. */
+  --chip-bg: rgba(15, 31, 29, 0.06);
+  --chip-bg-hover: rgba(15, 31, 29, 0.12);
 
   /* ── Row radius (review round 2 #task:912) ──
      Single token for the 5 row-style surfaces (sidebar rows / NavRail /

@@ -218,10 +218,11 @@
      复用）。 */
   --control-radius: 6px;
   --chip-radius: 4px;
-  /* Reaction-chip neutral fills (transparent-white on dark). The viewer's
-     own reaction uses `--accent-soft` for a stronger fill. */
-  --reaction-chip-bg: rgba(255, 255, 255, 0.06);
-  --reaction-chip-bg-hover: rgba(255, 255, 255, 0.12);
+  /* Bottom-row chip fill — shared by reaction chips and the thread-reply
+     pill (transparent-white on dark). The viewer's own reaction uses
+     `--accent-soft` for a stronger fill. */
+  --chip-bg: rgba(255, 255, 255, 0.06);
+  --chip-bg-hover: rgba(255, 255, 255, 0.12);
 
   /* ── Control border width ──
      1px hairline 派；不走 forza6 的 2px hard-cut。 */
