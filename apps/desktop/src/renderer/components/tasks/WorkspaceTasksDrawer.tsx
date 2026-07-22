@@ -12,7 +12,6 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
-  Hash,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -31,6 +30,7 @@ import {
 import { isTaskDrag, readTaskDrag, writeTaskDrag } from '@/features/tasks/taskDnd';
 import { drawerShouldCloseOnEscape } from '@/features/tasks/taskDetail';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
+import { ChannelIcon } from '@/components/ChannelIcon';
 import {
   TaskStatusBadge,
   TaskCardContextMenu,
@@ -810,7 +810,7 @@ function TaskCard({
             className="inline-flex min-w-0 items-center gap-0.5 text-text-secondary"
             title={task.conversation.title}
           >
-            <Hash className="size-3 shrink-0 text-text-muted" />
+            <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
             <span className="min-w-0 truncate">{task.conversation.title}</span>
           </span>
           {/* Time pinned to the row's right edge (`ml-auto`) — shiki
