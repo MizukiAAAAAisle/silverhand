@@ -39,7 +39,7 @@ import type { MessageJumpTarget } from '@/features/channels/useMessageJumpContro
  *
  * Row structure is SOURCE-FIRST (server-resolved fields only; never a
  * client-stitched message cache), now ICON-LED so location reads at a glance:
- *   - row 1 = WHERE: workspace icon + name · channel icon + conversation `title`.
+ *   - row 1 = WHERE: workspace icon + name, then channel icon + conversation `title`.
  *     The icons are the canonical identity primitives (`WorkspaceIcon`; `Hash`
  *     with the `data-channel-icon` theme hook), NOT raw glyphs — so forza6 paints
  *     them as its `W`/`#` posters instead of generic lucide shapes. The old
@@ -118,7 +118,7 @@ function ChannelGlyph({ item }: { item: ActivityItemDto }): JSX.Element {
   if (item.conversation_kind === 'dm_channel') {
     return <MessageCircle className="size-3.5 shrink-0 text-text-muted" />;
   }
-  return <ChannelIcon variant="sticker" className="text-text-muted" />;
+  return <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />;
 }
 
 /** The sender's avatar for a message line. The DTO gives a resolved
@@ -539,10 +539,11 @@ function ActivityRow({
         }`}
       >
         <div className="min-w-0 flex-1">
-          {/* row 1 — WHERE: workspace icon + name · channel icon + title.
+          {/* row 1 — WHERE: workspace icon + name, then channel icon + title.
               Canonical identity primitives (themed `WorkspaceIcon` +
               `data-channel-icon` `#`) replace the old type text label; forza6
-              repaints them as its posters. */}
+              repaints them as its posters. Segments self-delimit by identity
+              glyph + `gap` — no `·` middot. */}
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-text-muted">
             {workspace ? (
               <>
@@ -554,9 +555,6 @@ function ActivityRow({
                 />
                 <span className="min-w-0 shrink truncate text-text-secondary">
                   {workspace.name}
-                </span>
-                <span aria-hidden className="text-text-muted/60">
-                  ·
                 </span>
               </>
             ) : null}
