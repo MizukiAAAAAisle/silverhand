@@ -18,6 +18,7 @@ import type {
   TaskSummaryDto,
 } from '@silverhand/shared';
 import type { ConversationRepo } from '../../repos/conversation-repo.js';
+import { prepareObserved } from '../../observability/observed-statement.js';
 import {
   userCanAccessConversation,
   type ListTasksFilters,
@@ -171,7 +172,11 @@ export class TaskStore {
       sql += ' LIMIT ?';
       args.push(filters.limit);
     }
-    const rows = this.db.prepare<typeof args, TaskJoinedRow>(sql).all(...args);
+    const rows = prepareObserved<typeof args, TaskJoinedRow>(
+      this.db,
+      'tasks.list_filtered',
+      sql,
+    ).all(...args);
     return rows.map(r => this.joinedToSummary(r));
   }
 
@@ -191,8 +196,11 @@ export class TaskStore {
     actor: TaskActor,
     authorizedWorkspaceId?: string,
   ): TaskSummaryDto | null {
-    const row = this.db
-      .prepare<[string], TaskJoinedRow>(`${SELECT_TASK_JOINED} WHERE t.id = ?`)
+    const row = prepareObserved<[string], TaskJoinedRow>(
+        this.db,
+        'tasks.get_joined_by_id',
+        `${SELECT_TASK_JOINED} WHERE t.id = ?`,
+      )
       .get(taskId);
     if (!row) return null;
     if (actor.kind === 'agent') {
@@ -223,8 +231,7 @@ export class TaskStore {
   ): TaskDetailDto | null {
     const summary = this.getById(taskId, actor, authorizedWorkspaceId);
     if (!summary) return null;
-    const extra = this.db
-      .prepare<[string], {
+    const extra = prepareObserved<[string], {
         content: string;
         source_message_id: string | null;
         created_event_message_id: string | null;
@@ -234,6 +241,8 @@ export class TaskStore {
         editor_agent_name: string | null;
         editor_user_name: string | null;
       }>(
+        this.db,
+        'tasks.fetch_detail_extra',
         `SELECT t.content,
                 t.source_message_id,
                 t.created_event_message_id,
@@ -290,8 +299,9 @@ export class TaskStore {
    *  is the message's own conversation id (threads are reply clusters, not
    *  standalone conversations). */
   private resolveMessageNavRef(actor: TaskActor, messageId: string): TaskNavRef | null {
-    const msg = this.db
-      .prepare<[string], { conversation_id: string; thread_root_id: string | null }>(
+    const msg = prepareObserved<[string], { conversation_id: string; thread_root_id: string | null }>(
+        this.db,
+        'tasks.resolve_message_nav_ref',
         `SELECT conversation_id, thread_root_id FROM messages WHERE id = ?`,
       )
       .get(messageId);
@@ -316,8 +326,9 @@ export class TaskStore {
   /** Next per-workspace monotonic task number (1-based). Guarded by
    *  `uniq_tasks_workspace_number`; a concurrent create races on that index. */
   private allocateTaskNumber(workspaceId: string): number {
-    const row = this.db
-      .prepare<[string], { next: number }>(
+    const row = prepareObserved<[string], { next: number }>(
+        this.db,
+        'tasks.allocate_task_number',
         `SELECT COALESCE(MAX(task_number), 0) + 1 AS next
          FROM tasks WHERE workspace_id = ?`,
       )
@@ -352,8 +363,9 @@ export class TaskStore {
     const id = newTaskId();
     const taskNumber = this.allocateTaskNumber(args.workspaceId);
     const status: TaskStatus = args.claimByAgentId ? 'in_progress' : 'todo';
-    this.db
-      .prepare(
+    prepareObserved(
+        this.db,
+        'tasks.insert_row',
         `INSERT INTO tasks (
            id, workspace_id, task_number, conversation_id, thread_root_id,
            title, content, status, assignee_agent_id, assignee_user_id,
@@ -392,8 +404,11 @@ export class TaskStore {
   /** Stamp the persisted task-created system-event message id (the nav ref for
    *  a sourceless task). Called in the same txn as `createTaskRow`. */
   backfillCreatedEvent(taskId: string, messageId: string): void {
-    this.db
-      .prepare(`UPDATE tasks SET created_event_message_id = ? WHERE id = ?`)
+    prepareObserved(
+        this.db,
+        'tasks.backfill_created_event',
+        `UPDATE tasks SET created_event_message_id = ? WHERE id = ?`,
+      )
       .run(messageId, taskId);
   }
 
@@ -406,8 +421,9 @@ export class TaskStore {
     id: string;
     status: TaskStatus;
   } | null {
-    const row = this.db
-      .prepare<[string], { task_number: number; id: string; status: TaskStatus }>(
+    const row = prepareObserved<[string], { task_number: number; id: string; status: TaskStatus }>(
+        this.db,
+        'tasks.fetch_by_source_message_id',
         `SELECT task_number, id, status FROM tasks WHERE source_message_id = ?`,
       )
       .get(sourceMessageId);
@@ -430,8 +446,9 @@ export class TaskStore {
     editorId: string;
     editedAt: number;
   }): boolean {
-    const res = this.db
-      .prepare(
+    const res = prepareObserved(
+        this.db,
+        'tasks.apply_edit',
         `UPDATE tasks
          SET title = COALESCE(?, title),
              content = COALESCE(?, content),
@@ -452,8 +469,9 @@ export class TaskStore {
   }
 
   fetchTaskByNumber(workspaceId: string, taskNumber: number): ResolvedTaskRow | null {
-    const row = this.db
-      .prepare<[string, number], ResolvedTaskRow>(
+    const row = prepareObserved<[string, number], ResolvedTaskRow>(
+        this.db,
+        'tasks.fetch_by_number',
         `${SELECT_RESOLVED_TASK} WHERE t.workspace_id = ? AND t.task_number = ?`,
       )
       .get(workspaceId, taskNumber);
@@ -461,8 +479,11 @@ export class TaskStore {
   }
 
   fetchTaskById(taskId: string): ResolvedTaskRow | null {
-    const row = this.db
-      .prepare<[string], ResolvedTaskRow>(`${SELECT_RESOLVED_TASK} WHERE t.id = ?`)
+    const row = prepareObserved<[string], ResolvedTaskRow>(
+        this.db,
+        'tasks.fetch_by_id',
+        `${SELECT_RESOLVED_TASK} WHERE t.id = ?`,
+      )
       .get(taskId);
     return row ?? null;
   }
@@ -470,8 +491,9 @@ export class TaskStore {
   /** Locate a message for create's thread-target resolution and source
    *  validation. A message is never a task, so this returns only its location. */
   fetchMessageRef(messageId: string): MessageRef | null {
-    const row = this.db
-      .prepare<[string], MessageRef>(
+    const row = prepareObserved<[string], MessageRef>(
+        this.db,
+        'tasks.fetch_message_ref',
         `SELECT id, conversation_id AS conversation_id, thread_root_id
          FROM messages WHERE id = ?`,
       )
@@ -485,8 +507,9 @@ export class TaskStore {
    *  `in_progress`, but ONLY while unassigned and not terminal. Returns the
    *  number of rows changed (0 = lost the race / already claimed / terminal). */
   assignSelf(taskId: string, agentId: string): number {
-    const res = this.db
-      .prepare(
+    const res = prepareObserved(
+        this.db,
+        'tasks.assign_self',
         `UPDATE tasks
          SET assignee_agent_id = ?,
              status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END
@@ -500,8 +523,9 @@ export class TaskStore {
 
   /** Current assignment snapshot — the claim-miss re-read. */
   readAssignment(taskId: string): { assignee_agent_id: string | null; status: TaskStatus } | null {
-    const row = this.db
-      .prepare<[string], { assignee_agent_id: string | null; status: TaskStatus }>(
+    const row = prepareObserved<[string], { assignee_agent_id: string | null; status: TaskStatus }>(
+        this.db,
+        'tasks.read_assignment',
         `SELECT assignee_agent_id, status FROM tasks WHERE id = ?`,
       )
       .get(taskId);
@@ -512,8 +536,9 @@ export class TaskStore {
    *  `todo` task to `in_progress`. Not conditional — the human path validated
    *  eligibility already. */
   setAssignee(taskId: string, agentId: string | null): void {
-    this.db
-      .prepare(
+    prepareObserved(
+        this.db,
+        'tasks.set_assignee',
         `UPDATE tasks
          SET assignee_agent_id = ?,
              status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END
@@ -524,8 +549,9 @@ export class TaskStore {
 
   /** Unclaim: clear the assignee, reset to `todo`, clear any closed timestamp. */
   unassign(taskId: string): void {
-    this.db
-      .prepare(
+    prepareObserved(
+        this.db,
+        'tasks.unassign',
         `UPDATE tasks SET assignee_agent_id = NULL, status = 'todo', closed_at = NULL WHERE id = ?`,
       )
       .run(taskId);
@@ -534,8 +560,11 @@ export class TaskStore {
   /** Status transition write. `closedAt` is set IFF the new status is 'closed'
    *  (the CHECK enforces the invariant). */
   setStatus(taskId: string, status: TaskStatus, closedAt: number | null): void {
-    this.db
-      .prepare(`UPDATE tasks SET status = ?, closed_at = ? WHERE id = ?`)
+    prepareObserved(
+        this.db,
+        'tasks.set_status',
+        `UPDATE tasks SET status = ?, closed_at = ? WHERE id = ?`,
+      )
       .run(status, closedAt, taskId);
   }
 
@@ -546,8 +575,7 @@ export class TaskStore {
     closed_at: number | null;
     assignee: TaskAssigneeDto | null;
   } | null {
-    const row = this.db
-      .prepare<[string], {
+    const row = prepareObserved<[string], {
         title: string;
         status: TaskStatus;
         closed_at: number | null;
@@ -556,6 +584,8 @@ export class TaskStore {
         assignee_agent_name: string | null;
         assignee_user_name: string | null;
       }>(
+        this.db,
+        'tasks.refetch_snapshot',
         `SELECT t.title,
                 t.status,
                 t.closed_at,

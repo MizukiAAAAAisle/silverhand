@@ -6,6 +6,7 @@ import type {
   MessageSeq,
   StreamUnreadDto,
 } from '@silverhand/shared';
+import { prepareObserved } from '../observability/observed-statement.js';
 
 export interface MessageUnreadByConversation {
   by_conversation: Record<string, number>;
@@ -22,8 +23,8 @@ export interface MessageUnreadPointer {
 
 /** Raw SQLite shape for an unread pointer, before the DB-read decode boundary
  *  brands `seq` into a {@link MessageSeq} (docs/brand-typed-seq-v1.md §4.1).
- *  better-sqlite3 returns plain numbers, so the `.prepare<>` RowType must stay
- *  unbranded — branding it there would be a hidden trust-cast, not a decode. */
+ *  better-sqlite3 returns plain numbers, so the `prepareObserved<>` RowType must
+ *  stay unbranded — branding it there would be a hidden trust-cast, not a decode. */
 type MessageUnreadPointerRow = Omit<MessageUnreadPointer, 'seq'> & { seq: number };
 
 export interface StreamFirstUnread {
@@ -64,8 +65,9 @@ export class ConversationReadRepo {
     const { viewerUserId, conversationId, threadRootId, seq } = params;
     const now = Date.now();
     if (threadRootId === null) {
-      this.db
-        .prepare(
+      prepareObserved(
+          this.db,
+          'reads.mark_read_mainline',
           `INSERT INTO conversation_reads
              (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
            VALUES (@viewer, @conv, NULL, @seq, @now)
@@ -76,8 +78,9 @@ export class ConversationReadRepo {
         )
         .run({ viewer: viewerUserId, conv: conversationId, seq, now });
     } else {
-      this.db
-        .prepare(
+      prepareObserved(
+          this.db,
+          'reads.mark_read_thread',
           `INSERT INTO conversation_reads
              (user_id, conversation_id, thread_root_id, last_read_seq, read_at)
            VALUES (@viewer, @conv, @root, @seq, @now)
@@ -100,8 +103,9 @@ export class ConversationReadRepo {
     conversationId: string,
     threadRootId: string | null,
   ): ConversationReadRow | undefined {
-    return this.db
-      .prepare<[string, string, string | null], ConversationReadRow>(
+    return prepareObserved<[string, string, string | null], ConversationReadRow>(
+        this.db,
+        'reads.get_cursor_row',
         `SELECT * FROM conversation_reads
           WHERE user_id = ? AND conversation_id = ? AND thread_root_id IS ?`,
       )
@@ -129,8 +133,9 @@ export class ConversationReadRepo {
     threadRootId: string | null,
     viewerUserId: string,
   ): number {
-    const row = this.db
-      .prepare<{ conv: string; root: string | null; viewer: string }, { c: number }>(
+    const row = prepareObserved<{ conv: string; root: string | null; viewer: string }, { c: number }>(
+        this.db,
+        'reads.unread_count_for_stream',
         `SELECT COUNT(m.id) AS c
            FROM messages m
           WHERE m.conversation_id = @conv
@@ -156,11 +161,12 @@ export class ConversationReadRepo {
     threadRootId: string | null,
     viewerUserId: string,
   ): StreamFirstUnread | null {
-    const row = this.db
-      .prepare<
+    const row = prepareObserved<
         { conv: string; root: string | null; viewer: string },
         { message_id: string; seq: number }
       >(
+        this.db,
+        'reads.first_unread_for_stream',
         `SELECT m.id AS message_id, m.seq AS seq
            FROM messages m
           WHERE m.conversation_id = @conv
@@ -196,8 +202,7 @@ export class ConversationReadRepo {
     conversationId: string,
     viewerUserId: string,
   ): ConversationStreamUnreadDto {
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         { conv: string; viewer: string },
         {
           root: string | null;
@@ -206,6 +211,8 @@ export class ConversationReadRepo {
           unread_count: number;
         }
       >(
+        this.db,
+        'reads.stream_unread_for_conversation',
         `WITH unread AS (
            SELECT m.id   AS message_id,
                   m.seq  AS seq,
@@ -264,11 +271,12 @@ export class ConversationReadRepo {
     workspaceId: string,
     viewerUserId: string,
   ): MessageUnreadByConversation {
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         { viewer: string; workspace: string },
         { conversation_id: string; c: number }
       >(
+        this.db,
+        'reads.unread_counts_by_conversation_for_workspace',
         `SELECT c.id AS conversation_id, COUNT(m.id) AS c
            FROM conversations c
            JOIN conversation_users cu
@@ -300,8 +308,9 @@ export class ConversationReadRepo {
    *  unread). Non-followed threads' unread is deliberately excluded (de-noising)
    *  — it surfaces only as a weak dot in the Threads list, never in this count. */
   unreadCountForConversation(conversationId: string, viewerUserId: string): number {
-    const row = this.db
-      .prepare<{ conv: string; viewer: string }, { c: number }>(
+    const row = prepareObserved<{ conv: string; viewer: string }, { c: number }>(
+        this.db,
+        'reads.unread_count_for_conversation',
         `SELECT COUNT(m.id) AS c
            FROM messages m
           WHERE m.conversation_id = @conv AND ${ROLLUP_UNREAD}`,
@@ -318,8 +327,9 @@ export class ConversationReadRepo {
     conversationId: string,
     viewerUserId: string,
   ): MessageUnreadPointer | null {
-    const row = this.db
-      .prepare<{ conv: string; viewer: string }, MessageUnreadPointerRow>(
+    const row = prepareObserved<{ conv: string; viewer: string }, MessageUnreadPointerRow>(
+        this.db,
+        'reads.latest_unread_for_conversation',
         `SELECT m.conversation_id, m.id AS message_id, m.seq, m.thread_root_id
            FROM messages m
           WHERE m.conversation_id = @conv AND ${ROLLUP_UNREAD}
@@ -334,8 +344,9 @@ export class ConversationReadRepo {
     workspaceId: string,
     viewerUserId: string,
   ): Record<string, MessageUnreadPointer> {
-    const rows = this.db
-      .prepare<{ viewer: string; workspace: string }, MessageUnreadPointerRow>(
+    const rows = prepareObserved<{ viewer: string; workspace: string }, MessageUnreadPointerRow>(
+        this.db,
+        'reads.latest_unread_by_conversation_for_workspace',
         `WITH unread AS (
            SELECT c.id AS conversation_id,
                   m.id AS message_id,
@@ -374,8 +385,9 @@ export class ConversationReadRepo {
    *  unreadCountsByWorkspaceSidebar[ws]` so the emitted value is provably the same
    *  authoritative rollup the summary route and favorites row serve. */
   unreadCountForWorkspace(workspaceId: string, viewerUserId: string): number {
-    const row = this.db
-      .prepare<{ viewer: string; workspace: string }, { c: number }>(
+    const row = prepareObserved<{ viewer: string; workspace: string }, { c: number }>(
+        this.db,
+        'reads.unread_count_for_workspace',
         `SELECT COUNT(m.id) AS c
            FROM conversations c
            JOIN conversation_users cu
@@ -389,8 +401,9 @@ export class ConversationReadRepo {
   }
 
   unreadCountsByWorkspace(viewerUserId: string): Record<string, number> {
-    const rows = this.db
-      .prepare<{ viewer: string }, { workspace_id: string; c: number }>(
+    const rows = prepareObserved<{ viewer: string }, { workspace_id: string; c: number }>(
+        this.db,
+        'reads.unread_counts_by_workspace',
         `SELECT c.workspace_id AS workspace_id, COUNT(m.id) AS c
            FROM conversations c
            JOIN conversation_users cu
@@ -407,8 +420,9 @@ export class ConversationReadRepo {
   }
 
   unreadCountsByWorkspaceSidebar(viewerUserId: string): Record<string, number> {
-    const rows = this.db
-      .prepare<{ viewer: string }, { scope_id: string; c: number }>(
+    const rows = prepareObserved<{ viewer: string }, { scope_id: string; c: number }>(
+        this.db,
+        'reads.unread_counts_by_workspace_sidebar',
         `SELECT c.workspace_id AS scope_id, COUNT(m.id) AS c
            FROM conversations c
            JOIN conversation_users cu

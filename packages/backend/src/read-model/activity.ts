@@ -37,6 +37,7 @@
 // Then salience is derived (DM = directed-grade) and the list sorted §13.2:
 // directed tier first, most-recent-first within a tier.
 import type { BackendContext } from '../context.js';
+import { prepareObserved } from '../observability/observed-statement.js';
 import {
   apiPaths,
   DEFAULT_CHANNEL_ATTENTION_MODE,
@@ -214,8 +215,9 @@ const assembleDirectedNotifications: ActivitySource = ac => {
   const { ctx, viewerUserId, wsFilter } = ac;
   // `stream_cursor` lets us drop a mention the viewer has already read
   // positionally (§7: cursor-passed ⇒ directed cleared) without storing it.
-  const notifRows = ctx.db
-    .prepare<{ viewer: string; ws: string | null }, DirectedNotificationRow>(
+  const notifRows = prepareObserved<{ viewer: string; ws: string | null }, DirectedNotificationRow>(
+      ctx.db,
+      'activity.directed_notifications',
       `SELECT
           n.id                AS id,
           n.kind              AS kind,
@@ -343,8 +345,7 @@ const assemblePositionalStreams: ActivitySource = ac => {
   // already drops system / the viewer's own messages, so excluding a directed
   // message that wouldn't be ambient is a harmless no-op.
   const excludedJson = JSON.stringify([...ac.directedMessageIds]);
-  const positionalRows = ctx.db
-    .prepare<
+  const positionalRows = prepareObserved<
       {
         viewer: string;
         ws: string | null;
@@ -353,6 +354,8 @@ const assemblePositionalStreams: ActivitySource = ac => {
       },
       PositionalStreamRow
     >(
+      ctx.db,
+      'activity.positional_streams',
       `WITH viewer_unread AS (
          SELECT
            m.conversation_id AS conversation_id,

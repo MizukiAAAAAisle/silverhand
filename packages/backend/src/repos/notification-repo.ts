@@ -1,6 +1,7 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import type { NotificationDto, NotificationKind, NotificationRow } from '@silverhand/shared';
+import { prepareObserved } from '../observability/observed-statement.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -38,8 +39,9 @@ export class NotificationRepo {
   insert(params: InsertNotificationParams): NotificationDto {
     const id = newId();
     const now = Date.now();
-    this.db
-      .prepare(
+    prepareObserved(
+        this.db,
+        'notifications.insert_row',
         `INSERT INTO notifications
          (id, kind, user_id, agent_id, workspace_id, conversation_id, message_id,
           source_workspace_id, source_conversation_id, source_message_id,
@@ -64,8 +66,9 @@ export class NotificationRepo {
   }
 
   get(id: string): NotificationDto | null {
-    const row = this.db
-      .prepare<[string], NotificationJoinedRow>(
+    const row = prepareObserved<[string], NotificationJoinedRow>(
+        this.db,
+        'notifications.get_by_id',
         `SELECT
             n.*,
             m.thread_root_id AS thread_root_id
@@ -94,8 +97,9 @@ export class NotificationRepo {
     }
     if (opts.unread) whereParts.push('read_at IS NULL');
     args.push(limit);
-    const rows = this.db
-      .prepare<typeof args, NotificationJoinedRow>(
+    const rows = prepareObserved<typeof args, NotificationJoinedRow>(
+        this.db,
+        'notifications.list_for_user',
         `SELECT
             n.*,
             m.thread_root_id AS thread_root_id
@@ -115,8 +119,9 @@ export class NotificationRepo {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [] : [userId];
-    const rows = this.db
-      .prepare<typeof args, { scope_id: string; c: number }>(
+    const rows = prepareObserved<typeof args, { scope_id: string; c: number }>(
+        this.db,
+        'notifications.unread_counts_by_workspace',
         `SELECT
            COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
            COUNT(*) AS c
@@ -150,8 +155,7 @@ export class NotificationRepo {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [] : [userId];
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         typeof args,
         {
           scope_id: string;
@@ -160,6 +164,8 @@ export class NotificationRepo {
           thread_root_id: string | null;
         }
       >(
+        this.db,
+        'notifications.latest_unread_by_workspace',
         `SELECT
            COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
            n.conversation_id,
@@ -211,8 +217,9 @@ export class NotificationRepo {
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args =
       userId == null ? [now, conversationId] : [now, userId, conversationId];
-    const r = this.db
-      .prepare(
+    const r = prepareObserved(
+        this.db,
+        'notifications.mark_conversation_read',
         `UPDATE notifications
          SET read_at = ?
          WHERE ${userPredicate} AND conversation_id = ? AND read_at IS NULL`,
@@ -249,8 +256,7 @@ export class NotificationRepo {
     uptoSeq: number;
   }): string[] {
     const now = Date.now();
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         {
           now: number;
           viewer: string;
@@ -260,6 +266,8 @@ export class NotificationRepo {
         },
         { id: string }
       >(
+        this.db,
+        'notifications.mark_stream_mentions_read',
         `UPDATE notifications
             SET read_at = @now
           WHERE user_id = @viewer
@@ -288,8 +296,9 @@ export class NotificationRepo {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [] : [userId];
-    const row = this.db
-      .prepare<typeof args, { c: number }>(
+    const row = prepareObserved<typeof args, { c: number }>(
+        this.db,
+        'notifications.unread_count',
         `SELECT COUNT(*) AS c FROM notifications
          WHERE ${userPredicate} AND read_at IS NULL`,
       )
@@ -302,8 +311,9 @@ export class NotificationRepo {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [now, id] : [now, userId, id];
-    const r = this.db
-      .prepare(
+    const r = prepareObserved(
+        this.db,
+        'notifications.mark_read',
         `UPDATE notifications
             SET read_at = ?
           WHERE ${userPredicate}
@@ -320,8 +330,9 @@ export class NotificationRepo {
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args =
       userId == null ? [now, workspaceId] : [now, userId, workspaceId];
-    const r = this.db
-      .prepare(
+    const r = prepareObserved(
+        this.db,
+        'notifications.mark_workspace_read',
         `UPDATE notifications
          SET read_at = ?
          WHERE ${userPredicate} AND workspace_id = ? AND read_at IS NULL`,
@@ -335,8 +346,9 @@ export class NotificationRepo {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
     const args = userId == null ? [now] : [now, userId];
-    const r = this.db
-      .prepare(
+    const r = prepareObserved(
+        this.db,
+        'notifications.mark_all_read',
         `UPDATE notifications SET read_at = ?
          WHERE ${userPredicate} AND read_at IS NULL`,
       )

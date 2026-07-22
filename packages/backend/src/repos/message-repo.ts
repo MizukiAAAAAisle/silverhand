@@ -25,6 +25,7 @@ import {
   type WindowScope,
   type WindowScopeMode,
 } from './message-stream-scope.js';
+import { prepareObserved } from '../observability/observed-statement.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -538,11 +539,12 @@ export class MessageRepo {
     if (uniqueRootIds.length === 0) return {};
     const counts = Object.fromEntries(uniqueRootIds.map(id => [id, 0]));
     const placeholders = uniqueRootIds.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         [string, ...string[]],
         { thread_root_id: string; reply_count: number }
       >(
+        this.db,
+        'messages.reply_counts_by_root',
         `SELECT thread_root_id, COUNT(*) AS reply_count
            FROM messages
           WHERE conversation_id = ?
@@ -583,11 +585,12 @@ export class MessageRepo {
     const uniqueRootIds = [...new Set(rootMessageIds)];
     if (uniqueRootIds.length === 0) return result;
     const placeholders = uniqueRootIds.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         [string, ...string[]],
         { root_id: string; reply_count: number; last_reply_at: number }
       >(
+        this.db,
+        'messages.reply_badge_summaries_by_root',
         `SELECT agg.root_id      AS root_id,
                 agg.reply_count  AS reply_count,
                 lr.created_at    AS last_reply_at
@@ -646,11 +649,12 @@ export class MessageRepo {
 
     // Fetch one extra row to decide whether a next page exists without a
     // second COUNT query.
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         [string, string, string, number, number, number, number, number],
         ThreadRootRow
       >(
+        this.db,
+        'messages.list_channel_threads',
         `SELECT
            root.id            AS root_message_id,
            root.from_kind     AS root_from_kind,
@@ -757,8 +761,9 @@ export class MessageRepo {
     conversationId: string,
     rootId: string,
   ): ThreadSummaryInvariant | null {
-    const row = this.db
-      .prepare<[string, string, string, string], ThreadRootRow>(
+    const row = prepareObserved<[string, string, string, string], ThreadRootRow>(
+        this.db,
+        'messages.thread_list_entry_for_root',
         `SELECT
            root.id            AS root_message_id,
            root.from_kind     AS root_from_kind,
@@ -814,8 +819,7 @@ export class MessageRepo {
     >();
     if (rootIds.length === 0) return result;
     const placeholders = rootIds.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare<
+    const rows = prepareObserved<
         [string, ...string[]],
         {
           root_id: string;
@@ -824,6 +828,8 @@ export class MessageRepo {
           last_seq: number;
         }
       >(
+        this.db,
+        'messages.repliers_for_roots',
         `SELECT thread_root_id AS root_id,
                 from_kind      AS from_kind,
                 CASE from_kind WHEN 'agent' THEN from_agent_id ELSE from_user_id END AS actor_id,
@@ -868,8 +874,9 @@ export class MessageRepo {
     const followed = new Set<string>();
     if (rootIds.length === 0) return followed;
     const placeholders = rootIds.map(() => '?').join(', ');
-    const rows = this.db
-      .prepare<[string, string, ...string[]], { thread_root_id: string }>(
+    const rows = prepareObserved<[string, string, ...string[]], { thread_root_id: string }>(
+        this.db,
+        'messages.followed_roots_for_viewer',
         `SELECT thread_root_id
            FROM thread_followers
           WHERE conversation_id = ?
@@ -892,8 +899,7 @@ export class MessageRepo {
     limit: number,
     scope: WindowScope,
   ): MessageRowWithLinkedTask[] {
-    return this.db
-      .prepare<
+    return prepareObserved<
         [
           string,
           number | null,
@@ -907,6 +913,8 @@ export class MessageRepo {
         ],
         MessageRowWithLinkedTask
       >(
+        this.db,
+        'messages.window_before_seq',
         `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM (
              SELECT *
@@ -939,8 +947,7 @@ export class MessageRepo {
     scope: WindowScope,
   ): MessageRowWithLinkedTask[] {
     if (limit <= 0) return [];
-    return this.db
-      .prepare<
+    return prepareObserved<
         [
           string,
           number,
@@ -953,6 +960,8 @@ export class MessageRepo {
         ],
         MessageRowWithLinkedTask
       >(
+        this.db,
+        'messages.window_after_seq',
         `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
            ${LINKED_TASK_JOINS}
@@ -973,8 +982,7 @@ export class MessageRepo {
     messageId: string,
     scope: WindowScope,
   ): MessageRowWithLinkedTask | null {
-    const row = this.db
-      .prepare<
+    const row = prepareObserved<
         [
           string,
           string,
@@ -986,6 +994,8 @@ export class MessageRepo {
         ],
         MessageRowWithLinkedTask
       >(
+        this.db,
+        'messages.get_by_id_in_conversation',
         `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
            ${LINKED_TASK_JOINS}
@@ -1004,8 +1014,7 @@ export class MessageRepo {
     messageId: string,
     scope: WindowScope,
   ): number | null {
-    const row = this.db
-      .prepare<
+    const row = prepareObserved<
         [
           string,
           string,
@@ -1017,6 +1026,8 @@ export class MessageRepo {
         ],
         { seq: number }
       >(
+        this.db,
+        'messages.anchor_seq_for_id',
         `SELECT seq FROM messages
           WHERE conversation_id = ? AND id = ?
             AND ${streamScopePredicate()}`,
@@ -1044,8 +1055,7 @@ export class MessageRepo {
               AND ${streamScopePredicate()}
             LIMIT 1`;
     return (
-      this.db
-        .prepare<
+      prepareObserved<
           [
             string,
             number,
@@ -1056,14 +1066,15 @@ export class MessageRepo {
             string | null,
           ],
           { found: 1 }
-        >(sql)
+        >(this.db, 'messages.exists_beyond_seq', sql)
         .get(conversationId, pivot, ...streamScopeParams(scope)) !== undefined
     );
   }
 
   getById(id: string): MessageDto | null {
-    const row = this.db
-      .prepare<[string], MessageRowWithLinkedTask>(
+    const row = prepareObserved<[string], MessageRowWithLinkedTask>(
+        this.db,
+        'messages.get_by_id',
         `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
            ${LINKED_TASK_JOINS}
@@ -1097,8 +1108,9 @@ export class MessageRepo {
     conversationId: string,
     subtype: string,
   ): MessageDto | null {
-    const row = this.db
-      .prepare<[string, string], MessageRowWithLinkedTask>(
+    const row = prepareObserved<[string, string], MessageRowWithLinkedTask>(
+        this.db,
+        'messages.first_system_subtype_in_conversation',
         `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
            ${LINKED_TASK_JOINS}
@@ -1195,8 +1207,9 @@ export class MessageRepo {
   }
 
   latestSeqForConversation(conversationId: string): number {
-    const row = this.db
-      .prepare<[string], { latest_message_seq: number }>(
+    const row = prepareObserved<[string], { latest_message_seq: number }>(
+        this.db,
+        'messages.latest_seq_for_conversation',
         `SELECT latest_message_seq
            FROM conversations
           WHERE id = ?`,
@@ -1235,11 +1248,12 @@ export class MessageRepo {
     from_kind: string;
     from_agent_id: string | null;
   }> {
-    return this.db
-      .prepare<
+    return prepareObserved<
         [string, string | null, number, number],
         { id: string; seq: number; from_kind: string; from_agent_id: string | null }
       >(
+        this.db,
+        'messages.stream_window_meta',
         `SELECT id, seq, from_kind, from_agent_id
            FROM messages
           WHERE conversation_id = ?
@@ -1264,8 +1278,9 @@ export class MessageRepo {
     threadRootId: string,
     beforeSeq: number,
   ): MessageDto[] {
-    return this.db
-      .prepare<[string, string, number], MessageRowWithLinkedTask>(
+    return prepareObserved<[string, string, number], MessageRowWithLinkedTask>(
+        this.db,
+        'messages.stream_below_seq',
         `SELECT m.*, ${LINKED_TASK_SELECT}
            FROM messages m
            ${LINKED_TASK_JOINS}
@@ -1290,8 +1305,9 @@ export class MessageRepo {
   }
 
   private reserveNextSeq(conversationId: string): number {
-    const changed = this.db
-      .prepare<[string]>(
+    const changed = prepareObserved<[string]>(
+        this.db,
+        'messages.reserve_next_seq',
         `UPDATE conversations
             SET latest_message_seq = latest_message_seq + 1
           WHERE id = ?`,
@@ -1310,8 +1326,9 @@ export class MessageRepo {
     conversationId: string,
     threadRootId: string | null,
   ): number {
-    const row = this.db
-      .prepare<[string, string | null], { latest_seq: number }>(
+    const row = prepareObserved<[string, string | null], { latest_seq: number }>(
+        this.db,
+        'messages.stream_head_latest_seq',
         `SELECT latest_seq FROM conversation_stream_heads
           WHERE conversation_id = ? AND thread_root_id IS ?`,
       )
@@ -1329,8 +1346,9 @@ export class MessageRepo {
   listStreamHeads(
     conversationId: string,
   ): Array<{ threadRootId: string | null; latestSeq: number }> {
-    return this.db
-      .prepare<[string], { thread_root_id: string | null; latest_seq: number }>(
+    return prepareObserved<[string], { thread_root_id: string | null; latest_seq: number }>(
+        this.db,
+        'messages.list_stream_heads',
         `SELECT thread_root_id, latest_seq FROM conversation_stream_heads
           WHERE conversation_id = ?`,
       )
@@ -1347,16 +1365,18 @@ export class MessageRepo {
     threadRootId: string | null,
     newSeq: number,
   ): void {
-    const updated = this.db
-      .prepare<[number, string, string | null]>(
+    const updated = prepareObserved<[number, string, string | null]>(
+        this.db,
+        'messages.bump_stream_head_update',
         `UPDATE conversation_stream_heads
             SET latest_seq = ?
           WHERE conversation_id = ? AND thread_root_id IS ?`,
       )
       .run(newSeq, conversationId, threadRootId).changes;
     if (updated === 0) {
-      this.db
-        .prepare<[string, string | null, number]>(
+      prepareObserved<[string, string | null, number]>(
+          this.db,
+          'messages.bump_stream_head_insert',
           `INSERT INTO conversation_stream_heads
              (conversation_id, thread_root_id, latest_seq)
            VALUES (?, ?, ?)`,
@@ -1390,8 +1410,9 @@ export class MessageRepo {
     // normal delivery legitimately advances the recipient's observed
     // cursor PAST the head. seen ≥ head still means "saw everything
     // freshness-relevant" — strictly more information, never less.
-    const advanced = this.db
-      .prepare<[number, string, string | null, number]>(
+    const advanced = prepareObserved<[number, string, string | null, number]>(
+        this.db,
+        'messages.cas_stream_head_update',
         `UPDATE conversation_stream_heads
             SET latest_seq = ?
           WHERE conversation_id = ? AND thread_root_id IS ? AND latest_seq <= ?`,
@@ -1399,8 +1420,9 @@ export class MessageRepo {
       .run(newSeq, conversationId, threadRootId, seenStreamSeq).changes;
     if (advanced === 1) return true;
     if (seenStreamSeq !== 0) return false;
-    const inserted = this.db
-      .prepare<[string, string | null, number]>(
+    const inserted = prepareObserved<[string, string | null, number]>(
+        this.db,
+        'messages.cas_stream_head_insert',
         `INSERT INTO conversation_stream_heads
            (conversation_id, thread_root_id, latest_seq)
          VALUES (?, ?, ?)
@@ -1426,8 +1448,9 @@ export class MessageRepo {
       params.metadata ?? null,
       params.attachments ?? null,
     );
-    this.db
-      .prepare(
+    prepareObserved(
+        this.db,
+        'messages.insert_row',
         `INSERT INTO messages
          (id, conversation_id, from_kind, from_agent_id, from_user_id,
           content, metadata, seq, created_at, thread_root_id)
@@ -1445,8 +1468,11 @@ export class MessageRepo {
         now,
         params.threadRootId ?? null,
       );
-    const row = this.db
-      .prepare<[string], MessageRow>('SELECT * FROM messages WHERE id = ?')
+    const row = prepareObserved<[string], MessageRow>(
+        this.db,
+        'messages.select_inserted_row',
+        'SELECT * FROM messages WHERE id = ?',
+      )
       .get(id);
     if (!row) throw new Error('message insert failed');
     return messageRowToDto(row);
