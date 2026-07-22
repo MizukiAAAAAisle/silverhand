@@ -55,7 +55,7 @@ import {
   HostTokenRotationCoordinator,
   HostTokenRotationError,
 } from '../ws/host-token-rotation.js';
-import { dispatchHostStatus } from '../runtime/host-status-dispatch.js';
+import { HostStatusSingleFlight } from '../runtime/host-status-dispatch.js';
 import {
   dispatchHostRuntimeCatalog,
   type HostRuntimeCatalogOutcome,
@@ -96,6 +96,11 @@ export interface HostRouteDeps {
  */
 export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  // #task:1587 — one single-flight instance per app: `/status` requests for
+  // the same host + connection generation share one daemon RPC instead of
+  // each opening their own (refetch storms otherwise multiply straight
+  // through to the daemon).
+  const hostStatusSingleFlight = new HostStatusSingleFlight();
   const {
     ctx,
     hosts,
@@ -960,7 +965,7 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       } satisfies HostStatusResponse);
     }
 
-    const dispatch = await dispatchHostStatus(
+    const dispatch = await hostStatusSingleFlight.dispatch(
       ctx.outboundFrameAdapter?.() ?? null,
       hostId,
     );

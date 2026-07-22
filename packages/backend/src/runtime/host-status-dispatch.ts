@@ -40,13 +40,69 @@ export type HostStatusOutcome =
     };
 
 /**
- * Dispatch `host_status` to the owning daemon.
+ * #task:1587 — single-flight dispatcher for `host_status`.
  *
- * Resolution rule (matches `resolveOutboundForHost`): when the adapter
- * is missing or has no live connection for `hostId`, the caller treats
- * the host as disconnected — NOT as a 503. The renderer wants to show
- * "device offline" with the persistent host fields (`display_label`,
- * `name`, `kind`) intact, not an error banner.
+ * A renderer-side refetch storm (poll × event invalidation, no client
+ * coordination) can turn one host's status into hundreds of concurrent
+ * identical RPCs against a single daemon — the 2026-07-21 incident put
+ * 675 concurrent `host_status` on one connection, 627 of which burned
+ * the full 10s timeout and 560 answered after their waiters were gone.
+ * The daemon-facing fix is to admit at most ONE in-flight `host_status`
+ * per (host, connection generation); every concurrent caller shares
+ * that dispatch's outcome, success or failure.
+ *
+ * Generation binding is the correctness core, not an optimization:
+ * the in-flight entry is keyed on the `connectionId` resolved at entry
+ * creation, and that same id is pinned as `expectedConnectionId` on the
+ * underlying send. A daemon reconnect mints a new connectionId, so
+ * requests arriving after the flip key to a NEW entry (fresh RPC to the
+ * new daemon), while the old entry's send fails fast on the id mismatch
+ * and its waiters see a transport outcome — never data from a daemon
+ * generation they didn't ask about.
+ *
+ * Outcome promises never reject (every failure is mapped into the
+ * `HostStatusOutcome` union), so sharing one promise across waiters
+ * cannot leak unhandled rejections. Entries are removed on settle
+ * (identity-checked, so a slow settle can't evict a successor entry);
+ * the map holds only genuinely in-flight work.
+ */
+export class HostStatusSingleFlight {
+  private readonly inflight = new Map<string, Promise<HostStatusOutcome>>();
+
+  dispatch(
+    adapter: OutboundFrameAdapter | null,
+    hostId: string,
+  ): Promise<HostStatusOutcome> {
+    const connectionId = adapter?.connectionIdForHost(hostId) ?? null;
+    if (!adapter || !connectionId) {
+      return Promise.resolve({ kind: 'disconnected' });
+    }
+    const key = `${hostId}\u0000${connectionId}`;
+    const existing = this.inflight.get(key);
+    if (existing) return existing;
+    const entry = dispatchHostStatusToConnection(adapter, hostId, connectionId);
+    this.inflight.set(key, entry);
+    const cleanup = () => {
+      if (this.inflight.get(key) === entry) this.inflight.delete(key);
+    };
+    entry.then(cleanup, cleanup);
+    return entry;
+  }
+
+  /** Test seam: number of in-flight entries (leak assertion). */
+  inflightCount(): number {
+    return this.inflight.size;
+  }
+}
+
+/**
+ * Dispatch one `host_status` RPC against a specific connection
+ * generation and map every failure into the outcome union.
+ *
+ * `connectionId` is the generation the caller resolved (and keyed on)
+ * BEFORE calling; it is pinned as `expectedConnectionId` so a
+ * connection replaced between resolution and send fails fast instead
+ * of silently answering from the new daemon.
  *
  * Transport errors map to the typed reasons the renderer can render:
  *   - `transport_no_connection` / `transport_disconnected` → `'disconnected'`
@@ -61,14 +117,11 @@ export type HostStatusOutcome =
  * protocol-layer problem (the daemon answered but in a way the renderer
  * cannot interpret).
  */
-export async function dispatchHostStatus(
-  adapter: OutboundFrameAdapter | null,
+async function dispatchHostStatusToConnection(
+  adapter: OutboundFrameAdapter,
   hostId: string,
+  connectionId: string,
 ): Promise<HostStatusOutcome> {
-  const connectionId = adapter?.connectionIdForHost(hostId) ?? null;
-  if (!adapter || !connectionId) {
-    return { kind: 'disconnected' };
-  }
   try {
     const result = await adapter.sendCommand(hostId, 'host_status', {}, {
       timeoutMs: HOST_STATUS_TIMEOUT_MS,
