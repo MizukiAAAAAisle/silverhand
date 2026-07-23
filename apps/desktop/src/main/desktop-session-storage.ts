@@ -6,24 +6,25 @@
  * token lifecycle + renderer isolation; local encryption would not
  * defend against user-level desktop code execution and would diverge
  * from `daemon-config.json` host_token storage.
+ *
+ * #task:1598 — this module receives the RESOLVED session-file path
+ * (desktop composition root: `desktopAppPaths().desktop.session`).
+ * It never derives the path from a root, so a future layout-version
+ * flip happens in the selector only.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname } from 'node:path';
 
 export interface DesktopSessionStorageLogger {
   warn(obj: Record<string, unknown>, msg?: string): void;
 }
 
-export function desktopSessionPath(silverhandRoot: string): string {
-  return join(silverhandRoot, 'desktop', 'session.bin');
-}
-
 export function clearPersistedDesktopSession(opts: {
-  silverhandRoot: string;
+  sessionPath: string;
   logger?: DesktopSessionStorageLogger | null;
 }): void {
   try {
-    unlinkSync(desktopSessionPath(opts.silverhandRoot));
+    unlinkSync(opts.sessionPath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
       opts.logger?.warn({ err }, 'failed to remove desktop auth session file');
@@ -32,13 +33,12 @@ export function clearPersistedDesktopSession(opts: {
 }
 
 export function loadPersistedDesktopSessionToken(opts: {
-  silverhandRoot: string;
+  sessionPath: string;
   logger?: DesktopSessionStorageLogger | null;
 }): string | null {
-  const path = desktopSessionPath(opts.silverhandRoot);
-  if (!existsSync(path)) return null;
+  if (!existsSync(opts.sessionPath)) return null;
   try {
-    const token = readFileSync(path, 'utf8').trim();
+    const token = readFileSync(opts.sessionPath, 'utf8').trim();
     return token.length > 0 ? token : null;
   } catch (err) {
     opts.logger?.warn({ err }, 'failed to read desktop auth session file; clearing');
@@ -48,15 +48,14 @@ export function loadPersistedDesktopSessionToken(opts: {
 }
 
 export function persistDesktopSessionToken(opts: {
-  silverhandRoot: string;
+  sessionPath: string;
   token: string;
   logger?: DesktopSessionStorageLogger | null;
 }): void {
-  const path = desktopSessionPath(opts.silverhandRoot);
-  mkdirSync(join(opts.silverhandRoot, 'desktop'), { recursive: true });
-  writeFileSync(path, opts.token, { mode: 0o600 });
+  mkdirSync(dirname(opts.sessionPath), { recursive: true });
+  writeFileSync(opts.sessionPath, opts.token, { mode: 0o600 });
   try {
-    chmodSync(path, 0o600);
+    chmodSync(opts.sessionPath, 0o600);
   } catch (err) {
     opts.logger?.warn({ err }, 'failed to chmod desktop auth session file');
   }

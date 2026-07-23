@@ -1,11 +1,15 @@
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { dirname } from 'node:path';
 import { homedir } from 'node:os';
 import {
-  SERVER_CONFIG_FILENAME,
   ServerConfigSchema,
   type ServerConfig,
 } from '@silverhand/shared';
+import {
+  defaultAppRoot,
+  resolveDesktopAppPaths,
+  type DesktopAppPaths,
+} from '@silverhand/shared/app-data-layout';
 
 // `event_ws_allowed_origins` is NEVER persisted. For embedded it is a
 // GENERATED value — the current boot's finalized loopback origin, re-seeded
@@ -21,16 +25,27 @@ const PersistedServerConfigSchema = ServerConfigSchema.omit({
 });
 
 export function silverhandDir(): string {
-  return process.env.SILVERHAND_DIR || join(homedir(), '.silverhand');
+  return defaultAppRoot(process.env, homedir);
+}
+
+/**
+ * #task:1598 — the desktop process's resolved app-data paths, produced by
+ * the ONE path authority (`resolveDesktopAppPaths`) pinned to `legacy-v1`
+ * (byte-identical to the historical flat layout; the v2 migration flips
+ * the version in a later release). All main-process path consumers read
+ * from here instead of joining off the root themselves.
+ */
+export function desktopAppPaths(): DesktopAppPaths {
+  return resolveDesktopAppPaths(silverhandDir(), 'legacy-v1');
 }
 
 export function electronUserDataPath(silverhandRoot = silverhandDir()): string {
-  return join(silverhandRoot, 'desktop', 'electron-user-data');
+  return resolveDesktopAppPaths(silverhandRoot, 'legacy-v1').desktop
+    .electronUserData;
 }
 
 export async function loadOrCreateServerConfig(): Promise<ServerConfig> {
-  const dir = silverhandDir();
-  const filepath = join(dir, SERVER_CONFIG_FILENAME);
+  const filepath = desktopAppPaths().embeddedServer.serverConfig;
 
   try {
     const raw = await fs.readFile(filepath, 'utf8');
@@ -53,13 +68,12 @@ export async function loadOrCreateServerConfig(): Promise<ServerConfig> {
 }
 
 export async function writeServerConfig(config: ServerConfig): Promise<void> {
-  const dir = silverhandDir();
-  await fs.mkdir(dir, { recursive: true });
-  const filepath = join(dir, SERVER_CONFIG_FILENAME);
+  const paths = desktopAppPaths();
+  await fs.mkdir(dirname(paths.embeddedServer.serverConfig), { recursive: true });
   const persisted = PersistedServerConfigSchema.parse(config);
-  await fs.writeFile(filepath, JSON.stringify(persisted, null, 2), { mode: 0o600 });
+  await fs.writeFile(paths.embeddedServer.serverConfig, JSON.stringify(persisted, null, 2), { mode: 0o600 });
 }
 
 export function databasePath(): string {
-  return join(silverhandDir(), 'silverhand.db');
+  return desktopAppPaths().embeddedServer.database;
 }

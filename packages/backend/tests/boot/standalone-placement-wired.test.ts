@@ -17,6 +17,9 @@
  * for standalone. This file boots the real backend in standalone
  * mode and asserts behavior through `running.context.placement`.
  */
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -59,7 +62,7 @@ describe('startBackend(standalone).context.placement — D4.c C1 wiring', () => 
     running = await startBackend({
       mode: 'standalone',
       dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
+      ...resolveBackendDataPaths(tmp),
       serverConfig: makeServerConfig(),
       authConfig: { signupEnabled: true, sessionTtlMs: 1_000 * 60 * 60 * 24 },
       listen: { hostname: '127.0.0.1', port: 0 },
@@ -123,7 +126,7 @@ describe('startBackend(standalone).context.placement — D4.c C1 wiring', () => 
     running = await startBackend({
       mode: 'standalone',
       dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
+      ...resolveBackendDataPaths(tmp),
       serverConfig: makeServerConfig(),
       authConfig: { signupEnabled: true, sessionTtlMs: 1_000 * 60 * 60 * 24 },
       listen: { hostname: '127.0.0.1', port: 0 },

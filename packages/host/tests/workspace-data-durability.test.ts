@@ -46,8 +46,8 @@ describe('runDaemon wiring — durable workspace-data placement', () => {
   it('migrates a pre-fix namespace out of the identity dir and resolves the durable path', async () => {
     const dir = mkdtempSync('/tmp/sh-wsdata-');
     dirs.push(dir);
-    // Identity defaults to dirname(runtimePidRootDir)/identity.json → `dir`
-    // is the legacy (wipeable) state dir the registry USED to live in.
+    // The identity file is placed at `<dir>/identity.json` → `dir` is the
+    // legacy (wipeable) state dir the registry USED to live in.
     const runtimePidRootDir = join(dir, 'runtime-pids');
     const agentHomeRootDir = join(dir, 'data', 'agents');
     const hostConfigPath = join(dir, 'daemon-config.json');
@@ -88,6 +88,10 @@ describe('runDaemon wiring — durable workspace-data placement', () => {
       socketPath: join(dir, 'daemon.sock'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
+      // #task:1598 round 4 — the identity coordinate is EXPLICIT now (no
+      // sibling derivation); `dir` stays the legacy migration source via
+      // dirname(daemonIdentityPath).
+      daemonIdentityPath: join(dir, 'identity.json'),
       runtimePidRootDir,
       agentHomeRootDir,
       workspaceDataRootDir: join(dir, 'data', 'workspace-data'),
@@ -165,6 +169,10 @@ describe('runDaemon wiring — durable workspace-data placement', () => {
       socketPath: join(dir, 'daemon.sock'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
+      // #task:1598 round 4 — the identity coordinate is EXPLICIT now (no
+      // sibling derivation); `dir` stays the legacy migration source via
+      // dirname(daemonIdentityPath).
+      daemonIdentityPath: join(dir, 'identity.json'),
       runtimePidRootDir,
       agentHomeRootDir,
       workspaceDataRootDir: join(dir, 'data', 'workspace-data'),

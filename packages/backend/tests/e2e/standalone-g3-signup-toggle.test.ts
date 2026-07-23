@@ -52,6 +52,9 @@ import {
   type ServerConfig,
 } from '@silverhand/shared';
 import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
+import {
   startBackend,
   type RunningBackend,
 } from '../../src/index.js';
@@ -102,7 +105,7 @@ async function bootBackendOnly(opts: {
   const backend = await startBackend({
     mode: 'standalone',
     dbPath,
-    silverhandDir,
+    ...resolveBackendDataPaths(silverhandDir),
     serverConfig,
     listen: { hostname: '127.0.0.1', port: 0 },
     logger: silentBackendLogger,

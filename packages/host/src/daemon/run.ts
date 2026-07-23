@@ -20,6 +20,11 @@
  * start when another pid owns the lock".
  */
 import {
+  homeAppRoot,
+  legacyWorkspacesRootDir,
+  resolveLegacyStandaloneDaemonPaths,
+} from '@silverhand/shared/app-data-layout';
+import {
   claimPidFile,
   installShutdownHandlers,
   releasePidFile,
@@ -159,6 +164,13 @@ export interface RunDaemonOptions {
    */
   workspaceDataRootDir?: string | null;
   /**
+   * #task:1598 — the EXPLICIT global silverhand root used as the
+   * requested-path guard root (protectedRoots) and the legacy-workspaces
+   * exemption anchor. Desktop passes its app root; connect passes the
+   * global home root. Never derived from identity/registry paths.
+   */
+  silverhandStateRootDir?: string | null;
+  /**
    * Explicit daemon-local proxy config file. Standalone `connect --data-root`
    * uses this to keep every runtime artifact under its chosen data root.
    * Embedded desktop leaves it null so the daemon resolves the file from the
@@ -180,24 +192,20 @@ export interface RunDaemonOptions {
    */
   controlPlaneServerUrlPath?: string | null;
   /**
-   * Persistent daemon identity file. Four resolution cases:
+   * Persistent daemon identity file. Resolution (#task:1598 round 4 —
+   * the historical `dirname(runtimePidRootDir)/identity.json` sibling
+   * derivation is gone; embedders pass the coordinate explicitly):
    *
    *   - `=== null` — skip reading/creating any identity file; the
    *     daemon advertises `DEFAULT_DAEMON_IDENTITY` (bootstrap
    *     `daemon_id='local'` + `host_descriptor={name:'local',
-   *     kind:'local'}`). Used by protocol-only tests that don't want
-   *     to touch the filesystem.
-   *   - omitted **and** `runtimePidRootDir === null` — same as above
-   *     (cannot derive a file location without a root); bootstrap
-   *     identity is broadcast.
-   *   - omitted **and** `runtimePidRootDir` is set — derived to
-   *     `dirname(runtimePidRootDir)/identity.json`. Tests that pass
-   *     a temp `runtimePidRootDir` therefore keep the identity file
-   *     under the same temp tree automatically.
-   *   - explicit string — use the given path verbatim. Production
-   *     boot in `apps/desktop` lets this default to
-   *     `~/.silverhand/daemon/identity.json` via
-   *     `defaultDaemonIdentityPath`.
+   *     kind:'local'}`). Protocol-only tests and `connect` (which
+   *     supplies `daemonIdentity` directly) use this.
+   *   - explicit string — use the given path verbatim. Desktop passes
+   *     the resolver's `localComputer.run.identity` through
+   *     `--daemon-identity-path`.
+   *   - omitted — bare-daemon fallback `defaultDaemonIdentityPath()`
+   *     (`~/.silverhand/daemon/identity.json` via the resolver).
    *
    * On first read for any non-null path, the file is created with the
    * bootstrap identity (atomic tmp+rename, mode 0o600). Subsequent
@@ -404,7 +412,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
       : opts.runtimePidRootDir;
   const daemonIdentityPath =
     opts.daemonIdentityPath === undefined
-      ? defaultDaemonIdentityPath(runtimePidRootDir)
+      ? defaultDaemonIdentityPath()
       : opts.daemonIdentityPath;
   const daemonIdentity =
     opts.daemonIdentity !== undefined
@@ -562,9 +570,16 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     workspaceRegistryStateDirHook ??
     opts.workspaceDataRootDir ??
     defaultWorkspaceDataRootDir();
+  // Legacy MIGRATION SOURCE inventory (#task:1596) — these name where a
+  // pre-fix registry namespace may still live so `migrateLegacyWorkspaceData`
+  // can move it out; they are NOT path authorities. `dirname(daemonIdentityPath)`
+  // is the one deliberate inversion left: the pre-fix registry really lived
+  // beside the identity file. DELETION CONDITION: both entries go away with
+  // the #task:1596 legacy readers once rollout evidence shows supported
+  // installations have migrated (docs/app-data-layout-v2.md §7 discipline).
   const legacyWorkspaceDataStateDirs: (string | null)[] = [
     daemonIdentityPath !== null ? dirname(daemonIdentityPath) : null,
-    `${homedir()}/.silverhand/daemon`,
+    resolveLegacyStandaloneDaemonPaths(homeAppRoot()).stateDir,
   ];
   // D4.e-1 (Cindy P1-3) — the requested-path guard roots, constructed ONCE
   // here and injected into every registry build (NOT re-derived via
@@ -575,14 +590,17 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // `~/.silverhand`) — only the workspace-data dir moved, the guard root
   // and the per-computer profile root did not. The lone allowed child
   // inside it is `workspaces/` (pre-D4.e generated roots).
+  // #task:1598 round 2 (Cindy P1-2) — the guard root is an EXPLICIT
+  // resolved coordinate from the composition root (desktop passes its app
+  // root; connect passes the global home root), never a parent inversion
+  // of the identity/registry paths: a v2 layout that moves those files
+  // must not silently move the protected root. Bare daemons fall back to
+  // the resolver's home root.
   const silverhandStateRoot =
     opts.testHooks?.silverhandStateRoot ??
-    (workspaceRegistryStateDirHook !== undefined
-      ? dirname(workspaceRegistryStateDirHook)
-      : daemonIdentityPath !== null
-        ? dirname(dirname(daemonIdentityPath))
-        : `${homedir()}/.silverhand`);
-  const legacyWorkspacesRoot = join(silverhandStateRoot, 'workspaces');
+    opts.silverhandStateRootDir ??
+    homeAppRoot();
+  const legacyWorkspacesRoot = legacyWorkspacesRootDir(silverhandStateRoot);
   const fallbackEmbeddedHostId = daemonIdentity?.daemon_id ?? 'local';
   const liveOutboundBinding = (): RegistryBinding | null =>
     directOutboundBinding ?? outboundSupervisor.currentBinding();

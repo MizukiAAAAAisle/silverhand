@@ -56,6 +56,7 @@ import {
   loadOrCreateServerConfig,
   silverhandDir,
   writeServerConfig,
+  desktopAppPaths,
 } from './config.js';
 import { resolveEffectiveBootProfile } from './desktop-build-config.js';
 import { desktopClientInfoHeaderValue } from './client-info.js';
@@ -70,7 +71,6 @@ import {
 import {
   buildHostClaimInput,
   loadOrCreateInstallationId,
-  daemonHostConfigPath,
   readDaemonHostConfig,
   removeDaemonHostConfig,
   applyRotateSideEffects,
@@ -511,6 +511,8 @@ interface DaemonPaths {
   runtimePidRootDir: string;
   agentHomeRootDir: string;
   workspaceDataRootDir: string;
+  silverhandStateRootDir: string;
+  daemonIdentityPath: string;
   hostConfigPath: string;
   legacyProxyConfigPath: string;
   controlPlaneServerUrlPath: string;
@@ -520,30 +522,31 @@ interface DaemonPaths {
 }
 
 function daemonPaths(): DaemonPaths {
-  // All daemon runtime artifacts live under `<silverhand-dir>/run/` so
-  // the user can rm -rf the whole thing if their machine ever ends up
-  // in a weird state. Logs share the existing `logs/` directory the
-  // file logger already writes to.
-  const runDir = join(silverhandDir(), 'run');
+  // #task:1598 — every path comes from the ONE app-data resolver
+  // (`desktopAppPaths()`, pinned legacy-v1: physically identical to the
+  // historical flat layout). run/ stays wholly disposable — the user can
+  // rm -rf it if the machine ends up in a weird state; durable
+  // workspace-data (registry + managed roots holding agent L2 memory)
+  // lives OUTSIDE run/ (#task:1596).
+  const paths = desktopAppPaths();
   return {
-    socketPath: join(runDir, 'daemon.sock'),
-    pidFilePath: join(runDir, 'daemon.pid'),
-    logDir: join(silverhandDir(), 'logs'),
-    runtimePidRootDir: join(runDir, 'runtime-pids'),
-    agentHomeRootDir: join(silverhandDir(), 'agents'),
-    // #task:1596 — durable workspace-data (registry + managed workspace
-    // roots holding agent L2 memory) lives OUTSIDE run/ so the documented
-    // "rm -rf run/" recovery stays safe.
-    workspaceDataRootDir: join(silverhandDir(), 'workspace-data'),
-    hostConfigPath: daemonHostConfigPath(silverhandDir()),
-    legacyProxyConfigPath: join(silverhandDir(), 'daemon', 'proxy-config.json'),
-    controlPlaneServerUrlPath: join(runDir, 'control-plane-server-url'),
-    localOutboundSocketPath: join(runDir, 'daemon-outbound.sock'),
+    socketPath: paths.localComputer.run.socket,
+    pidFilePath: paths.localComputer.run.pidFile,
+    logDir: paths.logs,
+    runtimePidRootDir: paths.localComputer.run.runtimePids,
+    agentHomeRootDir: paths.localComputer.agents,
+    workspaceDataRootDir: paths.localComputer.workspaceData,
+    silverhandStateRootDir: paths.appRoot,
+    daemonIdentityPath: paths.localComputer.run.identity,
+    hostConfigPath: paths.localComputer.daemonConfig,
+    legacyProxyConfigPath: paths.localComputer.legacyProxyConfig,
+    controlPlaneServerUrlPath: paths.localComputer.run.controlPlaneServerUrl,
+    localOutboundSocketPath: paths.localComputer.run.outboundSocket,
   };
 }
 
 function embeddedBootstrapPath(): string {
-  return join(silverhandDir(), EMBEDDED_BOOTSTRAP_FILENAME);
+  return desktopAppPaths().embeddedServer.bootstrap;
 }
 
 /**
@@ -655,7 +658,7 @@ function installBackendEventWsOriginOverride(): void {
   expectedUrl.protocol = expectedUrl.protocol === 'https:' ? 'wss:' : 'ws:';
   // #task:1530 — release telemetry. Assembled once (memoized), fail-open: null
   // means "omit the header", never break the upgrade.
-  const clientInfoHeader = desktopClientInfoHeaderValue(silverhandDir(), logger);
+  const clientInfoHeader = desktopClientInfoHeaderValue(desktopAppPaths().installationId, logger);
   electronSession.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: [`${expectedUrl.protocol}//${expectedUrl.host}${apiPaths.eventWebSocket}`] },
     (details, callback) => {
@@ -695,15 +698,15 @@ function installBackendEventWsOriginOverride(): void {
 }
 
 function clearPersistedUserSession(): void {
-  clearPersistedDesktopSession({ silverhandRoot: silverhandDir(), logger });
+  clearPersistedDesktopSession({ sessionPath: desktopAppPaths().desktop.session, logger });
 }
 
 function loadPersistedUserSessionToken(): string | null {
-  return loadPersistedDesktopSessionToken({ silverhandRoot: silverhandDir(), logger });
+  return loadPersistedDesktopSessionToken({ sessionPath: desktopAppPaths().desktop.session, logger });
 }
 
 function persistUserSessionToken(token: string): void {
-  persistDesktopSessionToken({ silverhandRoot: silverhandDir(), token, logger });
+  persistDesktopSessionToken({ sessionPath: desktopAppPaths().desktop.session, token, logger });
 }
 
 async function storeUserSession(token: string, user: UserDto): Promise<void> {
@@ -746,7 +749,7 @@ async function clearUserSession(): Promise<void> {
   clearPersistedUserSession();
   await syncEventWsSessionCookie(null);
   try {
-    removeDaemonHostConfig(silverhandDir());
+    removeDaemonHostConfig(desktopAppPaths().localComputer.daemonConfig);
   } catch (err) {
     logger?.warn({ err }, 'failed to remove daemon host config');
   }
@@ -1040,10 +1043,10 @@ async function claimLocalHostForUserSession(): Promise<void> {
   // "remote profile saved → next launch must not crash even if the
   // remote backend is down".
   const backendUrlSnapshot = requireBackendUrl();
-  const dir = silverhandDir();
-  const existingConfig = readDaemonHostConfig(dir);
+  const paths = desktopAppPaths();
+  const existingConfig = readDaemonHostConfig(paths.localComputer.daemonConfig);
   try {
-    const installationId = loadOrCreateInstallationId(dir);
+    const installationId = loadOrCreateInstallationId(paths.installationId);
     const claimInput = buildHostClaimInput({
       installationId,
       existingConfig,
@@ -1105,14 +1108,14 @@ async function claimLocalHostForUserSession(): Promise<void> {
     // fingerprint treats it as `<none>`, and the absence is itself a
     // stable state distinct from any explicit version.
     const profileRead = readServerConnectionProfile({
-      silverhandRoot: silverhandDir(),
+      profilePath: paths.desktop.serverProfile,
       logger: logger ?? undefined,
     });
     const profileVersion =
       profileRead.ok ? profileRead.profile.version : undefined;
     const allowInsecureRemote = desktopAllowsInsecureRemote();
 
-    writeDaemonHostConfig(dir, {
+    writeDaemonHostConfig(paths.localComputer.daemonConfig, {
       server_url: backendUrlSnapshot,
       host_id: localHostId,
       host_token: hostToken,
@@ -1128,7 +1131,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
     // user-facing `local_host_status` enum.
     void triggerLocalHostOutboundAttach({
       localHostId,
-      configPath: daemonHostConfigPath(dir),
+      configPath: paths.localComputer.daemonConfig,
       attachWindow,
     });
   } catch (err) {
@@ -1211,7 +1214,7 @@ function snapshotLocalHostInfo(): {
     // exists (pre-claim state). Re-reads on every `backend:info`
     // refetch so post-save invalidation surfaces the new URL.
     local_host_server_url:
-      readDaemonHostConfig(silverhandDir())?.server_url ?? null,
+      readDaemonHostConfig(desktopAppPaths().localComputer.daemonConfig)?.server_url ?? null,
   };
 }
 
@@ -1361,8 +1364,8 @@ async function rotateHostToken(
   if (!hostId) {
     return { ok: false, code: 'host_not_found', message: 'missing host id' };
   }
-  const dir = silverhandDir();
-  const existingConfig = readDaemonHostConfig(dir);
+  const daemonConfigPath = desktopAppPaths().localComputer.daemonConfig;
+  const existingConfig = readDaemonHostConfig(daemonConfigPath);
   if (!existingConfig || existingConfig.host_id !== hostId) {
     // Stage B.4 hard guard: rotate is only legal for the host this
     // desktop is currently bound to. Rotating any other owned host
@@ -1419,7 +1422,7 @@ async function rotateHostToken(
   // Token bytes land here and ONLY here. Persist to daemon-config
   // before we return; the renderer reply below has no token.
   applyRotateSideEffects({
-    silverhandDir: dir,
+    daemonConfigPath,
     serverUrl: requireBackendUrl(),
     hostId: parsed.data.host_id,
     hostToken: parsed.data.host_token,
@@ -1484,7 +1487,7 @@ async function revokeHost(
   // `BackendInfo` IPC so the renderer can prompt the user to log in
   // again (which provisions a fresh active host row under the new
   // active-only partial-unique index).
-  const reconcile = applyRevokeSideEffects({ silverhandDir: silverhandDir(), hostId });
+  const reconcile = applyRevokeSideEffects({ daemonConfigPath: desktopAppPaths().localComputer.daemonConfig, hostId });
   if (reconcile === 'cleared') {
     localHostClaim = { status: 'revoked', hostId };
   }
@@ -1669,7 +1672,7 @@ async function saveServerUrlFromSettings(
     };
   }
 
-  const dir = silverhandDir();
+  const daemonConfigPath = desktopAppPaths().localComputer.daemonConfig;
   // **Controller snapshot (Cindy `#task:634` review P2)**: bind
   // `getAttachment` to a NON-NULL controller ONLY when one exists.
   // If we instead passed a function that always returns null, the
@@ -1703,19 +1706,19 @@ async function saveServerUrlFromSettings(
     {
       classifyServerUrl,
       allowInsecureRemote,
-      writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
+      writeDaemonHostConfig: config => writeDaemonHostConfig(daemonConfigPath, config),
       hostOutboundReload: () => client.hostOutboundReload(),
       getAttachment: bindAttachmentAccessor(controller),
       remoteMode: backend.kind === 'remote',
       currentLocalHostId: () =>
         localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
-      currentHostToken: () => readDaemonHostConfig(dir)?.host_token ?? null,
+      currentHostToken: () => readDaemonHostConfig(daemonConfigPath)?.host_token ?? null,
       // 5c-1: pull `profile_version` from the on-disk config so the
       // legacy settings:saveServerUrl path doesn't drop the field
       // when it rewrites the file. Legacy save is NOT a profile
       // commit; it should preserve whatever generation the existing
       // daemon-config (post-claim) was stamped with.
-      currentProfileVersion: () => readDaemonHostConfig(dir)?.profile_version,
+      currentProfileVersion: () => readDaemonHostConfig(daemonConfigPath)?.profile_version,
     },
   );
 
@@ -1915,7 +1918,7 @@ async function bootstrap(): Promise<void> {
     // embedded arm only (see below); a unit-tested seam pins that
     // remote / refuse plans never reach it.
     loggers = createCategorizedLoggers({
-      dir: join(silverhandDir(), 'logs'),
+      dir: desktopAppPaths().logs,
       alsoConsole: !app.isPackaged,
       base: { app: 'silverhand-desktop' },
     });
@@ -1941,7 +1944,7 @@ async function bootstrap(): Promise<void> {
     // in `@silverhand/shared/config`. See `backend-boot-mode.ts` for
     // the full decision matrix and the trip-wire rationale.
     const savedBootProfileView = readServerConnectionProfileViewOrNull({
-      silverhandRoot: silverhandDir(),
+      profilePath: desktopAppPaths().desktop.serverProfile,
       logger: logger
         ? {
             warn: (payload, msg) => logger?.warn(payload, msg),
@@ -2088,6 +2091,8 @@ async function bootstrap(): Promise<void> {
       runtimePidRootDir: paths.runtimePidRootDir,
       agentHomeRootDir: paths.agentHomeRootDir,
       workspaceDataRootDir: paths.workspaceDataRootDir,
+      silverhandStateRootDir: paths.silverhandStateRootDir,
+      daemonIdentityPath: paths.daemonIdentityPath,
       proxyConfigPath: null,
       legacyProxyConfigPath: paths.legacyProxyConfigPath,
       controlPlaneServerUrlPath:
@@ -2251,7 +2256,7 @@ async function bootstrap(): Promise<void> {
         const attachWindow = captureAttachWindow(localHostId);
         await triggerLocalHostOutboundAttach({
           localHostId,
-          configPath: daemonHostConfigPath(silverhandDir()),
+          configPath: desktopAppPaths().localComputer.daemonConfig,
           attachWindow,
         });
       })().catch(err => {
@@ -2298,7 +2303,7 @@ async function bootstrap(): Promise<void> {
           silverhandCliLauncher: resolveSilverhandCliLauncher(),
           logger: logger ?? undefined,
           loggers: loggers ?? undefined,
-          logDir: join(silverhandDir(), 'logs'),
+          logDir: desktopAppPaths().logs,
           // D5.a-3 (A6): the embedded backend no longer receives the
           // desktop HostClient. It dials the daemon's local outbound
           // frame socket itself and speaks the same R4-unified outbound
@@ -2400,10 +2405,11 @@ async function runBootReconciliation(): Promise<void> {
     const state = await reconcilePartialApplyAtBoot({
       readProfile: () =>
         readServerConnectionProfile({
-          silverhandRoot: silverhandDir(),
+          profilePath: desktopAppPaths().desktop.serverProfile,
           logger: logger ?? undefined,
         }),
-      readDaemonHostConfig: () => readDaemonHostConfig(silverhandDir()),
+      readDaemonHostConfig: () =>
+        readDaemonHostConfig(desktopAppPaths().localComputer.daemonConfig),
       runPhase2: profile => runProfilePhase2(profile),
     });
     partialApplyState = state;
@@ -2892,7 +2898,7 @@ export type PartialApplyRetryResult =
 function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   const client = hostClient;
   if (!client || !backend) return null;
-  const dir = silverhandDir();
+  const daemonConfigPath = desktopAppPaths().localComputer.daemonConfig;
   // D4.a Commit 5d — `null` on remote arm. The orchestrator's
   // `no_attachment_controller` arm surfaces a typed
   // `partial_apply_pending` so the renderer can render its banner
@@ -2900,12 +2906,12 @@ function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   const controller = getEmbeddedHostWsController();
   return {
     allowInsecureRemote: desktopAllowsInsecureRemote(),
-    writeDaemonHostConfig: config => writeDaemonHostConfig(dir, config),
+    writeDaemonHostConfig: config => writeDaemonHostConfig(daemonConfigPath, config),
     hostOutboundReload: () => client.hostOutboundReload(),
     getAttachment: bindAttachmentAccessor(controller),
     currentLocalHostId: () =>
       localHostClaim.status === 'claimed' ? localHostClaim.hostId : null,
-    currentHostToken: () => readDaemonHostConfig(dir)?.host_token ?? null,
+    currentHostToken: () => readDaemonHostConfig(daemonConfigPath)?.host_token ?? null,
   };
 }
 
@@ -3014,7 +3020,7 @@ async function handleProfileSaveWithTest(
   // profile, so canonicalizing once at write time means the rest of
   // the system never sees the un-canonicalized round-trip.
   const writeResult = writeServerConnectionProfile({
-    silverhandRoot: silverhandDir(),
+    profilePath: desktopAppPaths().desktop.serverProfile,
     serverUrl: test.originUrl,
     logger: logger ?? undefined,
   });
@@ -3103,7 +3109,7 @@ async function handleProfileSaveWithTest(
  */
 async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
   const read = readServerConnectionProfile({
-    silverhandRoot: silverhandDir(),
+    profilePath: desktopAppPaths().desktop.serverProfile,
     logger: logger ?? undefined,
   });
   if (!read.ok) {
@@ -3162,7 +3168,7 @@ ipcMain.handle(
   'profile:get',
   (): ServerConnectionProfileView | null =>
     readServerConnectionProfileViewOrNull({
-      silverhandRoot: silverhandDir(),
+      profilePath: desktopAppPaths().desktop.serverProfile,
       logger: logger ?? undefined,
     }),
 );
@@ -3174,7 +3180,7 @@ ipcMain.handle(
 
 ipcMain.handle('profile:clear', () => {
   const result = clearServerConnectionProfile({
-    silverhandRoot: silverhandDir(),
+    profilePath: desktopAppPaths().desktop.serverProfile,
     logger: logger ?? undefined,
   });
   if (result.ok) {

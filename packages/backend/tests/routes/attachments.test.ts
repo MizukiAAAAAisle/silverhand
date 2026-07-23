@@ -1001,7 +1001,7 @@ describe('Attachment lifecycle on workspace delete', () => {
     // assertion stays robust to namespace / extension changes.
     const row = new AttachmentRepo(t.ctx.db).getById(dto.id);
     expect(row).not.toBeNull();
-    const localPath = join(t.ctx.silverhandDir, 'blobs', row!.storage_key);
+    const localPath = join(t.silverhandDir, 'blobs', row!.storage_key);
     expect(existsSync(localPath)).toBe(true);
 
     const del = await http(t).del(`/api/workspaces/${workspaceId}`);
@@ -1030,7 +1030,7 @@ describe('Attachment lifecycle on workspace delete', () => {
 
     const row = new AttachmentRepo(t.ctx.db).getById(dto.id);
     expect(row).not.toBeNull();
-    const localPath = join(t.ctx.silverhandDir, 'blobs', row!.storage_key);
+    const localPath = join(t.silverhandDir, 'blobs', row!.storage_key);
     expect(existsSync(localPath)).toBe(true);
 
     // Direct fetch — http() helper sets content-type=application/json on
@@ -1076,7 +1076,7 @@ describe('Single attachment DELETE (orphan-only)', () => {
       )
     ).json() as any;
     const row = new AttachmentRepo(t.ctx.db).getById(dto.id);
-    const localPath = join(t.ctx.silverhandDir, 'blobs', row!.storage_key);
+    const localPath = join(t.silverhandDir, 'blobs', row!.storage_key);
     expect(existsSync(localPath)).toBe(true);
 
     const del = await viewer.del(`/api/attachments/${dto.id}`);

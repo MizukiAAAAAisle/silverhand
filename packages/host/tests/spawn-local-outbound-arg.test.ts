@@ -59,6 +59,8 @@ async function captureSpawnArgs(
     runtimePidRootDir?: string | null;
     agentHomeRootDir?: string | null;
     workspaceDataRootDir?: string | null;
+    silverhandStateRootDir?: string | null;
+    daemonIdentityPath?: string | null;
     controlPlaneServerUrlPath?: string | null;
   } = {},
 ): Promise<readonly string[]> {
@@ -92,6 +94,12 @@ async function captureSpawnArgs(
       : {}),
     ...(opts.workspaceDataRootDir !== undefined
       ? { workspaceDataRootDir: opts.workspaceDataRootDir }
+      : {}),
+    ...(opts.silverhandStateRootDir !== undefined
+      ? { silverhandStateRootDir: opts.silverhandStateRootDir }
+      : {}),
+    ...(opts.daemonIdentityPath !== undefined
+      ? { daemonIdentityPath: opts.daemonIdentityPath }
       : {}),
     ...(opts.controlPlaneServerUrlPath !== undefined
       ? { controlPlaneServerUrlPath: opts.controlPlaneServerUrlPath }
@@ -173,6 +181,46 @@ describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', (
 
     const nullArgs = await captureSpawnArgs({ workspaceDataRootDir: null });
     expect(nullArgs).not.toContain('--workspace-data-root-dir');
+  });
+
+  it('forwards --silverhand-state-root-dir when silverhandStateRootDir is set (#task:1598)', async () => {
+    // Load-bearing desktop chain: daemonPaths → spawn argv → entry →
+    // runDaemon guard root. A dropped flag silently falls back to the
+    // home root, so the forwarding itself is pinned here.
+    const args = await captureSpawnArgs({
+      silverhandStateRootDir: '/tmp/silverhand-fake-app-root',
+    });
+    const idx = args.indexOf('--silverhand-state-root-dir');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-app-root');
+  });
+
+  it('omits --silverhand-state-root-dir when unset or null', async () => {
+    const unsetArgs = await captureSpawnArgs();
+    expect(unsetArgs).not.toContain('--silverhand-state-root-dir');
+
+    const nullArgs = await captureSpawnArgs({ silverhandStateRootDir: null });
+    expect(nullArgs).not.toContain('--silverhand-state-root-dir');
+  });
+
+  it('forwards --daemon-identity-path when daemonIdentityPath is set (#task:1598 round 4)', async () => {
+    // Load-bearing desktop chain: with the sibling derivation removed, a
+    // dropped flag would silently move the identity file to the bare
+    // default under ~/.silverhand/daemon.
+    const args = await captureSpawnArgs({
+      daemonIdentityPath: '/tmp/silverhand-fake-run/identity.json',
+    });
+    const idx = args.indexOf('--daemon-identity-path');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-run/identity.json');
+  });
+
+  it('omits --daemon-identity-path when unset or null', async () => {
+    const unsetArgs = await captureSpawnArgs();
+    expect(unsetArgs).not.toContain('--daemon-identity-path');
+
+    const nullArgs = await captureSpawnArgs({ daemonIdentityPath: null });
+    expect(nullArgs).not.toContain('--daemon-identity-path');
   });
 
   it('forwards --control-plane-server-url-path when set', async () => {

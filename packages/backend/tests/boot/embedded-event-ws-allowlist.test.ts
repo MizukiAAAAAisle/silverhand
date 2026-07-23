@@ -16,6 +16,9 @@
  * pins the backend half: even if a stale value IS supplied, the boot drops
  * it.)
  */
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -61,7 +64,7 @@ describe('startBackend — embedded event-WS allowlist is this boot only', () =>
     running = await startBackend({
       mode: 'embedded',
       dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
+      ...resolveBackendDataPaths(tmp),
       serverConfig: makeEmbeddedConfig([staleOrigin]),
       silverhandCliLauncher: { command: 'true', args: [] },
       logger: { info() {}, warn() {}, error() {} },

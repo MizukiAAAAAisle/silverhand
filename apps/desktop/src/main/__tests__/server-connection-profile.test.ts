@@ -23,9 +23,13 @@ import {
   clearServerConnectionProfile,
   readServerConnectionProfile,
   readServerConnectionProfileViewOrNull,
-  serverConnectionProfilePath,
   writeServerConnectionProfile,
 } from '../server-connection-profile.js';
+
+// #task:1598 — the leaf takes the RESOLVED profile path; tests build it
+// the way the desktop selector does (legacy-v1 desktop facet).
+const serverConnectionProfilePath = (root: string) =>
+  join(root, 'desktop', 'server-profile.bin');
 
 describe('server-connection-profile storage', () => {
   let root: string;
@@ -36,29 +40,21 @@ describe('server-connection-profile storage', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  describe('serverConnectionProfilePath', () => {
-    it('joins under <root>/desktop/server-profile.bin', () => {
-      expect(serverConnectionProfilePath(root)).toBe(
-        join(root, 'desktop', 'server-profile.bin'),
-      );
-    });
-  });
-
   describe('readServerConnectionProfile', () => {
     it('returns not_found when no file exists', () => {
-      const result = readServerConnectionProfile({ silverhandRoot: root });
+      const result = readServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
       expect(result).toEqual({ ok: false, reason: 'not_found' });
     });
 
     it('returns parse_failed when content is not JSON', () => {
       const path = serverConnectionProfilePath(root);
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'http://127.0.0.1:7321',
       });
       writeFileSync(path, 'not-json{', { mode: 0o600 });
 
-      const result = readServerConnectionProfile({ silverhandRoot: root });
+      const result = readServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error('unreachable');
       expect(result.reason).toBe('parse_failed');
@@ -67,12 +63,12 @@ describe('server-connection-profile storage', () => {
     it('returns parse_failed when schema does not match', () => {
       const path = serverConnectionProfilePath(root);
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'http://127.0.0.1:7321',
       });
       writeFileSync(path, '{"version":1}', { mode: 0o600 });
 
-      const result = readServerConnectionProfile({ silverhandRoot: root });
+      const result = readServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
       expect(result.ok).toBe(false);
       if (result.ok) throw new Error('unreachable');
       expect(result.reason).toBe('parse_failed');
@@ -84,7 +80,7 @@ describe('server-connection-profile storage', () => {
   describe('writeServerConnectionProfile', () => {
     it('round-trips: write then read returns the same profile', () => {
       const writeResult = writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://backend.example.test',
         now: () => 1716800000000,
       });
@@ -97,7 +93,7 @@ describe('server-connection-profile storage', () => {
         updated_at: 1716800000000,
       });
 
-      const readResult = readServerConnectionProfile({ silverhandRoot: root });
+      const readResult = readServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
       expect(readResult.ok).toBe(true);
       if (!readResult.ok) throw new Error('unreachable');
       expect(readResult.profile).toEqual(writeResult.profile);
@@ -105,7 +101,7 @@ describe('server-connection-profile storage', () => {
 
     it('preserves created_at on overwrite and bumps updated_at AND increments version generation', () => {
       const firstWrite = writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://first.example.test',
         now: () => 1000,
       });
@@ -114,7 +110,7 @@ describe('server-connection-profile storage', () => {
       expect(firstWrite.profile.version).toBe(1);
 
       const secondWrite = writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://second.example.test',
         now: () => 2000,
       });
@@ -130,12 +126,12 @@ describe('server-connection-profile storage', () => {
 
     it('bumps version on overwrite even when the URL did not change', () => {
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://same.example.test',
         now: () => 1000,
       });
       const second = writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://same.example.test',
         now: () => 2000,
       });
@@ -148,7 +144,7 @@ describe('server-connection-profile storage', () => {
       let last = 0;
       for (let i = 0; i < 5; i++) {
         const r = writeServerConnectionProfile({
-          silverhandRoot: root,
+          profilePath: serverConnectionProfilePath(root),
           serverUrl: `https://x${i}.example.test`,
           now: () => 1000 + i,
         });
@@ -162,7 +158,7 @@ describe('server-connection-profile storage', () => {
 
     it('writes file with mode 0600', () => {
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://example.test',
       });
       const mode = statSync(serverConnectionProfilePath(root)).mode & 0o777;
@@ -171,7 +167,7 @@ describe('server-connection-profile storage', () => {
 
     it('leaves no temp file behind after a successful write', () => {
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://example.test',
       });
       expect(readdirSync(join(root, 'desktop'))).toEqual(['server-profile.bin']);
@@ -181,7 +177,7 @@ describe('server-connection-profile storage', () => {
       const rootFile = join(root, 'not-a-dir');
       writeFileSync(rootFile, 'x');
       const result = writeServerConnectionProfile({
-        silverhandRoot: rootFile,
+        profilePath: serverConnectionProfilePath(rootFile),
         serverUrl: 'https://example.test',
       });
       expect(result.ok).toBe(false);
@@ -193,18 +189,18 @@ describe('server-connection-profile storage', () => {
   describe('readServerConnectionProfileViewOrNull', () => {
     it('returns null when no profile exists', () => {
       expect(
-        readServerConnectionProfileViewOrNull({ silverhandRoot: root }),
+        readServerConnectionProfileViewOrNull({ profilePath: serverConnectionProfilePath(root) }),
       ).toBeNull();
     });
 
     it('returns a redacted view (only server_url + updated_at)', () => {
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://example.test',
         now: () => 4242,
       });
       const view = readServerConnectionProfileViewOrNull({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
       });
       expect(view).toEqual({
         server_url: 'https://example.test',
@@ -219,29 +215,29 @@ describe('server-connection-profile storage', () => {
 
   describe('clearServerConnectionProfile', () => {
     it('is idempotent: reports cleared:false when no file exists', () => {
-      const result = clearServerConnectionProfile({ silverhandRoot: root });
+      const result = clearServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
       expect(result).toEqual({ ok: true, cleared: false });
     });
 
     it('reports cleared:true when it removes a real file', () => {
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://example.test',
       });
       const path = serverConnectionProfilePath(root);
       expect(existsSync(path)).toBe(true);
-      const result = clearServerConnectionProfile({ silverhandRoot: root });
+      const result = clearServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
       expect(result).toEqual({ ok: true, cleared: true });
       expect(existsSync(path)).toBe(false);
     });
 
     it('subsequent reads return not_found after a successful clear', () => {
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://example.test',
       });
-      clearServerConnectionProfile({ silverhandRoot: root });
-      const result = readServerConnectionProfile({ silverhandRoot: root });
+      clearServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
+      const result = readServerConnectionProfile({ profilePath: serverConnectionProfilePath(root) });
       expect(result).toEqual({ ok: false, reason: 'not_found' });
     });
   });
@@ -250,14 +246,14 @@ describe('server-connection-profile storage', () => {
     it('emits a warn line when parse fails', () => {
       const path = serverConnectionProfilePath(root);
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: 'https://example.test',
       });
       writeFileSync(path, 'not-json{', { mode: 0o600 });
 
       const warn = vi.fn();
       const result = readServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         logger: { warn, info: vi.fn() },
       });
       expect(result.ok).toBe(false);
@@ -272,7 +268,7 @@ describe('server-connection-profile storage', () => {
     it('persists plaintext JSON because V1 local profiles use 0600 local-file policy', () => {
       const url = 'https://very-distinctive-string.example.test';
       writeServerConnectionProfile({
-        silverhandRoot: root,
+        profilePath: serverConnectionProfilePath(root),
         serverUrl: url,
       });
       const onDisk = readFileSync(serverConnectionProfilePath(root), 'utf8');

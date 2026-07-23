@@ -9,13 +9,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { hostname } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
-  DAEMON_HOST_CONFIG_FILENAME,
   DaemonHostConfigSchema,
   HostClaimOrCreateInputSchema,
-  INSTALLATION_ID_FILENAME,
   apiPaths,
   type DaemonHostConfig,
   type HostClaimOrCreateInput,
@@ -40,16 +38,13 @@ export type LocalHostClaimStatus =
   // revoked are NOT routed through `failed`.
   | { status: 'failed'; hostId: string | null };
 
-export function installationIdPath(silverhandDir: string): string {
-  return join(silverhandDir, INSTALLATION_ID_FILENAME);
-}
+// #task:1598 — every function in this leaf receives RESOLVED file paths
+// (desktop composition root: `desktopAppPaths().installationId` /
+// `.localComputer.daemonConfig`); it never derives them from a root, so
+// a future layout-version flip happens in the selector only.
 
-export function daemonHostConfigPath(silverhandDir: string): string {
-  return join(silverhandDir, DAEMON_HOST_CONFIG_FILENAME);
-}
-
-export function loadOrCreateInstallationId(silverhandDir: string): string {
-  const path = installationIdPath(silverhandDir);
+export function loadOrCreateInstallationId(installationIdPath: string): string {
+  const path = installationIdPath;
   if (existsSync(path)) {
     const parsed = InstallationIdSchema.safeParse(readFileSync(path, 'utf8').trim());
     if (parsed.success) return parsed.data;
@@ -61,9 +56,9 @@ export function loadOrCreateInstallationId(silverhandDir: string): string {
 }
 
 export function readDaemonHostConfig(
-  silverhandDir: string,
+  daemonConfigPath: string,
 ): DaemonHostConfig | null {
-  const path = daemonHostConfigPath(silverhandDir);
+  const path = daemonConfigPath;
   // Stat-first safe read (Cindy `#task:634` re-review P1). The daemon
   // side already uses this pattern in `readHostConfig`
   // (`packages/host/src/daemon/outbound-client.ts`) for the same
@@ -99,19 +94,19 @@ export function readDaemonHostConfig(
 }
 
 export function writeDaemonHostConfig(
-  silverhandDir: string,
+  daemonConfigPath: string,
   config: DaemonHostConfig,
 ): void {
   const parsed = DaemonHostConfigSchema.parse(config);
   writeSecretFile(
-    daemonHostConfigPath(silverhandDir),
+    daemonConfigPath,
     `${JSON.stringify(parsed, null, 2)}\n`,
   );
 }
 
-export function removeDaemonHostConfig(silverhandDir: string): void {
+export function removeDaemonHostConfig(daemonConfigPath: string): void {
   try {
-    unlinkSync(daemonHostConfigPath(silverhandDir));
+    unlinkSync(daemonConfigPath);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
@@ -229,13 +224,13 @@ export function assertApiProxyPath(path: string): void {
  *  to the rotate, not the profile commit.
  */
 export function applyRotateSideEffects(input: {
-  silverhandDir: string;
+  daemonConfigPath: string;
   serverUrl: string;
   hostId: string;
   hostToken: string;
 }): void {
-  const existing = readDaemonHostConfig(input.silverhandDir);
-  writeDaemonHostConfig(input.silverhandDir, {
+  const existing = readDaemonHostConfig(input.daemonConfigPath);
+  writeDaemonHostConfig(input.daemonConfigPath, {
     server_url: input.serverUrl,
     host_id: input.hostId,
     host_token: input.hostToken,
@@ -261,12 +256,12 @@ export function applyRotateSideEffects(input: {
  *  `'cleared'` when the revoked host id matches the desktop's current
  *  local-host binding (config dropped), `'unchanged'` otherwise. */
 export function applyRevokeSideEffects(input: {
-  silverhandDir: string;
+  daemonConfigPath: string;
   hostId: string;
 }): 'cleared' | 'unchanged' {
-  const existing = readDaemonHostConfig(input.silverhandDir);
+  const existing = readDaemonHostConfig(input.daemonConfigPath);
   if (existing?.host_id !== input.hostId) return 'unchanged';
-  removeDaemonHostConfig(input.silverhandDir);
+  removeDaemonHostConfig(input.daemonConfigPath);
   return 'cleared';
 }
 

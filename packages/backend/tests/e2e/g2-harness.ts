@@ -71,6 +71,9 @@ import {
   type ServerConfig,
 } from '@silverhand/shared';
 import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
+import {
   startBackend,
   type RunningBackend,
   type HostWsEventSink,
@@ -130,8 +133,8 @@ export interface G2Harness {
   /** `server_url` written to the daemon's config (matches
    *  `backend.url`). */
   serverUrl: string;
-  /** Path of the daemon's `daemon-config.json` (per
-   *  `defaultDaemonHostConfigPath`). */
+  /** Path of the daemon's `daemon-config.json` (per the resolver's
+   *  `localComputer.daemonConfig` coordinate). */
   daemonConfigPath: string;
   /** The `.silverhand` directory the backend + daemon share. Tests
    *  that boot a real daemon (`bootDaemonWithSupervisor`) place
@@ -212,7 +215,7 @@ export async function bootG2Harness(
   const backend = await startBackend({
     mode: 'standalone',
     dbPath,
-    silverhandDir,
+    ...resolveBackendDataPaths(silverhandDir),
     serverConfig,
     listen: { hostname: opts.hostname ?? '127.0.0.1', port: 0 },
     logger: verbose ? consoleBackendLogger() : silentBackendLogger,
@@ -291,7 +294,7 @@ export async function bootG2Harness(
       const newBackend = await startBackend({
         mode: 'standalone',
         dbPath,
-        silverhandDir,
+        ...resolveBackendDataPaths(silverhandDir),
         serverConfig,
         listen: { hostname: opts.hostname ?? '127.0.0.1', port: 0 },
         logger: verbose ? consoleBackendLogger() : silentBackendLogger,

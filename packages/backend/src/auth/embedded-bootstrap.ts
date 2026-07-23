@@ -14,7 +14,8 @@ export interface EmbeddedBootstrapState {
 }
 
 export interface PrepareEmbeddedBootstrapOptions {
-  silverhandDir: string;
+  /** Resolved bootstrap file path (from the app-data path authority). */
+  bootstrapPath: string;
   serverConfig: ServerConfig;
   listenHostname: string;
   logger: BackendLogger;
@@ -23,7 +24,7 @@ export interface PrepareEmbeddedBootstrapOptions {
 export async function prepareEmbeddedBootstrap(
   opts: PrepareEmbeddedBootstrapOptions,
 ): Promise<EmbeddedBootstrapState> {
-  const filePath = embeddedBootstrapPath(opts.silverhandDir);
+  const filePath = opts.bootstrapPath;
   if (opts.serverConfig.mode !== 'embedded') {
     await removeBootstrapFile(filePath, opts.logger);
     return disabledState(filePath, 'mode_not_embedded');
@@ -54,15 +55,12 @@ export async function cleanupEmbeddedBootstrap(
 }
 
 export function createDisabledEmbeddedBootstrapState(
-  silverhandDir: string,
+  bootstrapPath: string,
   reason: EmbeddedBootstrapState['reason'] = 'mode_not_embedded',
 ): EmbeddedBootstrapState {
-  return disabledState(embeddedBootstrapPath(silverhandDir), reason);
+  return disabledState(bootstrapPath, reason);
 }
 
-export function embeddedBootstrapPath(silverhandDir: string): string {
-  return join(silverhandDir, EMBEDDED_BOOTSTRAP_FILENAME);
-}
 
 export async function consumeEmbeddedBootstrapToken(
   state: EmbeddedBootstrapState,

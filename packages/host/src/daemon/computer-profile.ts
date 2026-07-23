@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
+import {
+  computersRootDir,
+  homeAppRoot,
+  resolveComputerDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { join } from 'node:path';
 
 export interface ComputerProfileBinding {
@@ -7,21 +11,25 @@ export interface ComputerProfileBinding {
 }
 
 export function defaultSilverhandStateRoot(): string {
-  return join(homedir(), '.silverhand');
+  // #task:1598 — env-INDEPENDENT by historical contract: connect profile
+  // roots never consulted SILVERHAND_DIR (see homeAppRoot).
+  return homeAppRoot();
 }
 
 export function computerProfileDir(
   binding: ComputerProfileBinding,
   silverhandStateRoot = defaultSilverhandStateRoot(),
 ): string {
-  return join(silverhandStateRoot, 'computers', safePathId(binding.host_id));
+  return join(computersRootDir(silverhandStateRoot), safePathId(binding.host_id));
 }
 
 export function computerProxyConfigPath(
   binding: ComputerProfileBinding,
   silverhandStateRoot = defaultSilverhandStateRoot(),
 ): string {
-  return join(computerProfileDir(binding, silverhandStateRoot), 'proxy-config.json');
+  return resolveComputerDataPaths(
+    computerProfileDir(binding, silverhandStateRoot),
+  ).proxyConfig;
 }
 
 export function defaultConnectDataRoot(

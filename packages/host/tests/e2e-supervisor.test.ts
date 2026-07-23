@@ -61,6 +61,7 @@ async function setupFixture(opts?: { failStartupDelivery?: boolean }): Promise<E
     pidFilePath,
     logDir,
     workspaceDataRootDir: join(dirname(socketPath), 'workspace-data'),
+    daemonIdentityPath: join(dir, 'identity.json'),
     runtimePidRootDir,
     installSignals: false,
     writeStdoutHandshake: false,

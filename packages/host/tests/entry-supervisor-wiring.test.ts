@@ -112,6 +112,10 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
       socketPath,
       pidFilePath,
       logDir,
+      // #task:1598 round 4 — end-to-end proof that the explicit identity
+      // coordinate survives spawn → argv → entry → runDaemon (no sibling
+      // derivation left to fall back on).
+      daemonIdentityPath: join(dir, 'run', 'identity.json'),
       alsoStderr: false,
       maxRestarts: 0,
       restartWindowMs: 1_000,
@@ -137,6 +141,13 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
     // surface while wiring the supervisor).
     const pong = await client.ping();
     expect(pong.pong).toBe(true);
+
+    // The identity file materialized at the EXPLICIT forwarded path —
+    // not beside the runtime-pid root, not under the sandbox home.
+    expect(existsSync(join(dir, 'run', 'identity.json'))).toBe(true);
+    expect(
+      existsSync(join(homeDir, '.silverhand', 'daemon', 'identity.json')),
+    ).toBe(false);
 
     await client.close();
     await handle.kill({ gracefulMs: 2_000 });

@@ -1,6 +1,5 @@
 import { constants } from 'node:fs';
 import { lstat, readFile, stat, unlink } from 'node:fs/promises';
-import { join } from 'node:path';
 import { emitKeypressEvents } from 'node:readline';
 import {
   AdminResetPasswordError,
@@ -11,7 +10,12 @@ import {
   type CategorizedLoggers,
   type FileLogger,
 } from '@silverhand/backend';
-import { AuthSignupInputSchema } from '@silverhand/shared';
+import {
+  AuthSignupInputSchema,
+} from '@silverhand/shared';
+import {
+  resolveServerDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import {
   DEFAULT_SILVERHAND_DATA_DIR,
   DEFAULT_SILVERHAND_SERVER_LOG_LEVEL,
@@ -63,7 +67,7 @@ export async function runAdminCommand(
 
     const config = resolveStandaloneAdminEnv(env);
     loggers = createCategorizedLoggers({
-      dir: join(config.dataDir.value, 'logs'),
+      dir: resolveServerDataPaths(config.dataDir.value).logs,
       alsoConsole: false,
       base: { app: 'silverhand-server', cli: 'admin' },
       // Admin recovery audit lines must be durable even when the server's
@@ -86,7 +90,7 @@ export async function runAdminCommand(
     }
 
     const reset = await resetAdminPassword({
-      dbPath: join(config.dataDir.value, 'silverhand.db'),
+      dbPath: resolveServerDataPaths(config.dataDir.value).database,
       email: input.data.email,
       password: input.data.password,
       allowSchemaUpgrade: config.migrate.value,

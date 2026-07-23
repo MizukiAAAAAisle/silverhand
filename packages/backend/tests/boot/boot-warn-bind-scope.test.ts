@@ -14,6 +14,9 @@
  * reads is `bindAddressScope` (derived from the configured
  * `listenHostname`), not the OS-resolved socket address.
  */
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -73,7 +76,7 @@ describe('startBackend — bind_address_scope WARN wiring', () => {
     running = await startBackend({
       mode: 'standalone',
       dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
+      ...resolveBackendDataPaths(tmp),
       serverConfig: makeServerConfig(),
       authConfig: { signupEnabled: true, sessionTtlMs: 1_000 * 60 * 60 * 24 },
       logger,
@@ -95,7 +98,7 @@ describe('startBackend — bind_address_scope WARN wiring', () => {
     running = await startBackend({
       mode: 'standalone',
       dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
+      ...resolveBackendDataPaths(tmp),
       serverConfig: makeServerConfig(),
       authConfig: { signupEnabled: true, sessionTtlMs: 1_000 * 60 * 60 * 24 },
       logger,
@@ -119,7 +122,7 @@ describe('startBackend — bind_address_scope WARN wiring', () => {
     running = await startBackend({
       mode: 'standalone',
       dbPath: join(tmp, 'silverhand.db'),
-      silverhandDir: tmp,
+      ...resolveBackendDataPaths(tmp),
       serverConfig: makeServerConfig(),
       authConfig: { signupEnabled: false, sessionTtlMs: 1_000 * 60 * 60 * 24 },
       logger,

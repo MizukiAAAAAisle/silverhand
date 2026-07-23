@@ -24,6 +24,9 @@
  * compensating execution, it MUST come with a fresh design pass and
  * its own pin, not by relaxing these assertions.
  */
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -514,7 +517,7 @@ describe('D4.d §5 — sequencing: runs before HTTP listener binds (real boot)',
     backend = await startBackend({
       mode: 'standalone',
       dbPath,
-      silverhandDir,
+      ...resolveBackendDataPaths(silverhandDir),
       serverConfig,
       listen: { hostname: '127.0.0.1', port: 0 },
       logger,

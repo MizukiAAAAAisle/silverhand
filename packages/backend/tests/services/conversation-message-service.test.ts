@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -97,7 +98,7 @@ function bootstrap() {
   const users = new UserRepo(db);
   const attachments = new AttachmentRepo(db);
   const attachmentService = new AttachmentService({
-    storage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
+    storage: createLocalBlobFileStorage({ rootDir: join(tmp.silverhandDir, 'blobs') }),
     attachments,
     conversations,
   });

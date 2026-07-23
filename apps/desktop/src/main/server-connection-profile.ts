@@ -42,26 +42,6 @@ import {
 } from '@silverhand/shared';
 
 /**
- * The on-disk filename for the profile file. Lives under the desktop
- * sub-directory inside the user's silverhand dir so it sits next to
- * the existing `session.bin` (see `desktop-session-storage.ts`).
- * Both files are managed by the same V1 0600 local-file policy.
- */
-export const SERVER_CONNECTION_PROFILE_FILENAME = 'server-profile.bin';
-
-/**
- * Compute the absolute on-disk path for the profile file given a
- * silverhand root directory (`~/.silverhand` by default, overridable
- * via `SILVERHAND_DIR` env at the main entrypoint).
- *
- * Pure path computation — does NOT verify existence or touch the
- * filesystem.
- */
-export function serverConnectionProfilePath(silverhandRoot: string): string {
-  return join(silverhandRoot, 'desktop', SERVER_CONNECTION_PROFILE_FILENAME);
-}
-
-/**
  * Logger seam — production callers pass the pino `FileLogger` instance;
  * tests pass a noop. Avoids importing the heavy server logger type into
  * this leaf module.
@@ -77,12 +57,14 @@ const noopLogger: ProfileStorageLogger = {
 };
 
 /**
- * Options bag for the storage primitives. `silverhandRoot` is required
- * so the same module can be unit-tested against a temp dir without
- * monkey-patching `homedir()`.
+ * Options bag for the storage primitives. `profilePath` is the RESOLVED
+ * profile-file path (#task:1598 — desktop composition root:
+ * `desktopAppPaths().desktop.serverProfile`); this leaf never derives it
+ * from a root, so a future layout-version flip happens in the selector
+ * only. Tests point it into a temp dir directly.
  */
 export interface ProfileStorageOptions {
-  silverhandRoot: string;
+  profilePath: string;
   /** `Date.now`-style clock seam. Defaults to `Date.now`. */
   now?: () => number;
   logger?: ProfileStorageLogger;
@@ -122,7 +104,7 @@ export function readServerConnectionProfile(
   opts: ProfileStorageOptions,
 ): ReadProfileResult {
   const logger = resolveLogger(opts);
-  const path = serverConnectionProfilePath(opts.silverhandRoot);
+  const path = opts.profilePath;
   if (!existsSync(path)) {
     return { ok: false, reason: 'not_found' };
   }
@@ -208,7 +190,7 @@ export function writeServerConnectionProfile(
 ): WriteProfileResult {
   const logger = resolveLogger(opts);
   const now = resolveNow(opts)();
-  const path = serverConnectionProfilePath(opts.silverhandRoot);
+  const path = opts.profilePath;
 
   // Preserve `created_at` across overwrites AND advance `version` as a
   // generation counter (Cindy D4.a Commit 2 review fixup): the §7.5
@@ -222,7 +204,7 @@ export function writeServerConnectionProfile(
   // setting a new URL, and inheriting a generation we couldn't parse
   // would be worse than starting clean.
   const existing = readServerConnectionProfile({
-    silverhandRoot: opts.silverhandRoot,
+    profilePath: opts.profilePath,
     logger,
   });
   const createdAt = existing.ok ? existing.profile.created_at : now;
@@ -326,7 +308,7 @@ export function clearServerConnectionProfile(
   opts: ProfileStorageOptions,
 ): ClearProfileResult {
   const logger = resolveLogger(opts);
-  const path = serverConnectionProfilePath(opts.silverhandRoot);
+  const path = opts.profilePath;
   if (!existsSync(path)) {
     return { ok: true, cleared: false };
   }

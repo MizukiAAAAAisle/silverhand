@@ -37,7 +37,7 @@ function bootstrap() {
   });
   conversations.addAgent(channel.id, agent.id);
 
-  const storage = createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir });
+  const storage = createLocalBlobFileStorage({ rootDir: join(tmp.silverhandDir, 'blobs') });
   const service = new AttachmentService({
     storage,
     attachments: new AttachmentRepo(db),
@@ -84,7 +84,7 @@ describe('AttachmentService.upload', () => {
     const { db, channel, cleanup } = bootstrap();
     try {
       const tmp = makeTempSilverhandDir();
-      const storage = createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir });
+      const storage = createLocalBlobFileStorage({ rootDir: join(tmp.silverhandDir, 'blobs') });
       const service = new AttachmentService({
         storage,
         attachments: new AttachmentRepo(db),

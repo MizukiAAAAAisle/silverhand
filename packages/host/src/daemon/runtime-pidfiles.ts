@@ -7,8 +7,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import {
+  homeAppRoot,
+  resolveLegacyStandaloneDaemonPaths,
+} from '@silverhand/shared/app-data-layout';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import type { RuntimeKind } from '@silverhand/shared';
@@ -53,7 +56,8 @@ export interface RuntimePidfileDeps {
 type ProbeResult = 'alive' | 'dead' | 'eperm' | 'error';
 
 export function defaultRuntimePidRootDir(): string {
-  return join(homedir(), '.silverhand', 'daemon', 'runtime-pids');
+  // Historical standalone default; env-independent by contract (#task:1598).
+  return resolveLegacyStandaloneDaemonPaths(homeAppRoot()).runtimePids;
 }
 
 export function buildDaemonInstanceId(startedAtMs: number, pid = process.pid): string {

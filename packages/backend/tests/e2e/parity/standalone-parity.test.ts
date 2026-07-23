@@ -16,6 +16,9 @@
  * connection serves — i.e. an old connection's late traffic cannot pollute
  * the current one, and replacing the old connection did not break the new.
  */
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';

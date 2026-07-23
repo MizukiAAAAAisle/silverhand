@@ -1,5 +1,8 @@
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import {
+  resolveBackendDataPaths,
+  resolveServerDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import {
   createCategorizedLoggers,
   createLogLevelControl,
@@ -95,10 +98,13 @@ export async function startEmbeddedSilverhandServer(
   opts: StartEmbeddedSilverhandServerOptions,
 ): Promise<RunningBackend> {
   const migrate = resolveEmbeddedMigrationEnv(opts.env ?? process.env);
+  // #task:1598 — explicit paths from the shared app-data resolver; the
+  // overloaded silverhandDir root is retired.
+  const dataPaths = resolveServerDataPaths(opts.dataDir);
   return startBackend({
     mode: 'embedded',
-    dbPath: join(opts.dataDir, 'silverhand.db'),
-    silverhandDir: opts.dataDir,
+    dbPath: dataPaths.database,
+    ...resolveBackendDataPaths(opts.dataDir),
     serverConfig: opts.serverConfig,
     silverhandCliLauncher: opts.silverhandCliLauncher,
     logger: opts.logger,
@@ -122,7 +128,7 @@ export async function startStandaloneSilverhandServer(
   await mkdir(config.dataDir.value, { recursive: true });
   const logControl = createLogLevelControl(config.logLevel.value);
   const loggers = createCategorizedLoggers({
-    dir: join(config.dataDir.value, 'logs'),
+    dir: resolveServerDataPaths(config.dataDir.value).logs,
     alsoConsole: true,
     base: { app: 'silverhand-server' },
     logControl,
@@ -178,10 +184,11 @@ export async function startStandaloneSilverhandServer(
         logger,
       );
     }
+    const dataPaths = resolveServerDataPaths(config.dataDir.value);
     backend = await startBackend({
       mode: 'standalone',
-      dbPath: join(config.dataDir.value, 'silverhand.db'),
-      silverhandDir: config.dataDir.value,
+      dbPath: dataPaths.database,
+      ...resolveBackendDataPaths(config.dataDir.value),
       serverConfig: standaloneServerConfig(config),
       authConfig: {
         ...resolveAuthRuntimeConfig(env),
@@ -189,7 +196,7 @@ export async function startStandaloneSilverhandServer(
       },
       logger,
       loggers,
-      logDir: join(config.dataDir.value, 'logs'),
+      logDir: dataPaths.logs,
       schemaUpgrade: {
         allow: config.migrate.value,
       },

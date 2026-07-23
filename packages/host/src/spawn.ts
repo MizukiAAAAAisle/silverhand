@@ -211,6 +211,15 @@ export interface SpawnDaemonOptions {
   /** #task:1596 — explicit durable workspace-data root forwarded to the
    *  daemon child (`--workspace-data-root-dir`). */
   workspaceDataRootDir?: string | null;
+  /** #task:1598 — explicit global silverhand root (guard root) forwarded
+   *  to the daemon child (`--silverhand-state-root-dir`). */
+  silverhandStateRootDir?: string | null;
+  /** #task:1598 round 4 — explicit persistent identity file forwarded to
+   *  the daemon child (`--daemon-identity-path`). Desktop passes the
+   *  resolver's `localComputer.run.identity`; omitting it makes the child
+   *  fall back to the bare-daemon default (`~/.silverhand/daemon/identity.json`),
+   *  NOT to a sibling of the runtime-pid root. */
+  daemonIdentityPath?: string | null;
   /** Daemon-local runtime proxy config file. */
   proxyConfigPath?: string | null;
   /** Legacy app-managed proxy config file to migrate into the per-computer profile. */
@@ -390,6 +399,12 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
         : []),
       ...(opts.workspaceDataRootDir
         ? ['--workspace-data-root-dir', opts.workspaceDataRootDir]
+        : []),
+      ...(opts.silverhandStateRootDir
+        ? ['--silverhand-state-root-dir', opts.silverhandStateRootDir]
+        : []),
+      ...(opts.daemonIdentityPath
+        ? ['--daemon-identity-path', opts.daemonIdentityPath]
         : []),
       ...(opts.agentHomeRootDir
         ? ['--agent-home-root-dir', opts.agentHomeRootDir]

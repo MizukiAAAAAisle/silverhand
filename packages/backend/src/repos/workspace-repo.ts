@@ -1,6 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { dirname, join, relative, resolve } from 'node:path';
+import { join } from 'node:path';
 import {
   agentHomeWorkspaceId,
   type AgentDto,
@@ -248,9 +248,13 @@ export class WorkspaceRepo {
     if (params.workspaceKind && params.workspaceKind !== 'regular') {
       throw new Error('use insertAgentHome for agent_home workspaces');
     }
-    if (isUnderAgentHomeRoot(params.workspacePath, this.opts.workspacesRoot)) {
-      throw new Error('regular workspace_path cannot be under agent home root');
-    }
+    // #task:1598 — the historical agent-home guard here derived the app
+    // root from `dirname(workspacesRoot)` (a layout inverse the v2 layout
+    // breaks). The AUTHORITATIVE check now lives daemon-side: every
+    // requested workspace path is validated at provision time against the
+    // registry's protectedRoots (agents / workspace-data / global root,
+    // #task:1596 rounds 3-5), and provision always precedes this insert in
+    // the creation flow.
     // D4.e-1 3b: callers that must dispatch `workspace_provision` BEFORE the
     // row exists (the registry keys by workspace_id) pre-generate the id via
     // `newWorkspaceId()` and pass it here so the provision and the row agree.
@@ -658,12 +662,4 @@ export class WorkspaceRepo {
   workspacePathFor(name: string): string {
     return join(this.opts.workspacesRoot, name);
   }
-}
-
-function isUnderAgentHomeRoot(workspacePath: string, workspacesRoot: string): boolean {
-  const silverhandDir = dirname(resolve(workspacesRoot));
-  const agentHomeRoot = resolve(silverhandDir, 'agents');
-  const target = resolve(workspacePath);
-  const rel = relative(agentHomeRoot, target);
-  return rel === '' || (!!rel && !rel.startsWith('..') && !rel.startsWith('/'));
 }

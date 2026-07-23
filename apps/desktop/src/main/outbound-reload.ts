@@ -157,7 +157,7 @@ export type OutboundReloadOutcome =
  * the new `daemon-config.json` AND fsyncs / renames such that any
  * concurrent reader sees either the old bytes or the new bytes,
  * never a partial. Production binding is
- * `writeDaemonHostConfig(silverhandDir, config)` in
+ * `writeDaemonHostConfig(daemonConfigPath, config)` in
  * `local-host-claim.ts`, which already uses tmp + writeFileSync +
  * renameSync with tmp cleanup on error.
  *

@@ -1,6 +1,12 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { authPaths } from '@silverhand/shared';
+import {
+  authPaths,
+} from '@silverhand/shared';
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import {
   prepareEmbeddedBootstrap,
   type EmbeddedBootstrapState,
@@ -239,7 +245,7 @@ async function prepare(
     mode: opts.mode ?? 'embedded',
   };
   app.ctx.embeddedBootstrap = await prepareEmbeddedBootstrap({
-    silverhandDir: app.ctx.silverhandDir,
+    bootstrapPath: resolveBackendDataPaths(app.silverhandDir).embeddedBootstrapPath,
     serverConfig: app.ctx.serverConfig,
     listenHostname: '127.0.0.1',
     logger: app.ctx.logger,

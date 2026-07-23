@@ -40,7 +40,7 @@ describe('desktopClientInfoHeaderValue (#task:1530)', () => {
   });
 
   it('assembles a header the server bounded-parser accepts as valid', () => {
-    const header = desktopClientInfoHeaderValue(dir);
+    const header = desktopClientInfoHeaderValue(join(dir, 'installation_id'));
     expect(header).toBeTruthy();
     const parsed = parseClientInfoHeader(header!);
     expect(parsed.status).toBe('valid');
@@ -65,14 +65,14 @@ describe('desktopClientInfoHeaderValue (#task:1530)', () => {
     mocked.version = 'has space (invalid)';
     resetDesktopClientInfoHeaderCacheForTest();
     const warn = vi.fn();
-    expect(() => desktopClientInfoHeaderValue(dir, { warn })).not.toThrow();
-    expect(desktopClientInfoHeaderValue(dir, { warn })).toBeNull();
+    expect(() => desktopClientInfoHeaderValue(join(dir, 'installation_id'), { warn })).not.toThrow();
+    expect(desktopClientInfoHeaderValue(join(dir, 'installation_id'), { warn })).toBeNull();
     expect(warn).toHaveBeenCalled();
   });
 
   it('memoizes the assembled header across calls', () => {
-    const first = desktopClientInfoHeaderValue(dir);
-    const second = desktopClientInfoHeaderValue(dir);
+    const first = desktopClientInfoHeaderValue(join(dir, 'installation_id'));
+    const second = desktopClientInfoHeaderValue(join(dir, 'installation_id'));
     expect(first).toBe(second);
   });
 });

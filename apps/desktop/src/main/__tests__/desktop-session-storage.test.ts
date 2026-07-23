@@ -11,10 +11,13 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearPersistedDesktopSession,
-  desktopSessionPath,
   loadPersistedDesktopSessionToken,
   persistDesktopSessionToken,
 } from '../desktop-session-storage.js';
+
+// #task:1598 — the leaf takes the RESOLVED session path; tests build it
+// the way the desktop selector does (legacy-v1 desktop facet).
+const desktopSessionPath = (root: string) => join(root, 'desktop', 'session.bin');
 
 describe('desktop-session-storage', () => {
   let root: string;
@@ -29,7 +32,7 @@ describe('desktop-session-storage', () => {
 
   it('stores the session bearer as a 0600 plaintext local file', () => {
     persistDesktopSessionToken({
-      silverhandRoot: root,
+      sessionPath: desktopSessionPath(root),
       token: 'session-token-plain',
     });
 
@@ -40,26 +43,26 @@ describe('desktop-session-storage', () => {
 
   it('loads a persisted token and trims trailing whitespace', () => {
     const path = desktopSessionPath(root);
-    persistDesktopSessionToken({ silverhandRoot: root, token: 'abc\n' });
-    expect(loadPersistedDesktopSessionToken({ silverhandRoot: root })).toBe('abc');
+    persistDesktopSessionToken({ sessionPath: desktopSessionPath(root), token: 'abc\n' });
+    expect(loadPersistedDesktopSessionToken({ sessionPath: desktopSessionPath(root) })).toBe('abc');
     expect(path).toBe(join(root, 'desktop', 'session.bin'));
   });
 
   it('treats missing or empty files as no token', () => {
-    expect(loadPersistedDesktopSessionToken({ silverhandRoot: root })).toBeNull();
+    expect(loadPersistedDesktopSessionToken({ sessionPath: desktopSessionPath(root) })).toBeNull();
 
-    persistDesktopSessionToken({ silverhandRoot: root, token: '' });
-    expect(loadPersistedDesktopSessionToken({ silverhandRoot: root })).toBeNull();
+    persistDesktopSessionToken({ sessionPath: desktopSessionPath(root), token: '' });
+    expect(loadPersistedDesktopSessionToken({ sessionPath: desktopSessionPath(root) })).toBeNull();
   });
 
   it('clears idempotently', () => {
-    persistDesktopSessionToken({ silverhandRoot: root, token: 'abc' });
-    clearPersistedDesktopSession({ silverhandRoot: root });
+    persistDesktopSessionToken({ sessionPath: desktopSessionPath(root), token: 'abc' });
+    clearPersistedDesktopSession({ sessionPath: desktopSessionPath(root) });
     expect(existsSync(desktopSessionPath(root))).toBe(false);
 
     const warn = vi.fn();
     clearPersistedDesktopSession({
-      silverhandRoot: root,
+      sessionPath: desktopSessionPath(root),
       logger: { warn },
     });
     expect(warn).not.toHaveBeenCalled();
@@ -72,7 +75,7 @@ describe('desktop-session-storage', () => {
 
     expect(
       loadPersistedDesktopSessionToken({
-        silverhandRoot: root,
+        sessionPath: desktopSessionPath(root),
         logger: { warn },
       }),
     ).toBeNull();

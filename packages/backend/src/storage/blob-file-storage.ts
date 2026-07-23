@@ -134,9 +134,10 @@ export class LocalBlobFileStorage implements BlobFileStorage {
 }
 
 export function createLocalBlobFileStorage(opts: {
-  silverhandDir: string;
+  /** Resolved blob root (from the app-data path authority). */
+  rootDir: string;
 }): LocalBlobFileStorage {
-  return new LocalBlobFileStorage({ rootDir: join(opts.silverhandDir, 'blobs') });
+  return new LocalBlobFileStorage({ rootDir: opts.rootDir });
 }
 
 function buildStorageKey(input: BlobFilePutInput): string {

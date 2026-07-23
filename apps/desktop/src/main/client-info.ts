@@ -24,7 +24,7 @@ export interface ClientInfoLogger {
 }
 
 export function desktopClientInfoHeaderValue(
-  silverhandRoot: string,
+  installationIdPath: string,
   logger?: ClientInfoLogger | null,
 ): string | null {
   if (cachedHeaderValue !== undefined) return cachedHeaderValue;
@@ -38,7 +38,7 @@ export function desktopClientInfoHeaderValue(
       build_dirty: BUILD_DIRTY,
       platform: process.platform,
       arch: process.arch,
-      installation_id: loadOrCreateInstallationId(silverhandRoot),
+      installation_id: loadOrCreateInstallationId(installationIdPath),
     };
     cachedHeaderValue = serializeClientInfoHeader(info);
   } catch (err) {

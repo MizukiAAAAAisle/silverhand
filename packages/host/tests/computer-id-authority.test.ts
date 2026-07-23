@@ -48,6 +48,7 @@ describe('runDaemon wiring — resolveComputerId authority', () => {
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'runtime-pids'),
+      daemonIdentityPath: join(dir, 'identity.json'),
       localOutboundSocketPath: join(dir, 'daemon-outbound.sock'),
       installSignals: false,
       writeStdoutHandshake: false,

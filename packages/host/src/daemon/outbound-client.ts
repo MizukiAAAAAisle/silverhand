@@ -945,10 +945,6 @@ export function daemonHostConfigFingerprint(config: DaemonHostConfig): string {
   );
 }
 
-export function defaultDaemonHostConfigPath(silverhandDir: string): string {
-  return join(silverhandDir, DAEMON_HOST_CONFIG_FILENAME);
-}
-
 export function hostConnectWebSocketUrl(
   serverUrl: string,
   options?: { allowInsecureRemote?: boolean },

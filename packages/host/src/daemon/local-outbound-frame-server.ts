@@ -65,6 +65,10 @@ import {
   unixSocketFrameWriter,
   type OutboundWriteBufferOptions,
 } from './outbound-write-buffer.js';
+import {
+  resolveDesktopAppPaths,
+  homeAppRoot,
+} from '@silverhand/shared/app-data-layout';
 import { resolveDeliveryOwner } from './supervisor-contract.js';
 
 /**
@@ -73,7 +77,11 @@ import { resolveDeliveryOwner } from './supervisor-contract.js';
  * IPC and the formal outbound envelope are physically isolated.
  */
 export function deriveLocalOutboundFrameSocketPath(home = homedir()): string {
-  return join(home, '.silverhand', 'run', 'daemon-outbound.sock');
+  // #task:1598 — delegate to the shared app-data path authority.
+  // Env-INDEPENDENT by historical contract (homeAppRoot); the `home` seam
+  // keeps the historical test signature.
+  return resolveDesktopAppPaths(homeAppRoot(home), 'legacy-v1')
+    .localComputer.run.outboundSocket;
 }
 
 export interface LocalOutboundFrameServerOptions {

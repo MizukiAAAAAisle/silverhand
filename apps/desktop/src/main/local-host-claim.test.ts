@@ -15,8 +15,6 @@ import {
   applyRotateSideEffects,
   assertApiProxyPath,
   buildHostClaimInput,
-  daemonHostConfigPath,
-  installationIdPath,
   isMainManagedHostPath,
   isTokenBearingHostClaimPath,
   loadOrCreateInstallationId,
@@ -25,6 +23,11 @@ import {
   removeDaemonHostConfig,
   writeDaemonHostConfig,
 } from './local-host-claim.js';
+
+// #task:1598 — the leaf takes RESOLVED file paths; tests build them the
+// way the desktop selector does (legacy-v1 flattens both onto the root).
+const installationIdPath = (dir: string) => join(dir, 'installation_id');
+const daemonHostConfigPath = (dir: string) => join(dir, 'daemon-config.json');
 
 describe('desktop local host claim helpers', () => {
   const cleanup: string[] = [];
@@ -38,8 +41,8 @@ describe('desktop local host claim helpers', () => {
   it('creates and reuses an owner-only installation_id', () => {
     const dir = tempDir();
 
-    const first = loadOrCreateInstallationId(dir);
-    const second = loadOrCreateInstallationId(dir);
+    const first = loadOrCreateInstallationId(installationIdPath(dir));
+    const second = loadOrCreateInstallationId(installationIdPath(dir));
 
     expect(second).toBe(first);
     expect(first).toMatch(
@@ -57,9 +60,9 @@ describe('desktop local host claim helpers', () => {
       host_token: 'host-token-cleartext',
     };
 
-    writeDaemonHostConfig(dir, config);
+    writeDaemonHostConfig(daemonHostConfigPath(dir), config);
 
-    expect(readDaemonHostConfig(dir)).toEqual(config);
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toEqual(config);
     expect(JSON.parse(readFileSync(daemonHostConfigPath(dir), 'utf8'))).toEqual(config);
     expect(fileMode(daemonHostConfigPath(dir))).toBe(0o600);
   });
@@ -71,13 +74,13 @@ describe('desktop local host claim helpers', () => {
       host_id: 'host-local',
       host_token: 'host-token-cleartext',
     };
-    writeDaemonHostConfig(dir, config);
+    writeDaemonHostConfig(daemonHostConfigPath(dir), config);
 
-    removeDaemonHostConfig(dir);
-    removeDaemonHostConfig(dir);
+    removeDaemonHostConfig(daemonHostConfigPath(dir));
+    removeDaemonHostConfig(daemonHostConfigPath(dir));
 
     expect(existsSync(daemonHostConfigPath(dir))).toBe(false);
-    expect(readDaemonHostConfig(dir)).toBeNull();
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toBeNull();
   });
 
   it('includes current_host_id only when reusable daemon config exists', () => {
@@ -215,20 +218,20 @@ describe('desktop local host claim helpers', () => {
   it('rotate side-effect persists the new token to daemon-config 0o600', () => {
     const dir = tempDir();
     // Pre-existing config with the old token.
-    writeDaemonHostConfig(dir, {
+    writeDaemonHostConfig(daemonHostConfigPath(dir), {
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'old-token',
     });
 
     applyRotateSideEffects({
-      silverhandDir: dir,
+      daemonConfigPath: daemonHostConfigPath(dir),
       serverUrl: 'http://127.0.0.1:4321',
       hostId: 'host-local',
       hostToken: 'new-token-cleartext',
     });
 
-    expect(readDaemonHostConfig(dir)).toEqual({
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toEqual({
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'new-token-cleartext',
@@ -243,7 +246,7 @@ describe('desktop local host claim helpers', () => {
   // changes to the rotate, not to the next legitimate profile commit.
   it('rotate preserves profile_version when the existing config carries one', () => {
     const dir = tempDir();
-    writeDaemonHostConfig(dir, {
+    writeDaemonHostConfig(daemonHostConfigPath(dir), {
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'old-token',
@@ -251,13 +254,13 @@ describe('desktop local host claim helpers', () => {
     });
 
     applyRotateSideEffects({
-      silverhandDir: dir,
+      daemonConfigPath: daemonHostConfigPath(dir),
       serverUrl: 'http://127.0.0.1:4321',
       hostId: 'host-local',
       hostToken: 'new-token-cleartext',
     });
 
-    expect(readDaemonHostConfig(dir)).toEqual({
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toEqual({
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'new-token-cleartext',
@@ -267,7 +270,7 @@ describe('desktop local host claim helpers', () => {
 
   it('rotate preserves allow_insecure_remote when the existing config carries it', () => {
     const dir = tempDir();
-    writeDaemonHostConfig(dir, {
+    writeDaemonHostConfig(daemonHostConfigPath(dir), {
       server_url: 'http://215.192.147.162:8080',
       host_id: 'host-local',
       host_token: 'old-token',
@@ -275,13 +278,13 @@ describe('desktop local host claim helpers', () => {
     });
 
     applyRotateSideEffects({
-      silverhandDir: dir,
+      daemonConfigPath: daemonHostConfigPath(dir),
       serverUrl: 'http://215.192.147.162:8080',
       hostId: 'host-local',
       hostToken: 'new-token-cleartext',
     });
 
-    expect(readDaemonHostConfig(dir)).toEqual({
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toEqual({
       server_url: 'http://215.192.147.162:8080',
       host_id: 'host-local',
       host_token: 'new-token-cleartext',
@@ -292,20 +295,20 @@ describe('desktop local host claim helpers', () => {
   it('rotate omits profile_version when the existing config has none', () => {
     const dir = tempDir();
     // Legacy D3.x config — no profile_version field.
-    writeDaemonHostConfig(dir, {
+    writeDaemonHostConfig(daemonHostConfigPath(dir), {
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'old-token',
     });
 
     applyRotateSideEffects({
-      silverhandDir: dir,
+      daemonConfigPath: daemonHostConfigPath(dir),
       serverUrl: 'http://127.0.0.1:4321',
       hostId: 'host-local',
       hostToken: 'new-token-cleartext',
     });
 
-    const after = readDaemonHostConfig(dir);
+    const after = readDaemonHostConfig(daemonHostConfigPath(dir));
     // Field is absent — NOT explicit `undefined`. The daemon
     // fingerprint encodes absent as `<none>` and explicit `0` as `0`,
     // so we must not slip a `profile_version: undefined` key into the
@@ -320,30 +323,30 @@ describe('desktop local host claim helpers', () => {
 
   it('revoke side-effect clears daemon-config when revoked host is the current local one', () => {
     const dir = tempDir();
-    writeDaemonHostConfig(dir, {
+    writeDaemonHostConfig(daemonHostConfigPath(dir), {
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'live-token',
     });
 
     expect(
-      applyRevokeSideEffects({ silverhandDir: dir, hostId: 'host-local' }),
+      applyRevokeSideEffects({ daemonConfigPath: daemonHostConfigPath(dir), hostId: 'host-local' }),
     ).toBe('cleared');
-    expect(readDaemonHostConfig(dir)).toBeNull();
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toBeNull();
   });
 
   it('revoke side-effect leaves daemon-config alone for non-current owned hosts', () => {
     const dir = tempDir();
-    writeDaemonHostConfig(dir, {
+    writeDaemonHostConfig(daemonHostConfigPath(dir), {
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'live-token',
     });
 
     expect(
-      applyRevokeSideEffects({ silverhandDir: dir, hostId: 'some-other-host' }),
+      applyRevokeSideEffects({ daemonConfigPath: daemonHostConfigPath(dir), hostId: 'some-other-host' }),
     ).toBe('unchanged');
-    expect(readDaemonHostConfig(dir)).toEqual({
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toEqual({
       server_url: 'http://127.0.0.1:4321',
       host_id: 'host-local',
       host_token: 'live-token',
@@ -353,7 +356,7 @@ describe('desktop local host claim helpers', () => {
   it('revoke side-effect is a no-op when no daemon-config exists', () => {
     const dir = tempDir();
     expect(
-      applyRevokeSideEffects({ silverhandDir: dir, hostId: 'whatever' }),
+      applyRevokeSideEffects({ daemonConfigPath: daemonHostConfigPath(dir), hostId: 'whatever' }),
     ).toBe('unchanged');
   });
 
@@ -373,13 +376,13 @@ describe('desktop local host claim helpers', () => {
     const dir = tempDir();
     mkdirSync(daemonHostConfigPath(dir), { recursive: true });
     expect(statSync(daemonHostConfigPath(dir)).isDirectory()).toBe(true);
-    expect(readDaemonHostConfig(dir)).toBeNull();
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toBeNull();
   });
 
   it('readDaemonHostConfig returns null for missing path', () => {
     const dir = tempDir();
     expect(existsSync(daemonHostConfigPath(dir))).toBe(false);
-    expect(readDaemonHostConfig(dir)).toBeNull();
+    expect(readDaemonHostConfig(daemonHostConfigPath(dir))).toBeNull();
   });
 
   function tempDir(): string {

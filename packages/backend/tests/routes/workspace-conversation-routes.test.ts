@@ -55,7 +55,7 @@ describe('workspace/conversation routes', () => {
     expect(dms.channels[0]).toMatchObject({
       kind: 'dm_channel',
       workspace_id: home.id,
-      workspace_path: join(t.ctx.silverhandDir, 'agents', agentBody.agent.id),
+      workspace_path: join(t.silverhandDir, 'agents', agentBody.agent.id),
     });
 
     const secondary = await (

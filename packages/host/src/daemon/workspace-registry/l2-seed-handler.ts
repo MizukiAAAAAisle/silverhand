@@ -79,7 +79,6 @@ export async function seedAgentL2(
       err instanceof Error ? err.message : String(err),
     );
   }
-
   const l2Dir = join(workspacePath, '.silverhand', 'agents', params.agent_id);
   try {
     let seeded = false;

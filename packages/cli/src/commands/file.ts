@@ -3,14 +3,17 @@
  */
 import { constants } from 'node:fs';
 import { access, mkdir, rename, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import type { AttachmentLocateDto } from '@silverhand/shared';
+import {
+  type AttachmentLocateDto,
+} from '@silverhand/shared';
+import {
+  homeAppRoot,
+  resolveDesktopAppPaths,
+} from '@silverhand/shared/app-data-layout';
 import { CliError } from '../errors.js';
 import { flagString } from '../parse.js';
 import type { Command } from './index.js';
-
-const SILVERHAND_DIR_ENV = 'SILVERHAND_DIR';
 
 const uploadCommand: Command = {
   verb: 'upload',
@@ -140,10 +143,14 @@ async function writeAttachmentCache(input: {
   return filePath;
 }
 
-function attachmentCacheRoot(): string {
-  const silverhandDir = process.env[SILVERHAND_DIR_ENV]?.trim();
-  if (silverhandDir) return join(silverhandDir, 'attachments-cache');
-  return join(homedir(), '.silverhand', 'attachments-cache');
+export function attachmentCacheRoot(env: Record<string, string | undefined> = process.env): string {
+  // #task:1598 — path shape from the shared authority. Root selection
+  // keeps the CLI's HISTORICAL semantics (trimmed SILVERHAND_DIR, else
+  // ~/.silverhand) — it diverges from desktop's untrimmed `||` semantics;
+  // unifying that is an explicit v2 decision, not a floor change.
+  const fromEnv = env.SILVERHAND_DIR?.trim();
+  const appRoot = fromEnv && fromEnv.length > 0 ? fromEnv : homeAppRoot();
+  return resolveDesktopAppPaths(appRoot, 'legacy-v1').attachmentsCache;
 }
 
 function safeSegment(value: string): string {

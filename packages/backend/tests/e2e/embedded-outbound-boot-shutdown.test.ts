@@ -14,6 +14,9 @@
  * tore down the transport first (the pre-fix order) the daemon would
  * never see it.
  */
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { createServer, type Server as NetServer, type Socket } from 'node:net';
 import { existsSync, mkdtempSync, rmSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -250,7 +253,7 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     running = await startBackend({
       mode: 'embedded',
       dbPath: join(tmpDir, 'silverhand.db'),
-      silverhandDir: tmpDir,
+      ...resolveBackendDataPaths(tmpDir),
       serverConfig: config,
       silverhandCliLauncher: { command: 'true', args: [] },
       logger: { info() {}, warn() {}, error() {} },
@@ -382,7 +385,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     running = await startBackend({
       mode: 'embedded',
       dbPath: join(tmpDir, 'silverhand.db'),
-      silverhandDir: tmpDir,
+      ...resolveBackendDataPaths(tmpDir),
       serverConfig: config,
       silverhandCliLauncher: { command: 'true', args: [] },
       logger: { info() {}, warn() {}, error() {} },

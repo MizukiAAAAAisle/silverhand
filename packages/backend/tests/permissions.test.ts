@@ -313,7 +313,7 @@ describe('permission helpers', () => {
     const f = seed(t);
     const home = f.workspaces.insertAgentHome({
       agent: f.alice,
-      workspacePath: join(t.ctx.silverhandDir, 'agents', f.alice.id),
+      workspacePath: join(t.silverhandDir, 'agents', f.alice.id),
     });
     const dm = f.conversations.insertDmChannel({
       workspaceId: home.id,

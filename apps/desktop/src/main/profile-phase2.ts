@@ -153,7 +153,7 @@ export interface PerformProfilePhase2Deps {
    *  admitted the profile. */
   allowInsecureRemote?: boolean;
   /** Atomic write to `daemon-config.json`. Production binding is
-   *  `writeDaemonHostConfig(silverhandDir, config)`. */
+   *  `writeDaemonHostConfig(daemonConfigPath, config)`. */
   writeDaemonHostConfig: WriteDaemonHostConfigFn;
   /** Daemon IPC — `HostClient.hostOutboundReload`. */
   hostOutboundReload: HostOutboundReloadFn;
@@ -499,10 +499,10 @@ export function derivePartialApplyState(
  */
 export interface ReconcilePartialApplyDeps {
   /** Read the on-disk server connection profile. Production binding
-   *  is `readServerConnectionProfile({silverhandRoot, safe, logger})`. */
+   *  is `readServerConnectionProfile({profilePath, safe, logger})`. */
   readProfile: () => ReadProfileResult;
   /** Read the on-disk daemon-config. Production binding is
-   *  `readDaemonHostConfig(silverhandDir)`. Returns `null` when the
+   *  `readDaemonHostConfig(daemonConfigPath)`. Returns `null` when the
    *  config is missing OR unreadable (matches the existing
    *  fail-closed semantics in `local-host-claim.ts`). */
   readDaemonHostConfig: () => DaemonHostConfig | null;

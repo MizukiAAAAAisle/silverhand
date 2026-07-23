@@ -24,7 +24,7 @@ describe('LocalBlobFileStorage', () => {
     cleanup = tmp.cleanup;
     return {
       silverhandDir: tmp.silverhandDir,
-      storage: createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir }),
+      storage: createLocalBlobFileStorage({ rootDir: join(tmp.silverhandDir, 'blobs') }),
     };
   }
 

@@ -1,6 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
+import { dirname } from 'node:path';
+import {
+  homeAppRoot,
+  resolveLegacyStandaloneDaemonPaths,
+} from '@silverhand/shared/app-data-layout';
 import { z } from 'zod';
 
 import { HelloResultSchema, type HelloResult } from '../protocol.js';
@@ -22,11 +25,16 @@ export const DEFAULT_DAEMON_IDENTITY: DaemonIdentity = Object.freeze({
   host_descriptor: Object.freeze({ name: 'local', kind: 'local' }),
 });
 
-export function defaultDaemonIdentityPath(runtimePidRootDir?: string | null): string {
-  if (runtimePidRootDir) {
-    return join(dirname(runtimePidRootDir), 'identity.json');
-  }
-  return join(homedir(), '.silverhand', 'daemon', 'identity.json');
+/**
+ * Bare-daemon fallback only (#task:1598 round 4): embedders pass the
+ * identity coordinate explicitly (`daemonIdentityPath` — desktop forwards
+ * the resolver's `localComputer.run.identity` via `--daemon-identity-path`;
+ * `connect` passes `null` and supplies the identity value directly). The
+ * historical sibling derivation from `runtimePidRootDir` was a parent
+ * inversion and is gone. Env-independent by contract (see homeAppRoot).
+ */
+export function defaultDaemonIdentityPath(): string {
+  return resolveLegacyStandaloneDaemonPaths(homeAppRoot()).identity;
 }
 
 export function readOrCreateDaemonIdentity(filePath: string): DaemonIdentity {

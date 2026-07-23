@@ -6,8 +6,12 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, join, sep } from 'node:path';
+import {
+  homeAppRoot,
+  resolveDesktopAppPaths,
+  WORKSPACE_DATA_DIR_NAME,
+} from '@silverhand/shared/app-data-layout';
 import {
   bindingSlug,
   WorkspaceRegistryError,
@@ -46,12 +50,19 @@ import {
  *   the legacy dir is never silently adopted as this run's authority.
  */
 
-export const WORKSPACE_DATA_DIR_NAME = 'workspace-data';
+export { WORKSPACE_DATA_DIR_NAME };
 const REGISTRY_FILE_NAME = 'workspace-registry.json';
 
-/** The global default when the embedder passes no explicit data root. */
+/**
+ * The global default when the embedder passes no explicit data root.
+ * #task:1598 — delegates to the shared app-data path authority (legacy-v1)
+ * instead of being an independent `homedir()` derivation.
+ */
 export function defaultWorkspaceDataRootDir(): string {
-  return join(homedir(), '.silverhand', WORKSPACE_DATA_DIR_NAME);
+  // Env-INDEPENDENT by historical contract (#task:1598 — homeAppRoot):
+  // the pre-resolver default never consulted SILVERHAND_DIR.
+  return resolveDesktopAppPaths(homeAppRoot(), 'legacy-v1').localComputer
+    .workspaceData;
 }
 
 export interface LegacyNamespaceMigrationOptions {

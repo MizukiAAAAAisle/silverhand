@@ -12,7 +12,8 @@
     "./db/baseline-schema": "./src/db/baseline-schema.ts",
     "./db/migrations": "./src/db/migrations.ts",
     "./db/schema": "./src/db/schema.ts",
-    "./driver": "./src/driver/index.ts"
+    "./driver": "./src/driver/index.ts",
+    "./app-data-layout": "./src/app-data-layout.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

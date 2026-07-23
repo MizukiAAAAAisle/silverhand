@@ -34,6 +34,11 @@
  *                         optional; host-local file whose content is the
  *                         control-plane origin injected into runtime CLI env.
  *                         Desktop uses this for embedded loopback boots.
+ *   --daemon-identity-path <abs>
+ *                         optional; persistent daemon identity file.
+ *                         Desktop passes the resolver's
+ *                         `localComputer.run.identity`; omitted → the
+ *                         bare-daemon default under `~/.silverhand/daemon`.
  *   --stderr              optional; mirror log lines to stderr too
  *
  * Stdout:
@@ -71,6 +76,8 @@ interface ParsedArgv {
   runtimePidRootDir: string | null;
   agentHomeRootDir: string | null;
   workspaceDataRootDir: string | null;
+  silverhandStateRootDir: string | null;
+  daemonIdentityPath: string | null;
   proxyConfigPath: string | null;
   legacyProxyConfigPath: string | null;
   controlPlaneServerUrlPath: string | null;
@@ -86,6 +93,8 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let runtimePidRootDir: string | null = null;
   let agentHomeRootDir: string | null = null;
   let workspaceDataRootDir: string | null = null;
+  let silverhandStateRootDir: string | null = null;
+  let daemonIdentityPath: string | null = null;
   let proxyConfigPath: string | null = null;
   let legacyProxyConfigPath: string | null = null;
   let controlPlaneServerUrlPath: string | null = null;
@@ -116,6 +125,12 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
         break;
       case '--workspace-data-root-dir':
         workspaceDataRootDir = argv[++i] ?? null;
+        break;
+      case '--silverhand-state-root-dir':
+        silverhandStateRootDir = argv[++i] ?? null;
+        break;
+      case '--daemon-identity-path':
+        daemonIdentityPath = argv[++i] ?? null;
         break;
       case '--proxy-config-path':
         proxyConfigPath = argv[++i] ?? null;
@@ -154,6 +169,12 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (workspaceDataRootDir !== null && !workspaceDataRootDir.startsWith('/')) {
     return { error: '--workspace-data-root-dir must be absolute' };
   }
+  if (silverhandStateRootDir !== null && !silverhandStateRootDir.startsWith('/')) {
+    return { error: '--silverhand-state-root-dir must be absolute' };
+  }
+  if (daemonIdentityPath !== null && !daemonIdentityPath.startsWith('/')) {
+    return { error: '--daemon-identity-path must be absolute' };
+  }
   if (proxyConfigPath !== null && !proxyConfigPath.startsWith('/')) {
     return { error: '--proxy-config-path must be absolute' };
   }
@@ -178,6 +199,8 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     runtimePidRootDir,
     agentHomeRootDir,
     workspaceDataRootDir,
+    silverhandStateRootDir,
+    daemonIdentityPath,
     proxyConfigPath,
     legacyProxyConfigPath,
     controlPlaneServerUrlPath,
@@ -211,6 +234,8 @@ async function main(): Promise<void> {
       runtimePidRootDir: parsed.runtimePidRootDir ?? undefined,
       agentHomeRootDir: parsed.agentHomeRootDir ?? undefined,
       workspaceDataRootDir: parsed.workspaceDataRootDir ?? undefined,
+      silverhandStateRootDir: parsed.silverhandStateRootDir ?? undefined,
+      daemonIdentityPath: parsed.daemonIdentityPath ?? undefined,
       proxyConfigPath: parsed.proxyConfigPath ?? undefined,
       legacyProxyConfigPath: parsed.legacyProxyConfigPath ?? undefined,
       controlPlaneServerUrlPath:

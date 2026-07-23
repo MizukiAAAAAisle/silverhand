@@ -27,6 +27,9 @@
  * which BOTH adapters pass; embedded's command-level guard is covered by
  * the shared Phase C.
  */
+import {
+  resolveBackendDataPaths,
+} from '@silverhand/shared/app-data-layout';
 import { createServer, connect as netConnect, type Server as NetServer, type Socket } from 'node:net';
 import { execPath } from 'node:process';
 import {
@@ -297,7 +300,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
   const backend: RunningBackend = await startBackend({
     mode: 'embedded',
     dbPath: join(tmpDir, 'silverhand.db'),
-    silverhandDir: tmpDir,
+    ...resolveBackendDataPaths(tmpDir),
     serverConfig,
     silverhandCliLauncher: { command: 'true', args: [] },
     logger: { info() {}, warn() {}, error() {} },

@@ -100,7 +100,12 @@ export interface BackendListenOptions {
 interface BaseBackendOptions {
   mode: BackendDeploymentMode;
   dbPath: string;
-  silverhandDir: string;
+  /** #task:1598 — explicit app-data paths from the shared resolver; the
+   *  overloaded `silverhandDir` root is retired (docs/app-data-layout-v2.md
+   *  §3). */
+  blobsRootDir: string;
+  embeddedBootstrapPath: string;
+  workspacesRootDir: string;
   serverConfig: ServerConfig;
   silverhandCliLauncher?: SilverhandCliLauncher;
   listen?: BackendListenOptions;
@@ -270,9 +275,9 @@ export async function startBackend(
       `Migration applied: v${migrationResult.current.beforeVersion} -> v${migrationResult.current.afterVersion}, backup at ${migrationResult.current.backupPath ?? 'none'}`,
     );
   }
-  const workspacesRoot = join(opts.silverhandDir, 'workspaces');
+  const workspacesRoot = opts.workspacesRootDir;
   const blobStorage = createLocalBlobFileStorage({
-    silverhandDir: opts.silverhandDir,
+    rootDir: opts.blobsRootDir,
   });
   await ensureWorkspacesRoot(workspacesRoot);
   await blobStorage.ensureReady();
@@ -381,11 +386,10 @@ export async function startBackend(
     serverConfig: opts.serverConfig,
     bindAddressScope,
     authConfig,
-    embeddedBootstrap: createDisabledEmbeddedBootstrapState(opts.silverhandDir),
+    embeddedBootstrap: createDisabledEmbeddedBootstrapState(opts.embeddedBootstrapPath),
     logger,
     loggers,
     logControl,
-    silverhandDir: opts.silverhandDir,
     workspacesRoot,
     logDir: opts.logDir,
     blobStorage,
@@ -571,7 +575,7 @@ export async function startBackend(
   ctx.scheduleService.start();
   ctx.idleReaperService.start();
   ctx.embeddedBootstrap = await prepareEmbeddedBootstrap({
-    silverhandDir: opts.silverhandDir,
+    bootstrapPath: opts.embeddedBootstrapPath,
     serverConfig: ctx.serverConfig,
     listenHostname,
     logger,

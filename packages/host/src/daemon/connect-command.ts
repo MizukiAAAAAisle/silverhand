@@ -27,6 +27,10 @@ import {
   shellQuoteConnectArg,
   type DaemonHostConfig,
 } from '@silverhand/shared';
+import {
+  resolveComputerDataPaths,
+  computersRootDir,
+} from '@silverhand/shared/app-data-layout';
 import { runDaemon } from './run.js';
 import { Supervisor } from './supervisor/index.js';
 import type { DaemonIdentity } from './identity.js';
@@ -206,6 +210,9 @@ export async function runConnectCommand(
     runtimePidRootDir: paths.runtimePidRootDir,
     agentHomeRootDir: paths.agentHomeRootDir,
     workspaceDataRootDir: paths.workspaceDataRootDir,
+    // #task:1598 — the guard root stays the GLOBAL home root even for a
+    // custom data root (connect still reads global legacy namespaces).
+    silverhandStateRootDir: defaultSilverhandStateRoot(),
     proxyConfigPath: paths.proxyConfigPath,
     hostConfig,
     daemonIdentity,
@@ -391,18 +398,19 @@ interface ConnectRuntimePaths {
 }
 
 function connectRuntimePaths(dataRoot: string): ConnectRuntimePaths {
-  const logDir = join(dataRoot, 'logs');
+  // #task:1598 — the per-computer data-root shape comes from the ONE
+  // app-data path authority; connect is not a second resolver. A custom
+  // --data-root never writes back to ~/.silverhand (#task:1596).
+  const computer = resolveComputerDataPaths(dataRoot);
   return {
-    socketPath: join(dataRoot, 'daemon.sock'),
-    pidFilePath: join(dataRoot, CONNECT_PID_FILE),
-    logDir,
-    launcherLogPath: join(logDir, CONNECT_LAUNCHER_LOG),
-    runtimePidRootDir: join(dataRoot, 'runtime-pids'),
-    agentHomeRootDir: join(dataRoot, 'agents'),
-    // #task:1596 — durable workspace-data stays inside the chosen data
-    // root; a custom --data-root never writes back to ~/.silverhand.
-    workspaceDataRootDir: join(dataRoot, 'workspace-data'),
-    proxyConfigPath: join(dataRoot, 'proxy-config.json'),
+    socketPath: computer.run.socket,
+    pidFilePath: computer.run.pidFile,
+    logDir: computer.logs,
+    launcherLogPath: join(computer.logs, CONNECT_LAUNCHER_LOG),
+    runtimePidRootDir: computer.run.runtimePids,
+    agentHomeRootDir: computer.agents,
+    workspaceDataRootDir: computer.workspaceData,
+    proxyConfigPath: computer.proxyConfig,
   };
 }
 
@@ -624,7 +632,7 @@ export async function discoverStopTarget(deps: StopCommandDeps): Promise<StopTar
 }
 
 function listDefaultConnectDataRoots(): string[] {
-  const computersRoot = join(defaultSilverhandStateRoot(), 'computers');
+  const computersRoot = computersRootDir(defaultSilverhandStateRoot());
   try {
     return readdirSync(computersRoot, { withFileTypes: true })
       .filter(entry => entry.isDirectory())

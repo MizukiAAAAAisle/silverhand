@@ -899,6 +899,9 @@ export interface BuildTestAppOptions {
 export interface TestApp {
   app: Hono<AppEnv>;
   ctx: BackendContext;
+  /** #task:1598 — the test fixture's app-data root. BackendContext no
+   *  longer exposes a general root, so path-deriving tests read it here. */
+  silverhandDir: string;
   fake: FakeConversationManager;
   /**
    * The default in-process fake host controller installed when
@@ -958,7 +961,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       options.authConfig?.sessionTtlMs ?? DEFAULT_AUTH_SESSION_TTL_MS,
   });
 
-  const blobStorage = createLocalBlobFileStorage({ silverhandDir: tmp.silverhandDir });
+  const blobStorage = createLocalBlobFileStorage({ rootDir: joinPath(tmp.silverhandDir, 'blobs') });
   const attachmentService = new AttachmentService({
     storage: blobStorage,
     attachments: new AttachmentRepo(db),
@@ -1008,11 +1011,10 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     serverConfig,
     bindAddressScope: options.bindAddressScope ?? 'loopback',
     authConfig,
-    embeddedBootstrap: createDisabledEmbeddedBootstrapState(tmp.silverhandDir),
+    embeddedBootstrap: createDisabledEmbeddedBootstrapState(joinPath(tmp.silverhandDir, 'embedded-bootstrap')),
     logger: silentLogger,
     loggers: { system: silentLogger, agent: silentLogger, cli: silentLogger },
     logControl: createLogLevelControl('warn'),
-    silverhandDir: tmp.silverhandDir,
     workspacesRoot: tmp.workspacesRoot,
     blobStorage,
     attachmentService,
@@ -1150,6 +1152,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   return {
     app,
     ctx,
+    silverhandDir: tmp.silverhandDir,
     fake,
     fakeHostWs,
     authToken,

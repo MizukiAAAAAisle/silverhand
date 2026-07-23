@@ -23,7 +23,6 @@ export { createDaemonLogControl, createDaemonLogger, type DaemonLogger } from '.
 export { claimPidFile, releasePidFile, installShutdownHandlers } from './lifecycle.js';
 export {
   OutboundDaemonClient,
-  defaultDaemonHostConfigPath,
   hostConnectWebSocketUrl,
   readHostConfig,
   writeHostConfigAtomic,

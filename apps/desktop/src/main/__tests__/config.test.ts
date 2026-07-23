@@ -6,6 +6,7 @@ import { SERVER_CONFIG_FILENAME } from '@silverhand/shared';
 import {
   electronUserDataPath,
   loadOrCreateServerConfig,
+  silverhandDir,
   writeServerConfig,
 } from '../config.js';
 
@@ -111,3 +112,24 @@ function readConfig(dir: string): Record<string, unknown> {
     readFileSync(join(dir, SERVER_CONFIG_FILENAME), 'utf8'),
   ) as Record<string, unknown>;
 }
+
+describe('silverhandDir — historical desktop SILVERHAND_DIR semantics (#task:1598 floor matrix)', () => {
+  const original = process.env.SILVERHAND_DIR;
+  afterEach(() => {
+    if (original === undefined) delete process.env.SILVERHAND_DIR;
+    else process.env.SILVERHAND_DIR = original;
+  });
+
+  it('empty falls back to ~/.silverhand; whitespace is used VERBATIM; explicit is used as-is', () => {
+    delete process.env.SILVERHAND_DIR;
+    expect(silverhandDir().endsWith('/.silverhand')).toBe(true);
+    process.env.SILVERHAND_DIR = '';
+    expect(silverhandDir().endsWith('/.silverhand')).toBe(true);
+    // Historical `||` semantics: a whitespace-only value is truthy and is
+    // used verbatim (divergence from the CLI's trim; v2 unifies — shiki).
+    process.env.SILVERHAND_DIR = '   ';
+    expect(silverhandDir()).toBe('   ');
+    process.env.SILVERHAND_DIR = '/x/y';
+    expect(silverhandDir()).toBe('/x/y');
+  });
+});
