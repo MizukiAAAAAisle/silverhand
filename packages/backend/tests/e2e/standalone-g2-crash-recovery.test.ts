@@ -65,6 +65,7 @@ import type { RuntimeKind } from '@silverhand/shared';
 import { conversationSideScope } from '@silverhand/shared';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import {
+  provisionWorkspaceOnDaemon,
   bootDaemonWithSupervisor,
   bootG2Harness,
   waitFor,
@@ -215,6 +216,14 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     const controller = harness.backend.context.hostWsController?.();
     if (!controller) throw new Error('host ws controller missing');
     await waitForAttachment(controller, harness.hostId);
+    // #task:1612 — model creation-time realization on the real daemon
+    // (the spawn path no longer provisions).
+    await provisionWorkspaceOnDaemon(
+      harness.backend,
+      harness.hostId,
+      workspaceId,
+      workspacePath,
+    );
 
     // Subscribe to the bus BEFORE the start so we catch BOTH
     // status events (sessionInit → active, then runtimeExit →

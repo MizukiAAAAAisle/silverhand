@@ -23,10 +23,11 @@
  * (`runtime_start` or `runtime_deliver`) and emits the typed wire code
  * (`workspace_not_provisioned` /
  * `workspace_path_missing` / `registry_unavailable`) instead of collapsing to
- * `internal_error`. This is the daemon-side final boundary; the backend ALSO
- * bounded-lazy-backfills before dispatch (Cindy `2A_y70Aue5X1SlOr`) so a
- * cold-start auto-start of a legacy unprovisioned workspace self-heals rather
- * than fails.
+ * `internal_error`. This is the daemon-side final boundary and the ONLY
+ * resolution: a workspace never established on this computer stays typed
+ * fail-closed (#task:1612 — the backend's pre-dispatch lazy backfill is
+ * retired; bindings are created at workspace creation / guest membership
+ * establishment, never healed at spawn).
  */
 import type { RuntimeStartErrorCode, StartOptions } from '../protocol.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
@@ -41,11 +42,11 @@ export type ResolvedWorkspaceRef = StartOptions['workspace'] & {
 /**
  * A memory-index workspace ref after local resolution. `path: null` means
  * this workspace has no local realization on THIS computer (cross-computer
- * membership whose local root has not been provisioned here yet, or a
+ * membership never established here, or a
  * foreign/corrupt ref) — the prompt renders it "unavailable on this
  * computer" instead of a fabricated path, and it never blocks the spawn.
- * It materializes lazily when that workspace next becomes the active one
- * on this computer.
+ * It resolves once a member on this computer is established
+ * (membership-time pathless provision, #task:1612).
  */
 export type ResolvedWorkspaceIndexRef = StartOptions['workspace'] & {
   path: string | null;

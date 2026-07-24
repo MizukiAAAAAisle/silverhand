@@ -390,8 +390,9 @@ export type McpProbeWireError = z.infer<typeof McpProbeWireErrorSchema>;
 
 // D4.e-6: commands whose execution may spawn a runtime widen their wire error
 // with the same resolver taxonomy. The daemon resolves all host paths and
-// fails closed; the backend reads `workspace_not_provisioned` (backfill +
-// retry), `workspace_path_missing` (host-local files absent), or
+// fails closed; the backend reads `workspace_not_provisioned` (never
+// established on this computer — #task:1612: no lazy backfill exists),
+// `workspace_path_missing` (host-local files absent), or
 // `registry_unavailable` (hard fail) off this arm. `runtime_deliver` shares it
 // because its SPAWN arm executes the same resolver as `runtime_start`.
 export const RuntimeStartWireErrorSchema = z

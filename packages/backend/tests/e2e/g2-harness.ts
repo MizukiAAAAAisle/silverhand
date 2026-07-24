@@ -733,3 +733,25 @@ function consoleBackendLogger(): BackendLogger {
     error: (obj, msg) => console.error('[backend]', msg, obj),
   };
 }
+
+/**
+ * #task:1612 — the registry is the sole authority and the spawn path no
+ * longer provisions. E2E fixtures that seed workspace rows by direct DB
+ * insert must model CREATION-time realization explicitly: dispatch the
+ * same `workspace_provision` the create-workspace flow performs, against
+ * the real attached daemon.
+ */
+export async function provisionWorkspaceOnDaemon(
+  backend: RunningBackend,
+  hostId: string,
+  workspaceId: string,
+  workspacePath: string,
+): Promise<void> {
+  const adapter = backend.context.outboundFrameAdapter?.();
+  if (!adapter) throw new Error('outbound frame adapter unwired in harness');
+  await adapter.sendCommand(hostId, 'workspace_provision', {
+    workspace_id: workspaceId,
+    kind: 'regular',
+    requested_path: workspacePath,
+  });
+}

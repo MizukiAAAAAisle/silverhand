@@ -8,7 +8,7 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
  * Application-level tests for the `deleteAgent` use case (#task:982, P11a). The HTTP route suites
- * (agents.test.ts full active-flow, agent-delete-files-purge fail-closed/backfill/
+ * (agents.test.ts full active-flow, agent-delete-files-purge fail-closed/
  * partial arms, agent-failed-recovery dispatch arms) remain the behavior
  * characterization — they hit the route, which now delegates here. These call the
  * use case DIRECTLY to pin the extraction-specific risks that are easiest to get
@@ -107,56 +107,6 @@ describe('deleteAgent use case', () => {
     });
     expect(result).toEqual({ kind: 'confirmRequired' });
     expect(new AgentRepo(t.ctx.db).get(agentId)).not.toBeNull();
-    expect(purgeCallCount(t)).toBe(0);
-  });
-
-  // Fail-closed ordering: a backfill failure short-circuits BEFORE the purge and
-  // before any DB delete — the agent row + membership survive and no purge fires.
-  it('registry backfill failure → failClosed before any DB delete (rows + membership intact, no purge)', async () => {
-    t = buildTestApp();
-    const agentId = await makeActiveAgent(t, 'backy');
-    const ws = (await (
-      await http(t).post('/api/workspaces', {
-        name: 'engineering',
-        member_agent_ids: [agentId],
-      })
-    ).json()) as any;
-    t.fakeHostWs!.calls = [];
-
-    vi.spyOn(t.ctx.workspaceRegistryBackfiller!, 'ensure').mockResolvedValue({
-      hostId: 'local',
-      status: 'failed',
-      provisioned: [],
-      alreadyBound: [],
-      failed: [
-        {
-          id: ws.workspace.id,
-          code: 'host_attach_pending',
-          message: 'backfill could not reach the daemon',
-          retriable: true,
-        },
-      ],
-    });
-
-    const result = await deleteAgent(depsFor(t), {
-      agentId,
-      requesterUserId: t.viewerUserId,
-      body: { confirm: true },
-    });
-    expect(result).toEqual({
-      kind: 'failClosed',
-      error: 'backfill could not reach the daemon',
-      code: 'host_attach_pending',
-      status: 503,
-    });
-    // No DB delete reached, no purge dispatched.
-    expect(new AgentRepo(t.ctx.db).get(agentId)).not.toBeNull();
-    const member = t.ctx.db
-      .prepare(
-        'SELECT COUNT(*) AS n FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
-      )
-      .get(ws.workspace.id, agentId) as { n: number };
-    expect(member.n).toBe(1);
     expect(purgeCallCount(t)).toBe(0);
   });
 

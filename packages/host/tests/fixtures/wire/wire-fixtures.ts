@@ -536,7 +536,7 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/workspace_provision-with-requested-path',
     description:
-      'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path / legacy backfill all unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
+      'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
     frame: enc({
       id: 'req-workspace-provision-2',
       intent: 'workspace_provision',
@@ -1652,7 +1652,7 @@ const AGENT_WORKSPACE_TREE_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_workspace_tree-error-workspace_not_provisioned',
     description:
-      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir. Surfaced when the tree is requested for a workspace_id this daemon has never provisioned; the backend may backfill + retry. Maps to HTTP 409 at the route layer.',
+      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir. Surfaced when the tree is requested for a workspace_id this daemon has never provisioned (never established on this computer). Maps to HTTP 409 at the route layer.',
     frame: enc({
       id: 'req-agent-workspace-tree-1',
       error: {
@@ -1736,7 +1736,7 @@ const AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_workspace_file_read-error-workspace_not_provisioned',
     description:
-      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir. The backend may backfill + retry. Maps to HTTP 409 at the route layer.',
+      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir (never established on this computer). Maps to HTTP 409 at the route layer.',
     frame: enc({
       id: 'req-agent-workspace-file-read-1',
       error: {
@@ -1910,7 +1910,7 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/runtime_start-error-workspace_not_provisioned',
     description:
-      'A regular workspace the start references has no registry binding (legacy row never backfilled / adopted). The daemon fails closed rather than derive a path from a backend-supplied value; the backend keeps the delivery pending for retry.',
+      'A regular workspace the start references has no registry binding (never established on this computer). The daemon fails closed rather than derive a path from a backend-supplied value; the backend keeps the delivery pending.',
     frame: enc({
       id: 'req-runtime-start-1',
       error: {

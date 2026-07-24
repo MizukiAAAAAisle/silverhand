@@ -173,16 +173,16 @@ export async function createWorkspace(
   // realization (#1596 plan — the home path never crosses machines), then
   // seeds.
   for (const agent of memberAgents) {
-    const sameHost = agent.host_id === workspaceHostId;
     const seed = await seedMemberAgentL2(
       ctx,
       agent.host_id,
-      {
-        id: workspace.id,
-        workspace_path: sameHost ? workspace.workspace_path : null,
-      },
+      workspace.id,
       agent.id,
-      { ensureProvisioned: !sameHost },
+      // A same-host member reuses the home root provisioned above in THIS
+      // request; a guest member's daemon first establishes a pathless
+      // local realization (#task:1612 — no path parameter exists on this
+      // flow), then seeds.
+      { guestRealization: agent.host_id !== workspaceHostId },
     );
     if (seed.kind === 'failed') return { kind: 'transportFailed', failure: seed };
   }

@@ -117,26 +117,6 @@ export class WorkspaceRepo {
     return row ? rowToDto(row) : null;
   }
 
-  /**
-   * #task:1529 — every REGULAR workspace bound to `hostId`, as the minimal
-   * `{ id, workspace_path }` rows the daemon-registry migration AUDIT forwards
-   * as `requested_path` to an idempotent `workspace_provision`. This is a
-   * full-host enumeration (the lazy backfill hot-path only ever sees a single
-   * conversation/agent's visible rows); the hydrate-time audit needs the whole
-   * host to observe migration completeness. `agent_home` and other hosts'
-   * rows are excluded.
-   */
-  listRegularForHost(hostId: string): { id: string; workspace_path: string }[] {
-    return this.db
-      .prepare<[string], { id: string; workspace_path: string }>(
-        `SELECT id, workspace_path
-           FROM workspaces
-          WHERE workspace_kind = 'regular'
-            AND workspace_host_id = ?
-          ORDER BY id ASC`,
-      )
-      .all(hostId);
-  }
 
   getByName(name: string): WorkspaceDto | null {
     const row = this.db
@@ -349,22 +329,6 @@ export class WorkspaceRepo {
     return newId();
   }
 
-  /**
-   * D4.e-1 3b: refresh the legacy `workspace_path` cache column from the
-   * daemon's `bound_workspace_path` ack. The column is a TRANSITIONAL cache
-   * of the daemon-authoritative path (registry is the real authority); this
-   * is the ONLY writer for the regular-workspace path after create/backfill.
-   */
-  updateWorkspacePathCache(id: string, boundWorkspacePath: string): WorkspaceDto | null {
-    this.db
-      .prepare(
-        `UPDATE workspaces
-         SET workspace_path = ?, updated_at = ?
-         WHERE id = ? AND workspace_kind = 'regular'`,
-      )
-      .run(boundWorkspacePath, Date.now(), id);
-    return this.get(id);
-  }
 
   setArchived(id: string, archived: boolean): WorkspaceDto | null {
     const now = Date.now();

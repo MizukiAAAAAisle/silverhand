@@ -129,9 +129,10 @@ binding's registry. The migration lifts ONLY the current binding's
 namespace; any other namespace (the pre-claim `local` placeholder) stays
 under workspace-data/ in its slug shape as an inert orphan — never merged,
 never read by the runtime, never deleted (cleanup is an explicit human
-action). The cross-binding lazy re-bind (`legacyBindings`) is retired; the
-#1529 stale-DB-path alias survives as pure coordinate math (run-era AND
-slot-era slug coordinates) with its own observation-first retirement gate.
+action). The cross-binding lazy re-bind (`legacyBindings`) is retired, and
+so is the #1529 stale-DB-path alias (#task:1612 — its only caller, the
+registry backfiller, is deleted; ECS `migration_complete=true` coverage was
+the shared delete gate).
 
 `desktop/computer-binding.json` is the desktop-owned "currently bound
 computer" authority (daemon-config schema — the location expresses the
@@ -578,10 +579,10 @@ pass — is ONE deletion unit with ONE predicate: delete it when the marker
 floor holds (rollout evidence shows every supported installation carries a
 completed v2 marker, sessions fact included). The eager model makes the
 marker sufficient: no session migration waits on a dormant agent's future
-start. Two narrower daemon-side compatibility seams retire on their own
-gates, not with the engine: the #1529 hydrate backfill and the stale
-run-era-path alias it exercises (observation-first: ECS
-`migration_complete=true` coverage per supported host). Do not automatically
+start. The two daemon-side compatibility seams (the #1529 hydrate backfill and
+the stale run-era-path alias it exercised) RETIRED with #task:1612 once the
+observation gate closed (ECS `migration_complete=true` coverage per
+supported host). Do not automatically
 delete residual `workspaces/`, `daemon/`, top-level `run/` leftovers, old
 bootstrap files, or `db.sqlite`; each has a different provenance and deletion
 proof.

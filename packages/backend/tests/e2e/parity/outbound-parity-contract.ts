@@ -164,7 +164,7 @@ interface SeededRuntimePair {
  * for both transports (the schema is transport-agnostic — that is the
  * whole point).
  */
-function seedRuntimePair(rig: ParityRig): SeededRuntimePair {
+async function seedRuntimePair(rig: ParityRig): Promise<SeededRuntimePair> {
   const db = rig.backend.context.db;
   const now = Date.now();
   const suffix = `${rig.name}-${now}`;
@@ -214,6 +214,17 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       VALUES (?, ?, NULL, NULL, 'idle', ?)`,
   ).run(conversationId, agentId, now);
 
+  // #task:1612 — model creation-time realization on the real daemon (the
+  // spawn path no longer provisions); the rig's daemon is attached in
+  // beforeAll, so the dispatch mirrors the create-workspace flow.
+  await rig.backend.context
+    .outboundFrameAdapter!()!
+    .sendCommand(rig.hostId, 'workspace_provision', {
+      workspace_id: workspaceId,
+      kind: 'regular',
+      requested_path: workspacePath,
+    });
+
   const messageId = `msg-parity-${suffix}`;
   db.prepare(
     `INSERT INTO messages
@@ -256,7 +267,7 @@ async function postCreateAgent(
 export function registerParityPhases(getRig: () => ParityRig): void {
   it('Phase A — runtime_start dispatch → real daemon spawn → session_init projects cli_session_id (same envelope)', async () => {
     const rig = getRig();
-    const { agentId, conversationId } = seedRuntimePair(rig);
+    const { agentId, conversationId } = await seedRuntimePair(rig);
 
     // Production trigger: same path the delivery coordinator takes.
     // `start` → `startDeliveryBacked` claims the pending inbox row and

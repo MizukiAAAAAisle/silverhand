@@ -20,7 +20,7 @@ import type { LogLevelControl } from './logger.js';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import type { HostRuntimeActivityView, HostStatusReadModel } from './runtime/host-status-read-model.js';
-import type { AgentL2SeedEnsurer, WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
+import type { AgentL2SeedEnsurer } from './runtime/agent-l2-seed-ensurer.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 import type { PresenceRegistry } from './presence/presence-registry.js';
 import type { BackendMetrics } from './observability/metrics.js';
@@ -202,22 +202,11 @@ export interface BackendContext {
    */
   hostStatusReadModel?: () => HostStatusReadModel;
   /**
-   * D4.e-1 3b-2/3b-3 (+ 3b P1-2) — migration backfiller for the daemon
-   * workspace registry. The `list_workspaces` read path calls
-   * `ensure(hostId, rows)` (scoped to the caller's VISIBLE regular rows)
-   * before dispatching `agent_workspace_index` (lazy, on-demand). A single
-   * shared instance memoizes per-`(host,id)` success and collapses concurrent
-   * callers of the same row; a failed id is left un-memoized so a later read
-   * retries (never boot-once). Optional so a minimal embedded boot or a test
-   * harness can omit it (the route then skips backfill and relies on the
-   * index alone).
-   */
-  workspaceRegistryBackfiller?: WorkspaceRegistryBackfiller;
-  /**
    * Cross-computer slice 1 (#task:1596) — pre-spawn agent L2 seed on the
    * dispatch host (idempotent daemon `agent_l2_seed`, memoized per
    * (host, workspace, agent)). Consumed by the runtime start/deliver
-   * filesystem-ensure chain. Optional like the backfiller.
+   * filesystem-ensure chain. Optional so a minimal embedded boot or a
+   * test harness can omit it (runtime start then fails closed).
    */
   agentL2SeedEnsurer?: AgentL2SeedEnsurer;
   /**

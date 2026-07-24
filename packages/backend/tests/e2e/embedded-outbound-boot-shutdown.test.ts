@@ -152,9 +152,9 @@ class FakeOutboundDaemon {
     } else if (cmd.kind === 'runtime_close_activity_log') {
       this.respondResult(cmd, { flushed: true });
     } else if (cmd.kind === 'workspace_provision') {
-      // D4.e-6: runtime_start is preceded by a bounded lazy registry
-      // backfill — ack the re-bind with a valid provision result so the
-      // start can proceed (idempotent re-bind to the requested path).
+      // Establishment-time provision (#task:1612) — ack with a valid
+      // provision result so the flow can proceed (idempotent bind to the
+      // requested path).
       const requested = (cmd.params as { requested_path?: string }).requested_path;
       this.respondResult(cmd, {
         ok: true,

@@ -57,6 +57,7 @@ import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/d
 import type { RuntimeKind } from '@silverhand/shared';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import {
+  provisionWorkspaceOnDaemon,
   bootDaemonWithSupervisor,
   bootG2Harness,
   waitFor,
@@ -205,6 +206,14 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     const controller1 = harness.backend.context.hostWsController?.();
     if (!controller1) throw new Error('controller missing pre-restart');
     const attached1 = await waitForAttachment(controller1, hostIdBefore);
+    // #task:1612 — model creation-time realization on the real daemon
+    // (the spawn path no longer provisions).
+    await provisionWorkspaceOnDaemon(
+      harness.backend,
+      harness.hostId,
+      workspaceId,
+      workspacePath,
+    );
     const connectionIdBefore = attached1.connectionId;
     const serverUrlBefore = harness.serverUrl;
 

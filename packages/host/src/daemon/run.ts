@@ -72,8 +72,6 @@ import {
   seedAgentL2,
   AgentFilesPurgeError,
   defaultWorkspaceDataRootDir,
-  legacyNamespaceDirs,
-  legacyWorkspaceDataSourceDirs,
   purgeAgentFiles,
   type RegistryBinding,
 } from './workspace-registry/index.js';
@@ -602,16 +600,6 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     opts.testHooks?.silverhandStateRoot ??
     opts.silverhandStateRootDir ??
     defaultAppRoot();
-  // Legacy ALIAS source inventory (#task:1603) — NOT a path authority and
-  // NOT a move source (the daemon performs no legacy physical moves; the
-  // desktop layout engine is the single owner). Feeds only the registry's
-  // stale-legacy-path re-bind provenance for #1529's hydrate backfill.
-  // DELETION CONDITION: retires with the #1529 observation-first gate.
-  const legacyAliasSourceDirs: (string | null)[] =
-    legacyWorkspaceDataSourceDirs({
-      daemonIdentityPath,
-      silverhandStateRoot,
-    });
   const legacyWorkspacesRoot = legacyWorkspacesRootDir(silverhandStateRoot);
   const fallbackEmbeddedHostId = daemonIdentity?.daemon_id ?? 'local';
   const liveOutboundBinding = (): RegistryBinding | null =>
@@ -698,35 +686,15 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
 
   const workspaceRegistry = (ctx: ComputerPathContext): WorkspaceRegistry => {
     const binding = ctx.binding;
-    // #task:1608 workspace-data convergence: the cross-binding lazy
-    // re-bind (legacyBindings/copyLegacyEntry) is retired — the migration
-    // lifts the current binding's registry once, and old namespaces are
-    // inert orphans the runtime never reads. The #1529 stale-DB-path
-    // alias below is coordinate math only (no filesystem reads) and keeps
-    // its own observation-first retirement gate; desktop-managed daemons
-    // still trust their own historical namespace coordinates (post-claim
-    // host id AND the pre-claim `local` placeholder) for it.
-    const aliasBindings: RegistryBinding[] = [binding];
-    if (daemonIdentityPath !== null) {
-      aliasBindings.push(
-        { server_origin: 'local-embedded', host_id: binding.host_id },
-        { server_origin: 'local-embedded', host_id: fallbackEmbeddedHostId },
-      );
-    }
+    // #task:1608/#task:1612: every legacy re-bind surface is retired — the
+    // migration lifts the current binding's registry once, old namespaces
+    // are inert orphans the runtime never reads, and stale server-side
+    // path caches have no reader (the registry is the sole authority).
     return new WorkspaceRegistry({
       stateDir: ctx.workspaceDataRoot,
       binding,
       silverhandStateRoot,
       legacyWorkspacesRoot,
-      trustedLegacyNamespaceDirs: legacyNamespaceDirs(
-        // Trusted alias SOURCE roots: the released run-era root(s) plus
-        // this computer's own workspace-data root — a stale server row may
-        // carry either the run-era slug coordinate or the intermediate
-        // slot-era one (`<workspace-data>/<binding-slug>/workspaces/<slug>`)
-        // from before the #task:1608 flat convergence.
-        [...legacyAliasSourceDirs, ctx.workspaceDataRoot],
-        aliasBindings,
-      ),
       // #task:1596 rounds 3-5 (Cindy P1-3) — a requested workspace path may
       // never overlap (either direction) the durable roots this daemon
       // depends on: its workspace-data root, its agent L1 root, AND the
@@ -789,9 +757,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // `resolveRuntimeStartPaths`). Built lazily per start so the standalone
   // binding (known only post-attach) is current — same pattern as the
   // data-plane handlers below. A `WorkspaceRegistryError` is mapped to the
-  // typed runtime_start taxonomy: `not_provisioned` → recoverable
-  // `workspace_not_provisioned` (backend may backfill + retry); a foreign /
-  // corrupt registry, or no binding at all, → hard `registry_unavailable`.
+  // typed runtime_start taxonomy: `not_provisioned` → typed
+  // `workspace_not_provisioned` (never established on this computer); a
+  // foreign / corrupt registry, or no binding at all, → hard
+  // `registry_unavailable`.
   const runtimeStartResolveDeps = {
     homeDir: opts.testHooks?.agentMaterializeHomeDir,
     // Generation-scoped (#task:1608): reads the FROZEN context at spawn
@@ -910,7 +879,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // registry + create its `.silverhand/` skeleton. ONE operation, two
     // path regimes: no `requested_path` → daemon-managed default; with one
     // → daemon re-validates the caller-proposed path then binds it (M1
-    // folder picker / sandbox typed path / legacy backfill). Built lazily
+    // folder picker / sandbox typed path). Built lazily
     // so the standalone binding (known only post-attach) is current.
     workspaceProvisionHandler: async params => {
       const ctx = computerContext;

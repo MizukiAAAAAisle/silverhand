@@ -46,6 +46,7 @@ import { AuthSessionService } from '../../src/auth/session.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import {
+  provisionWorkspaceOnDaemon,
   bootDaemonWithSupervisor,
   bootG2Harness,
   waitFor,
@@ -111,7 +112,7 @@ interface RouteEnv {
  * these rows in place under the D4.b lift; that's the same pattern
  * B2-B6 used for runtimeHost-direct tests.
  */
-function seedRouteEnv(harness: G2Harness, suffix: string): RouteEnv {
+async function seedRouteEnv(harness: G2Harness, suffix: string): Promise<RouteEnv> {
   const { db } = harness.backend.context;
   const now = Date.now();
   const workspaceId = `ws-g2-route-${suffix}`;
@@ -223,7 +224,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
 
   it('HTTP start → session_init projection; HTTP send → live delivery delivered_at; HTTP stop → runtime_exit (all via real routes)', async () => {
     harness = await bootG2Harness();
-    const env = seedRouteEnv(harness, 'happy');
+    const env = await seedRouteEnv(harness, 'happy');
     const { db } = harness.backend.context;
 
     // Seed one pending inbox row pre-start so the lifted route's
@@ -251,6 +252,15 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     const controller = harness.backend.context.hostWsController?.();
     if (!controller) throw new Error('host ws controller missing');
     await waitForAttachment(controller, harness.hostId);
+    // #task:1612 — model creation-time realization on the real daemon
+    // (the spawn path no longer provisions). The nodaemon arms skip this:
+    // their routes fail on transport before touching the registry.
+    await provisionWorkspaceOnDaemon(
+      harness.backend,
+      harness.hostId,
+      env.workspaceId,
+      join(harness.silverhandDir, 'workspaces', env.workspaceId),
+    );
 
     const baseUrl = harness.serverUrl;
 
@@ -401,7 +411,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     // short-circuit. We seed one pending inbox row first so the
     // transport layer actually gets called (and throws).
     harness = await bootG2Harness();
-    const env = seedRouteEnv(harness, 'nodaemon');
+    const env = await seedRouteEnv(harness, 'nodaemon');
 
     const { db } = harness.backend.context;
     const pendingMessage = new MessageRepo(db).insertForConversation({
@@ -441,7 +451,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     // throws typed `transport_no_connection` when no daemon is
     // attached → 503 `host_attach_pending`.
     harness = await bootG2Harness();
-    const env = seedRouteEnv(harness, 'nodaemonstop');
+    const env = await seedRouteEnv(harness, 'nodaemonstop');
 
     const res = await postJson(
       `${harness.serverUrl}/api/channels/${env.conversationId}/agents/${env.agentId}/stop`,

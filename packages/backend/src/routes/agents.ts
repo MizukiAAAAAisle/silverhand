@@ -1017,8 +1017,8 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   });
 
   // DELETE /api/agents/:id — destructive cascade. The full saga
-  // (materialization dispatch, hard-stop, fail-closed registry backfill + daemon
-  // purge, membership/conversation teardown, DM sweep, row delete) lives in the
+  // (materialization dispatch, hard-stop, fail-closed daemon purge,
+  // membership/conversation teardown, DM sweep, row delete) lives in the
   // `deleteAgent` use case (application/delete-agent.ts). This route is
   // parse-body + principal + map the typed DeleteAgentResult to HTTP. The
   // `confirm:true` guard is enforced inside the use case's active branch so a

@@ -17,22 +17,16 @@ import {
   WorkspaceRegistryError,
   type RegistryBinding,
 } from '../../src/daemon/workspace-registry/registry.js';
-import {
-  defaultWorkspaceDataRootDir,
-  legacyNamespaceDirs,
-  legacyWorkspaceDataSourceDirs,
-} from '../../src/daemon/workspace-registry/state-dir.js';
+import { defaultWorkspaceDataRootDir } from '../../src/daemon/workspace-registry/state-dir.js';
 
 /**
- * #task:1596/#task:1603 — workspace-data lives in the EXPLICIT durable
- * computer data root; the daemon performs NO legacy physical moves (the
- * desktop layout engine owns them and runs before any daemon). What
- * remains daemon-side:
- *   - the durable-root default/wiring (`defaultWorkspaceDataRootDir`);
- *   - the run-era ALIAS provenance (`legacyWorkspaceDataSourceDirs`) for
- *     stale server-DB paths, healed by #1529's provision ACK — the
- *     re-bind alias trusts only the EXACT managed path under a trusted
- *     legacy namespace, never basename resemblance.
+ * #task:1596/#task:1603/#task:1612 — workspace-data lives in the EXPLICIT
+ * durable computer data root; the daemon performs NO legacy physical moves
+ * (the desktop layout engine owns them and runs before any daemon) and,
+ * since #task:1612, no legacy path aliasing either. What remains
+ * daemon-side is only the durable-root default/wiring
+ * (`defaultWorkspaceDataRootDir`); a stale pre-v2 path proposal is a plain
+ * `path_conflict`, never healed.
  */
 
 const BINDING: RegistryBinding = {
@@ -79,84 +73,6 @@ describe('defaultWorkspaceDataRootDir', () => {
     expect(
       defaultWorkspaceDataRootDir().endsWith('/.silverhand/workspace-data'),
     ).toBe(true);
-  });
-});
-
-describe('provision — post-migration stale legacy path alias (exact provenance)', () => {
-  // The engine-owned move already happened: seed the finished durable
-  // shape directly and keep only the legacy COORDINATE for provenance.
-  function migratedRegistry(root: string): {
-    registry: WorkspaceRegistry;
-    legacy: string;
-    durable: string;
-  } {
-    const legacy = join(root, 'run');
-    const durable = join(root, 'workspace-data');
-    seedFlatRegistry(durable, BINDING, 'ws-1');
-    const registry = new WorkspaceRegistry({
-      stateDir: durable,
-      binding: BINDING,
-      trustedLegacyNamespaceDirs: legacyNamespaceDirs([legacy], [BINDING]),
-    });
-    return { registry, legacy, durable };
-  }
-
-  it('re-binding with the EXACT pre-migration managed path is an idempotent no-op returning the durable path', () => {
-    const root = tempDir();
-    try {
-      const { registry, legacy, durable } = migratedRegistry(root);
-      const oldManaged = join(
-        legacy,
-        bindingSlug(BINDING),
-        'workspaces',
-        managedWorkspaceSlug('ws-1'),
-      );
-      const result = registry.provision('ws-1', oldManaged);
-      expect(result.created).toBe(false);
-      expect(result.path).toBe(join(durable, 'workspaces', 'ws-1'));
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('a forged path with the same slug basename but a foreign parent is NOT provenance → path_conflict', () => {
-    const root = tempDir();
-    try {
-      const { registry } = migratedRegistry(root);
-      const forged = join(
-        root,
-        'evil',
-        'workspaces',
-        managedWorkspaceSlug('ws-1'),
-      );
-      let thrown: unknown;
-      try {
-        registry.provision('ws-1', forged);
-      } catch (err) {
-        thrown = err;
-      }
-      expect(thrown).toBeInstanceOf(WorkspaceRegistryError);
-      expect((thrown as WorkspaceRegistryError).code).toBe('path_conflict');
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it('without trusted legacy namespaces the alias is off entirely', () => {
-    const root = tempDir();
-    try {
-      const { legacy, durable } = migratedRegistry(root);
-      const bare = new WorkspaceRegistry({ stateDir: durable, binding: BINDING });
-      const oldManaged = join(
-        legacy,
-        bindingSlug(BINDING),
-        'workspaces',
-        managedWorkspaceSlug('ws-1'),
-      );
-      expect(() => bare.provision('ws-1', oldManaged)).toThrow(/already bound/);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 });
 
@@ -282,113 +198,29 @@ describe('protectedRoots — disjoint-volume global ancestor guard (#task:1596 r
   });
 });
 
-describe('legacyWorkspaceDataSourceDirs — alias provenance only (#task:1603)', () => {
-  it('desktop-managed: exactly the RELEASED run/ root; no daemon/ or workspace-data readers (never released-producible)', () => {
-    const root = '/approot';
-    const dirs = legacyWorkspaceDataSourceDirs({
-      daemonIdentityPath: join(root, 'computers', 'local', 'run', 'daemon-identity.json'),
-      silverhandStateRoot: root,
-    });
-    expect(dirs).toEqual([join(root, 'run')]);
-  });
-
-  it('connect/custom (no identity file) has no legacy alias sources at all', () => {
-    expect(
-      legacyWorkspaceDataSourceDirs({
-        daemonIdentityPath: null,
-        silverhandStateRoot: '/approot',
-      }),
-    ).toEqual([]);
-  });
-});
-
-describe('v2 cutover × stale run-era server row — provision alias (#task:1603 P0)', () => {
-  it('after the ENGINE-owned move, a server row caching the run-era managed path re-binds idempotently with the v2 root in the ACK; forged basename twins are rejected', () => {
+describe('#task:1612 — the stale-path alias is retired: a legacy coordinate proposal is a plain conflict', () => {
+  it('re-binding an already-bound id with a pre-migration managed path fails path_conflict (never healed)', () => {
     const root = tempDir();
     try {
-      const identityPath = join(root, 'computers', 'h-1', 'run', 'daemon-identity.json');
-      const v2StateDir = join(root, 'computers', 'h-1', 'workspace-data');
-      // The desktop layout engine already moved the run-era namespace,
-      // rewrote its managed path, AND flattened it (#task:1608); the
-      // daemon only sees the finished flat shape.
-      const v2Managed = join(v2StateDir, 'workspaces', 'ws-1');
-      mkdirSync(v2Managed, { recursive: true });
-      writeFileSync(
-        join(v2StateDir, 'workspace-registry.json'),
-        JSON.stringify({
-          schema_version: 1,
-          binding: BINDING,
-          workspaces: { 'ws-1': { path: v2Managed, provisioned_at: 1 } },
-        }),
-        'utf-8',
-      );
-      const aliasDirs = legacyWorkspaceDataSourceDirs({
-        daemonIdentityPath: identityPath,
-        silverhandStateRoot: root,
-      });
-      // Production shape (run.ts): trusted alias sources = the released
-      // run-era root(s) PLUS this computer's own workspace-data root (the
-      // intermediate slot-era slug coordinate); protected roots INCLUDE
-      // the global root, so only exact alias provenance may pass.
-      const registry = new WorkspaceRegistry({
-        stateDir: v2StateDir,
-        binding: BINDING,
-        silverhandStateRoot: root,
-        trustedLegacyNamespaceDirs: legacyNamespaceDirs(
-          [...aliasDirs, v2StateDir],
-          [BINDING],
-        ),
-        protectedRoots: [v2StateDir, join(root, 'computers', 'h-1', 'agents'), root],
-      });
-      const staleDbPath = join(
+      const durable = join(root, 'workspace-data');
+      seedFlatRegistry(durable, BINDING, 'ws-1');
+      const registry = new WorkspaceRegistry({ stateDir: durable, binding: BINDING });
+      const staleRunEra = join(
         root,
         'run',
         bindingSlug(BINDING),
         'workspaces',
         managedWorkspaceSlug('ws-1'),
       );
-      const result = registry.provision('ws-1', staleDbPath);
-      expect(result.created).toBe(false);
-      expect(result.path).toBe(v2Managed);
-      // A stale SLOT-ERA slug coordinate (pre-flatten intermediate) heals
-      // the same way.
-      const staleSlotEra = join(
-        v2StateDir,
-        bindingSlug(BINDING),
-        'workspaces',
-        managedWorkspaceSlug('ws-1'),
+      expect(() => registry.provision('ws-1', staleRunEra)).toThrowError(
+        expect.objectContaining({ code: 'path_conflict' }),
       );
-      const slotEra = registry.provision('ws-1', staleSlotEra);
-      expect(slotEra.created).toBe(false);
-      expect(slotEra.path).toBe(v2Managed);
-      // Same basename, foreign parent INSIDE the protected global root:
-      // rejected by the protected-root guard (alias provenance is checked
-      // first and did not match).
-      const forgedInsideRoot = join(root, 'evil', 'workspaces', managedWorkspaceSlug('ws-1'));
-      let thrownInside: unknown;
-      try {
-        registry.provision('ws-1', forgedInsideRoot);
-      } catch (err) {
-        thrownInside = err;
-      }
-      expect(thrownInside).toBeInstanceOf(WorkspaceRegistryError);
-      expect((thrownInside as WorkspaceRegistryError).code).toBe('invalid_path');
-      // Same basename OUTSIDE every protected root: still not provenance →
-      // pure re-bind conflict, never a silent overwrite.
-      const outside = tempDir();
-      try {
-        const forgedOutside = join(outside, 'workspaces', managedWorkspaceSlug('ws-1'));
-        let thrownOutside: unknown;
-        try {
-          registry.provision('ws-1', forgedOutside);
-        } catch (err) {
-          thrownOutside = err;
-        }
-        expect(thrownOutside).toBeInstanceOf(WorkspaceRegistryError);
-        expect((thrownOutside as WorkspaceRegistryError).code).toBe('path_conflict');
-      } finally {
-        rmSync(outside, { recursive: true, force: true });
-      }
+      // The exact CURRENT path stays idempotent (plain semantics survive).
+      const current = join(durable, 'workspaces', 'ws-1');
+      expect(registry.provision('ws-1', current)).toEqual({
+        path: current,
+        created: false,
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

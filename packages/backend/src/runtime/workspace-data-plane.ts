@@ -34,7 +34,7 @@ import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
  * thing: send a data-plane command over the deployment-neutral
  * {@link OutboundFrameAdapter} and normalize every failure (transport or
  * typed wire error) into a single structured outcome so each route can
- * decide how to render it — create → HTTP status; backfill / list / read /
+ * decide how to render it — create → HTTP status; list / read /
  * seed → fail-closed with a diagnostic code (never a `workspace_path` /
  * server-fs fallback).
  */
@@ -75,8 +75,8 @@ export interface DataPlaneFailure {
   /**
    * True when the condition is transient (daemon offline / timeout /
    * registry temporarily unavailable) so a later retry — next attach, next
-   * boot, next management call — can succeed. Drives backfill retry + lets
-   * the read path distinguish "retry later" from "genuinely missing".
+   * boot, next management call — can succeed. Lets the read path
+   * distinguish "retry later" from "genuinely missing".
    */
   retriable: boolean;
 }

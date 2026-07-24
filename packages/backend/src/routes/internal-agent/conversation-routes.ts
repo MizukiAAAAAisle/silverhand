@@ -51,11 +51,11 @@ import type { InternalRouteDeps } from './deps.js';
  * intent to the owning daemon, which resolves `agent_dir` from the
  * registry (regular) or its own homedir (agent_home).
  *
- * The backend NEVER derives `agent_dir` from `workspace_path` (I1). Before
- * dispatching, it `ensure()`s the registry backfill so a legacy
- * row is bound; an id the daemon cannot resolve (`unresolved`), an offline
- * host, or a failed backfill all FAIL CLOSED — the response carries a
- * diagnostic code, never a fabricated `workspace_path`-derived path.
+ * The backend NEVER derives `agent_dir` from `workspace_path` (I1). An id
+ * the daemon cannot resolve (`unresolved`) on the agent's own home axis, or
+ * an offline host, FAILS CLOSED — the response carries a diagnostic code,
+ * never a fabricated `workspace_path`-derived path (#task:1612: no lazy
+ * registry re-bind exists on this path anymore).
  *
  * Cross-computer slice 2 (#task:1600): the resolution axis is the AGENT's
  * host — the index renders paths as seen from the agent's own computer, so
@@ -95,44 +95,14 @@ async function buildAgentListWorkspacesDto(
   }
   const hostId = agent.host_id;
   const workspaceIds = workspaces.map(w => w.id);
-  // Backfill ONLY the rows this response needs resolved — the VISIBLE
-  // regular workspaces whose HOME computer is this host (agent_home is
-  // daemon-resolved from the homedir convention, never via the registry;
-  // a guest workspace's `workspace_path` belongs to its home computer and
-  // must never be legacy-bound onto the agent's daemon — guest roots are
-  // provisioned pathless at spawn time, #task:1596). An unrelated
-  // same-host regular row the agent can't see must never fail-close this
-  // agent's list, so we pass the scoped rows rather than enumerating
-  // every regular row on the host.
-  const regularRows = workspaces
-    .filter(
-      w => w.workspace_kind === 'regular' && w.workspace_host_id === hostId,
-    )
-    .map(w => ({ id: w.id, workspace_path: w.workspace_path }));
-
+  // #task:1612 — list resolution performs NO workspace provision: the
+  // daemon's agent_workspace_index is the sole resolver. A same-host
+  // workspace missing its registry binding surfaces as `unresolved` and
+  // trips the strict fail-closed below (data inconsistency — never healed
+  // from the DB path); a guest workspace resolves per-entry or degrades
+  // to "unavailable on this computer" (#task:1600).
   const agentDirById = new Map<string, string>();
   {
-    // Bind the visible legacy rows first (idempotent + retriable; never
-    // memoizes a failure, so a prior offline does not permanently skip them).
-    // No visible regular row → no registry backfill needed (agent_home only).
-    const backfill =
-      regularRows.length > 0
-        ? await ctx.workspaceRegistryBackfiller?.ensure(hostId, regularRows)
-        : undefined;
-    if (backfill && backfill.status === 'failed') {
-      // No row bound — daemon offline / registry unavailable. Fail closed.
-      const f = backfill.failed[0];
-      return {
-        kind: 'failed',
-        code: f?.code ?? 'host_attach_pending',
-        message:
-          'workspace registry backfill failed; cannot resolve agent_dir',
-        status: f && !f.retriable ? 502 : 503,
-      };
-    }
-    // A `partial` backfill leaves the still-unbound ids to surface as
-    // `unresolved` below, which trips the strict fail-closed there.
-
     const outbound = resolveOutboundForHost(adapter, hostId);
     if (outbound.kind === 'failed') {
       return failedOutcome(outbound);
@@ -147,14 +117,15 @@ async function buildAgentListWorkspacesDto(
       return failedOutcome(index);
     }
     // #task:1600 piece ② — unresolved ids split by axis:
-    //  - a row whose HOME computer is the agent's host was just
-    //    backfilled above, so "unresolved" is a genuine registry
-    //    inconsistency → strict fail-closed (unchanged contract);
+    //  - a row whose HOME computer is the agent's host must already hold
+    //    its creation-time registry binding, so "unresolved" is a genuine
+    //    registry inconsistency → strict fail-closed (unchanged contract);
     //  - a GUEST row (home computer elsewhere) with no local binding is
     //    the EXPECTED "unavailable on this computer" state → degrade
     //    per-entry to `agent_dir: null` (never a fabricated path, never
-    //    a whole-response failure). It resolves once the workspace next
-    //    runs on this computer (spawn-time pathless provision).
+    //    a whole-response failure). It resolves once a member on this
+    //    computer is established (membership-time pathless provision,
+    //    #task:1612).
     const hostById = new Map(workspaces.map(w => [w.id, w.workspace_host_id]));
     const sameHostUnresolved = index.result.unresolved.filter(
       id => hostById.get(id) === hostId,

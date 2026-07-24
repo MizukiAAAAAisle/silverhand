@@ -35,6 +35,4 @@ export { initWorkspaceSkeleton } from './workspace-skeleton.js';
 export {
   WORKSPACE_DATA_DIR_NAME,
   defaultWorkspaceDataRootDir,
-  legacyNamespaceDirs,
-  legacyWorkspaceDataSourceDirs,
 } from './state-dir.js';

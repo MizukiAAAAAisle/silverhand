@@ -44,6 +44,7 @@ import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/d
 import type { RuntimeKind } from '@silverhand/shared';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import {
+  provisionWorkspaceOnDaemon,
   bootDaemonWithSupervisor,
   bootG2Harness,
   waitFor,
@@ -203,6 +204,14 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     const controller = harness.backend.context.hostWsController?.();
     if (!controller) throw new Error('host ws controller missing');
     await waitForAttachment(controller, harness.hostId);
+    // #task:1612 — model creation-time realization on the real daemon
+    // (the spawn path no longer provisions).
+    await provisionWorkspaceOnDaemon(
+      harness.backend,
+      harness.hostId,
+      workspaceId,
+      workspacePath,
+    );
 
     // Spawn the runtime + wait for session_init to land in DB (this
     // is exactly the B2 happy path; we re-use it as the precondition

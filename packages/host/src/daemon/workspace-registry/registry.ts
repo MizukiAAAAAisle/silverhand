@@ -75,9 +75,10 @@ const MANAGED_WORKSPACES_DIR = 'workspaces';
  * nests under `<stateDir>/<bindingSlug>/` — the slot's `computers/
  * <computer_id>` directory IS the enrollment boundary, and the binding
  * stays in the registry file header as the foreign guard. This function
- * remains ONLY so the one-time layout migration and the #1529 stale-path
- * alias can name the exact legacy namespace coordinates; nothing mints
- * new paths from it.
+ * remains ONLY so the one-time layout migration can name the exact
+ * legacy namespace coordinates (#task:1612 deleted the other consumer,
+ * the #1529 stale-path alias); nothing mints new paths from it, and it
+ * goes when the migration unit does.
  */
 export function bindingSlug(binding: RegistryBinding): string {
   return createHash('sha256')
@@ -92,8 +93,9 @@ export function bindingSlug(binding: RegistryBinding): string {
  * (`sha256(workspace_id)` prefix). New managed paths use the RAW
  * workspace id validated by `assertSafeWorkspaceIdSegment` — the id
  * generator is filesystem-safe base64url, and validating beats hashing
- * into an unreadable name. Kept ONLY for the migration's and the alias's
- * legacy-side coordinates.
+ * into an unreadable name. Kept ONLY for the one-time migration's
+ * legacy-side coordinates (#task:1612 deleted the alias consumer); it
+ * goes when the migration unit does.
  */
 export function managedWorkspaceSlug(workspaceId: string): string {
   return createHash('sha256').update(workspaceId).digest('hex').slice(0, 32);
@@ -238,16 +240,6 @@ export interface WorkspaceRegistryOptions {
    */
   legacyWorkspacesRoot?: string;
   /**
-   * #task:1596 — the EXACT pre-migration namespace dirs this daemon trusts
-   * (computed by `legacyNamespaceDirs` from the known legacy state dirs ×
-   * this daemon's own binding slugs). A stale server-side `workspace_path`
-   * proposing the pre-migration managed path re-binds idempotently ONLY
-   * when it equals `<one of these>/workspaces/<this id's slug>` — never by
-   * basename resemblance (a slug is computable, so a matching basename is
-   * not provenance). Absent/empty → the alias is off.
-   */
-  trustedLegacyNamespaceDirs?: readonly string[];
-  /**
    * #task:1596 round 3/4 (Cindy P1-3) — roots whose subtree, exact path, or
    * ANCESTORS a requested workspace path may never occupy (bidirectional
    * overlap): binding a workspace over these would let a later recursive
@@ -290,7 +282,6 @@ export class WorkspaceRegistry {
   private readonly binding: RegistryBinding;
   private readonly silverhandStateRoot: string | undefined;
   private readonly legacyWorkspacesRoot: string | undefined;
-  private readonly trustedLegacyNamespaceDirs: readonly string[];
   private readonly protectedRoots: readonly string[];
   private readonly now: () => number;
 
@@ -309,9 +300,6 @@ export class WorkspaceRegistry {
     this.legacyWorkspacesRoot = opts.legacyWorkspacesRoot
       ? resolve(opts.legacyWorkspacesRoot)
       : undefined;
-    this.trustedLegacyNamespaceDirs = (opts.trustedLegacyNamespaceDirs ?? []).map(
-      dir => resolve(dir),
-    );
     this.protectedRoots = (opts.protectedRoots ?? []).map(dir => resolve(dir));
     this.now = opts.now ?? (() => Date.now());
   }
@@ -359,11 +347,12 @@ export class WorkspaceRegistry {
    *
    * Two path regimes, one operation (A — single intent, Cindy #720 + shiki):
    * - `requestedPath` ABSENT → daemon self-picks a deterministic managed
-   *   path (`<stateDir>/<binding-slug>/workspaces/<workspace-slug>`). The
-   *   slug is a hash of the id, so managed paths are 1:1 with ids and can
-   *   never collide across workspaces.
+   *   path (`<stateDir>/workspaces/<workspace_id>` — the RAW id after
+   *   `assertSafeWorkspaceIdSegment` structural validation, #task:1608).
+   *   Ids are unique per registry and case-fold-guarded, so managed paths
+   *   are 1:1 with ids and can never collide across workspaces.
    * - `requestedPath` PRESENT → the caller-proposed host path (M1 folder
-   *   picker / sandbox typed path / legacy backfill). The daemon
+   *   picker / sandbox typed path). The daemon
    *   RE-VALIDATES it (`validateRequestedPath`) — it does not blindly
    *   trust the backend — then binds it verbatim.
    *
@@ -376,8 +365,9 @@ export class WorkspaceRegistry {
    * - different id + an OVERLAPPING requested path → `path_conflict`. Two
    *   workspaces must never bind equal OR nested roots (P1-2): a recursive
    *   purge of the outer one would delete the inner one. Cannot arise for
-   *   managed paths (slug is per-id; a requested path can never be inside
-   *   the managed root — `validateRequestedPath` rejects that).
+   *   managed paths (the dir name is the unique id; a requested path can
+   *   never be inside the managed root — `validateRequestedPath` rejects
+   *   that).
    *
    * A foreign/corrupt registry throws and is NOT clobbered.
    */
@@ -392,36 +382,12 @@ export class WorkspaceRegistry {
       }
       // Idempotent-first (D4.e-1 3b-2): re-binding an id to the SAME absolute
       // path it already holds is ALWAYS a no-op — even when that path is the
-      // daemon-managed one. The backend migration backfill re-provisions
-      // every regular row by its stored `workspace_path`, and a
-      // managed-default row's stored path lives INSIDE the managed root,
-      // which `validateRequestedPath` would otherwise reject as
-      // `invalid_path`. Comparing the resolved path before structural
-      // validation keeps a faithful re-bind from spuriously failing. (A
-      // relative path still falls through to validation → `invalid_path`.)
+      // daemon-managed one, which `validateRequestedPath` would otherwise
+      // reject as `invalid_path`. Comparing the resolved path before
+      // structural validation keeps a faithful re-bind from spuriously
+      // failing. (A relative path still falls through to validation →
+      // `invalid_path`.)
       if (isAbsolute(requestedPath) && resolve(requestedPath) === existing.path) {
-        return { path: existing.path, created: false };
-      }
-      // #task:1596/#task:1608 stale-path alias: earlier layouts placed this
-      // id's managed root under a per-binding namespace with a hashed dir
-      // name, and the server's legacy `workspace_path` column may still
-      // propose that PRE-migration coordinate. Accept it as a faithful
-      // re-bind ONLY when the existing binding is this id's own
-      // deterministic managed path AND the proposal is EXACTLY the managed
-      // path this id would have had under one of the explicitly trusted
-      // legacy namespaces — structural provenance, never basename
-      // resemblance (the slug is computable by anyone). The reply carries
-      // the current bound path, which heals the server's stale column.
-      if (
-        isAbsolute(requestedPath) &&
-        SAFE_WORKSPACE_ID_SEGMENT.test(workspaceId) &&
-        existing.path === join(this.managedRoot, workspaceId) &&
-        this.trustedLegacyNamespaceDirs.some(
-          nsDir =>
-            resolve(requestedPath) ===
-            join(nsDir, MANAGED_WORKSPACES_DIR, managedWorkspaceSlug(workspaceId)),
-        )
-      ) {
         return { path: existing.path, created: false };
       }
       // Different path: validate it first (so a structurally bad proposal

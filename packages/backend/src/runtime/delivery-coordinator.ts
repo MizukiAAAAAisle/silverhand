@@ -289,8 +289,8 @@ export interface RuntimeExitMeta {
  * #task:1417 Stage 2b — this is `runtime_deliver`, the SOLE message
  * delivery command. `spawn_options` is NOT part of this signature: the
  * fanout's bridge closure injects it (it needs conversation/workspace
- * lookups) and runs the fs guards (host-consistency + registry
- * backfill) before dispatch, because the daemon owns the spawn-vs-admit
+ * lookups) and runs the fs guards (host-consistency + pre-spawn L2
+ * seed) before dispatch, because the daemon owns the spawn-vs-admit
  * decision and any deliver may spawn. The sync result is a custody
  * DISPOSITION (`spawning`/`admitted`/`refused`) that carries NO ack —
  * `delivered_at` moves ONLY on the async `runtime_delivery_consumed`

@@ -25,8 +25,8 @@ import {
  * Owns the full `DELETE /api/agents/:id` destructive cascade that previously
  * lived in the route body: materialization-status dispatch, authorization,
  * confirm gate, hard-stop of running conversation agents, the fail-closed
- * registry-backfill + daemon `agent_files_purge` sequence (no DB row is deleted
- * until the purge acks), the regular-membership/conversation teardown, the DM
+ * daemon `agent_files_purge` sequence (no DB row is deleted until the purge
+ * acks), the regular-membership/conversation teardown, the DM
  * attachment sweep, and the final agent-row delete.
  *
  * HTTP-agnostic by construction (spec §1.1): it returns a typed
@@ -86,8 +86,8 @@ export type DeleteAgentControlPlaneOnlyResult =
 
 /**
  * Named result — no HTTP status policy. The route maps kind → status/body with
- * an exhaustive `switch` + `never` fallback. The four fail-closed sources
- * (registry backfill / outbound resolve / purge dispatch / partial purge) all
+ * an exhaustive `switch` + `never` fallback. The fail-closed sources
+ * (outbound resolve / purge dispatch / partial purge) all
  * collapse into `failClosed`, whose body is uniformly `{ error, code }` at the
  * carried `status`.
  */
@@ -161,11 +161,10 @@ export async function deleteAgent(
 
   // 2. Purge the agent's host-local files on the OWNING daemon BEFORE any DB
   //    mutation. §3.3 fail-fast commit boundary: DB rows are NOT deleted until
-  //    the purge acks. Before the purge, re-bind every regular membership into
-  //    the owning daemon's registry (idempotent), and fail-closed if any row
-  //    can't be bound — otherwise the purge would report it as
-  //    `skipped_unprovisioned` and silently leave the L2 tree on disk while we
-  //    delete the DB row.
+  //    the purge acks. The daemon resolves each regular workspace from its
+  //    registry alone; a membership it never provisioned comes back as
+  //    `skipped_unprovisioned`, which fails the delete closed instead of
+  //    silently leaving an L2 tree on disk while we delete the DB row.
   const purge = await purgeAgentHostLocalFiles(deps, agent, impact);
   if (purge.kind === 'failClosed') return purge;
 
@@ -281,43 +280,13 @@ async function purgeAgentHostLocalFiles(
   | { kind: 'purged'; purgedCount: number; skippedUnprovisioned: number }
   | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus }
 > {
-  const { ctx, workspaces } = deps;
-  // #task:1600 — the purge runs on the AGENT's computer; each membership's
-  // ensure row follows the #1596 pathless-guest plan: forward the legacy
-  // home `workspace_path` only for workspaces whose home computer IS the
-  // agent's host; a foreign (guest) membership ensures with `null` so the
-  // guest daemon resolves/provisions its own managed root — the home path
-  // never crosses machines and a coincidentally-existing foreign path can
-  // never be mis-bound and purged.
-  const backfillRows: { id: string; workspace_path: string | null }[] = [];
-  for (const ws of impact.regular_memberships) {
-    const w = workspaces.get(ws.id);
-    if (w) {
-      backfillRows.push({
-        id: w.id,
-        workspace_path:
-          w.workspace_host_id === agent.host_id ? w.workspace_path : null,
-      });
-    }
-  }
-  if (backfillRows.length > 0) {
-    const backfill = await ctx.workspaceRegistryBackfiller?.ensure(
-      agent.host_id,
-      backfillRows,
-    );
-    if (backfill && backfill.status !== 'ok' && backfill.status !== 'noop') {
-      const f = backfill.failed[0];
-      return {
-        kind: 'failClosed',
-        error:
-          f?.message ??
-          'workspace registry backfill failed; cannot purge agent files',
-        code: f?.code ?? 'host_attach_pending',
-        status: f && !f.retriable ? 502 : 503,
-      };
-    }
-  }
-
+  const { ctx } = deps;
+  // #task:1612 — the purge performs NO workspace provision: the registry
+  // is the sole authority, and the daemon's agent_files_purge already
+  // reports an unbound workspace as skipped_unprovisioned (typed), which
+  // keeps the DB rows and fails the delete closed. The retired pre-purge
+  // backfill would have MINTED an empty root on the agent's computer just
+  // to delete it.
   const outbound = resolveOutboundForHost(
     ctx.outboundFrameAdapter?.() ?? null,
     agent.host_id,

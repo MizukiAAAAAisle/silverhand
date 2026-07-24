@@ -128,7 +128,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     );
   });
 
-  it('add-member control: a SAME-HOST add re-binds with the legacy home path', async () => {
+  it('add-member control (#task:1612): a SAME-HOST add provisions NOTHING — the workspace was realized at creation; seed only', async () => {
     t = buildTestApp();
     const ws = await createWorkspaceViaRoute(t, 'home-ws-2', []);
     const localId = await makeLocalAgent(t, 'local-adder');
@@ -148,10 +148,12 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     );
     expect(result.ok).toBe(true);
 
-    const provisions = provisionCalls(t);
-    expect(provisions).toHaveLength(1);
-    expect(provisions[0]!.hostId).toBe(ws.workspace_host_id);
-    expect(provisions[0]!.params.requested_path).toBe(ws.workspace_path);
+    // No provision at all (a missing binding would surface via the seed's
+    // typed workspace_not_provisioned — never healed from the DB path).
+    expect(provisionCalls(t)).toHaveLength(0);
+    const seeds = seedCalls(t);
+    expect(seeds).toHaveLength(1);
+    expect(seeds[0]!.hostId).toBe(ws.workspace_host_id);
   });
 
   it('create-with-members: mixed members seed on their OWN daemons — guest pathless, home path never crosses', async () => {
@@ -232,7 +234,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     }
   });
 
-  it('delete-agent purge: mixed memberships plan same-host WITH the home path and foreign PATHLESS; purge covers both workspaces', async () => {
+  it('delete-agent purge: mixed same-host + foreign memberships purge with ZERO provision dispatches; purge covers both workspaces', async () => {
     t = buildTestApp();
     const agentId = await makeLocalAgent(t, 'doomed');
     const homeWs = await createWorkspaceViaRoute(t, 'purge-home', [agentId]);
@@ -248,12 +250,22 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
           VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
       )
       .run('ws-foreign-del', 'foreign-del', '/home/elsewhere/project', guestHost, now, now);
-    t.ctx.db
-      .prepare(
-        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
-          VALUES (?, ?, ?)`,
-      )
-      .run('ws-foreign-del', agentId, now);
+    // #task:1612 — the membership is ESTABLISHED properly (guest pathless
+    // provision + seed + commit on the agent's daemon), so the purge later
+    // finds a real local realization instead of relying on the retired
+    // pre-purge backfill.
+    const established = await addWorkspaceAgentMember(
+      { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces: new WorkspaceRepo(t.ctx.db) },
+      {
+        workspace: {
+          id: 'ws-foreign-del',
+          workspace_path: '/home/elsewhere/project',
+          workspace_host_id: guestHost,
+        },
+        agentId,
+      },
+    );
+    expect(established.ok).toBe(true);
     t.fakeHostWs!.calls.length = 0;
 
     const result = await deleteAgent(
@@ -268,20 +280,11 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     );
     expect(result.kind).toBe('deleted');
 
-    // Purge runs on the AGENT's computer only; both ensure rows are planned
-    // there: home ws with its legacy path, foreign ws PATHLESS — the foreign
-    // home path (`/home/elsewhere/project`) must never appear.
-    const provisions = provisionCalls(t);
-    const byWorkspace = new Map(
-      provisions.map(c => [c.params.workspace_id as string, c]),
-    );
-    const homeCall = byWorkspace.get(homeWs.id);
-    expect(homeCall).toBeDefined();
-    expect(homeCall!.params.requested_path).toBe(homeWs.workspace_path);
-    const foreignCall = byWorkspace.get('ws-foreign-del');
-    expect(foreignCall).toBeDefined();
-    expect('requested_path' in foreignCall!.params).toBe(false);
-    for (const c of provisions) {
+    // #task:1612 — the purge performs NO provision (an unbound workspace
+    // surfaces as skipped_unprovisioned; nothing mints an empty root just
+    // to delete it), and no home path ever crosses machines.
+    expect(provisionCalls(t)).toHaveLength(0);
+    for (const c of t.fakeHostWs!.calls) {
       expect(JSON.stringify(c.params)).not.toContain('/home/elsewhere/project');
     }
 

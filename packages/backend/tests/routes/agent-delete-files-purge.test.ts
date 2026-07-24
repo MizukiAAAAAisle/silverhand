@@ -114,12 +114,12 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     expect((await http(t).get(`/api/agents/${agentId}`)).status).toBe(200);
   });
 
-  // P1-1 (Cindy XHjiAeZ9hPOZoX3N): a pre-D4.e legacy membership may have no
-  // registry binding when DELETE runs. The route must re-bind every regular
-  // membership (workspace_provision) BEFORE the purge so the daemon can resolve
-  // the real legacy L2 path — otherwise the purge skips it and we'd delete the
-  // DB row while leaving the L2 tree on disk.
-  it('backfills the registry (workspace_provision) before the purge, then deletes', async () => {
+  // #task:1612 — DELETE performs NO provision: the registry is the sole
+  // authority and the workspace was realized at creation/membership time.
+  // (The retired pre-purge backfill would have minted an empty root just
+  // to delete it.) The purge dispatches directly and covers the
+  // membership's workspace.
+  it('purges directly with ZERO workspace_provision before the purge, then deletes', async () => {
     t = buildTestApp();
     const agentId = await makeActiveAgent(t, 'dave');
     const ws = (await (
@@ -134,15 +134,11 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     expect(del.status).toBe(204);
 
     const kinds = t.fakeHostWs!.calls.map(c => c.kind);
-    const provisionIdx = kinds.indexOf('workspace_provision');
+    expect(kinds).not.toContain('workspace_provision');
     const purgeIdx = kinds.indexOf('agent_files_purge');
-    // The membership was re-bound (workspace_provision) and that bind happened
-    // strictly before the purge dispatch.
-    expect(provisionIdx).toBeGreaterThanOrEqual(0);
     expect(purgeIdx).toBeGreaterThanOrEqual(0);
-    expect(provisionIdx).toBeLessThan(purgeIdx);
-    const provisionCall = t.fakeHostWs!.calls[provisionIdx]!;
-    expect((provisionCall.params as any).workspace_id).toBe(ws.workspace.id);
+    const purgeCall = t.fakeHostWs!.calls[purgeIdx]!;
+    expect((purgeCall.params as any).workspace_ids).toContain(ws.workspace.id);
   });
 
   // P1-1: an INCOMPLETE purge (daemon couldn't resolve a targeted workspace,

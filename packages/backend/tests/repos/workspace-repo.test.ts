@@ -97,36 +97,4 @@ describe('WorkspaceRepo', () => {
     ).toEqual({ c: 2 });
   });
 
-  it('listRegularForHost returns only regular workspaces bound to that host', () => {
-    // #task:1529 — the migration audit's candidate query is the only full-host
-    // enumeration of what must be provisioned, so it must strictly exclude
-    // other hosts and non-regular kinds (agent_home). A leak either way
-    // corrupts the audit's counts.
-    const { db, localHostId, workspace, a, workspaces } =
-      bootstrapWorkspaceAndAgents();
-
-    // agent_home on the SAME host — excluded (wrong kind).
-    workspaces.insertAgentHome({
-      agent: a,
-      workspacePath: join(tmpdir(), 'agents', a.id),
-    });
-
-    // A regular workspace on a DIFFERENT host — excluded (wrong host).
-    const otherHost = new HostRepo(db).create('other', 'remote');
-    const otherWs = workspaces.insert({
-      name: 'other-ops',
-      description: null,
-      workspacePath: testWorkspacePath('other-ops'),
-      workspaceHostId: otherHost.id,
-    });
-
-    const candidates = workspaces.listRegularForHost(localHostId);
-    expect(candidates.map(c => c.id)).toEqual([workspace.id]);
-    expect(candidates[0]).toMatchObject({
-      workspace_path: workspace.workspace_path,
-    });
-    expect(workspaces.listRegularForHost(otherHost.id).map(c => c.id)).toEqual([
-      otherWs.id,
-    ]);
-  });
 });

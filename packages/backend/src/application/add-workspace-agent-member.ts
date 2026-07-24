@@ -62,23 +62,18 @@ export async function addWorkspaceAgentMember(
   // ② pre-commit: L2 seed must succeed before we write the row (spec §2.1).
   // Cross-computer slice 2 (#task:1600): the seed targets the AGENT's own
   // daemon (`agent.host_id`) — L2 memory lives on the computer the agent
-  // runs on, which is not necessarily the workspace's home computer. The
-  // ensure row follows the #1596 pathless-guest plan: the legacy home
-  // `workspace_path` is forwarded ONLY when the agent IS on the workspace's
-  // home computer; a guest ensure ships `null` so the guest daemon
-  // self-picks its managed root — the home path never crosses machines.
+  // runs on. #task:1612: a GUEST member (agent on another computer than
+  // the workspace's home) first establishes a pathless local realization
+  // on its computer; a same-host member seeds directly — the workspace was
+  // realized at creation, and a missing binding fails closed via the
+  // seed's typed workspace_not_provisioned (no path ever crosses
+  // machines, no DB-path recovery exists).
   const seed = await seedMemberAgentL2(
     ctx,
     agent.host_id,
-    {
-      id: input.workspace.id,
-      workspace_path:
-        input.workspace.workspace_host_id === agent.host_id
-          ? input.workspace.workspace_path
-          : null,
-    },
+    input.workspace.id,
     agent.id,
-    { ensureProvisioned: true },
+    { guestRealization: input.workspace.workspace_host_id !== agent.host_id },
   );
   if (seed.kind === 'failed') {
     return { ok: false, error: { code: 'seed_failed', failure: seed } };

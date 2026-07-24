@@ -33,7 +33,7 @@ import {
   OutboundRuntimeEventFanout,
   outboundEventToEventFrame,
 } from '../../src/runtime/outbound-event-fanout.js';
-import { AgentL2SeedEnsurer, WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
+import { AgentL2SeedEnsurer } from '../../src/runtime/agent-l2-seed-ensurer.js';
 import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import { DbRuntimeStatusProjector } from '../../src/runtime/status-projector.js';
@@ -1234,16 +1234,8 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('D4.e-6 — re-binds a legacy regular workspace (workspace_provision) BEFORE runtime_deliver, and the runtime_deliver spawn_options carry NO host paths', async () => {
-    const fix = makeFixture({
-      runtime: 'codex',
-      workspaceRegistryBackfiller: ({ transport, workspaces }) =>
-        new WorkspaceRegistryBackfiller({
-          workspaces,
-          outboundFrameAdapter: () =>
-            transport as unknown as OutboundFrameAdapter,
-        }),
-    });
+  it('#task:1612 — runtime_deliver dispatches NO workspace_provision, and spawn_options carry NO host paths', async () => {
+    const fix = makeFixture({ runtime: 'codex' });
     try {
       enqueueMessage(fix, 'start me');
       await expect(
@@ -1251,23 +1243,14 @@ describe('OutboundRuntimeEventFanout', () => {
       ).resolves.toBe(true);
 
       const kinds = fix.transport.calls.map(c => c.kind);
-      const provIdx = kinds.indexOf('workspace_provision');
+      // The spawn path performs NO provision (the registry is the sole
+      // authority; realization happened at creation/membership time).
+      expect(kinds).not.toContain('workspace_provision');
       const deliverIdx = kinds.indexOf('runtime_deliver');
-      // The legacy regular workspace is re-bound FIRST, then runtime_deliver.
-      // #task:1417 Stage 2b — the bridge closure runs the same backfill the
-      // old delivery-backed start ran, before dispatching runtime_deliver.
-      expect(provIdx).toBeGreaterThanOrEqual(0);
-      expect(deliverIdx).toBeGreaterThan(provIdx);
+      expect(deliverIdx).toBeGreaterThanOrEqual(0);
 
-      // The provision forwards the stored path as `requested_path` (the
-      // backfiller never assembles a path) — this is a provision/backfill
-      // seam, where carrying a host path is still legitimate.
-      const prov = fix.transport.calls[provIdx]!.params;
-      expect(prov).toMatchObject({ kind: 'regular' });
-      expect(typeof prov.requested_path).toBe('string');
-
-      // But the runtime_deliver spawn_options are SEMANTIC-only: no
-      // path/home_dir anywhere in the options tree (carve-out revoked).
+      // The runtime_deliver spawn_options are SEMANTIC-only: no
+      // path/home_dir anywhere in the options tree.
       const deliver = fix.transport.calls[deliverIdx]!.params;
       const spawnOptions = deliver.spawn_options as {
         workspace: Record<string, unknown>;
@@ -1287,64 +1270,17 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('D4.e-6 — a failed backfill BLOCKS runtime_deliver and keeps the rows pending for retry', async () => {
+  it('#task:1612 — a cross-host ACTIVE workspace spawns with ZERO provision too: guest realization is membership-time, not spawn-time', async () => {
     const fix = makeFixture({
       runtime: 'codex',
-      workspaceRegistryBackfiller: () =>
-        ({
-          ensure: (hostId: string, rows: { id: string; workspace_path: string }[]) =>
-            Promise.resolve({
-              hostId,
-              status: 'failed' as const,
-              provisioned: [],
-              alreadyBound: [],
-              failed: rows.map(r => ({
-                id: r.id,
-                code: 'daemon_unavailable' as const,
-                message: 'daemon offline',
-                retriable: true,
-              })),
-            }),
-        }) as unknown as WorkspaceRegistryBackfiller,
-    });
-    try {
-      const delivery = enqueueMessage(fix, 'start me');
-      // #task:1417 Stage 2b — the backfill guard now lives in the bridge's
-      // runtime_deliver closure and THROWS on failure (vs the old
-      // return-false). deliverPending rolls the claimed rows back and rethrows;
-      // either way the rows stay a durable retry anchor and NO runtime_deliver
-      // reaches the daemon (it would jam the daemon-side fail-closed).
-      await expect(
-        fix.fanout.deliverPending(fix.channelId, fix.agentId),
-      ).rejects.toThrow(/filesystem ensure incomplete/);
-      expect(fix.transport.deliverCalls()).toHaveLength(0);
-      // The claimed rows are rolled back to pending: a retry anchor, not a loss.
-      expect(
-        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
-      ).toEqual([delivery.inboxId]);
-    } finally {
-      fix.cleanup();
-    }
-  });
-
-  it('#task:1600 — a cross-host ACTIVE workspace is a legal guest: provision dispatches PATHLESS to the agent host and delivery proceeds (ex-I4 fail-closed)', async () => {
-    const fix = makeFixture({
-      runtime: 'codex',
-      workspaceRegistryBackfiller: ({ transport, workspaces }) =>
-        new WorkspaceRegistryBackfiller({
-          workspaces,
+      agentL2SeedEnsurer: ({ transport }) =>
+        new AgentL2SeedEnsurer({
           outboundFrameAdapter: () =>
             transport as unknown as OutboundFrameAdapter,
         }),
     });
     try {
       enqueueMessage(fix, 'start me');
-      // The conversation's workspace now lives on a DIFFERENT (real) host
-      // than the agent. Pre-#task:1600 this threw the I4 host-equality
-      // error; it is now the legal cross-computer guest shape: dispatch
-      // stays on the AGENT's host, the guest provision goes out WITHOUT
-      // the home computer's workspace_path (daemon self-picks its managed
-      // root, #task:1596), and runtime_deliver proceeds.
       const otherHostId = new HostRepo(fix.db).create('host-other', 'local').id;
       fix.db
         .prepare(`UPDATE workspaces SET workspace_host_id = ?`)
@@ -1352,12 +1288,9 @@ describe('OutboundRuntimeEventFanout', () => {
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
-      const provisions = fix.transport.calls.filter(
-        c => c.kind === 'workspace_provision',
-      );
-      expect(provisions).toHaveLength(1);
-      // Guest provision: the home computer's path must NOT cross over.
-      expect(provisions[0]!.params.requested_path ?? null).toBeNull();
+      expect(
+        fix.transport.calls.filter(c => c.kind === 'workspace_provision'),
+      ).toHaveLength(0);
       expect(fix.transport.deliverCalls()).toHaveLength(1);
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
     } finally {
@@ -1365,15 +1298,9 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('#task:1596 — strict pre-spawn order: workspace_provision → agent_l2_seed → runtime_deliver', async () => {
+  it('#task:1596/#task:1612 — strict pre-spawn order: agent_l2_seed → runtime_deliver, zero provision', async () => {
     const fix = makeFixture({
       runtime: 'codex',
-      workspaceRegistryBackfiller: ({ transport, workspaces }) =>
-        new WorkspaceRegistryBackfiller({
-          workspaces,
-          outboundFrameAdapter: () =>
-            transport as unknown as OutboundFrameAdapter,
-        }),
       agentL2SeedEnsurer: ({ transport }) =>
         new AgentL2SeedEnsurer({
           outboundFrameAdapter: () =>
@@ -1386,13 +1313,11 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
       const kinds = fix.transport.calls.map(c => c.kind);
-      const provIdx = kinds.indexOf('workspace_provision');
       const seedIdx = kinds.indexOf('agent_l2_seed');
       const deliverIdx = kinds.indexOf('runtime_deliver');
-      expect(provIdx).toBeGreaterThanOrEqual(0);
-      expect(seedIdx).toBeGreaterThan(provIdx);
+      expect(kinds).not.toContain('workspace_provision');
+      expect(seedIdx).toBeGreaterThanOrEqual(0);
       expect(deliverIdx).toBeGreaterThan(seedIdx);
-      // The seed targets the active workspace for the spawning agent.
       const seed = fix.transport.calls[seedIdx]!.params;
       expect(seed).toMatchObject({
         agent_id: fix.agentId,
@@ -1432,24 +1357,44 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('#task:1596 — peer workspaces never enter the pre-spawn ensure: only the ACTIVE workspace is provisioned/seeded', async () => {
-    const ensured: string[][] = [];
+  it('#task:1612 — a MISSING registry binding (typed workspace_not_provisioned from the seed) blocks the spawn; no provision heals it', async () => {
+    const fix = makeFixture({
+      runtime: 'codex',
+      agentL2SeedEnsurer: () =>
+        ({
+          ensure: async () => ({
+            ok: false,
+            failure: {
+              code: 'workspace_not_provisioned' as const,
+              message: 'workspace has no registry binding on this computer',
+              retriable: true,
+            },
+          }),
+        }) as unknown as AgentL2SeedEnsurer,
+    });
+    try {
+      const delivery = enqueueMessage(fix, 'start me');
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).rejects.toThrow(/filesystem ensure incomplete/);
+      // Fail closed: NO provision was dispatched to mint a fresh root over
+      // the missing binding, no deliver reached the daemon, rows retry.
+      expect(
+        fix.transport.calls.some(c => c.kind === 'workspace_provision'),
+      ).toBe(false);
+      expect(fix.transport.deliverCalls()).toHaveLength(0);
+      expect(
+        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
+      ).toEqual([delivery.inboxId]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('#task:1596 — peer workspaces never enter the pre-spawn ensure: only the ACTIVE workspace is seeded', async () => {
     const seeded: string[] = [];
     const fix = makeFixture({
       runtime: 'codex',
-      workspaceRegistryBackfiller: () =>
-        ({
-          ensure: async (hostId: string, rows: { id: string }[]) => {
-            ensured.push(rows.map(r => r.id));
-            return {
-              hostId,
-              status: 'ok' as const,
-              provisioned: rows.map(r => r.id),
-              alreadyBound: [],
-              failed: [],
-            };
-          },
-        }) as unknown as WorkspaceRegistryBackfiller,
       agentL2SeedEnsurer: () =>
         ({
           ensure: async (_h: string, workspaceId: string) => {
@@ -1459,10 +1404,6 @@ describe('OutboundRuntimeEventFanout', () => {
         }) as unknown as AgentL2SeedEnsurer,
     });
     try {
-      // A SECOND same-host regular workspace the agent is a member of — a
-      // memory-index peer. It must not be provisioned or seeded pre-spawn
-      // (same-host legacy migration is the hydrate audit's job; unbound
-      // peers degrade daemon-side to "unavailable on this computer").
       const workspaces = new WorkspaceRepo(fix.db);
       const peer = workspaces.insert({
         name: 'peer-ws',
@@ -1481,146 +1422,35 @@ describe('OutboundRuntimeEventFanout', () => {
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
-      // Exactly one ensure batch, containing exactly the active workspace.
-      expect(ensured).toEqual([[fix.workspaceId]]);
       expect(seeded).toEqual([fix.workspaceId]);
-    } finally {
-      fix.cleanup();
-    }
-  });
-
-  it('#task:1596 — a regular-workspace spawn with UNWIRED filesystem deps fails closed (no dispatch)', async () => {
-    for (const missing of ['backfiller', 'seeder'] as const) {
-      // The wiring check runs BEFORE any side effect: in the missing-seeder
-      // arm the (real, transport-wired) backfiller must not have provisioned
-      // anything either — a half-run ensure chain would mask an assembly
-      // regression.
-      const fix = makeFixture({
-        runtime: 'codex',
-        ...(missing === 'backfiller'
-          ? { workspaceRegistryBackfiller: null }
-          : {
-              workspaceRegistryBackfiller: ({ transport, workspaces }) =>
-                new WorkspaceRegistryBackfiller({
-                  workspaces,
-                  outboundFrameAdapter: () =>
-                    transport as unknown as OutboundFrameAdapter,
-                }),
-              agentL2SeedEnsurer: null,
-            }),
-      });
-      try {
-        const delivery = enqueueMessage(fix, 'start me');
-        await expect(
-          fix.fanout.deliverPending(fix.channelId, fix.agentId),
-        ).rejects.toThrow(/filesystem ensure incomplete/);
-        expect(
-          fix.transport.calls.some(c => c.kind === 'workspace_provision'),
-        ).toBe(false);
-        expect(
-          fix.transport.calls.some(c => c.kind === 'agent_l2_seed'),
-        ).toBe(false);
-        expect(fix.transport.deliverCalls()).toHaveLength(0);
-        expect(
-          fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
-        ).toEqual([delivery.inboxId]);
-      } finally {
-        fix.cleanup();
-      }
-    }
-  });
-
-  it('#task:1529 — on daemon hydrate, actively audits the host and logs a redacted migration summary WITHOUT spawning', async () => {
-    const infos: Record<string, unknown>[] = [];
-    const fix = makeFixture({
-      runtime: 'codex',
-      logger: {
-        info: (obj: unknown) => infos.push(obj as Record<string, unknown>),
-        warn: () => {},
-        error: () => {},
-      },
-      workspaceRegistryBackfiller: ({ transport, workspaces }) =>
-        new WorkspaceRegistryBackfiller({
-          workspaces,
-          outboundFrameAdapter: () =>
-            transport as unknown as OutboundFrameAdapter,
-        }),
-    });
-    try {
-      await hydrateRuntime(fix, 'ready', {});
-      await waitFor(() =>
-        infos.some(o => o.action === 'workspace_registry_migration_audit'),
-      );
-      const audit = infos.find(
-        o => o.action === 'workspace_registry_migration_audit',
-      )!;
-      // The host's single legacy regular workspace is audited: one candidate,
-      // no failures, migration reported complete. (FakeTransport provisions it
-      // with provisioned:true, so it lands as a fresh bind this run.)
-      expect(audit).toMatchObject({
-        hostId: fix.hostId,
-        workspace_count: 1,
-        failed_count: 0,
-        failure_codes: [],
-        migration_complete: true,
-      });
       expect(
-        (audit.provisioned_count as number) +
-          (audit.already_bound_count as number),
-      ).toBe(1);
-      // The audit only re-binds the registry — it must never drive a spawn.
-      const kinds = fix.transport.calls.map(c => c.kind);
-      expect(kinds).toContain('workspace_provision');
-      expect(kinds).not.toContain('runtime_start');
+        fix.transport.calls.some(c => c.kind === 'workspace_provision'),
+      ).toBe(false);
     } finally {
       fix.cleanup();
     }
   });
 
-  it('#task:1529 — a failed provision surfaces as migration_complete:false + failure code in the audit (still no spawn)', async () => {
-    const infos: Record<string, unknown>[] = [];
+  it('#task:1596/#task:1612 — a regular-workspace spawn with an UNWIRED seed dep fails closed (no dispatch)', async () => {
     const fix = makeFixture({
       runtime: 'codex',
-      logger: {
-        info: (obj: unknown) => infos.push(obj as Record<string, unknown>),
-        warn: () => {},
-        error: () => {},
-      },
-      workspaceRegistryBackfiller: () =>
-        ({
-          ensure: (
-            hostId: string,
-            rows: { id: string; workspace_path: string }[],
-          ) =>
-            Promise.resolve({
-              hostId,
-              status: 'failed' as const,
-              provisioned: [],
-              alreadyBound: [],
-              failed: rows.map(r => ({
-                id: r.id,
-                code: 'invalid_workspace_path' as const,
-                message: 'bad path',
-                retriable: false,
-              })),
-            }),
-        }) as unknown as WorkspaceRegistryBackfiller,
+      agentL2SeedEnsurer: null,
     });
     try {
-      await hydrateRuntime(fix, 'ready', {});
-      await waitFor(() =>
-        infos.some(o => o.action === 'workspace_registry_migration_audit'),
-      );
-      const audit = infos.find(
-        o => o.action === 'workspace_registry_migration_audit',
-      )!;
-      expect(audit).toMatchObject({
-        migration_complete: false,
-        failed_count: 1,
-        failure_codes: ['invalid_workspace_path'],
-      });
-      // A workspace-scoped provision failure must never escalate into a spawn.
-      expect(fix.transport.calls.map(c => c.kind)).not.toContain('runtime_start');
+      const delivery = enqueueMessage(fix, 'start me');
+      await expect(
+        fix.fanout.deliverPending(fix.channelId, fix.agentId),
+      ).rejects.toThrow(/filesystem ensure incomplete/);
+      expect(
+        fix.transport.calls.some(c => c.kind === 'workspace_provision'),
+      ).toBe(false);
+      expect(
+        fix.transport.calls.some(c => c.kind === 'agent_l2_seed'),
+      ).toBe(false);
+      expect(fix.transport.deliverCalls()).toHaveLength(0);
+      expect(
+        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
+      ).toEqual([delivery.inboxId]);
     } finally {
       fix.cleanup();
     }
@@ -2452,14 +2282,6 @@ function makeFixture(
     runtime?: RuntimeKind;
     clearSessionExitTimeoutMs?: number;
     logger?: typeof SILENT_LOGGER;
-    workspaceRegistryBackfiller?:
-      | ((ctx: {
-          transport: FakeTransport;
-          workspaces: WorkspaceRepo;
-        }) => WorkspaceRegistryBackfiller)
-      | null;
-    /** #task:1596 — pre-spawn L2 seed ensurer. Default: permissive fake
-     *  (regular-workspace spawns fail closed without one). `null` omits. */
     agentL2SeedEnsurer?:
       | ((ctx: { transport: FakeTransport }) => AgentL2SeedEnsurer)
       | null;
@@ -2505,26 +2327,10 @@ function makeFixture(
       events.push({ conv, kind: payload.kind, payload: payload.payload }),
   };
   const transport = new FakeTransport();
-  // #task:1596 — filesystem ensure deps are LOAD-BEARING for regular
-  // spawns (missing → fail closed), so the fixture defaults to permissive
-  // in-memory fakes. A test opts into the real classes (wired to the fake
-  // transport) or into `null` to exercise the fail-closed arm.
-  const backfiller =
-    opts.workspaceRegistryBackfiller === null
-      ? undefined
-      : opts.workspaceRegistryBackfiller?.({ transport, workspaces }) ??
-        ({
-          ensure: async (
-            hostId: string,
-            rows: { id: string }[],
-          ) => ({
-            hostId,
-            status: 'ok' as const,
-            provisioned: rows.map(r => r.id),
-            alreadyBound: [],
-            failed: [],
-          }),
-        } as unknown as WorkspaceRegistryBackfiller);
+  // #task:1596/#task:1612 — the L2 seed dep is LOAD-BEARING for regular
+  // spawns (missing → fail closed), so the fixture defaults to a
+  // permissive in-memory fake. A test opts into the real class (wired to
+  // the fake transport) or into `null` to exercise the fail-closed arm.
   const seedEnsurer =
     opts.agentL2SeedEnsurer === null
       ? undefined
@@ -2543,7 +2349,6 @@ function makeFixture(
       : { coLocatedHostId: opts.coLocatedHostId ?? localHostId }),
     agentTokens: new AgentTokenStore(),
     activityLog: null,
-    ...(backfiller ? { workspaceRegistryBackfiller: backfiller } : {}),
     ...(seedEnsurer ? { agentL2SeedEnsurer: seedEnsurer } : {}),
     ...(opts.clearSessionExitTimeoutMs !== undefined
       ? { clearSessionExitTimeoutMs: opts.clearSessionExitTimeoutMs }
@@ -2789,9 +2594,10 @@ class FakeTransport implements HostWsServerController {
       }) as Promise<OutboundServerCommandResult<K>>;
     }
     if (kind === 'workspace_provision') {
-      // D4.e-6 — the lazy backfill re-binds a legacy regular workspace by
-      // re-provisioning it with its stored path; the daemon ack is the
-      // authoritative bound path (here, the requested path, idempotently).
+      // Establishment-time provision ack (#task:1612 — the only provision
+      // flows left are workspace creation and guest membership); the daemon
+      // ack is the authoritative bound path (here, the requested path,
+      // idempotently).
       const requested = (params as { requested_path?: string }).requested_path;
       return Promise.resolve({
         ok: true,

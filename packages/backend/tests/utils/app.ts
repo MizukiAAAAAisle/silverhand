@@ -38,7 +38,6 @@ import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
-import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
 import { HostStatusReadModel } from '../../src/runtime/host-status-read-model.js';
 import { createApiRouter } from '../../src/routes.js';
 import { createInternalRouter } from '../../src/routes/internal-agent.js';
@@ -368,7 +367,7 @@ export class FakeHostWsServerController implements HostWsServerController {
    * registry: `workspace_provision` records `workspace_id → bound path`, and
    * `agent_workspace_index` resolves regular ids from it (missing → an
    * `unresolved` entry, like a never-provisioned id). This makes list tests
-   * actually depend on backfill/provision having run with the right
+   * actually depend on creation-time provision having run with the right
    * `requested_path` instead of the fake always succeeding.
    */
   private readonly boundWorkspacePaths = new Map<string, string>();
@@ -509,8 +508,8 @@ export class FakeHostWsServerController implements HostWsServerController {
       // agent_home (`wsah_<agent_id>`) from the homedir convention, regular
       // from the recorded registry bind (`workspace_provision`). A regular id
       // with NO recorded bind is `unresolved` (read fail-closed), so list
-      // tests must drive backfill/provision rather than relying on the fake
-      // to always succeed.
+      // tests must drive establishment-time provision rather than relying on
+      // the fake to always succeed.
       const entries: { workspace_id: string; agent_dir: string }[] = [];
       const unresolved: string[] = [];
       for (const workspace_id of p.workspace_ids) {
@@ -1055,12 +1054,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeView: hostId => ctx.hostRuntimeView?.(hostId) ?? null,
   });
   ctx.hostStatusReadModel = () => hostStatusReadModel;
-  // D4.e-1 3b-2/3b-3 — the same shared registry backfiller production wires,
-  // so list_workspaces ensure()s before dispatching agent_workspace_index.
-  ctx.workspaceRegistryBackfiller = new WorkspaceRegistryBackfiller({
-    workspaces: new WorkspaceRepo(db),
-    outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
-  });
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),

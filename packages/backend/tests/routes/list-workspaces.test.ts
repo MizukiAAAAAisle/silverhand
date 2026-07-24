@@ -160,24 +160,19 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(regular.agent_dir).toBe(`/daemon/stamped/${reg.workspaceId}`);
   });
 
-  it('runs the registry backfill before resolving: dispatches workspace_provision for legacy rows', async () => {
+  it('#task:1612 — list dispatches ONLY agent_workspace_index: zero workspace_provision on the read path', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
-    const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
+    await createRegularWorkspace(t, 'team-x', [alice.agentId]);
     // Drop create-time provision calls so we observe ONLY the list path.
     t.fakeHostWs!.calls.length = 0;
 
     const res = await http(t).get(listWorkspacesPath(alice.dmChannelId, alice.agentId));
     expect(res.status).toBe(200);
 
-    const provisionCalls = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'workspace_provision',
-    );
-    // The backfill re-provisions the regular row with its stored path as
-    // requested_path (idempotent re-bind), BEFORE the index dispatch.
-    expect(provisionCalls.some(c => c.params.workspace_id === reg.workspaceId)).toBe(
-      true,
-    );
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
+    ).toHaveLength(0);
     const indexCalls = t.fakeHostWs!.calls.filter(
       c => c.kind === 'agent_workspace_index',
     );
@@ -188,12 +183,12 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     await createRegularWorkspace(t, 'team-x', [alice.agentId]);
-    // Daemon detaches AFTER setup: the next dispatch (backfill provision)
-    // fails with a transport error → fail-closed, no fallback.
+    // Daemon detaches AFTER setup: the next dispatch (the index) fails
+    // with a transport error → fail-closed, no fallback.
     t.fakeHostWs!.sendCommandError = new HostWsCommandTransportError(
       'transport_no_connection',
       'host runtime detached',
-      { hostId: 'local', commandKind: 'workspace_provision', requestId: 'r' },
+      { hostId: 'local', commandKind: 'agent_workspace_index', requestId: 'r' },
     );
 
     const res = await http(t).get(listWorkspacesPath(alice.dmChannelId, alice.agentId));
@@ -262,14 +257,12 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const regular = body.workspaces.find((w: any) => w.id === reg.workspaceId);
     expect(typeof regular.agent_dir).toBe('string');
 
-    // Load-bearing #task:1600 pin: the guest workspace's HOME-computer
-    // `workspace_path` must never be dispatched as a legacy re-bind
-    // (`workspace_provision` requested_path) onto ALICE's daemon.
-    const provisioned = t.fakeHostWs!.calls
-      .filter(c => c.kind === 'workspace_provision')
-      .map(c => c.params.workspace_id);
-    expect(provisioned).not.toContain('ws-other-host');
-    expect(provisioned).toContain(reg.workspaceId);
+    // #task:1612 — the read path provisions NOTHING (a fortiori the guest
+    // workspace's home path can never be legacy-bound onto alice's daemon).
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
+    ).toHaveLength(0);
+    void reg;
   });
 
   it('exposes archived flag and immutable identity fields on each entry', async () => {
@@ -296,18 +289,16 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(home.archived).toBe(false);
   });
 
-  it('backfill binds ARCHIVED legacy regular rows too → list returns daemon-stamped agent_dir, not 409 unresolved', async () => {
+  it('#task:1612 — a same-host row with NO registry binding fails the list closed (409, no healing, no provision)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     // Drop create-time fan-out so we observe only the list path below.
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
 
-    // Forge a LEGACY archived regular workspace: a row that exists with a
-    // cached workspace_path but has NO registry binding (never provisioned),
-    // and is already archived. It must be on the SAME host as alice's other
-    // workspaces (else the single-host invariant fires first). The backfill
-    // must enumerate archived rows too and bind them, so the list resolves
-    // a daemon-stamped agent_dir rather than failing closed on `unresolved`.
+    // #task:1612 — a SAME-HOST row with NO registry binding is a DATA
+    // INCONSISTENCY: the list must fail closed on the daemon's
+    // `unresolved` (409), never heal it from the DB path and never mint
+    // a fresh root. (Pre-#1612 the lazy backfill re-bound it here.)
     const db = t.ctx.db;
     const hostId = (
       db
@@ -328,24 +319,26 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     ).run('ws-legacy-arch', alice.agentId, now);
 
     try {
+      t.fakeHostWs!.calls.length = 0;
       const res = await http(t).get(
         listWorkspacesPath(alice.dmChannelId, alice.agentId),
       );
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(409);
       const body = await res.json() as any;
-      const arch = body.workspaces.find((w: any) => w.id === 'ws-legacy-arch');
-      expect(arch).toBeDefined();
-      expect(arch.archived).toBe(true);
-      // Resolved (not unresolved) and daemon-stamped from the bound path.
-      expect(arch.agent_dir).toBe(
-        join(legacyDir, '.silverhand', 'agents', alice.agentId),
-      );
+      expect(body.code).toBe('workspace_unresolved');
+      expect(body.error).toContain('ws-legacy-arch');
+      // Fail closed WITHOUT healing: no provision was dispatched, no
+      // fabricated agent_dir leaked.
+      expect(
+        t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
+      ).toHaveLength(0);
+      expect(body.workspaces).toBeUndefined();
     } finally {
       rmSync(legacyDir, { recursive: true, force: true });
     }
   });
 
-  it('a same-host NON-MEMBER legacy regular row never enters the current agent backfill (P1-2 scope)', async () => {
+  it('a same-host NON-MEMBER unbound regular row never affects the current agent list (per-visible-row scope)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -353,10 +346,9 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     t.fakeHostWs!.calls.length = 0;
 
     // Insert a same-host regular workspace alice is NOT a member of, with NO
-    // registry binding. Pre-fix the backfill enumerated EVERY regular row on
-    // the host, so this unbound stranger row would dispatch (and a bad path
-    // could fail-close alice's whole list). Now backfill is scoped to alice's
-    // VISIBLE regular rows, so the stranger is never touched.
+    // registry binding. The list resolves only alice's VISIBLE rows, so this
+    // unbound stranger row is never dispatched and can never fail-close
+    // alice's list (#task:1612: it is never provisioned either).
     const db = t.ctx.db;
     const hostId = (
       db

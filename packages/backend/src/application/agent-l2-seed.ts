@@ -1,6 +1,7 @@
 import type { BackendContext } from '../context.js';
 import {
   dispatchAgentL2Seed,
+  dispatchWorkspaceProvision,
   resolveOutboundForHost,
   type DataPlaneFailure,
 } from '../runtime/workspace-data-plane.js';
@@ -21,63 +22,42 @@ import {
  * seeded" half-state. A crash AFTER seed but BEFORE the row leaves only a
  * benign orphan L2 dir (idempotent, reused on retry).
  *
- * This is HTTP-agnostic by design (spec §1.1, Cindy review constraint ③) —
- * it lives outside `routes.ts` and returns a typed result so the use case can
- * import it without dragging in the Hono adapter; callers map the failure to
- * their own transport.
- *
- * `ensureProvisioned` controls the lazy registry backfill: the member-add
- * use case passes `true` (a pre-D4.e legacy workspace may have no registry
- * binding yet, and a guest agent's daemon may never have seen this
- * workspace), while create-with-members passes it only for GUEST members —
- * the workspace was provisioned on its home computer earlier in the SAME
- * request, so re-binding per same-host member would be a redundant round
- * trip.
- *
- * `workspace.workspace_path` follows the #1596 pathless-guest contract the
- * caller plans: the legacy home path ONLY when the workspace's home
- * computer IS `hostId`; `null` otherwise, so the guest daemon self-picks
- * its managed root and the home computer's path never crosses machines
- * (and the guest bind's ack is never written back into the home
- * `workspaces.workspace_path` column — the backfiller enforces that).
+ * `guestRealization` (#task:1612) marks the ONE remaining provision entry
+ * point besides workspace creation: a GUEST agent joining a workspace on
+ * another computer first establishes a pathless local realization on ITS
+ * computer (the daemon self-picks the managed root — no path parameter
+ * exists on this flow, sealing the retired legacy DB-path rebind at the
+ * type level), then seeds. A same-host member never provisions here: the
+ * workspace was realized at creation, and a missing registry binding is a
+ * data inconsistency the seed surfaces as its typed
+ * `workspace_not_provisioned` — never healed by minting a fresh root.
  */
 export async function seedMemberAgentL2(
   ctx: BackendContext,
   hostId: string,
-  workspace: { id: string; workspace_path: string | null },
+  workspaceId: string,
   agentId: string,
-  opts: { ensureProvisioned: boolean },
+  opts: { guestRealization: boolean },
 ): Promise<{ kind: 'ok' } | DataPlaneFailure> {
-  // 1) Ensure the workspace is bound in the owning daemon's registry. Legacy
-  //    rows are lazily re-provisioned here; the create-with-members path
-  //    already provisioned in-request, so it skips this.
-  if (opts.ensureProvisioned) {
-    const backfill = await ctx.workspaceRegistryBackfiller?.ensure(hostId, [
-      { id: workspace.id, workspace_path: workspace.workspace_path },
-    ]);
-    if (backfill && backfill.status === 'failed') {
-      const f = backfill.failed[0];
-      return {
-        kind: 'failed',
-        code: f?.code ?? 'host_attach_pending',
-        message:
-          f?.message ?? 'workspace registry backfill failed; cannot seed agent L2',
-        status: f && !f.retriable ? 502 : 503,
-        retriable: f?.retriable ?? true,
-      };
-    }
-  }
-  // 2) Seed L2 on the owning daemon (fail-closed; never a server-side write).
   const outbound = resolveOutboundForHost(
     ctx.outboundFrameAdapter?.() ?? null,
     hostId,
   );
   if (outbound.kind === 'failed') return outbound;
+  if (opts.guestRealization) {
+    const provision = await dispatchWorkspaceProvision(
+      outbound.adapter,
+      hostId,
+      outbound.connectionId,
+      { workspace_id: workspaceId, kind: 'regular' },
+    );
+    if (provision.kind === 'failed') return provision;
+  }
   const seed = await dispatchAgentL2Seed(
     outbound.adapter,
     hostId,
     outbound.connectionId,
-    { agent_id: agentId, workspace_id: workspace.id, template_choice: 'default' },
+    { agent_id: agentId, workspace_id: workspaceId, template_choice: 'default' },
   );
   if (seed.kind === 'failed') return seed;
   return { kind: 'ok' };

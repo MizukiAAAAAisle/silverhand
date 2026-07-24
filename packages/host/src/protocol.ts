@@ -1668,13 +1668,13 @@ const AgentMaterializeIpcErrorSchema = z
 // and `runtime_deliver` may spawn, so both declare it; a typed code still
 // cannot leak onto a non-spawning intent's wire error.
 //   - `workspace_not_provisioned`: the regular workspace id is not bound
-//     in the daemon registry (legacy row never provisioned / never
-//     read-path-backfilled). Recoverable: the backend may backfill via
-//     `workspace_provision` and retry.
+//     in the daemon registry (this computer never established it —
+//     #task:1612: there is no lazy backfill; the binding is created at
+//     workspace creation or guest membership establishment, or never).
 //   - `workspace_path_missing`: the daemon resolved a semantic workspace
 //     ref, but the host-local path no longer exists or is not a directory
 //     (for example an old agent_home row created under another
-//     `SILVERHAND_DIR`). Not recoverable by registry backfill; the local
+//     `SILVERHAND_DIR`). Not recoverable by re-provisioning; the local
 //     files need to be restored/materialized.
 //   - `registry_unavailable`: the registry itself can't be consulted
 //     (daemon not attached to a control plane, or foreign/corrupt
@@ -1726,10 +1726,10 @@ export const WorkspaceProvisionParamsSchema = z
      * writability is NOT probed in the registry; it is proven at the
      * skeleton-creation stage, where an fs errno classifies as
      * `fs_unavailable` / `fs_quota_exceeded`. The authoritative result is
-     * always `bound_workspace_path`, NOT this field. Legacy backfill of a
-     * pre-D4.e `workspaces.workspace_path` is just a call that passes the
-     * old path here (idempotent on the same id→path). The backend NEVER
-     * interprets this path; it only decides whether to forward one.
+     * always `bound_workspace_path`, NOT this field. The backend NEVER
+     * interprets this path; it only decides whether to forward one
+     * (#task:1612: it is forwarded only at workspace creation — guest
+     * membership establishment provisions pathless).
      */
     requested_path: z.string().min(1).optional(),
   })
@@ -2325,7 +2325,7 @@ export const intentSchemas = {
     result: RuntimeStartResultSchema,
     // D4.e-6 — daemon now resolves all paths and fails closed on
     // unresolvable workspaces; the typed taxonomy lets the backend
-    // tell `workspace_not_provisioned` (backfill + retry),
+    // tell `workspace_not_provisioned` (never established here),
     // `workspace_path_missing` (host-local files missing), and
     // `registry_unavailable` (hard fail) apart from a generic
     // `internal_error`. Per-command scoped like agent_materialize.
@@ -2343,7 +2343,7 @@ export const intentSchemas = {
     result: RuntimeDeliverResultSchema,
     // `runtime_deliver` is the sole delivery command and its SPAWN arm runs
     // the same path resolver as `runtime_start`. Preserve those typed errors
-    // so the backend can backfill/retry instead of receiving taxonomy drift.
+    // so the backend reads the same taxonomy instead of taxonomy drift.
     error: RuntimeSpawnIpcErrorSchema,
   },
   runtime_status: {
@@ -2411,7 +2411,7 @@ export const intentSchemas = {
   // with its own taxonomy and nothing else, so a typed code from one
   // intent cannot leak onto another's wire error. `workspace_provision`
   // also carries the OPTIONAL caller-proposed `requested_path` (M1
-  // folder-picker / sandbox typed path / legacy backfill all unify here);
+  // folder-picker / sandbox typed path unify here);
   // when absent the daemon self-picks the managed default. There is NO
   // separate adopt/bind intent — path provisioning is one operation.
   workspace_provision: {

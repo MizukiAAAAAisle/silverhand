@@ -254,8 +254,8 @@ describe('indexAgentWorkspaces', () => {
 });
 
 // D4.e-1 (A — single intent): `provisionWorkspace` with a caller-PROPOSED
-// `requested_path` (M1 folder picker / sandbox typed path / legacy
-// backfill all unify here). The daemon re-validates the path host-side
+// `requested_path` (M1 folder picker / sandbox typed path
+// unify here). The daemon re-validates the path host-side
 // (absolute / not root / not home / not inside the managed root / not
 // already bound) before binding + creating the skeleton — it never
 // blindly trusts the backend.

@@ -14,10 +14,12 @@ import { mapFsErrno } from './fs-errno.js';
  * skeleton. ONE operation, two path regimes (A — single intent):
  * - no `requested_path` → daemon self-picks a deterministic managed path;
  * - `requested_path` present → daemon re-validates the caller-proposed
- *   host path (M1 folder picker / sandbox typed path / legacy backfill)
+ *   host path (M1 folder picker / sandbox typed path)
  *   then binds it.
- * The backend dispatches this at workspace-create time and keeps only
- * `workspace_id` (+ caches `bound_workspace_path` into the legacy column).
+ * The backend dispatches this at establishment time only — workspace
+ * creation (with a path) or guest membership establishment (pathless,
+ * #task:1612). It records the creation ack's `bound_workspace_path` as
+ * home-computer metadata but never resolves paths from it (I1).
  */
 
 export class WorkspaceProvisionError extends DaemonTypedError {

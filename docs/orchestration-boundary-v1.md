@@ -603,17 +603,20 @@ authority for every host-local absolute path.
   atomically at mode `0600`, scoped to exactly one `(server_origin, host_id)`
   binding recorded in its header. A registry whose recorded binding differs from
   the daemon's current binding is foreign and every op fails closed.
-- **Raw ids are never path components.** A regular workspace's managed path uses
-  a sha256 slug of its id, so a server-supplied id like `../escape` can never
-  leave the managed root; a caller-*requested* path is re-validated daemon-side
-  and rejected inside the managed root, the home dir, `/`, or the state root.
-  Agent-home derives deterministically from `homedir()` + agent_id
-  (`computeAgentDir`) and is not stored in the registry.
-- **Bounded lazy backfill.** Legacy pre-registry rows are re-bound before
-  dispatch by `WorkspaceRegistryBackfiller`, which dispatches only
-  `workspace_provision` (forwarding the stored path as a `requested_path` for
-  the daemon to re-validate); it is bounded, idempotent, and rolls back a
-  newly-created registry entry on partial/failed provision.
+- **Ids become path components only after strict validation.** A regular
+  workspace's managed dir is the VALIDATED raw workspace id
+  (`^[A-Za-z0-9_-]{1,64}$`, case-fold-unique — #task:1608); anything else
+  fails closed, so a server-supplied id like `../escape` can never become a
+  path. A caller-*requested* path is re-validated daemon-side and rejected
+  inside the managed root, the home dir, `/`, or the state root. Agent-home
+  derives deterministically from `homedir()` + agent_id (`computeAgentDir`)
+  and is not stored in the registry.
+- **No lazy backfill.** The legacy `WorkspaceRegistryBackfiller` (DB-path →
+  `requested_path` rebind) is retired (#task:1612, delete gate: fleet
+  `migration_complete=true`). The registry is the sole authority: provision
+  exists only at workspace creation (home computer) and at guest membership
+  establishment (pathless, on the guest's computer); read/spawn/purge fail
+  closed on a missing binding via their existing typed results.
 
 ### 5.2 Calling-boundary rule
 

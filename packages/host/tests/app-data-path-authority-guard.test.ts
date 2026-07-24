@@ -362,8 +362,8 @@ const VERSION_LITERAL_ALLOWLIST: Array<{
   {
     file: 'packages/host/src/daemon/workspace-registry/state-dir.ts',
     reason:
-      'bare-daemon fallback wrapper (defaultWorkspaceDataRootDir) + legacy source inventory (legacyWorkspaceDataSourceDirs, #task:1603 P0)',
-    count: 2,
+      'bare-daemon fallback wrapper (defaultWorkspaceDataRootDir; legacy source inventory retired with #task:1612)',
+    count: 1,
   },
   {
     file: 'packages/host/src/daemon/local-outbound-frame-server.ts',

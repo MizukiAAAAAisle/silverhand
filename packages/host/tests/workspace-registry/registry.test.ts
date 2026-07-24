@@ -236,16 +236,15 @@ describe('WorkspaceRegistry — provision with a caller-proposed path', () => {
     expect(reg.resolve('ws_1')).toBe(managed);
   });
 
-  // Idempotent-first (D4.e-1 3b-2): the backend migration backfill
-  // re-provisions every regular row by its stored `workspace_path`. For a
-  // managed-default row that path lives INSIDE the managed root, which the
-  // requested-path guards reject. Re-binding an id to the SAME path it
-  // already holds must be a faithful no-op even so — but ONLY for that exact
-  // id+path pair; the managed-root guard must still bite everyone else.
+  // Idempotent-first (D4.e-1 3b-2): re-binding an id to the SAME path it
+  // already holds is a faithful no-op even when that path lives INSIDE the
+  // managed root (which the requested-path guards reject for everyone
+  // else) — but ONLY for that exact id+path pair; the managed-root guard
+  // must still bite everyone else.
   it('managed-default id re-provisioned with its OWN managed path is idempotent (skips guards)', () => {
     const reg = makeRegistry(STANDALONE);
     const managed = reg.provision('ws_1').path; // inside the managed root
-    const again = reg.provision('ws_1', managed); // backfill re-bind by stored path
+    const again = reg.provision('ws_1', managed); // faithful re-bind by the exact bound path
     expect(again.created).toBe(false);
     expect(again.path).toBe(managed);
     expect(reg.resolve('ws_1')).toBe(managed);
@@ -372,7 +371,7 @@ describe('WorkspaceRegistry — state-root guard (P1-3)', () => {
     }
   });
 
-  it('allows a child of the generated workspaces root (legacy backfill)', () => {
+  it('allows a child of the generated workspaces root (pre-D4 external-path carve-out)', () => {
     const reg = makeGuarded();
     const legacyWs = `${LEGACY_ROOT}/ws-legacy-abc`;
     const result = reg.provision('ws_legacy', legacyWs);
