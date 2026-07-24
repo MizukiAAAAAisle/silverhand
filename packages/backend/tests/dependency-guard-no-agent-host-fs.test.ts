@@ -15,7 +15,7 @@
  * This guard enforces the invariant STRUCTURALLY by banning any `node:fs`
  * (or `fs` / `fs/promises`) import from `packages/backend/src` except an
  * explicit allow-list of BACKEND-LOCAL infrastructure modules — db, logs,
- * blob/attachment storage, the managed-workspaces-root bootstrap, and the
+ * blob/attachment storage, and the
  * embedded auth bootstrap. None of those resolve or write an agent-host
  * path; they own the server's own on-disk state. Any NEW fs importer trips
  * the guard and forces review: either it is more backend-local infra (extend
@@ -51,8 +51,7 @@ const SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
  *   - logger.ts                   → JSONL log files under ~/.silverhand/logs
  *   - storage/blob-file-storage.ts→ attachment/blob storage (backend-local)
  *   - runtime/activity-log-writer.ts → per-conversation activity log files
- *   - workspaces-root.ts           → ensureWorkspacesRoot (managed root dir)
- *   - index.ts                    → boot wiring (ensureWorkspacesRoot, dirs)
+ *   - index.ts                    → boot wiring (backend-local dirs)
  *   - auth/embedded-bootstrap.ts  → embedded identity/config bootstrap
  * Extend ONLY for genuine backend-local infra, with a comment saying why.
  */
@@ -61,7 +60,6 @@ const FS_ALLOWLIST = new Set<string>([
   'logger.ts',
   'storage/blob-file-storage.ts',
   'runtime/activity-log-writer.ts',
-  'workspaces-root.ts',
   'index.ts',
   'auth/embedded-bootstrap.ts',
 ]);

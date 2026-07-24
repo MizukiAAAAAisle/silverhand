@@ -63,6 +63,7 @@
  * multiplexer is host-isolated; no wire envelope shape change, no
  * new wire fields.
  */
+import { testWorkspacePath } from '../utils/db.js';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -139,15 +140,14 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   // Seed a workspace + channel + agent owned by each host. We use
   // the repos directly — going through HTTP routes adds noise
   // (host-mismatch preflight is C3's coverage, not C6's).
-  const workspacesRoot = join(tmpdir(), 'silverhand-c6-two-daemon');
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
   const agents = new AgentRepo(db);
 
   const wsXRow = workspaces.insert({
     name: 'c6-x',
     description: null,
-    workspacePath: workspaces.workspacePathFor('c6-x'),
+    workspacePath: testWorkspacePath('c6-x'),
     workspaceHostId: hostXRow.id,
   });
   const channelX = conversations.insertChannel({
@@ -165,7 +165,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   const wsYRow = workspaces.insert({
     name: 'c6-y',
     description: null,
-    workspacePath: workspaces.workspacePathFor('c6-y'),
+    workspacePath: testWorkspacePath('c6-y'),
     workspaceHostId: hostYRow.id,
   });
   const channelY = conversations.insertChannel({
@@ -213,7 +213,6 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     events: publisher,
     transport: () => controller,
     logger,
-    workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
     activityLog: null,

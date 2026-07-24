@@ -66,7 +66,7 @@ describe('agent capability storage (graded-permissions cut 2)', () => {
       // persistence — it never seeds capabilities. Capability seeding is the
       // use case's `if (created)` decision, so re-adding an existing member
       // (created === false) leaves a narrowed set untouched.
-      new WorkspaceRepo(t.ctx.db, { workspacesRoot: t.ctx.workspacesRoot }).insertMembership(ws, alice);
+      new WorkspaceRepo(t.ctx.db).insertMembership(ws, alice);
       expect(repo.list(ws, alice)).toEqual(['read_messages']);
     });
   });
@@ -115,9 +115,7 @@ describe('agent capability storage (graded-permissions cut 2)', () => {
     it('exempts an agent in its OWN agent_home even with no cap row', async () => {
       t = buildTestApp();
       const alice = await makeAgent(t, 'alice');
-      const home = new WorkspaceRepo(t.ctx.db, {
-        workspacesRoot: t.ctx.workspacesRoot,
-      }).getAgentHomeByOwner(alice);
+      const home = new WorkspaceRepo(t.ctx.db).getAgentHomeByOwner(alice);
       expect(home).not.toBeNull();
       // No workspace_agent_capabilities row exists for the home; exemption
       // must carry full authority regardless of the requested bucket.
@@ -139,9 +137,7 @@ describe('agent capability storage (graded-permissions cut 2)', () => {
       t = buildTestApp();
       const alice = await makeAgent(t, 'alice');
       const bob = await makeAgent(t, 'bob');
-      const aliceHome = new WorkspaceRepo(t.ctx.db, {
-        workspacesRoot: t.ctx.workspacesRoot,
-      }).getAgentHomeByOwner(alice);
+      const aliceHome = new WorkspaceRepo(t.ctx.db).getAgentHomeByOwner(alice);
       const bobPrincipal: AgentPrincipal = {
         kind: 'agent',
         conversationId: 'irrelevant',

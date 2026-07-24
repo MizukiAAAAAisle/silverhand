@@ -24,6 +24,7 @@
  *     them), a fresh connection mints a DISTINCT id (old id never reused),
  *     and a closed adapter delivers no further events.
  */
+import { testWorkspacePath } from '../../utils/db.js';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
@@ -125,16 +126,14 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
 
   const hostRow = new HostRepo(db).getOwnedLocalForUser(t.viewerUserId)!;
   const hostToken = new HostTokenService(db).issueHostToken({ hostId: hostRow.id }).hostToken;
-
-  const workspacesRoot = join(tmpdir(), 'silverhand-d5a4-staleness');
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
   const agents = new AgentRepo(db);
 
   const wsRow = workspaces.insert({
     name: 'd5a4-stale',
     description: null,
-    workspacePath: workspaces.workspacePathFor('d5a4-stale'),
+    workspacePath: testWorkspacePath('d5a4-stale'),
     workspaceHostId: hostRow.id,
   });
   const channel = conversations.insertChannel({
@@ -162,7 +161,6 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     events: publisher,
     transport: () => controller,
     logger,
-    workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
     activityLog: null,

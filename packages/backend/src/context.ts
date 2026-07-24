@@ -117,9 +117,6 @@ export interface BackendContext {
   loggers: BackendLoggers;
   /** Shared log-level and per-conversation temporary debug-window state. */
   logControl: LogLevelControl;
-  /** Root for all silverhand state (`~/.silverhand`). */
-  /** `<silverhandDir>/workspaces/` — root for auto-generated channel workspaces. */
-  workspacesRoot: string;
   /** Directory where the file logger writes. Optional — undefined when no
    *  file logger is in use (e.g. in tests). */
   logDir?: string;

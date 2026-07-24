@@ -42,8 +42,14 @@ function collectTsFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe('daemon test fixtures cannot address the real ~/.silverhand', () => {
-  it('every runDaemon( call in test sources passes explicit workspaceDataRootDir AND daemonIdentityPath', () => {
-    const REQUIRED_OPTIONS = ['workspaceDataRootDir', 'daemonIdentityPath'];
+  it('every runDaemon( call in test sources passes an explicit durable root (workspaceDataRootDir OR computersRootDir) AND daemonIdentityPath', () => {
+    // #task:1608 — `computersRootDir` sandboxes the durable computer slots
+    // the same way an explicit `workspaceDataRootDir` does; either one
+    // keeps the fixture off the real ~/.silverhand.
+    const REQUIRED_OPTIONS: Array<string | readonly string[]> = [
+      ['workspaceDataRootDir', 'computersRootDir'],
+      'daemonIdentityPath',
+    ];
     const violations: string[] = [];
     for (const root of TEST_ROOTS) {
       for (const file of collectTsFiles(root)) {
@@ -63,10 +69,11 @@ describe('daemon test fixtures cannot address the real ~/.silverhand', () => {
           // window, never a silent pass for a missing option — the option
           // text itself is what we look for).
           for (const option of REQUIRED_OPTIONS) {
-            if (!body.includes(option)) {
+            const alternatives = Array.isArray(option) ? option : [option];
+            if (!alternatives.some(name => body.includes(name))) {
               const line = source.slice(0, call).split('\n').length;
               violations.push(
-                `${relative(process.cwd(), file)}:${line} — runDaemon() without explicit ${option}`,
+                `${relative(process.cwd(), file)}:${line} — runDaemon() without explicit ${alternatives.join(' | ')}`,
               );
             }
           }

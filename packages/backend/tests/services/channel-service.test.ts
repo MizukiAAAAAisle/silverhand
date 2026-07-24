@@ -64,7 +64,7 @@ function bootstrap() {
   const hosts = new HostRepo(db);
   hosts.ensureLocal();
   const agents = new AgentRepo(db);
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
   const conversationReads = new ConversationReadRepo(db);
   const messages = new MessageRepo(db);

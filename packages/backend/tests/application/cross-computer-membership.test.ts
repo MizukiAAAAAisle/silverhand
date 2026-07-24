@@ -94,9 +94,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const guestId = forgeGuestAgent(t, 'adder', guestHost);
     t.fakeHostWs!.calls.length = 0;
 
-    const workspaces = new WorkspaceRepo(t.ctx.db, {
-      workspacesRoot: t.ctx.workspacesRoot,
-    });
+    const workspaces = new WorkspaceRepo(t.ctx.db);
     const result = await addWorkspaceAgentMember(
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
       {
@@ -136,9 +134,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const localId = await makeLocalAgent(t, 'local-adder');
     t.fakeHostWs!.calls.length = 0;
 
-    const workspaces = new WorkspaceRepo(t.ctx.db, {
-      workspacesRoot: t.ctx.workspacesRoot,
-    });
+    const workspaces = new WorkspaceRepo(t.ctx.db);
     const result = await addWorkspaceAgentMember(
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
       {
@@ -193,9 +189,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     ).toBeGreaterThan(t.fakeHostWs!.calls.indexOf(guestProvisions[0]!));
 
     // Home path cache untouched by the guest bind.
-    const workspaces = new WorkspaceRepo(t.ctx.db, {
-      workspacesRoot: t.ctx.workspacesRoot,
-    });
+    const workspaces = new WorkspaceRepo(t.ctx.db);
     expect(workspaces.get(ws.id)!.workspace_path).toBe(ws.workspace_path);
     // Both memberships landed.
     const memberIds = workspaces.listMembers(ws.id).map(m => m.id);
@@ -227,9 +221,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     expect(res.status).toBeGreaterThanOrEqual(500);
 
     // No PARTIAL set: neither the local nor the guest membership landed.
-    const workspaces = new WorkspaceRepo(t.ctx.db, {
-      workspacesRoot: t.ctx.workspacesRoot,
-    });
+    const workspaces = new WorkspaceRepo(t.ctx.db);
     const created = t.ctx.db
       .prepare<[], { id: string }[] | undefined>(
         `SELECT id FROM workspaces WHERE name = 'mixed-ws-fail'`,
@@ -268,9 +260,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
       {
         ctx: t.ctx,
         agents: new AgentRepo(t.ctx.db),
-        workspaces: new WorkspaceRepo(t.ctx.db, {
-          workspacesRoot: t.ctx.workspacesRoot,
-        }),
+        workspaces: new WorkspaceRepo(t.ctx.db),
         conversations: new ConversationRepo(t.ctx.db),
         conversationInboxes: new ConversationInboxRepo(t.ctx.db),
       },
@@ -339,9 +329,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
       {
         ctx: t.ctx,
         agents: new AgentRepo(t.ctx.db),
-        workspaces: new WorkspaceRepo(t.ctx.db, {
-          workspacesRoot: t.ctx.workspacesRoot,
-        }),
+        workspaces: new WorkspaceRepo(t.ctx.db),
         conversations: new ConversationRepo(t.ctx.db),
         conversationInboxes: new ConversationInboxRepo(t.ctx.db),
       },

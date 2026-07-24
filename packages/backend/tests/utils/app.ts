@@ -928,7 +928,9 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     seedAllFixtureMemberships: options.seedAllFixtureMemberships,
   });
   const tmp = makeTempSilverhandDir();
-  // The real `startBackend` mkdirs workspacesRoot before mounting routes.
+  // Fixture-local convenience only: some tests write files under their
+  // explicit test workspace paths. Production startBackend creates no
+  // workspaces root (#task:1608 rev 3).
   mkdirSync(tmp.workspacesRoot, { recursive: true });
 
   const fake = new FakeConversationManager();
@@ -988,7 +990,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   const placement = new RuntimeHostPlacementResolver({
     hosts: new HostRepo(db),
     agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
   });
   const presence = new PresenceRegistry({
     events,
@@ -1015,7 +1017,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     logger: silentLogger,
     loggers: { system: silentLogger, agent: silentLogger, cli: silentLogger },
     logControl: createLogLevelControl('warn'),
-    workspacesRoot: tmp.workspacesRoot,
     blobStorage,
     attachmentService,
     agentService,
@@ -1057,14 +1058,14 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   // D4.e-1 3b-2/3b-3 — the same shared registry backfiller production wires,
   // so list_workspaces ensure()s before dispatching agent_workspace_index.
   ctx.workspaceRegistryBackfiller = new WorkspaceRegistryBackfiller({
-    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
   });
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
     conversationReads: new ConversationReadRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     agents: new AgentRepo(db),
     messages: new MessageRepo(db),
     events: ctx.events,
@@ -1080,7 +1081,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     agents: new AgentRepo(db),
     users: new UserRepo(db),
     notifications: new NotificationRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     attachmentService,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
@@ -1091,7 +1092,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
@@ -1100,7 +1101,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   });
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     conversations: new ConversationRepo(db),
     conversationReads: new ConversationReadRepo(db),
     messages: new MessageRepo(db),

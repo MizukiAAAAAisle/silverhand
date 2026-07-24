@@ -11,7 +11,7 @@ function bootstrap() {
   const tmp = makeTempSilverhandDir();
   const agents = new AgentRepo(db);
   const conversations = new ConversationRepo(db);
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const agent = agents.create(
     { name: 'activity-agent', runtime: 'claude' },
     localHostId,

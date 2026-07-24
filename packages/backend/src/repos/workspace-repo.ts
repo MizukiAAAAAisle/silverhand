@@ -1,6 +1,5 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
-import { join } from 'node:path';
 import {
   agentHomeWorkspaceId,
   type AgentDto,
@@ -93,15 +92,8 @@ const WORKSPACE_SELECT = `
   FROM workspaces w
 `;
 
-export interface WorkspaceRepoOptions {
-  workspacesRoot: string;
-}
-
 export class WorkspaceRepo {
-  constructor(
-    private readonly db: Db,
-    private readonly opts: WorkspaceRepoOptions,
-  ) {}
+  constructor(private readonly db: Db) {}
 
   list(_opts: { includeSystem?: boolean } = {}): WorkspaceDto[] {
     const rows = this.db
@@ -249,8 +241,9 @@ export class WorkspaceRepo {
       throw new Error('use insertAgentHome for agent_home workspaces');
     }
     // #task:1598 — the historical agent-home guard here derived the app
-    // root from `dirname(workspacesRoot)` (a layout inverse the v2 layout
-    // breaks). The AUTHORITATIVE check now lives daemon-side: every
+    // root from the retired backend workspaces root (a layout inverse the
+    // v2 layout breaks; the whole backend workspaces-root contract is gone
+    // — #task:1608 rev 3). The AUTHORITATIVE check now lives daemon-side: every
     // requested workspace path is validated at provision time against the
     // registry's protectedRoots (agents / workspace-data / global root,
     // #task:1596 rounds 3-5), and provision always precedes this insert in
@@ -628,7 +621,4 @@ export class WorkspaceRepo {
       .run(workspaceId, userId);
   }
 
-  workspacePathFor(name: string): string {
-    return join(this.opts.workspacesRoot, name);
-  }
 }

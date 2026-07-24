@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, isAbsolute, join, resolve, sep } from 'node:path';
+import { isAbsolute, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -53,12 +53,7 @@ export type WorkspaceRegistryErrorCode =
   | 'not_provisioned'
   | 'registry_corrupt'
   | 'path_conflict'
-  | 'invalid_path'
-  /** #task:1596 — durable-state-dir migration cannot proceed safely
-   *  (ownership ambiguity, or a rename/rewrite step failed). The daemon
-   *  fails closed: no registry build, no byte is deleted or overwritten;
-   *  the condition is deterministic and surfaces until resolved. */
-  | 'migration_blocked';
+  | 'invalid_path';
 
 export class WorkspaceRegistryError extends Error {
   constructor(
@@ -75,15 +70,14 @@ const REGISTRY_FILE_NAME = 'workspace-registry.json';
 const MANAGED_WORKSPACES_DIR = 'workspaces';
 
 /**
- * Stable, path-safe slug for a binding. Both the registry file and the
- * managed workspaces root live under `<stateDir>/<bindingSlug>/`, so two
- * different control-plane bindings on the same machine (e.g. embedded vs
- * standalone, or two standalone backends) NEVER share a registry file or
- * a managed directory (Cindy rev2 P1 guard #1). `server_origin` may
- * contain characters that are unsafe in a path component, so we hash
- * rather than embed it verbatim. The header-level foreign-guard
- * (`load()` below) stays as defense-in-depth even though collisions in a
- * 16-hex-char sha256 prefix are not a practical concern.
+ * Stable, path-safe slug for a binding. HISTORICAL COORDINATE ONLY
+ * (#task:1608 workspace-data convergence): the live registry no longer
+ * nests under `<stateDir>/<bindingSlug>/` — the slot's `computers/
+ * <computer_id>` directory IS the enrollment boundary, and the binding
+ * stays in the registry file header as the foreign guard. This function
+ * remains ONLY so the one-time layout migration and the #1529 stale-path
+ * alias can name the exact legacy namespace coordinates; nothing mints
+ * new paths from it.
  */
 export function bindingSlug(binding: RegistryBinding): string {
   return createHash('sha256')
@@ -93,19 +87,48 @@ export function bindingSlug(binding: RegistryBinding): string {
 }
 
 /**
- * Path-safe slug for a workspace id (Cindy rev2 ① P1). The registry is
- * the daemon's path authority / security boundary, so a server-supplied
- * semantic id MUST NOT be trusted as a path component: values like
- * `../escape`, `a/b`, or `/abs` would let the managed path escape its
- * root or nest unexpectedly. We derive the on-disk directory name by
- * hashing the id rather than depending on the upstream ID character set,
- * so the managed path is structurally always exactly one component under
- * `managedRoot`. The raw id remains the registry MAP key (a JSON object
- * key — never a path), so lookups stay by id while the directory is the
- * slug. 128 bits (32 hex chars) makes collisions a non-concern.
+ * HISTORICAL COORDINATE ONLY (#task:1608 workspace-data convergence): the
+ * legacy on-disk directory name for a managed workspace
+ * (`sha256(workspace_id)` prefix). New managed paths use the RAW
+ * workspace id validated by `assertSafeWorkspaceIdSegment` — the id
+ * generator is filesystem-safe base64url, and validating beats hashing
+ * into an unreadable name. Kept ONLY for the migration's and the alias's
+ * legacy-side coordinates.
  */
 export function managedWorkspaceSlug(workspaceId: string): string {
   return createHash('sha256').update(workspaceId).digest('hex').slice(0, 32);
+}
+
+/**
+ * #task:1608 — the registry is the daemon's path authority / security
+ * boundary, so a server-supplied semantic id may become a path component
+ * ONLY after structural validation: fs-safe charset (no separators, no
+ * dots — `.`/`..` traversal is impossible by construction), non-empty,
+ * bounded length. Anything else fails closed as `invalid_path`; we never
+ * "repair" an id by hashing, because an unverifiable id is a contract
+ * violation, not an encoding problem.
+ */
+const SAFE_WORKSPACE_ID_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function assertSafeWorkspaceIdSegment(workspaceId: string): string {
+  if (!SAFE_WORKSPACE_ID_SEGMENT.test(workspaceId)) {
+    throw new WorkspaceRegistryError(
+      'invalid_path',
+      `workspace id ${JSON.stringify(workspaceId)} is not a safe path segment`,
+    );
+  }
+  return workspaceId;
+}
+
+/**
+ * #task:1608 (Cindy R3-4) — raw ids are case-sensitive but the default
+ * APFS volume is not, so two ids differing only by case would land in the
+ * SAME managed directory. Uniqueness is therefore enforced case-folded:
+ * a registry whose ids collide under folding is corrupt, and a provision
+ * that would create such a collision fails closed.
+ */
+export function workspaceIdCaseFoldKey(workspaceId: string): string {
+  return workspaceId.toLowerCase();
 }
 
 const RegistryBindingSchema = z
@@ -131,6 +154,46 @@ const RegistryFileSchema = z
   .strict();
 
 type RegistryFile = z.infer<typeof RegistryFileSchema>;
+
+/** #task:1608 (Cindy R4 P0-2) — the ONE strict registry-file parse, shared
+ *  by the runtime load() and the migration plan so there is exactly one
+ *  schema authority. Throws the caller-supplied error on ANY deviation —
+ *  a malformed file is never "repaired" into an empty/partial registry. */
+export type WorkspaceRegistryFile = RegistryFile;
+export function parseWorkspaceRegistryFileStrict(
+  raw: string,
+  fail: (message: string) => Error,
+): WorkspaceRegistryFile {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw fail(`registry file is not valid JSON: ${(err as Error).message}`);
+  }
+  const result = RegistryFileSchema.safeParse(parsed);
+  if (!result.success) {
+    throw fail(
+      `registry file does not match the schema: ${result.error.issues[0]?.message ?? 'schema mismatch'}`,
+    );
+  }
+  return result.data;
+}
+
+/** #task:1608 (Cindy R3-4) — case-folded id uniqueness over a full id set;
+ *  returns the first colliding pair or null. Shared by load, provision,
+ *  and the migration plan. */
+export function findCaseFoldCollision(
+  ids: readonly string[],
+): { a: string; b: string } | null {
+  const folded = new Map<string, string>();
+  for (const id of ids) {
+    const key = workspaceIdCaseFoldKey(id);
+    const prior = folded.get(key);
+    if (prior !== undefined && prior !== id) return { a: prior, b: id };
+    folded.set(key, id);
+  }
+  return null;
+}
 
 export interface WorkspaceRegistryEntry {
   workspace_id: string;
@@ -174,14 +237,6 @@ export interface WorkspaceRegistryOptions {
    * is set.
    */
   legacyWorkspacesRoot?: string;
-  /**
-   * Explicitly trusted predecessor bindings whose exact daemon-managed
-   * `workspace_id -> path` entry may be copied into this registry.
-   * This is the narrow upgrade seam for desktop's historical
-   * `local-embedded` namespace; it never widens generic requested-path
-   * validation and never scans arbitrary binding directories.
-   */
-  legacyBindings?: readonly RegistryBinding[];
   /**
    * #task:1596 — the EXACT pre-migration namespace dirs this daemon trusts
    * (computed by `legacyNamespaceDirs` from the known legacy state dirs ×
@@ -230,22 +285,23 @@ function pathsOverlap(a: string, b: string): boolean {
  * interleave a load with another op's save.
  */
 export class WorkspaceRegistry {
-  private readonly stateDir: string;
   private readonly filePath: string;
   private readonly managedRoot: string;
   private readonly binding: RegistryBinding;
   private readonly silverhandStateRoot: string | undefined;
   private readonly legacyWorkspacesRoot: string | undefined;
-  private readonly legacyBindings: readonly RegistryBinding[];
   private readonly trustedLegacyNamespaceDirs: readonly string[];
   private readonly protectedRoots: readonly string[];
   private readonly now: () => number;
 
   constructor(opts: WorkspaceRegistryOptions) {
-    this.stateDir = opts.stateDir;
-    const nsRoot = join(opts.stateDir, bindingSlug(opts.binding));
-    this.filePath = join(nsRoot, REGISTRY_FILE_NAME);
-    this.managedRoot = join(nsRoot, MANAGED_WORKSPACES_DIR);
+    // #task:1608 workspace-data convergence: the registry and the managed
+    // workspaces root sit DIRECTLY on the workspace-data root — the
+    // computers/<computer_id> slot is the enrollment boundary, so the
+    // historical per-binding nesting (`<stateDir>/<bindingSlug>/`) is
+    // gone. The binding stays in the file header as the foreign guard.
+    this.filePath = join(opts.stateDir, REGISTRY_FILE_NAME);
+    this.managedRoot = join(opts.stateDir, MANAGED_WORKSPACES_DIR);
     this.binding = opts.binding;
     this.silverhandStateRoot = opts.silverhandStateRoot
       ? resolve(opts.silverhandStateRoot)
@@ -253,14 +309,6 @@ export class WorkspaceRegistry {
     this.legacyWorkspacesRoot = opts.legacyWorkspacesRoot
       ? resolve(opts.legacyWorkspacesRoot)
       : undefined;
-    const seenLegacyBindings = new Set<string>();
-    this.legacyBindings = (opts.legacyBindings ?? []).filter(candidate => {
-      if (bindingsEqual(candidate, opts.binding)) return false;
-      const key = `${candidate.server_origin}\0${candidate.host_id}`;
-      if (seenLegacyBindings.has(key)) return false;
-      seenLegacyBindings.add(key);
-      return true;
-    });
     this.trustedLegacyNamespaceDirs = (opts.trustedLegacyNamespaceDirs ?? []).map(
       dir => resolve(dir),
     );
@@ -354,20 +402,20 @@ export class WorkspaceRegistry {
       if (isAbsolute(requestedPath) && resolve(requestedPath) === existing.path) {
         return { path: existing.path, created: false };
       }
-      // #task:1596 durability migration alias: the workspace-data migration
-      // moved this id's managed root to the durable state dir, but the
-      // server's legacy `workspace_path` column may still propose the
-      // PRE-migration managed path. Accept it as a faithful re-bind ONLY
-      // when the existing binding is this id's own deterministic managed
-      // path AND the proposal is EXACTLY the managed path this id would
-      // have had under one of the explicitly trusted legacy namespaces —
-      // structural provenance, never basename resemblance (the slug is
-      // computable by anyone). The reply carries the current bound path,
-      // which heals the server's stale column.
+      // #task:1596/#task:1608 stale-path alias: earlier layouts placed this
+      // id's managed root under a per-binding namespace with a hashed dir
+      // name, and the server's legacy `workspace_path` column may still
+      // propose that PRE-migration coordinate. Accept it as a faithful
+      // re-bind ONLY when the existing binding is this id's own
+      // deterministic managed path AND the proposal is EXACTLY the managed
+      // path this id would have had under one of the explicitly trusted
+      // legacy namespaces — structural provenance, never basename
+      // resemblance (the slug is computable by anyone). The reply carries
+      // the current bound path, which heals the server's stale column.
       if (
         isAbsolute(requestedPath) &&
-        existing.path ===
-          join(this.managedRoot, managedWorkspaceSlug(workspaceId)) &&
+        SAFE_WORKSPACE_ID_SEGMENT.test(workspaceId) &&
+        existing.path === join(this.managedRoot, workspaceId) &&
         this.trustedLegacyNamespaceDirs.some(
           nsDir =>
             resolve(requestedPath) ===
@@ -385,16 +433,28 @@ export class WorkspaceRegistry {
         `workspace ${workspaceId} is already bound to ${existing.path}; refusing to overwrite with ${validated}`,
       );
     }
-    if (requestedPath !== undefined) {
-      const copied = this.copyLegacyEntry(file, workspaceId, requestedPath);
-      if (copied) return copied;
-    }
 
     let path: string;
     if (requestedPath === undefined) {
-      path = join(this.managedRoot, managedWorkspaceSlug(workspaceId));
+      // #task:1608 — the managed dir IS the validated raw workspace id
+      // (fail closed on an unsafe id), directly under the workspace-data
+      // root's workspaces/ dir.
+      path = join(this.managedRoot, assertSafeWorkspaceIdSegment(workspaceId));
     } else {
       path = this.validateRequestedPath(requestedPath);
+    }
+    // #task:1608 (Cindy R3-4) — case-folded id uniqueness: on the default
+    // case-insensitive APFS volume, ids differing only by case would land
+    // in the same managed directory. A NEW id colliding case-folded with
+    // an existing DIFFERENT id fails closed.
+    const foldedNew = workspaceIdCaseFoldKey(workspaceId);
+    for (const otherId of Object.keys(file.workspaces)) {
+      if (otherId !== workspaceId && workspaceIdCaseFoldKey(otherId) === foldedNew) {
+        throw new WorkspaceRegistryError(
+          'path_conflict',
+          `workspace id ${workspaceId} collides case-insensitively with existing workspace ${otherId}`,
+        );
+      }
     }
     // Cross-workspace OVERLAP conflict: no two workspace ids may bind equal
     // or nested roots (P1-2). Managed paths are per-id and disjoint, so this
@@ -404,97 +464,6 @@ export class WorkspaceRegistry {
     file.workspaces[workspaceId] = { path, provisioned_at: this.now() };
     this.persist(file);
     return { path, created: true };
-  }
-
-  /**
-   * Copy an exact daemon-managed entry from an explicitly trusted predecessor
-   * registry.
-   *
-   * A normal caller may never bind a requested path inside Silverhand's state
-   * root. Historical desktop-managed workspaces are the one upgrade case that
-   * legitimately live there: their path was allocated by an older
-   * `local-embedded` registry. We accept that path only when the predecessor
-   * registry itself proves the same workspace id owns its deterministic
-   * managed path, and that path exactly matches the server's requested path.
-   * The predecessor remains intact for rollback. This creates no general alias:
-   * only the same workspace id and exact daemon-recorded path may be copied,
-   * and the daemon process still activates only one binding at a time.
-   */
-  private copyLegacyEntry(
-    destination: RegistryFile,
-    workspaceId: string,
-    requestedPath: string,
-  ): ProvisionResult | null {
-    if (this.legacyBindings.length === 0 || !isAbsolute(requestedPath)) {
-      return null;
-    }
-    const resolvedRequestedPath = resolve(requestedPath);
-    const sources: Array<{
-      entry: RegistryFile['workspaces'][string];
-    }> = [];
-
-    for (const binding of this.legacyBindings) {
-      const registry = new WorkspaceRegistry({
-        stateDir: this.stateDir,
-        binding,
-        ...(this.silverhandStateRoot
-          ? { silverhandStateRoot: this.silverhandStateRoot }
-          : {}),
-        ...(this.legacyWorkspacesRoot
-          ? { legacyWorkspacesRoot: this.legacyWorkspacesRoot }
-          : {}),
-        now: this.now,
-      });
-      const source = registry.load();
-      const entry = source?.workspaces[workspaceId];
-      if (!entry) continue;
-      const sourceManagedPath = join(
-        registry.managedRoot,
-        managedWorkspaceSlug(workspaceId),
-      );
-      // A predecessor's user-requested path still goes through today's normal
-      // validation. Only the deterministic path minted inside the predecessor's
-      // own managed root needs this state-root migration seam.
-      if (entry.path !== sourceManagedPath) continue;
-      // The server's requested path must equal the predecessor's CURRENT
-      // managed path, OR (#task:1596) the exact PRE-migration managed path
-      // this source binding would have had under a trusted legacy namespace
-      // — the durable-state-dir migration repointed the entry, but the
-      // server's legacy column may still carry the old location. Structural
-      // provenance only (trusted dir x source binding slug x workspace
-      // slug); never basename resemblance.
-      const trustedStaleSourcePaths = this.trustedLegacyNamespaceDirs
-        .filter(nsDir => basename(nsDir) === bindingSlug(binding))
-        .map(nsDir =>
-          join(nsDir, MANAGED_WORKSPACES_DIR, managedWorkspaceSlug(workspaceId)),
-        );
-      const requestedMatchesCurrent =
-        isAbsolute(entry.path) && resolve(entry.path) === resolvedRequestedPath;
-      const requestedMatchesTrustedStale =
-        trustedStaleSourcePaths.includes(resolvedRequestedPath);
-      if (!requestedMatchesCurrent && !requestedMatchesTrustedStale) {
-        throw new WorkspaceRegistryError(
-          'path_conflict',
-          `legacy registry binds workspace ${workspaceId} to ${entry.path}; ` +
-            `refusing requested path ${resolvedRequestedPath}`,
-        );
-      }
-      sources.push({ entry });
-    }
-
-    if (sources.length === 0) return null;
-
-    // Persist the predecessor's CURRENT (durable) path — never the possibly
-    // stale requested one. The ack carries it back and heals the server
-    // column.
-    const copiedPath = sources[0]!.entry.path;
-    this.assertNoOverlap(destination, workspaceId, copiedPath);
-    destination.workspaces[workspaceId] = {
-      path: copiedPath,
-      provisioned_at: Math.min(...sources.map(source => source.entry.provisioned_at)),
-    };
-    this.persist(destination);
-    return { path: copiedPath, created: false };
   }
 
   /**
@@ -707,21 +676,26 @@ export class WorkspaceRegistry {
       );
     }
 
-    let parsed: RegistryFile;
-    try {
-      parsed = RegistryFileSchema.parse(JSON.parse(raw));
-    } catch (err) {
-      throw new WorkspaceRegistryError(
-        'registry_corrupt',
-        `registry file is malformed: ${(err as Error).message}`,
-      );
-    }
+    const parsed = parseWorkspaceRegistryFileStrict(
+      raw,
+      m => new WorkspaceRegistryError('registry_corrupt', `registry file is malformed: ${m}`),
+    );
 
     if (!bindingsEqual(parsed.binding, this.binding)) {
       throw new WorkspaceRegistryError(
         'registry_foreign',
         `registry is bound to ${parsed.binding.server_origin}/${parsed.binding.host_id}, ` +
           `not the current ${this.binding.server_origin}/${this.binding.host_id}`,
+      );
+    }
+    // #task:1608 (Cindy R3-4) — a persisted registry whose ids collide
+    // under case folding is corrupt (its managed dirs would alias on a
+    // case-insensitive volume); fail closed rather than serve either.
+    const collision = findCaseFoldCollision(Object.keys(parsed.workspaces));
+    if (collision !== null) {
+      throw new WorkspaceRegistryError(
+        'registry_corrupt',
+        `registry ids ${collision.a} and ${collision.b} collide case-insensitively`,
       );
     }
     return parsed;

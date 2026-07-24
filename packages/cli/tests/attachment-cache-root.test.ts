@@ -4,13 +4,11 @@ import { join } from 'node:path';
 import { attachmentCacheRoot } from '../src/commands/file.js';
 
 /**
- * #task:1598 round 2 (Cindy P1-3) — the CLI's HISTORICAL SILVERHAND_DIR
- * semantics (trimmed value; whitespace-only falls back), which diverge
- * from desktop's untrimmed `||` semantics. The compatibility floor
- * preserves the divergence; v2 unifies on "SILVERHAND_DIR is the app
- * root" (shiki's decision, recorded in #task:1597).
+ * #task:1603 — the CLI consumes the ONE unified SILVERHAND_DIR contract
+ * (trim; blank after trim = unset), shared with desktop and the daemon
+ * defaults. The historical CLI/desktop divergence is gone.
  */
-describe('attachmentCacheRoot — historical CLI env semantics', () => {
+describe('attachmentCacheRoot — unified SILVERHAND_DIR contract', () => {
   const HOME = join(homedir(), '.silverhand', 'attachments-cache');
 
   it('unset / empty / whitespace fall back to the home root; explicit is used trimmed', () => {

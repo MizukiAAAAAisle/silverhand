@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -10,10 +11,8 @@ import { openTestDb } from '../utils/db.js';
 
 function bootstrap() {
   const { db, localHostId } = openTestDb();
-  const workspaces = new WorkspaceRepo(db, {
-    workspacesRoot: join(tmpdir(), 'silverhand-inbox-test'),
-  });
-  const workspacePath = workspaces.workspacePathFor('inbox-ws');
+  const workspaces = new WorkspaceRepo(db);
+  const workspacePath = testWorkspacePath('inbox-ws');
   const workspace = workspaces.insert({
     name: 'inbox-ws',
     description: null,

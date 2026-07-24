@@ -602,7 +602,7 @@ describe('host routes', () => {
         runtime: 'codex',
         hostId: created.host_id,
       });
-      new WorkspaceRepo(t.ctx.db, { workspacesRoot: t.ctx.workspacesRoot }).insert({
+      new WorkspaceRepo(t.ctx.db).insert({
         name: 'Dependent Workspace',
         description: null,
         workspacePath: '/tmp/dependent-workspace',
@@ -656,9 +656,7 @@ describe('host routes', () => {
       });
       const agent = new AgentRepo(t.ctx.db).get(agentId);
       expect(agent).not.toBeNull();
-      new WorkspaceRepo(t.ctx.db, {
-        workspacesRoot: t.ctx.workspacesRoot,
-      }).insertAgentHome({
+      new WorkspaceRepo(t.ctx.db).insertAgentHome({
         agent: agent!,
         workspacePath: `/tmp/${agentId}`,
       });
@@ -739,9 +737,7 @@ describe('host routes', () => {
       });
       const agent = new AgentRepo(t.ctx.db).get(agentId);
       expect(agent).not.toBeNull();
-      const workspaces = new WorkspaceRepo(t.ctx.db, {
-        workspacesRoot: t.ctx.workspacesRoot,
-      });
+      const workspaces = new WorkspaceRepo(t.ctx.db);
       const home = workspaces.insertAgentHome({
         agent: agent!,
         workspacePath: `/tmp/${agentId}`,
@@ -794,9 +790,7 @@ describe('host routes', () => {
       });
       const agent = new AgentRepo(t.ctx.db).get(agentId);
       expect(agent).not.toBeNull();
-      const workspaces = new WorkspaceRepo(t.ctx.db, {
-        workspacesRoot: t.ctx.workspacesRoot,
-      });
+      const workspaces = new WorkspaceRepo(t.ctx.db);
       const home = workspaces.insertAgentHome({
         agent: agent!,
         workspacePath: `/tmp/${agentId}`,
@@ -871,7 +865,7 @@ describe('host routes', () => {
         runtime: 'codex',
         hostId: created.host_id,
       });
-      new WorkspaceRepo(t.ctx.db, { workspacesRoot: t.ctx.workspacesRoot }).insert({
+      new WorkspaceRepo(t.ctx.db).insert({
         name: 'Dependent Workspace',
         description: null,
         workspacePath: '/tmp/dependent-workspace',

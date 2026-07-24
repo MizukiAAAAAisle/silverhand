@@ -82,7 +82,6 @@ export interface OutboundRuntimeEventFanoutOptions {
   events: EventPublisher;
   transport: () => OutboundFrameAdapter | null;
   logger: BackendLogger;
-  workspacesRoot: string;
   silverhandCli: SilverhandCliLauncher | null;
   coLocatedHostId?: string;
   agentTokens: AgentTokenStore;
@@ -209,9 +208,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     this.agents = new AgentRepo(opts.db);
     this.hosts = new HostRepo(opts.db);
     this.users = new UserRepo(opts.db);
-    this.workspaces = new WorkspaceRepo(opts.db, {
-      workspacesRoot: opts.workspacesRoot,
-    });
+    this.workspaces = new WorkspaceRepo(opts.db);
     this.messages = new MessageRepo(opts.db);
     this.membership = new MembershipService({
       agents: new AgentRepo(opts.db),

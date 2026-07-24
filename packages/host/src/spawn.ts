@@ -204,13 +204,11 @@ export interface SpawnDaemonOptions {
    *  each other's runtime children. Omit to let daemon entry use its
    *  legacy default. */
   runtimePidRootDir?: string | null;
-  /** Root for daemon-owned agent L1 dirs. Desktop passes a
-   *  SILVERHAND_DIR-scoped path so isolated apps do not materialize
-   *  agents under the global user profile. */
-  agentHomeRootDir?: string | null;
-  /** #task:1596 — explicit durable workspace-data root forwarded to the
-   *  daemon child (`--workspace-data-root-dir`). */
-  workspaceDataRootDir?: string | null;
+  /** #task:1608 — the per-computer durable slots root
+   *  (`<app-root>/computers`) forwarded to the daemon child
+   *  (`--computers-root-dir`). The daemon freezes the actual
+   *  `computers/<computer_id>` slot per accepted binding generation. */
+  computersRootDir?: string | null;
   /** #task:1598 — explicit global silverhand root (guard root) forwarded
    *  to the daemon child (`--silverhand-state-root-dir`). */
   silverhandStateRootDir?: string | null;
@@ -397,8 +395,8 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       ...(opts.runtimePidRootDir
         ? ['--runtime-pid-root-dir', opts.runtimePidRootDir]
         : []),
-      ...(opts.workspaceDataRootDir
-        ? ['--workspace-data-root-dir', opts.workspaceDataRootDir]
+      ...(opts.computersRootDir
+        ? ['--computers-root-dir', opts.computersRootDir]
         : []),
       ...(opts.silverhandStateRootDir
         ? ['--silverhand-state-root-dir', opts.silverhandStateRootDir]
@@ -406,9 +404,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       ...(opts.daemonIdentityPath
         ? ['--daemon-identity-path', opts.daemonIdentityPath]
         : []),
-      ...(opts.agentHomeRootDir
-        ? ['--agent-home-root-dir', opts.agentHomeRootDir]
-        : []),
+
       ...(opts.proxyConfigPath
         ? ['--proxy-config-path', opts.proxyConfigPath]
         : []),

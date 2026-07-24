@@ -11,6 +11,12 @@ import {
   type RegistryBinding,
 } from '../../src/daemon/workspace-registry/index.js';
 
+// #task:1608 workspace-data convergence: the registry lives FLAT on the
+// workspace-data root (`workspace-registry.json` + `workspaces/<raw id>`);
+// the computers/<computer_id> slot is the enrollment boundary and the
+// binding header is the foreign guard. Managed dirs are the VALIDATED raw
+// workspace id — unsafe ids fail closed instead of being hashed.
+
 /**
  * D4.e-1 daemon workspace registry tests. The registry is the keystone
  * primitive making the daemon the sole authority for host-local
@@ -44,14 +50,11 @@ function makeRegistry(binding: RegistryBinding, now = () => 1_700_000_000_000) {
 }
 
 describe('WorkspaceRegistry — provision', () => {
-  it('provisions a deterministic managed path under the binding slug', () => {
+  it('provisions a deterministic managed path: the raw id directly under workspaces/', () => {
     const reg = makeRegistry(STANDALONE);
     const result = reg.provision('ws_1');
     expect(result.created).toBe(true);
-    const slug = bindingSlug(STANDALONE);
-    expect(result.path).toBe(
-      join(stateDir, slug, 'workspaces', managedWorkspaceSlug('ws_1')),
-    );
+    expect(result.path).toBe(join(stateDir, 'workspaces', 'ws_1'));
   });
 
   it('is idempotent: re-provision returns existing path, created=false, preserves provisioned_at', () => {
@@ -127,30 +130,55 @@ describe('WorkspaceRegistry — resolve (read fail-closed)', () => {
 });
 
 describe('WorkspaceRegistry — managed path safety (no traversal)', () => {
-  const ESCAPES = ['../escape', 'a/b', '/abs', '..', '../../etc/passwd', 'x/../../y'];
+  const ESCAPES = ['../escape', 'a/b', '/abs', '..', '../../etc/passwd', 'x/../../y', '', 'a'.repeat(65), 'dot.dot'];
 
-  it('keeps every managed path exactly one component under managedRoot, even for hostile ids', () => {
+  it('a hostile or non-conforming id FAILS CLOSED instead of becoming a path component', () => {
     const reg = makeRegistry(STANDALONE);
-    const managedRoot = join(stateDir, bindingSlug(STANDALONE), 'workspaces');
     for (const id of ESCAPES) {
-      const { path } = reg.provision(id);
-      // Path is managedRoot + exactly one slug component — never escapes.
-      expect(path).toBe(join(managedRoot, managedWorkspaceSlug(id)));
-      expect(path.startsWith(`${managedRoot}/`)).toBe(true);
-      // The directory name is the hash slug, not the hostile id.
-      expect(path.includes('..')).toBe(false);
-      expect(path.endsWith(id)).toBe(false);
+      try {
+        reg.provision(id);
+        throw new Error(`expected throw for ${JSON.stringify(id)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WorkspaceRegistryError);
+        expect((err as WorkspaceRegistryError).code).toBe('invalid_path');
+      }
+      expect(reg.has(id)).toBe(false);
     }
   });
 
-  it('resolve returns the same in-root path for a hostile id (round-trip by raw id)', () => {
+  it('a conforming id round-trips: provision → resolve by raw id', () => {
     const reg = makeRegistry(STANDALONE);
-    const { path } = reg.provision('../escape');
-    expect(reg.resolve('../escape')).toBe(path);
-    expect(reg.has('../escape')).toBe(true);
+    const { path } = reg.provision('r6Cb5cuDnS2hAP9l');
+    expect(path).toBe(join(stateDir, 'workspaces', 'r6Cb5cuDnS2hAP9l'));
+    expect(reg.resolve('r6Cb5cuDnS2hAP9l')).toBe(path);
   });
 
-  it('managedWorkspaceSlug is deterministic, path-safe, and collision-resistant per id', () => {
+  it('case-fold uniqueness (Cindy R3-4): a NEW id colliding case-insensitively with an existing one fails closed', () => {
+    const reg = makeRegistry(STANDALONE);
+    reg.provision('WsAbC');
+    try {
+      reg.provision('wsabc');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect((err as WorkspaceRegistryError).code).toBe('path_conflict');
+    }
+    expect(reg.has('wsabc')).toBe(false);
+    // The exact same id stays idempotent.
+    expect(reg.provision('WsAbC').created).toBe(false);
+  });
+
+  it('a persisted registry with case-fold-colliding ids is corrupt (fail closed on load)', () => {
+    const reg = makeRegistry(STANDALONE);
+    reg.provision('WsAbC');
+    const file = JSON.parse(readFileSync(reg.registryFilePath(), 'utf-8'));
+    file.workspaces['wsabc'] = { path: '/tmp/elsewhere', provisioned_at: 1 };
+    writeFileSync(reg.registryFilePath(), JSON.stringify(file));
+    expect(() => makeRegistry(STANDALONE).list()).toThrowError(
+      expect.objectContaining({ code: 'registry_corrupt' }),
+    );
+  });
+
+  it('managedWorkspaceSlug stays deterministic (legacy migration coordinate only)', () => {
     expect(managedWorkspaceSlug('ws_1')).toBe(managedWorkspaceSlug('ws_1'));
     expect(managedWorkspaceSlug('ws_1')).toMatch(/^[0-9a-f]{32}$/);
     expect(managedWorkspaceSlug('ws_1')).not.toBe(managedWorkspaceSlug('ws_2'));
@@ -254,7 +282,7 @@ describe('WorkspaceRegistry — provision with a caller-proposed path', () => {
 
   it('rejects a requested path inside the daemon-managed root', () => {
     const reg = makeRegistry(STANDALONE);
-    const insideManaged = join(stateDir, bindingSlug(STANDALONE), 'workspaces', 'x');
+    const insideManaged = join(stateDir, 'workspaces', 'x');
     try {
       reg.provision('ws_inside', insideManaged);
       throw new Error('expected throw');
@@ -388,129 +416,32 @@ describe('WorkspaceRegistry — remove (compensation, P1-1)', () => {
   });
 });
 
-describe('WorkspaceRegistry — binding-slug namespace isolation', () => {
-  it('embedded and standalone use different files and managed roots on the same stateDir', () => {
+describe('WorkspaceRegistry — one workspace-data root, one binding (#task:1608)', () => {
+  it('a second binding on the same root fails closed as registry_foreign (never a parallel namespace)', () => {
+    // The computers/<computer_id> slot is the enrollment boundary: the flat
+    // registry belongs to exactly one binding. Another binding must not get
+    // its own nested namespace back — every op fails closed on the header.
     const standalone = makeRegistry(STANDALONE);
+    standalone.provision('ws_same_id');
     const embedded = makeRegistry(EMBEDDED);
-    expect(standalone.registryFilePath()).not.toBe(embedded.registryFilePath());
-
-    const sa = standalone.provision('ws_same_id');
-    const em = embedded.provision('ws_same_id');
-    // Same workspace_id under two bindings → distinct managed paths.
-    expect(sa.path).not.toBe(em.path);
-
-    // Each binding only sees its own entry.
-    expect(standalone.has('ws_same_id')).toBe(true);
-    expect(embedded.has('ws_same_id')).toBe(true);
-    // A fresh handle for the other binding never sees this one's data.
-    expect(makeRegistry(EMBEDDED).resolve('ws_same_id')).toBe(em.path);
-    expect(makeRegistry(STANDALONE).resolve('ws_same_id')).toBe(sa.path);
+    expect(embedded.registryFilePath()).toBe(standalone.registryFilePath());
+    for (const op of [
+      () => embedded.resolve('ws_same_id'),
+      () => embedded.provision('ws_other'),
+      () => embedded.list(),
+    ]) {
+      expect(op).toThrowError(expect.objectContaining({ code: 'registry_foreign' }));
+    }
+    // The rightful binding still reads its data.
+    expect(makeRegistry(STANDALONE).has('ws_same_id')).toBe(true);
   });
 
-  it('bindingSlug is stable and path-safe (16 hex chars, deterministic)', () => {
+  it('bindingSlug is stable and path-safe (legacy migration coordinate only)', () => {
     const a = bindingSlug(STANDALONE);
     const b = bindingSlug(STANDALONE);
     expect(a).toBe(b);
     expect(a).toMatch(/^[0-9a-f]{16}$/);
     expect(bindingSlug(EMBEDDED)).not.toBe(a);
-  });
-});
-
-describe('WorkspaceRegistry — trusted legacy binding handoff', () => {
-  function makeGuardedTarget(legacyBindings: readonly RegistryBinding[]) {
-    return new WorkspaceRegistry({
-      stateDir,
-      binding: STANDALONE,
-      silverhandStateRoot: stateDir,
-      legacyWorkspacesRoot: join(stateDir, 'legacy-workspaces'),
-      legacyBindings,
-      now: () => 1_800_000_000_000,
-    });
-  }
-
-  it('copies an exact id/path entry from local-embedded without widening the state-root guard', () => {
-    const legacy = makeRegistry(EMBEDDED, () => 1_700_000_000_000);
-    const old = legacy.provision('ws_managed');
-    expect(old.path).toContain(join(stateDir, bindingSlug(EMBEDDED), 'workspaces'));
-
-    const current = makeGuardedTarget([EMBEDDED]);
-    const copied = current.provision('ws_managed', old.path);
-
-    expect(copied).toEqual({ path: old.path, created: false });
-    expect(current.resolve('ws_managed')).toBe(old.path);
-    expect(legacy.resolve('ws_managed')).toBe(old.path);
-    const currentFile = JSON.parse(readFileSync(current.registryFilePath(), 'utf-8'));
-    expect(currentFile.workspaces.ws_managed.provisioned_at).toBe(1_700_000_000_000);
-  });
-
-  it('checks the stable pre-claim local id without scanning arbitrary bindings', () => {
-    const currentHostEmbedded: RegistryBinding = {
-      server_origin: 'local-embedded',
-      host_id: STANDALONE.host_id,
-    };
-    const fallback = makeRegistry(EMBEDDED);
-    const old = fallback.provision('ws_pre_claim');
-    const current = makeGuardedTarget([currentHostEmbedded, EMBEDDED]);
-
-    expect(current.provision('ws_pre_claim', old.path)).toEqual({
-      path: old.path,
-      created: false,
-    });
-    expect(current.resolve('ws_pre_claim')).toBe(old.path);
-  });
-
-  it('still rejects a state-root path that no trusted predecessor registry owns', () => {
-    const legacy = makeRegistry(EMBEDDED);
-    const old = legacy.provision('ws_owned_by_someone_else');
-    const current = makeGuardedTarget([EMBEDDED]);
-
-    expect(() => current.provision('ws_unproven', old.path)).toThrowError(
-      expect.objectContaining({ code: 'invalid_path' }),
-    );
-    expect(current.has('ws_unproven')).toBe(false);
-    expect(legacy.has('ws_owned_by_someone_else')).toBe(true);
-  });
-
-  it('does not let a predecessor custom entry bypass current path validation', () => {
-    const legacy = makeRegistry(EMBEDDED);
-    const customInsideState = join(stateDir, 'custom-inside-state');
-    legacy.provision('ws_custom', customInsideState);
-    const current = makeGuardedTarget([EMBEDDED]);
-
-    expect(() => current.provision('ws_custom', customInsideState)).toThrowError(
-      expect.objectContaining({ code: 'invalid_path' }),
-    );
-    expect(current.has('ws_custom')).toBe(false);
-    expect(legacy.resolve('ws_custom')).toBe(customInsideState);
-  });
-
-  it('fails closed when the predecessor records the id under a different path', () => {
-    const legacy = makeRegistry(EMBEDDED);
-    const old = legacy.provision('ws_conflict');
-    const current = makeGuardedTarget([EMBEDDED]);
-
-    expect(() =>
-      current.provision('ws_conflict', join(stateDir, 'different-managed-path')),
-    ).toThrowError(expect.objectContaining({ code: 'path_conflict' }));
-    expect(current.has('ws_conflict')).toBe(false);
-    expect(legacy.resolve('ws_conflict')).toBe(old.path);
-  });
-
-  it('does not consult a predecessor after the destination already has the exact entry', () => {
-    const legacy = makeRegistry(EMBEDDED);
-    const old = legacy.provision('ws_retry');
-    // Simulate a hotfix user whose real-origin destination was already bound.
-    makeRegistry(STANDALONE).provision('ws_retry', old.path);
-    // A corrupt predecessor must not break that already-complete path; legacy
-    // handoff is demand-driven only on destination miss.
-    writeFileSync(legacy.registryFilePath(), '{ broken legacy registry');
-
-    const current = makeGuardedTarget([EMBEDDED]);
-    expect(current.provision('ws_retry', old.path)).toEqual({
-      path: old.path,
-      created: false,
-    });
-    expect(current.resolve('ws_retry')).toBe(old.path);
   });
 });
 

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
+import { testWorkspacePath } from '../utils/db.js';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -212,7 +213,7 @@ function freshUserApp(): TestApp {
     .get();
   if (!host) throw new Error('local host missing from test DB');
   const now = Date.now();
-  const workspacePath = `${app.ctx.workspacesRoot}/pre-user-bootstrap`;
+  const workspacePath = testWorkspacePath('pre-user-bootstrap');
   app.ctx.db
     .prepare<[string, string, number, number]>(
       `INSERT INTO workspaces

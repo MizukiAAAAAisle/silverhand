@@ -10,7 +10,7 @@ function bootstrap() {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   const conversations = new ConversationRepo(db);
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const messages = new MessageRepo(db);
   const agents = new AgentRepo(db);
   return {

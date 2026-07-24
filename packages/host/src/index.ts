@@ -28,6 +28,40 @@ export { SocketTransport } from './client/socket-transport.js';
 export type { Transport, TransportEvents, DecodedFrame } from './client/transport.js';
 export { enableNodeSystemCa, type NodeSystemCaActivation } from './node-system-ca.js';
 export {
+  bindingSlug,
+  managedWorkspaceSlug,
+  type RegistryBinding,
+} from './daemon/workspace-registry/registry.js';
+// #task:1608 workspace-data convergence — one-time flatten consumed by the
+// desktop layout engine (and, if sanctioned, the connect startup pass).
+export {
+  FlattenLayoutError,
+  executeWorkspaceDataConvergence,
+  planWorkspaceDataConvergence,
+} from './daemon/workspace-registry/flatten-layout.js';
+export { runWorkspaceDataConvergencePass } from './daemon/workspace-registry/convergence-pass.js';
+export {
+  CWD_SCOPED_SESSION_RUNTIMES,
+  SessionMigrationError,
+  cwdSessionSlug,
+  defaultNamespaceProbe,
+  isSlugVerifiableCwd,
+  normalizeStoreRootOverride,
+  runSessionRenamePass,
+  sessionNamespaceFor,
+  type NamespaceState,
+  type SessionCwdPair,
+  type SessionPassDeps,
+  type SessionPassResult,
+  type SessionStoreEnv,
+} from './daemon/workspace-registry/session-migration.js';
+// #task:1603 — legacy-runtime quiesce primitives for the desktop layout-v2
+// migration preflight (§5.1): reclaim the legacy daemon pid/socket and reap
+// orphan runtime children BEFORE any durable move.
+export { reclaimStaleDaemonIfPresent } from './daemon/reclaim.js';
+export { reconcileRuntimePidfiles } from './daemon/runtime-pidfiles.js';
+export { createDaemonLogger, type DaemonLogger } from './daemon/logger.js';
+export {
   spawnDaemonChild,
   type DaemonLauncher,
   type DaemonHandle,

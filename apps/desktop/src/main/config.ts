@@ -6,9 +6,11 @@ import {
   type ServerConfig,
 } from '@silverhand/shared';
 import {
+  appRootEnvOverride,
   defaultAppRoot,
   resolveDesktopAppPaths,
   type DesktopAppPaths,
+  type DesktopLayoutVersion,
 } from '@silverhand/shared/app-data-layout';
 
 // `event_ws_allowed_origins` is NEVER persisted. For embedded it is a
@@ -29,14 +31,35 @@ export function silverhandDir(): string {
 }
 
 /**
- * #task:1598 — the desktop process's resolved app-data paths, produced by
- * the ONE path authority (`resolveDesktopAppPaths`) pinned to `legacy-v1`
- * (byte-identical to the historical flat layout; the v2 migration flips
- * the version in a later release). All main-process path consumers read
- * from here instead of joining off the root themselves.
+ * #task:1603 (Cindy P1) — the Electron userData redirect gate must use
+ * the SAME presence judgment as the root value: a whitespace-only
+ * SILVERHAND_DIR is unset, so it must not redirect userData while the
+ * app root itself falls back to home.
  */
+export function shouldRedirectElectronUserData(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return appRootEnvOverride(env) !== null;
+}
+
+/**
+ * #task:1598/#task:1603 — the desktop process's resolved app-data paths,
+ * produced by the ONE path authority (`resolveDesktopAppPaths`). The
+ * layout version starts at `legacy-v1` and is flipped to `v2` exactly
+ * once per process by `initializeDesktopLayoutVersion` after the startup
+ * migration reads/writes the data-layout marker. All main-process path
+ * consumers read from here instead of joining off the root themselves.
+ */
+let activeLayoutVersion: DesktopLayoutVersion = 'legacy-v1';
+
+export function initializeDesktopLayoutVersion(
+  version: DesktopLayoutVersion,
+): void {
+  activeLayoutVersion = version;
+}
+
 export function desktopAppPaths(): DesktopAppPaths {
-  return resolveDesktopAppPaths(silverhandDir(), 'legacy-v1');
+  return resolveDesktopAppPaths(silverhandDir(), activeLayoutVersion);
 }
 
 export function electronUserDataPath(silverhandRoot = silverhandDir()): string {

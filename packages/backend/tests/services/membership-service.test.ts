@@ -22,7 +22,7 @@ function bootstrap() {
   new HostRepo(db).ensureLocal();
   const agents = new AgentRepo(db);
   const users = new UserRepo(db);
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
   const service = new MembershipService({ agents, users, conversations });
 

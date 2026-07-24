@@ -36,6 +36,5 @@ export {
   WORKSPACE_DATA_DIR_NAME,
   defaultWorkspaceDataRootDir,
   legacyNamespaceDirs,
-  migrateLegacyWorkspaceData,
-  type LegacyNamespaceMigrationOptions,
+  legacyWorkspaceDataSourceDirs,
 } from './state-dir.js';

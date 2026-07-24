@@ -57,8 +57,7 @@ async function captureSpawnArgs(
   opts: {
     localOutboundSocketPath?: string | null;
     runtimePidRootDir?: string | null;
-    agentHomeRootDir?: string | null;
-    workspaceDataRootDir?: string | null;
+    computersRootDir?: string | null;
     silverhandStateRootDir?: string | null;
     daemonIdentityPath?: string | null;
     controlPlaneServerUrlPath?: string | null;
@@ -89,11 +88,8 @@ async function captureSpawnArgs(
     ...(opts.runtimePidRootDir !== undefined
       ? { runtimePidRootDir: opts.runtimePidRootDir }
       : {}),
-    ...(opts.agentHomeRootDir !== undefined
-      ? { agentHomeRootDir: opts.agentHomeRootDir }
-      : {}),
-    ...(opts.workspaceDataRootDir !== undefined
-      ? { workspaceDataRootDir: opts.workspaceDataRootDir }
+    ...(opts.computersRootDir !== undefined
+      ? { computersRootDir: opts.computersRootDir }
       : {}),
     ...(opts.silverhandStateRootDir !== undefined
       ? { silverhandStateRootDir: opts.silverhandStateRootDir }
@@ -149,38 +145,21 @@ describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', (
     expect(nullArgs).not.toContain('--runtime-pid-root-dir');
   });
 
-  it('forwards --agent-home-root-dir when agentHomeRootDir is set', async () => {
+  it('forwards --computers-root-dir when computersRootDir is set (#task:1608)', async () => {
     const args = await captureSpawnArgs({
-      agentHomeRootDir: '/tmp/silverhand-fake-agent-home-root',
+      computersRootDir: '/tmp/silverhand-fake-computers-root',
     });
-    const idx = args.indexOf('--agent-home-root-dir');
+    const idx = args.indexOf('--computers-root-dir');
     expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-agent-home-root');
+    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-computers-root');
   });
 
-  it('omits --agent-home-root-dir when agentHomeRootDir is unset or null', async () => {
+  it('omits --computers-root-dir when computersRootDir is unset or null', async () => {
     const unsetArgs = await captureSpawnArgs();
-    expect(unsetArgs).not.toContain('--agent-home-root-dir');
+    expect(unsetArgs).not.toContain('--computers-root-dir');
 
-    const nullArgs = await captureSpawnArgs({ agentHomeRootDir: null });
-    expect(nullArgs).not.toContain('--agent-home-root-dir');
-  });
-
-  it('forwards --workspace-data-root-dir when workspaceDataRootDir is set (#task:1596)', async () => {
-    const args = await captureSpawnArgs({
-      workspaceDataRootDir: '/tmp/silverhand-fake-workspace-data',
-    });
-    const idx = args.indexOf('--workspace-data-root-dir');
-    expect(idx).toBeGreaterThanOrEqual(0);
-    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-workspace-data');
-  });
-
-  it('omits --workspace-data-root-dir when unset or null', async () => {
-    const unsetArgs = await captureSpawnArgs();
-    expect(unsetArgs).not.toContain('--workspace-data-root-dir');
-
-    const nullArgs = await captureSpawnArgs({ workspaceDataRootDir: null });
-    expect(nullArgs).not.toContain('--workspace-data-root-dir');
+    const nullArgs = await captureSpawnArgs({ computersRootDir: null });
+    expect(nullArgs).not.toContain('--computers-root-dir');
   });
 
   it('forwards --silverhand-state-root-dir when silverhandStateRootDir is set (#task:1598)', async () => {

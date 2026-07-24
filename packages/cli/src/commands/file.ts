@@ -8,7 +8,7 @@ import {
   type AttachmentLocateDto,
 } from '@silverhand/shared';
 import {
-  homeAppRoot,
+  defaultAppRoot,
   resolveDesktopAppPaths,
 } from '@silverhand/shared/app-data-layout';
 import { CliError } from '../errors.js';
@@ -144,13 +144,9 @@ async function writeAttachmentCache(input: {
 }
 
 export function attachmentCacheRoot(env: Record<string, string | undefined> = process.env): string {
-  // #task:1598 — path shape from the shared authority. Root selection
-  // keeps the CLI's HISTORICAL semantics (trimmed SILVERHAND_DIR, else
-  // ~/.silverhand) — it diverges from desktop's untrimmed `||` semantics;
-  // unifying that is an explicit v2 decision, not a floor change.
-  const fromEnv = env.SILVERHAND_DIR?.trim();
-  const appRoot = fromEnv && fromEnv.length > 0 ? fromEnv : homeAppRoot();
-  return resolveDesktopAppPaths(appRoot, 'legacy-v1').attachmentsCache;
+  // #task:1603 — the ONE unified SILVERHAND_DIR contract (trim; blank =
+  // unset); the historical CLI-local trim is now the shared semantics.
+  return resolveDesktopAppPaths(defaultAppRoot(env), 'legacy-v1').attachmentsCache;
 }
 
 function safeSegment(value: string): string {

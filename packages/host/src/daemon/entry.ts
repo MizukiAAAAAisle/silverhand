@@ -22,11 +22,11 @@
  *                         Desktop passes a SILVERHAND_DIR-scoped path
  *                         so two app instances cannot reap each other's
  *                         runtime children.
- *   --agent-home-root-dir <abs>
- *                         optional; root for daemon-owned agent L1
- *                         dirs. Desktop passes `<SILVERHAND_DIR>/agents`
- *                         so remote-only smoke apps do not write into
- *                         global `~/.silverhand/agents`.
+ *   --computers-root-dir <abs>
+ *                         optional (#task:1608); the per-computer durable
+ *                         slots root (`<app-root>/computers`). The daemon
+ *                         freezes the `computers/<computer_id>` slot per
+ *                         accepted binding generation.
  *   --proxy-config-path <abs>
  *                         optional; daemon-local runtime proxy config.
  *                         Proxy is host-local truth, never server state.
@@ -74,8 +74,7 @@ interface ParsedArgv {
   hostConfigPath: string | null;
   localOutboundSocketPath: string | null;
   runtimePidRootDir: string | null;
-  agentHomeRootDir: string | null;
-  workspaceDataRootDir: string | null;
+  computersRootDir: string | null;
   silverhandStateRootDir: string | null;
   daemonIdentityPath: string | null;
   proxyConfigPath: string | null;
@@ -91,8 +90,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let hostConfigPath: string | null = null;
   let localOutboundSocketPath: string | null = null;
   let runtimePidRootDir: string | null = null;
-  let agentHomeRootDir: string | null = null;
-  let workspaceDataRootDir: string | null = null;
+  let computersRootDir: string | null = null;
   let silverhandStateRootDir: string | null = null;
   let daemonIdentityPath: string | null = null;
   let proxyConfigPath: string | null = null;
@@ -120,11 +118,8 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
       case '--runtime-pid-root-dir':
         runtimePidRootDir = argv[++i] ?? null;
         break;
-      case '--agent-home-root-dir':
-        agentHomeRootDir = argv[++i] ?? null;
-        break;
-      case '--workspace-data-root-dir':
-        workspaceDataRootDir = argv[++i] ?? null;
+      case '--computers-root-dir':
+        computersRootDir = argv[++i] ?? null;
         break;
       case '--silverhand-state-root-dir':
         silverhandStateRootDir = argv[++i] ?? null;
@@ -163,11 +158,8 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (runtimePidRootDir !== null && !runtimePidRootDir.startsWith('/')) {
     return { error: '--runtime-pid-root-dir must be absolute' };
   }
-  if (agentHomeRootDir !== null && !agentHomeRootDir.startsWith('/')) {
-    return { error: '--agent-home-root-dir must be absolute' };
-  }
-  if (workspaceDataRootDir !== null && !workspaceDataRootDir.startsWith('/')) {
-    return { error: '--workspace-data-root-dir must be absolute' };
+  if (computersRootDir !== null && !computersRootDir.startsWith('/')) {
+    return { error: '--computers-root-dir must be absolute' };
   }
   if (silverhandStateRootDir !== null && !silverhandStateRootDir.startsWith('/')) {
     return { error: '--silverhand-state-root-dir must be absolute' };
@@ -197,8 +189,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     hostConfigPath,
     localOutboundSocketPath,
     runtimePidRootDir,
-    agentHomeRootDir,
-    workspaceDataRootDir,
+    computersRootDir,
     silverhandStateRootDir,
     daemonIdentityPath,
     proxyConfigPath,
@@ -232,8 +223,7 @@ async function main(): Promise<void> {
       hostConfigPath: parsed.hostConfigPath,
       localOutboundSocketPath: parsed.localOutboundSocketPath,
       runtimePidRootDir: parsed.runtimePidRootDir ?? undefined,
-      agentHomeRootDir: parsed.agentHomeRootDir ?? undefined,
-      workspaceDataRootDir: parsed.workspaceDataRootDir ?? undefined,
+      computersRootDir: parsed.computersRootDir ?? undefined,
       silverhandStateRootDir: parsed.silverhandStateRootDir ?? undefined,
       daemonIdentityPath: parsed.daemonIdentityPath ?? undefined,
       proxyConfigPath: parsed.proxyConfigPath ?? undefined,

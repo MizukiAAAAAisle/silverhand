@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { testWorkspacePath } from './utils/db.js';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -27,9 +28,7 @@ import { buildTestApp, type TestApp } from './utils/app.js';
 function seed(t: TestApp) {
   const agents = new AgentRepo(t.ctx.db);
   const conversations = new ConversationRepo(t.ctx.db);
-  const workspaces = new WorkspaceRepo(t.ctx.db, {
-    workspacesRoot: t.ctx.workspacesRoot,
-  });
+  const workspaces = new WorkspaceRepo(t.ctx.db);
   const attachments = new AttachmentRepo(t.ctx.db);
   const host = new HostRepo(t.ctx.db).ensureLocal();
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, host.id, 'local');
@@ -37,7 +36,7 @@ function seed(t: TestApp) {
   const workspace = workspaces.insert({
     name: `ws-${randomUUID().slice(0, 8)}`,
     description: null,
-    workspacePath: join(t.ctx.workspacesRoot, 'workspace'),
+    workspacePath: testWorkspacePath('permissions-ws'),
     workspaceHostId: host.id,
   });
   workspaces.insertMembership(workspace.id, alice.id);

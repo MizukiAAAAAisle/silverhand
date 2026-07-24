@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSafeOpenExtension } from '@silverhand/shared';
@@ -17,10 +18,8 @@ import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 function bootstrap() {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
-  const workspaces = new WorkspaceRepo(db, {
-    workspacesRoot: join(tmpdir(), 'silverhand-attsvc-test'),
-  });
-  const workspacePath = workspaces.workspacePathFor('att-ws');
+  const workspaces = new WorkspaceRepo(db);
+  const workspacePath = testWorkspacePath('att-ws');
   const workspace = workspaces.insert({
     name: 'att-ws',
     description: null,
@@ -172,9 +171,7 @@ describe('AttachmentService.locateForAgent', () => {
         createdById: agent.id,
       });
       const conversations = new ConversationRepo(db);
-      const otherWorkspace = new WorkspaceRepo(db, {
-        workspacesRoot: join(tmpdir(), 'silverhand-attsvc-test-2'),
-      }).insert({
+      const otherWorkspace = new WorkspaceRepo(db).insert({
         name: 'other',
         description: null,
         workspacePath: join(tmpdir(), 'silverhand-attsvc-test-2', 'other'),
@@ -287,9 +284,7 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
       });
 
       // Create another channel and upload an attachment scoped to it.
-      const otherWorkspace = new WorkspaceRepo(db, {
-        workspacesRoot: join(tmpdir(), 'silverhand-attsvc-test-3'),
-      }).insert({
+      const otherWorkspace = new WorkspaceRepo(db).insert({
         name: 'other',
         description: null,
         workspacePath: join(tmpdir(), 'silverhand-attsvc-test-3', 'other'),

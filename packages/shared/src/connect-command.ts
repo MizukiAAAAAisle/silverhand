@@ -21,6 +21,10 @@ export const CONNECT_ARG_SERVER_URL = '--server-url';
 export const CONNECT_ARG_CONNECT_TOKEN = '--connect-token';
 export const CONNECT_ARG_CONNECT_TOKEN_ENV = '--connect-token-env';
 export const CONNECT_ARG_DATA_ROOT = '--data-root';
+/** #task:1608 — INTERNAL flag: the detached child inherits the parent's
+ *  default/explicit data-root origin FACT instead of re-deriving it from
+ *  the path shape. Never part of the human-assembled connect command. */
+export const CONNECT_ARG_DATA_ROOT_ORIGIN = '--data-root-origin';
 export const CONNECT_ARG_FOREGROUND = '--foreground';
 export const CONNECT_ARG_NO_DAEMON = '--no-daemon';
 export const CONNECT_ARG_QUIET = '--quiet';

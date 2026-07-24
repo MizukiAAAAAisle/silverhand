@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -9,13 +10,13 @@ import { openTestDb } from '../utils/db.js';
 function bootstrapWorkspaceAndAgents() {
   const { db, localHostId } = openTestDb();
   const workspacesRoot = join(tmpdir(), 'silverhand-workspace-test');
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const agents = new AgentRepo(db);
 
   const workspace = workspaces.insert({
     name: 'ops',
     description: null,
-    workspacePath: workspaces.workspacePathFor('ops'),
+    workspacePath: testWorkspacePath('ops'),
     workspaceHostId: localHostId,
   });
   const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
@@ -81,7 +82,7 @@ describe('WorkspaceRepo', () => {
     const sameNameRegular = workspaces.insert({
       name: a.name,
       description: null,
-      workspacePath: workspaces.workspacePathFor(a.name),
+      workspacePath: testWorkspacePath(a.name),
       workspaceHostId: localHostId,
     });
     expect(sameNameRegular.workspace_kind).toBe('regular');
@@ -115,7 +116,7 @@ describe('WorkspaceRepo', () => {
     const otherWs = workspaces.insert({
       name: 'other-ops',
       description: null,
-      workspacePath: workspaces.workspacePathFor('other-ops'),
+      workspacePath: testWorkspacePath('other-ops'),
       workspaceHostId: otherHost.id,
     });
 

@@ -57,7 +57,7 @@ function bootstrap(
   const tmp = makeTempSilverhandDir();
   new HostRepo(db).ensureLocal();
   const agents = new AgentRepo(db);
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot: tmp.workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
   const messages = new MessageRepo(db);
   const events = new ScopeEventBus('test-epoch');

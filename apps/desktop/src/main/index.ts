@@ -51,8 +51,12 @@ import {
   spawnDaemonChild,
   type DaemonHandle,
 } from '@silverhand/host';
+import { migrateDesktopAppDataLayout } from './layout-migration/engine.js';
+import { quiesceLegacyLocalRuntime } from './layout-migration/quiesce.js';
 import {
+  initializeDesktopLayoutVersion,
   electronUserDataPath,
+  shouldRedirectElectronUserData,
   loadOrCreateServerConfig,
   silverhandDir,
   writeServerConfig,
@@ -201,7 +205,10 @@ let backend: BackendHandle | null = null;
 let daemon: DaemonHandle | null = null;
 let hostClient: HostClient | null = null;
 
-if (process.env.SILVERHAND_DIR) {
+// #task:1603 — presence judged by the unified SILVERHAND_DIR contract
+// (whitespace-only = unset), never the raw env: the userData redirect and
+// the app root must take the same arm for the same input.
+if (shouldRedirectElectronUserData()) {
   app.setPath('userData', electronUserDataPath());
 }
 let logger: FileLogger | null = null;
@@ -509,8 +516,9 @@ interface DaemonPaths {
   pidFilePath: string;
   logDir: string;
   runtimePidRootDir: string;
-  agentHomeRootDir: string;
-  workspaceDataRootDir: string;
+  /** #task:1608 — the per-computer slots root; the daemon freezes the
+   *  accepted binding's `computers/<computer_id>` slot per generation. */
+  computersRootDir: string;
   silverhandStateRootDir: string;
   daemonIdentityPath: string;
   hostConfigPath: string;
@@ -530,18 +538,17 @@ function daemonPaths(): DaemonPaths {
   // lives OUTSIDE run/ (#task:1596).
   const paths = desktopAppPaths();
   return {
-    socketPath: paths.localComputer.run.socket,
-    pidFilePath: paths.localComputer.run.pidFile,
+    socketPath: paths.run.socket,
+    pidFilePath: paths.run.pidFile,
     logDir: paths.logs,
-    runtimePidRootDir: paths.localComputer.run.runtimePids,
-    agentHomeRootDir: paths.localComputer.agents,
-    workspaceDataRootDir: paths.localComputer.workspaceData,
+    runtimePidRootDir: paths.run.runtimePids,
+    computersRootDir: paths.computersRoot,
     silverhandStateRootDir: paths.appRoot,
-    daemonIdentityPath: paths.localComputer.run.identity,
-    hostConfigPath: paths.localComputer.daemonConfig,
-    legacyProxyConfigPath: paths.localComputer.legacyProxyConfig,
-    controlPlaneServerUrlPath: paths.localComputer.run.controlPlaneServerUrl,
-    localOutboundSocketPath: paths.localComputer.run.outboundSocket,
+    daemonIdentityPath: paths.run.identity,
+    hostConfigPath: paths.desktop.computerBinding,
+    legacyProxyConfigPath: paths.legacyLocalComputer.proxyConfig,
+    controlPlaneServerUrlPath: paths.run.controlPlaneServerUrl,
+    localOutboundSocketPath: paths.run.outboundSocket,
   };
 }
 
@@ -749,7 +756,7 @@ async function clearUserSession(): Promise<void> {
   clearPersistedUserSession();
   await syncEventWsSessionCookie(null);
   try {
-    removeDaemonHostConfig(desktopAppPaths().localComputer.daemonConfig);
+    removeDaemonHostConfig(desktopAppPaths().desktop.computerBinding);
   } catch (err) {
     logger?.warn({ err }, 'failed to remove daemon host config');
   }
@@ -1044,7 +1051,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
   // remote backend is down".
   const backendUrlSnapshot = requireBackendUrl();
   const paths = desktopAppPaths();
-  const existingConfig = readDaemonHostConfig(paths.localComputer.daemonConfig);
+  const existingConfig = readDaemonHostConfig(paths.desktop.computerBinding);
   try {
     const installationId = loadOrCreateInstallationId(paths.installationId);
     const claimInput = buildHostClaimInput({
@@ -1115,7 +1122,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       profileRead.ok ? profileRead.profile.version : undefined;
     const allowInsecureRemote = desktopAllowsInsecureRemote();
 
-    writeDaemonHostConfig(paths.localComputer.daemonConfig, {
+    writeDaemonHostConfig(paths.desktop.computerBinding, {
       server_url: backendUrlSnapshot,
       host_id: localHostId,
       host_token: hostToken,
@@ -1131,7 +1138,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
     // user-facing `local_host_status` enum.
     void triggerLocalHostOutboundAttach({
       localHostId,
-      configPath: paths.localComputer.daemonConfig,
+      configPath: paths.desktop.computerBinding,
       attachWindow,
     });
   } catch (err) {
@@ -1214,7 +1221,7 @@ function snapshotLocalHostInfo(): {
     // exists (pre-claim state). Re-reads on every `backend:info`
     // refetch so post-save invalidation surfaces the new URL.
     local_host_server_url:
-      readDaemonHostConfig(desktopAppPaths().localComputer.daemonConfig)?.server_url ?? null,
+      readDaemonHostConfig(desktopAppPaths().desktop.computerBinding)?.server_url ?? null,
   };
 }
 
@@ -1364,7 +1371,7 @@ async function rotateHostToken(
   if (!hostId) {
     return { ok: false, code: 'host_not_found', message: 'missing host id' };
   }
-  const daemonConfigPath = desktopAppPaths().localComputer.daemonConfig;
+  const daemonConfigPath = desktopAppPaths().desktop.computerBinding;
   const existingConfig = readDaemonHostConfig(daemonConfigPath);
   if (!existingConfig || existingConfig.host_id !== hostId) {
     // Stage B.4 hard guard: rotate is only legal for the host this
@@ -1487,7 +1494,7 @@ async function revokeHost(
   // `BackendInfo` IPC so the renderer can prompt the user to log in
   // again (which provisions a fresh active host row under the new
   // active-only partial-unique index).
-  const reconcile = applyRevokeSideEffects({ daemonConfigPath: desktopAppPaths().localComputer.daemonConfig, hostId });
+  const reconcile = applyRevokeSideEffects({ daemonConfigPath: desktopAppPaths().desktop.computerBinding, hostId });
   if (reconcile === 'cleared') {
     localHostClaim = { status: 'revoked', hostId };
   }
@@ -1672,7 +1679,7 @@ async function saveServerUrlFromSettings(
     };
   }
 
-  const daemonConfigPath = desktopAppPaths().localComputer.daemonConfig;
+  const daemonConfigPath = desktopAppPaths().desktop.computerBinding;
   // **Controller snapshot (Cindy `#task:634` review P2)**: bind
   // `getAttachment` to a NON-NULL controller ONLY when one exists.
   // If we instead passed a function that always returns null, the
@@ -1935,6 +1942,23 @@ async function bootstrap(): Promise<void> {
       },
       'logger initialized',
     );
+    // #task:1603 — layout-v2 startup preparation (§5): single-instance
+    // ownership is held (module scope), the logger is up, and NOTHING has
+    // read host config / spawned the daemon / opened the embedded DB yet.
+    // Quiesce any legacy daemon + orphan runtime children, run the eager
+    // two-facet migration, then flip the resolver selector to the marker's
+    // version. Both desktop modes execute this identically; migration
+    // failures are startup-blocking by design (fail closed, bytes intact).
+    await quiesceLegacyLocalRuntime(silverhandDir(), desktopAppPaths().logs);
+    migrateDesktopAppDataLayout(silverhandDir(), {
+      info: (f, m) => logger?.info(f, m),
+      warn: (f, m) => logger?.warn(f, m),
+    });
+    initializeDesktopLayoutVersion('v2');
+    logger.info(
+      { action: 'layout_version_selected', version: 'v2' },
+      'desktop app data layout selected',
+    );
     // D4.a Commit 3 — boot-mode decision. We compute it AFTER the
     // logger is initialized so the decision can be logged actionably,
     // but BEFORE we spawn the daemon / start the embedded backend so
@@ -2089,8 +2113,7 @@ async function bootstrap(): Promise<void> {
       pidFilePath: paths.pidFilePath,
       logDir: paths.logDir,
       runtimePidRootDir: paths.runtimePidRootDir,
-      agentHomeRootDir: paths.agentHomeRootDir,
-      workspaceDataRootDir: paths.workspaceDataRootDir,
+      computersRootDir: paths.computersRootDir,
       silverhandStateRootDir: paths.silverhandStateRootDir,
       daemonIdentityPath: paths.daemonIdentityPath,
       proxyConfigPath: null,
@@ -2256,7 +2279,7 @@ async function bootstrap(): Promise<void> {
         const attachWindow = captureAttachWindow(localHostId);
         await triggerLocalHostOutboundAttach({
           localHostId,
-          configPath: desktopAppPaths().localComputer.daemonConfig,
+          configPath: desktopAppPaths().desktop.computerBinding,
           attachWindow,
         });
       })().catch(err => {
@@ -2293,7 +2316,7 @@ async function bootstrap(): Promise<void> {
       loadOrCreateServerConfig: () => loadOrCreateServerConfig(),
       startEmbeddedAndPersistConfig: async config => {
         const running = await startEmbeddedSilverhandServer({
-          dataDir: silverhandDir(),
+          dataDir: desktopAppPaths().embeddedServer.root,
           // The embedded arm trusts the loaded ServerConfig; runtime
           // shape is asserted by `loadOrCreateServerConfig` /
           // `ServerConfigSchema.parse` upstream.
@@ -2409,7 +2432,7 @@ async function runBootReconciliation(): Promise<void> {
           logger: logger ?? undefined,
         }),
       readDaemonHostConfig: () =>
-        readDaemonHostConfig(desktopAppPaths().localComputer.daemonConfig),
+        readDaemonHostConfig(desktopAppPaths().desktop.computerBinding),
       runPhase2: profile => runProfilePhase2(profile),
     });
     partialApplyState = state;
@@ -2898,7 +2921,7 @@ export type PartialApplyRetryResult =
 function buildProfilePhase2Deps(): PerformProfilePhase2Deps | null {
   const client = hostClient;
   if (!client || !backend) return null;
-  const daemonConfigPath = desktopAppPaths().localComputer.daemonConfig;
+  const daemonConfigPath = desktopAppPaths().desktop.computerBinding;
   // D4.a Commit 5d — `null` on remote arm. The orchestrator's
   // `no_attachment_controller` arm surfaces a typed
   // `partial_apply_pending` so the renderer can render its banner
@@ -3224,7 +3247,16 @@ ipcMain.handle(
 registerSurfaceIpcHandlers();
 registerSelectionExportIpcHandlers();
 
+// #task:1603 — §5.1 process-ownership prerequisite: exactly one desktop
+// instance may run the startup preparation (and later the migration) per
+// machine. A second instance exits immediately; the first one keeps
+// working (no focus dance needed pre-window).
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
 app.whenReady().then(async () => {
+  if (!app.hasSingleInstanceLock()) return;
   await bootstrap();
   if (HEADLESS) {
     // One-line machine-readable handshake on stdout. Test scripts pipe

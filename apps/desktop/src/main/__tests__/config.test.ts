@@ -6,6 +6,7 @@ import { SERVER_CONFIG_FILENAME } from '@silverhand/shared';
 import {
   electronUserDataPath,
   loadOrCreateServerConfig,
+  shouldRedirectElectronUserData,
   silverhandDir,
   writeServerConfig,
 } from '../config.js';
@@ -113,23 +114,36 @@ function readConfig(dir: string): Record<string, unknown> {
   ) as Record<string, unknown>;
 }
 
-describe('silverhandDir — historical desktop SILVERHAND_DIR semantics (#task:1598 floor matrix)', () => {
+describe('silverhandDir — the ONE unified SILVERHAND_DIR contract (#task:1603)', () => {
   const original = process.env.SILVERHAND_DIR;
   afterEach(() => {
     if (original === undefined) delete process.env.SILVERHAND_DIR;
     else process.env.SILVERHAND_DIR = original;
   });
 
-  it('empty falls back to ~/.silverhand; whitespace is used VERBATIM; explicit is used as-is', () => {
+  it('unset/empty/whitespace fall back to ~/.silverhand; a padded value is trimmed; explicit is used as-is', () => {
     delete process.env.SILVERHAND_DIR;
     expect(silverhandDir().endsWith('/.silverhand')).toBe(true);
     process.env.SILVERHAND_DIR = '';
     expect(silverhandDir().endsWith('/.silverhand')).toBe(true);
-    // Historical `||` semantics: a whitespace-only value is truthy and is
-    // used verbatim (divergence from the CLI's trim; v2 unifies — shiki).
+    // Unified trim contract (shiki 2026-07-24): blank after trim = unset.
     process.env.SILVERHAND_DIR = '   ';
-    expect(silverhandDir()).toBe('   ');
+    expect(silverhandDir().endsWith('/.silverhand')).toBe(true);
+    process.env.SILVERHAND_DIR = ' /x/y ';
+    expect(silverhandDir()).toBe('/x/y');
     process.env.SILVERHAND_DIR = '/x/y';
     expect(silverhandDir()).toBe('/x/y');
+  });
+
+  it('the Electron userData redirect gate takes the SAME arm as the root for unset/empty/whitespace vs explicit (Cindy P1)', () => {
+    for (const variant of [undefined, '', '   '] as const) {
+      if (variant === undefined) delete process.env.SILVERHAND_DIR;
+      else process.env.SILVERHAND_DIR = variant;
+      expect(shouldRedirectElectronUserData(), `env=${JSON.stringify(variant)}`).toBe(false);
+    }
+    for (const variant of ['/x/y', ' /x/y '] as const) {
+      process.env.SILVERHAND_DIR = variant;
+      expect(shouldRedirectElectronUserData(), `env=${JSON.stringify(variant)}`).toBe(true);
+    }
   });
 });

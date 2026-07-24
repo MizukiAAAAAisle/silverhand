@@ -59,6 +59,7 @@
  * check applied to outbound event frames; no wire envelope shape
  * changes.
  */
+import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -113,16 +114,14 @@ function makePerimeterFixture(): PerimeterFixture {
     installationId: 'install-teammate',
     lastSeenAt: Date.now(),
   });
-
-  const workspacesRoot = join(tmpdir(), 'silverhand-outbound-perimeter-test');
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
   const agents = new AgentRepo(db);
 
   const wsX = workspaces.insert({
     name: 'perimeter-x',
     description: null,
-    workspacePath: workspaces.workspacePathFor('perimeter-x'),
+    workspacePath: testWorkspacePath('perimeter-x'),
     workspaceHostId: hostXId,
   });
   const channelX = conversations.insertChannel({
@@ -143,7 +142,7 @@ function makePerimeterFixture(): PerimeterFixture {
   const wsY = workspaces.insert({
     name: 'perimeter-y',
     description: null,
-    workspacePath: workspaces.workspacePathFor('perimeter-y'),
+    workspacePath: testWorkspacePath('perimeter-y'),
     workspaceHostId: hostY.id,
   });
   const channelY = conversations.insertChannel({
@@ -182,7 +181,6 @@ function makePerimeterFixture(): PerimeterFixture {
     events: publisher,
     transport: () => transport,
     logger,
-    workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     agentTokens: new AgentTokenStore(),
     activityLog: null,

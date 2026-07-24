@@ -68,9 +68,7 @@ async function createChannel(
 function conversationDeps(t: TestApp) {
   const agents = new AgentRepo(t.ctx.db);
   const users = new UserRepo(t.ctx.db);
-  const workspaces = new WorkspaceRepo(t.ctx.db, {
-    workspacesRoot: t.ctx.workspacesRoot,
-  });
+  const workspaces = new WorkspaceRepo(t.ctx.db);
   const conversations = new ConversationRepo(t.ctx.db);
   const messages = new MessageRepo(t.ctx.db);
   const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(t.ctx.db);
@@ -91,9 +89,7 @@ function workspaceAgentDeps(t: TestApp) {
   return {
     ctx: t.ctx,
     agents: new AgentRepo(t.ctx.db),
-    workspaces: new WorkspaceRepo(t.ctx.db, {
-      workspacesRoot: t.ctx.workspacesRoot,
-    }),
+    workspaces: new WorkspaceRepo(t.ctx.db),
   };
 }
 
@@ -608,9 +604,7 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
   });
 
   function workspaceRow(t: TestApp, workspaceId: string) {
-    const ws = new WorkspaceRepo(t.ctx.db, {
-      workspacesRoot: t.ctx.workspacesRoot,
-    }).get(workspaceId)!;
+    const ws = new WorkspaceRepo(t.ctx.db).get(workspaceId)!;
     return {
       id: ws.id,
       workspace_path: ws.workspace_path,

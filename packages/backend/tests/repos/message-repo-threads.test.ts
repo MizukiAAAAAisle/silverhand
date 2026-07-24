@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Database as Db } from 'better-sqlite3';
@@ -14,10 +15,8 @@ import { openTestDb } from '../utils/db.js';
 // Local bootstrap (mirrors message-repo.test.ts) — one channel + one agent.
 function bootstrap() {
   const { db, localHostId } = openTestDb();
-  const workspaces = new WorkspaceRepo(db, {
-    workspacesRoot: join(tmpdir(), 'silverhand-threads-test'),
-  });
-  const workspacePath = workspaces.workspacePathFor('threads-ws');
+  const workspaces = new WorkspaceRepo(db);
+  const workspacePath = testWorkspacePath('threads-ws');
   const workspace = workspaces.insert({
     name: 'threads-ws',
     description: null,

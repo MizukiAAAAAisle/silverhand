@@ -30,7 +30,6 @@ import {
 import { PasswordCredentialService } from './auth/password.js';
 import { AuthSessionService } from './auth/session.js';
 import { HostRepo } from './repos/host-repo.js';
-import { ensureWorkspacesRoot } from './workspaces-root.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
 import { PresenceRegistry } from './presence/presence-registry.js';
 import {
@@ -105,7 +104,6 @@ interface BaseBackendOptions {
    *  §3). */
   blobsRootDir: string;
   embeddedBootstrapPath: string;
-  workspacesRootDir: string;
   serverConfig: ServerConfig;
   silverhandCliLauncher?: SilverhandCliLauncher;
   listen?: BackendListenOptions;
@@ -275,11 +273,9 @@ export async function startBackend(
       `Migration applied: v${migrationResult.current.beforeVersion} -> v${migrationResult.current.afterVersion}, backup at ${migrationResult.current.backupPath ?? 'none'}`,
     );
   }
-  const workspacesRoot = opts.workspacesRootDir;
   const blobStorage = createLocalBlobFileStorage({
     rootDir: opts.blobsRootDir,
   });
-  await ensureWorkspacesRoot(workspacesRoot);
   await blobStorage.ensureReady();
 
   if (opts.mode === 'embedded') {
@@ -320,7 +316,7 @@ export async function startBackend(
   const placement = new RuntimeHostPlacementResolver({
     hosts: new HostRepo(db),
     agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
   });
   let outboundFanout: OutboundRuntimeEventFanout | null = null;
   let hostWs: HostWsServerController | null = null;
@@ -390,7 +386,6 @@ export async function startBackend(
     logger,
     loggers,
     logControl,
-    workspacesRoot,
     logDir: opts.logDir,
     blobStorage,
     attachmentService,
@@ -468,7 +463,7 @@ export async function startBackend(
   // collapses concurrent callers, retries after a failure). It only
   // dispatches `workspace_provision`; it never assembles a host path.
   ctx.workspaceRegistryBackfiller = new WorkspaceRegistryBackfiller({
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
   });
 
@@ -483,7 +478,7 @@ export async function startBackend(
     db,
     conversations: new ConversationRepo(db),
     conversationReads: new ConversationReadRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     agents: new AgentRepo(db),
     messages: new MessageRepo(db),
     events: ctx.events,
@@ -499,7 +494,7 @@ export async function startBackend(
     agents: new AgentRepo(db),
     users: new UserRepo(db),
     notifications: new NotificationRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     attachmentService,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
@@ -510,7 +505,7 @@ export async function startBackend(
     conversations: new ConversationRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
@@ -519,7 +514,7 @@ export async function startBackend(
   });
   ctx.scheduleService = new ScheduleService({
     schedules: new ScheduleRepo(db),
-    workspaces: new WorkspaceRepo(db, { workspacesRoot }),
+    workspaces: new WorkspaceRepo(db),
     conversations: new ConversationRepo(db),
     conversationReads: new ConversationReadRepo(db),
     messages: new MessageRepo(db),
@@ -723,7 +718,6 @@ export async function startBackend(
         events: ctx.events,
         transport: () => outboundAdapter,
         logger,
-        workspacesRoot,
         silverhandCli: ctx.silverhandCliLauncher,
         ...(ctx.coLocatedHostId
           ? { coLocatedHostId: ctx.coLocatedHostId }

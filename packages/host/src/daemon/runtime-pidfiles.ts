@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import {
-  homeAppRoot,
+  defaultAppRoot,
   resolveLegacyStandaloneDaemonPaths,
 } from '@silverhand/shared/app-data-layout';
 import { randomUUID } from 'node:crypto';
@@ -56,8 +56,8 @@ export interface RuntimePidfileDeps {
 type ProbeResult = 'alive' | 'dead' | 'eperm' | 'error';
 
 export function defaultRuntimePidRootDir(): string {
-  // Historical standalone default; env-independent by contract (#task:1598).
-  return resolveLegacyStandaloneDaemonPaths(homeAppRoot()).runtimePids;
+  // Standalone default; env-AWARE since the v2 cutover (#task:1603, §8).
+  return resolveLegacyStandaloneDaemonPaths(defaultAppRoot()).runtimePids;
 }
 
 export function buildDaemonInstanceId(startedAtMs: number, pid = process.pid): string {

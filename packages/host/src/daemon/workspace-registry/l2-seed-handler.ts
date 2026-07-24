@@ -69,8 +69,7 @@ export async function seedAgentL2(
         );
       }
       if (err.code === 'registry_foreign' ||
-        err.code === 'registry_corrupt' ||
-        err.code === 'migration_blocked') {
+        err.code === 'registry_corrupt') {
         throw new AgentL2SeedError('registry_unavailable', err.message);
       }
     }

@@ -346,9 +346,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   });
   const hosts = new HostRepo(ctx.db);
   const agents = new AgentRepo(ctx.db);
-  const workspaces = new WorkspaceRepo(ctx.db, {
-    workspacesRoot: ctx.workspacesRoot,
-  });
+  const workspaces = new WorkspaceRepo(ctx.db);
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
   const reactions = new MessageReactionRepo(ctx.db);

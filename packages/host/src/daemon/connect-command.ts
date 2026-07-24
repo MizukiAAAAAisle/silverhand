@@ -8,14 +8,15 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { Socket } from 'node:net';
-import { hostname } from 'node:os';
-import { join } from 'node:path';
+import { homedir, hostname } from 'node:os';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import {
   apiPaths,
   CONNECT_ARG_CONNECT_TOKEN,
   CONNECT_ARG_CONNECT_TOKEN_ENV,
   CONNECT_ARG_DATA_ROOT,
+  CONNECT_ARG_DATA_ROOT_ORIGIN,
   CONNECT_ARG_FOREGROUND,
   CONNECT_ARG_NO_DAEMON,
   CONNECT_ARG_QUIET,
@@ -29,9 +30,17 @@ import {
 } from '@silverhand/shared';
 import {
   resolveComputerDataPaths,
+  resolveConnectProfilePaths,
   computersRootDir,
 } from '@silverhand/shared/app-data-layout';
 import { runDaemon } from './run.js';
+// #task:1608 (Cindy R4 P2-4) — sibling imports, never the public barrel.
+import { runWorkspaceDataConvergencePass } from './workspace-registry/convergence-pass.js';
+import { FlattenLayoutError } from './workspace-registry/flatten-layout.js';
+import {
+  SessionMigrationError,
+  type SessionStoreEnv,
+} from './workspace-registry/session-migration.js';
 import { Supervisor } from './supervisor/index.js';
 import type { DaemonIdentity } from './identity.js';
 import { hostConnectWebSocketUrl } from './outbound-client.js';
@@ -42,7 +51,6 @@ const execFileAsync = promisify(execFile);
 const CONNECT_READY_TIMEOUT_MS = 10_000;
 const STOP_GRACE_MS = 5_000;
 const CONNECT_LAUNCHER_LOG = 'connect-launcher.log';
-const CONNECT_PID_FILE = 'silverhand-daemon.pid';
 const CONNECT_TOKEN_ENV = 'SILVERHAND_DAEMON_CONNECT_TOKEN';
 const DEFAULT_DAEMON_NPM_SPEC = '@silverhand-ai/daemon@latest';
 
@@ -50,6 +58,11 @@ export interface ConnectCommandOptions {
   serverUrl: string;
   connectToken: string;
   dataRoot: string | null;
+  /** #task:1608 R2-3 — the data-root origin FACT. 'default' only when the
+   *  detached child inherits the parent's default profile via the internal
+   *  `--data-root-origin` flag; a user-supplied `--data-root` is always
+   *  'explicit'. Never derived from the path shape. */
+  dataRootOrigin: 'default' | 'explicit';
   alsoStderr: boolean;
   daemonMode: boolean;
 }
@@ -66,6 +79,7 @@ export function parseConnectArgv(
   let connectToken: string | null = null;
   let connectTokenEnv: string | null = null;
   let dataRoot: string | null = null;
+  let dataRootOrigin: 'default' | 'explicit' | null = null;
   let alsoStderr = true;
   let daemonMode = true;
 
@@ -87,6 +101,18 @@ export function parseConnectArgv(
       case CONNECT_ARG_DATA_ROOT:
         dataRoot = argv[++i] ?? null;
         break;
+      case CONNECT_ARG_DATA_ROOT_ORIGIN: {
+        const value = argv[++i] ?? null;
+        if (value !== 'default' && value !== 'explicit') {
+          return {
+            ok: false,
+            exitCode: 1,
+            message: `${CONNECT_ARG_DATA_ROOT_ORIGIN} must be 'default' or 'explicit'`,
+          };
+        }
+        dataRootOrigin = value;
+        break;
+      }
       case CONNECT_ARG_FOREGROUND:
       case CONNECT_ARG_NO_DAEMON:
         daemonMode = false;
@@ -129,6 +155,13 @@ export function parseConnectArgv(
   if (dataRoot !== null && !dataRoot.startsWith('/')) {
     return { ok: false, exitCode: 1, message: '--data-root must be absolute' };
   }
+  if (dataRootOrigin !== null && dataRoot === null) {
+    return {
+      ok: false,
+      exitCode: 1,
+      message: `${CONNECT_ARG_DATA_ROOT_ORIGIN} requires ${CONNECT_ARG_DATA_ROOT}`,
+    };
+  }
 
   return {
     ok: true,
@@ -136,6 +169,7 @@ export function parseConnectArgv(
       serverUrl,
       connectToken,
       dataRoot,
+      dataRootOrigin: dataRootOrigin ?? 'explicit',
       alsoStderr,
       daemonMode,
     },
@@ -163,6 +197,29 @@ export async function runConnectCommand(
     return 1;
   }
 
+  // #task:1608 R2-3 — the origin FACT decides the profile shape, never the
+  // path shape. `--data-root` absent (or the internal origin flag saying
+  // 'default') = default profile keyed by the host id; a user-supplied
+  // explicit root is flat and self-contained. `<app-root>/computers/` is a
+  // RESERVED namespace (its dir names are safeComputerDirId(host_id)
+  // products): an explicit root inside it could collide with a managed
+  // default profile, so it is rejected loudly — never silently redirected,
+  // never silently run flat inside the managed namespace. Checked BEFORE
+  // any network or filesystem side effect.
+  const stateRoot = defaultSilverhandStateRoot();
+  const useDefaultProfile =
+    parsed.options.dataRoot === null || parsed.options.dataRootOrigin === 'default';
+  if (!useDefaultProfile) {
+    const computersRoot = resolve(computersRootDir(stateRoot));
+    const requested = resolve(parsed.options.dataRoot!);
+    if (requested === computersRoot || requested.startsWith(computersRoot + sep)) {
+      process.stderr.write(
+        `silverhand-daemon connect: --data-root may not point inside ${computersRoot} (reserved for daemon-managed default profiles); omit --data-root to use the default profile\n`,
+      );
+      return 1;
+    }
+  }
+
   let hostId: string;
   try {
     hostId = await resolveConnectHostId({
@@ -175,19 +232,102 @@ export async function runConnectCommand(
     );
     return 1;
   }
-  const dataRoot =
-    parsed.options.dataRoot ??
-    defaultConnectDataRoot(hostId);
+  let dataRoot: string;
+  let paths: ConnectRuntimePaths;
+  if (useDefaultProfile) {
+    dataRoot = defaultConnectDataRoot(hostId, stateRoot);
+    if (
+      parsed.options.dataRoot !== null &&
+      resolve(parsed.options.dataRoot) !== resolve(dataRoot)
+    ) {
+      // The detached child inherited a default root minted by its parent;
+      // it must re-derive to the SAME slot (same env, same token → same
+      // host id). Divergence means the environment changed under us.
+      process.stderr.write(
+        `silverhand-daemon connect: inherited default data root ${parsed.options.dataRoot} does not match this host id's slot ${dataRoot}\n`,
+      );
+      return 1;
+    }
+    paths = defaultConnectRuntimePaths(hostId, stateRoot);
+  } else {
+    dataRoot = parsed.options.dataRoot!;
+    paths = explicitConnectRuntimePaths(dataRoot);
+  }
   mkdirSync(dataRoot, { recursive: true });
-  const paths = connectRuntimePaths(dataRoot);
+  mkdirSync(paths.runStateDir, { recursive: true });
+
+  if (useDefaultProfile) {
+    // #task:1608 transition guard (delete with the legacy layout
+    // inventory): pre-relocation connect daemons kept their pid file
+    // INSIDE the slot, where the new run/ coordinates would never collide
+    // with them. One live daemon per slot — fail closed until it stops.
+    const legacyPidPath = resolveComputerDataPaths(dataRoot).run.pidFile;
+    const legacy = await readExistingConnectDaemon(legacyPidPath, dataRoot);
+    if (legacy.status === 'matching' || legacy.status === 'eperm') {
+      process.stderr.write(
+        `silverhand-daemon connect: refusing to start; a pre-existing Silverhand daemon (pid ${legacy.pid}) still owns ${dataRoot} via the legacy pid file ${legacyPidPath}; stop it first\n`,
+      );
+      return 1;
+    }
+  }
 
   if (parsed.options.daemonMode) {
     return runConnectDaemonMode({
       options: parsed.options,
       dataRoot,
+      defaultProfile: useDefaultProfile,
       paths,
       env,
     });
+  }
+
+  // Foreground = the actual daemon process. Refuse a double start BEFORE
+  // the one-time migration below can touch bytes another live daemon owns.
+  const alreadyRunning = await readExistingConnectDaemon(paths.pidFilePath, dataRoot);
+  if (alreadyRunning.status !== 'none') {
+    process.stderr.write(
+      `silverhand-daemon connect: refusing to start; pid ${alreadyRunning.pid} already owns ${dataRoot}\n`,
+    );
+    return 1;
+  }
+
+  // #task:1608 workspace-data convergence — the CONNECT composition entry
+  // over the ONE migration unit (Cindy ruling 2026-07-25): after the
+  // computer binding is resolved and verified, BEFORE any registry or
+  // data-plane surface exists, converge THIS computer's workspace-data to
+  // the flat raw-id layout (registry lift + dir renames + session cwd
+  // renames). Only the current root is touched — never another computer's
+  // directory. Failure is fail-closed: the daemon does not start, no new
+  // resolver coordinates are materialized.
+  try {
+    runWorkspaceDataConvergencePass({
+      workspaceDataRoot: paths.workspaceDataRootDir,
+      // The ONE candidate a connect daemon can own: its full runtime
+      // binding (Cindy R4 P0-1 — never a bare host id).
+      candidateBindings: [
+        { server_origin: new URL(parsed.options.serverUrl).origin, host_id: hostId },
+      ],
+      sessionStoreHome: homedir(),
+      // The same effective env the daemon (and its runtime children)
+      // inherit — never a fresh process.env read (Cindy R4 P2-4).
+      env: env as SessionStoreEnv,
+      logger: {
+        info: (_f, m) => {
+          if (parsed.options.alsoStderr) {
+            process.stderr.write(`silverhand-daemon connect: ${m}\n`);
+          }
+        },
+        warn: (_f, m) => process.stderr.write(`silverhand-daemon connect: ${m}\n`),
+      },
+    });
+  } catch (err) {
+    if (err instanceof FlattenLayoutError || err instanceof SessionMigrationError) {
+      process.stderr.write(
+        `silverhand-daemon connect: workspace-data migration failed (${err.code}): ${err.message}\n`,
+      );
+      return 1;
+    }
+    throw err;
   }
 
   const hostConfig: DaemonHostConfig = {
@@ -338,7 +478,7 @@ export async function runStopCommand(
     }
     dataRoot = discovered.dataRoot;
   }
-  const paths = connectRuntimePaths(dataRoot);
+  const paths = stopRuntimePaths(dataRoot);
   const pid = readPidFile(paths.pidFilePath);
   if (pid === null) {
     process.stdout.write(`No Silverhand daemon is running for data root: ${dataRoot}\n`);
@@ -391,22 +531,48 @@ interface ConnectRuntimePaths {
   pidFilePath: string;
   logDir: string;
   launcherLogPath: string;
+  /** Where transient run files live; created before the daemon starts. */
+  runStateDir: string;
   runtimePidRootDir: string;
   agentHomeRootDir: string;
   workspaceDataRootDir: string;
   proxyConfigPath: string;
 }
 
-function connectRuntimePaths(dataRoot: string): ConnectRuntimePaths {
-  // #task:1598 — the per-computer data-root shape comes from the ONE
-  // app-data path authority; connect is not a second resolver. A custom
-  // --data-root never writes back to ~/.silverhand (#task:1596).
+/**
+ * #task:1608 R2-3 — the DEFAULT connect profile shape, keyed by the origin
+ * fact (no user `--data-root`), never by path sniffing. The slot keeps
+ * only durable state; transient run files and logs are app-scoped
+ * (`resolveConnectProfilePaths`).
+ */
+export function defaultConnectRuntimePaths(
+  computerId: string,
+  silverhandStateRoot = defaultSilverhandStateRoot(),
+): ConnectRuntimePaths {
+  const profile = resolveConnectProfilePaths(silverhandStateRoot, computerId);
+  return {
+    socketPath: profile.run.socket,
+    pidFilePath: profile.run.pidFile,
+    logDir: profile.logs,
+    launcherLogPath: join(profile.logs, CONNECT_LAUNCHER_LOG),
+    runStateDir: profile.run.root,
+    runtimePidRootDir: profile.run.runtimePids,
+    agentHomeRootDir: profile.slot.agents,
+    workspaceDataRootDir: profile.slot.workspaceData,
+    proxyConfigPath: profile.slot.proxyConfig,
+  };
+}
+
+/** An EXPLICIT `--data-root`: the historical flat self-contained shape
+ *  (never redirected, never writing back to ~/.silverhand — #task:1596). */
+export function explicitConnectRuntimePaths(dataRoot: string): ConnectRuntimePaths {
   const computer = resolveComputerDataPaths(dataRoot);
   return {
     socketPath: computer.run.socket,
     pidFilePath: computer.run.pidFile,
     logDir: computer.logs,
     launcherLogPath: join(computer.logs, CONNECT_LAUNCHER_LOG),
+    runStateDir: computer.run.root,
     runtimePidRootDir: computer.run.runtimePids,
     agentHomeRootDir: computer.agents,
     workspaceDataRootDir: computer.workspaceData,
@@ -414,9 +580,29 @@ function connectRuntimePaths(dataRoot: string): ConnectRuntimePaths {
   };
 }
 
+/**
+ * stop/discovery mapping for a data root. `<app-root>/computers/` is a
+ * RESERVED namespace — `connect` REJECTS an explicit `--data-root` inside
+ * it — so a data root that is a direct child of the computers root can
+ * only be a daemon-managed default profile. Membership here is an
+ * ENFORCED INVARIANT consumed at stop time, not a shape guess; everything
+ * else is an explicit root with the flat shape.
+ */
+export function stopRuntimePaths(
+  dataRoot: string,
+  silverhandStateRoot = defaultSilverhandStateRoot(),
+): ConnectRuntimePaths {
+  const resolved = resolve(dataRoot);
+  return dirname(resolved) === resolve(computersRootDir(silverhandStateRoot))
+    ? defaultConnectRuntimePaths(basename(resolved), silverhandStateRoot)
+    : explicitConnectRuntimePaths(dataRoot);
+}
+
 async function runConnectDaemonMode(input: {
   options: ConnectCommandOptions;
   dataRoot: string;
+  /** The parent's origin fact, forwarded to the child explicitly. */
+  defaultProfile: boolean;
   paths: ConnectRuntimePaths;
   env: NodeJS.ProcessEnv;
 }): Promise<number> {
@@ -466,6 +652,10 @@ async function runConnectDaemonMode(input: {
         CONNECT_TOKEN_ENV,
         CONNECT_ARG_DATA_ROOT,
         input.dataRoot,
+        // #task:1608 R2-3 — the child inherits the origin FACT; it never
+        // re-derives default/explicit from the path shape. The pinned
+        // --data-root stays for stop's cmdline identification.
+        ...(input.defaultProfile ? [CONNECT_ARG_DATA_ROOT_ORIGIN, 'default'] : []),
         input.options.alsoStderr ? CONNECT_ARG_STDERR : CONNECT_ARG_QUIET,
       ],
       {
@@ -611,7 +801,7 @@ export type StopTargetDiscovery =
 export async function discoverStopTarget(deps: StopCommandDeps): Promise<StopTargetDiscovery> {
   const liveTargets: Array<{ dataRoot: string; pid: number }> = [];
   for (const dataRoot of deps.listCandidateDataRoots()) {
-    const pidFilePath = connectRuntimePaths(dataRoot).pidFilePath;
+    const pidFilePath = stopRuntimePaths(dataRoot).pidFilePath;
     const pid = readPidFile(pidFilePath);
     if (pid === null) continue;
     const state = deps.signalPid(pid, 0);

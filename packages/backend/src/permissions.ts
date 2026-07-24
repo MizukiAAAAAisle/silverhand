@@ -21,7 +21,7 @@ export type AttachmentAclRow = Pick<
 >;
 
 function workspaceRepo(ctx: BackendContext): WorkspaceRepo {
-  return new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
+  return new WorkspaceRepo(ctx.db);
 }
 
 function conversationRepo(ctx: BackendContext): ConversationRepo {

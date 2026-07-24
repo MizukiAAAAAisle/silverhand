@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
-  homeAppRoot,
+  defaultAppRoot,
   resolveLegacyStandaloneDaemonPaths,
 } from '@silverhand/shared/app-data-layout';
 import { z } from 'zod';
@@ -31,10 +31,12 @@ export const DEFAULT_DAEMON_IDENTITY: DaemonIdentity = Object.freeze({
  * the resolver's `localComputer.run.identity` via `--daemon-identity-path`;
  * `connect` passes `null` and supplies the identity value directly). The
  * historical sibling derivation from `runtimePidRootDir` was a parent
- * inversion and is gone. Env-independent by contract (see homeAppRoot).
+ * inversion and is gone. Env-AWARE since the v2 cutover: every default
+ * root consults SILVERHAND_DIR (contract §8; no released artifact ever
+ * shipped the env-independent bare-daemon defaults).
  */
 export function defaultDaemonIdentityPath(): string {
-  return resolveLegacyStandaloneDaemonPaths(homeAppRoot()).identity;
+  return resolveLegacyStandaloneDaemonPaths(defaultAppRoot()).identity;
 }
 
 export function readOrCreateDaemonIdentity(filePath: string): DaemonIdentity {

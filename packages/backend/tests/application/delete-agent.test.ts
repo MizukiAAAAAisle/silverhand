@@ -22,7 +22,7 @@ function depsFor(t: TestApp) {
   return {
     ctx: t.ctx,
     agents: new AgentRepo(t.ctx.db),
-    workspaces: new WorkspaceRepo(t.ctx.db, { workspacesRoot: t.ctx.workspacesRoot }),
+    workspaces: new WorkspaceRepo(t.ctx.db),
     conversations: new ConversationRepo(t.ctx.db),
     conversationInboxes: new ConversationInboxRepo(t.ctx.db),
   };

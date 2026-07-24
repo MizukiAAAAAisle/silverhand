@@ -67,7 +67,7 @@ import {
 } from './outbound-write-buffer.js';
 import {
   resolveDesktopAppPaths,
-  homeAppRoot,
+  defaultAppRoot,
 } from '@silverhand/shared/app-data-layout';
 import { resolveDeliveryOwner } from './supervisor-contract.js';
 
@@ -77,11 +77,11 @@ import { resolveDeliveryOwner } from './supervisor-contract.js';
  * IPC and the formal outbound envelope are physically isolated.
  */
 export function deriveLocalOutboundFrameSocketPath(home = homedir()): string {
-  // #task:1598 — delegate to the shared app-data path authority.
-  // Env-INDEPENDENT by historical contract (homeAppRoot); the `home` seam
-  // keeps the historical test signature.
-  return resolveDesktopAppPaths(homeAppRoot(home), 'legacy-v1')
-    .localComputer.run.outboundSocket;
+  // #task:1598/#task:1603 — delegate to the shared app-data path
+  // authority; env-AWARE since the v2 cutover (contract §8). The `home`
+  // seam keeps the historical test signature.
+  return resolveDesktopAppPaths(defaultAppRoot(process.env, () => home), 'legacy-v1')
+    .run.outboundSocket;
 }
 
 export interface LocalOutboundFrameServerOptions {

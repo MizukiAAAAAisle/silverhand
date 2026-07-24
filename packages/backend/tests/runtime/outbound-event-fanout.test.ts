@@ -1,4 +1,5 @@
 import { tmpdir } from 'node:os';
+import { testWorkspacePath } from '../utils/db.js';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -1462,13 +1463,11 @@ describe('OutboundRuntimeEventFanout', () => {
       // memory-index peer. It must not be provisioned or seeded pre-spawn
       // (same-host legacy migration is the hydrate audit's job; unbound
       // peers degrade daemon-side to "unavailable on this computer").
-      const workspaces = new WorkspaceRepo(fix.db, {
-        workspacesRoot: join(tmpdir(), 'silverhand-outbound-fanout-test'),
-      });
+      const workspaces = new WorkspaceRepo(fix.db);
       const peer = workspaces.insert({
         name: 'peer-ws',
         description: null,
-        workspacePath: workspaces.workspacePathFor('peer-ws'),
+        workspacePath: testWorkspacePath('peer-ws'),
         workspaceHostId: fix.hostId,
       });
       fix.db
@@ -2474,9 +2473,8 @@ function makeFixture(
   } = {},
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
-  const workspacesRoot = join(tmpdir(), 'silverhand-outbound-fanout-test');
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
-  const workspacePath = workspaces.workspacePathFor('fanout-ws');
+  const workspaces = new WorkspaceRepo(db);
+  const workspacePath = testWorkspacePath('fanout-ws');
   const workspace = workspaces.insert({
     name: 'fanout-ws',
     description: null,
@@ -2539,7 +2537,6 @@ function makeFixture(
     events: publisher,
     transport: () => transport,
     logger: opts.logger ?? SILENT_LOGGER,
-    workspacesRoot,
     silverhandCli: { command: 'silverhand', args: [] },
     ...(opts.coLocatedHostId === null
       ? {}

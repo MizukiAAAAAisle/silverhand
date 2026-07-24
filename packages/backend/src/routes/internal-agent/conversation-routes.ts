@@ -71,9 +71,7 @@ async function buildAgentListWorkspacesDto(
   ctx: BackendContext,
   agentId: string,
 ): Promise<AgentListWorkspacesOutcome> {
-  const workspaces = new WorkspaceRepo(ctx.db, {
-    workspacesRoot: ctx.workspacesRoot,
-  }).listForAgent(agentId);
+  const workspaces = new WorkspaceRepo(ctx.db).listForAgent(agentId);
   if (workspaces.length === 0) {
     return { kind: 'ok', dto: { workspaces: [] } };
   }

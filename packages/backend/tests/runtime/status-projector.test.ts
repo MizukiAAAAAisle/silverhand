@@ -41,7 +41,7 @@ function makeFixture(
   const { workspacesRoot, cleanup } = makeTempSilverhandDir();
   const conversations = new ConversationRepo(db);
   const agents = new AgentRepo(db);
-  const workspaces = new WorkspaceRepo(db, { workspacesRoot });
+  const workspaces = new WorkspaceRepo(db);
 
   const ws = workspaces.insert({
     name: 'ws-proj',

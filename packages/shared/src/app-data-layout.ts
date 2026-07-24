@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -33,32 +34,40 @@ export const WORKSPACE_DATA_DIR_NAME = 'workspace-data';
 /** The desktop layout marker file, relative to `desktop/`. */
 export const DATA_LAYOUT_MARKER_FILENAME = 'data-layout.json';
 
+/** #task:1608 — the desktop-owned computer binding file, relative to
+ *  `desktop/` (daemon-config schema; the LOCATION expresses the owner). */
+export const COMPUTER_BINDING_FILENAME = 'computer-binding.json';
+
 /**
- * Resolve the desktop app root exactly once at process entry:
- * `SILVERHAND_DIR` when set, else `~/.silverhand`. EXACT historical
- * desktop semantics (`process.env.SILVERHAND_DIR || ...`): the empty
- * string falls through, any other value — including whitespace — is used
- * verbatim. (The CLI historically trimmed; that divergence is preserved
- * at its call site and listed for a v2 unification decision.) Inputs are
- * injectable for tests; production callers use the defaults.
+ * The UNIFIED `SILVERHAND_DIR` parse contract (v2 cutover, shiki
+ * 2026-07-24): `trim()` the value; blank-after-trim counts as unset
+ * (returns null); anything else is the TRIMMED value. This is the ONE
+ * judgment for both the root VALUE and the root PRESENCE — any gate that
+ * branches on "was SILVERHAND_DIR set?" must consume this, never the raw
+ * env, or whitespace/unset would take different arms.
+ */
+export function appRootEnvOverride(
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  const fromEnv = env.SILVERHAND_DIR?.trim();
+  return fromEnv ? fromEnv : null;
+}
+
+/**
+ * Resolve the app root exactly once at process entry: the trimmed
+ * `SILVERHAND_DIR` override when present, else `~/.silverhand`. Desktop,
+ * the CLI, and the bare-daemon/connect defaults all consume THIS
+ * resolver — the historical desktop whitespace-verbatim `||` and the
+ * CLI-local trim divergence are gone. An explicit `--data-root` is not
+ * part of this env contract: it stays highest-priority and is never
+ * trimmed or redirected. Inputs are injectable for tests; production
+ * callers use the defaults.
  */
 export function defaultAppRoot(
   env: Record<string, string | undefined> = process.env,
   home: () => string = homedir,
 ): string {
-  return env.SILVERHAND_DIR || join(home(), '.silverhand');
-}
-
-/**
- * The env-INDEPENDENT user-home app root (`~/.silverhand`). Historical
- * host-daemon defaults (standalone identity/runtime-pids, connect profile
- * root, workspace-data fallback, local outbound socket) never consulted
- * `SILVERHAND_DIR`; the compatibility floor preserves that exactly —
- * making them env-sensitive would silently move connect profiles and
- * fallback roots for anyone running with an explicit `SILVERHAND_DIR`.
- */
-export function homeAppRoot(home: string = homedir()): string {
-  return join(home, '.silverhand');
+  return appRootEnvOverride(env) ?? join(home(), '.silverhand');
 }
 
 /**
@@ -82,9 +91,119 @@ export function resolveLegacyStandaloneDaemonPaths(appRoot: string): {
   };
 }
 
+/**
+ * #task:1603 — the two independently atomic staging roots of the layout-v2
+ * migration (docs/app-data-layout-v2.md §6). Owned by the resolver so the
+ * migration never invents its own coordinates.
+ */
+export function localComputerStagingDir(appRoot: string): string {
+  return join(appRoot, 'computers', '.local-layout-v2.staging');
+}
+
+export function embeddedServerStagingDir(appRoot: string): string {
+  return join(appRoot, '.embedded-server-layout-v2.staging');
+}
+
 /** The per-computer profiles root (`<app-root>/computers`). */
 export function computersRootDir(appRoot: string): string {
   return join(appRoot, 'computers');
+}
+
+/**
+ * #task:1608 — filesystem-safe directory id for a computer slot. Ported
+ * from the connect profile key (host computer-profile safePathId) so
+ * desktop and connect slots are literally the same coordinates.
+ */
+export function safeComputerDirId(computerId: string): string {
+  return (
+    computerId.replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 80) ||
+    shortHash(computerId)
+  );
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
+/**
+ * #task:1608 — the durable per-computer slot (`computers/<computer_id>`),
+ * materialized only after the machine registers with a server
+ * (claim_or_create → hosts.id). Desktop and connect defaults are the SAME
+ * shape and coordinates; there is no `local` special case. The app-scoped
+ * transient run/ dir and the desktop-owned binding file deliberately live
+ * OUTSIDE the slot (they must exist before any computer id does).
+ */
+export interface ComputerSlotPaths {
+  root: string;
+  /** L1 agent identity root (`<root>/agents/<agent_id>/...`). */
+  agents: string;
+  /** Durable workspace registry + managed workspace roots (holds L2). */
+  workspaceData: string;
+  /** Per-computer proxy config. */
+  proxyConfig: string;
+}
+
+export function resolveComputerSlotPaths(
+  appRoot: string,
+  computerId: string,
+): ComputerSlotPaths {
+  return resolveComputerSlotFromComputersRoot(
+    computersRootDir(appRoot),
+    computerId,
+  );
+}
+
+/** Same slot, keyed from an explicit computers root (what the daemon
+ *  receives via `--computers-root-dir`). */
+export function resolveComputerSlotFromComputersRoot(
+  computersRoot: string,
+  computerId: string,
+): ComputerSlotPaths {
+  const root = join(computersRoot, safeComputerDirId(computerId));
+  return {
+    root,
+    agents: join(root, 'agents'),
+    workspaceData: join(root, WORKSPACE_DATA_DIR_NAME),
+    proxyConfig: join(root, 'proxy-config.json'),
+  };
+}
+
+/**
+ * #task:1608 — the DEFAULT `silverhand-daemon connect` profile: the durable
+ * slot plus its app-scoped transient/run and log coordinates. The slot holds
+ * ONLY durable state (agents, workspace-data, proxy-config); sockets,
+ * pidfiles, and runtime pidfiles live under the app-scoped transient root
+ * (`run/connect-<computer_dir>/`), and logs under the single support-bundle
+ * root (`logs/connect-<computer_dir>/`). An EXPLICIT `--data-root` keeps the
+ * self-contained flat shape (`resolveComputerDataPaths`) instead.
+ */
+export interface ConnectProfilePaths {
+  slot: ComputerSlotPaths;
+  logs: string;
+  run: {
+    root: string;
+    socket: string;
+    pidFile: string;
+    runtimePids: string;
+  };
+}
+
+export function resolveConnectProfilePaths(
+  appRoot: string,
+  computerId: string,
+): ConnectProfilePaths {
+  const dirId = safeComputerDirId(computerId);
+  const runRoot = join(appRoot, 'run', `connect-${dirId}`);
+  return {
+    slot: resolveComputerSlotPaths(appRoot, computerId),
+    logs: join(appRoot, 'logs', `connect-${dirId}`),
+    run: {
+      root: runRoot,
+      socket: join(runRoot, 'daemon.sock'),
+      pidFile: join(runRoot, 'silverhand-daemon.pid'),
+      runtimePids: join(runRoot, 'runtime-pids'),
+    },
+  };
 }
 
 /** The pre-D4.e backend-generated workspaces root (`<app-root>/workspaces`). */
@@ -132,6 +251,17 @@ export interface EmbeddedServerPaths {
   bootstrap: string;
 }
 
+/** App-scoped transient runtime coordinates (`<app-root>/run/**`). */
+export interface AppRunPaths {
+  root: string;
+  socket: string;
+  outboundSocket: string;
+  pidFile: string;
+  identity: string;
+  runtimePids: string;
+  controlPlaneServerUrl: string;
+}
+
 export interface DesktopAppPaths {
   appRoot: string;
   version: DesktopLayoutVersion;
@@ -142,11 +272,31 @@ export interface DesktopAppPaths {
     serverProfile: string;
     session: string;
     layoutMarker: string;
+    /** #task:1608 — the desktop-owned "which computer is this app bound
+     *  to" authority (daemon-config schema; v2 location). */
+    computerBinding: string;
   };
-  localComputer: ComputerDataPaths & {
-    /** Historical desktop-daemon proxy config (`daemon/proxy-config.json`)
-     *  consulted for one-time migration; legacy layout only. */
-    legacyProxyConfig: string;
+  /**
+   * #task:1608 — the app-scoped transient runtime root. IDENTICAL
+   * coordinates in both layout versions (top-level `run/`): it must exist
+   * before any computer id does, holds only rebuildable state (sockets,
+   * pidfiles, instance identity, control-plane URL), and may be cleared
+   * only while the app/daemon is stopped. Never migrated.
+   */
+  run: AppRunPaths;
+  /** The per-computer durable slots root (`<app-root>/computers`);
+   *  individual slots resolve via `resolveComputerSlotPaths`. */
+  computersRoot: string;
+  /**
+   * The legacy-v1 flat local-computer coordinates (historical facts, used
+   * ONLY as migration sources and the legacy binding-config location).
+   */
+  legacyLocalComputer: {
+    agents: string;
+    workspaceData: string;
+    daemonConfig: string;
+    /** Historical desktop-daemon proxy config (`daemon/proxy-config.json`). */
+    proxyConfig: string;
   };
   embeddedServer: EmbeddedServerPaths;
   /** Single support-bundle log root (deliberately not split per owner). */
@@ -213,6 +363,7 @@ export function resolveDesktopAppPaths(
   version: DesktopLayoutVersion,
 ): DesktopAppPaths {
   const desktopRoot = join(appRoot, 'desktop');
+  const runRoot = join(appRoot, 'run');
   const shared = {
     appRoot,
     version,
@@ -223,6 +374,25 @@ export function resolveDesktopAppPaths(
       serverProfile: join(desktopRoot, 'server-profile.bin'),
       session: join(desktopRoot, 'session.bin'),
       layoutMarker: join(desktopRoot, DATA_LAYOUT_MARKER_FILENAME),
+      computerBinding: join(desktopRoot, COMPUTER_BINDING_FILENAME),
+    },
+    // Top-level run/ in BOTH versions (#task:1608): the transient runtime
+    // root is app-scoped and pre-dates any computer id.
+    run: {
+      root: runRoot,
+      socket: join(runRoot, 'daemon.sock'),
+      outboundSocket: join(runRoot, 'daemon-outbound.sock'),
+      pidFile: join(runRoot, 'daemon.pid'),
+      identity: join(runRoot, 'identity.json'),
+      runtimePids: join(runRoot, 'runtime-pids'),
+      controlPlaneServerUrl: join(runRoot, 'control-plane-server-url'),
+    },
+    computersRoot: computersRootDir(appRoot),
+    legacyLocalComputer: {
+      agents: join(appRoot, 'agents'),
+      workspaceData: join(appRoot, WORKSPACE_DATA_DIR_NAME),
+      daemonConfig: join(appRoot, DAEMON_HOST_CONFIG_FILENAME),
+      proxyConfig: join(appRoot, 'daemon', 'proxy-config.json'),
     },
     logs: join(appRoot, 'logs'),
     attachmentsCache: join(appRoot, 'attachments-cache'),
@@ -230,29 +400,10 @@ export function resolveDesktopAppPaths(
   };
 
   if (version === 'legacy-v1') {
-    // Byte-identical to the historical flat layout: local-computer and
-    // embedded-server facets sit directly on the app root.
-    const runRoot = join(appRoot, 'run');
+    // Byte-identical to the historical flat layout: the embedded-server
+    // facet sits directly on the app root.
     return {
       ...shared,
-      localComputer: {
-        root: appRoot,
-        agents: join(appRoot, 'agents'),
-        workspaceData: join(appRoot, WORKSPACE_DATA_DIR_NAME),
-        daemonConfig: join(appRoot, DAEMON_HOST_CONFIG_FILENAME),
-        proxyConfig: join(appRoot, 'daemon', 'proxy-config.json'),
-        legacyProxyConfig: join(appRoot, 'daemon', 'proxy-config.json'),
-        logs: shared.logs,
-        run: {
-          root: runRoot,
-          socket: join(runRoot, 'daemon.sock'),
-          outboundSocket: join(runRoot, 'daemon-outbound.sock'),
-          pidFile: join(runRoot, 'daemon.pid'),
-          identity: join(runRoot, 'identity.json'),
-          runtimePids: join(runRoot, 'runtime-pids'),
-          controlPlaneServerUrl: join(runRoot, 'control-plane-server-url'),
-        },
-      },
       embeddedServer: {
         root: appRoot,
         database: join(appRoot, 'silverhand.db'),
@@ -265,31 +416,12 @@ export function resolveDesktopAppPaths(
     };
   }
 
-  // v2 (docs/app-data-layout-v2.md §2). Defined for the marker/migration;
-  // production does not select it in the compatibility floor.
-  const localRoot = join(appRoot, 'computers', 'local');
-  const localRun = join(localRoot, 'run');
+  // v2 (docs/app-data-layout-v2.md §2): computer-scoped durable facets
+  // live in per-id slots (resolveComputerSlotPaths); nothing here is
+  // keyed by a computer id.
   const embeddedRoot = join(appRoot, 'embedded-server');
   return {
     ...shared,
-    localComputer: {
-      root: localRoot,
-      agents: join(localRoot, 'agents'),
-      workspaceData: join(localRoot, WORKSPACE_DATA_DIR_NAME),
-      daemonConfig: join(localRoot, 'config', DAEMON_HOST_CONFIG_FILENAME),
-      proxyConfig: join(localRoot, 'config', 'proxy-config.json'),
-      legacyProxyConfig: join(appRoot, 'daemon', 'proxy-config.json'),
-      logs: shared.logs,
-      run: {
-        root: localRun,
-        socket: join(localRun, 'daemon.sock'),
-        outboundSocket: join(localRun, 'daemon-outbound.sock'),
-        pidFile: join(localRun, 'daemon.pid'),
-        identity: join(localRun, 'identity.json'),
-        runtimePids: join(localRun, 'runtime-pids'),
-        controlPlaneServerUrl: join(localRun, 'control-plane-server-url'),
-      },
-    },
     embeddedServer: {
       root: embeddedRoot,
       database: join(embeddedRoot, 'silverhand.db'),
@@ -310,7 +442,6 @@ export function resolveDesktopAppPaths(
 export interface BackendDataPaths {
   blobsRootDir: string;
   embeddedBootstrapPath: string;
-  workspacesRootDir: string;
 }
 
 export function resolveBackendDataPaths(dataRoot: string): BackendDataPaths {
@@ -318,6 +449,5 @@ export function resolveBackendDataPaths(dataRoot: string): BackendDataPaths {
   return {
     blobsRootDir: server.blobs,
     embeddedBootstrapPath: server.bootstrap,
-    workspacesRootDir: join(dataRoot, 'workspaces'),
   };
 }

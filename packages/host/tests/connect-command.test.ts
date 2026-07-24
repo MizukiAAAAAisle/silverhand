@@ -1,16 +1,21 @@
-import { describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   assembleConnectCommand,
   buildConnectArgv,
 } from '@silverhand/shared';
+import { bindingSlug, managedWorkspaceSlug } from '../src/index.js';
 import {
+  defaultConnectRuntimePaths,
   discoverStopTarget,
+  explicitConnectRuntimePaths,
   formatStopCommand,
   parseConnectArgv,
   parseStopArgv,
+  runConnectCommand,
+  stopRuntimePaths,
 } from '../src/daemon/connect-command';
 
 describe('silverhand-daemon connect command', () => {
@@ -28,6 +33,7 @@ describe('silverhand-daemon connect command', () => {
         serverUrl: 'http://127.0.0.1:18080',
         connectToken: 'ct_123',
         dataRoot: null,
+        dataRootOrigin: 'explicit',
         alsoStderr: true,
         daemonMode: true,
       },
@@ -49,6 +55,7 @@ describe('silverhand-daemon connect command', () => {
         serverUrl: 'http://127.0.0.1:18080',
         connectToken: 'ct_123',
         dataRoot: null,
+        dataRootOrigin: 'explicit',
         alsoStderr: true,
         daemonMode: false,
       },
@@ -72,6 +79,7 @@ describe('silverhand-daemon connect command', () => {
         serverUrl: 'http://127.0.0.1:18080',
         connectToken: 'ct_from_env',
         dataRoot: null,
+        dataRootOrigin: 'explicit',
         alsoStderr: true,
         daemonMode: true,
       },
@@ -127,6 +135,7 @@ describe('silverhand-daemon connect command', () => {
           serverUrl: input.serverUrl,
           connectToken: input.connectToken,
           dataRoot: null,
+          dataRootOrigin: 'explicit',
           alsoStderr: true,
           daemonMode: true,
         },
@@ -178,6 +187,258 @@ describe('silverhand-daemon connect command', () => {
   it('formats a copy-pasteable stop command for the exact data root', () => {
     expect(formatStopCommand('/tmp/silverhand computer')).toBe(
       "npx @silverhand-ai/daemon@latest stop --data-root '/tmp/silverhand computer'",
+    );
+  });
+
+  // #task:1608 R2-3 falsifiers — origin is a FACT carried on the argv, and
+  // the two profile shapes are separate explicit resolvers (no path
+  // sniffing at start). A default profile keeps only DURABLE state in the
+  // slot; transient run files and logs are app-scoped. An explicit root
+  // stays flat and self-contained.
+  it('parses the internal --data-root-origin flag the detached child inherits', () => {
+    const parsed = parseConnectArgv([
+      '--server-url',
+      'http://127.0.0.1:18080',
+      '--connect-token',
+      'ct_123',
+      '--data-root',
+      '/home/u/.silverhand/computers/host_1',
+      '--data-root-origin',
+      'default',
+    ]);
+    expect(parsed).toMatchObject({
+      ok: true,
+      options: {
+        dataRoot: '/home/u/.silverhand/computers/host_1',
+        dataRootOrigin: 'default',
+      },
+    });
+  });
+
+  it('rejects --data-root-origin without --data-root and rejects unknown origin values', () => {
+    expect(
+      parseConnectArgv([
+        '--server-url',
+        'http://127.0.0.1:18080',
+        '--connect-token',
+        'ct_123',
+        '--data-root-origin',
+        'default',
+      ]),
+    ).toMatchObject({ ok: false, exitCode: 1 });
+    expect(
+      parseConnectArgv([
+        '--server-url',
+        'http://127.0.0.1:18080',
+        '--connect-token',
+        'ct_123',
+        '--data-root',
+        '/data/custom',
+        '--data-root-origin',
+        'shape-guess',
+      ]),
+    ).toMatchObject({ ok: false, exitCode: 1 });
+  });
+
+  it('an explicit --data-root inside the reserved computers/ namespace is rejected before any side effect', async () => {
+    const stateRoot = mkdtempSync(join(tmpdir(), 'silverhand-reserved-'));
+    const prevEnv = process.env.SILVERHAND_DIR;
+    process.env.SILVERHAND_DIR = stateRoot;
+    const stderrWrites: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      const requested = join(stateRoot, 'computers', 'custom');
+      const code = await runConnectCommand([
+        '--server-url',
+        'http://127.0.0.1:18080',
+        '--connect-token',
+        'ct_123',
+        '--data-root',
+        requested,
+      ]);
+      expect(code).toBe(1);
+      expect(stderrWrites.join('')).toContain('reserved');
+      // Fail closed with ZERO side effects: neither the requested root nor
+      // any redirected run/log dirs were created.
+      expect(existsSync(requested)).toBe(false);
+      expect(existsSync(join(stateRoot, 'run'))).toBe(false);
+      expect(existsSync(join(stateRoot, 'logs'))).toBe(false);
+    } finally {
+      process.stderr.write = origWrite;
+      if (prevEnv === undefined) delete process.env.SILVERHAND_DIR;
+      else process.env.SILVERHAND_DIR = prevEnv;
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('a forged --data-root-origin default with a non-canonical root is rejected (the flag cannot promote arbitrary paths)', async () => {
+    // Cindy R2 gate: the internal origin flag is parent→child provenance
+    // ONLY. The child must recompute the canonical default root from the
+    // hostId IT resolved and refuse any mismatch — otherwise the flag
+    // would grant any path the default-profile (app-scoped run/log)
+    // treatment.
+    const stateRoot = mkdtempSync(join(tmpdir(), 'silverhand-forged-'));
+    const prevEnv = process.env.SILVERHAND_DIR;
+    process.env.SILVERHAND_DIR = stateRoot;
+    const stderrWrites: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response(JSON.stringify({ host_id: 'host-real' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    );
+    try {
+      const forged = join(stateRoot, 'elsewhere', 'evil');
+      const code = await runConnectCommand([
+        '--server-url',
+        'http://127.0.0.1:18080',
+        '--connect-token',
+        'ct_123',
+        '--data-root',
+        forged,
+        '--data-root-origin',
+        'default',
+        '--foreground',
+      ]);
+      expect(code).toBe(1);
+      expect(stderrWrites.join('')).toContain('does not match');
+      // Nothing was created at the forged root or the canonical slot.
+      expect(existsSync(forged)).toBe(false);
+      expect(existsSync(join(stateRoot, 'computers'))).toBe(false);
+      expect(existsSync(join(stateRoot, 'run'))).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      process.stderr.write = origWrite;
+      if (prevEnv === undefined) delete process.env.SILVERHAND_DIR;
+      else process.env.SILVERHAND_DIR = prevEnv;
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('connect converges workspace-data BEFORE starting; a convergence conflict blocks startup fail-closed (#task:1608)', async () => {
+    // PRODUCTION WIRING falsifier for the connect composition entry over
+    // the ONE migration unit: a workspace present at both the slug and the
+    // flat coordinate is a typed conflict — the daemon must NOT start and
+    // no run-state may appear.
+    const stateRoot = mkdtempSync(join(tmpdir(), 'silverhand-conv-'));
+    const prevEnv = process.env.SILVERHAND_DIR;
+    process.env.SILVERHAND_DIR = stateRoot;
+    const stderrWrites: string[] = [];
+    const origWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderrWrites.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response(JSON.stringify({ host_id: 'host-real' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    );
+    try {
+      const wsData = join(stateRoot, 'computers', 'host-real', 'workspace-data');
+      // The candidate the connect entry derives: origin(--server-url) + hostId.
+      const binding = { server_origin: 'http://127.0.0.1:18080', host_id: 'host-real' };
+      const slugManaged = join(
+        wsData,
+        bindingSlug(binding),
+        'workspaces',
+        managedWorkspaceSlug('r6Cb5cuDnS2hAP9l'),
+      );
+      mkdirSync(slugManaged, { recursive: true });
+      writeFileSync(
+        join(wsData, bindingSlug(binding), 'workspace-registry.json'),
+        JSON.stringify({
+          schema_version: 1,
+          binding,
+          workspaces: {
+            r6Cb5cuDnS2hAP9l: { path: slugManaged, provisioned_at: 1 },
+          },
+        }),
+      );
+      // The conflicting flat twin.
+      mkdirSync(join(wsData, 'workspaces', 'r6Cb5cuDnS2hAP9l'), { recursive: true });
+
+      const code = await runConnectCommand([
+        '--server-url',
+        'http://127.0.0.1:18080',
+        '--connect-token',
+        'ct_123',
+        '--foreground',
+      ]);
+      expect(code).toBe(1);
+      expect(stderrWrites.join('')).toContain('workspace-data migration failed');
+      // Fail closed: source registry not retired, no daemon run-state.
+      expect(
+        existsSync(join(wsData, bindingSlug(binding), 'workspace-registry.json')),
+      ).toBe(true);
+      expect(existsSync(join(stateRoot, 'run', 'connect-host-real', 'daemon.sock'))).toBe(false);
+      expect(
+        existsSync(join(stateRoot, 'run', 'connect-host-real', 'silverhand-daemon.pid')),
+      ).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+      process.stderr.write = origWrite;
+      if (prevEnv === undefined) delete process.env.SILVERHAND_DIR;
+      else process.env.SILVERHAND_DIR = prevEnv;
+      rmSync(stateRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('the default profile maps to app-scoped run/logs and slot-scoped durable state', () => {
+    const stateRoot = '/home/u/.silverhand';
+    const p = defaultConnectRuntimePaths('host/1', stateRoot);
+    expect(p.socketPath).toBe(`${stateRoot}/run/connect-host_1/daemon.sock`);
+    expect(p.pidFilePath).toBe(
+      `${stateRoot}/run/connect-host_1/silverhand-daemon.pid`,
+    );
+    expect(p.runStateDir).toBe(`${stateRoot}/run/connect-host_1`);
+    expect(p.runtimePidRootDir).toBe(`${stateRoot}/run/connect-host_1/runtime-pids`);
+    expect(p.logDir).toBe(`${stateRoot}/logs/connect-host_1`);
+    expect(p.launcherLogPath).toBe(
+      `${stateRoot}/logs/connect-host_1/connect-launcher.log`,
+    );
+    expect(p.agentHomeRootDir).toBe(`${stateRoot}/computers/host_1/agents`);
+    expect(p.workspaceDataRootDir).toBe(
+      `${stateRoot}/computers/host_1/workspace-data`,
+    );
+    expect(p.proxyConfigPath).toBe(
+      `${stateRoot}/computers/host_1/proxy-config.json`,
+    );
+  });
+
+  it('an explicit data root stays flat and self-contained (never redirected)', () => {
+    const p = explicitConnectRuntimePaths('/data/custom');
+    expect(p.socketPath).toBe('/data/custom/daemon.sock');
+    expect(p.pidFilePath).toBe('/data/custom/silverhand-daemon.pid');
+    expect(p.runStateDir).toBe('/data/custom');
+    expect(p.runtimePidRootDir).toBe('/data/custom/runtime-pids');
+    expect(p.logDir).toBe('/data/custom/logs');
+    expect(p.agentHomeRootDir).toBe('/data/custom/agents');
+    expect(p.workspaceDataRootDir).toBe('/data/custom/workspace-data');
+    expect(p.proxyConfigPath).toBe('/data/custom/proxy-config.json');
+  });
+
+  it('stop maps a reserved-namespace root to the default profile BY INVARIANT and anything else flat', () => {
+    const stateRoot = '/home/u/.silverhand';
+    expect(
+      stopRuntimePaths(`${stateRoot}/computers/host_1`, stateRoot).pidFilePath,
+    ).toBe(`${stateRoot}/run/connect-host_1/silverhand-daemon.pid`);
+    expect(stopRuntimePaths('/data/custom', stateRoot).pidFilePath).toBe(
+      '/data/custom/silverhand-daemon.pid',
     );
   });
 

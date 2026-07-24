@@ -10,9 +10,7 @@ function makeResolver() {
   const { db, viewerUserId } = openTestDb();
   const hosts = new HostRepo(db);
   const agents = new AgentRepo(db);
-  const workspaces = new WorkspaceRepo(db, {
-    workspacesRoot: '/tmp/silverhand-test-workspaces',
-  });
+  const workspaces = new WorkspaceRepo(db);
   const placement = new RuntimeHostPlacementResolver({
     hosts,
     agents,

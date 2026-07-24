@@ -69,7 +69,7 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
   const conversations = new ConversationRepo(ctx.db);
   const messages = new MessageRepo(ctx.db);
   const reactions = new MessageReactionRepo(ctx.db);
-  const workspaces = new WorkspaceRepo(ctx.db, { workspacesRoot: ctx.workspacesRoot });
+  const workspaces = new WorkspaceRepo(ctx.db);
   const users = new UserRepo(ctx.db);
   const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(ctx.db);
   const membership = new MembershipService({ agents, users, conversations });

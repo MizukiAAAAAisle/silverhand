@@ -204,9 +204,7 @@ describe('AgentRepo.listRuntimeConversations — archived scoping (#task:1398)',
     const tmp = makeTempSilverhandDir();
     const repo = new AgentRepo(db);
     const conversations = new ConversationRepo(db);
-    const workspaces = new WorkspaceRepo(db, {
-      workspacesRoot: tmp.workspacesRoot,
-    });
+    const workspaces = new WorkspaceRepo(db);
     const agent = repo.create(
       { name: 'alice', runtime: 'claude' },
       localHostId,

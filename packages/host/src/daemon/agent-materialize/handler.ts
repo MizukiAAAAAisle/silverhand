@@ -41,7 +41,7 @@ import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
-  homeAppRoot,
+  defaultAppRoot,
   resolveDesktopAppPaths,
 } from '@silverhand/shared/app-data-layout';
 import type {
@@ -114,15 +114,15 @@ export interface MaterializeAgentDeps {
 /**
  * Compute the absolute path the agent's L1 home lives at on this
  * host. Bare-daemon fallback only — production wiring passes
- * `agentHomeRootDir` explicitly. #task:1598 — delegates to the shared
- * app-data path authority (legacy-v1 agents root; env-INDEPENDENT by
- * historical contract, see homeAppRoot); the `homeDir` seam keeps the
+ * `agentHomeRootDir` explicitly. #task:1598/#task:1603 — delegates to
+ * the shared app-data path authority (legacy-v1 agents root; env-AWARE
+ * since the v2 cutover, contract §8); the `homeDir` seam keeps the
  * historical test signature.
  */
 export function computeAgentDir(agentId: string, homeDir = homedir()): string {
   return join(
-    resolveDesktopAppPaths(homeAppRoot(homeDir), 'legacy-v1').localComputer
-      .agents,
+    resolveDesktopAppPaths(defaultAppRoot(process.env, () => homeDir), 'legacy-v1')
+      .legacyLocalComputer.agents,
     agentId,
   );
 }
