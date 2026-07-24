@@ -7,7 +7,7 @@ import type { UserRepo } from '../repos/user-repo.js';
  * Resolves a conversation's full participant list (agents + humans) into
  * a single, render-ready `MemberDto[]` — the unified shape consumed by:
  *
- *   - `platform-prompt.ts` (the "Members in this conversation:" block;
+ *   - `platform-prompt.ts` (the "Channel members:" block;
  *     the prompt builder applies a `self: true` marker by comparing
  *     each member's `agent_id` against the spawning agent id),
  *   - PR-C's chat header chip strip (forthcoming).

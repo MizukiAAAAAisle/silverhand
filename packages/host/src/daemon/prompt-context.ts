@@ -66,14 +66,15 @@ export async function buildPromptContextFromRuntimeStartOptions(
     ),
     sessionContext: {
       conversationId: options.session.conversation_id,
-      channelName:
-        options.session.kind === 'dm_channel'
-          ? options.session.title
-          : options.workspace.name,
+      computerId: options.computer_id,
+      workspaceName: options.workspace.name,
+      // The daemon-resolved local root on THIS computer (registry for
+      // regular workspaces, agent L1 home for DMs) — never the server-side
+      // home workspace_path.
+      workspacePath: options.workspace.path,
       channelKind: options.session.kind === 'dm_channel' ? 'dm' : 'regular',
       sessionTitle: options.session.title,
       members: options.session.members,
-      selfAgentId: options.agent.id,
     },
   };
 }

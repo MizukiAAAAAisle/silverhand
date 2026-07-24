@@ -77,6 +77,7 @@ import {
 } from './agent-profile-mcp/index.js';
 import { probeMcpServer } from './mcp-probe/index.js';
 import {
+  resolveAuthenticatedComputerId,
   RuntimeStartResolveError,
   type RuntimeStartResolveDeps,
 } from './runtime-start-resolve.js';
@@ -639,6 +640,14 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         throw err;
       }
     },
+    // The prompt's This Context → Computer line. Authority is the LIVE
+    // authenticated outbound binding only — never resolveRegistryBinding(),
+    // whose embedded arm substitutes the pre-login placeholder
+    // (`daemon_id` / 'local') when desktop has not claimed yet. Pre-attach
+    // this fails closed (typed, recoverable) instead of stamping a
+    // placeholder into prompt provenance.
+    resolveComputerId: (): string =>
+      resolveAuthenticatedComputerId(liveOutboundBinding()),
   };
   const supervisor = opts.supervisorFactory
     ? opts.supervisorFactory({

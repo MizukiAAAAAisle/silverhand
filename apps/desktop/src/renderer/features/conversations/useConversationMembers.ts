@@ -67,7 +67,7 @@ export function mapConversationMembersResult(
  * thread navigation does not refetch within `staleTime`.
  *
  * The backend route is the single source of truth shared with the
- * platform prompt's "Members in this conversation:" block — divergence
+ * platform prompt's "Channel members:" block — divergence
  * between what the agent talks about and what the chip strip shows is
  * structurally impossible.
  *

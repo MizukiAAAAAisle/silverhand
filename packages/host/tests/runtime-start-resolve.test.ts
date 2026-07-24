@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 import {
+  resolveAuthenticatedComputerId,
   resolveRuntimeStartPaths,
   RuntimeStartResolveError,
   type RuntimeStartResolveDeps,
@@ -26,7 +27,11 @@ function depsWith(
   resolveRegularWorkspacePath: (id: string) => string,
   homeDir = HOME,
 ): RuntimeStartResolveDeps {
-  return { homeDir, resolveRegularWorkspacePath };
+  return {
+    homeDir,
+    resolveRegularWorkspacePath,
+    resolveComputerId: () => 'computer-1',
+  };
 }
 
 describe('resolveRuntimeStartPaths — regular workspace', () => {
@@ -48,6 +53,15 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
     // Semantic fields are preserved.
     expect(resolved.workspace.id).toBe('ws1');
     expect(resolved.agent.id).toBe('a1');
+  });
+
+  it('attaches the daemon-resolved computer id to the resolved options', () => {
+    const options = testStartOptions({ workspaceKind: 'regular' });
+    const resolved = resolveRuntimeStartPaths(
+      options,
+      depsWith(id => `/host/ws/${id}`),
+    );
+    expect(resolved.computer_id).toBe('computer-1');
   });
 
   it('fails closed: a thrown RuntimeStartResolveError propagates unchanged', () => {
@@ -98,6 +112,7 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
       resolveRegularWorkspacePath: () => {
         throw new Error('registry must not be consulted for agent_home');
       },
+      resolveComputerId: () => 'computer-1',
     });
     const expected = computeAgentDirFromRoot('a9', agentHomeRootDir);
     expect(resolved.agent.home_dir).toBe(expected);
@@ -136,6 +151,30 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
     }
     expect(thrown).toBeInstanceOf(RuntimeStartResolveError);
     expect((thrown as RuntimeStartResolveError).code).toBe('workspace_not_provisioned');
+  });
+});
+
+describe('resolveAuthenticatedComputerId — prompt computer authority', () => {
+  it('returns the authenticated binding host id', () => {
+    expect(
+      resolveAuthenticatedComputerId({ host_id: 'computer-9' }),
+    ).toBe('computer-9');
+  });
+
+  it('fails closed with typed registry_unavailable when not attached — never a placeholder', () => {
+    // The embedded registry-namespace fallback (`daemon_id` / 'local') is
+    // deliberately NOT accepted here: pre-attach there is no authenticated
+    // computer identity, so prompt provenance must refuse, not guess.
+    let thrown: unknown;
+    try {
+      resolveAuthenticatedComputerId(null);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(RuntimeStartResolveError);
+    expect((thrown as RuntimeStartResolveError).code).toBe(
+      'registry_unavailable',
+    );
   });
 });
 

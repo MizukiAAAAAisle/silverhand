@@ -91,12 +91,16 @@ export function testStartOptions(overrides: {
 export function testRuntimeStartResolveDeps(overrides: {
   homeDir?: string;
   workspacePath?: string;
+  computerId?: string;
   resolveRegularWorkspacePath?: (workspaceId: string) => string;
+  resolveComputerId?: () => string;
 } = {}): RuntimeStartResolveDeps {
   const workspacePath = overrides.workspacePath ?? process.cwd();
+  const computerId = overrides.computerId ?? 'test-computer';
   return {
     homeDir: overrides.homeDir,
     resolveRegularWorkspacePath:
       overrides.resolveRegularWorkspacePath ?? (() => workspacePath),
+    resolveComputerId: overrides.resolveComputerId ?? (() => computerId),
   };
 }

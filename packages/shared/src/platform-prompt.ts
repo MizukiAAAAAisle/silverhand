@@ -105,17 +105,25 @@ export interface MemoryNotesCatalog {
 export interface SessionContextInput {
   /** Current channel/thread conversation id. */
   conversationId: string;
-  channelName: string;
+  /** The daemon-authenticated computer id this agent runs on. Sourced from
+   *  the daemon's control-plane binding (`host_id`), never derived from the
+   *  workspace or trusted from the wire. */
+  computerId: string;
+  /** Workspace display name. Server-controlled text — rendered JSON-quoted
+   *  (see `quotePromptValue`) so it cannot break the Context bullet list. */
+  workspaceName: string;
+  /** Absolute local root of this workspace on THIS computer, as resolved by
+   *  the daemon (workspace registry for `regular`, agent L1 home for DM).
+   *  Never a foreign computer's path and never the server-side home path. */
+  workspacePath: string;
   channelKind: WorkspaceUiKind;
   sessionTitle: string;
   /** Agent + human participants of this conversation. Includes self;
-   *  the renderer marks the matching `agent_id === selfAgentId` row
-   *  with `self: true`. The list is rendered verbatim under
-   *  "Members in this conversation:" — see PR-B. */
+   *  the renderer marks the row whose `agent_id` equals the spawning
+   *  agent's id (`PlatformPromptInput.agentId` — the single identity
+   *  authority) with `self: true`. The list is rendered verbatim under
+   *  "Channel members:" — see PR-B. */
   members: MemberDto[];
-  /** Agent id of the currently-spawning agent (i.e. "you"); used to
-   *  apply the `self: true` marker on its row in the members block. */
-  selfAgentId: string;
 }
 
 export interface DriverPromptContext {
@@ -133,10 +141,11 @@ export interface DriverPromptContext {
  * Build the standing operating manual injected at every spawn, with the
  * agent's active role appended at the end.
  *
- * Structure is deliberate: behavioral contract first (Operating Contract →
- * Turn Workflow), then the knowledge and collaboration model, then product
- * coordination, and only then the tool/format references. The agent should
- * meet the rules that bind it before the commands that serve them.
+ * Structure is deliberate: runtime facts first (This Context — who/where am
+ * I), then the behavioral contract (Operating Contract → Turn Workflow), then
+ * the knowledge and collaboration model, then product coordination, and only
+ * then the tool/format references. The agent should know where it is and meet
+ * the rules that bind it before the commands that serve them.
  *
  * Keep paths relative to cwd. The runtime's working directory is the
  * conversation workspace_path snapshot, so relative paths point at the active
@@ -161,7 +170,10 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const schedule = t('schedule');
   const listSchedules = t('list_schedules');
   const cancelSchedule = t('cancel_schedule');
-  const sessionContextBlock = renderSessionContext(input.sessionContext);
+  const sessionContextBlock = renderSessionContext(
+    input.sessionContext,
+    input.agentId,
+  );
   const profileDir = normalizeProfileDir(input.activeProfileDir);
   const memoryPath = profilePath(profileDir, 'MEMORY.md');
   const notesDir = profilePath(profileDir, 'notes');
@@ -184,14 +196,18 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
 other agents in a shared workspace via Silverhand. This is your operating
 manual; your specific assignment is the **Initial role** section at the end.
 
+${sessionContextBlock}
+
 ## Operating Contract
 
 These invariants always hold. Everything else in this manual serves them.
 
 - **Reply only through the CLI.** To say anything to anyone, call ${sendMessage}.
   Text you emit as normal output is invisible to the conversation. Use the
-  \`silverhand\` CLI for every chat, task, schedule, history, channel, thread,
-  member, and file action.
+  \`silverhand\` CLI for chat, task, and attachment operations, and the other
+  documented command families for Silverhand management. The daemon injects a
+  local \`silverhand\` wrapper into \`PATH\` for you. Use ONLY the documented
+  \`silverhand\` command families for communication and Silverhand management.
 - **Read each message's header.** Every incoming message starts with a meta
   header line:
   \`[msg_id=<id> sender=<who> type=<agent|human|system> target=channel|thread:<root_message_id> time=<iso>]\`.
@@ -242,8 +258,6 @@ Each time you are woken:
    test) runs to completion in one turn.
 5. Report the result via ${sendMessage}, then run a memory checkpoint (see
    **Workspace & Memory**) before stopping.
-
-${sessionContextBlock}
 
 ## Your Profile
 
@@ -868,38 +882,64 @@ grant it.
   when the message is independent of unread content.`;
 }
 
-function renderSessionContext(sc: SessionContextInput): string {
+function renderSessionContext(sc: SessionContextInput, agentId: string): string {
   const lines: string[] = [];
   lines.push('## This Context');
+  lines.push('');
+  lines.push(`- Agent ID: ${inlineCode(agentId)}`);
+  lines.push(`- Computer: ${inlineCode(sc.computerId)}`);
+  const workspaceValue = `${quotePromptValue(sc.workspaceName)} (${inlineCode(sc.workspacePath)})`;
   if (sc.channelKind === 'dm') {
     lines.push(
-      `- DM channel: \`${sc.channelName}\` (1:1 with the user). MEMORY.md /`,
-      `  notes/ here are this DM's L2 memory and stay private to it.`,
+      `- Workspace: ${workspaceValue} — DM home (1:1 with the user). MEMORY.md / notes/ here are this DM's L2 memory and stay private to it.`,
     );
   } else {
     lines.push(
-      `- Workspace: \`${sc.channelName}\` (regular workspace). Use this`,
-      `  workspace's L2 MEMORY.md / notes/ for workspace-scoped collaboration`,
-      `  and notes; L1 \`system_prompt.md\` is shared across every workspace.`,
+      `- Workspace: ${workspaceValue} — regular workspace. Use this workspace's L2 MEMORY.md / notes/ for workspace-scoped collaboration and notes; L1 \`system_prompt.md\` is shared across every workspace.`,
     );
   }
-  lines.push(`- Channel: "${sc.sessionTitle}"`);
-  lines.push(`- Conversation id: \`${sc.conversationId}\``);
+  lines.push(
+    `- Channel: ${quotePromptValue(sc.sessionTitle)} (${inlineCode(sc.conversationId)})`,
+  );
   if (sc.members.length === 0) {
     // Defensive: every spawn happens because the agent IS a member,
     // so this list should always contain at least self. If we somehow
     // got here with no members, omit the block rather than render an
     // empty header.
   } else {
-    lines.push(`- Members in this conversation:`);
+    lines.push(`- Channel members:`);
     for (const m of sc.members) {
-      lines.push(`  ${renderMemberLine(m, sc.selfAgentId)}`);
+      lines.push(`  ${renderMemberLine(m, agentId)}`);
     }
     lines.push(
       `- Mention rule: use \`@<name>\` only. \`display_name\` is for recognition, not mentioning.`,
     );
   }
   return lines.join('\n');
+}
+
+/**
+ * Render a value as a single-line Markdown code span.
+ *
+ * Ids are server-generated and paths are daemon-resolved, so these values
+ * are trusted in practice — but the Context block sits at the very top of
+ * the prompt, so it gets the same defensive single-line guarantee as the
+ * untrusted fields: any line-break character collapses to a space, and the
+ * span delimiter is one backtick longer than the longest backtick run in
+ * the value (CommonMark code-span rules), so the value can never terminate
+ * the span early or fabricate a Context bullet.
+ */
+function inlineCode(value: string): string {
+  const singleLine = value.replace(/[\r\n\u2028\u2029\u0085]+/g, ' ');
+  let longest = 0;
+  const re = /`+/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(singleLine)) !== null) {
+    if (match[0].length > longest) longest = match[0].length;
+  }
+  if (longest === 0) return `\`${singleLine}\``;
+  const delimiter = '`'.repeat(longest + 1);
+  return `${delimiter} ${singleLine} ${delimiter}`;
 }
 
 /**

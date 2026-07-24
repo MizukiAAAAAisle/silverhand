@@ -53,6 +53,10 @@ export type ResolvedStartOptions = Omit<
   agent: ResolvedAgentRef;
   workspace: ResolvedWorkspaceRef;
   workspace_memory_index: ResolvedWorkspaceRef[];
+  /** The daemon-authenticated computer id this runtime spawns on (the
+   *  control-plane binding's `host_id`). Injected into the prompt's This
+   *  Context block; never received over the wire. */
+  computer_id: string;
 };
 
 /** Typed, dispatcher-projectable failure to resolve a runtime_start path. */
@@ -86,6 +90,35 @@ export interface RuntimeStartResolveDeps {
    * guessed path — when the id is unbound.
    */
   resolveRegularWorkspacePath: (workspaceId: string) => string;
+  /**
+   * Resolve the daemon's own authenticated computer id. Production wires
+   * this to {@link resolveAuthenticatedComputerId} over the LIVE outbound
+   * binding (standalone host config or the post-claim
+   * `host_outbound_attach` binding) — NOT the registry's namespace
+   * fallback, whose embedded pre-login placeholder (`daemon_id` / 'local')
+   * must never be presented as prompt provenance. It MUST throw
+   * (fail-closed) when the daemon is not attached — never guess or fall
+   * back to a machine-derived name.
+   */
+  resolveComputerId: () => string;
+}
+
+/**
+ * The single computer-id authority for prompt provenance: the host id of an
+ * AUTHENTICATED control-plane binding, or a typed fail-closed error. Null
+ * means "not attached yet" — a runtime must never spawn believing it is on
+ * a placeholder computer, so this refuses rather than guessing.
+ */
+export function resolveAuthenticatedComputerId(
+  binding: { host_id: string } | null,
+): string {
+  if (binding == null) {
+    throw new RuntimeStartResolveError(
+      'registry_unavailable',
+      'daemon not attached to a control plane; cannot resolve the authenticated computer id',
+    );
+  }
+  return binding.host_id;
 }
 
 /**
@@ -132,5 +165,6 @@ export function resolveRuntimeStartPaths(
     workspace: resolveWorkspace(options.workspace),
     workspace_memory_index:
       options.workspace_memory_index.map(resolveWorkspace),
+    computer_id: deps.resolveComputerId(),
   };
 }

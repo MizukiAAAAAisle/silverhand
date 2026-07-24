@@ -51,7 +51,7 @@ export function MemberStrip({
   }, [conversationAgents]);
 
   // Members come from the same backend source-of-truth that the
-  // platform prompt's "Members in this conversation:" block renders, so
+  // platform prompt's "Channel members:" block renders, so
   // chips and prompt can never drift. Self-filter is the renderer's
   // job: the *current human viewer* is dropped here. Agent self has no
   // UI meaning for chips and is intentionally not filtered.

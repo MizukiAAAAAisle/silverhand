@@ -34,18 +34,24 @@ that register.
 
 ## 2. The canonical section skeleton
 
-Sections render in this fixed order. The ordering is the design: the **behavioral
-contract comes first, tool/format references come last**, and the runtime-injected
-blocks sit at the very tail because compaction recovery depends on them being
-present.
+Sections render in this fixed order. The ordering is the design: **runtime
+facts first (This Context), the behavioral contract right behind them,
+tool/format references last**, and the runtime-injected blocks sit at the very
+tail because compaction recovery depends on them being present.
 
-1. **Operating Contract** — the hard invariants. Everything else serves them:
-   reply only through the CLI; read each message's meta header; claim work, not
-   messages; system messages are informational; you stay alive and never poll.
-2. **Turn Workflow** — the per-wake loop: orient from the injected tail → ack if
+1. **This Context** — injected (`renderSessionContext`): the structured
+   runtime facts, one bullet each — Agent ID, Computer (the daemon's
+   authenticated computer id), Workspace (name + the local root resolved on
+   *this* computer), Channel (title + conversation id), Channel members,
+   mention rule. It sits first so the agent knows who/where it is before any
+   rule or reference.
+2. **Operating Contract** — the hard invariants. Everything else serves them:
+   reply only through the CLI (and ONLY the documented `silverhand` command
+   families for communication and Silverhand management); read each message's
+   meta header; claim work, not messages; system messages are informational;
+   you stay alive and never poll.
+3. **Turn Workflow** — the per-wake loop: orient from the injected tail → ack if
    needed → claim/continue → do all the work → report + checkpoint.
-3. **This Context** — injected (`renderSessionContext`): where am I (workspace /
-   channel / thread, members, mention rule).
 4. **Your Profile** — concept anchor: profile = the executing subject's own
    global (L1) config namespace, shared across every workspace; where custom MCP
    servers live; managed via `silverhand profile …`. Concept + behavior only —
@@ -65,8 +71,11 @@ present.
 
 **Ordering invariants:**
 
-- The contract (1–2) precedes everything. Never demote it below references.
-- **Your Profile** sits right after This Context and before Workspace & Memory:
+- This Context (1) precedes everything: runtime facts before rules. The
+  contract (2–3) precedes all knowledge/reference sections. Never demote the
+  contract below references.
+- **Your Profile** sits right after Turn Workflow and before Workspace &
+  Memory:
   identity/global-config is more foundational than workspace memory but is not an
   Operating Contract invariant. It is a fixed cognitive entry point for the
   agent's own profile surface — each new profile capability fills in its
@@ -135,6 +144,15 @@ their logic requires understanding the attack they prevent; the tests in
   quoted (untrusted) but `name` / `runtime` / `kind` / `self` raw (closed
   enums / regex-validated). Don't quote the safe fields or unquote the unsafe
   one.
+- **This Context field escaping** — `workspaceName` and `sessionTitle` are
+  server-side user-controlled text and render through `quotePromptValue`;
+  ids and the workspace path render through `inlineCode` (single-line
+  collapse + a code-span delimiter longer than any backtick run in the
+  value). This Context sits at the very top of the prompt, so an unescaped
+  value could forge a runtime-fact bullet (a fake `- Computer:` line) that
+  the agent would trust. The Workspace path must always be the local root
+  the daemon resolved on the current computer — never a server-side or
+  foreign-computer path.
 
 The `renderInjectedFile` `unreadable` branch is also load-bearing: a present-but-
 unreadable file renders an explicit error, never the "missing — create one" hint,
@@ -199,8 +217,8 @@ The test file is `packages/backend/tests/drivers/platform-prompt.test.ts`.
 
 Before landing a platform-prompt edit:
 
-- [ ] Section order still matches §2; contract first, references last, injected
-      tail last.
+- [ ] Section order still matches §2; This Context first, contract right
+      behind it, references last, injected tail last.
 - [ ] No §3 load-bearing content dropped or weakened (or the drop is explicit
       and approved).
 - [ ] No §4 security code weakened; its tests still pass.

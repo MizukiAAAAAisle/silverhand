@@ -119,7 +119,7 @@ export type ConversationUserMemberDto = z.infer<typeof ConversationUserMemberDto
 
 // `MemberDto` is the unified, rendered shape used wherever code
 // needs to treat conversation participants uniformly — currently
-// the platform prompt's "Members in this conversation:" block
+// the platform prompt's "Channel members:" block
 // (PR-B) and, in PR-C, the chat header chip strip. Distinct from
 // `ConversationAgentDto` / `ConversationUserMemberDto`, which are
 // raw membership rows.

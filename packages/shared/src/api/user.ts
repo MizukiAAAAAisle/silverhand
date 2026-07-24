@@ -50,7 +50,7 @@ export const MeResponseSchema = z.union([
 export type MeResponse = z.infer<typeof MeResponseSchema>;
 
 // `display_name` is rendered into the agent system prompt (PR-B
-// "Members in this conversation:" block) and persisted on `users`
+// "Channel members:" block) and persisted on `users`
 // and `agents`. Reject every character that could survive `.trim()`
 // but be interpreted as a line break or non-printable control
 // downstream:
