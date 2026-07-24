@@ -2715,8 +2715,10 @@ export class Supervisor implements SupervisorContract {
    * boundary documented on `DeferredEntry`. Any alternate consumer must
    * arbitrate under this same lifecycle lock, use this same profile-specific
    * bounded FIFO selection, and reserve the selected prefix until its own
-   * transport handoff commits. It must never steal `startupDelivery`, infer
-   * admission from an empty queue/timeout, or hold this lock while waiting.
+   * transport handoff commits. While that reservation is unresolved it must
+   * also block every later prefix from release, preserving presentation FIFO.
+   * It must never steal `startupDelivery`, infer admission from an empty
+   * queue/timeout, or hold this lock while waiting.
    * With no alternate consumer active, this function's behavior must remain
    * byte-for-byte identical.
    */

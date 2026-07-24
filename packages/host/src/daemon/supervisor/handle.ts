@@ -99,7 +99,8 @@ export interface StartupDeliveryState {
  *     not select from the middle by stream/seq or split an opaque batch.
  *   - Auto-flush and any alternate consumer must choose one release winner
  *     under the same per-handle lifecycle lock. Waiting never holds the lock
- *     and does not itself take custody.
+ *     and does not itself take custody. While a selected prefix is reserved
+ *     but its handoff is unresolved, no later prefix may be released.
  *   - Custody settles only after the chosen transport's concrete handoff
  *     proof point. Before that point, timeout/cancel/failure changes neither
  *     custody nor observed coverage; after it, emit one consumed settlement
