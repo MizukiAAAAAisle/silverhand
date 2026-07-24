@@ -889,10 +889,8 @@ grant it.
   For a short single-line body, \`printf "%s" "hello" | silverhand message send\`
   is equivalent. An attachment-only send may omit stdin and pass
   \`--attachment <id>\`; with neither text nor attachment it fails before sending.
-- **Stale sends.** If a send returns \`message_stale\`, continue current work.
-  Resolve it only when a later normal input includes a stale-send continuation.
-  Follow that continuation's resend or discard instruction. Use \`--anyway\`
-  only when the message is independent of unread content.`;
+- **Stale sends.** If a send returns \`message_stale\`, stop that send attempt
+  until pending messages arrive through normal delivery.`;
 }
 
 function renderSessionContext(sc: SessionContextInput, agentId: string): string {
