@@ -89,6 +89,24 @@ export interface StartupDeliveryState {
  * owning connection's drop the entry is discarded (owner-scoped cleanup,
  * §11.4.1) with no `consumed`/`failed`, because nothing was written and the
  * backend rolls the rows back to pending on its own disconnect handler.
+ *
+ * LOAD-BEARING CUSTODY CONTRACT (applies to every present or future
+ * release trigger, including a CLI pull):
+ *   - The backend inbox lease is the sole durable authority; this queue is
+ *     the only daemon-owned set eligible for alternate release arbitration.
+ *   - A consumer may take only the scheduler's next bounded FIFO prefix.
+ *     It must preserve ids, owner, text, and stream metadata verbatim; it may
+ *     not select from the middle by stream/seq or split an opaque batch.
+ *   - Auto-flush and any alternate consumer must choose one release winner
+ *     under the same per-handle lifecycle lock. Waiting never holds the lock
+ *     and does not itself take custody.
+ *   - Custody settles only after the chosen transport's concrete handoff
+ *     proof point. Before that point, timeout/cancel/failure changes neither
+ *     custody nor observed coverage; after it, emit one consumed settlement
+ *     and advance only the batch's actual per-stream coverage.
+ *
+ * `startupDelivery` is already release-in-progress and is therefore never
+ * eligible to be reclaimed by an alternate consumer.
  */
 export interface DeferredEntry {
   readonly deliveryIds: readonly number[];

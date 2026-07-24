@@ -2710,6 +2710,15 @@ export class Supervisor implements SupervisorContract {
    *
    * Custody stays the daemon's until `consumeStartupDelivery` emits the
    * async `runtime_delivery_consumed`; the flush never acks the DB.
+   *
+   * This queue splice is the auto-push side of the single-release-winner
+   * boundary documented on `DeferredEntry`. Any alternate consumer must
+   * arbitrate under this same lifecycle lock, use this same profile-specific
+   * bounded FIFO selection, and reserve the selected prefix until its own
+   * transport handoff commits. It must never steal `startupDelivery`, infer
+   * admission from an empty queue/timeout, or hold this lock while waiting.
+   * With no alternate consumer active, this function's behavior must remain
+   * byte-for-byte identical.
    */
   private async flushDeferred(handle: RuntimeHandle): Promise<void> {
     const k = key(handle.conversationId, handle.agentId);
