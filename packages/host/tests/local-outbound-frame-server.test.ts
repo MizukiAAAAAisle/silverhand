@@ -571,3 +571,62 @@ function makeReadyEvent(): Extract<EventFrame, { event: 'ready' }> {
     started_at: 1717000000,
   } as Extract<EventFrame, { event: 'ready' }>;
 }
+
+describe('LocalOutboundFrameServer — heartbeat (#task:1588 slice 2)', () => {
+  it('answers a server-initiated ping with a pong echoing ts', async () => {
+    const { client } = await makeHarness(async command => ({
+      id: command.id,
+      result: {},
+    }));
+
+    client.sendRaw({
+      direction: 'server_to_daemon',
+      type: 'heartbeat',
+      kind: 'ping',
+      ts: 4321,
+    });
+
+    // Skip any unsolicited frames (e.g. a ready event) until the pong.
+    const deadline = Date.now() + 1_000;
+    for (;;) {
+      const frame = (await client.nextFrame()) as Record<string, unknown>;
+      if (frame['type'] === 'heartbeat') {
+        expect(frame['kind']).toBe('pong');
+        expect(frame['echo_ts']).toBe(4321);
+        expect(frame['direction']).toBe('daemon_to_server');
+        break;
+      }
+      if (Date.now() > deadline) throw new Error('no pong received');
+    }
+    expect(client.closed).toBe(false);
+  });
+
+  it('tolerates an inbound pong without treating it as a violation', async () => {
+    const { client, logger } = await makeHarness(async command => ({
+      id: command.id,
+      result: {},
+    }));
+
+    client.sendRaw({
+      direction: 'server_to_daemon',
+      type: 'heartbeat',
+      kind: 'pong',
+      ts: 1,
+      echo_ts: 2,
+    });
+
+    // Follow with a real command to prove the connection survived.
+    client.sendCommand(runtimeStatusCommand('after-pong'));
+    const deadline = Date.now() + 1_000;
+    for (;;) {
+      const frame = (await client.nextFrame()) as Record<string, unknown>;
+      if (frame['type'] === 'command_response') {
+        expect(frame['id']).toBe('after-pong');
+        break;
+      }
+      if (Date.now() > deadline) throw new Error('no command response');
+    }
+    expect(client.closed).toBe(false);
+    expect(logger.entries.some(e => e.action === 'frame_invalid')).toBe(false);
+  });
+});

@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import { useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
+  HOST_AGENT_LIVENESS_CHANGED_EVENT,
   HOST_CONNECTION_CHANGED_EVENT,
+  HostAgentLivenessChangedEventSchema,
   HostConnectionChangedEventSchema,
   type ServerFrame,
 } from '@silverhand/shared';
@@ -18,13 +20,19 @@ import {
 
 export type HostConnectionSyncAction =
   | { kind: 'invalidate-all' }
-  | { kind: 'invalidate-host'; hostId: string };
+  | { kind: 'invalidate-host'; hostId: string }
+  | { kind: 'invalidate-host-status'; hostId: string };
 
 /**
  * Host presence is the backend connection registry's projection. WS frames are
  * invalidation signals only; renderer never patches availability from the
  * event payload. On `snapshot_required` we reconcile the whole owner-scoped
  * host tree, because the attach/detach delta that was missed is unknown.
+ *
+ * #task:1588 slice 2 — `host_agent_liveness_changed` is the narrow sibling:
+ * an agent's runtime came up or went away on a host, which only moves the
+ * per-host `/status` projection (agent online dots). It deliberately does NOT
+ * touch `hostsKey`/`backendInfoKey` — connection state didn't change.
  */
 export function decideHostConnectionSyncAction(
   frame: ServerFrame,
@@ -34,23 +42,34 @@ export function decideHostConnectionSyncAction(
     return isViewerScope(frame.scope) ? { kind: 'invalidate-all' } : null;
   }
 
-  if (
-    frame.type !== 'event' ||
-    frame.kind !== HOST_CONNECTION_CHANGED_EVENT ||
-    !isViewerScope(frame.scope)
-  ) {
+  if (frame.type !== 'event' || !isViewerScope(frame.scope)) {
     return null;
   }
 
-  const parsed = HostConnectionChangedEventSchema.safeParse(frame.payload);
-  if (!parsed.success) return null;
-  return { kind: 'invalidate-host', hostId: parsed.data.host_id };
+  if (frame.kind === HOST_CONNECTION_CHANGED_EVENT) {
+    const parsed = HostConnectionChangedEventSchema.safeParse(frame.payload);
+    if (!parsed.success) return null;
+    return { kind: 'invalidate-host', hostId: parsed.data.host_id };
+  }
+
+  if (frame.kind === HOST_AGENT_LIVENESS_CHANGED_EVENT) {
+    const parsed = HostAgentLivenessChangedEventSchema.safeParse(frame.payload);
+    if (!parsed.success) return null;
+    return { kind: 'invalidate-host-status', hostId: parsed.data.host_id };
+  }
+
+  return null;
 }
 
 function invalidateHostConnectionQueries(
   qc: QueryClient,
   action: HostConnectionSyncAction,
 ): void {
+  if (action.kind === 'invalidate-host-status') {
+    void qc.invalidateQueries({ queryKey: hostStatusKey(action.hostId) });
+    return;
+  }
+
   void qc.invalidateQueries({ queryKey: hostsKey });
   void qc.invalidateQueries({ queryKey: backendInfoKey });
 

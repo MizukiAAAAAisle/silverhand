@@ -29,6 +29,7 @@ import {
   type HelloResult,
   intentErrorSchema,
   intentSchemas,
+  HOST_ACTIVE_RUNTIME_PHASES,
   type AgentMessageSendParams,
   type AgentStaleResolveParams,
   type AgentStreamObservedParams,
@@ -678,18 +679,13 @@ export class IntentDispatcher {
         //
         // Phase whitelist (Cindy `oJ-mzKP7kbXtHUTe` slice-1 review P1 #2):
         // backend's outbound-event-fanout already treats `idle || exited`
-        // as non-live (delivery / start gates). The first cut here only
-        // excluded `exited`, which would have let a future `idle` handle
-        // light up ComputerPane's "online" pip incorrectly. Express the
-        // contract as a whitelist of active phases so a NEW phase added
-        // to the protocol enum fails CLOSED (not online) until the
-        // ComputerPane semantics for it are explicit.
-        const ACTIVE_PHASES = new Set([
-          'spawning',
-          'startup_pending',
-          'ready',
-          'draining',
-        ]);
+        // as non-live (delivery / start gates). Express the contract as a
+        // whitelist of active phases so a NEW phase added to the protocol
+        // enum fails CLOSED (not online) until the ComputerPane semantics
+        // for it are explicit. #task:1588 single-sourced the whitelist to
+        // protocol.ts (`HOST_ACTIVE_RUNTIME_PHASES`); the backend host-
+        // status read model derives liveness from the same set, so the
+        // two ends cannot drift.
         return {
           os: composeHostOs(),
           os_arch: hostOsArch(),
@@ -701,7 +697,7 @@ export class IntentDispatcher {
             ? Array.from(
                 new Set(
                   (await this.supervisor.status({})).runtimes
-                    .filter(r => ACTIVE_PHASES.has(r.phase))
+                    .filter(r => HOST_ACTIVE_RUNTIME_PHASES.has(r.phase))
                     .map(r => r.agent_id),
                 ),
               )

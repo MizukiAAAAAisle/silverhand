@@ -2286,6 +2286,12 @@ function makeFixture(
       workspaces: WorkspaceRepo;
     }) => WorkspaceRegistryBackfiller;
     coLocatedHostId?: string | null;
+    publishHostScopeEvent?: (
+      ownerUserId: string,
+      kind: string,
+      payload: unknown,
+    ) => void;
+    onHostReady?: (hostId: string) => void;
   } = {},
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
@@ -2339,6 +2345,10 @@ function makeFixture(
     ...(opts.clearSessionExitTimeoutMs !== undefined
       ? { clearSessionExitTimeoutMs: opts.clearSessionExitTimeoutMs }
       : {}),
+    ...(opts.publishHostScopeEvent
+      ? { publishHostScopeEvent: opts.publishHostScopeEvent }
+      : {}),
+    ...(opts.onHostReady ? { onHostReady: opts.onHostReady } : {}),
   });
   const messages = new MessageRepo(db);
   const inbox = new ConversationInboxRepo(db);
@@ -2957,3 +2967,153 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
+  function stateEvent(
+    fix: Fixture,
+    status: 'thinking',
+    ts: number,
+  ): OutboundDaemonToServerEventFrame {
+    return {
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'runtime_state',
+      conversation_id: fix.channelId,
+      agent_id: fix.agentId,
+      state: {
+        ...RUN_STATE,
+        conversationId: fix.channelId,
+        agentId: fix.agentId,
+        status,
+        updatedAt: ts,
+        lastActivityAt: ts,
+      },
+      ts,
+    };
+  }
+
+  function exitEvent(fix: Fixture, ts: number): OutboundDaemonToServerEventFrame {
+    return {
+      direction: 'daemon_to_server',
+      type: 'event',
+      kind: 'runtime_exit',
+      conversation_id: fix.channelId,
+      agent_id: fix.agentId,
+      code: 0,
+      intentional: true,
+      ts,
+    };
+  }
+
+  it('fires onHostReady on every daemon ready event', () => {
+    const readyHosts: string[] = [];
+    const fix = makeFixture({ onHostReady: hostId => readyHosts.push(hostId) });
+    fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+    expect(readyHosts).toEqual([fix.hostId]);
+    fix.transport.connectionId = 'conn-2';
+    fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-2');
+    expect(readyHosts).toEqual([fix.hostId, fix.hostId]);
+  });
+
+  /** The fixture's local host starts unclaimed (`user_id` null) — an
+   *  ownerless host publishes nothing (nobody to notify). Claim it for
+   *  the viewer so the owner-scope publish path is exercised. */
+  function claimHostForViewer(fix: Fixture): void {
+    fix.db
+      .prepare('UPDATE hosts SET user_id = ? WHERE id = ?')
+      .run(fix.viewerUserId, fix.hostId);
+  }
+
+  it('publishes host_agent_liveness_changed to the owner scope only on real set transitions', async () => {
+    const published: Array<{ owner: string; kind: string; payload: unknown }> = [];
+    const fix = makeFixture({
+      publishHostScopeEvent: (owner, kind, payload) =>
+        published.push({ owner, kind, payload }),
+    });
+    claimHostForViewer(fix);
+
+    fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+    // Wait for the async hydrate to land (pre-latch runtime events are
+    // dropped by the cache's daemon-key gate).
+    await waitFor(
+      () =>
+        fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon ===
+        true,
+    );
+    // Hydrate FORCE-publishes exactly once (Cindy P1-2: the read
+    // model's seed→cache authority switch must be observable even when
+    // the cache signature didn't move — the seed={A} → hydrate={} shape).
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      owner: fix.viewerUserId,
+      kind: 'host_agent_liveness_changed',
+      payload: { host_id: fix.hostId },
+    });
+
+    // First live runtime → set gains the agent → ONE event.
+    fix.fanout.onEvent(fix.hostId, stateEvent(fix, 'thinking', 1700000001000), 'conn-1');
+    expect(published).toHaveLength(2);
+
+    // Another state event for the SAME agent: set unchanged → no event
+    // (never a per-runtime_state broadcast).
+    fix.fanout.onEvent(fix.hostId, stateEvent(fix, 'thinking', 1700000002000), 'conn-1');
+    expect(published).toHaveLength(2);
+
+    // Last runtime exits → set empties → ONE more event.
+    fix.fanout.onEvent(fix.hostId, exitEvent(fix, 1700000003000), 'conn-1');
+    expect(published).toHaveLength(3);
+  });
+
+  it('every hydrate force-publishes once even when the cache signature is unchanged (P1-2 authority switch)', async () => {
+    const published: string[] = [];
+    const fix = makeFixture({
+      publishHostScopeEvent: (_owner, kind) => published.push(kind),
+    });
+    claimHostForViewer(fix);
+
+    fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+    await waitFor(
+      () =>
+        fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon ===
+        true,
+    );
+    expect(published).toHaveLength(1); // empty→empty signature, still forced
+
+    // A NEW daemon generation (different pid) rehydrates: empty→empty
+    // again, and the forced publish still fires — clients holding a
+    // seed-based response for the new generation must be invalidated.
+    fix.transport.connectionId = 'conn-2';
+    fix.fanout.onEvent(
+      fix.hostId,
+      { ...readyEvent(), daemon_pid: 456 } as OutboundDaemonToServerEventFrame,
+      'conn-2',
+    );
+    await waitFor(() => published.length >= 2);
+    expect(published).toHaveLength(2);
+  });
+
+  it('disconnect empties the set and publishes once', async () => {
+    const published: string[] = [];
+    const fix = makeFixture({
+      publishHostScopeEvent: (_owner, kind) => published.push(kind),
+    });
+    claimHostForViewer(fix);
+
+    fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+    await waitFor(
+      () =>
+        fix.fanout.hostRuntimeView(fix.hostId)?.hydratedForCurrentDaemon ===
+        true,
+    );
+    // 1 forced hydrate publish + 1 for the runtime coming up.
+    fix.fanout.onEvent(fix.hostId, stateEvent(fix, 'thinking', 1700000001000), 'conn-1');
+    expect(published).toHaveLength(2);
+
+    fix.fanout.onDisconnect(fix.hostId, 'conn-1');
+    expect(published).toHaveLength(3);
+
+    // A second disconnect for an already-empty set publishes nothing.
+    fix.fanout.onDisconnect(fix.hostId, 'conn-1');
+    expect(published).toHaveLength(3);
+  });
+});

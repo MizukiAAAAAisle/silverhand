@@ -228,6 +228,17 @@ const NOOP_LOGGER: RuntimeEventHandlerLogger = {
 const CONVERSATION_ACTIVITY_TEXT_BLOCK_MAX_CHARS = 16 * 1024;
 const CONVERSATION_ACTIVITY_TEXT_BLOCK_PUBLISH_INTERVAL_MS = 1_000;
 
+/**
+ * #task:1588 P1-3 — bounded backoff for same-generation hydrate retry
+ * (~48s total). Long enough to ride out a transiently busy daemon,
+ * bounded so a genuinely dead daemon isn't probed forever — after
+ * exhaustion the generation stays un-hydrated until the next
+ * reconnect/daemon_ready. Exported for the retry test.
+ */
+export const HYDRATE_RETRY_DELAYS_MS: readonly number[] = [
+  1_000, 2_000, 5_000, 10_000, 30_000,
+];
+
 function shouldClearCliSessionAfterFatalError(event: ParsedEvent): boolean {
   return (
     event.kind === 'error' &&
@@ -347,6 +358,19 @@ export class RuntimeEventHandler {
   private unsubscribeReconnect: (() => void) | null = null;
   private started = false;
   /**
+   * #task:1588 P1-3 — hydrate retry state. A failed `runtime_status`
+   * hydrate used to be log-only, which froze host-level agent liveness
+   * for the entire connection generation (the host-status read model
+   * would keep serving its seed fallback until the next reconnect).
+   * Each EXTERNAL hydrate trigger (initial / reconnect / daemon_ready)
+   * bumps the epoch, superseding any pending retry from the previous
+   * generation; a failed attempt schedules the next one on the bounded
+   * backoff schedule below. Exhaustion is terminal for the generation
+   * (logged loudly) — the next reconnect/daemon_ready starts fresh.
+   */
+  private hydrateEpoch = 0;
+  private hydrateRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
    * Last seen `runtime_init_timeout.timeout_reason` per (conv,agent),
    * stashed so we can attach it to the matching `runtime_init_retrying`
    * projection (CM publishes `agent_status starting reason=init_timeout_retrying
@@ -428,6 +452,11 @@ export class RuntimeEventHandler {
   stop(): void {
     if (!this.started) return;
     this.started = false;
+    this.hydrateEpoch += 1;
+    if (this.hydrateRetryTimer !== null) {
+      clearTimeout(this.hydrateRetryTimer);
+      this.hydrateRetryTimer = null;
+    }
     this.unsubscribeEvents?.();
     this.unsubscribeReconnect?.();
     this.unsubscribeEvents = null;
@@ -1171,8 +1200,28 @@ export class RuntimeEventHandler {
     daemonPid?: number,
     startedAt?: number,
   ): Promise<void> {
+    // External trigger: supersede any pending retry from a previous
+    // generation and start attempt 0 of a fresh epoch.
+    this.hydrateEpoch += 1;
+    if (this.hydrateRetryTimer !== null) {
+      clearTimeout(this.hydrateRetryTimer);
+      this.hydrateRetryTimer = null;
+    }
+    await this.hydrateAttempt(trigger, this.hydrateEpoch, 0, daemonPid, startedAt);
+  }
+
+  private async hydrateAttempt(
+    trigger: 'initial' | 'reconnect' | 'daemon_ready',
+    epoch: number,
+    attempt: number,
+    daemonPid?: number,
+    startedAt?: number,
+  ): Promise<void> {
     try {
       const snapshot = await this.bridge.runtimeStatus();
+      // A hydrate that resolves after a newer trigger superseded it
+      // must not overwrite the newer generation's cache state.
+      if (epoch !== this.hydrateEpoch) return;
       // Source the daemon instance key:
       //   - From the triggering `ready` event when available
       //   - Else from the cache's last latched key (reconnect to
@@ -1189,6 +1238,7 @@ export class RuntimeEventHandler {
           kind: 'event',
           action: 'hydrate',
           trigger,
+          attempt,
           runtime_count: snapshot.runtimes.length,
           daemon_key: key,
         },
@@ -1215,15 +1265,40 @@ export class RuntimeEventHandler {
         }
       }
     } catch (err) {
-      this.logger.error(
+      const delayMs = HYDRATE_RETRY_DELAYS_MS[attempt];
+      if (delayMs === undefined) {
+        this.logger.error(
+          {
+            kind: 'event',
+            action: 'hydrate',
+            trigger,
+            attempt,
+            err: (err as Error).message,
+          },
+          'hydrate failed and retry schedule exhausted; agent liveness may be stale until next reconnect',
+        );
+        return;
+      }
+      this.logger.warn(
         {
           kind: 'event',
           action: 'hydrate',
           trigger,
+          attempt,
+          retry_in_ms: delayMs,
           err: (err as Error).message,
         },
-        'hydrate failed; cache may be stale until next reconnect',
+        'hydrate failed; retrying on bounded backoff',
       );
+      const timer = setTimeout(() => {
+        this.hydrateRetryTimer = null;
+        // Abandon the retry if a newer trigger superseded this epoch
+        // or the handler stopped meanwhile.
+        if (epoch !== this.hydrateEpoch || !this.started) return;
+        void this.hydrateAttempt(trigger, epoch, attempt + 1, daemonPid, startedAt);
+      }, delayMs);
+      timer.unref?.();
+      this.hydrateRetryTimer = timer;
     }
   }
 }

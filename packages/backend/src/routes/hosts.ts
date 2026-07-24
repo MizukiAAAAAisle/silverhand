@@ -55,7 +55,7 @@ import {
   HostTokenRotationCoordinator,
   HostTokenRotationError,
 } from '../ws/host-token-rotation.js';
-import { HostStatusSingleFlight } from '../runtime/host-status-dispatch.js';
+import { HostStatusReadModel } from '../runtime/host-status-read-model.js';
 import {
   dispatchHostRuntimeCatalog,
   type HostRuntimeCatalogOutcome,
@@ -96,11 +96,20 @@ export interface HostRouteDeps {
  */
 export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  // #task:1587 — one single-flight instance per app: `/status` requests for
-  // the same host + connection generation share one daemon RPC instead of
-  // each opening their own (refetch storms otherwise multiply straight
-  // through to the daemon).
-  const hostStatusSingleFlight = new HostStatusSingleFlight();
+  // #task:1587/#task:1588 — generation-bound read model for `/status`:
+  // one `host_status` RPC per (host, connection generation) seeds the
+  // static snapshot (single-flighted; eager-seeded on attach by the
+  // composition root); the active-agent set is served from the event
+  // fanout's per-host runtime cache. Steady-state reads never RPC the
+  // daemon. Prefer the process-wide instance (it holds the eager
+  // seeds); the local fallback only exists for route harnesses that
+  // construct a bare BackendContext.
+  const hostStatusReadModel =
+    deps.ctx.hostStatusReadModel?.() ??
+    new HostStatusReadModel({
+      adapter: () => deps.ctx.outboundFrameAdapter?.() ?? null,
+      runtimeView: hostId => deps.ctx.hostRuntimeView?.(hostId) ?? null,
+    });
   const {
     ctx,
     hosts,
@@ -965,10 +974,10 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       } satisfies HostStatusResponse);
     }
 
-    const dispatch = await hostStatusSingleFlight.dispatch(
-      ctx.outboundFrameAdapter?.() ?? null,
-      hostId,
-    );
+    // #task:1588 gate #4 — memory-only read: never dispatches to the
+    // daemon. Pre-seed reads return the transient unreachable arm; the
+    // seed-landed `host_connection_changed` republish converges clients.
+    const dispatch = hostStatusReadModel.read(hostId);
 
     if (dispatch.kind === 'disconnected') {
       return c.json({
@@ -989,23 +998,15 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     }
 
     // `dispatch.kind === 'ok'` — live daemon → per-row `online`
-    // enrichment from `active_agent_ids`. Daemon-reported ids NOT in
-    // the registration are filler-noise and do NOT get injected as
+    // enrichment from the read model's active set (event-maintained
+    // post-hydrate; seed-RPC fallback before). Ids NOT in the
+    // registration are filler-noise and do NOT get injected as
     // phantom rows (registration view is the source of truth).
-    const activeSet = new Set(dispatch.result.active_agent_ids);
-
     return c.json({
       host_id: hostId,
       availability: 'available',
-      snapshot: {
-        os: dispatch.result.os,
-        os_arch: dispatch.result.os_arch,
-        daemon_pid: dispatch.result.daemon_pid,
-        daemon_version: dispatch.result.daemon_version,
-        started_at: dispatch.result.started_at,
-        uptime_ms: dispatch.result.uptime_ms,
-      },
-      agents: buildAgentRows(activeSet),
+      snapshot: dispatch.snapshot,
+      agents: buildAgentRows(dispatch.activeAgentIds),
       last_seen_at: host.last_seen_at,
     } satisfies HostStatusResponse);
   });

@@ -158,6 +158,19 @@ class FakeOutboundDaemon {
         provisioned: true,
         bound_workspace_path: requested ?? '/host/ws/provisioned',
       });
+    } else if (cmd.kind === 'host_status') {
+      // #task:1588 slice 2 — the fanout eager-seeds the host-status read
+      // model on `ready`; answer with a schema-valid snapshot so the
+      // seed RPC doesn't trip the adapter's protocol-violation teardown.
+      this.respondResult(cmd, {
+        os: 'fake-os 1.0',
+        os_arch: 'arm64',
+        daemon_pid: 4242,
+        daemon_version: '0.0.0-fake',
+        started_at: 1,
+        uptime_ms: 1,
+        active_agent_ids: [],
+      });
     } else {
       this.respondResult(cmd, {});
     }

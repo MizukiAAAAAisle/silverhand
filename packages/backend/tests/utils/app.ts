@@ -39,6 +39,7 @@ import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { WorkspaceRegistryBackfiller } from '../../src/runtime/workspace-registry-backfill.js';
+import { HostStatusReadModel } from '../../src/runtime/host-status-read-model.js';
 import { createApiRouter } from '../../src/routes.js';
 import { createInternalRouter } from '../../src/routes/internal-agent.js';
 import type {
@@ -1042,6 +1043,15 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     outboundFrameAdapter: hostWsControllerFactory,
     runtimeHost: fake,
   };
+  // #task:1588 — the /status route reads through the ctx-level read model
+  // (memory-only; gate #4). Route tests seed it explicitly via
+  // `await t.ctx.hostStatusReadModel!().seedEagerly(hostId)` after wiring
+  // their fake controller.
+  const hostStatusReadModel = new HostStatusReadModel({
+    adapter: () => ctx.outboundFrameAdapter?.() ?? null,
+    runtimeView: hostId => ctx.hostRuntimeView?.(hostId) ?? null,
+  });
+  ctx.hostStatusReadModel = () => hostStatusReadModel;
   // D4.e-1 3b-2/3b-3 — the same shared registry backfiller production wires,
   // so list_workspaces ensure()s before dispatching agent_workspace_index.
   ctx.workspaceRegistryBackfiller = new WorkspaceRegistryBackfiller({
@@ -1146,6 +1156,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     legacyServerAuthToken,
     viewerUserId,
     cleanup: () => {
+      hostStatusReadModel.close();
       ctx.scheduleService.stop();
       ctx.idleReaperService.stop();
       try {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  HOST_AGENT_LIVENESS_CHANGED_EVENT,
   HOST_CONNECTION_CHANGED_EVENT,
   type ServerFrame,
 } from '@silverhand/shared';
@@ -73,6 +74,44 @@ describe('decideHostConnectionSyncAction', () => {
           scope: 'app',
           reason: 'epoch_mismatch',
         } as ServerFrame,
+        isViewerScope,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('decideHostConnectionSyncAction — host_agent_liveness_changed (#task:1588 slice 2)', () => {
+  it('maps a valid current-viewer liveness event to a status-only invalidation', () => {
+    expect(
+      decideHostConnectionSyncAction(
+        evt('viewer:u1', HOST_AGENT_LIVENESS_CHANGED_EVENT, { host_id: 'h1' }),
+        isViewerScope,
+      ),
+    ).toEqual({ kind: 'invalidate-host-status', hostId: 'h1' });
+  });
+
+  it('ignores malformed liveness payloads', () => {
+    expect(
+      decideHostConnectionSyncAction(
+        evt('viewer:u1', HOST_AGENT_LIVENESS_CHANGED_EVENT, { host_id: 42 }),
+        isViewerScope,
+      ),
+    ).toBeNull();
+    expect(
+      decideHostConnectionSyncAction(
+        evt('viewer:u1', HOST_AGENT_LIVENESS_CHANGED_EVENT, {
+          host_id: 'h1',
+          online: true,
+        }),
+        isViewerScope,
+      ),
+    ).toBeNull(); // strict schema: a payload smuggling state is rejected
+  });
+
+  it('ignores liveness events on non-viewer scopes', () => {
+    expect(
+      decideHostConnectionSyncAction(
+        evt('viewer:other', HOST_AGENT_LIVENESS_CHANGED_EVENT, { host_id: 'h1' }),
         isViewerScope,
       ),
     ).toBeNull();

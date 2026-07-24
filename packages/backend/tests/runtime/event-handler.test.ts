@@ -28,6 +28,7 @@ import {
 import type { AgentRunState } from '@silverhand/shared';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 import {
+  HYDRATE_RETRY_DELAYS_MS,
   RuntimeEventHandler,
   type ConversationActivitySink,
   type EventPublisher,
@@ -2594,5 +2595,152 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
         },
       },
     ]);
+  });
+});
+
+describe('hydrate retry — #task:1588 P1-3 (bounded same-generation recovery)', () => {
+  function makeFlakyBridge(failures: number): {
+    bridge: RuntimeStatusBridge;
+    statusCalls: () => number;
+  } {
+    let count = 0;
+    const bridge = {
+      runtimeStatus: async () => {
+        count += 1;
+        if (count <= failures) throw new Error(`hydrate boom #${count}`);
+        return {
+          runtimes: [
+            {
+              conversation_id: 'c1',
+              agent_id: 'a1',
+              pid: 42,
+              phase: 'ready',
+              run_state: null,
+              started_at: 1700000000000,
+            },
+          ],
+        };
+      },
+    } as unknown as RuntimeStatusBridge;
+    return { bridge, statusCalls: () => count };
+  }
+
+  it('a failed hydrate retries on the bounded backoff and recovers within the same generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new RunStateCache();
+      const { client } = makeFakeClient();
+      const { bridge, statusCalls } = makeFlakyBridge(2);
+      const { publisher } = makePublisher();
+      const { sink } = makeInboxAck();
+      const hydrateCompletes: string[] = [];
+      const handler = makeHandler({
+        client,
+        bridge,
+        cache,
+        events: publisher,
+        inboxAck: sink,
+        onHydrateComplete: trigger => {
+          hydrateCompletes.push(trigger);
+        },
+      });
+
+      await handler.start(); // attempt 0 fails
+      expect(statusCalls()).toBe(1);
+      expect(cache.list()).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(HYDRATE_RETRY_DELAYS_MS[0]!); // attempt 1 fails
+      expect(statusCalls()).toBe(2);
+      expect(cache.list()).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(HYDRATE_RETRY_DELAYS_MS[1]!); // attempt 2 succeeds
+      expect(statusCalls()).toBe(3);
+      expect(cache.list()).toHaveLength(1);
+      expect(hydrateCompletes).toEqual(['initial']);
+
+      // No further probes after success.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(statusCalls()).toBe(3);
+      handler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('retry schedule is bounded: exhaustion stops probing until the next external trigger', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new RunStateCache();
+      const { client, triggerReconnect } = makeFakeClient();
+      const { bridge, statusCalls } = makeFlakyBridge(Number.POSITIVE_INFINITY);
+      const { publisher } = makePublisher();
+      const { sink } = makeInboxAck();
+      const handler = makeHandler({
+        client,
+        bridge,
+        cache,
+        events: publisher,
+        inboxAck: sink,
+      });
+
+      await handler.start();
+      for (const delay of HYDRATE_RETRY_DELAYS_MS) {
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      const attempts = statusCalls();
+      expect(attempts).toBe(1 + HYDRATE_RETRY_DELAYS_MS.length);
+
+      // Exhausted: no more probes, however long we wait.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(statusCalls()).toBe(attempts);
+
+      // A new external trigger (reconnect) starts a fresh epoch.
+      triggerReconnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statusCalls()).toBe(attempts + 1);
+      handler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a newer trigger supersedes a pending retry (no cross-generation hydrate)', async () => {
+    vi.useFakeTimers();
+    try {
+      const cache = new RunStateCache();
+      const { client, emit } = makeFakeClient();
+      let count = 0;
+      const bridge = {
+        runtimeStatus: async () => {
+          count += 1;
+          if (count === 1) throw new Error('first hydrate fails');
+          return { runtimes: [] };
+        },
+      } as unknown as RuntimeStatusBridge;
+      const { publisher } = makePublisher();
+      const { sink } = makeInboxAck();
+      const handler = makeHandler({
+        client,
+        bridge,
+        cache,
+        events: publisher,
+        inboxAck: sink,
+      });
+
+      await handler.start(); // fails, schedules retry at +1s
+      expect(count).toBe(1);
+
+      // daemon_ready arrives before the retry timer fires: new epoch.
+      emit(readyFrame(4242, 1700000000001));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(count).toBe(2); // the daemon_ready hydrate ran immediately
+
+      // The superseded epoch's pending retry must NOT fire a third probe.
+      await vi.advanceTimersByTimeAsync(HYDRATE_RETRY_DELAYS_MS[0]!);
+      expect(count).toBe(2);
+      handler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

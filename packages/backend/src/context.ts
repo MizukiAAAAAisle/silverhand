@@ -19,6 +19,7 @@ import type { AuthSessionService } from './auth/session.js';
 import type { LogLevelControl } from './logger.js';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
+import type { HostRuntimeActivityView, HostStatusReadModel } from './runtime/host-status-read-model.js';
 import type { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 import type { PresenceRegistry } from './presence/presence-registry.js';
@@ -187,6 +188,23 @@ export interface BackendContext {
    * the WS lifecycle/control port for user-managed computers.
    */
   outboundFrameAdapter?: () => OutboundFrameAdapter | null;
+  /**
+   * #task:1588 — late-bound per-host liveness view from the outbound
+   * event fanout (event-maintained, generation-bound). The host-status
+   * read model consumes it so `GET /api/hosts/:id/status` serves the
+   * active-agent set from memory instead of RPCing the daemon per
+   * read. Optional: a harness without a fanout leaves it absent and
+   * the read model falls back to its per-generation seed.
+   */
+  hostRuntimeView?: (hostId: string) => HostRuntimeActivityView | null;
+  /**
+   * #task:1588 slice 2 — the process-wide host-status read model
+   * (generation-bound seeds + event-maintained liveness). The hosts
+   * route reads `/status` through it; the composition root eager-seeds
+   * it on daemon attach. Optional: a route harness without the
+   * composition root constructs a local instance instead.
+   */
+  hostStatusReadModel?: () => HostStatusReadModel;
   /**
    * D4.e-1 3b-2/3b-3 (+ 3b P1-2) — migration backfiller for the daemon
    * workspace registry. The `list_workspaces` read path calls

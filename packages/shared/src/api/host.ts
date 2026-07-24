@@ -137,6 +137,23 @@ export type HostConnectionChangedEvent = z.infer<
   typeof HostConnectionChangedEventSchema
 >;
 
+/** #task:1588 slice 2 — WS event kind published on `viewer:{ownerUserId}`
+ *  when a host's active-agent set actually changes (an agent's first
+ *  runtime comes up, or its last one exits). Invalidation signal only:
+ *  consumers refetch `/api/hosts/:id/status` (a zero-RPC memory read
+ *  backend-side) — the payload never carries liveness state, so it can
+ *  never become a second source of truth. */
+export const HOST_AGENT_LIVENESS_CHANGED_EVENT = 'host_agent_liveness_changed';
+
+export const HostAgentLivenessChangedEventSchema = z
+  .object({
+    host_id: z.string(),
+  })
+  .strict();
+export type HostAgentLivenessChangedEvent = z.infer<
+  typeof HostAgentLivenessChangedEventSchema
+>;
+
 export const HostUnreachableReasonSchema = z.enum([
   'daemon_unreachable',
   'timeout',

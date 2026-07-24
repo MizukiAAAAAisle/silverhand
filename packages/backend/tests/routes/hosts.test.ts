@@ -2139,12 +2139,20 @@ describe('host routes', () => {
           active_agent_ids: [insertedAgentId],
         };
       });
+      await seedHostStatus(t, host!.id);
 
       const res = await sessionHttp(t, userToken).get(
         apiPaths.hostStatus(host!.id),
       );
       expect(res.status).toBe(200);
       const body = await res.json() as Record<string, unknown>;
+      // uptime_ms derives from the seed base + elapsed-since-seed, so it
+      // is >= the daemon-reported value rather than an exact echo.
+      const uptime = (body as { snapshot: { uptime_ms: number } }).snapshot
+        .uptime_ms;
+      expect(uptime).toBeGreaterThanOrEqual(60_000);
+      expect(uptime).toBeLessThan(70_000);
+      expect(Number.isInteger(uptime)).toBe(true);
       expect(body).toMatchObject({
         host_id: host!.id,
         availability: 'available',
@@ -2154,7 +2162,6 @@ describe('host routes', () => {
           daemon_pid: 4242,
           daemon_version: '0.1.0',
           started_at: 1_700_000_000_000,
-          uptime_ms: 60_000,
         },
         agents: [
           {
@@ -2200,6 +2207,7 @@ describe('host routes', () => {
         uptime_ms: 1,
         active_agent_ids: [agentId, 'phantom-not-registered'],
       }));
+      await seedHostStatus(t, host!.id);
 
       const res = await sessionHttp(t, userToken).get(
         apiPaths.hostStatus(host!.id),
@@ -2261,7 +2269,7 @@ describe('host routes', () => {
       expect(body).not.toHaveProperty('reason');
     });
 
-    it('returns `unreachable{reason:"timeout"}` with registration list (all offline) when daemon RPC times out', async () => {
+    it('returns `unreachable` (pending seed) with registration list when the seed failed — and the GET itself never dispatches (#task:1588 gate #4)', async () => {
       let controller: FakeHostWsController | null = null;
       t = buildTestApp({ hostWsController: () => controller });
       const userToken = t.ctx.authSessions.issueSession({
@@ -2287,6 +2295,10 @@ describe('host routes', () => {
           { hostId: call.hostId, commandKind: call.kind },
         );
       });
+      // Background seed attempt fails; the generation stays un-seeded.
+      await seedHostStatus(t, host!.id);
+      const callsAfterSeed = controller.calls.length;
+      expect(callsAfterSeed).toBe(1);
 
       const res = await sessionHttp(t, userToken).get(
         apiPaths.hostStatus(host!.id),
@@ -2299,13 +2311,37 @@ describe('host routes', () => {
       expect(body).toMatchObject({
         host_id: host!.id,
         availability: 'unreachable',
-        reason: 'timeout',
+        reason: 'daemon_unreachable',
       });
-      // Registration still visible; offline because no live daemon answered.
+      // Gate #4: the HTTP read surface performed ZERO daemon RPC.
+      expect(controller.calls.length).toBe(callsAfterSeed);
+      // Registration still visible; offline because no confirmed snapshot.
       expect(body.agents.map(a => a.agent_id)).toEqual([agentId]);
       expect(body.agents[0]!.online).toBe('offline');
       expect(body.agents[0]!.avatar_url).toBeNull();
       expect(body).not.toHaveProperty('snapshot');
+    });
+
+    it('a pre-seed GET (daemon attached, seed not landed) returns unreachable and performs zero RPC', async () => {
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
+      controller = new FakeHostWsController(async () => {
+        throw new Error('the HTTP read surface must not dispatch');
+      });
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host!.id),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        availability: 'unreachable',
+        reason: 'daemon_unreachable',
+      });
+      expect(controller.calls).toHaveLength(0);
     });
 
     it('returns `revoked` arm with registration list (all offline), no daemon dispatch', async () => {
@@ -2404,6 +2440,13 @@ function insertTestAgent(
 
 function sessionHttp(t: TestApp, token: string) {
   return http(t, { authorization: `Bearer ${token}` });
+}
+
+/** #task:1588 gate #4 — the /status route is a memory-only read; tests
+ *  drive the background seeding chain explicitly (production seeds on
+ *  daemon attach via the fanout's onHostReady). */
+async function seedHostStatus(t: TestApp, hostId: string): Promise<void> {
+  await t.ctx.hostStatusReadModel!().seedEagerly(hostId);
 }
 
 function legacyServerAuthHttp(t: TestApp) {

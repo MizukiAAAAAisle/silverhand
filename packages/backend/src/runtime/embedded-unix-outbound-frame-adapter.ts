@@ -8,6 +8,7 @@ import {
   encodeOutboundFrame,
   splitNdjson,
   type OutboundDaemonToServerEventFrame,
+  type OutboundHeartbeatFrame,
   type OutboundServerCommandKind,
   type OutboundServerCommandParams,
   type OutboundServerCommandResult,
@@ -40,6 +41,12 @@ export interface EmbeddedUnixOutboundFrameAdapterOptions {
   onDisconnect?: (hostId: string, connectionId: string) => void;
   /** Per-command response timeout. */
   commandTimeoutMs?: number;
+  /**
+   * #task:1588 slice 2 — local app-level heartbeat cadence (defaults
+   * mirror the WSS server: 30s ping / 5s pong). Overridable for tests.
+   */
+  pingIntervalMs?: number;
+  pongTimeoutMs?: number;
   logger?: {
     info: (meta: Record<string, unknown>, msg: string) => void;
     warn: (meta: Record<string, unknown>, msg: string) => void;
@@ -56,6 +63,10 @@ interface PendingCommand {
 }
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+// Heartbeat cadence mirrors host-ws-server's WSS defaults so the two
+// transports share one liveness contract.
+const DEFAULT_PING_INTERVAL_MS = 30_000;
+const DEFAULT_PONG_TIMEOUT_MS = 5_000;
 const RECONNECT_BASE_DELAY_MS = 100;
 const RECONNECT_MAX_DELAY_MS = 1_000;
 
@@ -71,9 +82,12 @@ const RECONNECT_MAX_DELAY_MS = 1_000;
  * are identical — which is the whole point of D5.a. This adapter passes
  * the same `runOutboundFrameAdapterContract` the standalone adapter does.
  *
- * Liveness model (per D5.a design §4.4): no app-level heartbeat. The
- * adapter relies on Unix-socket `close`/`error` events; a half-open
- * socket is not a concern under the same-uid local threat model.
+ * Liveness model (#task:1588 slice 2, superseding the D5.a §4.4 "socket
+ * close only" stance): the adapter runs the SAME app-level heartbeat as
+ * the WSS path (server-initiated ping every 30s, 5s pong budget), so
+ * `available` means "recently responsive" on both transports — a daemon
+ * whose event loop wedges while the Unix socket stays open is detected
+ * and torn down through the existing disconnect/reconnect flow.
  *
  * Security posture mirrors the WSS server: an inbound frame that fails
  * the per-command response schema is a PROTOCOL VIOLATION — the
@@ -87,6 +101,8 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
   private readonly socketPath: string;
   private readonly hostId: string;
   private readonly commandTimeoutMs: number;
+  private readonly pingIntervalMs: number;
+  private readonly pongTimeoutMs: number;
   private readonly onEvent?: EmbeddedUnixOutboundFrameAdapterOptions['onEvent'];
   private readonly onDisconnect?: EmbeddedUnixOutboundFrameAdapterOptions['onDisconnect'];
   private readonly logger?: EmbeddedUnixOutboundFrameAdapterOptions['logger'];
@@ -105,11 +121,15 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
   private closed = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
+  private pingTimer: NodeJS.Timeout | null = null;
+  private pongTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: EmbeddedUnixOutboundFrameAdapterOptions) {
     this.socketPath = opts.socketPath;
     this.hostId = opts.hostId;
     this.commandTimeoutMs = opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+    this.pingIntervalMs = opts.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
+    this.pongTimeoutMs = opts.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS;
     this.onEvent = opts.onEvent;
     this.onDisconnect = opts.onDisconnect;
     this.logger = opts.logger;
@@ -147,8 +167,20 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
     this.readBuffer = '';
     this.reconnectAttempt = 0;
 
-    socket.on('data', chunk => this.onData(chunk));
-    socket.on('close', () => this.onSocketClosed('socket_closed'));
+    // #task:1588 slice 2 (Cindy P1-3) — every connection-scoped handler
+    // is guarded on SOURCE-SOCKET IDENTITY. A replaced attachment's
+    // queued `data`/`close`/`error` callbacks (Node can deliver them
+    // after we've already torn the socket down and reconnected) must
+    // never touch the successor generation's buffer, timers, pending
+    // map, or reconnect scheduling.
+    socket.on('data', chunk => {
+      if (this.socket !== socket) return;
+      this.onData(chunk);
+    });
+    socket.on('close', () => {
+      if (this.socket !== socket) return;
+      this.onSocketClosed('socket_closed');
+    });
     socket.on('error', err => {
       this.logger?.warn(
         { hostId: this.hostId, err: err.message },
@@ -157,8 +189,70 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
       if (!socket.destroyed) {
         socket.destroy();
       }
+      if (this.socket !== socket) return;
       this.onSocketClosed('socket_error');
     });
+    this.startHeartbeat(socket);
+  }
+
+  /**
+   * #task:1588 slice 2 — app-level heartbeat for the local transport,
+   * mirroring `HostWsConnection.startHeartbeat`. Every `pingIntervalMs`
+   * send a ping and arm a `pongTimeoutMs` deadline; a pong clears it, a
+   * miss destroys the socket, which funnels into the ordinary
+   * `onSocketClosed('heartbeat_timeout')` disconnect/reconnect flow.
+   * Timers are per-attachment: they are cleared in `onSocketClosed`, and
+   * the `socket` identity check makes a stale timer from a replaced
+   * attachment a no-op (generation isolation).
+   */
+  private startHeartbeat(socket: Socket): void {
+    this.clearHeartbeatTimers();
+    const ping = setInterval(() => {
+      if (this.socket !== socket || socket.destroyed) return;
+      const frame: OutboundHeartbeatFrame = {
+        direction: 'server_to_daemon',
+        type: 'heartbeat',
+        kind: 'ping',
+        ts: Date.now(),
+      };
+      socket.write(`${encodeOutboundFrame(frame)}\n`, err => {
+        if (err) {
+          this.logger?.warn(
+            { hostId: this.hostId, err: err.message },
+            'embedded-unix: heartbeat ping write failed',
+          );
+        }
+      });
+      if (this.pongTimer) clearTimeout(this.pongTimer);
+      const pong = setTimeout(() => {
+        this.pongTimer = null;
+        if (this.socket !== socket || socket.destroyed) return;
+        this.logger?.warn(
+          {
+            hostId: this.hostId,
+            pongTimeoutMs: this.pongTimeoutMs,
+          },
+          'embedded-unix: heartbeat timeout; destroying socket',
+        );
+        socket.destroy();
+        this.onSocketClosed('heartbeat_timeout');
+      }, this.pongTimeoutMs);
+      pong.unref?.();
+      this.pongTimer = pong;
+    }, this.pingIntervalMs);
+    ping.unref?.();
+    this.pingTimer = ping;
+  }
+
+  private clearHeartbeatTimers(): void {
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
+    }
+    if (this.pongTimer) {
+      clearTimeout(this.pongTimer);
+      this.pongTimer = null;
+    }
   }
 
   activeConnectionCount(): number {
@@ -301,6 +395,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
   async close(): Promise<void> {
     this.closed = true;
     this.clearReconnectTimer();
+    this.clearHeartbeatTimers();
     const socket = this.socket;
     if (!socket) {
       this.rejectAllPending('adapter closed');
@@ -347,8 +442,29 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
 
     const heartbeat = OutboundHeartbeatFrameSchema.safeParse(parsed);
     if (heartbeat.success) {
-      // No app-level heartbeat for the local transport; ignore daemon
-      // heartbeats rather than treating them as a violation.
+      // #task:1588 slice 2 — active heartbeat (WSS parity). A pong
+      // clears the outstanding deadline; a daemon-initiated ping gets
+      // a pong back. A pong with no armed deadline (e.g. a late reply
+      // raced past its timeout on a connection that survived) is a
+      // benign no-op.
+      if (heartbeat.data.kind === 'pong') {
+        if (this.pongTimer) {
+          clearTimeout(this.pongTimer);
+          this.pongTimer = null;
+        }
+        return true;
+      }
+      const socket = this.socket;
+      if (socket && !socket.destroyed) {
+        const pong: OutboundHeartbeatFrame = {
+          direction: 'server_to_daemon',
+          type: 'heartbeat',
+          kind: 'pong',
+          ts: Date.now(),
+          echo_ts: heartbeat.data.ts,
+        };
+        socket.write(`${encodeOutboundFrame(pong)}\n`, () => {});
+      }
       return true;
     }
 
@@ -438,6 +554,7 @@ export class EmbeddedUnixOutboundFrameAdapter implements OutboundFrameAdapter {
   }
 
   private onSocketClosed(reason: string): void {
+    this.clearHeartbeatTimers();
     const connectionId = this.connectionId;
     const hadSocket = this.socket !== null;
     if (!hadSocket && this.pending.size === 0) return;

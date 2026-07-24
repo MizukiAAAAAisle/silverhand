@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import {
   EventFrameSchema,
+  isHostActiveRuntimePhase,
   type EventFrame,
   type OutboundDaemonToServerEventFrame,
   type OutboundServerCommandKind,
@@ -15,6 +16,10 @@ import type {
   RuntimeKind,
 } from '@silverhand/shared';
 import { isBaselineReasoningEffort } from '@silverhand/shared';
+import {
+  HOST_AGENT_LIVENESS_CHANGED_EVENT,
+  type HostAgentLivenessChangedEvent,
+} from '@silverhand/shared';
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
 import { systemSubtype } from '@silverhand/shared';
@@ -54,6 +59,7 @@ import {
   type RuntimeStatusBridge,
 } from './event-handler.js';
 import { RunStateCache, type CachedRuntimeEntry } from './run-state-cache.js';
+import type { HostRuntimeActivityView } from './host-status-read-model.js';
 import {
   formatInboxBatch,
   sendMessageToolName,
@@ -78,6 +84,26 @@ export interface OutboundRuntimeEventFanoutOptions {
   silverhandCli: SilverhandCliLauncher | null;
   coLocatedHostId?: string;
   agentTokens: AgentTokenStore;
+  /**
+   * #task:1588 slice 2 — viewer-scope publisher for the
+   * `host_agent_liveness_changed` invalidation event. Injected as a
+   * narrow port (composition root wires it to
+   * `ctx.events.publishToScope('viewer:...')`) so the fanout stays off
+   * the full ScopeEventBus surface. Optional: unwired in harnesses
+   * that don't exercise the renderer event path.
+   */
+  publishHostScopeEvent?: (
+    ownerUserId: string,
+    kind: string,
+    payload: unknown,
+  ) => void;
+  /**
+   * #task:1588 slice 2 — fired on every daemon `ready` event (fresh
+   * connection generation). The composition root wires this to the
+   * host-status read model's eager seed so the FIRST `/status` read of
+   * a generation is already a memory read.
+   */
+  onHostReady?: (hostId: string) => void;
   /**
    * D4.e-6 — bounded lazy backfill of the daemon workspace registry before
    * a `runtime_start` dispatch. `runtime_start` carries semantic-only refs;
@@ -110,6 +136,22 @@ interface HostFanoutState {
   currentConnectionId: string | null;
   currentDaemonKey: string | null;
   dispatchConnectionId: string | null;
+  /**
+   * #task:1588 — daemon key whose `runtime_status` hydrate has
+   * completed (atomic whole-set replace into `cache`). Compared
+   * against `currentDaemonKey` by {@link OutboundRuntimeEventFanout.hostRuntimeView}:
+   * only a match makes the cache authoritative for host-level agent
+   * liveness. Never reset explicitly — a daemon swap changes
+   * `currentDaemonKey`, and the stale value simply stops matching.
+   */
+  hydratedDaemonKey: string | null;
+  /**
+   * #task:1588 slice 2 — signature of the last PUBLISHED active-agent
+   * set (sorted, joined). `maybePublishLivenessChanged` compares the
+   * current fold against it and publishes the invalidation event only
+   * on a real change — never a per-event broadcast.
+   */
+  lastLivenessSignature: string;
 }
 
 interface PendingDeliveryBatch {
@@ -295,6 +337,19 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     } finally {
       state.dispatchConnectionId = null;
     }
+    if (event.kind === 'ready') {
+      // Fresh connection generation: let the composition root eager-
+      // seed the host-status read model (fire-and-forget there).
+      try {
+        this.opts.onHostReady?.(hostId);
+      } catch (err) {
+        this.opts.logger.warn(
+          { kind: 'event', hostId, err: (err as Error).message },
+          'onHostReady callback threw',
+        );
+      }
+    }
+    this.maybePublishLivenessChanged(hostId, state);
   }
 
   onDisconnect(hostId: string, connectionId: string): void {
@@ -313,6 +368,81 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         );
       }
       state.cache.clearAll();
+      this.maybePublishLivenessChanged(hostId, state);
+    }
+  }
+
+  /**
+   * #task:1588 — per-host liveness view for the host-status read model
+   * (`GET /api/hosts/:id/status` zero-RPC read path).
+   *
+   * `activeAgentIds` mirrors the daemon's own `host_status`
+   * derivation: agents with at least one runtime in an ACTIVE phase,
+   * scoped to the current daemon generation. `hydratedForCurrentDaemon`
+   * is the trust gate — false until the current daemon's
+   * `runtime_status` hydrate (atomic whole-set replace) has landed, so
+   * the read model falls back to its generation-bound seed instead of
+   * reading a not-yet-populated cache as "everything offline".
+   */
+  hostRuntimeView(hostId: string): HostRuntimeActivityView | null {
+    const state = this.states.get(hostId);
+    if (!state) return null;
+    return {
+      connectionId: state.currentConnectionId,
+      hydratedForCurrentDaemon:
+        state.currentDaemonKey !== null &&
+        state.hydratedDaemonKey === state.currentDaemonKey,
+      activeAgentIds: activeAgentIdsFromCacheEntries(
+        state.cache.list(),
+        state.currentDaemonKey,
+      ),
+    };
+  }
+
+  /**
+   * #task:1588 slice 2 — publish `host_agent_liveness_changed` to the
+   * host owner's viewer scope when the active-agent set actually
+   * changed. Pure invalidation: the payload is `{host_id}` — renderers
+   * refetch `/status` (a memory read) for the state. Runs after every
+   * dispatched event / hydrate / disconnect; the sorted-signature diff
+   * keeps the emit rate at "real transitions only" (an agent's first
+   * runtime up, or its last one gone) — never per runtime_state frame.
+   *
+   * `force` (hydrate path only): the signature diff compares cache
+   * against cache, but at hydrate completion the READ MODEL's authority
+   * switches from the seed's `active_agent_ids` to the cache. A seed
+   * set the hydrate contradicts (seed `{A}` → hydrate `{}`) produces NO
+   * cache-signature change, yet clients that cached the seed-based
+   * response would stay stale forever with polling gone. One forced
+   * publish per hydrate makes the authority switch always observable
+   * (Cindy slice-2 review P1-2).
+   */
+  private maybePublishLivenessChanged(
+    hostId: string,
+    state: HostFanoutState,
+    opts?: { force?: boolean },
+  ): void {
+    const signature = activeAgentIdsFromCacheEntries(
+      state.cache.list(),
+      state.currentDaemonKey,
+    )
+      .sort()
+      .join(',');
+    if (!opts?.force && signature === state.lastLivenessSignature) return;
+    state.lastLivenessSignature = signature;
+    const publish = this.opts.publishHostScopeEvent;
+    if (!publish) return;
+    const ownerUserId = this.hosts.get(hostId)?.user_id ?? null;
+    if (ownerUserId === null) return;
+    try {
+      publish(ownerUserId, HOST_AGENT_LIVENESS_CHANGED_EVENT, {
+        host_id: hostId,
+      } satisfies HostAgentLivenessChangedEvent);
+    } catch (err) {
+      this.opts.logger.warn(
+        { kind: 'event', hostId, err: (err as Error).message },
+        'host_agent_liveness_changed publish threw',
+      );
     }
   }
 
@@ -1282,6 +1412,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       currentConnectionId: null,
       currentDaemonKey: null,
       dispatchConnectionId: null,
+      hydratedDaemonKey: null,
+      lastLivenessSignature: '',
     };
     const bridge: RuntimeStatusBridge = {
       runtimeStatus: async () => {
@@ -1454,6 +1586,13 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           // does.
           return;
         }
+        // #task:1588 — the cache now holds the daemon's atomic
+        // whole-set snapshot; host-level liveness reads may trust it
+        // for this generation. Force-publish: the seed→cache authority
+        // switch must be observable even when the cache signature
+        // didn't move (see maybePublishLivenessChanged).
+        state.hydratedDaemonKey = state.currentDaemonKey;
+        this.maybePublishLivenessChanged(hostId, state, { force: true });
         this.reconcileMissingRuntimesAfterHydrate(hostId, state);
         queueMicrotask(() => {
           this.replayPendingForHost(hostId, connectionId).catch(err => {
@@ -1815,4 +1954,29 @@ function clearSessionKey(conversationId: string, agentId: string): string {
 
 function idleReapRuntimeEnabled(_runtime: RuntimeKind): boolean {
   return true;
+}
+
+/**
+ * Pure: agents with at least one runtime in an active phase, scoped to
+ * `daemonKey` (entries from a previous daemon generation never count).
+ * Aggregates per agent across conversations — one runtime exiting must
+ * not mark an agent offline while another of its runtimes lives.
+ *
+ * The phase whitelist is the SHARED `HOST_ACTIVE_RUNTIME_PHASES` from
+ * `@silverhand/host` protocol — the same set the daemon's own
+ * `host_status.active_agent_ids` derivation filters on, so backend and
+ * daemon liveness cannot drift (fail-closed on unknown phases).
+ */
+export function activeAgentIdsFromCacheEntries(
+  entries: readonly CachedRuntimeEntry[],
+  daemonKey: string | null,
+): string[] {
+  if (daemonKey === null) return [];
+  const ids = new Set<string>();
+  for (const entry of entries) {
+    if (entry.daemonInstanceKey !== daemonKey) continue;
+    if (!isHostActiveRuntimePhase(entry.phase)) continue;
+    ids.add(entry.agentId);
+  }
+  return [...ids];
 }

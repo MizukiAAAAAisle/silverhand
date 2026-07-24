@@ -89,7 +89,11 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
     };
     if (!shouldWrite(level, line, logControl)) return;
     const encoded = safeStringify(line);
-    stream.write(encoded + '\n');
+    // A late log (e.g. a command landing during teardown) must drop,
+    // not crash with ERR_STREAM_WRITE_AFTER_END.
+    if (stream.writable) {
+      stream.write(encoded + '\n');
+    }
     if (alsoStderr) {
       process.stderr.write(encoded + '\n');
     }

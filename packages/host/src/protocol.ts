@@ -732,6 +732,29 @@ export const RuntimePhaseSchema = z.enum([
   'draining',
   'exited',
 ]);
+export type RuntimePhase = z.infer<typeof RuntimePhaseSchema>;
+
+/**
+ * #task:1588 — single source for "does this runtime phase count as a
+ * live runtime for HOST-level agent liveness". Consumed by BOTH the
+ * daemon's `host_status.active_agent_ids` derivation (dispatcher) and
+ * the backend's host-status read model, so the two ends cannot drift.
+ *
+ * Expressed as a whitelist so a NEW phase added to
+ * {@link RuntimePhaseSchema} fails CLOSED (not online) until its
+ * liveness semantics are decided explicitly (Cindy slice-1 review
+ * P1 #2 contract; re-affirmed in #task:1588 review).
+ */
+export const HOST_ACTIVE_RUNTIME_PHASES: ReadonlySet<RuntimePhase> = new Set([
+  'spawning',
+  'startup_pending',
+  'ready',
+  'draining',
+] satisfies RuntimePhase[]);
+
+export function isHostActiveRuntimePhase(phase: string): boolean {
+  return HOST_ACTIVE_RUNTIME_PHASES.has(phase as RuntimePhase);
+}
 
 /** A single (conversation, agent) supervised runtime as the daemon
  *  reports it via `runtime_status`. Mirrors the run-state DTO that

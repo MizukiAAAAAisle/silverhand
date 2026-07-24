@@ -27,10 +27,10 @@
  *     and ownership checks — design §4.2);
  *   - authenticate with a bearer token (same-uid local socket + mode
  *     0o600 is the perimeter — design §4.4);
- *   - run an app-level heartbeat (local liveness is socket close events
- *     only — design §4.4). Inbound heartbeat frames are tolerated and
- *     ignored so a future heartbeat-enabled client does not trip the
- *     protocol-violation path.
+ *   - initiate an app-level heartbeat. #task:1588 slice 2: the BACKEND
+ *     adapter initiates pings on this transport and this server answers
+ *     with pongs, so `available` means "recently responsive" on both
+ *     transports; the daemon side still never pings.
  *
  * Security posture mirrors the WSS server and the embedded adapter: an
  * inbound frame that is not a valid `server_to_daemon` command (or
@@ -392,10 +392,34 @@ export class LocalOutboundFrameServer {
       return true;
     }
 
-    // Tolerate (and ignore) heartbeat frames so a future heartbeat-enabled
-    // client does not trip the protocol-violation path. The local
-    // transport itself runs no app-level heartbeat (design §4.4).
-    if (OutboundHeartbeatFrameSchema.safeParse(parsed).success) {
+    // #task:1588 slice 2 — answer the backend adapter's heartbeat ping
+    // with a pong (WSS parity: same contract as the daemon's outbound
+    // WS client). A pong arriving here is tolerated and ignored — the
+    // daemon side initiates no pings on the local transport.
+    const heartbeat = OutboundHeartbeatFrameSchema.safeParse(parsed);
+    if (heartbeat.success) {
+      if (heartbeat.data.kind === 'ping' && !socket.destroyed) {
+        try {
+          socket.write(
+            `${encodeOutboundFrame({
+              direction: 'daemon_to_server',
+              type: 'heartbeat',
+              kind: 'pong',
+              ts: Date.now(),
+              echo_ts: heartbeat.data.ts,
+            })}\n`,
+          );
+        } catch (err) {
+          this.logger.warn(
+            {
+              kind: 'local_outbound',
+              action: 'heartbeat_pong_failed',
+              err: (err as Error).message,
+            },
+            'local outbound: heartbeat pong write failed',
+          );
+        }
+      }
       return true;
     }
 

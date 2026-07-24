@@ -46,6 +46,7 @@ import {
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { OutboundAgentRuntimeHost } from './runtime/outbound-agent-runtime-host.js';
 import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
+import { HostStatusReadModel } from './runtime/host-status-read-model.js';
 import {
   CompositeOutboundFrameAdapter,
   StandaloneOutboundFrameAdapter,
@@ -77,6 +78,7 @@ import { UserRepo } from './repos/user-repo.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import {
   classifyBindAddressScope,
+  HOST_CONNECTION_CHANGED_EVENT,
   type BindAddressScope,
   type ServerConfig,
 } from '@silverhand/shared';
@@ -323,6 +325,26 @@ export async function startBackend(
   // once the HTTP server binds; the fanout reads it via
   // `() => outboundAdapter`.
   let outboundAdapter: OutboundFrameAdapter | null = null;
+  // #task:1588 — process-wide host-status read model. Thunks late-bind
+  // the transport + fanout view; the fanout's `onHostReady` eager-seeds
+  // it so the first `/status` read of a generation is a memory read.
+  // `onSeeded` re-publishes the availability invalidation: a renderer
+  // that read the pre-seed pending arm refetches once the seed lands
+  // (the HTTP read path itself never dispatches — task gate #4).
+  const hostStatusReadModel = new HostStatusReadModel({
+    adapter: () => outboundAdapter,
+    runtimeView: hostId => outboundFanout?.hostRuntimeView(hostId) ?? null,
+    logger,
+    onSeeded: hostId => {
+      const ownerUserId = hostRepo.get(hostId)?.user_id ?? null;
+      if (ownerUserId === null) return;
+      events.publishToScope(
+        `viewer:${ownerUserId}`,
+        HOST_CONNECTION_CHANGED_EVENT,
+        { host_id: hostId },
+      );
+    },
+  });
   // Embedded local-Unix adapter kept here so the server-close path can
   // close the connection it owns (the standalone adapter only *views* a
   // controller owned by the bootstrap, so it has nothing to close).
@@ -410,6 +432,11 @@ export async function startBackend(
     // accessor so they never branch on deployment mode. `hostWsController`
     // stays as the WS lifecycle/control port for user-managed computers.
     outboundFrameAdapter: () => outboundAdapter,
+    // #task:1588 — late-bound per-host liveness view (see context.ts).
+    // `outboundFanout` is constructed in the listen callback, after this
+    // ctx literal; the thunk resolves live.
+    hostRuntimeView: hostId => outboundFanout?.hostRuntimeView(hostId) ?? null,
+    hostStatusReadModel: () => hostStatusReadModel,
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
@@ -628,6 +655,11 @@ export async function startBackend(
             await ctx.runtimeHost.stopAll().catch(() => undefined);
             await ctx.runtimeHost.closeActivityLog().catch(() => undefined);
 
+            // #task:1588 — cancel pending eager-seed retries before the
+            // transports go away; a timer firing mid-teardown would
+            // dispatch host_status into a closing daemon.
+            hostStatusReadModel.close();
+
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
             await Promise.all([eventWs?.close(), hostWs?.close()]);
             ctx.presence.dispose();
@@ -688,6 +720,12 @@ export async function startBackend(
         agentTokens: ctx.agentTokens,
         logDir: ctx.logDir,
         workspaceRegistryBackfiller: ctx.workspaceRegistryBackfiller,
+        // #task:1588 slice 2 — semantic liveness invalidation + eager
+        // seed wiring. The narrow publisher port keeps the fanout off
+        // the full ScopeEventBus surface.
+        publishHostScopeEvent: (ownerUserId, kind, payload) =>
+          ctx.events.publishToScope(`viewer:${ownerUserId}`, kind, payload),
+        onHostReady: hostId => hostStatusReadModel.seedEagerly(hostId),
       });
       ctx.readiness.outboundEventFanoutInstalled = true;
     }

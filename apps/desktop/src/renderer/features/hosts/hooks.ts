@@ -307,45 +307,35 @@ export function useHostProvenanceGate(): {
   };
 }
 
-export interface HostStatusFreshnessPolicy {
-  /** React Query `staleTime` for this consumer. */
-  staleTime: number;
-  /** React Query `refetchOnMount` for this consumer. */
-  refetchOnMount: 'always' | false;
-}
-
 /**
- * `#task:1010`/`#task:1011` (Cindy review P1) — decide the cache
- * freshness policy for `useHostStatusQuery` based on the consumer.
+ * #task:1588 slice 2 — the ONE freshness model for `hostStatusKey`.
  *
- * The two consumers share `hostStatusKey(hostId)` but have OPPOSITE
- * freshness needs, and they must NOT inherit each other's policy:
+ * `/status` responses are cached fresh-forever and invalidated by
+ * exactly three signals, all handled in `host-connection-sync.ts`:
+ *   - `host_connection_changed` (attach/detach) → per-host invalidate;
+ *   - `host_agent_liveness_changed` (an agent's runtime came up / its
+ *     last one exited) → per-host status invalidate;
+ *   - `snapshot_required` (event-loss recovery) → invalidate-all;
+ * plus the explicit Refresh action on HostDetailView.
  *
- *   - **Manual consumers (`pollUntilAvailable === false`)** —
- *     `staleTime: Infinity` + no mount refetch: the cache entry stays
- *     fresh as long as it's in memory, and the user pulls fresh data via an
- *     explicit Refresh button.
- *
- *   - **ConnectionPane pill (`pollUntilAvailable === true`)** — the
- *     remote-mode readiness source. It MUST re-validate against the live
- *     remote backend on every mount and MUST NOT trust a stale
- *     `available` left in the shared cache by a prior HostDetailView
- *     read. Otherwise the pill would flash/stick "Ready" while the
- *     daemon is actually disconnected (the `refetchInterval` stops as
- *     soon as it sees `available`, so without a forced fresh mount probe
- *     a stale `available` would never be corrected). Hence
- *     `staleTime: 0` + `refetchOnMount: 'always'`.
- *
- * Pure + exported so a unit test pins the "pollUntilAvailable never
- * inherits the fresh-forever manual cache" contract without rendering
- * the hook.
+ * History: this key used to carry FOUR divergent per-consumer policies
+ * (staleTime Infinity / 0 / 2s+5s poll / poll-until-available), which
+ * produced the #1010 stale-pill and #1376 dialog-jitter bugs. Backend-
+ * side the read is now a zero-RPC memory snapshot and the backend
+ * pushes the invalidation events above, so every consumer shares this
+ * single policy and NOBODY polls.
  */
-export function hostStatusFreshnessPolicy(
-  pollUntilAvailable: boolean,
-): HostStatusFreshnessPolicy {
-  return pollUntilAvailable
-    ? { staleTime: 0, refetchOnMount: 'always' }
-    : { staleTime: Infinity, refetchOnMount: false };
+function hostStatusQueryOptions(hostId: string) {
+  return {
+    queryKey: hostStatusKey(hostId),
+    queryFn: async (): Promise<HostStatusResponse> => {
+      const raw = await api<unknown>(apiPaths.hostStatus(hostId));
+      return HostStatusResponseSchema.parse(raw);
+    },
+    staleTime: Infinity,
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+  } as const;
 }
 
 /**
@@ -355,47 +345,19 @@ export function hostStatusFreshnessPolicy(
  * always renders `data.agents[]` (registration is a DB fact, survives
  * daemon disconnect — see Cindy `Mtf5zZL-Y7PauIDi`).
  *
- * **Freshness is consumer-dependent** — see `hostStatusFreshnessPolicy`.
- * Manual consumers use `staleTime: Infinity` and explicit invalidation.
- * Live connection surfaces opt into `pollUntilAvailable`, which forces a fresh
- * mount probe + poll-until-available so they never trust an old offline cache.
+ * Freshness: see {@link hostStatusQueryOptions} — event-driven, no
+ * polling, one policy for every consumer of `hostStatusKey`.
  *
  * The hook is `enabled` only when `hostId` is provided so the master/
  * detail right pane mounting with no selection doesn't burn a request.
  */
 export function useHostStatusQuery(
   hostId: string | null | undefined,
-  options?: { enabled?: boolean; pollUntilAvailable?: boolean },
+  options?: { enabled?: boolean },
 ) {
-  const freshness = hostStatusFreshnessPolicy(
-    options?.pollUntilAvailable ?? false,
-  );
   return useQuery<HostStatusResponse>({
-    queryKey: hostStatusKey(hostId ?? '__none__'),
-    queryFn: async () => {
-      const raw = await api<unknown>(apiPaths.hostStatus(hostId!));
-      return HostStatusResponseSchema.parse(raw);
-    },
+    ...hostStatusQueryOptions(hostId ?? '__none__'),
     enabled: (options?.enabled ?? true) && Boolean(hostId),
-    staleTime: freshness.staleTime,
-    refetchOnMount: freshness.refetchOnMount,
-    refetchOnWindowFocus: false,
-    // `#task:1010` — opt-in polling for the ConnectionPane "This
-    // computer" pill in remote mode. There, `local_host_ws_attached_at`
-    // is structurally null (the attachment registry lives in the remote
-    // backend, not in-process), so the pill needs host-status
-    // `availability` as the readiness source. We poll only until the
-    // host reports `available`, then stop — a `disconnected` host keeps
-    // polling (it's the genuine "Connecting" case) but never round-trips
-    // the daemon (the backend short-circuits to `disconnected` before
-    // dispatch when no attachment exists). Default callers (manual
-    // refresh on HostDetailView) leave this off.
-    refetchInterval: options?.pollUntilAvailable
-      ? query =>
-          query.state.data?.availability === 'available'
-            ? false
-            : CONNECTING_POLL_MS
-      : false,
   });
 }
 
@@ -493,30 +455,18 @@ export function useHostAvailabilityMap(
   hostIds: string[],
 ): HostAvailabilitySnapshot {
   const results = useQueries({
-    queries: hostIds.map(id => ({
-      queryKey: hostStatusKey(id),
-      queryFn: async (): Promise<HostStatusResponse> => {
-        const raw = await api<unknown>(apiPaths.hostStatus(id));
-        return HostStatusResponseSchema.parse(raw);
-      },
-      staleTime: 0,
-      refetchOnMount: 'always' as const,
-      refetchOnWindowFocus: false,
-    })),
+    queries: hostIds.map(id => hostStatusQueryOptions(id)),
   });
   const entries = hostIds.map((id, i) => {
     const result = results[i];
     return {
       id,
       // `isPending` (NOT `isFetching`): "no settled data yet" = the true initial
-      // probe. A BACKGROUND refetch of already-settled data has
-      // `isPending===false` (data exists) even while `isFetching===true`, so it
-      // keeps exposing the last availability instead of blanking it. Using
-      // `isFetching` here conflated the two, so every 5s `hostStatusKey` poll
-      // (shared with `useAgentOnlineByHost` behind an open create dialog) flipped
-      // a known-available host to "unavailable" for ~50ms — collapsing the
-      // Runtime section and re-centering the vertically-centered modal = jitter
-      // (Cindy CDP #task:1376: modal y 308→312, section h 84→76, 5s cadence).
+      // probe. A BACKGROUND refetch (event-driven invalidation) of already-
+      // settled data has `isPending===false` (data exists) even while
+      // `isFetching===true`, so it keeps exposing the last availability
+      // instead of blanking it. Using `isFetching` here conflated the two
+      // and caused the #1376 create-dialog jitter.
       isPending: result?.isPending ?? true,
       availability: result?.data?.availability,
     };
@@ -549,23 +499,16 @@ export interface UpdateHostMutationVars {
  * conversation runtime-state projection (Cindy #task:1362 P1).
  *
  * Shares `hostStatusKey(id)` with the detail view / picker (one cache per
- * computer, N computers ≤ N agents), polled on the rail cadence so presence
- * stays live. Returns `Map<agentId, boolean>` (true = online); agents whose
- * computer has no status (deleted / unowned host) are absent → caller treats
- * them as offline.
+ * computer, N computers ≤ N agents). #task:1588 slice 2 removed the 5s
+ * poll: presence changes now arrive as `host_agent_liveness_changed`
+ * invalidations pushed by the backend (see `host-connection-sync.ts`), so
+ * the dots stay live without any interval. Returns `Map<agentId, boolean>`
+ * (true = online); agents whose computer has no status (deleted / unowned
+ * host) are absent → caller treats them as offline.
  */
 export function useAgentOnlineByHost(hostIds: string[]): Map<string, boolean> {
   const results = useQueries({
-    queries: hostIds.map(id => ({
-      queryKey: hostStatusKey(id),
-      queryFn: async (): Promise<HostStatusResponse> => {
-        const raw = await api<unknown>(apiPaths.hostStatus(id));
-        return HostStatusResponseSchema.parse(raw);
-      },
-      staleTime: 2_000,
-      refetchInterval: 5_000,
-      refetchOnWindowFocus: false,
-    })),
+    queries: hostIds.map(id => hostStatusQueryOptions(id)),
   });
   // Content signature over every agent's online flag, so the memo (and Map
   // identity) only changes when a liveness bit actually flips.

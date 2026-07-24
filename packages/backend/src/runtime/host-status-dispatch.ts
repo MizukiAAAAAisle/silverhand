@@ -77,6 +77,21 @@ export class HostStatusSingleFlight {
     if (!adapter || !connectionId) {
       return Promise.resolve({ kind: 'disconnected' });
     }
+    return this.dispatchKeyed(adapter, hostId, connectionId);
+  }
+
+  /**
+   * Admission keyed on a caller-resolved connection generation. Callers
+   * that cache the outcome per generation (the host-status read model)
+   * MUST use this form: resolving the id here again could observe a
+   * newer connection than the caller keyed on, and the shared outcome
+   * would be filed under the wrong generation.
+   */
+  dispatchKeyed(
+    adapter: OutboundFrameAdapter,
+    hostId: string,
+    connectionId: string,
+  ): Promise<HostStatusOutcome> {
     const key = `${hostId}\u0000${connectionId}`;
     const existing = this.inflight.get(key);
     if (existing) return existing;

@@ -1429,14 +1429,13 @@ function RegisteredAgentsSection({
 }): JSX.Element {
   const nav = useNav();
   // Agent-on-computer liveness (layer-2) is the SAME fact the rail dot
-  // reads. The detail's `useHostStatusQuery` freezes its snapshot
-  // (`staleTime: Infinity`, no interval) so the availability card stays
-  // stable — but that also froze these agent pips. Read liveness from
-  // the shared `useAgentOnlineByHost` (5s poll on the same
-  // `hostStatusKey`) so the pip converges within ≤5s, single-source
-  // with the rail dot. Falls back to the frozen snapshot's `online`
-  // until the first live sample lands. Do NOT source layer-3
-  // conversation status here — this list's subject is the computer.
+  // reads. Read it from the shared `useAgentOnlineByHost` (same
+  // `hostStatusKey`, event-driven: the backend pushes
+  // `host_agent_liveness_changed` invalidations — #task:1588 removed
+  // the old 5s poll) so the pip stays single-source with the rail dot.
+  // Falls back to the frozen snapshot's `online` until the first live
+  // sample lands. Do NOT source layer-3 conversation status here —
+  // this list's subject is the computer.
   const liveOnlineByHost = useAgentOnlineByHost([hostId]);
   // shiki dogfood `DXVl5tEBshVT2LqF` #2: route avatar uploads through
   // the shared object-URL cache so cards show the user-picked image
