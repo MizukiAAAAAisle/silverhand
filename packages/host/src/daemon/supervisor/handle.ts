@@ -115,11 +115,15 @@ export interface ActivitySnippetBuffer {
 export const INPUT_PAYLOAD_UUID_CAP = 200;
 
 /** Signal-only stale contract: the 409 exposes NO bodies, so it never
- *  moves the observed cursor. The daemon only remembers the event id (to
- *  correlate the agent's resolution) and the head it conflicted with. */
+ *  moves the observed cursor. The daemon remembers enough correlation
+ *  to attach a continuation only when normal delivery covers the same
+ *  stream through the conflicting head. */
 export interface PendingStaleEvent {
   id: string;
   currentSeq: number;
+  /** Null only for an older/malformed backend response. Such an event
+   *  remains resolvable but cannot trigger a delivery continuation. */
+  streamKey: string | null;
 }
 
 /** Gated legacy default-reply-target inference shape (see

@@ -351,6 +351,22 @@ function coveredSeqPairsForBatch(batch: StartupDeliveryState): Array<[string, nu
   return [...byStream.entries()];
 }
 
+function textWithStaleContinuation(
+  handle: RuntimeHandle,
+  batch: StartupDeliveryState,
+  coveredSeqByStream: ReadonlyArray<readonly [string, number]>,
+): string {
+  const stale = handle.pendingStaleEvent;
+  if (!stale?.streamKey) return batch.text;
+  const coveredSeq = coveredSeqByStream.find(
+    ([streamKey]) => streamKey === stale.streamKey,
+  )?.[1];
+  if (coveredSeq === undefined || coveredSeq < stale.currentSeq) {
+    return batch.text;
+  }
+  return `${batch.text}\n\nStale-send continuation for event ${stale.id}: the pending input is included above. Re-evaluate the rejected draft now. Resend with \`--stale-resolution unaffected\` or \`--stale-resolution revised\`, or discard it with \`silverhand message stale-resolve --resolution obsolete\`.`;
+}
+
 function strategyBoundaryOpen(handle: RuntimeHandle): boolean {
   switch (handle.driver.releaseProfile) {
     case 'next-turn-batch':
@@ -609,6 +625,7 @@ function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
   if (d['subkind'] !== 'message_stale') return null;
   const id = d['stale_event_id'];
   const currentSeq = d['current_seq'];
+  const streamKey = d['stream_key'];
   if (
     typeof id !== 'string'
     || id.length === 0
@@ -618,7 +635,17 @@ function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
   ) {
     return null;
   }
-  return { id, currentSeq };
+  return {
+    id,
+    currentSeq,
+    streamKey:
+      streamKey === MAIN_STREAM_KEY
+      || (typeof streamKey === 'string'
+        && streamKey.startsWith('thread:')
+        && streamKey.length > 'thread:'.length)
+        ? streamKey
+        : null,
+  };
 }
 
 async function safeReadResponseText(res: Response): Promise<string> {
@@ -1995,14 +2022,17 @@ export class Supervisor implements SupervisorContract {
       return;
     }
 
+    const coveredSeqByStream = coveredSeqPairsForBatch(batch);
     const payloadUuid = this.mintInputPayloadUuid(
       handle,
       deliveryIds,
-      coveredSeqPairsForBatch(batch),
+      coveredSeqByStream,
     );
-    const encoded = handle.driver.encodeStdinMessage(batch.text, handle.cliSessionId, {
-      payloadUuid,
-    });
+    const encoded = handle.driver.encodeStdinMessage(
+      textWithStaleContinuation(handle, batch, coveredSeqByStream),
+      handle.cliSessionId,
+      { payloadUuid },
+    );
     if (encoded === null) {
       // Driver claims ready_to_encode but still refused. This is a
       // driver-author bug; fail loud per Cindy `0G5uJBydO_4qt_2r`.

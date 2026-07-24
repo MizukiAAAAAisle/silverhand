@@ -3453,6 +3453,119 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
 });
 
 describe('Supervisor — daemon-owned freshness boundary', () => {
+  it('attaches a stale-send continuation only to normal delivery that covers the same stream, repeats until resolution, then stops', async () => {
+    const encodedTexts: string[] = [];
+    const { driver } = makeProgrammableDriver();
+    const baseEncode = driver.encodeStdinMessage.bind(driver);
+    driver.encodeStdinMessage = (text, sessionId, opts) => {
+      encodedTexts.push(text);
+      return baseEncode(text, sessionId, opts);
+    };
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    let backendCalls = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        backendCalls += 1;
+        if (backendCalls === 1) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: 'stale-main-12',
+                  stream_key: 'main',
+                  seen_up_to_seq: 10,
+                  current_seq: 12,
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response('{}', {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+    const deliver = async (
+      deliveryId: number,
+      text: string,
+      deliveredUpToSeq: number,
+      deliveries?: Array<{
+        delivery_id: number;
+        message_id: string;
+        seq: number;
+        thread_root_id: string | null;
+        delivery_kind: 'turn' | 'observe';
+      }>,
+    ) => {
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [deliveryId],
+        kind: 'message',
+        text,
+        delivered_up_to_seq: deliveredUpToSeq,
+        ...(deliveries ? { deliveries } : {}),
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, deliveryId);
+    };
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      await deliver(10, 'main-10', 10);
+
+      const stale = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'draft',
+      });
+      expect(stale).toMatchObject({ ok: false, status: 409 });
+
+      await deliver(20, 'thread-20', 20, [{
+        delivery_id: 20,
+        message_id: 'thread-message-20',
+        seq: 20,
+        thread_root_id: 'thread-root',
+        delivery_kind: 'observe',
+      }]);
+      expect(encodedTexts.at(-1)).toBe('thread-20');
+
+      await deliver(11, 'main-11', 11);
+      expect(encodedTexts.at(-1)).toBe('main-11');
+
+      await deliver(12, 'main-12', 12);
+      expect(encodedTexts.at(-1)).toContain('stale-main-12');
+      expect(encodedTexts.at(-1)).toContain('--stale-resolution revised');
+
+      await deliver(13, 'main-13', 13);
+      expect(encodedTexts.at(-1)).toContain('stale-main-12');
+
+      const resolved = await supervisor.agentStaleResolve({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        resolution_reason: 'obsolete',
+      });
+      expect(resolved).toEqual({ ok: true, resolved: true });
+
+      await deliver(14, 'main-14', 14);
+      expect(encodedTexts.at(-1)).toBe('main-14');
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('carries the stale event and holds the boundary when the 409 window is empty', async () => {
     const { supervisor, events } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];

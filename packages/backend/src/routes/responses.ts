@@ -312,8 +312,8 @@ export function conversationMessageServiceErrorResponse(
     // authoritative delta. Bodies
     // are released exactly once, through the normal inbox/admission face;
     // the observed boundary advances via admission evidence, not via this
-    // response. The hint tells the agent what to do: wait for the queued
-    // normal input, then retry or resolve.
+    // response. The hint keeps the current turn actionable; a later normal
+    // delivery carries the deterministic continuation.
     return c.json(
       {
         error: {
@@ -328,7 +328,7 @@ export function conversationMessageServiceErrorResponse(
               : 'main',
             seen_up_to_seq: err.seenUpToSeq,
             current_seq: err.currentSeq,
-            hint: 'wait for pending messages to arrive through normal delivery; then retry with --stale-resolution or discard via message stale-resolve',
+            hint: 'send rejected; continue current work and resolve only when normal delivery includes a stale-send continuation',
           },
         },
       },
