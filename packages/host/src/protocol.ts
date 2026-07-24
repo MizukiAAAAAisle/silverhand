@@ -158,6 +158,14 @@ import {
 // a v9 daemon, and the v9 params schema no longer validates v8's enum — fail
 // loud at hello. `OUTBOUND_PROTOCOL_VERSION` bumps alongside (7→8). No shim —
 // soft stop had no product entry point.
+//
+// The v9 epoch ALSO covers two new strict `runtime_parsed_event.parsed` arms,
+// each independently bump-worthy (the parsed union is bilateral strict, so an
+// additive sender arm is a breaking change for an older receiver):
+//   - `input_lifecycle` (#task:1557/#task:1561): per-payload runtime
+//     lifecycle used as generation-boundary evidence.
+//   - `api_response` (#task:1582): normalized provider notice
+//     (waiting/ready/notice + message; never raw payloads).
 
 export const HOST_PROTOCOL_VERSION = 9;
 

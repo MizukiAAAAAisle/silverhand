@@ -116,6 +116,23 @@ export const ParsedEventSchema = z.discriminatedUnion('kind', [
     .strict(),
   z
     .object({
+      /** Normalized provider/API response notice (#task:1582). Emitted
+       *  ONLY for responses the driver recognizes and normalizes (e.g.
+       *  Qoder `model_queue_status` queued/ready) — never raw payloads,
+       *  request ids, or unknown shapes (those stay in diagnostics).
+       *  `status: 'waiting'` puts the run state into the dedicated
+       *  `waiting` status; `'ready'` restores `thinking` (only from a
+       *  waiting-owned hold); `'notice'` is display-only — it records an
+       *  Activity row and never touches the run state. Not
+       *  generation-boundary evidence: it never starts a turn and never
+       *  settles pending admission coverage. */
+      kind: z.literal('api_response'),
+      status: z.enum(['waiting', 'ready', 'notice']),
+      message: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
       kind: z.literal('error'),
       message: z.string(),
       code: z.string().optional(),
@@ -151,6 +168,7 @@ export const PARSED_EVENT_KINDS = [
   'compaction_started',
   'compaction_finished',
   'input_lifecycle',
+  'api_response',
   'error',
   'unknown',
 ] as const satisfies ReadonlyArray<ParsedEvent['kind']>;

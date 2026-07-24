@@ -3,6 +3,7 @@ import {
   Brain,
   ChevronDown,
   ChevronUp,
+  Hourglass,
   Layers,
   Loader2,
 } from 'lucide-react';
@@ -39,6 +40,7 @@ const STATUS_LABEL: Record<string, string> = {
   starting: 'Starting…',
   thinking: 'Thinking…',
   tool_running: 'Thinking…',
+  waiting: 'Waiting…',
 };
 
 const ACTIVITY_SNIPPET_KIND_LABEL: Record<
@@ -47,6 +49,7 @@ const ACTIVITY_SNIPPET_KIND_LABEL: Record<
 > = {
   thinking: 'Thinking',
   text: 'Writing',
+  api_response: 'Notice',
 };
 
 export function activitySnippetKindLabel(
@@ -66,8 +69,9 @@ function statusRank(state: AgentRunState): number {
   if (state.status === 'tool_running') return 0;
   if (state.compacting) return 1;
   if (state.status === 'thinking') return 2;
-  if (state.status === 'starting') return 3;
-  return 4;
+  if (state.status === 'waiting') return 3;
+  if (state.status === 'starting') return 4;
+  return 5;
 }
 
 function pickOrder(a: AgentRunState, b: AgentRunState): number {
@@ -233,7 +237,11 @@ export function ComposerActivityHeader({
       ? activitySnippetKindLabel(subject.activitySnippetKind)
       : null;
   const SnippetKindIcon =
-    subject.activitySnippetKind === 'thinking' ? Brain : null;
+    subject.activitySnippetKind === 'thinking'
+      ? Brain
+      : subject.activitySnippetKind === 'api_response'
+        ? Hourglass
+        : null;
   const snippet =
     subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
   const extra = active.length - 1;
@@ -389,7 +397,11 @@ function ActivityDetailRow({
     ? activitySnippetKindLabel(state.activitySnippetKind)
     : null;
   const SnippetKindIcon =
-    state.activitySnippetKind === 'thinking' ? Brain : null;
+    state.activitySnippetKind === 'thinking'
+      ? Brain
+      : state.activitySnippetKind === 'api_response'
+        ? Hourglass
+        : null;
   const toolEntries = Object.entries(state.toolCallCounts ?? {}).filter(
     ([, count]) => count > 0,
   );

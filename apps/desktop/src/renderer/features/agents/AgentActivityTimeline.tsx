@@ -5,6 +5,8 @@ import {
   Brain,
   CheckCircle2,
   ChevronUp,
+  Hourglass,
+  Info,
   Layers,
   Loader2,
   MessageSquare,
@@ -247,6 +249,11 @@ function visualForKind(kind: ConversationEventKind): KindVisual {
       return { Icon: AlertTriangle, tone: 'error' };
     case 'parsed_event_dropped':
       return { Icon: Ban, tone: 'warning' };
+    case 'api_response':
+      // Default = the waiting/ready queue lifecycle (hourglass). The
+      // generic `notice` class is overridden at EventRow, where the
+      // payload status is in scope — neutral Info, no queue connotation.
+      return { Icon: Hourglass, tone: 'warning' };
     case 'session_init':
       return { Icon: Power, tone: 'muted' };
     case 'compaction_started':
@@ -354,7 +361,14 @@ function EventRow({
   completed?: boolean;
 }): JSX.Element {
   const { kind, payload } = event;
-  const { Icon, tone } = visualForKind(kind);
+  let { Icon, tone } = visualForKind(kind);
+  if (kind === 'api_response' && str(payload, 'status') === 'notice') {
+    // #task:1582 display boundary: waiting/ready are the queue
+    // lifecycle (hourglass); `notice` is the generic normalized
+    // response — neutral Info semantics, not a wait.
+    Icon = Info;
+    tone = 'neutral';
+  }
   const time = dayjs(event.created_at).format('HH:mm:ss');
 
   if (kind === 'tool_call') {
@@ -433,6 +447,17 @@ function EventRow({
   } else if (kind === 'error' || kind === 'stderr') {
     title = (
       <span className="break-words text-error">{str(payload, 'message') ?? 'Error'}</span>
+    );
+  } else if (kind === 'api_response') {
+    const isNotice = str(payload, 'status') === 'notice';
+    title = (
+      <span
+        className={
+          isNotice ? 'break-words text-text-secondary' : 'break-words text-warning'
+        }
+      >
+        {str(payload, 'message') ?? 'Provider response'}
+      </span>
     );
   } else if (kind === 'parsed_event_dropped') {
     const pk = str(payload, 'parsed_kind');

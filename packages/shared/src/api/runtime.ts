@@ -11,6 +11,11 @@ export const AgentRunStatusSchema = z.enum([
   'starting',
   'thinking',
   'tool_running',
+  // Provider/API-level hold (#task:1582): the runtime is queued or
+  // rate-limited upstream — no inference is running. Entered by a
+  // driver-normalized `api_response(status:'waiting')`; a subsequent
+  // `'ready'` (or any real activity) returns to `thinking`.
+  'waiting',
   'idle',
   'failed',
 ]);
@@ -32,6 +37,9 @@ export type AgentRunTerminalReason = z.infer<
 export const AgentActivitySnippetKindSchema = z.enum([
   'thinking',
   'text',
+  // Normalized provider/API notice (#task:1582) — its own display lane,
+  // never blended into the thinking/text streaming semantics.
+  'api_response',
 ]);
 export type AgentActivitySnippetKind = z.infer<
   typeof AgentActivitySnippetKindSchema

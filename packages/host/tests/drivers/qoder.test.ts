@@ -174,7 +174,7 @@ describe('QoderDriver.parseLine', () => {
     ).toEqual([]);
   });
 
-  it('projects model queue updates as visible runtime activity', () => {
+  it('projects model queue updates as normalized api_response events (#task:1582)', () => {
     const driver = new QoderDriver();
 
     expect(
@@ -190,8 +190,9 @@ describe('QoderDriver.parseLine', () => {
       ),
     ).toEqual([
       {
-        kind: 'thinking',
-        text: 'Qoder model request queued (queue size 573, estimated wait 12m 27s)',
+        kind: 'api_response',
+        status: 'waiting',
+        message: 'Qoder model request queued (queue size 573, estimated wait 12m 27s)',
       },
     ]);
 
@@ -204,7 +205,11 @@ describe('QoderDriver.parseLine', () => {
         }),
       ),
     ).toEqual([
-      { kind: 'thinking', text: 'Qoder model is available; resuming request' },
+      {
+        kind: 'api_response',
+        status: 'ready',
+        message: 'Qoder model is available; resuming request',
+      },
     ]);
   });
 
@@ -221,7 +226,11 @@ describe('QoderDriver.parseLine', () => {
         }),
       ),
     ).toEqual([
-      { kind: 'thinking', text: 'Qoder model request queued' },
+      {
+        kind: 'api_response',
+        status: 'waiting',
+        message: 'Qoder model request queued',
+      },
     ]);
   });
 

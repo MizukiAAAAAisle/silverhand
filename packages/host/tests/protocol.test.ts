@@ -846,6 +846,9 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
       { kind: 'turn_end', sessionId: 'sess-1' },
       { kind: 'compaction_started' },
       { kind: 'compaction_finished' },
+      { kind: 'api_response', status: 'waiting', message: 'model request queued' },
+      { kind: 'api_response', status: 'ready', message: 'model available' },
+      { kind: 'api_response', status: 'notice', message: 'provider capacity degraded' },
       { kind: 'error', message: 'boom', code: 'E_THING', fatal: true },
       { kind: 'unknown', raw: 'mystery line' },
     ];
@@ -954,6 +957,43 @@ describe('protocol — runtime_parsed_event (Cindy `OQCA05pivtB8nSTC` + `C2BZGDb
       ts: 1,
     });
     expect(r.success).toBe(false);
+  });
+
+  it('api_response arm is strict and closed: no raw payload passthrough, no unknown status', () => {
+    // #task:1582 contract: the arm carries ONLY the normalized
+    // status+message pair — a driver must never smuggle the raw provider
+    // payload / request ids onto the wire through this kind.
+    const rawSmuggle = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: {
+        kind: 'api_response',
+        status: 'waiting',
+        message: 'queued',
+        raw: { request_id: 'must-not-surface' },
+      },
+      ts: 1,
+    });
+    expect(rawSmuggle.success).toBe(false);
+
+    const unknownStatus = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'api_response', status: 'rate_limited', message: 'x' },
+      ts: 1,
+    });
+    expect(unknownStatus.success).toBe(false);
+
+    const emptyMessage = EventFrameSchema.safeParse({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      parsed: { kind: 'api_response', status: 'waiting', message: '' },
+      ts: 1,
+    });
+    expect(emptyMessage.success).toBe(false);
   });
 });
 

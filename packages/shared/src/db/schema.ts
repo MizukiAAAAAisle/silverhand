@@ -131,6 +131,7 @@ export const ConversationEventKindSchema = z.enum([
   'compaction_started',
   'compaction_finished',
   'turn_end',
+  'api_response',
   'error',
   'unknown',
   'parsed_event_dropped',

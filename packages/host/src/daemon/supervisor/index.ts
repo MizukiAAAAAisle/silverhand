@@ -3277,6 +3277,48 @@ export class Supervisor implements SupervisorContract {
       case 'text':
         this.recordActivitySnippet(handle, 'text', parsed.text);
         break;
+      case 'api_response': {
+        // Normalized provider notice (#task:1582): a queued/rate-limited
+        // provider holds the run in the dedicated `waiting` status (the
+        // runtime is NOT inferring — calling it thinking was the #1553
+        // mislabel); `ready` returns it to `thinking`; `notice` is a
+        // display-only Activity row. The message rides the run-state
+        // snippet as its own `api_response` snippet kind — a discrete
+        // notice, never blended into the thinking/text coalescing
+        // buffer. NOT generation-boundary evidence: `parsedStartsTurn`
+        // excludes this kind, so it never settles pending admission
+        // coverage.
+        //
+        // Display-state only, and only within its own lane: `waiting`
+        // may not displace a more specific state (running tool /
+        // compaction — same guard as tool_output's restore), `ready`
+        // restores ONLY a hold that `waiting` itself created, and
+        // `notice` never touches the run state at all. A notice that
+        // cannot own the status leaves the run state untouched — it is
+        // still persisted as a discrete activity row backend-side.
+        const currentStatus = handle.runState?.status;
+        if (parsed.status === 'waiting') {
+          if (
+            handle.busy.outstandingToolUses === 0 &&
+            !handle.busy.compacting
+          ) {
+            this.transitionRunState(handle, {
+              status: 'waiting',
+              detail: null,
+              activitySnippet: parsed.message,
+              activitySnippetKind: 'api_response',
+            });
+          }
+        } else if (parsed.status === 'ready' && currentStatus === 'waiting') {
+          this.transitionRunState(handle, {
+            status: 'thinking',
+            detail: null,
+            activitySnippet: parsed.message,
+            activitySnippetKind: 'api_response',
+          });
+        }
+        break;
+      }
       case 'tool_call':
         handle.busy.outstandingToolUses += 1;
         const toolCallCounts =

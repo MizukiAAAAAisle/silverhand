@@ -51,8 +51,9 @@ function queueStatusEvent(line: string): ParsedEvent | null {
 
   if (frame.status === 'ready') {
     return {
-      kind: 'thinking',
-      text: 'Qoder model is available; resuming request',
+      kind: 'api_response',
+      status: 'ready',
+      message: 'Qoder model is available; resuming request',
     };
   }
   if (frame.status !== 'queued') return null;
@@ -79,7 +80,11 @@ function queueStatusEvent(line: string): ParsedEvent | null {
   }
 
   const suffix = details.length > 0 ? ` (${details.join(', ')})` : '';
-  return { kind: 'thinking', text: `Qoder model request queued${suffix}` };
+  return {
+    kind: 'api_response',
+    status: 'waiting',
+    message: `Qoder model request queued${suffix}`,
+  };
 }
 
 /**

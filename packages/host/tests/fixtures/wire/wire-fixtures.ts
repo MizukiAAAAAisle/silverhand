@@ -2522,6 +2522,23 @@ const EVENTS: WireFixture[] = [
     kind: { kind: 'event' },
   },
   {
+    name: 'event/runtime_parsed_event-api_response',
+    description:
+      'ParsedEvent fanout — normalized provider/API response notice (#task:1582): driver-recognized status + message only, never raw payloads.',
+    frame: enc({
+      event: 'runtime_parsed_event',
+      conversation_id: C,
+      agent_id: A,
+      parsed: {
+        kind: 'api_response',
+        status: 'waiting',
+        message: 'Qoder model request queued (queue size 3)',
+      },
+      ts: TS,
+    }),
+    kind: { kind: 'event' },
+  },
+  {
     name: 'event/runtime_parsed_event-error',
     description: 'ParsedEvent fanout — driver-side error with optional code/fatal.',
     frame: enc({

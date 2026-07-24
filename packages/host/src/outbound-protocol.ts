@@ -203,6 +203,12 @@ const FrameIdSchema = z.string().min(1);
 // `soft_directive` deleted, `mode` narrows to literal `'hard'`, soft result
 // variant removed). Strict schemas break in both directions — fail loud at
 // attach. Bumps alongside HOST_PROTOCOL_VERSION (8→9).
+//
+// The v8 epoch ALSO covers the new strict `runtime_parsed_event.parsed`
+// arms `input_lifecycle` (#task:1557/#task:1561) and `api_response`
+// (#task:1582) — bilateral strict union, so each additive sender arm is
+// independently a breaking change for an older receiver. See the note at
+// HOST_PROTOCOL_VERSION.
 export const OUTBOUND_PROTOCOL_VERSION = 8;
 
 // ── server → daemon command catalogue ──────────────────────────────

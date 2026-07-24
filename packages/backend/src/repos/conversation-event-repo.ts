@@ -307,6 +307,8 @@ function payloadForParsedEvent(event: ParsedEvent): ConversationActivityPayload 
       return null;
     case 'input_lifecycle':
       return { command_uuid: event.commandUuid, state: event.state };
+    case 'api_response':
+      return { status: event.status, message: event.message };
     case 'error':
       return {
         message: event.message,

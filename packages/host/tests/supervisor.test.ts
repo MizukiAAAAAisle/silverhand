@@ -3514,6 +3514,107 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
     }
   });
 
+  it('api_response falsifier (#task:1582): waiting/ready own only their display lane, and the notice is NOT generation-boundary evidence (pending coverage stays parked)', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver();
+    const logs: Array<Record<string, unknown>> = [];
+    const logger = {
+      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      error: () => {},
+    } as unknown as DaemonLogger;
+    const { supervisor, events } = makeSupervisorWithDriver(driver, { logger });
+    const advancedTo = (seq: number) =>
+      logs.some(
+        l =>
+          l['action'] === 'freshness_observed_seq_advanced' &&
+          l['observed_seq'] === seq,
+      );
+    const lastStatus = () => {
+      const frames = events.filter(e => e.event === 'runtime_state');
+      const last = frames.at(-1);
+      return last && last.event === 'runtime_state' ? last.state : null;
+    };
+    let tick = 100;
+    const deliverTick = async (parsedEvents: ParsedEvent[]) => {
+      setNextParse(parsedEvents);
+      tick += 1;
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [tick], kind: 'message',
+        text: `tick-${tick}`, spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, tick);
+    };
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      // M1 (seq 10) admitted → observed 10, turn active.
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [10], kind: 'message',
+        text: 'M1', delivered_up_to_seq: 10, spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 10);
+
+      // Provider queue notice → dedicated `waiting` status with the
+      // normalized message on the snippet (was mislabeled `thinking`).
+      await deliverTick([
+        { kind: 'api_response', status: 'waiting', message: 'Qoder model request queued (queue size 3)' },
+      ]);
+      await waitFor(() => lastStatus()?.status === 'waiting');
+      expect(lastStatus()?.activitySnippet).toContain('queue size 3');
+
+      // `ready` restores ONLY the hold waiting created → back to thinking.
+      await deliverTick([
+        { kind: 'api_response', status: 'ready', message: 'Qoder model is available; resuming request' },
+      ]);
+      await waitFor(() => lastStatus()?.status === 'thinking');
+
+      // `notice` is display-only: it never touches the run state.
+      await deliverTick([
+        { kind: 'api_response', status: 'notice', message: 'provider capacity degraded' },
+      ]);
+      expect(lastStatus()?.status).toBe('thinking');
+
+      // Lane guard: a running tool owns the display. waiting must NOT
+      // displace tool_running (same guard as tool_output's restore),
+      // and ready must NOT touch a status waiting did not create.
+      await deliverTick([{ kind: 'tool_call', name: 'Bash', input: {} }]);
+      await waitFor(() => lastStatus()?.status === 'tool_running');
+      await deliverTick([
+        { kind: 'api_response', status: 'waiting', message: 'queued mid-tool' },
+      ]);
+      expect(lastStatus()?.status).toBe('tool_running');
+      expect(lastStatus()?.detail).toBe('Bash');
+      await deliverTick([
+        { kind: 'api_response', status: 'ready', message: 'ready mid-tool' },
+      ]);
+      expect(lastStatus()?.status).toBe('tool_running');
+      await deliverTick([{ kind: 'tool_output', name: 'Bash' }]);
+      await waitFor(() => lastStatus()?.status === 'thinking');
+
+      // Evidence falsifier: after turn_end, seq 12 is delivered mid-gap
+      // and parks in pendingAdmission. A provider notice must NOT settle
+      // it — api_response is a delivery/transport-side observation, not
+      // proof a new model generation started.
+      setNextParse([{ kind: 'turn_end' }]);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [12], kind: 'message',
+        text: 'gap', delivered_up_to_seq: 12, spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 12);
+      await deliverTick([
+        { kind: 'api_response', status: 'waiting', message: 'queued again' },
+      ]);
+      expect(advancedTo(12)).toBe(false);
+
+      // A REAL generation start (thinking) settles the pending coverage.
+      await deliverTick([{ kind: 'thinking', text: 'new action' }]);
+      await waitFor(() => advancedTo(12));
+    } finally {
+      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .catch(() => undefined);
+    }
+  });
+
   it('countgame round-2 falsifier (#task:1561): old action with locked snapshot gets a REAL signal-only 409; only after the userMessage-echo lifecycle does the informed resend pass CAS', async () => {
     const captured: Array<string | undefined> = [];
     const { driver, setNextParse } = makeProgrammableDriver();

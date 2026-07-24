@@ -231,6 +231,8 @@ function parsed(kind: ParsedEvent['kind']): ParsedEvent {
       return { kind, message: 'oops' };
     case 'input_lifecycle':
       return { kind, commandUuid: 'uuid-1', state: 'started' };
+    case 'api_response':
+      return { kind, status: 'waiting', message: 'model request queued' };
     case 'unknown':
       return { kind, raw: '' };
   }
