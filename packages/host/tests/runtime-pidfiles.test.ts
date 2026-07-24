@@ -156,6 +156,7 @@ describe('runtime pidfile orphan reconcile', () => {
 
     const daemon = await runDaemon({
       socketPath: join(f.dir, 'daemon.sock'),
+      workspaceDataRootDir: join(f.dir, 'workspace-data'),
       pidFilePath: join(f.dir, 'daemon.pid'),
       logDir: join(f.dir, 'logs'),
       runtimePidRootDir: f.rootDir,

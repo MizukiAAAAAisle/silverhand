@@ -23,7 +23,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
@@ -60,6 +60,7 @@ async function setupFixture(opts?: { failStartupDelivery?: boolean }): Promise<E
     socketPath,
     pidFilePath,
     logDir,
+    workspaceDataRootDir: join(dirname(socketPath), 'workspace-data'),
     runtimePidRootDir,
     installSignals: false,
     writeStdoutHandshake: false,

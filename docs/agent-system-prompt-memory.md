@@ -181,22 +181,26 @@ to a different conversation; all writes happen in the agent's current
 process, which is fine because L1 is a real file the agent can edit
 in-place.
 
-## Host-equality is a membership precondition, not a runtime filter
+## Local realization is per-computer; the index degrades to "unavailable"
 
-Each agent has a `host_id` (where its runtime executes). Each workspace
-has a `workspace_host_id` (where its files live). Same host = same
-trust domain; an agent on the same host can read every file under that
-host's filesystem.
+Each agent has a `host_id` (the computer its runtime executes on). Each
+workspace has a home computer (`workspace_host_id`), but a workspace is a
+LOGICAL collaboration domain: on every computer that runs it, the daemon
+registry binds it to a computer-local root (the home computer keeps the
+user-chosen directory; a guest computer gets a daemon-managed root, and the
+home path never crosses computers).
 
-We enforce `agent.host_id == workspace.workspace_host_id` at the
-moment an agent is added to a workspace (the membership precondition).
-Once that check passes, no runtime path filter is needed: the workspace
-memory index is built from `listForAgent`, and every entry in it is
-guaranteed to live on the same host the agent is currently running on.
+Before a spawn, the backend ensures the ACTIVE workspace's local root and
+the agent's L2 seed exist on the agent's computer (blocking, idempotent —
+`workspace_provision` without a requested path on a guest, then
+`agent_l2_seed`). The workspace memory index is resolve-or-degrade: an
+entry the daemon cannot resolve locally renders as _unavailable on this
+computer_ — never a fabricated path — and does not block the spawn. It
+becomes available when that workspace next runs on this computer.
 
-When remote sandbox runtimes ship, the same precondition picks up the
-new constraint — `addAgentToWorkspace` will reject mixed-host pairs —
-without changing the prompt assembly.
+(Membership host-equality is still enforced at add time while the
+cross-computer entry gate is closed; removing that gate is a separate,
+later slice and does not change this prompt-assembly contract.)
 
 ## Migration
 

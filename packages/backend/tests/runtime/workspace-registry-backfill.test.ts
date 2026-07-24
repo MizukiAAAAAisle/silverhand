@@ -33,7 +33,11 @@ import {
   HostWsCommandTransportError,
 } from '../../src/ws/host-ws-server.js';
 import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
-import { WorkspaceRegistryBackfiller, summarizeMigrationAudit } from '../../src/runtime/workspace-registry-backfill.js';
+import {
+  AgentL2SeedEnsurer,
+  WorkspaceRegistryBackfiller,
+  summarizeMigrationAudit,
+} from '../../src/runtime/workspace-registry-backfill.js';
 
 type ProvisionCall = { workspace_id: string; requested_path?: string };
 
@@ -350,6 +354,38 @@ describe('WorkspaceRegistryBackfiller', () => {
     expect(calls.map(c => c.workspace_id)).toEqual(['ws_visible']);
   });
 
+  it('cross-computer guest row (null path): dispatches with NO requested_path and never writes the home-path cache', async () => {
+    // Slice 1 (#task:1596): a guest ensure lets the daemon self-pick its
+    // managed root. Two invariants: the home computer's path must not cross
+    // (no requested_path), and the guest daemon's bound_workspace_path (a
+    // DIFFERENT computer's root) must never overwrite the server's legacy
+    // home-path column.
+    const { repo, cacheWrites } = makeRepo();
+    const { adapter, calls } = makeAdapter({
+      connectionId: 'conn-1',
+      behavior: {
+        ws_guest: { ok: true, boundPath: '/guest/managed/ws_guest', provisioned: true },
+      },
+    });
+    const bf = new WorkspaceRegistryBackfiller({
+      workspaces: repo,
+      outboundFrameAdapter: () => adapter,
+    });
+    const res = await bf.ensure('guest-host', [
+      { id: 'ws_guest', workspace_path: null },
+    ]);
+    expect(res.status).toBe('ok');
+    expect(res.provisioned).toEqual(['ws_guest']);
+    expect(calls).toEqual([{ workspace_id: 'ws_guest', requested_path: undefined }]);
+    expect(cacheWrites).toEqual([]);
+    // Memoized like any other bind.
+    const again = await bf.ensure('guest-host', [
+      { id: 'ws_guest', workspace_path: null },
+    ]);
+    expect(again.alreadyBound).toEqual(['ws_guest']);
+    expect(calls).toHaveLength(1);
+  });
+
   it('transport timeout mid-run is recorded as a retriable per-id failure', async () => {
     const { repo } = makeRepo();
     const rows = [{ id: 'ws_a', workspace_path: '/Users/x/a' }];
@@ -369,6 +405,118 @@ describe('WorkspaceRegistryBackfiller', () => {
     expect(res.status).toBe('failed');
     expect(res.failed[0]!.code).toBe('daemon_timeout');
     expect(res.failed[0]!.retriable).toBe(true);
+  });
+});
+
+describe('AgentL2SeedEnsurer (#task:1596 pre-spawn L2 seed on the dispatch host)', () => {
+  type SeedCall = { agent_id: string; workspace_id: string };
+
+  function makeSeedAdapter(opts: {
+    connectionId: string | null;
+    error?: Error;
+  }): { adapter: OutboundFrameAdapter; calls: SeedCall[] } {
+    const calls: SeedCall[] = [];
+    const adapter: OutboundFrameAdapter = {
+      activeConnectionCount: () => (opts.connectionId ? 1 : 0),
+      connectedHostIds: () => (opts.connectionId ? ['local'] : []),
+      connectionIdForHost: () => opts.connectionId,
+      getAttachment: () => null,
+      async sendCommand<K extends OutboundServerCommandKind>(
+        _hostId: string,
+        kind: K,
+        params: OutboundServerCommandParams<K>,
+      ): Promise<OutboundServerCommandResult<K>> {
+        expect(kind).toBe('agent_l2_seed');
+        const p = params as { agent_id: string; workspace_id: string };
+        calls.push({ agent_id: p.agent_id, workspace_id: p.workspace_id });
+        if (opts.error) throw opts.error;
+        return {
+          ok: true,
+          seeded: true,
+          l2_present: true,
+        } as OutboundServerCommandResult<K>;
+      },
+      async close() {},
+    };
+    return { adapter, calls };
+  }
+
+  it('seeds once and memoizes per (host, workspace, agent)', async () => {
+    const { adapter, calls } = makeSeedAdapter({ connectionId: 'conn-1' });
+    const ensurer = new AgentL2SeedEnsurer({ outboundFrameAdapter: () => adapter });
+
+    expect(await ensurer.ensure('h1', 'ws1', 'a1')).toEqual({ ok: true });
+    expect(await ensurer.ensure('h1', 'ws1', 'a1')).toEqual({ ok: true });
+    expect(calls).toHaveLength(1);
+    // A different agent / workspace / host is a separate key.
+    await ensurer.ensure('h1', 'ws1', 'a2');
+    await ensurer.ensure('h1', 'ws2', 'a1');
+    await ensurer.ensure('h2', 'ws1', 'a1');
+    expect(calls).toHaveLength(4);
+  });
+
+  it('daemon offline → typed failure, NOT memoized; next ensure retries', async () => {
+    let adapterRef: OutboundFrameAdapter | null = null;
+    const ensurer = new AgentL2SeedEnsurer({
+      outboundFrameAdapter: () => adapterRef,
+    });
+    const first = await ensurer.ensure('h1', 'ws1', 'a1');
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.failure.code).toBe('host_attach_pending');
+      expect(first.failure.retriable).toBe(true);
+    }
+    const { adapter, calls } = makeSeedAdapter({ connectionId: 'conn-1' });
+    adapterRef = adapter;
+    expect(await ensurer.ensure('h1', 'ws1', 'a1')).toEqual({ ok: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('typed daemon failure surfaces and is retried on the next ensure', async () => {
+    const failing = makeSeedAdapter({
+      connectionId: 'conn-1',
+      error: new HostWsCommandResponseError(
+        'workspace_not_provisioned' as never,
+        'ws1 not bound',
+        { hostId: 'h1', commandKind: 'agent_l2_seed', requestId: 'r' },
+      ),
+    });
+    let adapter = failing.adapter;
+    const ensurer = new AgentL2SeedEnsurer({
+      outboundFrameAdapter: () => adapter,
+    });
+    const res = await ensurer.ensure('h1', 'ws1', 'a1');
+    expect(res.ok).toBe(false);
+    const healthy = makeSeedAdapter({ connectionId: 'conn-1' });
+    adapter = healthy.adapter;
+    expect(await ensurer.ensure('h1', 'ws1', 'a1')).toEqual({ ok: true });
+    expect(healthy.calls).toHaveLength(1);
+  });
+
+  it('concurrent ensure() for the same key collapse onto one dispatch', async () => {
+    let resolveSend: (() => void) | null = null;
+    let sendCount = 0;
+    const adapter: OutboundFrameAdapter = {
+      activeConnectionCount: () => 1,
+      connectedHostIds: () => ['local'],
+      connectionIdForHost: () => 'conn-1',
+      getAttachment: () => null,
+      sendCommand: ((..._args: unknown[]) => {
+        sendCount += 1;
+        return new Promise<unknown>(resolve => {
+          resolveSend = () =>
+            resolve({ ok: true, seeded: true, l2_present: true });
+        });
+      }) as OutboundFrameAdapter['sendCommand'],
+      async close() {},
+    };
+    const ensurer = new AgentL2SeedEnsurer({ outboundFrameAdapter: () => adapter });
+    const p1 = ensurer.ensure('h1', 'ws1', 'a1');
+    const p2 = ensurer.ensure('h1', 'ws1', 'a1');
+    await new Promise(r => setTimeout(r, 0));
+    expect(sendCount).toBe(1);
+    resolveSend!();
+    expect(await Promise.all([p1, p2])).toEqual([{ ok: true }, { ok: true }]);
   });
 });
 

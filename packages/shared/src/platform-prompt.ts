@@ -76,11 +76,13 @@ export interface WorkspaceMemoryIndexEntry {
   /** Workspace display name; the current workspace's entry is suffixed
    *  with " (current)". */
   label: string;
-  /** Absolute path to that workspace's MEMORY.md for this agent. Files
-   *  under this path are readable when the agent is on the same host
-   *  as the workspace (host equality is enforced as a membership
-   *  precondition, not at runtime). */
-  memoryPath: string;
+  /** Absolute path to that workspace's MEMORY.md for this agent on THIS
+   *  computer, or `null` when the workspace has no local realization here
+   *  yet (cross-computer membership whose local root has not been
+   *  provisioned on this computer). A `null` entry renders "unavailable on
+   *  this computer" — never a fabricated path — and becomes available when
+   *  that workspace next runs on this computer. */
+  memoryPath: string | null;
 }
 
 export type MemoryNoteCategory = 'user' | 'feedback' | 'project';
@@ -709,11 +711,20 @@ function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): strin
     'auto-loaded above as **Active Workspace Memory**; the other entries ' +
     'are reference paths — open one with your file tools only when you ' +
     'have a concrete reason to consult that workspace (the user asked, ' +
-    'a hand-off references it, etc.). Do not bulk-read them.';
+    'a hand-off references it, etc.). Do not bulk-read them. An entry ' +
+    'marked "unavailable on this computer" has no local files here — do ' +
+    'not guess a path for it; it becomes available when that workspace ' +
+    'next runs on this computer.';
   if (entries.length === 0) {
     return `${header}\n\n_No member workspaces._`;
   }
-  const body = entries.map(e => `- ${e.label} — \`${e.memoryPath}\``).join('\n');
+  const body = entries
+    .map(e =>
+      e.memoryPath === null
+        ? `- ${e.label} — _unavailable on this computer_`
+        : `- ${e.label} — \`${e.memoryPath}\``,
+    )
+    .join('\n');
   return `${header}\n\n${body}`;
 }
 

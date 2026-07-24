@@ -208,6 +208,9 @@ export interface SpawnDaemonOptions {
    *  SILVERHAND_DIR-scoped path so isolated apps do not materialize
    *  agents under the global user profile. */
   agentHomeRootDir?: string | null;
+  /** #task:1596 — explicit durable workspace-data root forwarded to the
+   *  daemon child (`--workspace-data-root-dir`). */
+  workspaceDataRootDir?: string | null;
   /** Daemon-local runtime proxy config file. */
   proxyConfigPath?: string | null;
   /** Legacy app-managed proxy config file to migrate into the per-computer profile. */
@@ -384,6 +387,9 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
         : []),
       ...(opts.runtimePidRootDir
         ? ['--runtime-pid-root-dir', opts.runtimePidRootDir]
+        : []),
+      ...(opts.workspaceDataRootDir
+        ? ['--workspace-data-root-dir', opts.workspaceDataRootDir]
         : []),
       ...(opts.agentHomeRootDir
         ? ['--agent-home-root-dir', opts.agentHomeRootDir]

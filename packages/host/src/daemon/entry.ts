@@ -70,6 +70,7 @@ interface ParsedArgv {
   localOutboundSocketPath: string | null;
   runtimePidRootDir: string | null;
   agentHomeRootDir: string | null;
+  workspaceDataRootDir: string | null;
   proxyConfigPath: string | null;
   legacyProxyConfigPath: string | null;
   controlPlaneServerUrlPath: string | null;
@@ -84,6 +85,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let localOutboundSocketPath: string | null = null;
   let runtimePidRootDir: string | null = null;
   let agentHomeRootDir: string | null = null;
+  let workspaceDataRootDir: string | null = null;
   let proxyConfigPath: string | null = null;
   let legacyProxyConfigPath: string | null = null;
   let controlPlaneServerUrlPath: string | null = null;
@@ -111,6 +113,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
         break;
       case '--agent-home-root-dir':
         agentHomeRootDir = argv[++i] ?? null;
+        break;
+      case '--workspace-data-root-dir':
+        workspaceDataRootDir = argv[++i] ?? null;
         break;
       case '--proxy-config-path':
         proxyConfigPath = argv[++i] ?? null;
@@ -146,6 +151,9 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (agentHomeRootDir !== null && !agentHomeRootDir.startsWith('/')) {
     return { error: '--agent-home-root-dir must be absolute' };
   }
+  if (workspaceDataRootDir !== null && !workspaceDataRootDir.startsWith('/')) {
+    return { error: '--workspace-data-root-dir must be absolute' };
+  }
   if (proxyConfigPath !== null && !proxyConfigPath.startsWith('/')) {
     return { error: '--proxy-config-path must be absolute' };
   }
@@ -169,6 +177,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     localOutboundSocketPath,
     runtimePidRootDir,
     agentHomeRootDir,
+    workspaceDataRootDir,
     proxyConfigPath,
     legacyProxyConfigPath,
     controlPlaneServerUrlPath,
@@ -201,6 +210,7 @@ async function main(): Promise<void> {
       localOutboundSocketPath: parsed.localOutboundSocketPath,
       runtimePidRootDir: parsed.runtimePidRootDir ?? undefined,
       agentHomeRootDir: parsed.agentHomeRootDir ?? undefined,
+      workspaceDataRootDir: parsed.workspaceDataRootDir ?? undefined,
       proxyConfigPath: parsed.proxyConfigPath ?? undefined,
       legacyProxyConfigPath: parsed.legacyProxyConfigPath ?? undefined,
       controlPlaneServerUrlPath:

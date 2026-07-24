@@ -1,6 +1,7 @@
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
 import {
+  dispatchAgentL2Seed,
   dispatchWorkspaceProvision,
   resolveOutboundForHost,
   type DataPlaneFailureCode,
@@ -43,8 +44,17 @@ import {
 export interface WorkspaceRegistryBackfillRow {
   /** The registry key (workspace id). */
   id: string;
-  /** Legacy cached path, forwarded verbatim as `requested_path`. */
-  workspace_path: string;
+  /**
+   * Path to forward as `requested_path`:
+   * - a string — the legacy cached home path, forwarded verbatim (same-host
+   *   re-bind / migration);
+   * - `null` — cross-computer guest ensure: the daemon self-picks its
+   *   deterministic managed root. A guest bind must NEVER receive the home
+   *   computer's path, and its `bound_workspace_path` ack must NEVER be
+   *   written back into the server's legacy `workspace_path` column (that
+   *   column is the home computer's path, not a per-computer value).
+   */
+  workspace_path: string | null;
 }
 
 export interface WorkspaceRegistryBackfillFailure {
@@ -219,7 +229,9 @@ export class WorkspaceRegistryBackfiller {
       {
         workspace_id: row.id,
         kind: 'regular',
-        requested_path: row.workspace_path,
+        ...(row.workspace_path === null
+          ? {}
+          : { requested_path: row.workspace_path }),
       },
     );
     if (provision.kind === 'failed') {
@@ -235,14 +247,112 @@ export class WorkspaceRegistryBackfiller {
     }
     // Refresh the legacy cache from the daemon's authoritative ack. For a
     // managed-default row this rewrites the same value (no-op); for a
-    // re-validated requested path it pins the resolved form.
-    this.deps.workspaces.updateWorkspacePathCache(
-      row.id,
-      provision.result.bound_workspace_path,
-    );
+    // re-validated requested path it pins the resolved form. A guest bind
+    // (null requested path) is a DIFFERENT computer's root — never write it
+    // into the home-path column.
+    if (row.workspace_path !== null) {
+      this.deps.workspaces.updateWorkspacePathCache(
+        row.id,
+        provision.result.bound_workspace_path,
+      );
+    }
     this.settled.add(this.key(hostId, row.id));
     return provision.result.provisioned
       ? { kind: 'provisioned' }
       : { kind: 'alreadyBound' };
+  }
+}
+
+export interface AgentL2SeedEnsureFailure {
+  code: DataPlaneFailureCode;
+  message: string;
+  retriable: boolean;
+}
+
+export type AgentL2SeedEnsureResult =
+  | { ok: true }
+  | { ok: false; failure: AgentL2SeedEnsureFailure };
+
+/**
+ * Cross-computer slice 1 (#task:1596) — pre-spawn L2 seed on the DISPATCH
+ * host. The membership-time seed (`seedMemberAgentL2`) runs on the workspace's
+ * home computer; when an agent lives on a different computer, its L2 for this
+ * workspace must exist under that computer's local root before the first
+ * spawn. This ensurer dispatches the idempotent `agent_l2_seed` intent to the
+ * agent's daemon (which resolves the workspace via ITS registry — so the
+ * workspace must be provisioned there first; callers order provision → seed).
+ *
+ * Same discipline as {@link WorkspaceRegistryBackfiller}: per-(host, workspace,
+ * agent) success memo for this backend lifetime (the daemon-side seed is
+ * `writeIfMissing`-idempotent, so a repeat after backend restart is safe),
+ * in-flight collapse for concurrent spawns, and failures are NOT memoized so
+ * the next spawn retries.
+ */
+export class AgentL2SeedEnsurer {
+  private readonly inFlight = new Map<string, Promise<AgentL2SeedEnsureResult>>();
+  private readonly settled = new Set<string>();
+
+  constructor(
+    private readonly deps: { outboundFrameAdapter: () => OutboundFrameAdapter | null },
+  ) {}
+
+  private key(hostId: string, workspaceId: string, agentId: string): string {
+    return JSON.stringify([hostId, workspaceId, agentId]);
+  }
+
+  async ensure(
+    hostId: string,
+    workspaceId: string,
+    agentId: string,
+  ): Promise<AgentL2SeedEnsureResult> {
+    const key = this.key(hostId, workspaceId, agentId);
+    if (this.settled.has(key)) return { ok: true };
+    const running = this.inFlight.get(key);
+    if (running) return running;
+    const run = this.seedOne(hostId, workspaceId, agentId, key).finally(() => {
+      this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, run);
+    return run;
+  }
+
+  private async seedOne(
+    hostId: string,
+    workspaceId: string,
+    agentId: string,
+    key: string,
+  ): Promise<AgentL2SeedEnsureResult> {
+    const outbound = resolveOutboundForHost(
+      this.deps.outboundFrameAdapter(),
+      hostId,
+    );
+    if (outbound.kind === 'failed') {
+      return {
+        ok: false,
+        failure: {
+          code: outbound.code,
+          message: outbound.message,
+          retriable: outbound.retriable,
+        },
+      };
+    }
+    const seed = await dispatchAgentL2Seed(
+      outbound.adapter,
+      hostId,
+      outbound.connectionId,
+      { agent_id: agentId, workspace_id: workspaceId, template_choice: 'default' },
+    );
+    if (seed.kind === 'failed') {
+      return {
+        ok: false,
+        failure: {
+          code: seed.code,
+          message: seed.message,
+          retriable: seed.retriable,
+        },
+      };
+    }
+    this.settled.add(key);
+    return { ok: true };
   }
 }

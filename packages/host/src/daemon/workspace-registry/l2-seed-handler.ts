@@ -68,7 +68,9 @@ export async function seedAgentL2(
           `workspace ${params.workspace_id} is not provisioned; cannot seed L2`,
         );
       }
-      if (err.code === 'registry_foreign' || err.code === 'registry_corrupt') {
+      if (err.code === 'registry_foreign' ||
+        err.code === 'registry_corrupt' ||
+        err.code === 'migration_blocked') {
         throw new AgentL2SeedError('registry_unavailable', err.message);
       }
     }

@@ -65,7 +65,7 @@ import { NotificationRepo } from './repos/notification-repo.js';
 import { ScheduleRepo } from './repos/schedule-repo.js';
 import { ThreadFollowerRepo } from './repos/thread-follower-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
-import { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
+import { AgentL2SeedEnsurer, WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { AgentService } from './services/agent-service.js';
 import { ChannelService } from './services/channel-service.js';
@@ -468,6 +468,13 @@ export async function startBackend(
     outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
   });
 
+  // Cross-computer slice 1 (#task:1596) — pre-spawn L2 seed ensurer for the
+  // runtime start/deliver filesystem chain (idempotent daemon agent_l2_seed,
+  // memoized per (host, workspace, agent), failures retried).
+  ctx.agentL2SeedEnsurer = new AgentL2SeedEnsurer({
+    outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
+  });
+
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
@@ -720,6 +727,7 @@ export async function startBackend(
         agentTokens: ctx.agentTokens,
         logDir: ctx.logDir,
         workspaceRegistryBackfiller: ctx.workspaceRegistryBackfiller,
+        agentL2SeedEnsurer: ctx.agentL2SeedEnsurer,
         // #task:1588 slice 2 — semantic liveness invalidation + eager
         // seed wiring. The narrow publisher port keeps the fanout off
         // the full ScopeEventBus surface.

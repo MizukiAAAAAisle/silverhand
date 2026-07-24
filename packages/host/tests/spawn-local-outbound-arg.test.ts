@@ -58,6 +58,7 @@ async function captureSpawnArgs(
     localOutboundSocketPath?: string | null;
     runtimePidRootDir?: string | null;
     agentHomeRootDir?: string | null;
+    workspaceDataRootDir?: string | null;
     controlPlaneServerUrlPath?: string | null;
   } = {},
 ): Promise<readonly string[]> {
@@ -88,6 +89,9 @@ async function captureSpawnArgs(
       : {}),
     ...(opts.agentHomeRootDir !== undefined
       ? { agentHomeRootDir: opts.agentHomeRootDir }
+      : {}),
+    ...(opts.workspaceDataRootDir !== undefined
+      ? { workspaceDataRootDir: opts.workspaceDataRootDir }
       : {}),
     ...(opts.controlPlaneServerUrlPath !== undefined
       ? { controlPlaneServerUrlPath: opts.controlPlaneServerUrlPath }
@@ -152,6 +156,23 @@ describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', (
 
     const nullArgs = await captureSpawnArgs({ agentHomeRootDir: null });
     expect(nullArgs).not.toContain('--agent-home-root-dir');
+  });
+
+  it('forwards --workspace-data-root-dir when workspaceDataRootDir is set (#task:1596)', async () => {
+    const args = await captureSpawnArgs({
+      workspaceDataRootDir: '/tmp/silverhand-fake-workspace-data',
+    });
+    const idx = args.indexOf('--workspace-data-root-dir');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('/tmp/silverhand-fake-workspace-data');
+  });
+
+  it('omits --workspace-data-root-dir when unset or null', async () => {
+    const unsetArgs = await captureSpawnArgs();
+    expect(unsetArgs).not.toContain('--workspace-data-root-dir');
+
+    const nullArgs = await captureSpawnArgs({ workspaceDataRootDir: null });
+    expect(nullArgs).not.toContain('--workspace-data-root-dir');
   });
 
   it('forwards --control-plane-server-url-path when set', async () => {

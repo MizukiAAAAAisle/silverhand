@@ -20,7 +20,7 @@ import type { LogLevelControl } from './logger.js';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import type { HostRuntimeActivityView, HostStatusReadModel } from './runtime/host-status-read-model.js';
-import type { WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
+import type { AgentL2SeedEnsurer, WorkspaceRegistryBackfiller } from './runtime/workspace-registry-backfill.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 import type { PresenceRegistry } from './presence/presence-registry.js';
 import type { BackendMetrics } from './observability/metrics.js';
@@ -217,6 +217,13 @@ export interface BackendContext {
    * index alone).
    */
   workspaceRegistryBackfiller?: WorkspaceRegistryBackfiller;
+  /**
+   * Cross-computer slice 1 (#task:1596) — pre-spawn agent L2 seed on the
+   * dispatch host (idempotent daemon `agent_l2_seed`, memoized per
+   * (host, workspace, agent)). Consumed by the runtime start/deliver
+   * filesystem-ensure chain. Optional like the backfiller.
+   */
+  agentL2SeedEnsurer?: AgentL2SeedEnsurer;
   /**
    * Backend-side facade for agent runtime lifecycle. Services and
    * routes route every spawn / stop / deliver / clearSession / inbox

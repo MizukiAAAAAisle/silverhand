@@ -38,6 +38,19 @@ export type ResolvedWorkspaceRef = StartOptions['workspace'] & {
   path: string;
 };
 
+/**
+ * A memory-index workspace ref after local resolution. `path: null` means
+ * this workspace has no local realization on THIS computer (cross-computer
+ * membership whose local root has not been provisioned here yet, or a
+ * foreign/corrupt ref) — the prompt renders it "unavailable on this
+ * computer" instead of a fabricated path, and it never blocks the spawn.
+ * It materializes lazily when that workspace next becomes the active one
+ * on this computer.
+ */
+export type ResolvedWorkspaceIndexRef = StartOptions['workspace'] & {
+  path: string | null;
+};
+
 /** An agent ref with the daemon-resolved L1 `home_dir` attached. */
 export type ResolvedAgentRef = StartOptions['agent'] & { home_dir: string };
 
@@ -52,7 +65,7 @@ export type ResolvedStartOptions = Omit<
 > & {
   agent: ResolvedAgentRef;
   workspace: ResolvedWorkspaceRef;
-  workspace_memory_index: ResolvedWorkspaceRef[];
+  workspace_memory_index: ResolvedWorkspaceIndexRef[];
   /** The daemon-authenticated computer id this runtime spawns on (the
    *  control-plane binding's `host_id`). Injected into the prompt's This
    *  Context block; never received over the wire. */
@@ -124,12 +137,13 @@ export function resolveAuthenticatedComputerId(
 /**
  * Resolve every host path a `runtime_start` needs from semantic refs.
  * Pure: all registry/error policy lives behind `deps.resolveRegular
- * WorkspacePath`. An `agent_home` ref (including in the memory index) resolves
- * to the CURRENT agent's L1 dir, but ONLY after its id is verified to be this
- * agent's own home workspace id (`agentHomeWorkspaceId(agentId)`, the shared
- * single source). A foreign / corrupt `agent_home` id is NOT silently
- * normalized onto the current agent's L1 — it fails closed (which would
- * otherwise let host B's home, or another agent's, resolve under host A).
+ * WorkspacePath`. An `agent_home` ref resolves to the CURRENT agent's L1 dir,
+ * but ONLY after its id is verified to be this agent's own home workspace id
+ * (`agentHomeWorkspaceId(agentId)`, the shared single source). A foreign /
+ * corrupt `agent_home` id is NOT silently normalized onto the current
+ * agent's L1 (which would let host B's home, or another agent's, resolve
+ * under host A): as the ACTIVE workspace it fails closed; as a memory-index
+ * entry it degrades to `path: null` (unavailable on this computer).
  */
 export function resolveRuntimeStartPaths(
   options: StartOptions,
@@ -159,12 +173,31 @@ export function resolveRuntimeStartPaths(
     return { ...workspace, path: deps.resolveRegularWorkspacePath(workspace.id) };
   };
 
+  // The ACTIVE workspace fails closed — a runtime must never spawn against
+  // an unresolved cwd. A memory-INDEX entry fails soft: an unresolvable
+  // entry (no local binding on this computer, or a foreign/corrupt
+  // agent_home ref) resolves to `path: null` and renders "unavailable on
+  // this computer" — it must never block the spawn nor resolve onto a
+  // guessed path.
+  const resolveIndexEntry = (
+    workspace: StartOptions['workspace'],
+  ): ResolvedWorkspaceIndexRef => {
+    try {
+      return resolveWorkspace(workspace);
+    } catch (err) {
+      if (err instanceof RuntimeStartResolveError) {
+        return { ...workspace, path: null };
+      }
+      throw err;
+    }
+  };
+
   return {
     ...options,
     agent: { ...options.agent, home_dir: homeDir },
     workspace: resolveWorkspace(options.workspace),
     workspace_memory_index:
-      options.workspace_memory_index.map(resolveWorkspace),
+      options.workspace_memory_index.map(resolveIndexEntry),
     computer_id: deps.resolveComputerId(),
   };
 }

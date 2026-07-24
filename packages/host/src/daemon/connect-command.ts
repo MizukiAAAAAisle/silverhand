@@ -205,6 +205,7 @@ export async function runConnectCommand(
     logDir: paths.logDir,
     runtimePidRootDir: paths.runtimePidRootDir,
     agentHomeRootDir: paths.agentHomeRootDir,
+    workspaceDataRootDir: paths.workspaceDataRootDir,
     proxyConfigPath: paths.proxyConfigPath,
     hostConfig,
     daemonIdentity,
@@ -385,6 +386,7 @@ interface ConnectRuntimePaths {
   launcherLogPath: string;
   runtimePidRootDir: string;
   agentHomeRootDir: string;
+  workspaceDataRootDir: string;
   proxyConfigPath: string;
 }
 
@@ -397,6 +399,9 @@ function connectRuntimePaths(dataRoot: string): ConnectRuntimePaths {
     launcherLogPath: join(logDir, CONNECT_LAUNCHER_LOG),
     runtimePidRootDir: join(dataRoot, 'runtime-pids'),
     agentHomeRootDir: join(dataRoot, 'agents'),
+    // #task:1596 — durable workspace-data stays inside the chosen data
+    // root; a custom --data-root never writes back to ~/.silverhand.
+    workspaceDataRootDir: join(dataRoot, 'workspace-data'),
     proxyConfigPath: join(dataRoot, 'proxy-config.json'),
   };
 }

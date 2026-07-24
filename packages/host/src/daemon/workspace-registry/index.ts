@@ -32,3 +32,10 @@ export {
 } from './files-purge-handler.js';
 export { mapFsErrno, type FsErrnoCode } from './fs-errno.js';
 export { initWorkspaceSkeleton } from './workspace-skeleton.js';
+export {
+  WORKSPACE_DATA_DIR_NAME,
+  defaultWorkspaceDataRootDir,
+  legacyNamespaceDirs,
+  migrateLegacyWorkspaceData,
+  type LegacyNamespaceMigrationOptions,
+} from './state-dir.js';

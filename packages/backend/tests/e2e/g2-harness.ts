@@ -484,6 +484,9 @@ export async function bootDaemonWithSupervisor(
     writeStdoutHandshake: false,
     alsoStderr: false,
     runtimePidRootDir,
+    // #task:1596 — keep durable workspace-data inside the test sandbox
+    // (the default would write the REAL ~/.silverhand/workspace-data).
+    workspaceDataRootDir: join(daemonDir, 'workspace-data'),
     daemonIdentityPath: null,
     testHooks: opts.testHooks,
     supervisorFactory: ({

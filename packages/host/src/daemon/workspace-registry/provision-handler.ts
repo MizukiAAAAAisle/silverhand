@@ -123,7 +123,9 @@ export async function provisionWorkspace(
 function toProvisionError(err: unknown): WorkspaceProvisionError {
   if (err instanceof WorkspaceProvisionError) return err;
   if (err instanceof WorkspaceRegistryError) {
-    if (err.code === 'registry_foreign' || err.code === 'registry_corrupt') {
+    if (err.code === 'registry_foreign' ||
+        err.code === 'registry_corrupt' ||
+        err.code === 'migration_blocked') {
       return new WorkspaceProvisionError('registry_unavailable', err.message);
     }
     // invalid_path / path_conflict are first-class provision codes now that

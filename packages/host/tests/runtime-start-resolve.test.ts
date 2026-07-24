@@ -137,20 +137,16 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
     ).toThrow(RuntimeStartResolveError);
   });
 
-  it('fails closed when an agent_home ref id is a non-home string', () => {
+  it('memory-index entry with a foreign/non-home agent_home id degrades to unavailable (never resolves onto own L1)', () => {
     const base = testStartOptions({ agentId: 'a1', workspaceKind: 'agent_home' });
     const options: StartOptions = {
       ...base,
       workspace_memory_index: [{ id: 'home1', name: 'DM', kind: 'agent_home' }],
     };
-    let thrown: unknown;
-    try {
-      resolveRuntimeStartPaths(options, depsWith(() => '/host/ws/ws1'));
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(RuntimeStartResolveError);
-    expect((thrown as RuntimeStartResolveError).code).toBe('workspace_not_provisioned');
+    const resolved = resolveRuntimeStartPaths(options, depsWith(() => '/host/ws/ws1'));
+    expect(resolved.workspace_memory_index).toEqual([
+      { id: 'home1', name: 'DM', kind: 'agent_home', path: null },
+    ]);
   });
 });
 
@@ -198,5 +194,54 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
       computeAgentDir('a1', HOME),
       '/host/ws/ws2',
     ]);
+  });
+
+  it('an unresolvable index entry degrades to path:null while the ACTIVE workspace stays fail-closed', () => {
+    // Slice 1 (#task:1596): a cross-computer peer workspace has no local
+    // binding on this computer. It must NOT block the spawn and must NOT
+    // resolve onto a guessed path — it renders "unavailable on this
+    // computer". The active workspace keeps the hard fail-closed contract.
+    const base = testStartOptions({ agentId: 'a1', workspaceKind: 'regular' });
+    const options: StartOptions = {
+      ...base,
+      workspace_memory_index: [
+        { id: 'ws1', name: 'primary', kind: 'regular' },
+        { id: 'ws_peer_unbound', name: 'peer', kind: 'regular' },
+      ],
+    };
+    const resolved = resolveRuntimeStartPaths(
+      options,
+      depsWith(id => {
+        if (id === 'ws_peer_unbound') {
+          throw new RuntimeStartResolveError(
+            'workspace_not_provisioned',
+            'no local binding on this computer',
+          );
+        }
+        return `/host/ws/${id}`;
+      }),
+    );
+    expect(resolved.workspace.path).toBe('/host/ws/ws1');
+    expect(resolved.workspace_memory_index).toEqual([
+      { id: 'ws1', name: 'primary', kind: 'regular', path: '/host/ws/ws1' },
+      { id: 'ws_peer_unbound', name: 'peer', kind: 'regular', path: null },
+    ]);
+
+    // Same failure on the ACTIVE workspace still throws (fail closed).
+    const activeUnbound: StartOptions = {
+      ...base,
+      workspace: { id: 'ws_peer_unbound', name: 'peer', kind: 'regular' },
+    };
+    expect(() =>
+      resolveRuntimeStartPaths(
+        activeUnbound,
+        depsWith(() => {
+          throw new RuntimeStartResolveError(
+            'workspace_not_provisioned',
+            'no local binding on this computer',
+          );
+        }),
+      ),
+    ).toThrow(RuntimeStartResolveError);
   });
 });

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createConnection } from 'node:net';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { HostClient } from '../src/client/index.js';
@@ -34,6 +34,7 @@ async function setupFixture(): Promise<E2eFixture> {
     socketPath,
     pidFilePath,
     logDir,
+    workspaceDataRootDir: join(dirname(socketPath), 'workspace-data'),
     runtimePidRootDir,
     installSignals: false,
     writeStdoutHandshake: false,
@@ -110,6 +111,7 @@ describe('e2e — real Unix socket', () => {
         socketPath: join(f.dir, 'other.sock'),
         pidFilePath: f.pidFilePath,
         logDir: f.logDir,
+        workspaceDataRootDir: join(f.dir, 'workspace-data'),
         runtimePidRootDir: join(f.dir, 'other-runtime-pids'),
         installSignals: false,
         writeStdoutHandshake: false,

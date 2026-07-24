@@ -510,6 +510,7 @@ interface DaemonPaths {
   logDir: string;
   runtimePidRootDir: string;
   agentHomeRootDir: string;
+  workspaceDataRootDir: string;
   hostConfigPath: string;
   legacyProxyConfigPath: string;
   controlPlaneServerUrlPath: string;
@@ -530,6 +531,10 @@ function daemonPaths(): DaemonPaths {
     logDir: join(silverhandDir(), 'logs'),
     runtimePidRootDir: join(runDir, 'runtime-pids'),
     agentHomeRootDir: join(silverhandDir(), 'agents'),
+    // #task:1596 — durable workspace-data (registry + managed workspace
+    // roots holding agent L2 memory) lives OUTSIDE run/ so the documented
+    // "rm -rf run/" recovery stays safe.
+    workspaceDataRootDir: join(silverhandDir(), 'workspace-data'),
     hostConfigPath: daemonHostConfigPath(silverhandDir()),
     legacyProxyConfigPath: join(silverhandDir(), 'daemon', 'proxy-config.json'),
     controlPlaneServerUrlPath: join(runDir, 'control-plane-server-url'),
@@ -2082,6 +2087,7 @@ async function bootstrap(): Promise<void> {
       logDir: paths.logDir,
       runtimePidRootDir: paths.runtimePidRootDir,
       agentHomeRootDir: paths.agentHomeRootDir,
+      workspaceDataRootDir: paths.workspaceDataRootDir,
       proxyConfigPath: null,
       legacyProxyConfigPath: paths.legacyProxyConfigPath,
       controlPlaneServerUrlPath:

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, isAbsolute, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 
 /**
@@ -53,7 +53,12 @@ export type WorkspaceRegistryErrorCode =
   | 'not_provisioned'
   | 'registry_corrupt'
   | 'path_conflict'
-  | 'invalid_path';
+  | 'invalid_path'
+  /** #task:1596 — durable-state-dir migration cannot proceed safely
+   *  (ownership ambiguity, or a rename/rewrite step failed). The daemon
+   *  fails closed: no registry build, no byte is deleted or overwritten;
+   *  the condition is deterministic and surfaces until resolved. */
+  | 'migration_blocked';
 
 export class WorkspaceRegistryError extends Error {
   constructor(
@@ -177,6 +182,29 @@ export interface WorkspaceRegistryOptions {
    * validation and never scans arbitrary binding directories.
    */
   legacyBindings?: readonly RegistryBinding[];
+  /**
+   * #task:1596 — the EXACT pre-migration namespace dirs this daemon trusts
+   * (computed by `legacyNamespaceDirs` from the known legacy state dirs ×
+   * this daemon's own binding slugs). A stale server-side `workspace_path`
+   * proposing the pre-migration managed path re-binds idempotently ONLY
+   * when it equals `<one of these>/workspaces/<this id's slug>` — never by
+   * basename resemblance (a slug is computable, so a matching basename is
+   * not provenance). Absent/empty → the alias is off.
+   */
+  trustedLegacyNamespaceDirs?: readonly string[];
+  /**
+   * #task:1596 round 3/4 (Cindy P1-3) — roots whose subtree, exact path, or
+   * ANCESTORS a requested workspace path may never occupy (bidirectional
+   * overlap): binding a workspace over these would let a later recursive
+   * workspace purge destroy Silverhand durable state. Production passes
+   * the computer's workspace-data root, the agent L1 root, AND the global
+   * silverhand root (each needs its own ancestor guard — a custom data
+   * root may live on a disjoint volume from the global root). The only
+   * carve-out: a sanctioned `legacyWorkspacesRoot` child strictly INSIDE
+   * the global root (matched via `silverhandStateRoot`); the exemption
+   * never applies to ancestors nor to the workspace-data / agents roots.
+   */
+  protectedRoots?: readonly string[];
   /** Injectable clock for tests. */
   now?: () => number;
 }
@@ -209,6 +237,8 @@ export class WorkspaceRegistry {
   private readonly silverhandStateRoot: string | undefined;
   private readonly legacyWorkspacesRoot: string | undefined;
   private readonly legacyBindings: readonly RegistryBinding[];
+  private readonly trustedLegacyNamespaceDirs: readonly string[];
+  private readonly protectedRoots: readonly string[];
   private readonly now: () => number;
 
   constructor(opts: WorkspaceRegistryOptions) {
@@ -231,6 +261,10 @@ export class WorkspaceRegistry {
       seenLegacyBindings.add(key);
       return true;
     });
+    this.trustedLegacyNamespaceDirs = (opts.trustedLegacyNamespaceDirs ?? []).map(
+      dir => resolve(dir),
+    );
+    this.protectedRoots = (opts.protectedRoots ?? []).map(dir => resolve(dir));
     this.now = opts.now ?? (() => Date.now());
   }
 
@@ -320,6 +354,28 @@ export class WorkspaceRegistry {
       if (isAbsolute(requestedPath) && resolve(requestedPath) === existing.path) {
         return { path: existing.path, created: false };
       }
+      // #task:1596 durability migration alias: the workspace-data migration
+      // moved this id's managed root to the durable state dir, but the
+      // server's legacy `workspace_path` column may still propose the
+      // PRE-migration managed path. Accept it as a faithful re-bind ONLY
+      // when the existing binding is this id's own deterministic managed
+      // path AND the proposal is EXACTLY the managed path this id would
+      // have had under one of the explicitly trusted legacy namespaces —
+      // structural provenance, never basename resemblance (the slug is
+      // computable by anyone). The reply carries the current bound path,
+      // which heals the server's stale column.
+      if (
+        isAbsolute(requestedPath) &&
+        existing.path ===
+          join(this.managedRoot, managedWorkspaceSlug(workspaceId)) &&
+        this.trustedLegacyNamespaceDirs.some(
+          nsDir =>
+            resolve(requestedPath) ===
+            join(nsDir, MANAGED_WORKSPACES_DIR, managedWorkspaceSlug(workspaceId)),
+        )
+      ) {
+        return { path: existing.path, created: false };
+      }
       // Different path: validate it first (so a structurally bad proposal
       // surfaces as `invalid_path`), then refuse — never silently overwrite
       // an existing binding (including a parent↔child move).
@@ -400,7 +456,23 @@ export class WorkspaceRegistry {
       // validation. Only the deterministic path minted inside the predecessor's
       // own managed root needs this state-root migration seam.
       if (entry.path !== sourceManagedPath) continue;
-      if (!isAbsolute(entry.path) || resolve(entry.path) !== resolvedRequestedPath) {
+      // The server's requested path must equal the predecessor's CURRENT
+      // managed path, OR (#task:1596) the exact PRE-migration managed path
+      // this source binding would have had under a trusted legacy namespace
+      // — the durable-state-dir migration repointed the entry, but the
+      // server's legacy column may still carry the old location. Structural
+      // provenance only (trusted dir x source binding slug x workspace
+      // slug); never basename resemblance.
+      const trustedStaleSourcePaths = this.trustedLegacyNamespaceDirs
+        .filter(nsDir => basename(nsDir) === bindingSlug(binding))
+        .map(nsDir =>
+          join(nsDir, MANAGED_WORKSPACES_DIR, managedWorkspaceSlug(workspaceId)),
+        );
+      const requestedMatchesCurrent =
+        isAbsolute(entry.path) && resolve(entry.path) === resolvedRequestedPath;
+      const requestedMatchesTrustedStale =
+        trustedStaleSourcePaths.includes(resolvedRequestedPath);
+      if (!requestedMatchesCurrent && !requestedMatchesTrustedStale) {
         throw new WorkspaceRegistryError(
           'path_conflict',
           `legacy registry binds workspace ${workspaceId} to ${entry.path}; ` +
@@ -412,13 +484,17 @@ export class WorkspaceRegistry {
 
     if (sources.length === 0) return null;
 
-    this.assertNoOverlap(destination, workspaceId, resolvedRequestedPath);
+    // Persist the predecessor's CURRENT (durable) path — never the possibly
+    // stale requested one. The ack carries it back and heals the server
+    // column.
+    const copiedPath = sources[0]!.entry.path;
+    this.assertNoOverlap(destination, workspaceId, copiedPath);
     destination.workspaces[workspaceId] = {
-      path: resolvedRequestedPath,
+      path: copiedPath,
       provisioned_at: Math.min(...sources.map(source => source.entry.provisioned_at)),
     };
     this.persist(destination);
-    return { path: resolvedRequestedPath, created: false };
+    return { path: copiedPath, created: false };
   }
 
   /**
@@ -510,6 +586,33 @@ export class WorkspaceRegistry {
       throw new WorkspaceRegistryError(
         'invalid_path',
         'requested path cannot live inside the daemon-managed workspaces root',
+      );
+    }
+    // #task:1596 rounds 3-5 (Cindy P1-3) — protected-root overlap guard: a
+    // requested path may not equal, live inside, OR be an ANCESTOR of any
+    // protected root (an ancestor binding would purge the root itself;
+    // ancestor coverage must be per-root because a connect custom data
+    // root can live on a DISJOINT tree/volume from the global root, so
+    // nothing "transitively" covers `~/.silverhand`'s ancestors).
+    // The ONE carve-out: a path strictly INSIDE the global state root that
+    // is a sanctioned legacyWorkspacesRoot child — that historical
+    // exemption applies to the global root's DESCENDANT direction only,
+    // never to its ancestors and never to workspace-data / agents roots.
+    const insideLegacyWorkspacesChild =
+      this.legacyWorkspacesRoot !== undefined &&
+      resolved.startsWith(this.legacyWorkspacesRoot + sep);
+    for (const root of this.protectedRoots) {
+      if (!pathsOverlap(resolved, root)) continue;
+      const isDescendantOfRoot = resolved.startsWith(root + sep);
+      const exempt =
+        isDescendantOfRoot &&
+        insideLegacyWorkspacesChild &&
+        this.silverhandStateRoot !== undefined &&
+        root === this.silverhandStateRoot;
+      if (exempt) continue;
+      throw new WorkspaceRegistryError(
+        'invalid_path',
+        'requested path overlaps a protected silverhand root (workspace-data / agents / silverhand state)',
       );
     }
     // State-root guard (Cindy P1-3; the daemon-canonical form of the retired

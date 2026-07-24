@@ -632,7 +632,7 @@ describe('buildPlatformPrompt — three-file model', () => {
   // `{ kind: 'missing' }`.
   function withInjections(args: {
     currentMemory?: string | InjectedFileContent;
-    workspaceMemoryIndex?: Array<{ label: string; memoryPath: string }>;
+    workspaceMemoryIndex?: Array<{ label: string; memoryPath: string | null }>;
     channelKind?: 'regular' | 'dm';
     roleSystemPrompt?: string;
     activeProfileDir?: string;
@@ -705,6 +705,19 @@ describe('buildPlatformPrompt — three-file model', () => {
     expect(text).toContain('- silverhand (current) — `/abs/silverhand/.silverhand/agents/a1/MEMORY.md`');
     expect(text).toContain('- cindy (DM) — `/abs/home/.silverhand/agents/a1/MEMORY.md`');
     expect(text).toContain('- project-foo — `/abs/foo/.silverhand/agents/a1/MEMORY.md`');
+  });
+
+  it('renders a null-path index entry as unavailable on this computer (no fabricated path)', () => {
+    // Slice 1 (#task:1596): a cross-computer workspace with no local root on
+    // this computer must not show a fake path the agent would try to read.
+    const text = withInjections({
+      workspaceMemoryIndex: [
+        { label: 'silverhand (current)', memoryPath: '/abs/silverhand/.silverhand/agents/a1/MEMORY.md' },
+        { label: 'remote-project', memoryPath: null },
+      ],
+    });
+    expect(text).toContain('- remote-project — _unavailable on this computer_');
+    expect(text).not.toMatch(/remote-project — `/);
   });
 
   it('injects a read-only note catalog between active memory and workspace index', () => {

@@ -70,8 +70,10 @@ import {
 } from './runtime-start-options.js';
 import {
   summarizeMigrationAudit,
+  type AgentL2SeedEnsurer,
   type WorkspaceRegistryBackfiller,
 } from './workspace-registry-backfill.js';
+import { planRuntimeStartFilesystemEnsure } from './runtime-filesystem-plan.js';
 import { EventPerimeterGuard } from './event-perimeter.js';
 import { ClearSessionWaiterRegistry } from './clear-session-registry.js';
 
@@ -113,10 +115,21 @@ export interface OutboundRuntimeEventFanoutOptions {
    * read-path (`list_workspaces` / `GET workspace` / member-add) having
    * triggered the D4.e-1 lazy backfill, so the start path backfills the
    * regular workspaces it is about to reference (Cindy `2A_y70Aue5X1SlOr`).
-   * Optional: when unwired (legacy/test) the daemon-side fail-closed remains
-   * the final boundary.
+   * Optional in the type for protocol-only assemblies, but LOAD-BEARING for
+   * spawning: a regular-workspace runtime_start/deliver fails closed when
+   * this is unwired (#task:1596 review — a precondition must not be
+   * skip-on-missing).
    */
   workspaceRegistryBackfiller?: WorkspaceRegistryBackfiller;
+  /**
+   * Cross-computer slice 1 (#task:1596) — pre-spawn L2 seed on the dispatch
+   * host. The active workspace's L2 for the spawning agent must exist under
+   * THAT computer's local root before the runtime starts; membership-time
+   * seeding only covers the workspace's home computer. Optional in the type
+   * for protocol-only assemblies, but LOAD-BEARING for spawning: a
+   * regular-workspace runtime_start/deliver fails closed when unwired.
+   */
+  agentL2SeedEnsurer?: AgentL2SeedEnsurer;
   logDir?: string;
   activityLog?: ActivityLogWriter | null;
   /**
@@ -1076,14 +1089,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         'runtime_start blocked: referenced workspace is owned by a different host',
       );
     }
-    const backfillOk = await this.backfillRuntimeStartWorkspaces(
+    const backfillOk = await this.ensureRuntimeStartFilesystem(
       hostId,
       conversationId,
       agentId,
     );
     if (!backfillOk) {
       throw new Error(
-        'runtime_start blocked: workspace registry backfill incomplete',
+        'runtime_start blocked: runtime filesystem ensure incomplete',
       );
     }
     const transport = this.requireTransport();
@@ -1206,52 +1219,97 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   /**
-   * D4.e-6 — re-bind into the daemon registry the regular workspaces a
-   * `runtime_start` is about to reference (primary conversation workspace +
-   * the regular entries of the agent's memory index). `agent_home` is skipped
-   * — the daemon resolves it homedir-side (`computeAgentDir`), never via the
-   * registry. Forwards each row's legacy `workspace_path` as `requested_path`
-   * (the backfiller never assembles a path); a `noop`/`ok` clears the dispatch
-   * to proceed, a `partial`/`failed` blocks it (caller keeps the pending
-   * anchor for retry). When no backfiller is wired the daemon-side fail-closed
-   * is the only boundary, so we proceed. Returns true iff dispatch may go on.
+   * Cross-computer slice 1 (#task:1596) — pre-dispatch runtime filesystem
+   * ensure on the dispatch (agent's) host. Contract (#task:1594 final +
+   * Cindy review round 1):
+   *
+   * 1. ONLY the ACTIVE workspace (the conversation's primary) is ensured —
+   *    BLOCKING provision. Same-host rows re-bind with the legacy
+   *    `workspace_path` (migration behavior, unchanged); a cross-host guest
+   *    row provisions with NO requested path so the daemon self-picks its
+   *    managed root — the home computer's path never crosses to a guest
+   *    daemon.
+   * 2. ACTIVE workspace L2 seed for the spawning agent on this host:
+   *    BLOCKING (ordered after provision — the daemon seed resolves the
+   *    workspace via its registry). Memoized per (host, workspace, agent).
+   * 3. Peer memory-index workspaces are NEVER touched here: already-bound
+   *    ones resolve daemon-side, unbound ones degrade per-entry to
+   *    "unavailable on this computer", and same-host legacy migration is
+   *    owned by the hydrate-time `auditWorkspaceRegistryMigration()` — the
+   *    spawn critical path pays for exactly one workspace.
+   *
+   * `agent_home` is skipped (daemon resolves it homedir-side). For a
+   * regular active workspace the backfiller + seed ensurer are LOAD-BEARING
+   * preconditions: missing wiring fails closed (never "skip and hope"), so
+   * a mis-assembled deployment cannot spawn runtimes with an unensured
+   * filesystem. Returns true iff dispatch may go on.
    */
-  private async backfillRuntimeStartWorkspaces(
+  private async ensureRuntimeStartFilesystem(
     hostId: string,
     conversationId: string,
     agentId: string,
   ): Promise<boolean> {
-    const backfiller = this.opts.workspaceRegistryBackfiller;
-    if (!backfiller) return true;
     const conversation = this.conversations.get(conversationId);
     if (!conversation) return true;
-    const candidates = [
-      this.workspaces.get(conversation.workspace_id),
-      ...this.workspaces.listForAgent(agentId),
-    ];
-    const rows: { id: string; workspace_path: string }[] = [];
-    const seen = new Set<string>();
-    for (const ws of candidates) {
-      if (!ws || ws.workspace_kind !== 'regular' || seen.has(ws.id)) continue;
-      seen.add(ws.id);
-      rows.push({ id: ws.id, workspace_path: ws.workspace_path });
-    }
-    if (rows.length === 0) return true;
-    const backfill = await backfiller.ensure(hostId, rows);
-    if (backfill.status === 'ok' || backfill.status === 'noop') return true;
-    this.opts.logger.warn(
-      {
-        kind: 'inbox',
-        action: 'runtime_start_workspace_backfill_incomplete',
-        hostId,
-        conversationId,
-        agent_id: agentId,
-        status: backfill.status,
-        failed: backfill.failed.map(f => ({ id: f.id, code: f.code })),
-      },
-      'runtime_start blocked: workspace registry backfill incomplete; rows kept pending for retry',
+    const plan = planRuntimeStartFilesystemEnsure(
+      hostId,
+      this.workspaces.get(conversation.workspace_id) ?? undefined,
     );
-    return false;
+    if (!plan.primaryRow) return true;
+
+    const backfiller = this.opts.workspaceRegistryBackfiller;
+    const seeder = this.opts.agentL2SeedEnsurer;
+    if (!backfiller || !seeder) {
+      this.opts.logger.warn(
+        {
+          kind: 'inbox',
+          action: 'runtime_start_filesystem_deps_unwired',
+          hostId,
+          conversationId,
+          agent_id: agentId,
+          workspace_id: plan.primaryRow.id,
+          backfiller_wired: !!backfiller,
+          seeder_wired: !!seeder,
+        },
+        'runtime_start blocked: filesystem ensure dependencies unwired for a regular workspace (fail closed)',
+      );
+      return false;
+    }
+
+    const ensure = await backfiller.ensure(hostId, [plan.primaryRow]);
+    if (ensure.status !== 'ok' && ensure.status !== 'noop') {
+      this.opts.logger.warn(
+        {
+          kind: 'inbox',
+          action: 'runtime_start_workspace_backfill_incomplete',
+          hostId,
+          conversationId,
+          agent_id: agentId,
+          status: ensure.status,
+          failed: ensure.failed.map(f => ({ id: f.id, code: f.code })),
+        },
+        'runtime_start blocked: active workspace provision incomplete on dispatch host; kept pending for retry',
+      );
+      return false;
+    }
+
+    const seed = await seeder.ensure(hostId, plan.primaryRow.id, agentId);
+    if (!seed.ok) {
+      this.opts.logger.warn(
+        {
+          kind: 'inbox',
+          action: 'runtime_start_agent_l2_seed_incomplete',
+          hostId,
+          conversationId,
+          agent_id: agentId,
+          workspace_id: plan.primaryRow.id,
+          code: seed.failure.code,
+        },
+        'runtime_start blocked: agent L2 seed incomplete on dispatch host; kept pending for retry',
+      );
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -1474,14 +1532,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
               'runtime_deliver blocked: a referenced workspace is owned by a different host',
             );
           }
-          const backfillOk = await this.backfillRuntimeStartWorkspaces(
+          const backfillOk = await this.ensureRuntimeStartFilesystem(
             hostId,
             params.conversation_id,
             params.agent_id,
           );
           if (!backfillOk) {
             throw new Error(
-              'runtime_deliver blocked: workspace registry backfill incomplete',
+              'runtime_deliver blocked: runtime filesystem ensure incomplete',
             );
           }
           if (

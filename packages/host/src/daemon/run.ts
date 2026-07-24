@@ -64,10 +64,14 @@ import {
   AgentL2SeedError,
   seedAgentL2,
   AgentFilesPurgeError,
+  defaultWorkspaceDataRootDir,
+  legacyNamespaceDirs,
+  migrateLegacyWorkspaceData,
   purgeAgentFiles,
   type RegistryBinding,
 } from './workspace-registry/index.js';
 import {
+  AgentWorkspaceFsError,
   listAgentWorkspaceTree,
   readAgentWorkspaceFile,
 } from './agent-workspace-fs/index.js';
@@ -145,6 +149,15 @@ export interface RunDaemonOptions {
    * isolated from the user's normal profile.
    */
   agentHomeRootDir?: string | null;
+  /**
+   * #task:1596 — the EXPLICIT persistent workspace-data root for this
+   * computer (registry file + managed workspace roots, which hold agent L2
+   * memory). Desktop passes `<silverhand-dir>/workspace-data`; `connect`
+   * passes `<data-root>/workspace-data`. Never derived from identity/pid
+   * paths (those are wipeable runtime state) nor from where agent L1
+   * lives. Absent → the global `~/.silverhand/workspace-data`.
+   */
+  workspaceDataRootDir?: string | null;
   /**
    * Explicit daemon-local proxy config file. Standalone `connect --data-root`
    * uses this to keep every runtime artifact under its chosen data root.
@@ -532,22 +545,44 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // The registry is built lazily per command because the binding is only
   // known after `host_outbound_attach` on both desktop and standalone
   // late-attach paths.
+  //
+  // #task:1596 durability fix (Cindy P1): workspace-data (registry file +
+  // managed roots, which hold agent L2 memory) is DURABLE state — it must
+  // not live under the identity file's directory (desktop's wipeable
+  // `~/.silverhand/run`) nor the historical `~/.silverhand/daemon`. The
+  // embedder passes its persistent computer data root EXPLICITLY
+  // (`workspaceDataRootDir`: desktop `~/.silverhand/workspace-data`,
+  // connect `<data-root>/workspace-data`) — where agent L1 lives never
+  // implicitly decides where workspace-data lives. Absent → the global
+  // default. Pre-fix namespaces are narrowly migrated at registry build
+  // time (`migrateLegacyWorkspaceData`), fail-closed on any ambiguity.
+  const agentHomeRootDir = opts.agentHomeRootDir ?? undefined;
+  const workspaceRegistryStateDirHook = opts.testHooks?.workspaceRegistryStateDir;
   const workspaceRegistryStateDir =
-    opts.testHooks?.workspaceRegistryStateDir ??
-    (daemonIdentityPath !== null
-      ? dirname(daemonIdentityPath)
-      : `${homedir()}/.silverhand/daemon`);
+    workspaceRegistryStateDirHook ??
+    opts.workspaceDataRootDir ??
+    defaultWorkspaceDataRootDir();
+  const legacyWorkspaceDataStateDirs: (string | null)[] = [
+    daemonIdentityPath !== null ? dirname(daemonIdentityPath) : null,
+    `${homedir()}/.silverhand/daemon`,
+  ];
   // D4.e-1 (Cindy P1-3) — the requested-path guard roots, constructed ONCE
   // here and injected into every registry build (NOT re-derived via
   // homedir() inside the handler), so the validate-root can never diverge
-  // from the actual state root under testHook/packaging. The state root is
-  // the parent of the daemon state dir (`~/.silverhand/daemon` →
-  // `~/.silverhand`); the lone allowed child inside it is `workspaces/`
-  // (pre-D4.e generated roots).
+  // from the actual state root under testHook/packaging. The state root
+  // keeps its pre-#task:1596 derivation (parent of the identity/state dir:
+  // desktop `~/.silverhand/run` → `~/.silverhand`; in-memory identity →
+  // `~/.silverhand`) — only the workspace-data dir moved, the guard root
+  // and the per-computer profile root did not. The lone allowed child
+  // inside it is `workspaces/` (pre-D4.e generated roots).
   const silverhandStateRoot =
-    opts.testHooks?.silverhandStateRoot ?? dirname(workspaceRegistryStateDir);
+    opts.testHooks?.silverhandStateRoot ??
+    (workspaceRegistryStateDirHook !== undefined
+      ? dirname(workspaceRegistryStateDirHook)
+      : daemonIdentityPath !== null
+        ? dirname(dirname(daemonIdentityPath))
+        : `${homedir()}/.silverhand`);
   const legacyWorkspacesRoot = join(silverhandStateRoot, 'workspaces');
-  const agentHomeRootDir = opts.agentHomeRootDir ?? undefined;
   const fallbackEmbeddedHostId = daemonIdentity?.daemon_id ?? 'local';
   const liveOutboundBinding = (): RegistryBinding | null =>
     directOutboundBinding ?? outboundSupervisor.currentBinding();
@@ -572,13 +607,63 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         { server_origin: 'local-embedded', host_id: fallbackEmbeddedHostId },
       );
     }
+    // #task:1596 durability fix — relocate any pre-fix namespace (identity
+    // dir / historical `~/.silverhand/daemon`) into the durable state dir
+    // before building. Fail-closed: ownership ambiguity or a failed
+    // rename/rewrite throws `migration_blocked` and NO registry is built —
+    // a legacy dir is never adopted as this run's authority. Skipped
+    // entirely under the explicit test hook.
+    const allBindings = [binding, ...legacyBindings];
+    if (workspaceRegistryStateDirHook === undefined) {
+      migrateLegacyWorkspaceData({
+        stateDir: workspaceRegistryStateDir,
+        legacyStateDirs: legacyWorkspaceDataStateDirs,
+        bindings: allBindings,
+        logger,
+      });
+    }
     return new WorkspaceRegistry({
       stateDir: workspaceRegistryStateDir,
       binding,
       silverhandStateRoot,
       legacyWorkspacesRoot,
       legacyBindings,
+      trustedLegacyNamespaceDirs: legacyNamespaceDirs(
+        legacyWorkspaceDataStateDirs,
+        allBindings,
+      ),
+      // #task:1596 rounds 3-5 (Cindy P1-3) — a requested workspace path may
+      // never overlap (either direction) the durable roots this daemon
+      // depends on: its workspace-data root, its agent L1 root, AND the
+      // global silverhand root. All three need their own ancestor guard —
+      // a connect custom data root can live on a disjoint volume, so the
+      // global root's ancestors are not covered transitively. The
+      // legacy-workspaces exemption survives only for paths strictly
+      // INSIDE the global root (the registry keys it off
+      // silverhandStateRoot).
+      protectedRoots: [
+        workspaceRegistryStateDir,
+        ...(agentHomeRootDir ? [agentHomeRootDir] : []),
+        silverhandStateRoot,
+      ],
     });
+  };
+  // #task:1596 round 3 (Cindy P1-1) — registry construction (including the
+  // durable workspace-data migration it runs) must fail INSIDE each
+  // intent's typed boundary: a WorkspaceRegistryError here
+  // (migration_blocked / registry_corrupt / registry_foreign) becomes the
+  // intent's own typed `registry_unavailable`, never the dispatcher's
+  // generic internal_error.
+  const buildRegistryAs = <E extends Error>(
+    binding: RegistryBinding,
+    wrap: (message: string) => E,
+  ): WorkspaceRegistry => {
+    try {
+      return workspaceRegistry(binding);
+    } catch (err) {
+      if (err instanceof WorkspaceRegistryError) throw wrap(err.message);
+      throw err;
+    }
   };
   const resolveProxyConfigPath = (): string | null => {
     if (opts.proxyConfigPath) return opts.proxyConfigPath;
@@ -625,9 +710,8 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = workspaceRegistry(binding);
       try {
-        return registry.resolve(workspaceId);
+        return workspaceRegistry(binding).resolve(workspaceId);
       } catch (err) {
         if (err instanceof WorkspaceRegistryError) {
           throw new RuntimeStartResolveError(
@@ -720,7 +804,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = workspaceRegistry(binding);
+      const registry = buildRegistryAs(
+        binding,
+        m => new WorkspaceProvisionError('registry_unavailable', m),
+      );
       return provisionWorkspace(params, { registry, logger });
     },
     // D4.e-1 — agent_workspace_index: route-time `agent_dir` resolver.
@@ -735,7 +822,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = workspaceRegistry(binding);
+      const registry = buildRegistryAs(
+        binding,
+        m => new AgentWorkspaceIndexError('registry_unavailable', m),
+      );
       return indexAgentWorkspaces(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
@@ -749,7 +839,12 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // to the same L1 dir. No server-derived path crosses the wire.
     agentWorkspaceTreeHandler: async params => {
       const binding = params.workspace_id ? resolveRegistryBinding() : null;
-      const registry = binding ? workspaceRegistry(binding) : undefined;
+      const registry = binding
+        ? buildRegistryAs(
+            binding,
+            m => new AgentWorkspaceFsError('registry_unavailable', m),
+          )
+        : undefined;
       return listAgentWorkspaceTree(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
@@ -762,7 +857,12 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // so the daemon never follows a symlink or reads outside the resolved base.
     agentWorkspaceFileReadHandler: async params => {
       const binding = params.workspace_id ? resolveRegistryBinding() : null;
-      const registry = binding ? workspaceRegistry(binding) : undefined;
+      const registry = binding
+        ? buildRegistryAs(
+            binding,
+            m => new AgentWorkspaceFsError('registry_unavailable', m),
+          )
+        : undefined;
       return readAgentWorkspaceFile(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,
@@ -782,7 +882,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = workspaceRegistry(binding);
+      const registry = buildRegistryAs(
+        binding,
+        m => new AgentL2SeedError('registry_unavailable', m),
+      );
       return seedAgentL2(params, { registry });
     },
     // D4.e-4 — agent_files_purge: remove an agent's host-local L1/L2 files
@@ -801,7 +904,10 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           'daemon not attached to a control plane; cannot resolve workspace registry binding',
         );
       }
-      const registry = workspaceRegistry(binding);
+      const registry = buildRegistryAs(
+        binding,
+        m => new AgentFilesPurgeError('registry_unavailable', m),
+      );
       return purgeAgentFiles(params, {
         registry,
         homeDir: opts.testHooks?.agentMaterializeHomeDir,

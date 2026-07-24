@@ -71,7 +71,9 @@ export async function indexAgentWorkspaces(
           unresolved.push(workspaceId);
           continue;
         }
-        if (err.code === 'registry_foreign' || err.code === 'registry_corrupt') {
+        if (err.code === 'registry_foreign' ||
+        err.code === 'registry_corrupt' ||
+        err.code === 'migration_blocked') {
           // Whole-registry failure → fail the call (typed).
           throw new AgentWorkspaceIndexError('registry_unavailable', err.message);
         }

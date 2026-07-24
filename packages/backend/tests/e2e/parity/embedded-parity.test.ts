@@ -46,6 +46,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  HostClient,
   OutboundDaemonToServerCommandResponseFrameSchema,
   OutboundDaemonToServerEventFrameSchema,
   OutboundHeartbeatFrameSchema,
@@ -55,6 +56,7 @@ import {
 import {
   runDaemon,
   Supervisor,
+  writeHostConfigAtomic,
   type RunningDaemon,
   type SupervisorOptions,
 } from '@silverhand/host/daemon';
@@ -209,6 +211,8 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
     daemonIdentityPath: null,
     runtimePidRootDir,
     controlPlaneServerUrlPath,
+    // #task:1596 — sandbox the durable workspace-data (default = real home).
+    workspaceDataRootDir: join(daemonDir, 'workspace-data'),
     testHooks: { agentMaterializeHomeDir: agentHomeDir },
     supervisorFactory: ({
       emit,
@@ -245,6 +249,36 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
   // 2) Recording proxy in front of the daemon's outbound socket.
   const proxy = new RecordingUnixProxy(proxySock, daemonOutboundSock);
   await proxy.listen();
+
+  // 2b) Attach the daemon to its claimed host identity, mirroring what
+  //     desktop main does in production (`host_outbound_attach` with the
+  //     app-managed daemon-config). Since #task:1595 the daemon's prompt
+  //     Computer authority is the LIVE authenticated binding and a
+  //     runtime_start on an unattached daemon fails closed
+  //     (`registry_unavailable`), so an embedded fixture without this step
+  //     no longer spawns. The server_url is never dialed successfully here
+  //     (nothing listens) — attach accepts the validated config and sets the
+  //     binding regardless, exactly like the pre-login desktop window.
+  const hostConfigPath = join(tmpDir, 'daemon-config.json');
+  writeHostConfigAtomic(hostConfigPath, {
+    server_url: 'http://127.0.0.1:58128',
+    host_id: 'parity-embedded-host',
+    host_token: 'parity-host-token',
+  });
+  {
+    const attachClient = new HostClient({ socketPath: controlSock });
+    await attachClient.connect();
+    try {
+      const attached = await attachClient.hostOutboundAttach({
+        config_path: hostConfigPath,
+      });
+      if (!attached.attached) {
+        throw new Error('parity fixture: host_outbound_attach failed');
+      }
+    } finally {
+      await attachClient.close();
+    }
+  }
 
   // 3) Real embedded backend dialing the PROXY socket (so we capture the
   //    real frames it puts on the wire). The embedded adapter connects from

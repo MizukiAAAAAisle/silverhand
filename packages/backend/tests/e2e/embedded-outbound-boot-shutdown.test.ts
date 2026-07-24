@@ -158,6 +158,14 @@ class FakeOutboundDaemon {
         provisioned: true,
         bound_workspace_path: requested ?? '/host/ws/provisioned',
       });
+    } else if (cmd.kind === 'agent_l2_seed') {
+      // Cross-computer slice 1 (#task:1596): runtime_start is also preceded
+      // by a blocking pre-spawn L2 seed on the dispatch host — ack it.
+      this.respondResult(cmd, {
+        ok: true,
+        seeded: true,
+        l2_present: true,
+      });
     } else if (cmd.kind === 'host_status') {
       // #task:1588 slice 2 — the fanout eager-seeds the host-status read
       // model on `ready`; answer with a schema-valid snapshot so the

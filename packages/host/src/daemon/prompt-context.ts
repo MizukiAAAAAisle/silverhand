@@ -88,7 +88,15 @@ export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
       workspace.kind === 'agent_home' ? `${workspace.name} (DM)` : workspace.name;
     return {
       label: isCurrent ? `${baseLabel} (current)` : baseLabel,
-      memoryPath: join(memoryDirFor(workspace, options.agent.id), 'MEMORY.md'),
+      // path === null → no local realization on this computer yet; the
+      // renderer marks the entry unavailable instead of fabricating a path.
+      memoryPath:
+        workspace.path === null
+          ? null
+          : join(
+              memoryDirFor({ ...workspace, path: workspace.path }, options.agent.id),
+              'MEMORY.md',
+            ),
     };
   });
 }
