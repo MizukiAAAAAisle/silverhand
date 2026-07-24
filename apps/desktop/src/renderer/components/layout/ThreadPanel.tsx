@@ -21,7 +21,13 @@ import {
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
-import { threadClusterShowsLoader, threadLiveMarkReadSeq, threadMarkReadSnapshot, threadOpenNeedsLatestRefetch } from './threadMarkRead';
+import {
+  threadClusterShowsLoader,
+  threadLiveMarkReadSeq,
+  threadMarkReadSnapshot,
+  threadOpenNeedsLatestRefetch,
+  threadTailIsVisible,
+} from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { type JumpPhase, jumpWindowLockedForPhase, threadLocateAllowed } from '@/features/channels/messageJumpPhase';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
@@ -581,7 +587,7 @@ export function ThreadPanel({
   // but `document.hidden` read inline isn't reactive — `visibilitychange` fires
   // no React render. Without this, a reply that arrives while the app is
   // backgrounded correctly stays unread, but when the user returns to the
-  // foreground (pinned at the tail, reply now on screen) nothing re-runs the
+  // foreground (tail reply now on screen) nothing re-runs the
   // gate, so it lingers unread until the next message/scroll/reopen. Mirroring
   // visibility into state makes the return-to-visible transition a dependency
   // that re-fires the live-mark effect.
@@ -597,18 +603,28 @@ export function ThreadPanel({
 
   // VISIBLE-LIVE mark: a reply arriving while the panel is open + watched should
   // clear unread without a close/reopen. Follow the read cursor to the newest
-  // reply ONLY while pinned at the tail (it's on screen) AND the window is
-  // visible — never swallowing an unrendered tail (scrolled up) or a
-  // backgrounded panel. `threadLiveMarkReadSeq` is the pure gate; debounced so a
+  // reply ONLY while the committed DOM viewport reaches the true stream tail
+  // AND the window is visible — never swallowing an unrendered tail (scrolled
+  // up) or a backgrounded panel. The actual viewport is sampled here instead
+  // of trusting `pinBottomRef`: that ref controls follow intent and can be stale
+  // after a clamped/no-op jump scroll. `threadLiveMarkReadSeq` is the pure gate;
+  // debounced so a
   // burst of replies collapses to one mark at the latest visible seq
   // (max-VISIBLE, not latest-known — `messages` is the loaded
   // window). `lastMarkedSeqRef` (advanced on success) keeps it forward-only.
   // `documentVisible` is a dep so returning to the foreground re-runs the gate.
   const maxLoadedSeq = lastCommittedSeq(messages);
-  const pinnedAtTail = isAtTail && pinBottomRef.current;
   useEffect(() => {
+    const viewport = scrollRef.current;
     const seq = threadLiveMarkReadSeq({
-      pinnedAtTail,
+      tailVisible:
+        viewport !== null &&
+        threadTailIsVisible({
+          streamAtTail: isAtTail,
+          scrollHeight: viewport.scrollHeight,
+          scrollTop: viewport.scrollTop,
+          clientHeight: viewport.clientHeight,
+        }),
       documentVisible,
       maxVisibleSeq: maxLoadedSeq,
       lastMarkedSeq: lastMarkedSeqRef.current,
@@ -623,7 +639,19 @@ export function ThreadPanel({
       liveMarkTimerRef.current = null;
       // Re-check at fire time: the user may have scrolled up or backgrounded
       // the app during the debounce window.
-      if (!(isAtTail && pinBottomRef.current) || document.hidden) return;
+      const currentViewport = scrollRef.current;
+      if (
+        currentViewport === null ||
+        !threadTailIsVisible({
+          streamAtTail: isAtTail,
+          scrollHeight: currentViewport.scrollHeight,
+          scrollTop: currentViewport.scrollTop,
+          clientHeight: currentViewport.clientHeight,
+        }) ||
+        document.hidden
+      ) {
+        return;
+      }
       issueMarkRead(seq);
     }, 300);
     return () => {
@@ -632,7 +660,13 @@ export function ThreadPanel({
         liveMarkTimerRef.current = null;
       }
     };
-  }, [pinnedAtTail, documentVisible, maxLoadedSeq, isAtTail, issueMarkRead]);
+  }, [
+    showScrollBottom,
+    documentVisible,
+    maxLoadedSeq,
+    isAtTail,
+    issueMarkRead,
+  ]);
 
   // Flush a SEEN-but-unmarked tail reply when THIS open ends — the panel closes
   // (unmount) or switches to another thread — before the 300ms visible-live

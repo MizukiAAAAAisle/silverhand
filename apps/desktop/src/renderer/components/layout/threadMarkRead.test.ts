@@ -6,6 +6,7 @@ import {
   threadLiveMarkReadSeq,
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
+  threadTailIsVisible,
   type ThreadMarkReadGateInput,
   type ThreadLiveMarkReadInput,
 } from './threadMarkRead';
@@ -257,7 +258,7 @@ describe('cluster freshness epoch carrier (primeAround → gate, §9.10)', () =>
 describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
   // `maxVisibleSeq` / `lastMarkedSeq` are taken as raw numbers (or null) and
   // decoded to MessageSeq here (slice-A pattern), so overrides pass plain
-  // literals. Default: pinned + visible, tail 42, marked 10.
+  // literals. Default: actual tail visible, document visible, tail 42, marked 10.
   const live = (
     over: Partial<
       Omit<ThreadLiveMarkReadInput, 'maxVisibleSeq' | 'lastMarkedSeq'>
@@ -268,7 +269,7 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
   ): ThreadLiveMarkReadInput => {
     const { maxVisibleSeq, lastMarkedSeq, ...rest } = over;
     return {
-      pinnedAtTail: true,
+      tailVisible: true,
       documentVisible: true,
       maxVisibleSeq:
         maxVisibleSeq === undefined
@@ -286,12 +287,12 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
     };
   };
 
-  it('tail pinned + visible + newer reply → marks to the visible tail seq', () => {
+  it('tail visible + newer reply → marks to the visible tail seq', () => {
     expect(threadLiveMarkReadSeq(live())).toBe(42);
   });
 
-  it('not pinned at tail (scrolled up) → null (no swallow of unrendered tail)', () => {
-    expect(threadLiveMarkReadSeq(live({ pinnedAtTail: false }))).toBeNull();
+  it('tail not visible (scrolled up) → null (no swallow of unrendered tail)', () => {
+    expect(threadLiveMarkReadSeq(live({ tailVisible: false }))).toBeNull();
   });
 
   it('document hidden / backgrounded → null even when pinned at tail', () => {
@@ -333,17 +334,70 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
     // reply)…
     expect(
       threadLiveMarkReadSeq(
-        live({ pinnedAtTail: true, maxVisibleSeq: 42, lastMarkedSeq: 10, documentVisible: false }),
+        live({
+          tailVisible: true,
+          maxVisibleSeq: 42,
+          lastMarkedSeq: 10,
+          documentVisible: false,
+        }),
       ),
     ).toBeNull();
     // …and the moment the user returns to the foreground (visibilitychange →
-    // documentVisible true, same pinned tail) the SAME seq becomes markable.
+    // documentVisible true, same visible tail) the SAME seq becomes markable.
     // The component wires `documentVisible` as a state/effect dependency so this
     // transition actually re-runs the gate.
     expect(
       threadLiveMarkReadSeq(
-        live({ pinnedAtTail: true, maxVisibleSeq: 42, lastMarkedSeq: 10, documentVisible: true }),
+        live({
+          tailVisible: true,
+          maxVisibleSeq: 42,
+          lastMarkedSeq: 10,
+          documentVisible: true,
+        }),
       ),
     ).toBe(42);
+  });
+});
+
+describe('threadTailIsVisible (#task:1610 live unread)', () => {
+  it('uses committed viewport position, not a mutable follow-intent ref', () => {
+    expect(
+      threadTailIsVisible({
+        streamAtTail: true,
+        scrollHeight: 1_000,
+        scrollTop: 600,
+        clientHeight: 400,
+      }),
+    ).toBe(true);
+  });
+
+  it('does not treat the local bottom of a mid-history window as the stream tail', () => {
+    expect(
+      threadTailIsVisible({
+        streamAtTail: false,
+        scrollHeight: 1_000,
+        scrollTop: 600,
+        clientHeight: 400,
+      }),
+    ).toBe(false);
+  });
+
+  it('preserves the existing 20px bottom tolerance without swallowing a scrolled-up tail', () => {
+    expect(
+      threadTailIsVisible({
+        streamAtTail: true,
+        scrollHeight: 1_000,
+        scrollTop: 581,
+        clientHeight: 400,
+      }),
+    ).toBe(true);
+    expect(
+      threadTailIsVisible({
+        streamAtTail: true,
+        scrollHeight: 1_000,
+        scrollTop: 579,
+        clientHeight: 400,
+      }),
+    ).toBe(false);
   });
 });

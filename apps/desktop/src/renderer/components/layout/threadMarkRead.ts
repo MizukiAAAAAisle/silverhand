@@ -130,10 +130,11 @@ export function threadClusterShowsLoader(input: {
 }
 
 export interface ThreadLiveMarkReadInput {
-  /** The viewer is pinned at the tail — the newest reply is on screen. When
-   *  false (scrolled up into history) the newest reply isn't seen, so we must
-   *  NOT advance: no-swallow means the cursor only follows what was visible. */
-  pinnedAtTail: boolean;
+  /** The viewer's actual scroll viewport reaches the true stream tail — the
+   *  newest reply is on screen. This is deliberately an observed DOM fact, not
+   *  the panel's follow/pin intent: that mutable intent can become stale after
+   *  a jump or a no-op programmatic scroll. */
+  tailVisible: boolean;
   /** The app window / document is visible. A panel that is "open" but
    *  backgrounded hasn't actually been seen, so a live append must not mark it
    *  read (Cindy bar #4). */
@@ -156,8 +157,9 @@ export interface ThreadLiveMarkReadInput {
  * (`threadMarkReadSnapshot`); THIS governs subsequent live appends.
  *
  * Returns the seq to advance the read cursor to, or null to hold unread. We
- * advance ONLY when the newest reply is genuinely on screen (pinned at tail AND
- * the window visible) and it is newer than what we've marked — so a reply that
+ * advance ONLY when the newest reply is genuinely on screen (the actual
+ * viewport reaches the stream tail AND the window is visible) and it is newer
+ * than what we've marked — so a reply that
  * lands while the user is scrolled up, or the app is backgrounded, stays unread
  * until they actually see it. This preserves the no-swallow invariant: the
  * cursor never jumps past an unrendered tail.
@@ -170,7 +172,7 @@ export interface ThreadLiveMarkReadInput {
 export function threadLiveMarkReadSeq(
   input: ThreadLiveMarkReadInput,
 ): MessageSeq | null {
-  if (!input.pinnedAtTail) return null;
+  if (!input.tailVisible) return null;
   if (!input.documentVisible) return null;
   if (input.maxVisibleSeq === null) return null;
   // Same-stream (this thread) MessageSeq compare, guarded on explicit absence:
@@ -178,4 +180,32 @@ export function threadLiveMarkReadSeq(
   if (input.lastMarkedSeq !== null && input.maxVisibleSeq <= input.lastMarkedSeq)
     return null;
   return input.maxVisibleSeq;
+}
+
+export interface ThreadTailVisibilityInput {
+  /** Whether the loaded cluster window reaches the authoritative stream tail. */
+  streamAtTail: boolean;
+  /** Scroll-container metrics sampled after the current render committed. */
+  scrollHeight: number;
+  scrollTop: number;
+  clientHeight: number;
+  /** Existing ThreadPanel bottom tolerance, in CSS pixels. */
+  tolerancePx?: number;
+}
+
+/**
+ * Whether the newest reply is actually visible in the thread viewport.
+ *
+ * Keeping this as an observed scroll fact closes a subtle split-brain: the
+ * follow-bottom ref is navigation intent, and can remain false when a jump's
+ * `scrollIntoView()` is clamped/no-op at an already-visible bottom. Read-state
+ * must follow what the user can see, not that stale intent bit.
+ */
+export function threadTailIsVisible(
+  input: ThreadTailVisibilityInput,
+): boolean {
+  if (!input.streamAtTail) return false;
+  const remaining =
+    input.scrollHeight - input.scrollTop - input.clientHeight;
+  return remaining <= (input.tolerancePx ?? 20);
 }
