@@ -217,7 +217,7 @@ describe('workspace/conversation routes', () => {
     expect(await res.json()).toMatchObject({ code: 'host_not_owned' });
   });
 
-  it('rejects workspace create members whose host does not match the workspace host', async () => {
+  it('accepts workspace create members on another computer (#task:1600 gate lifted)', async () => {
     t = buildTestApp();
     const teammateHeaders = {
       [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
@@ -231,15 +231,21 @@ describe('workspace/conversation routes', () => {
     ).json() as any;
 
     const res = await http(t).post('/api/workspaces', {
-      name: 'host-mismatch-create',
+      name: 'cross-computer-create-ok',
       member_agent_ids: [teammateAgent.agent.id],
     });
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
+    const memberRow = t.ctx.db
+      .prepare<[string, string], { agent_id: string }>(
+        'SELECT agent_id FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
+      )
+      .get(body.workspace.id, teammateAgent.agent.id);
+    expect(memberRow).toBeDefined();
   });
 
-  it('rejects addMember when agent and workspace hosts differ', async () => {
+  it('accepts addMember when agent and workspace hosts differ (#task:1600 gate lifted)', async () => {
     t = buildTestApp();
     const teammateHeaders = {
       [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
@@ -263,8 +269,9 @@ describe('workspace/conversation routes', () => {
       { agent_id: teammateAgent.agent.id },
     );
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
+    expect(body.member.agent_id).toBe(teammateAgent.agent.id);
   });
 
   it('serves channel message routes and retires public thread message routes', async () => {

@@ -30,7 +30,6 @@ import { seedMemberAgentL2 } from './agent-l2-seed.js';
  */
 export type AddWorkspaceAgentMemberError =
   | { code: 'agent_not_found' }
-  | { code: 'placement'; cause: unknown }
   | { code: 'seed_failed'; failure: DataPlaneFailure };
 
 export type AddWorkspaceAgentMemberResult =
@@ -52,19 +51,32 @@ export async function addWorkspaceAgentMember(
   const agent = agents.get(input.agentId);
   if (!agent) return { ok: false, error: { code: 'agent_not_found' } };
 
-  const hostId = input.workspace.workspace_host_id;
-  // ② pre-commit: placement policy (moved up from WorkspaceRepo, spec §4).
-  try {
-    ctx.placement.assertAgentMatchesHost(agent.id, hostId);
-  } catch (err) {
-    return { ok: false, error: { code: 'placement', cause: err } };
-  }
+  // #task:1600 final piece — the cross-computer PRODUCT ENTRY GATE is
+  // lifted: an agent on any computer may join. The internal paths were
+  // already reclassified to per-agent host axes (perimeter, fanout,
+  // list-workspaces, delete), the agent `computer=` header + prompt
+  // behavior contract ship in the same tree, and the seed below plans
+  // its ensure row by the agent's own computer, so no host-equality
+  // precondition remains.
 
   // ② pre-commit: L2 seed must succeed before we write the row (spec §2.1).
+  // Cross-computer slice 2 (#task:1600): the seed targets the AGENT's own
+  // daemon (`agent.host_id`) — L2 memory lives on the computer the agent
+  // runs on, which is not necessarily the workspace's home computer. The
+  // ensure row follows the #1596 pathless-guest plan: the legacy home
+  // `workspace_path` is forwarded ONLY when the agent IS on the workspace's
+  // home computer; a guest ensure ships `null` so the guest daemon
+  // self-picks its managed root — the home path never crosses machines.
   const seed = await seedMemberAgentL2(
     ctx,
-    hostId,
-    { id: input.workspace.id, workspace_path: input.workspace.workspace_path },
+    agent.host_id,
+    {
+      id: input.workspace.id,
+      workspace_path:
+        input.workspace.workspace_host_id === agent.host_id
+          ? input.workspace.workspace_path
+          : null,
+    },
     agent.id,
     { ensureProvisioned: true },
   );

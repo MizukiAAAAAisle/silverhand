@@ -223,15 +223,15 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(body.workspaces).toBeUndefined();
   });
 
-  it('cross-host membership set → explicit 409 workspace_host_ambiguous (no silent multi-host fan-out)', async () => {
+  it("cross-host membership set resolves against the AGENT's host; unprovisioned guest rows degrade to agent_dir null; home path never legacy-bound (#task:1600)", async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
 
-    // Forge an I4-violating state directly: a second host + a regular
-    // workspace on it that alice is a member of. Membership normally enforces
-    // host equality, so this can only arise via corruption — the route must
-    // reject it explicitly rather than fan out across two daemons.
+    // Cross-computer membership: a second host + a regular workspace on it
+    // that alice is a member of. Since #task:1600 this is a LEGAL state
+    // (the old 409 workspace_host_ambiguous defended the retired I4
+    // same-host invariant). Resolution now targets alice's OWN daemon.
     const db = t.ctx.db;
     const now = Date.now();
     db.prepare(
@@ -247,14 +247,29 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
         VALUES (?, ?, ?)`,
     ).run('ws-other-host', alice.agentId, now);
+    t.fakeHostWs!.calls.length = 0;
 
     const res = await http(t).get(listWorkspacesPath(alice.dmChannelId, alice.agentId));
-    expect(res.status).toBe(409);
+
+    // #task:1600 piece ②: the unprovisioned guest row degrades PER-ENTRY
+    // to `agent_dir: null` ("unavailable on this computer") — the response
+    // succeeds, same-host rows still resolve, and no path is fabricated.
+    expect(res.status).toBe(200);
     const body = await res.json() as any;
-    expect(body.code).toBe('workspace_host_ambiguous');
-    expect(body.workspaces).toBeUndefined();
-    // The legitimate single-host workspace is NOT leaked in a partial list.
-    expect(JSON.stringify(body)).not.toContain(reg.workspaceId);
+    const guest = body.workspaces.find((w: any) => w.id === 'ws-other-host');
+    expect(guest).toBeDefined();
+    expect(guest.agent_dir).toBeNull();
+    const regular = body.workspaces.find((w: any) => w.id === reg.workspaceId);
+    expect(typeof regular.agent_dir).toBe('string');
+
+    // Load-bearing #task:1600 pin: the guest workspace's HOME-computer
+    // `workspace_path` must never be dispatched as a legacy re-bind
+    // (`workspace_provision` requested_path) onto ALICE's daemon.
+    const provisioned = t.fakeHostWs!.calls
+      .filter(c => c.kind === 'workspace_provision')
+      .map(c => c.params.workspace_id);
+    expect(provisioned).not.toContain('ws-other-host');
+    expect(provisioned).toContain(reg.workspaceId);
   });
 
   it('exposes archived flag and immutable identity fields on each entry', async () => {

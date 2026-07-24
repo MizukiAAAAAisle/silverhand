@@ -14,18 +14,21 @@
  *
  * C5 installs `assertEventOwnership` BEFORE `stateForHost` (so
  * `this.states` Map stays clean on rejection). The full validation
- * chain for per-agent frames (short-circuited; first failure wins):
+ * chain for per-agent frames (short-circuited; first failure wins;
+ * cross-computer slice 2 #task:1600 removed the old workspace-host
+ * arm — a workspace's members may legitimately run on other
+ * computers, so the hostile "my agent, someone else's conversation"
+ * shape is carried entirely by the membership arm):
  *
  *   1. agents.get(agent_id) exists.
  *   2. agent.host_id === hostId.
  *   3. conversations.get(conversation_id) exists.
- *   4. workspaces.get(conversation.workspace_id).workspace_host_id === hostId.
- *   5. conversations.getAgent(conversation_id, agent_id) exists.
+ *   4. conversations.getAgent(conversation_id, agent_id) exists.
  *
  * Daemon-level frames (no `agent_id` — currently `ready` and
  * `shutting_down`) are admitted by construction.
  *
- * Pinned contracts (9 / 9 pass):
+ * Pinned contracts:
  *
  *   1. Same-host happy path (control).
  *   2. Cross-host runtime_ready_for_drain (kind with PRE-DISPATCH
@@ -35,9 +38,13 @@
  *      same drop, kind-agnostic.
  *   4. Unknown agent_id → drop, action
  *      `outbound_event_unknown_agent`.
- *   5. (Cindy P1.a) host X agent X + host Y conversation → drop,
- *      reason `conversation_host_mismatch`. agent ownership passes;
- *      this is what step (2) alone would have leaked.
+ *   5. (Cindy P1.a, reclassified by #task:1600) host X agent X +
+ *      host Y conversation WITHOUT membership → drop, reason
+ *      `agent_not_in_conversation`. agent ownership passes; the
+ *      membership arm is what excludes this shape now.
+ *   5b. (#task:1600) host X agent X + host Y conversation WITH
+ *      membership → ADMITTED: a cross-computer guest member's
+ *      events are legal.
  *   6. (Cindy P1.b) host X agent X + host X conversation but the
  *      (cid, aid) pair is NOT in `conversation_agents` → drop,
  *      reason `agent_not_in_conversation`.
@@ -86,6 +93,9 @@ interface PerimeterFixture {
    *  WITHOUT adding any agent to its `conversation_agents`. Used by
    *  the `agent_not_in_conversation` regression. */
   insertHostXChannelWithoutAgent(title: string): string;
+  /** Test helper (#task:1600): make hostX's agent a MEMBER of hostY's
+   *  channel — the legal cross-computer guest shape. */
+  addAgentXToHostYChannel(): void;
   cleanup(): void;
 }
 
@@ -185,6 +195,12 @@ function makePerimeterFixture(): PerimeterFixture {
     warns,
     hostX: { id: hostXId, channelId: channelX.id, agentId: agentX.id },
     hostY: { id: hostY.id, channelId: channelY.id, agentId: agentY.id },
+    addAgentXToHostYChannel: (): void => {
+      conversations.addAgent(channelY.id, agentX.id);
+      conversations.updateAgentRuntime(channelY.id, agentX.id, {
+        status: 'starting',
+      });
+    },
     insertHostXChannelWithoutAgent: (title: string): string => {
       // Fresh channel under hostX's workspace. No `conversation_agents`
       // row inserted — the agent is NOT a member of this conversation.
@@ -424,16 +440,14 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
     }
   });
 
-  // Cindy `dgCAVQ3fbHoOFvvN` P1 (a): host X uses ITS OWN agent but
-  // targets HOST Y's conversation. agent_host_mismatch wouldn't catch
-  // this — agent.host_id IS hostId. Without conversation_host_mismatch
-  // the event would publish into host Y's conversation (cross-tenant
-  // SSE / DB projection leak).
-  it('drops host X agent X + host Y conversation — states.size stays 0, no SSE / no RPC, warn tagged conversation_host_mismatch (Cindy P1.a)', () => {
+  // Cindy `dgCAVQ3fbHoOFvvN` P1 (a), reclassified by #task:1600: host X
+  // uses ITS OWN agent but targets HOST Y's conversation WITHOUT being a
+  // member. agent_host_mismatch wouldn't catch this — agent.host_id IS
+  // hostId. The old workspace-host arm is gone (guest members are legal
+  // now); the MEMBERSHIP arm is what excludes this cross-tenant shape.
+  it('drops host X agent X + host Y conversation without membership — warn tagged agent_not_in_conversation (Cindy P1.a / #task:1600)', () => {
     const fix = makePerimeterFixture();
     try {
-      // hostX agent + hostY conversation. agent ownership passes,
-      // step (4) catches `workspace.workspace_host_id !== hostId`.
       fix.fanout.onEvent(
         fix.hostX.id,
         parsedEventFrame(fix.hostY.channelId, fix.hostX.agentId),
@@ -450,11 +464,37 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
         connectionHostId: fix.hostX.id,
         agentId: fix.hostX.agentId,
         conversationId: fix.hostY.channelId,
-        workspaceHostId: fix.hostY.id,
         eventKind: 'runtime_parsed_event',
-        reason: 'conversation_host_mismatch',
+        reason: 'agent_not_in_conversation',
         action: 'outbound_event_perimeter_mismatch',
       });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  // #task:1600 falsifier for the reclassification: the SAME cross-host
+  // shape WITH membership is now legal — a guest member's daemon may
+  // emit events into a conversation whose workspace lives on another
+  // computer. Before slice 2 this was dropped as conversation_host_mismatch.
+  it('admits host X agent X + host Y conversation WITH membership — cross-computer guest events are legal (#task:1600)', () => {
+    const fix = makePerimeterFixture();
+    try {
+      fix.addAgentXToHostYChannel();
+      fix.fanout.onEvent(
+        fix.hostX.id,
+        parsedEventFrame(fix.hostY.channelId, fix.hostX.agentId),
+        'conn-1',
+      );
+
+      expect(perimeterWarns(fix.warns)).toEqual([]);
+      expect(
+        fix.warns.filter(
+          w => isRecord(w.obj) && w.obj.action === 'outbound_event_unknown_agent',
+        ),
+      ).toEqual([]);
+      // The event crossed the perimeter into per-host runtime state.
+      expect(fanoutStatesSize(fix.fanout)).toBe(1);
     } finally {
       fix.cleanup();
     }

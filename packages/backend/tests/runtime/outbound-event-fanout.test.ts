@@ -1326,7 +1326,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('D4.e-6 — fails closed (I4) when a referenced workspace is owned by a different host: no workspace_provision, no runtime_deliver', async () => {
+  it('#task:1600 — a cross-host ACTIVE workspace is a legal guest: provision dispatches PATHLESS to the agent host and delivery proceeds (ex-I4 fail-closed)', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       workspaceRegistryBackfiller: ({ transport, workspaces }) =>
@@ -1337,24 +1337,28 @@ describe('OutboundRuntimeEventFanout', () => {
         }),
     });
     try {
-      const delivery = enqueueMessage(fix, 'start me');
-      // Forge an I4 violation: the conversation's (only) workspace now claims a
-      // DIFFERENT (real) host than the agent's. The host-equality gate fires
-      // BEFORE the backfill inside the runtime_deliver closure and throws, so
-      // neither workspace_provision nor runtime_deliver is dispatched, and the
-      // rows stay pending.
+      enqueueMessage(fix, 'start me');
+      // The conversation's workspace now lives on a DIFFERENT (real) host
+      // than the agent. Pre-#task:1600 this threw the I4 host-equality
+      // error; it is now the legal cross-computer guest shape: dispatch
+      // stays on the AGENT's host, the guest provision goes out WITHOUT
+      // the home computer's workspace_path (daemon self-picks its managed
+      // root, #task:1596), and runtime_deliver proceeds.
       const otherHostId = new HostRepo(fix.db).create('host-other', 'local').id;
       fix.db
         .prepare(`UPDATE workspaces SET workspace_host_id = ?`)
         .run(otherHostId);
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
-      ).rejects.toThrow(/different host/);
-      expect(fix.transport.calls.some(c => c.kind === 'workspace_provision')).toBe(false);
-      expect(fix.transport.deliverCalls()).toHaveLength(0);
-      expect(
-        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
-      ).toEqual([delivery.inboxId]);
+      ).resolves.toBe(true);
+      const provisions = fix.transport.calls.filter(
+        c => c.kind === 'workspace_provision',
+      );
+      expect(provisions).toHaveLength(1);
+      // Guest provision: the home computer's path must NOT cross over.
+      expect(provisions[0]!.params.requested_path ?? null).toBeNull();
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
     } finally {
       fix.cleanup();
     }

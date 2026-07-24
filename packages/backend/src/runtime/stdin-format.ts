@@ -68,6 +68,7 @@ export interface MessageLite {
 export function formatInboxBatch(
   items: PendingConversationInboxItem[],
   agentNameById: (id: string) => string | undefined,
+  agentComputerIdById: (id: string) => string | undefined,
   userNameById: (id: string) => string | undefined,
   defaultUserHandle: string | undefined,
   recipientAgentName: string | undefined,
@@ -82,6 +83,7 @@ export function formatInboxBatch(
       const meta = formatStdinMessageHeader(
         message,
         agentNameById,
+        agentComputerIdById,
         userNameById,
         defaultUserHandle,
       );
@@ -109,7 +111,7 @@ export function formatInboxBatch(
  * in `[...]` so it is visually distinct from the body, which follows on the
  * next line):
  *
- *     [msg_id=<full-id> sender=@<handle>|system type=agent|human|system target=channel|thread:<root-id> time=<ISO8601>]
+ *     [msg_id=<full-id> sender=@<handle>|system type=agent|human|system computer=<host-id (agent rows only)> target=channel|thread:<root-id> time=<ISO8601>]
  *
  * - `sender` is the canonical mention handle (`@<agent.name>` /
  *   `@<user.name>`) so an agent can reply with `@<handle>` directly.
@@ -119,6 +121,15 @@ export function formatInboxBatch(
  *   messages emit `sender=system` with no `@`.
  * - `type` is the surface vocabulary: DB column `from_kind='user'`
  *   maps to `human` here; agent and system pass through.
+ * - `computer` (#task:1600, `type=agent` only) is the sender agent's
+ *   CURRENT `host_id`, resolved live at render time — never persisted
+ *   on the message, so it always reflects where that agent runs NOW.
+ *   Human/system rows carry no computer field, and an agent row whose
+ *   sender can no longer be resolved simply omits it — there is no
+ *   `computer=unknown` token, and a MISSING field must never be read
+ *   as "same computer" (the prompt behavior contract says exactly
+ *   this). Receivers compare it against their own Computer id to
+ *   decide whether the sender shares this filesystem.
  * - `target` names the stream this message belongs to: `channel` for
  *   main-line messages, or `thread:<root-id>` for a reply cluster.
  *   The message's own `msg_id` remains the relation handle agents pass
@@ -130,6 +141,7 @@ export function formatInboxBatch(
 export function formatStdinMessageHeader(
   msg: MessageLite,
   agentNameById: (id: string) => string | undefined,
+  agentComputerIdById: (id: string) => string | undefined,
   userNameById: (id: string) => string | undefined,
   defaultUserHandle: string | undefined,
 ): string {
@@ -152,7 +164,11 @@ export function formatStdinMessageHeader(
         ? agentNameById(msg.from_agent_id)
         : undefined;
       const sender = handle ? `@${handle}` : 'agent';
-      return `[msg_id=${msg.id} sender=${sender} type=agent target=${target} time=${time}${taskSuffix}]`;
+      const computerId = msg.from_agent_id
+        ? agentComputerIdById(msg.from_agent_id)
+        : undefined;
+      const computer = computerId ? ` computer=${computerId}` : '';
+      return `[msg_id=${msg.id} sender=${sender} type=agent${computer} target=${target} time=${time}${taskSuffix}]`;
     }
     case 'user': {
       const resolved = msg.from_user_id
@@ -186,30 +202,6 @@ export function formatStdinTimestamp(epochMs: number): string {
     `T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` +
     offset
   );
-}
-
-/** Single-message live-delivery form: one message addressed at one
- *  recipient agent, optionally @-mentioning them. */
-export function formatLiveMessage(
-  message: MessageLite,
-  agentNameById: (id: string) => string | undefined,
-  userNameById: (id: string) => string | undefined,
-  defaultUserHandle: string | undefined,
-  recipientAgentName: string | undefined,
-  sendMessageTool: string,
-): string {
-  const meta = formatStdinMessageHeader(
-    message,
-    agentNameById,
-    userNameById,
-    defaultUserHandle,
-  );
-  const suffix = formatAttachmentSuffix(message.attachments);
-  return `New message:\n${meta}\n${message.content}${suffix}\n\n${formatDeliveryInstruction(
-    [message],
-    recipientAgentName,
-    sendMessageTool,
-  )}`;
 }
 
 /** Render attachments as a short, deterministic suffix the agent can

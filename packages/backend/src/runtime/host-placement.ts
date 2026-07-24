@@ -22,8 +22,6 @@ export interface RuntimeHostPlacementControl extends RuntimeHostPlacement {
    * single-row "resolve" decision.
    */
   listOwnedActiveLocalForUser(userId: string): HostRow[];
-  assertAgentMatchesHost(agentId: string, hostId: string): void;
-  assertHostEqualityForMembership(agentId: string, workspaceId: string): void;
 }
 
 export class RuntimeHostPlacementResolver implements RuntimeHostPlacementControl {
@@ -139,13 +137,6 @@ export class RuntimeHostPlacementResolver implements RuntimeHostPlacementControl
     return { host: this.assertActiveHost(agent.host_id) };
   }
 
-  assertAgentMatchesHost(agentId: string, hostId: string): void {
-    this.deps.workspaces.assertAgentHostMatchesWorkspaceHost(agentId, hostId);
-  }
-
-  assertHostEqualityForMembership(agentId: string, workspaceId: string): void {
-    this.deps.workspaces.assertHostEqualityForMembership(agentId, workspaceId);
-  }
 }
 
 /**
@@ -187,13 +178,6 @@ export class DisabledRuntimeHostPlacement implements RuntimeHostPlacementControl
     throw disabled(`agent ${agentId} has no runtime host in standalone mode`);
   }
 
-  assertAgentMatchesHost(agentId: string, _hostId: string): void {
-    throw disabled(`agent ${agentId} host placement is disabled in standalone mode`);
-  }
-
-  assertHostEqualityForMembership(agentId: string, _workspaceId: string): void {
-    throw disabled(`agent ${agentId} host placement is disabled in standalone mode`);
-  }
 }
 
 function disabled(message: string): RuntimeHostPlacementError {

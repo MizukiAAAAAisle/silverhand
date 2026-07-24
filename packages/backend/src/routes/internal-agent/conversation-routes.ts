@@ -19,6 +19,7 @@ import {
   elapsedSince,
   timedRouteSpan,
 } from '../../observability/route-span.js';
+import { AgentRepo } from '../../repos/agent-repo.js';
 import { WorkspaceRepo } from '../../repos/workspace-repo.js';
 import {
   dispatchAgentWorkspaceIndex,
@@ -56,11 +57,11 @@ import type { InternalRouteDeps } from './deps.js';
  * host, or a failed backfill all FAIL CLOSED — the response carries a
  * diagnostic code, never a fabricated `workspace_path`-derived path.
  *
- * Single-host invariant: all of an agent's workspaces are
- * owned by one host, so resolution targets a SINGLE owning daemon. A
- * multi-host membership set is rejected with an explicit error rather than
- * silently fanned out across daemons (which would break M1 sticky
- * ownership).
+ * Cross-computer slice 2 (#task:1600): the resolution axis is the AGENT's
+ * host — the index renders paths as seen from the agent's own computer, so
+ * there is exactly ONE daemon to ask regardless of where the workspaces'
+ * home computers are. The old multi-host `workspace_host_ambiguous`
+ * rejection is gone with the I4 same-host invariant it defended.
  */
 type AgentListWorkspacesOutcome =
   | { kind: 'ok'; dto: AgentListWorkspacesDto }
@@ -79,31 +80,36 @@ async function buildAgentListWorkspacesDto(
 
   const adapter = ctx.outboundFrameAdapter?.() ?? null;
 
-  // Host invariant: every workspace an agent belongs to is
-  // owned by the agent's host — membership enforces `agent.host_id ==
-  // workspace_host_id`. This route resolves `agent_dir` against ONE owning
-  // daemon. A cross-host result would mean silently fanning out paths from
-  // different hosts in a single response, which breaks M1 sticky ownership.
-  // So a multi-host set is an EXPLICIT error, never a silent multi-host
-  // fan-out (this is the defensive realization of "I4 host equality").
-  const ownerHosts = new Set(workspaces.map(w => w.workspace_host_id));
-  if (ownerHosts.size > 1) {
+  // Cross-computer slice 2 (#task:1600): resolve against the AGENT's own
+  // daemon. Paths in this index are only meaningful on the computer the
+  // agent runs on, so the agent's host is the single correct resolution
+  // axis — never `workspace_host_id`, which names each workspace's home
+  // computer and may legitimately differ per row once members span
+  // computers.
+  const agent = new AgentRepo(ctx.db).get(agentId);
+  if (!agent) {
     return {
       kind: 'failed',
-      code: 'workspace_host_ambiguous',
-      message: `agent's workspaces span multiple hosts (${[...ownerHosts].join(', ')}); refusing cross-host agent_dir resolution`,
-      status: 409,
+      code: 'agent_not_found',
+      message: `agent ${agentId} not found`,
+      status: 404,
     };
   }
-  const hostId = workspaces[0]!.workspace_host_id;
+  const hostId = agent.host_id;
   const workspaceIds = workspaces.map(w => w.id);
-  // Backfill ONLY the rows this response needs resolved — the
-  // VISIBLE regular workspaces (agent_home is daemon-resolved from the homedir
-  // convention, never via the registry). An unrelated same-host regular row
-  // the agent can't see must never fail-close this agent's list, so we pass
-  // the scoped rows rather than enumerating every regular row on the host.
+  // Backfill ONLY the rows this response needs resolved — the VISIBLE
+  // regular workspaces whose HOME computer is this host (agent_home is
+  // daemon-resolved from the homedir convention, never via the registry;
+  // a guest workspace's `workspace_path` belongs to its home computer and
+  // must never be legacy-bound onto the agent's daemon — guest roots are
+  // provisioned pathless at spawn time, #task:1596). An unrelated
+  // same-host regular row the agent can't see must never fail-close this
+  // agent's list, so we pass the scoped rows rather than enumerating
+  // every regular row on the host.
   const regularRows = workspaces
-    .filter(w => w.workspace_kind === 'regular')
+    .filter(
+      w => w.workspace_kind === 'regular' && w.workspace_host_id === hostId,
+    )
     .map(w => ({ id: w.id, workspace_path: w.workspace_path }));
 
   const agentDirById = new Map<string, string>();
@@ -142,14 +148,24 @@ async function buildAgentListWorkspacesDto(
     if (index.kind === 'failed') {
       return failedOutcome(index);
     }
-    if (index.result.unresolved.length > 0) {
-      // Strict fail-closed: a regular workspace with no
-      // registry binding has NO agent_dir. Never derive one from
-      // workspace_path — surface a typed error instead.
+    // #task:1600 piece ② — unresolved ids split by axis:
+    //  - a row whose HOME computer is the agent's host was just
+    //    backfilled above, so "unresolved" is a genuine registry
+    //    inconsistency → strict fail-closed (unchanged contract);
+    //  - a GUEST row (home computer elsewhere) with no local binding is
+    //    the EXPECTED "unavailable on this computer" state → degrade
+    //    per-entry to `agent_dir: null` (never a fabricated path, never
+    //    a whole-response failure). It resolves once the workspace next
+    //    runs on this computer (spawn-time pathless provision).
+    const hostById = new Map(workspaces.map(w => [w.id, w.workspace_host_id]));
+    const sameHostUnresolved = index.result.unresolved.filter(
+      id => hostById.get(id) === hostId,
+    );
+    if (sameHostUnresolved.length > 0) {
       return {
         kind: 'failed',
         code: 'workspace_unresolved',
-        message: `daemon could not resolve agent_dir for workspace(s): ${index.result.unresolved.join(', ')}`,
+        message: `daemon could not resolve agent_dir for workspace(s): ${sameHostUnresolved.join(', ')}`,
         status: 409,
       };
     }
@@ -160,10 +176,11 @@ async function buildAgentListWorkspacesDto(
 
   const dto: AgentListWorkspacesDto = {
     workspaces: workspaces.map((w): AgentListedWorkspace => {
-      const agentDir = agentDirById.get(w.id);
-      if (!agentDir) {
-        // Unreachable: every id was resolved or tripped fail-closed above.
-        // Guard so a logic gap can never leak an empty/derived path.
+      const agentDir = agentDirById.get(w.id) ?? null;
+      if (agentDir === null && w.workspace_host_id === hostId) {
+        // Unreachable: every same-host id was resolved or tripped the
+        // strict fail-closed above. Guard so a logic gap can never leak
+        // an empty/derived path.
         throw new Error(`agent_dir unresolved for workspace ${w.id}`);
       }
       return {

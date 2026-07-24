@@ -224,7 +224,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     this.perimeter = new EventPerimeterGuard({
       agents: this.agents,
       conversations: this.conversations,
-      workspaces: this.workspaces,
       logger: opts.logger,
     });
     this.inboxAck = {
@@ -1084,11 +1083,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (entry && entry.phase !== 'idle' && entry.phase !== 'exited') {
       return;
     }
-    if (!this.runtimeStartHostsConsistent(hostId, conversationId, agentId)) {
-      throw new Error(
-        'runtime_start blocked: referenced workspace is owned by a different host',
-      );
-    }
     const backfillOk = await this.ensureRuntimeStartFilesystem(
       hostId,
       conversationId,
@@ -1175,47 +1169,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         `runtime_start blocked: reasoning_effort '${effort}' requires the target computer's daemon to advertise runtime.codex.reasoning.v1 — update the computer's Silverhand daemon or lower the effort`,
       );
     }
-  }
-
-  /**
-   * D4.e-6 I4 gate (Cindy P1-2): every workspace a `runtime_start` references
-   * — the primary conversation workspace + the agent's memory-index workspaces
-   * (`listForAgent`) — MUST be owned by the dispatch host. Under I4 an agent's
-   * memberships are all same-host, so a mismatch is DB corruption (e.g. a
-   * conversation whose `workspace_host_id` disagrees with the agent's host, or
-   * another host's regular workspace leaking into the membership set). We fail
-   * closed rather than dispatch `workspace_provision` / `runtime_start` for a
-   * foreign-host workspace. Returns true iff every referenced workspace is on
-   * `hostId`. Both kinds are checked (a foreign `agent_home` is corruption too).
-   */
-  private runtimeStartHostsConsistent(
-    hostId: string,
-    conversationId: string,
-    agentId: string,
-  ): boolean {
-    const conversation = this.conversations.get(conversationId);
-    if (!conversation) return true; // upstream builder fails; nothing to gate
-    const referenced = [
-      this.workspaces.get(conversation.workspace_id),
-      ...this.workspaces.listForAgent(agentId),
-    ];
-    for (const ws of referenced) {
-      if (!ws || ws.workspace_host_id === hostId) continue;
-      this.opts.logger.warn(
-        {
-          kind: 'inbox',
-          action: 'runtime_start_workspace_host_mismatch',
-          hostId,
-          conversationId,
-          agent_id: agentId,
-          workspace_id: ws.id,
-          workspace_host_id: ws.workspace_host_id,
-        },
-        'runtime_start blocked: a referenced workspace is owned by a different host (I4 violation); refusing to backfill/dispatch',
-      );
-      return false;
-    }
-    return true;
   }
 
   /**
@@ -1521,17 +1474,6 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           const connectionId =
             state.dispatchConnectionId ??
             this.connectedConnectionId(hostId, 'runtime_deliver');
-          if (
-            !this.runtimeStartHostsConsistent(
-              hostId,
-              params.conversation_id,
-              params.agent_id,
-            )
-          ) {
-            throw new Error(
-              'runtime_deliver blocked: a referenced workspace is owned by a different host',
-            );
-          }
           const backfillOk = await this.ensureRuntimeStartFilesystem(
             hostId,
             params.conversation_id,
@@ -1905,6 +1847,9 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       text: formatInboxBatch(
         [...claimed],
         id => this.agents.get(id)?.name,
+        // #task:1600 — the sender agent's CURRENT computer, resolved live
+        // (never persisted on the message).
+        id => this.agents.get(id)?.host_id,
         id => this.users.get(id)?.name,
         this.defaultUserHandle(conversationId),
         agent.name,

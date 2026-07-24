@@ -391,37 +391,6 @@ export class WorkspaceRepo {
       .run(id);
   }
 
-  assertAgentHostMatchesWorkspaceHost(agentId: string, workspaceHostId: string): void {
-    const agent = this.db
-      .prepare<[string], Pick<AgentRow, 'id' | 'host_id'>>(
-        `SELECT id, host_id FROM agents WHERE id = ?`,
-      )
-      .get(agentId);
-    if (!agent) {
-      throw new RuntimeHostPlacementError(
-        'agent_missing',
-        `agent ${agentId} not found`,
-      );
-    }
-    if (agent.host_id !== workspaceHostId) {
-      throw new RuntimeHostPlacementError(
-        'host_mismatch',
-        `agent ${agentId} host ${agent.host_id} does not match workspace host ${workspaceHostId}`,
-      );
-    }
-  }
-
-  assertHostEqualityForMembership(agentId: string, workspaceId: string): void {
-    const workspace = this.get(workspaceId);
-    if (!workspace) {
-      throw new RuntimeHostPlacementError(
-        'workspace_missing',
-        `workspace ${workspaceId} not found`,
-      );
-    }
-    this.assertAgentHostMatchesWorkspaceHost(agentId, workspace.workspace_host_id);
-  }
-
   /**
    * Insert a workspace membership row — PURE persistence (use-case-layer
    * spec §4). Returns the row plus a `created` flag (true only when this call

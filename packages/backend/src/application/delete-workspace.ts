@@ -3,29 +3,24 @@ import type { UserPrincipal } from '../auth/principal.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import { canGovernWorkspace } from '../permissions.js';
-import { assertWorkspaceAgentsMatchHost } from './workspace-placement.js';
 
 /**
  * DeleteWorkspace use case (#task:983 — P13a spec).
  *
  * Owns the full `DELETE /api/workspaces/:id` destructive cascade that previously
  * lived in the route body: idempotency / kind guard, owner-gate authorization,
- * the fail-closed placement preflight (BEFORE any side effect), the runtime stop
- * fan-out (`resolveConversationRuns('conversation_closed')` + per-agent hard
- * `stop`, fire-and-forget), the best-effort attachment-blob sweep, and the final
- * workspace-row delete (DB rows cascade via FK).
+ * the runtime stop fan-out (`resolveConversationRuns('conversation_closed')` +
+ * per-agent hard `stop`, fire-and-forget), the best-effort attachment-blob
+ * sweep, and the final workspace-row delete (DB rows cascade via FK).
  *
  * HTTP-agnostic by construction (mirror of `delete-agent.ts`): it returns a typed
  * {@link DeleteWorkspaceResult}; the route maps kind → HTTP status + body with an
  * exhaustive `switch` + `never` fallback. It never imports Hono `Context` and
- * never builds a `Response`. The `placementRejected` arm carries the raw thrown
- * `err` so the route can reuse `placementErrorResponse` (Cindy ruling a — no
- * duplicated status table) and rethrow on an unmapped error.
+ * never builds a `Response`.
  *
- * Side-effect ORDERING is the contract (Cindy ruling 5): preflight strictly
- * before the stop fan-out, sweep, and delete. There is intentionally NO outer
- * `db.transaction` — the unit of work is a single repo `delete` + FK CASCADE, and
- * P13a is a pure lift that neither adds nor removes a unit of work.
+ * There is intentionally NO outer `db.transaction` — the unit of work is a
+ * single repo `delete` + FK CASCADE, and P13a is a pure lift that neither adds
+ * nor removes a unit of work.
  */
 export interface DeleteWorkspaceDeps {
   ctx: BackendContext;
@@ -43,8 +38,7 @@ export type DeleteWorkspaceResult =
   | { kind: 'deleted' } //                         → 204
   | { kind: 'idempotentNoop' } //                  unknown id → 204
   | { kind: 'notDeletableKind' } //                existing non-regular workspace → 409
-  | { kind: 'forbidden' } //                       owner-gate → 403
-  | { kind: 'placementRejected'; err: unknown }; // → route maps via placementErrorResponse
+  | { kind: 'forbidden' }; //                      owner-gate → 403
 
 export async function deleteWorkspace(
   deps: DeleteWorkspaceDeps,
@@ -73,21 +67,15 @@ export async function deleteWorkspace(
   // emit `viewer_workspaces_changed(removed)` post-commit (#task:1404).
   const viewerUserIds = workspaces.listUserMemberIds(workspace.id);
 
-  // D4.c C3 — replaced the standalone-mode `host_runtime_disabled` short-circuit
-  // with an explicit placement preflight that runs in both deployment modes. This
-  // MUST run before any side effect: `runtimeHost.resolveConversationRuns`,
-  // runtime stop, `attachmentService.sweepForChannel`, `workspaces.delete`. If any
-  // agent's host placement no longer matches the workspace, fail-closed and leave
-  // every conversation / blob / row untouched.
-  try {
-    assertWorkspaceAgentsMatchHost(
-      { ctx, conversations },
-      workspace.id,
-      workspace.workspace_host_id,
-    );
-  } catch (err) {
-    return { kind: 'placementRejected', err };
-  }
+  // Cross-computer slice 2 (#task:1600): the old D4.c C3 placement preflight
+  // (every member agent's host must equal `workspace_host_id`) is gone — a
+  // workspace's members may legitimately live on other computers. Runtime
+  // stops below already route per agent (`runtimeHost.stop` resolves each
+  // agent's own host), and the delete removes no daemon-side files: guest
+  // computers' local roots stay behind as LOCALLY-RETAINED orphans awaiting
+  // a future explicit local cleanup on that computer (#1594: zero implicit
+  // deletion; after the cascade the membership rows are gone, so no current
+  // purge path can even enumerate them).
 
   for (const conversation of workspaceConversations) {
     ctx.runtimeHost.resolveConversationRuns(conversation.id, 'conversation_closed');

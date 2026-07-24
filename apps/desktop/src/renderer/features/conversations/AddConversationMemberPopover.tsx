@@ -10,7 +10,7 @@ import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsers } from '@/features/users/hooks';
 import { ApiError } from '@/lib/api';
-import { useWorkspaceMemberLists, useWorkspaces } from '../workspaces/hooks';
+import { useWorkspaceMemberLists } from '../workspaces/hooks';
 import { useConversationMembers } from './useConversationMembers';
 import { useAddConversationMember } from './useAddConversationMember';
 
@@ -32,11 +32,10 @@ export interface AddConversationMemberPopoverProps {
  * workspace are eligible for governance users because the server's
  * add-member use case provisions the workspace membership first under
  * the same admin-level guard — humans via a plain roster insert, agents
- * via the placement / L2-seed / capability-default path. External agents
- * are filtered to the workspace's own host (`host_id` match) because an
- * agent can only join a workspace on its own host, so cross-host agents
- * would always fail placement — hiding them keeps the picker free of
- * dead candidates. Members are first-class regardless of kind, so the
+ * via the L2-seed / capability-default path. Agents join from ANY
+ * computer (#task:1600 — cross-computer membership; a guest member's L2
+ * seeds on its own computer), so the global directory is never filtered
+ * by host. Members are first-class regardless of kind, so the
  * row treats them uniformly: avatar + display name + `@handle` on a
  * single line, with the avatar component picked by kind.
  *
@@ -96,7 +95,6 @@ function PopoverBody({
   const canPickGlobal = viewerRole === 'owner' || viewerRole === 'admin';
   const humans = useUsers({ enabled: canPickGlobal });
   const agents = useAgents({ enabled: canPickGlobal });
-  const workspaces = useWorkspaces();
   const conversationMembers = useConversationMembers(conversationId);
   const addMember = useAddConversationMember(conversationId, workspaceId);
 
@@ -105,27 +103,16 @@ function PopoverBody({
 
   const wsAgents: AgentDto[] = memberLists.data?.agents ?? [];
   const wsHumans: UserDto[] = memberLists.data?.humans ?? [];
-  // The workspace's own host. External agents must match it to be
-  // pickable — an agent can only join a workspace on its own host, so a
-  // cross-host pick would always fail placement. Null while the
-  // workspace list loads; no agent's `host_id` matches null, so external
-  // agents simply appear once it resolves (gated by `isLoading` below).
-  const workspaceHostId =
-    workspaces.data?.find(w => w.id === workspaceId)?.workspace_host_id ?? null;
   const pickableHumans = useMemo(() => {
     if (!canPickGlobal) return wsHumans;
     const workspaceIds = new Set(wsHumans.map(u => u.id));
     const externalHumans = (humans.data ?? []).filter(u => !workspaceIds.has(u.id));
     return [...wsHumans, ...externalHumans];
   }, [canPickGlobal, wsHumans, humans.data]);
-  const pickableAgents = useMemo(() => {
-    if (!canPickGlobal) return wsAgents;
-    const workspaceIds = new Set(wsAgents.map(a => a.id));
-    const externalAgents = (agents.data ?? []).filter(
-      a => !workspaceIds.has(a.id) && a.host_id === workspaceHostId,
-    );
-    return [...wsAgents, ...externalAgents];
-  }, [canPickGlobal, wsAgents, agents.data, workspaceHostId]);
+  const pickableAgents = useMemo(
+    () => computePickableAgents(canPickGlobal, wsAgents, agents.data ?? []),
+    [canPickGlobal, wsAgents, agents.data],
+  );
   const agentAvatars = useAgentAvatarObjectUrls(pickableAgents);
   const humanAvatars = useUserAvatarObjectUrls(pickableHumans);
 
@@ -173,7 +160,7 @@ function PopoverBody({
 
   const isLoading =
     !memberLists.data
-    || (canPickGlobal && (!humans.data || !agents.data || !workspaces.data))
+    || (canPickGlobal && (!humans.data || !agents.data))
     || conversationMembers.status === 'loading';
 
   return (
@@ -289,11 +276,6 @@ function formatError(err: unknown): string {
     switch (code) {
       case 'workspace_membership_required':
         return 'Agent 需要先加入 workspace 后才能添加。';
-      case 'host_mismatch':
-        // Defensive: the picker filters cross-host agents out, so this
-        // only surfaces on a race. Agents can't join a workspace on a
-        // different host.
-        return 'Agent 不在此 workspace 的 host 上,无法加入。';
       case 'host_attach_pending':
         return '当前 host 未连接,稍后再试。';
       case 'candidate_not_found':
@@ -322,4 +304,23 @@ function parseCode(body: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * #task:1600 — cross-computer membership contract for the picker: for a
+ * governance viewer, EVERY non-member agent from the global directory is
+ * pickable regardless of which computer it lives on (guest members are
+ * legal; their L2 seeds on their own daemon). Only "already a workspace
+ * member" narrows the list — which is why this helper deliberately takes
+ * NO host argument. Falsifier-tested in
+ * `AddConversationMemberPopover.test.ts`.
+ */
+export function computePickableAgents(
+  canPickGlobal: boolean,
+  wsAgents: AgentDto[],
+  globalAgents: AgentDto[],
+): AgentDto[] {
+  if (!canPickGlobal) return wsAgents;
+  const workspaceIds = new Set(wsAgents.map(a => a.id));
+  return [...wsAgents, ...globalAgents.filter(a => !workspaceIds.has(a.id))];
 }

@@ -1,6 +1,5 @@
 export type RuntimeHostPlacementErrorCode =
   | 'agent_missing'
-  | 'host_mismatch'
   | 'host_missing'
   | 'host_not_owned'
   | 'host_pending_attach'
@@ -18,7 +17,6 @@ export type RuntimeHostPlacementErrorCode =
   // (= zero hosts, user has no daemon) by carrying "you have
   // multiple — pick one" semantics rather than "you have none".
   | 'local_host_ambiguous'
-  | 'workspace_missing'
   // D4.a Commit 6 (3) — typed-fail for the narrow case where host
   // placement RESOLVED (a live host record exists, owned, not
   // revoked, runtime not disabled) but the daemon's outbound WS is

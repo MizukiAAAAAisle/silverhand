@@ -42,7 +42,6 @@ import { timedRouteSpan } from '../observability/route-span.js';
 import { createWorkspace } from '../application/create-workspace.js';
 import { deleteWorkspace } from '../application/delete-workspace.js';
 import { isWorkspaceNameAvailable } from '../application/name-availability.js';
-import { assertWorkspaceAgentsMatchHost } from '../application/workspace-placement.js';
 import { AgentHomeChannelError } from '../services/channel-service.js';
 import { channelServiceErrorResponse, placementErrorResponse } from './responses.js';
 
@@ -176,27 +175,11 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    // Placement preflight runs in both deployment modes. Iterate every existing agent-backed
-    // conversation in this workspace; if any agent's host placement
-    // no longer matches the workspace's `workspace_host_id`,
-    // fail-closed with 409 `host_mismatch`. This MUST run before
-    // any side effect: metadata write
-    // (`updateMutableMetadata`), the rename system message
-    // insert, or `runtimeHost.deliverMessage`. The same DB-level placement
-    // contract applies in both deployment modes. Agent-host assignments do not
-    // change today, but the preflight makes the invariant explicit so future
-    // agent-rebind paths cannot silently break workspace metadata writes.
-    try {
-      assertWorkspaceAgentsMatchHost(
-        { ctx, conversations },
-        workspace.id,
-        workspace.workspace_host_id,
-      );
-    } catch (err) {
-      const mapped = placementErrorResponse(c, err);
-      if (mapped) return mapped;
-      throw err;
-    }
+    // Cross-computer slice 2 (#task:1600): the old placement preflight
+    // (every member agent's host must equal `workspace_host_id`) is gone —
+    // a workspace's members may legitimately live on other computers, so
+    // host divergence is a normal state, not corruption. Metadata writes
+    // touch no host filesystem, so no placement condition remains here.
     if (parsed.data.name && parsed.data.name !== workspace.name) {
       const collision = workspaces.getByName(parsed.data.name);
       if (collision && collision.id !== workspace.id) {
@@ -280,11 +263,6 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         );
       case 'forbidden':
         return c.json({ error: 'forbidden' }, 403);
-      case 'placementRejected': {
-        const mapped = placementErrorResponse(c, result.err);
-        if (mapped) return mapped;
-        throw result.err;
-      }
       default: {
         const _exhaustive: never = result;
         throw new Error(

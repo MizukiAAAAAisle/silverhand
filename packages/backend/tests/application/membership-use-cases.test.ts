@@ -667,13 +667,15 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
     expect(result).toEqual({ ok: false, error: { code: 'agent_not_found' } });
   });
 
-  it('fails closed on a placement mismatch, persisting NO membership or caps', async () => {
+  it('a host-divergent workspace ref is a legal GUEST add (#task:1600): membership lands via a pathless agent-host seed', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
     const ws = await createRegularWorkspace(t, 'placement', [alice]);
     const deps = workspaceAgentDeps(t);
-    // Pre-commit precondition: bob's host does not match this (wrong) host.
+    t.fakeHostWs!.calls.length = 0;
+    // The workspace claims another home computer; bob (on the local host)
+    // joins as a cross-computer guest — the retired gate used to 409 this.
     const result = await addWorkspaceAgentMember(deps, {
       workspace: {
         ...workspaceRow(t, ws),
@@ -682,11 +684,13 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
       agentId: bob,
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('unreachable');
-    expect(result.error.code).toBe('placement');
-    // Nothing was written: placement is asserted BEFORE the UoW.
-    expect(deps.workspaces.isMember(ws, bob)).toBe(false);
-    expect(new AgentCapabilityRepo(t.ctx.db).list(ws, bob)).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(deps.workspaces.isMember(ws, bob)).toBe(true);
+    // Guest plan: the ensure ran on BOB's host without the home path.
+    const provision = t.fakeHostWs!.calls.find(
+      c => c.kind === 'workspace_provision',
+    );
+    expect(provision).toBeDefined();
+    expect('requested_path' in provision!.params).toBe(false);
   });
 });

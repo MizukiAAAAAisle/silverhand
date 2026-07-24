@@ -282,10 +282,23 @@ async function purgeAgentHostLocalFiles(
   | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus }
 > {
   const { ctx, workspaces } = deps;
-  const backfillRows: { id: string; workspace_path: string }[] = [];
+  // #task:1600 — the purge runs on the AGENT's computer; each membership's
+  // ensure row follows the #1596 pathless-guest plan: forward the legacy
+  // home `workspace_path` only for workspaces whose home computer IS the
+  // agent's host; a foreign (guest) membership ensures with `null` so the
+  // guest daemon resolves/provisions its own managed root — the home path
+  // never crosses machines and a coincidentally-existing foreign path can
+  // never be mis-bound and purged.
+  const backfillRows: { id: string; workspace_path: string | null }[] = [];
   for (const ws of impact.regular_memberships) {
     const w = workspaces.get(ws.id);
-    if (w) backfillRows.push({ id: w.id, workspace_path: w.workspace_path });
+    if (w) {
+      backfillRows.push({
+        id: w.id,
+        workspace_path:
+          w.workspace_host_id === agent.host_id ? w.workspace_path : null,
+      });
+    }
   }
   if (backfillRows.length > 0) {
     const backfill = await ctx.workspaceRegistryBackfiller?.ensure(

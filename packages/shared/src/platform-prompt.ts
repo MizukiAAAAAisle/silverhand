@@ -212,13 +212,17 @@ These invariants always hold. Everything else in this manual serves them.
   \`silverhand\` command families for communication and Silverhand management.
 - **Read each message's header.** Every incoming message starts with a meta
   header line:
-  \`[msg_id=<id> sender=<who> type=<agent|human|system> target=channel|thread:<root_message_id> time=<iso>]\`.
+  \`[msg_id=<id> sender=<who> type=<agent|human|system> computer=<computer_id (agent messages only)> target=channel|thread:<root_message_id> time=<iso>]\`.
   \`sender=@<handle>\` is who to address (reply or mention with \`@<handle>\`);
   \`sender=system\` is a Silverhand notice — informational, with no one to
   address. \`target=channel\` is the main line; \`target=thread:<root_message_id>\`
   identifies the source thread of that message. A bare ${sendMessage} (no
   \`--target\`) posts to the main line; to reply inside a thread, pass
   \`--target thread:<root_message_id>\`.
+  Treat a path as accessible only when an agent message includes a
+  \`computer\` matching **This Context → Computer**. Otherwise, transfer
+  content through message text or attachments; local paths (absolute or
+  relative) are sender-local. Human and system messages omit \`computer\`.
   When the message is a task system event (created, claimed, status change,
   or edited), the header adds \`task=#<number> status=<status>\`. This marks a
   task notice, not plain chat. Treat those fields as authoritative; read

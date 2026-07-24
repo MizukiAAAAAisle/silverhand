@@ -16,22 +16,24 @@
  *         `resolveOwnedLocalForUser` (the C1-installed 0/1/N
  *         policy). The synthetic `STANDALONE_SERVER` host row is
  *         no longer minted.
- *       * cross-host `member_agent_ids` → 409 `host_mismatch`
- *         BEFORE any fs / DB / blob side effect.
+ *       * cross-host `member_agent_ids` are ACCEPTED (#task:1600 —
+ *         both entry gates lifted); guest members pathless-provision
+ *         + seed on their own daemons before any membership row.
  *
- *   - PATCH /api/workspaces/:id:
- *       * `assertWorkspaceAgentsMatchHost` runs after parse,
- *         BEFORE any metadata write / system rename message /
- *         deliverMessage.
+ *   - PATCH /api/workspaces/:id and DELETE /api/workspaces/:id:
+ *       * Cross-computer slice 2 (#task:1600) REMOVED the old
+ *         `assertWorkspaceAgentsMatchHost` preflight — a member agent
+ *         on another computer is a legal state, so metadata writes and
+ *         the delete cascade proceed regardless of member hosts
+ *         (runtime stops route per agent; no daemon-side files are
+ *         removed, guest local roots stay behind as locally-retained
+ *         orphans awaiting future explicit local cleanup).
  *
- *   - DELETE /api/workspaces/:id:
- *       * Same preflight, BEFORE
- *         `runtimeHost.resolveConversationRuns`, runtime stop,
- *         attachment sweep, `workspaces.delete`.
- *
- *   - POST /api/workspaces/:id/members:
- *       * Cross-host real agent → 409 `host_mismatch` BEFORE
- *         `ensureAgentL1Dir` / `seedAgentL2`.
+ *   - POST /api/workspaces and POST /api/workspaces/:id/members:
+ *       * #task:1600 final piece LIFTED both cross-computer product
+ *         entry gates: members on other computers are accepted; their
+ *         L2 seeds plan pathless ensures on the member's own daemon
+ *         (`cross-computer-membership.test.ts` pins the data paths).
  *
  * NOTE on fs side-effect transitionality (Cindy P2): C3 does NOT
  * move the server-side placeholder dirs (`initWorkspaceDir`,
@@ -155,13 +157,12 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     expect(provisionCalls[0]!.hostId).toBe(target!.id);
   });
 
-  it('POST /api/workspaces (standalone) — cross-host `member_agent_ids` → 409 `host_mismatch`, no workspace row created', async () => {
+  it('POST /api/workspaces (standalone) — cross-host `member_agent_ids` are ACCEPTED (#task:1600 gate lifted): membership lands, guest ensure is pathless', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     // Direct DB insert: in standalone, POST /api/agents is still
-    // gated by `host_runtime_disabled` (defer to D4.d). The
-    // route under test is workspace-create's host_mismatch
-    // preflight, so seeding the agent via DB is sufficient and
-    // avoids cross-route coupling.
+    // gated by `host_runtime_disabled` (defer to D4.d). Seeding the
+    // cross-computer agent via DB is sufficient and avoids
+    // cross-route coupling.
     const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       'teammate',
     )!;
@@ -174,29 +175,34 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
       )
       .run(agentId, 'cross-host-create', teammateHost.id, 'teammate', now, now);
 
-    const workspaceCountBefore = t.ctx.db
-      .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM workspaces')
-      .get()!.c;
-
     const res = await http(t).post('/api/workspaces', {
-      name: 'standalone-host-mismatch',
+      name: 'standalone-cross-host-ok',
       member_agent_ids: [agentId],
     });
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
-
-    // The placement check runs BEFORE `initWorkspaceDir` and
-    // `workspaces.insert`, so neither side effect happens.
-    const workspaceCountAfter = t.ctx.db
-      .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM workspaces')
-      .get()!.c;
-    expect(workspaceCountAfter).toBe(workspaceCountBefore);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
+    // Membership landed for the guest agent.
+    const memberRow = t.ctx.db
+      .prepare<[string, string], { agent_id: string }>(
+        'SELECT agent_id FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
+      )
+      .get(body.workspace.id, agentId);
+    expect(memberRow).toBeDefined();
+    // The guest ensure ran on the AGENT's daemon WITHOUT the home path.
+    const guestProvisions = t.fakeHostWs!.calls.filter(
+      c =>
+        c.kind === 'workspace_provision' &&
+        c.hostId === teammateHost.id &&
+        c.params.workspace_id === body.workspace.id,
+    );
+    expect(guestProvisions).toHaveLength(1);
+    expect('requested_path' in guestProvisions[0]!.params).toBe(false);
   });
 
   // ── PATCH /api/workspaces/:id ───────────────────────────────
 
-  it('PATCH /api/workspaces/:id — cross-host agent in workspace channel → 409 `host_mismatch`, NO metadata write / system rename message / deliverMessage', async () => {
+  it('PATCH /api/workspaces/:id — cross-computer member agent is LEGAL: metadata write proceeds (#task:1600 reclassification)', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     // Seed: workspace owned by viewer's local host; channel +
     // synthetic agent row whose host is the teammate's host (not
@@ -218,10 +224,9 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     expect(ws.workspace.workspace_host_id).toBe(viewerHost.id);
 
     // Insert the synthetic cross-host agent + channel membership
-    // directly via DB (a route call would fail-closed at create
-    // time, which is the very contract C1+C3 install — we want
-    // a workspace whose channel ALREADY contains a cross-host
-    // agent to test PATCH/DELETE preflight).
+    // directly via DB (the add-member PRODUCT ENTRY GATE is still
+    // closed, so this state is forged the way a post-gate-lift
+    // deployment would produce it legitimately).
     const agentId = `cross-host-agent-${Date.now()}`;
     const now = Date.now();
     t.ctx.db
@@ -237,46 +242,23 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
       )
       .run(ws.onboarding_channel_id, agentId, now);
 
-    const beforeRow = t.ctx.db
-      .prepare<[string], { name: string; description: string | null; updated_at: number }>(
-        'SELECT name, description, updated_at FROM workspaces WHERE id = ?',
-      )
-      .get(ws.workspace.id)!;
-    const sysMsgCountBefore = t.ctx.db
-      .prepare<[string], { c: number }>(
-        `SELECT COUNT(*) AS c FROM messages
-          WHERE conversation_id = ? AND from_kind = 'system'`,
-      )
-      .get(ws.onboarding_channel_id)!.c;
-
     const res = await http(t).patch(`/api/workspaces/${ws.workspace.id}`, {
       name: 'patch-renamed',
     });
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
-
-    // No metadata write — name / description / updated_at unchanged.
+    // #task:1600: the old preflight 409 is gone — the rename succeeds
+    // even though a member agent lives on another computer.
+    expect(res.status).toBe(200);
     const afterRow = t.ctx.db
-      .prepare<[string], { name: string; description: string | null; updated_at: number }>(
-        'SELECT name, description, updated_at FROM workspaces WHERE id = ?',
+      .prepare<[string], { name: string }>(
+        'SELECT name FROM workspaces WHERE id = ?',
       )
       .get(ws.workspace.id)!;
-    expect(afterRow).toEqual(beforeRow);
-    // No system rename message inserted.
-    const sysMsgCountAfter = t.ctx.db
-      .prepare<[string], { c: number }>(
-        `SELECT COUNT(*) AS c FROM messages
-          WHERE conversation_id = ? AND from_kind = 'system'`,
-      )
-      .get(ws.onboarding_channel_id)!.c;
-    expect(sysMsgCountAfter).toBe(sysMsgCountBefore);
-    // No deliverMessage call recorded on the fake.
-    expect(t.fake.delivered).toEqual([]);
+    expect(afterRow.name).toBe('patch-renamed');
   });
 
   // ── DELETE /api/workspaces/:id ──────────────────────────────
-  it('DELETE /api/workspaces/:id — cross-host agent → 409 `host_mismatch`, workspace + channel + agents all still present', async () => {
+  it('DELETE /api/workspaces/:id — cross-computer member agent is LEGAL: delete cascade proceeds (#task:1600 reclassification)', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       t.viewerUserId,
@@ -310,41 +292,31 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
 
     const res = await http(t).del(`/api/workspaces/${ws.workspace.id}`);
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
-
-    // Workspace row still present.
-    const wsRow = t.ctx.db
-      .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
-      .get(ws.workspace.id);
-    expect(wsRow).toBeDefined();
-    // Onboarding channel still present.
-    const chRow = t.ctx.db
-      .prepare<[string], { id: string }>(
-        'SELECT id FROM conversations WHERE id = ?',
-      )
-      .get(ws.onboarding_channel_id);
-    expect(chRow).toBeDefined();
-    // Agent row still active (no cascade-delete on rejected DELETE).
-    const agentRow = t.ctx.db
-      .prepare<[string], { id: string }>('SELECT id FROM agents WHERE id = ?')
-      .get(agentId);
-    expect(agentRow).toBeDefined();
-    // Runtime stop never called.
-    expect(t.fake.starts).toEqual([]);
+    // #task:1600: the old preflight 409 is gone — delete proceeds; rows
+    // cascade; the agent row itself survives (agents are not workspace
+    // property). No daemon-side files are touched by delete, so a guest
+    // computer's local root stays behind as a locally-retained orphan
+    // awaiting future explicit local cleanup on that computer.
+    expect(res.status).toBe(204);
+    expect(
+      t.ctx.db
+        .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
+        .get(ws.workspace.id),
+    ).toBeUndefined();
+    expect(
+      t.ctx.db
+        .prepare<[string], { id: string }>('SELECT id FROM agents WHERE id = ?')
+        .get(agentId),
+    ).toBeDefined();
   });
 
-  // D4.c C3 round-1 P1 (Cindy `BWZz2ps68DuvMKsW`): the helper must
-  // cover every conversation kind, not just `kind = 'channel'`.
-  // `listAllChannelsForWorkspace` returns channels only — a
-  // cross-host agent attached to a dm_channel would
-  // bypass the preflight while DELETE's downstream loop
-  // (`conversations.list().filter(workspace_id===id)`) would still
-  // walk the runtime stop / delete path on it. This test seeds
-  // a dm_channel (a non-channel kind is sufficient to pin the
-  // helper's coverage contract) carrying a cross-host agent
-  // and asserts BOTH PATCH and DELETE 409 + zero side effect.
-  it('PATCH/DELETE — cross-host agent attached to a DM_CHANNEL (not channel) is also caught by the preflight (Cindy round-1 P1)', async () => {
+  // #task:1600 reclassification of the old Cindy round-1 P1 pin: a
+  // cross-host agent attached to a NON-channel conversation kind
+  // (dm_channel) is exactly as legal as one on a channel — PATCH and
+  // DELETE both proceed. The kind-coverage concern the old preflight
+  // pin protected is preserved in inverted form: no conversation kind
+  // may smuggle a host-equality assumption back in.
+  it('PATCH/DELETE — cross-host agent attached to a DM_CHANNEL is legal too (#task:1600, ex-Cindy round-1 P1)', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       t.viewerUserId,
@@ -400,70 +372,45 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       )
       .run(dmId, agentId, now);
 
-    // PATCH must 409 + leave metadata / system message / runtime
-    // delivery untouched.
-    const beforeRow = t.ctx.db
-      .prepare<[string], { name: string; description: string | null; updated_at: number }>(
-        'SELECT name, description, updated_at FROM workspaces WHERE id = ?',
-      )
-      .get(ws.workspace.id)!;
-    const sysMsgCountBefore = t.ctx.db
-      .prepare<[string], { c: number }>(
-        `SELECT COUNT(*) AS c FROM messages
-          WHERE conversation_id = ? AND from_kind = 'system'`,
-      )
-      .get(ws.onboarding_channel_id)!.c;
-
+    // PATCH proceeds despite the cross-host dm_channel member.
     const patchRes = await http(t).patch(`/api/workspaces/${ws.workspace.id}`, {
-      name: 'thread-rename-attempt',
+      name: 'thread-rename-ok',
     });
-    expect(patchRes.status).toBe(409);
-    expect(await patchRes.json()).toMatchObject({ code: 'host_mismatch' });
+    expect(patchRes.status).toBe(200);
+    expect(
+      t.ctx.db
+        .prepare<[string], { name: string }>(
+          'SELECT name FROM workspaces WHERE id = ?',
+        )
+        .get(ws.workspace.id)!.name,
+    ).toBe('thread-rename-ok');
 
-    const afterRow = t.ctx.db
-      .prepare<[string], { name: string; description: string | null; updated_at: number }>(
-        'SELECT name, description, updated_at FROM workspaces WHERE id = ?',
-      )
-      .get(ws.workspace.id)!;
-    expect(afterRow).toEqual(beforeRow);
-    const sysMsgCountAfter = t.ctx.db
-      .prepare<[string], { c: number }>(
-        `SELECT COUNT(*) AS c FROM messages
-          WHERE conversation_id = ? AND from_kind = 'system'`,
-      )
-      .get(ws.onboarding_channel_id)!.c;
-    expect(sysMsgCountAfter).toBe(sysMsgCountBefore);
-    expect(t.fake.delivered).toEqual([]);
-
-    // DELETE must 409 + leave workspace / thread / agent intact +
-    // not call runtime stop.
+    // DELETE proceeds too; the workspace and its dm_channel cascade away,
+    // the agent row survives.
     const delRes = await http(t).del(`/api/workspaces/${ws.workspace.id}`);
-    expect(delRes.status).toBe(409);
-    expect(await delRes.json()).toMatchObject({ code: 'host_mismatch' });
-
+    expect(delRes.status).toBe(204);
     expect(
       t.ctx.db
         .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
         .get(ws.workspace.id),
-    ).toBeDefined();
+    ).toBeUndefined();
     expect(
       t.ctx.db
         .prepare<[string], { id: string }>(
           'SELECT id FROM conversations WHERE id = ?',
         )
         .get(dmId),
-    ).toBeDefined();
+    ).toBeUndefined();
     expect(
       t.ctx.db
         .prepare<[string], { id: string }>('SELECT id FROM agents WHERE id = ?')
         .get(agentId),
     ).toBeDefined();
-    expect(t.fake.starts).toEqual([]);
   });
 
   // ── POST /api/workspaces/:id/members ────────────────────────
 
-  it('POST /api/workspaces/:id/members (standalone) — cross-host agent → 409 `host_mismatch` and agent L2 dir is NOT created', async () => {
+  it('POST /api/workspaces/:id/members — cross-host agent is ACCEPTED (#task:1600 gate lifted); the HOME-path L2 dir is never created server-side', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     // Direct DB insert (standalone POST /api/agents is still
     // gated; see comment on the POST workspace cross-host test).
@@ -497,18 +444,25 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     );
     expect(existsSync(expectedL2Dir)).toBe(false);
 
+    t.fakeHostWs!.calls.length = 0;
+    // Pure ack for the guest seed: the shared embedded test fs conflates
+    // "both computers" onto one disk, so the default fake seed would write
+    // under the same path a real guest daemon would keep on ITS machine.
+    // What this pin protects is that the SERVER writes nothing.
+    t.fakeHostWs!.agentL2SeedAckOverride = () =>
+      ({ ok: true as const, seeded: true }) as any;
     const res = await http(t).post(
       `/api/workspaces/${ws.workspace.id}/members`,
       { agent_id: agentId },
     );
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'host_mismatch' });
-
-    // Critical fail-closed pin: no agent L2 dir leaked. D4.e-3 runs the
-    // placement check (`assertAgentMatchesHost`) fail-fast, BEFORE the
-    // daemon `agent_l2_seed` dispatch and the membership-row INSERT, so a
-    // rejected add-member produces no daemon seed and no fs side effect.
+    expect(res.status).toBe(201);
+    // The seed went to the GUEST daemon (agent's own computer), pathless
+    // ensure first; the HOME computer's workspace path gains no L2 dir —
+    // the guest L2 lives under the guest daemon's managed root.
+    const seed = t.fakeHostWs!.calls.find(c => c.kind === 'agent_l2_seed');
+    expect(seed).toBeDefined();
+    expect(seed!.hostId).toBe(teammateHost.id);
     expect(existsSync(expectedL2Dir)).toBe(false);
   });
 

@@ -175,7 +175,7 @@ agent spawn / inbox-drain / run-state 归 `packages/host`（daemon），backend 
 
 1. **agent-facing CLI 永远只暴露业务面**（message / task / channel / thread / workspace / file / schedule）。daemon 控制权（spawn / pid / version / token 颁发）属基础设施层，**不允许**写成 `silverhand host ...` 子命令。
 2. **backend 记 `(conversation, agent)` runtime intent / state；不记 OS process handle**。handle 永远归 host。
-3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。`host_id` membership precondition（`agent.host_id == workspace.host_id`）已经把 host 建模成一等公民，并作为 runtime 协议端点参与 spawn。
+3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。host 已被建模成一等公民并作为 runtime 协议端点参与 spawn；一切 runtime 归属都以 `agent.host_id` 为轴（cross-computer slice 2 起，workspace 成员可合法分布在不同 computer 上，`agent.host_id == workspace.host_id` 不再是任何层的前置条件；`workspace_host_id` 只表示 workspace 的 home computer。agent 消息 header 携带 `computer=`、prompt 行为合同与 membership 入口同批启用）。
 4. **CLI 不是秘密边界，backend token + ACL 才是**。任何"防止 agent 看见 X"的需求，应该走 backend authz，**不要**走"agent 看不见这个命令"的路径——agent 是有自主性的 actor，藏命令并不等同于授权拒绝。
 5. **创建 host-placed 资源时,origin surface 必须显式带 host。** `POST /api/agents` 的 `host_id`、`POST /api/workspaces` 的 `workspace_host_id` 以及未来任何 optional `*_host_id` 都不能让 desktop UI 依赖 backend 的 0/1/N fallback。即使 picker 因为当前只有一个 host 而隐藏,desktop 也要发送当前 bound host id；backend fallback 只保留给无 origin-host 上下文的 API/remote caller,并在多 host 时 fail closed (`local_host_ambiguous`)。
 
@@ -188,7 +188,7 @@ agent spawn / inbox-drain / run-state 归 `packages/host`（daemon），backend 
 | run state record | daemon → backend 通过 event 上报 |
 | backend ↔ daemon 通信 | `HostClient`（embedded 走 Unix socket，standalone 走 outbound WS）——已落地且**必需**，不是可选 |
 
-backend 已不再自己 host ConversationManager；spawn / stdin-stdout / inbox-drain / run-state 全部归 `packages/host` daemon。backend 只记 `(conversation, agent)` 的 runtime intent / state，不持有 OS process handle。**host 是真正的安全边界**：控制面（backend 记 intent / 颁 token / 走 ACL）与执行面（daemon 持 pid / 跑进程 / 触碰 fs 与 API key）分离，`host_id` membership precondition（`agent.host_id == workspace.host_id`）是 spawn 的前置条件。
+backend 已不再自己 host ConversationManager；spawn / stdin-stdout / inbox-drain / run-state 全部归 `packages/host` daemon。backend 只记 `(conversation, agent)` 的 runtime intent / state，不持有 OS process handle。**host 是真正的安全边界**：控制面（backend 记 intent / 颁 token / 走 ACL）与执行面（daemon 持 pid / 跑进程 / 触碰 fs 与 API key）分离；spawn 的归属轴是 `agent.host_id`（事件周界同样只查 agent 归属 + conversation membership，不查 workspace host——cross-computer slice 2 起 workspace host 只表示 workspace 的 home computer，不再约束成员分布）。
 
 ---
 

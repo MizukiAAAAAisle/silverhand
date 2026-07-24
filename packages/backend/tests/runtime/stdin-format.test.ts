@@ -68,6 +68,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         created_at: 0,
       },
       agentName,
+      agentComputer,
       userName,
       undefined,
     );
@@ -90,12 +91,13 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         created_at: 0,
       },
       agentName,
+      agentComputer,
       userName,
       undefined,
     );
 
     expect(header).toMatch(
-      /^\[msg_id=m-reply sender=@Alice type=agent target=thread:m-root time=/,
+      /^\[msg_id=m-reply sender=@Alice type=agent computer=host-alice target=thread:m-root time=/,
     );
   });
 
@@ -118,6 +120,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         }),
       },
       agentName,
+      agentComputer,
       userName,
       undefined,
     );
@@ -140,6 +143,7 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         metadata: null,
       },
       agentName,
+      agentComputer,
       userName,
       undefined,
     );
@@ -165,11 +169,82 @@ describe('formatStdinMessageHeader reply-cluster metadata', () => {
         }),
       },
       agentName,
+      agentComputer,
       userName,
       undefined,
     );
 
     expect(header).toContain('task=#7 status=in_progress');
+  });
+
+  // ── #task:1600 — conditional computer= header ──────────────────────
+
+  it('agent rows carry computer=<current host id>, resolved live at render time', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-a',
+        thread_root_id: null,
+        from_kind: 'agent',
+        from_agent_id: 'a1',
+        from_user_id: null,
+        content: 'hi',
+        created_at: 0,
+      },
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+    );
+    expect(header).toMatch(
+      /^\[msg_id=m-a sender=@Alice type=agent computer=host-alice target=channel time=/,
+    );
+  });
+
+  it('human and system rows NEVER carry a computer field', () => {
+    const human = formatStdinMessageHeader(
+      {
+        id: 'm-h',
+        thread_root_id: null,
+        from_kind: 'user',
+        from_agent_id: null,
+        from_user_id: 'u1',
+        content: 'hi',
+        created_at: 0,
+      },
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+    );
+    const system = formatStdinMessageHeader(
+      systemMessage({}),
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+    );
+    expect(human).not.toContain('computer=');
+    expect(system).not.toContain('computer=');
+  });
+
+  it('an unresolvable sender agent OMITS the field — no computer=unknown token exists', () => {
+    const header = formatStdinMessageHeader(
+      {
+        id: 'm-gone',
+        thread_root_id: null,
+        from_kind: 'agent',
+        from_agent_id: 'a-deleted',
+        from_user_id: null,
+        content: 'hi',
+        created_at: 0,
+      },
+      agentName,
+      agentComputer,
+      userName,
+      undefined,
+    );
+    expect(header).not.toContain('computer=');
+    expect(header).not.toContain('unknown');
   });
 });
 
@@ -188,6 +263,10 @@ function systemMessage(overrides: Partial<MessageLite> = {}): MessageLite {
 
 function agentName(id: string): string | undefined {
   return id === 'a1' ? 'Alice' : undefined;
+}
+
+function agentComputer(id: string): string | undefined {
+  return id === 'a1' ? 'host-alice' : undefined;
 }
 
 function userName(id: string): string | undefined {

@@ -1,8 +1,8 @@
 # Cross-Host Channel — 跨 host agent 同 channel
 
-> **Status**: v1 设计文档,**非实现**。本文档锁定"不同 host 上的 agent 共处同一 channel"的领域模型与不变量;落地拆成后续 PR。
+> **Status**: **已落地**(#task:1596 slice 1 + #task:1600 slice 2)。本文档是该特性的设计出处,锁定"不同 host 上的 agent 共处同一 channel"的领域模型与不变量;实现以 repo 代码为准。
 >
-> **Scope**: 这是一个 **communication-plane** feature。它**不**引入 federation / consensus / 跨 host 文件同步。唯一真正新增的领域概念是 per-(host, workspace) 的 **workspace local root** 及其 **ownership / 删除权**。落地依赖里,runtime placement 路由已由现行 `agents.host_id` + `RuntimeHostPlacementResolver` + per-host outbound routing 提供(见 `docs/orchestration-boundary-v1.md`、`docs/daemon-outbound-protocol.md`);仍未落地的只有 membership host-equality gate 的**放宽**(§5),本文只引用不重述。
+> **Scope**: 这是一个 **communication-plane** feature。它**不**引入 federation / consensus / 跨 host 文件同步。唯一真正新增的领域概念是 per-(host, workspace) 的 **workspace local root** 及其 **ownership / 删除权**。落地依赖里,runtime placement 路由已由现行 `agents.host_id` + `RuntimeHostPlacementResolver` + per-host outbound routing 提供(见 `docs/orchestration-boundary-v1.md`、`docs/daemon-outbound-protocol.md`);cross-computer slice 2(#task:1600)已把内部 host-equality guard(事件周界 workspace-host arm、runtime_start I4 一致性 gate、list-workspaces 多 host 拒绝、PATCH/DELETE placement preflight)全部重分类到 `agent.host_id`/membership 轴,并在终片与 agent `computer=` header、cross-computer prompt 行为合同同批**拔除了 membership gate**(add-member 与 create-with-members 两个入口),本文只引用不重述。
 
 ---
 
@@ -27,7 +27,7 @@
 1. **不做 server↔server 联邦 / 共识**:单 backend,不引入第二真相源。
 2. **不做跨 host 文件同步**:不 rsync、不挂网络盘、不做分布式 fs。文件隔离是不变量(§3),不是 bug。
 3. **不做跨 host 共享 worktree**:同 host 内的共享 worktree 并发约束(独立 commit、不 amend)与本特性正交;跨 host 的 agent 本就各有各的 fs,不存在共享 index。
-4. **不在本文档实现 membership gate 放宽**:membership host-equality gate 的放宽仍是 design-but-unbuilt,本文只把它记为落地依赖(§5)。runtime placement 路由本身已上线(现行 `agents.host_id` + `RuntimeHostPlacementResolver`),不在待建之列。
+4. **membership gate 放宽已落地**(#task:1600 终片,与 `computer=` header + prompt 行为合同同批):add-member 与 create-with-members 均接受异机成员;guest L2 走各自 computer 的 pathless local root。本文 §5 保留为设计出处。
 
 ---
 
@@ -117,11 +117,11 @@ guest local root 用 `<workspace_id>`,**不用** workspace name:
 
 > 这条直接回答了"放宽后仍必须成立的不变量是什么":membership 是 control plane 的可见性/成员资格;runtime/fs 是 execution plane 的能力边界。放宽前者一个字节都不能渗到后者。
 
-### 5.2 落地依赖:一个待建,一个已上线
+### 5.2 落地依赖:两块均已上线
 
-跨 host 同 channel 要真正跑起来,涉及两块 runtime 机制。其中**只有第一块仍待建**;第二块已经是现行契约,本文只作消费:
+跨 host 同 channel 涉及两块 runtime 机制,**均已落地**,本文只作消费:
 
-1. **membership host-equality gate 放宽(design-but-unbuilt)。** 今天 member-add 有 `assertAgentHostMatchesWorkspaceHost`(`packages/backend/src/repos/workspace-repo.ts`),要求 `agent.host_id == workspace.workspace_host_id`,host 不等就抛 `host_mismatch`。跨 host 同 channel 的前提就是允许 host 不等的 agent 入 workspace——这条 gate 要从"硬等"放宽成"允许多 host,但每个 (conv, agent) 的 runtime 落在它自己的 host 上",且**严格受 §5.1 fail-closed 不变量约束**。
+1. **membership host-equality gate 已拔除(#task:1600 终片)。** 旧 member-add gate(`assertAgentHostMatchesWorkspaceHost`)及其 `host_mismatch` 产出已整链删除;host 不等的 agent 可入 workspace,每个 (conv, agent) 的 runtime 落在它自己的 host 上,guest L2 seed 在其自己 computer 的 pathless local root 下,**严格受 §5.1 fail-closed 不变量约束**(未解析出自己的 local root 就 fail closed,绝不 fallback 到 home host 的路径)。
 2. **runtime placement 按 `agents.host_id` 路由(已上线,非待建)。** 每个 agent 的 host 由 `agents.host_id` 记定;`RuntimeHostPlacementResolver`(`packages/backend/src/runtime/host-placement.ts`)据此解析出该 (conv, agent) 的目标 host,dispatch 再按 `host_id` 路由到该 host 的 per-host outbound connection。跨 host channel 是这套现行 placement 的直接消费者,不需要新增 placement 机制。
 
 > 换句话说:本特性 = 现行 host placement 的**应用层语义** + 一个新的 workspace local root 概念 + 一段条件 prompt。底层 routing 机制已存在,不在本文重新发明。

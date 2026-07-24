@@ -275,10 +275,10 @@ export type AgentL2SeedEnsureResult =
 
 /**
  * Cross-computer slice 1 (#task:1596) — pre-spawn L2 seed on the DISPATCH
- * host. The membership-time seed (`seedMemberAgentL2`) runs on the workspace's
- * home computer; when an agent lives on a different computer, its L2 for this
- * workspace must exist under that computer's local root before the first
- * spawn. This ensurer dispatches the idempotent `agent_l2_seed` intent to the
+ * host. The membership-time seed (`seedMemberAgentL2`) runs on the agent's
+ * own computer (its assigned host); this ensurer covers the spawn-time
+ * complement: the L2 for this workspace must exist under the dispatch
+ * computer's local root before the first spawn. This ensurer dispatches the idempotent `agent_l2_seed` intent to the
  * agent's daemon (which resolves the workspace via ITS registry — so the
  * workspace must be provisioned there first; callers order provision → seed).
  *

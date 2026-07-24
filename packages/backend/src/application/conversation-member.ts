@@ -56,7 +56,6 @@ export type AddConversationMemberError =
   | { code: 'forbidden' }
   | { code: 'candidate_not_found'; message: string }
   | { code: 'workspace_membership_required'; message: string }
-  | { code: 'workspace_agent_placement'; cause: unknown }
   | {
       code: 'workspace_agent_seed_failed';
       failure: {
@@ -227,11 +226,6 @@ export async function addConversationMember(
             return {
               ok: false,
               error: { code: 'candidate_not_found', message: 'agent not found' },
-            };
-          case 'placement':
-            return {
-              ok: false,
-              error: { code: 'workspace_agent_placement', cause: workspaceMember.error.cause },
             };
           case 'seed_failed':
             return {

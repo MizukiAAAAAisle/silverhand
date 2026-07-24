@@ -198,9 +198,10 @@ entry the daemon cannot resolve locally renders as _unavailable on this
 computer_ — never a fabricated path — and does not block the spawn. It
 becomes available when that workspace next runs on this computer.
 
-(Membership host-equality is still enforced at add time while the
-cross-computer entry gate is closed; removing that gate is a separate,
-later slice and does not change this prompt-assembly contract.)
+(Membership host-equality is gone entirely — #task:1600 lifted the
+cross-computer entry gates; members join from any computer and their L2
+seeds on their own computer's local realization. This prompt-assembly
+contract is unchanged by where members live.)
 
 ## Migration
 
@@ -232,8 +233,10 @@ Manual. There is no programmatic migration script:
 - **Do not push agent-side `Read MEMORY.md first` instructions** —
   content is already in the prompt; the second read is wasted budget.
 - **Do not add a host-id filter inside `buildWorkspaceMemoryIndex`.**
-  Host equality is enforced at membership time; runtime filtering is
-  redundant and can mask membership bugs.
+  Cross-computer members are legal (#task:1600): a peer workspace whose
+  local root does not resolve on this computer renders as _unavailable
+  on this computer_ — filtering it out entirely would hide real
+  memberships and mask membership bugs.
 - **Do not re-introduce a workspace `CONSENSUS.md` / Workspace Consensus
   section.** It was removed deliberately (#task:1086): agents rarely
   edited the shared file and one shared doc blurred separate agents'

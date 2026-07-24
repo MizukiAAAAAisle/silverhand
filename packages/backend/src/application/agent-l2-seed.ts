@@ -6,11 +6,14 @@ import {
 } from '../runtime/workspace-data-plane.js';
 
 /**
- * D4.e-3 — seed a member agent's L2 (per-workspace) memory on the host that
- * owns `workspace`, via the daemon (`agent_l2_seed`). Shared by
- * create-with-members and the member-add use case. The daemon is the sole
- * authority for the host-local L2 path (I1): the backend forwards only
- * `workspace_id` / `agent_id` and never writes the L2 itself.
+ * D4.e-3 — seed a member agent's L2 (per-workspace) memory on the AGENT's
+ * computer (`hostId` = `agent.host_id`, #task:1600: L2 lives where the agent
+ * runs — the workspace's LOCAL REALIZATION on that computer, which is not
+ * necessarily the workspace's home computer), via the daemon
+ * (`agent_l2_seed`). Shared by create-with-members and the member-add use
+ * case. The daemon is the sole authority for the host-local L2 path (I1):
+ * the backend forwards only `workspace_id` / `agent_id` and never writes
+ * the L2 itself.
  *
  * Returns `{ kind: 'ok' }` on success, or a fail-closed {@link DataPlaneFailure}.
  * Cindy ordering red line (spec §2.1): the CALLER must NOT insert the
@@ -25,14 +28,23 @@ import {
  *
  * `ensureProvisioned` controls the lazy registry backfill: the member-add
  * use case passes `true` (a pre-D4.e legacy workspace may have no registry
- * binding yet), while create-with-members passes `false` because the
- * workspace was already provisioned earlier in the SAME request — re-binding
- * it per member would be a redundant daemon round-trip.
+ * binding yet, and a guest agent's daemon may never have seen this
+ * workspace), while create-with-members passes it only for GUEST members —
+ * the workspace was provisioned on its home computer earlier in the SAME
+ * request, so re-binding per same-host member would be a redundant round
+ * trip.
+ *
+ * `workspace.workspace_path` follows the #1596 pathless-guest contract the
+ * caller plans: the legacy home path ONLY when the workspace's home
+ * computer IS `hostId`; `null` otherwise, so the guest daemon self-picks
+ * its managed root and the home computer's path never crosses machines
+ * (and the guest bind's ack is never written back into the home
+ * `workspaces.workspace_path` column — the backfiller enforces that).
  */
 export async function seedMemberAgentL2(
   ctx: BackendContext,
   hostId: string,
-  workspace: { id: string; workspace_path: string },
+  workspace: { id: string; workspace_path: string | null },
   agentId: string,
   opts: { ensureProvisioned: boolean },
 ): Promise<{ kind: 'ok' } | DataPlaneFailure> {

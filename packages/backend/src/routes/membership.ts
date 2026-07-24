@@ -60,7 +60,7 @@ import {
   removeConversationMember,
 } from '../application/conversation-member.js';
 import { type PostCommitEffect, runPostCommitEffects } from '../application/post-commit.js';
-import { placementErrorResponse, conversationMemberResultResponse } from './responses.js';
+import { conversationMemberResultResponse } from './responses.js';
 
 export interface MembershipRouteDeps {
   ctx: BackendContext;
@@ -421,11 +421,6 @@ export function createWorkspaceMembershipApp(
     switch (result.error.code) {
       case 'agent_not_found':
         return c.json({ error: 'agent not found' }, 404);
-      case 'placement': {
-        const mapped = placementErrorResponse(c, result.error.cause);
-        if (mapped) return mapped;
-        throw result.error.cause;
-      }
       case 'seed_failed':
         return c.json(
           { error: result.error.failure.message, code: result.error.failure.code },

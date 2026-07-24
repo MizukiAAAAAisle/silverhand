@@ -233,9 +233,9 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     // `agents.get(id)` resolves to null, the filter drops it, and
     // workspace creation proceeds with `memberAgents = []`. This is
     // the embedded behavior carried into standalone — no special
-    // case. The replacement negative pin (real but cross-host
-    // agent → 409 `host_mismatch`) lives in the workspace route
-    // tests, not the G1 happy-path file.
+    // case. (Cross-host members are ACCEPTED since #task:1600; the
+    // acceptance pins live in the workspace route tests, not this
+    // G1 happy-path file.)
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'ws.refuse@example.test');
     await claimLocalHost(t, token);
@@ -266,8 +266,8 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     const token = await signupReturnToken(t, 'ws.seed@example.test');
     const claimedHostId = await claimLocalHost(t, token);
 
-    // A REAL agent on the claimed host — it survives the member filter +
-    // host-equality check, so the request reaches the daemon-mediated seed.
+    // A REAL agent on the claimed host — the request reaches the
+    // daemon-mediated seed on that same host (same-host member path).
     const ownerUserId = t.ctx.db
       .prepare<[], { id: string }>(
         `SELECT id FROM users WHERE email = 'ws.seed@example.test'`,
@@ -516,12 +516,10 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(channel.status).toBe(201);
     const channelId = channel.body.channel.id as string;
 
-    // D4.c C3 — the synthetic agent must live on the same host as
-    // the workspace (the user's claimed local host). Pre-C3 this
-    // test inserted the agent under `STANDALONE_SERVER`; that
-    // host_id no longer matches the workspace's
-    // `workspace_host_id`, so `assertAgentMatchesHost` would
-    // fail-closed at delivery time. Bind to `claimedHostId` instead.
+    // The synthetic agent lives on the user's claimed local host so
+    // runtime delivery routes to the daemon this test drives
+    // (cross-computer membership is legal since #task:1600, but this
+    // test exercises the same-host delivery path).
     const agentId = `synthetic-agent-${randomSlug()}`;
     const now = Date.now();
     const ownerUserId = t.ctx.db

@@ -287,14 +287,18 @@ export type AgentReadHistoryDto = z.infer<typeof AgentReadHistoryDtoSchema>;
  *  here. `agent_dir` is the agent's working directory inside this
  *  workspace — for `agent_home` this is the workspace root itself,
  *  for `regular` it is the nested `.silverhand/agents/<agent_id>`
- *  L2 profile dir. */
+ *  L2 profile dir. `null` means UNAVAILABLE ON THIS COMPUTER
+ *  (#task:1600): the workspace's local root is not provisioned on the
+ *  agent's own computer (a cross-computer guest membership the agent
+ *  has not run in yet). Never a fabricated path; it resolves once the
+ *  workspace next runs on the agent's computer. */
 export const AgentListedWorkspaceSchema = z.object({
   id: z.string(),
   name: z.string(),
   kind: WorkspaceKindSchema,
   archived: z.boolean(),
   updated_at: z.number(),
-  agent_dir: z.string(),
+  agent_dir: z.string().nullable(),
 });
 export type AgentListedWorkspace = z.infer<typeof AgentListedWorkspaceSchema>;
 

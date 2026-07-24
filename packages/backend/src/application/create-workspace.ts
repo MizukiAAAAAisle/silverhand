@@ -18,12 +18,13 @@ import { isWorkspaceNameAvailable } from './name-availability.js';
  * CreateWorkspace provisioning saga.
  *
  * Owns the whole `POST /api/workspaces` orchestration that previously lived in
- * the route body: dup-name guard, placement resolution
- * (`assertOwnedActiveHost` / `resolveOwnedLocalForUser` / per-member
- * `assertAgentMatchesHost`), daemon `workspace_provision` BEFORE the row insert
- * (no orphan row), the workspace row + owner/member writes, the L2-seed-all-
- * before-any-agent-membership ordering red line, the per-agent
- * `insertMembership + seedDefaults` unit-of-work, and the onboarding fan-out.
+ * the route body: dup-name guard, home-computer placement resolution
+ * (`assertOwnedActiveHost` / `resolveOwnedLocalForUser`; members join from
+ * ANY computer — #task:1600), daemon `workspace_provision` BEFORE the row
+ * insert (no orphan row), the workspace row + owner/member writes, the
+ * L2-seed-all-before-any-agent-membership ordering red line (per-agent-host
+ * seeds), the per-agent `insertMembership + seedDefaults` unit-of-work, and
+ * the onboarding fan-out.
  *
  * HTTP-agnostic by construction (spec §1.1 / §4): it returns a typed
  * {@link CreateWorkspaceResult}; the route maps result kind → HTTP status +
@@ -115,9 +116,10 @@ export async function createWorkspace(
       .map(id => agents.get(id))
       .filter((agent): agent is AgentDto => agent !== null);
     memberUserIds = cmd.memberUserIds.filter(id => users.get(id) !== null);
-    for (const agent of memberAgents) {
-      ctx.placement.assertAgentMatchesHost(agent.id, workspaceHostId);
-    }
+    // #task:1600 final piece — the cross-computer PRODUCT ENTRY GATE #2 is
+    // lifted: initial members may live on any computer. The seed loop below
+    // already plans per agent host (guest members pathless-provision on
+    // their own daemon), so the lift is a pure gate removal.
   } catch (err) {
     return { kind: 'placementError', err };
   }
@@ -161,17 +163,26 @@ export async function createWorkspace(
     workspaces.addUserMember(workspace.id, userId);
   }
 
-  // Ordering red line (spec §2.1): seed EVERY member's L2 on the owning daemon
-  // BEFORE inserting ANY agent `workspace_members` row, so a late seed failure
-  // never leaves a PARTIAL set. On failure the workspace row + user members
-  // remain as accepted residue (no 2PC) and agent membership stays at 0.
+  // Ordering red line (spec §2.1): seed EVERY member's L2 BEFORE inserting
+  // ANY agent `workspace_members` row, so a late seed failure never leaves a
+  // PARTIAL set. On failure the workspace row + user members remain as
+  // accepted residue (no 2PC) and agent membership stays at 0.
+  // #task:1600 — each seed targets the AGENT's own computer: a same-host
+  // member reuses the home root provisioned above in THIS request (no
+  // re-ensure); a guest member's daemon first ensures a pathless local
+  // realization (#1596 plan — the home path never crosses machines), then
+  // seeds.
   for (const agent of memberAgents) {
+    const sameHost = agent.host_id === workspaceHostId;
     const seed = await seedMemberAgentL2(
       ctx,
-      workspaceHostId,
-      { id: workspace.id, workspace_path: workspace.workspace_path },
+      agent.host_id,
+      {
+        id: workspace.id,
+        workspace_path: sameHost ? workspace.workspace_path : null,
+      },
       agent.id,
-      { ensureProvisioned: false },
+      { ensureProvisioned: !sameHost },
     );
     if (seed.kind === 'failed') return { kind: 'transportFailed', failure: seed };
   }

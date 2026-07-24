@@ -115,8 +115,8 @@ WorkspaceRepo.insertMembership(ws, agent) -> { member, created }   # 纯持久�
 AgentCapabilityRepo.seedDefaults(ws, agent)                        # 已是纯 seed 动作(无需改)
 
 AddWorkspaceAgentMemberUseCase.execute(...):
-  assertAgentMatchesHost(...) / host-equality      # ② pre-commit(从 repo 上移到此)
-  await seedMemberAgentL2(...)  // 失败即返回,不写行   # ② pre-commit(HTTP-agnostic 版本)
+  # (host-equality precondition 已随 #task:1600 终片删除;成员可来自任何 computer)
+  await seedMemberAgentL2(...)  // 失败即返回,不写行   # ② pre-commit(HTTP-agnostic 版本;guest 走 agent-host pathless plan)
   db.transaction(() => {                            # ① use case 显式持有 UoW
     const { member, created } = workspaceRepo.insertMembership(ws, agent)
     if (created) capabilityRepo.seedDefaults(ws, agent)   # 策略回应用层,仍同一事务
@@ -128,7 +128,7 @@ AddWorkspaceAgentMemberUseCase.execute(...):
 - 原子性:成员 + 能力仍在**同一事务**,部分失败整体回滚 →"member 必有 cap 集"成立(`agent-capability-repo.ts:80-81`)。
 - no-silent-re-widen:只在 `created`(本次真正插入)时 seed → 重加已存在成员是 no-op,不覆盖被收窄过的集合(`workspace-repo.ts:424-429` / doc §2.3)。
 - L2-seed-first:seed 成功才写行(`:3059-3063` red-line),由 §2.1 铁律承载。
-- host equality:**移到 use case ② precondition**;`insertMembership` 不再懂 host/placement,`WorkspaceRepo` 不再隐式依赖 `AgentRepo`/placement。
+- host equality:该 ② precondition 已随 #task:1600 终片删除(cross-computer membership 合法);`insertMembership` 仍是纯持久化,`WorkspaceRepo` 不依赖 `AgentRepo`/placement。
 
 ---
 
@@ -163,7 +163,7 @@ type PostCommitEffect = () => void | Promise<void>;
 1. **member ⇒ cap 集**:新增 workspace 成员后,该 (ws, agent) 必有默认能力集;部分失败两者都不落。
 2. **no-silent-re-widen**:重加已存在成员不重置被收窄的能力集。
 3. **L2-seed-first**:无"有 member 行但 L2 未 seed"的半状态。
-4. **host equality**:跨 host 的 (agent, workspace) 仍被拒。
+4. **host equality（已随 #task:1600 终片拔除）**:跨 host 的 (agent, workspace) 合法。内部路径(perimeter/fanout/list-workspaces/delete)与 seed/purge 计划全部以 `agent.host_id` 为轴;guest 成员的 L2 在其自己 computer 的 pathless local root 下 seed,home `workspace_path` 永不跨机。
 5. **conversation 入会幂等**:重复加同一成员不重复发 system message / 不重复 publish。
 6. **kind/closed 守卫**:仅 channel/thread 可加成员;closed 拒绝。
 7. **授权语义**:human governance(admin / human-roster owner)、agent capability(view-equiv,

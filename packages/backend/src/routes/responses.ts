@@ -36,7 +36,6 @@ const placementErrorStatusMap: Record<
   400 | 403 | 404 | 409 | 503
 > = {
   agent_missing: 404,
-  host_mismatch: 409,
   host_missing: 404,
   host_not_owned: 403,
   host_pending_attach: 409,
@@ -50,7 +49,6 @@ const placementErrorStatusMap: Record<
   // renderer surface a "you have N hosts — pick one" UX instead of the
   // "no daemon found" UX it shows for `local_host_unbound`.
   local_host_ambiguous: 409,
-  workspace_missing: 404,
   // Transient transport-down → 503 Service Unavailable. Differs from
   // `host_runtime_disabled` (409: standalone
   // backend, no daemon at all — config decision) by carrying
@@ -173,11 +171,6 @@ export function conversationMemberResultResponse(
       return c.json({ error: error.message, code: 'candidate_not_found' }, 404);
     case 'workspace_membership_required':
       return c.json({ error: error.message, code: 'workspace_membership_required' }, 422);
-    case 'workspace_agent_placement': {
-      const mapped = placementErrorResponse(c, error.cause);
-      if (mapped) return mapped;
-      throw error.cause;
-    }
     case 'workspace_agent_seed_failed':
       return c.json(
         { error: error.failure.message, code: error.failure.code },

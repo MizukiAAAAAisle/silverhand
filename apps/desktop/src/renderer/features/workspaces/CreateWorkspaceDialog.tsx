@@ -141,28 +141,9 @@ export function CreateWorkspaceDialog({
     setError(null);
   };
 
-  const eligibleAgents = useMemo(
-    () =>
-      effectiveHostId
-        ? agents.filter(agent => agent.host_id === effectiveHostId)
-        : [],
-    [agents, effectiveHostId],
-  );
-
-  // Agent membership must match the workspace host. If the user changes the
-  // storage host after selecting agents, prune now instead of letting the
-  // backend reject with `host_mismatch`.
-  useEffect(() => {
-    const eligibleIds = new Set(eligibleAgents.map(agent => agent.id));
-    setSelectedAgents(prev => {
-      const next = prev.filter(id => eligibleIds.has(id));
-      return next.length === prev.length ? prev : next;
-    });
-  }, [eligibleAgents]);
-
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
     () => [
-      ...eligibleAgents.map((agent: AgentDto) => ({
+      ...computeWorkspaceAgentCandidates(agents).map((agent: AgentDto) => ({
         kind: 'agent' as const,
         agent,
       })),
@@ -177,7 +158,7 @@ export function CreateWorkspaceDialog({
         .filter((user: UserDto) => user.id !== viewerUserId)
         .map((user: UserDto) => ({ kind: 'human' as const, user })),
     ],
-    [eligibleAgents, users, viewerUserId],
+    [agents, users, viewerUserId],
   );
 
   const selectedMembers = useMemo(
@@ -404,7 +385,6 @@ const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
     "That computer isn't available anymore. Pick another and try again.",
   host_missing:
     "That computer isn't available anymore. Pick another and try again.",
-  host_mismatch: 'Initial agents must live on the selected computer.',
   host_attach_pending:
     'That computer is not connected yet. Try again in a moment.',
   workspace_path_conflict:
@@ -419,4 +399,16 @@ function friendlyCreateWorkspaceError(err: unknown): string {
     fallbackMessage: "Couldn't create the workspace. Please try again.",
     knownCodeMessages: WORKSPACE_CREATE_ERROR_MESSAGES,
   });
+}
+
+/**
+ * #task:1600 — cross-computer membership contract for the create dialog:
+ * the storage computer decides ONLY where the workspace's home root lives.
+ * It never filters agent candidates and never prunes a selection — which is
+ * why this helper deliberately takes NO host argument. Members on other
+ * computers are legal; their L2 seeds land on their own daemons.
+ * Falsifier-tested in `CreateWorkspaceDialog.test.ts`.
+ */
+export function computeWorkspaceAgentCandidates(agents: AgentDto[]): AgentDto[] {
+  return agents;
 }

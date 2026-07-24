@@ -145,7 +145,7 @@ export interface DriverDeliveryView {
  * # Daemon owns encode (Option A v2 — Cindy `UMGu36zoTDVuKWXi`)
  *
  * `text` is the UN-ENCODED human-readable message body (from
- * `formatLiveMessage` or `formatInboxBatch`). The daemon's in-process
+ * `formatInboxBatch`). The daemon's in-process
  * driver instance — whose runtime state (codex `threadId` etc.) is
  * authoritative — encodes via `encodeStdinMessage(text, cliSessionId)`
  * just before writing to stdin. Backend MUST NOT pre-encode: doing so
