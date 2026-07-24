@@ -49,8 +49,8 @@ binding，并复用原 workspace 文件。重新添加相同 agent 时，已有�
 
 ## 支持人员：保留原 Workspace 身份
 
-如果必须保留原 Workspace 身份，不要让用户直接编辑 SQLite 或
-`workspace-registry.json`。
+如果必须保留原 Workspace 身份，可在支持人员确认后直接修复本地
+`workspace-registry.json`。不要修改服务端 SQLite。
 
 操作前必须确认：
 
@@ -61,10 +61,48 @@ binding，并复用原 workspace 文件。重新添加相同 agent 时，已有�
 5. 当前 daemon binding 是预期的 `(server_origin, host_id)`；
 6. registry 中没有其他条目占用相同路径、父路径或子路径。
 
-修复方式是：以确认后的本地文件夹作为 `requested_path`，对原
-`workspace_id` 执行一次幂等 `workspace_provision`。该操作必须经过
-daemon 正常的 `WorkspaceRegistry.provision()` 路径验证与原子持久化；
-可使用经过 review 的 support build 或一次性 operator 工具调用。
+支持人员根据当前 registry 内容生成一份完整 replacement JSON。不要让用户
+自行计算 namespace、binding slug 或 `workspace_id`。文件保持以下形状：
+
+```json
+{
+  "schema_version": 1,
+  "binding": {
+    "server_origin": "<confirmed-server-origin>",
+    "host_id": "<confirmed-host-id>"
+  },
+  "workspaces": {
+    "<workspace_id>": {
+      "path": "<confirmed-absolute-workspace-path>",
+      "provisioned_at": 1780000000000
+    }
+  }
+}
+```
+
+如原文件已有其他 workspace 条目，replacement 必须原样保留这些条目，再
+加入待修复条目。
+
+支持人员提供：
+
+- registry 文件的精确绝对路径；
+- 合并了现有所有条目的完整 replacement JSON；
+- 原 workspace 文件夹的精确绝对路径。
+
+用户按以下步骤执行：
+
+1. 完全退出 Silverhand，并确认 Silverhand/daemon 进程已经退出。
+2. 备份原 workspace 文件夹和整个 Silverhand 数据目录。
+3. 将现有 registry 文件另存为带时间戳的备份；文件不存在时保留该事实，
+   不要自行选择其他 namespace。
+4. 将支持人员提供的内容保存为同目录下的新文件。
+5. 验证新文件是合法 JSON，权限设为仅当前用户可读写（`0600`）。
+6. 确保原 workspace 下的 `.silverhand/agents` 目录存在。
+7. 用新文件替换原 registry 文件，再启动 Silverhand。
+
+replacement 必须保留其他 workspace 条目；同一 `workspace_id` 已指向其他
+路径、其他 id 占用相同/父/子路径、binding 不一致或 registry 无法解析时，
+停止操作，不覆盖原文件。
 
 修复后：
 
@@ -73,5 +111,5 @@ daemon 正常的 `WorkspaceRegistry.provision()` 路径验证与原子持久化�
 3. 启动一个 agent 并核对其 working directory；
 4. 用户确认恢复前保留修复前备份。
 
-手工修改 registry JSON、直接修改服务端 SQLite、删除
+未经支持确认自行修改 registry、直接修改服务端 SQLite、删除
 `~/.silverhand` 或 Reset Session 都不是本问题的恢复方式。
