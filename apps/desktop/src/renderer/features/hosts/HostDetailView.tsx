@@ -136,6 +136,15 @@ import {
   CONTROL_INK_BORDER,
 } from '@/features/common/ControlInkBorder';
 import {
+  destructiveAction,
+  destructiveCancel,
+} from '@/features/common/DestructiveAction';
+import {
+  HOST_ACTION_BUTTON_DANGER,
+  HOST_MODAL_BUTTON,
+  HOST_MODAL_BUTTON_COMMIT,
+} from './host-action-button';
+import {
   describeHostStatus,
   formatUptime,
   type HostStatusTone,
@@ -291,13 +300,20 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
             />
           </>
         ) : null}
-        {/* Copy diagnostics is a page-level utility, rendered regardless of
-            the status query state — offline / unreachable / status-load-failed
-            is exactly when a user reaches for it. Sits above the destructive
-            action, in its own quiet frame (not inside it). */}
-        <HostDiagnosticsAction host={host} />
-        {actions.revoke ? <RevokeComputerSection host={host} /> : null}
-        {actions.delete ? <DeleteComputerSection host={host} /> : null}
+        {/* Footer action group (#task:1619, shiki 2026-07-26). `Copy
+            diagnostics` and the one terminal verb this computer allows are ONE
+            group: full-width buttons, a single divider above the group, none
+            between them. They used to be two sibling `<section>`s, so the
+            divider + double `py-6` read as two unrelated pages of settings.
+            Diagnostics still lives outside the status-conditional branches
+            above — offline / unreachable / status-load-failed is exactly when a
+            user reaches for it — and `revoke` / `delete` are mutually exclusive
+            per `computerActions`, so this group is never more than two rows. */}
+        <section className="flex flex-col gap-2 border-t border-border-subtle py-6 first:border-t-0">
+          <HostDiagnosticsAction host={host} />
+          {actions.revoke ? <RevokeComputerSection host={host} /> : null}
+          {actions.delete ? <DeleteComputerSection host={host} /> : null}
+        </section>
       </div>
     </main>
   );
@@ -502,6 +518,15 @@ function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Element {
  * component, different mutation, different confirm copy — the two
  * never share a backend verb.
  *
+ * Visually the trigger is the SAME red poster sticker as Delete (shiki
+ * 2026-07-26: "Revoke Computer 按钮也改成这个样式"). Ranking the two verbs
+ * by chrome was the earlier read and it was wrong: both are terminal for
+ * this computer's connection, they are mutually exclusive (a computer
+ * offers one or the other, never both), so a user never sees them side by
+ * side to compare. The difference that matters — reversible vs permanent,
+ * what survives — is carried by the verb and by the confirm copy, not by a
+ * quieter frame.
+ *
  * Revoking the current local computer does NOT log the user out.
  * User sessions are user-level and outlive Computer lifecycle; the
  * detail view flips to the revoked-terminal read-only shape (via the
@@ -531,11 +556,11 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
   const label = host.display_label?.trim() || host.name;
 
   return (
-    <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
+    <>
       <Button
         variant="outline"
         onClick={openConfirm}
-        className={`gap-2 self-start ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} text-error hover:bg-bg-floating`}
+        {...destructiveAction(`gap-2 ${HOST_ACTION_BUTTON_DANGER}`)}
       >
         <ShieldOff className="size-3.5" />
         {computerCopy.revokeComputer}
@@ -567,7 +592,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
               variant="outline"
               onClick={() => setOpen(false)}
               disabled={revoke.isPending}
-              className={`${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-bg-floating`}
+              {...destructiveCancel()}
             >
               {computerCopy.cancel}
             </Button>
@@ -575,7 +600,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
               variant="danger"
               onClick={() => void handleRevoke()}
               disabled={revoke.isPending}
-              className={`gap-2 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:opacity-100`}
+              {...destructiveAction('gap-2')}
               aria-label={`${computerCopy.revokeComputer}: ${label}`}
             >
               {revoke.isPending ? (
@@ -590,7 +615,7 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </section>
+    </>
   );
 }
 
@@ -662,11 +687,11 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
   const label = host.display_label?.trim() || host.name;
 
   return (
-    <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
+    <>
       <Button
         variant="outline"
         onClick={openConfirm}
-        className="gap-2 self-start border-error/40 text-error hover:border-error hover:bg-error/10"
+        {...destructiveAction(`gap-2 ${HOST_ACTION_BUTTON_DANGER}`)}
       >
         <Trash2 className="size-3.5" />
         {computerCopy.deleteComputer}
@@ -695,13 +720,16 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   variant="outline"
                   onClick={() => setOpen(false)}
                   disabled={del.isPending}
+                  data-host-action="neutral"
+                  className={HOST_MODAL_BUTTON}
                 >
                   {computerCopy.cancel}
                 </Button>
                 <Button
                   onClick={() => void handleDelete()}
                   disabled={del.isPending}
-                  className="gap-2"
+                  data-host-action="commit"
+                  className={`gap-2 ${HOST_MODAL_BUTTON_COMMIT}`}
                 >
                   {del.isPending ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -725,7 +753,12 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 title={computerCopy.deleteUnauthorizedTitle}
               />
               <DialogFooter>
-                <Button variant="outline" onClick={() => setOpen(false)}>
+                <Button
+                  variant="outline"
+                  onClick={() => setOpen(false)}
+                  data-host-action="neutral"
+                  className={HOST_MODAL_BUTTON}
+                >
                   {computerCopy.deleteBlockedDismiss}
                 </Button>
               </DialogFooter>
@@ -739,13 +772,19 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setOpen(false)}>
+                <Button
+                  variant="outline"
+                  onClick={() => setOpen(false)}
+                  data-host-action="neutral"
+                  className={HOST_MODAL_BUTTON}
+                >
                   {computerCopy.cancel}
                 </Button>
                 <Button
                   onClick={() => void resources.refetch()}
                   disabled={resources.isFetching}
-                  className="gap-2"
+                  data-host-action="commit"
+                  className={`gap-2 ${HOST_MODAL_BUTTON_COMMIT}`}
                 >
                   {resources.isFetching ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -783,6 +822,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   variant="outline"
                   onClick={() => setOpen(false)}
                   disabled={del.isPending}
+                  {...destructiveCancel()}
                 >
                   {computerCopy.cancel}
                 </Button>
@@ -793,7 +833,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   // renders this same confirm, so this guard is what stops a
                   // confirm of an impact the user has not seen.
                   disabled={phase.kind !== 'confirm' || del.isPending}
-                  className="gap-2"
+                  {...destructiveAction('gap-2')}
                   aria-label={`${computerCopy.deleteComputer}: ${label}`}
                 >
                   {del.isPending || phase.kind === 'loading' ? (
@@ -810,7 +850,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
           )}
         </DialogContent>
       </Dialog>
-    </section>
+    </>
   );
 }
 

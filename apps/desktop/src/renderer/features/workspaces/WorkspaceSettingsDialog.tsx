@@ -9,6 +9,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  destructiveAction,
+  destructiveCancel,
+} from '@/features/common/DestructiveAction';
 import { cn } from '@/lib/cn';
 import { AgentPermissionsPanel } from './AgentPermissionsPanel';
 import { HumanRolesPanel } from './HumanRolesPanel';
@@ -405,9 +409,10 @@ function GeneralSection({
               <div className="flex items-center justify-end gap-2">
                 <Button
                   type="button"
-                  variant="ghost"
+                  variant="outline"
                   onClick={() => setConfirmingDelete(false)}
                   disabled={deletePending}
+                  {...destructiveCancel()}
                 >
                   Cancel
                 </Button>
@@ -416,6 +421,7 @@ function GeneralSection({
                   variant="danger"
                   onClick={onDelete}
                   disabled={deletePending}
+                  {...destructiveAction()}
                 >
                   {deletePending ? 'Deleting…' : 'Confirm delete'}
                 </Button>
@@ -427,6 +433,7 @@ function GeneralSection({
                   variant="danger"
                   onClick={() => setConfirmingDelete(true)}
                   disabled={!workspaceId}
+                  {...destructiveAction()}
                 >
                   Delete workspace
                 </Button>

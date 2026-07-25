@@ -22,6 +22,10 @@ import {
 } from '@/features/me/hooks';
 import { Button } from '@/components/ui/button';
 import {
+  destructiveAction,
+  destructiveCancel,
+} from '@/features/common/DestructiveAction';
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -444,6 +448,7 @@ function AgentManagementActions({
               variant="outline"
               onClick={() => setClearDialogOpen(false)}
               disabled={clearSession.isPending}
+              {...destructiveCancel()}
             >
               Cancel
             </Button>
@@ -452,6 +457,7 @@ function AgentManagementActions({
               variant="danger"
               onClick={clear}
               disabled={clearSession.isPending}
+              {...destructiveAction()}
             >
               {clearSession.isPending ? 'Clearing...' : 'Clear session'}
             </Button>
@@ -476,6 +482,7 @@ function AgentManagementActions({
               variant="outline"
               onClick={() => setRemoveDialogOpen(false)}
               disabled={removeFromChannel.isPending}
+              {...destructiveCancel()}
             >
               Cancel
             </Button>
@@ -484,6 +491,7 @@ function AgentManagementActions({
               variant="danger"
               onClick={remove}
               disabled={removeFromChannel.isPending}
+              {...destructiveAction()}
             >
               {removeFromChannel.isPending ? 'Removing...' : 'Remove'}
             </Button>

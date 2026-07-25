@@ -1949,3 +1949,182 @@
 [data-theme='forza6'] [data-modal-shell] {
   box-shadow: 2px 2px 0 var(--forza6-ink);
 }
+
+/* ── Computer footer action stack — poster sticker (#task:1619) ──
+   shiki 2026-07-26: "forza6 加上 poster sticker,同时加上与主题适配的
+   hover 效果". The two page-level computer actions (`Copy diagnostics`
+   + the terminal verb) are now full-width rows in one group, which is
+   what makes them large enough to carry a poster identity — a
+   self-start pill couldn't.
+
+   Everything except the shadow is already token-driven at the
+   consumer (`host-action-button.ts`): forza6's
+   `--control-border-width: 2px` gives the ink frame,
+   `--control-radius: 0` the hard corners, and the hover pair
+   `--border-control-hover` (ink) + `--bg-option-hover` (pale lime)
+   is the cross-theme hover language — of which forza6 keeps only the
+   frame half (the ground is cancelled below, see "peel only"). This
+   rule adds the one thing that has no cross-theme token — the hard
+   ink drop shadow of the poster sticker family (chat-header `#` chip,
+   sidebar selected row, dialog shell).
+
+   Shadow at REST, not earned on hover: unlike a repeated list row,
+   these are exactly two instances at the page footer, and they ARE
+   the page's terminal actions — the surface the sticker language is
+   for.
+
+   Hover GROWS that one shadow 1.5px → 2.5px against
+   `CONTROL_HOVER_LIFT`'s 1px translate, so the gap opens and the
+   sticker peels off the paper — the same hover the destructive
+   sticker below uses (shiki 2026-07-26: "对 cancel 也做一下"). It is
+   still ONE shadow layer changing size, not a second layer stacked on
+   the first. The peel is the WHOLE hover: the ground the consumer's
+   hover pair would paint is cancelled just below, so no button in this
+   family changes colour under the cursor — only the frame recolours
+   and the sticker lifts.
+
+   Identity only — width and spacing stay with the consumer, so the
+   next surface that adopts `data-host-action` can size itself. */
+[data-theme='forza6'] [data-host-action] {
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+  transition:
+    transform 150ms var(--ease, ease),
+    box-shadow 150ms ease;
+}
+[data-theme='forza6'] [data-host-action]:hover:not(:disabled) {
+  box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
+}
+/* Hover is the PEEL ONLY — no ground change (shiki 2026-07-26: "这俩 action
+   button 都保持 hover 无背景色"). `CONTROL_SURFACE_BUTTON` ships the canonical
+   control-hover PAIR (`--border-control-hover` + `--bg-option-hover`), which is
+   right in warm-script / slack-dark where nothing else moves on hover. Here the
+   sticker already answers with a growing shadow against a 1px lift, so the pale
+   lime block was a second, redundant hover channel on top of it — and the frame
+   still recolours, so the affordance doesn't depend on the ground. Held at the
+   variant's RESTING paper (`--bg-floating`, what `outline` sits on) rather than
+   `transparent`, so the button keeps its own surface over whatever it's on. */
+[data-theme='forza6'] [data-host-action='neutral']:hover:not(:disabled),
+[data-theme='forza6'] [data-destructive-action='cancel']:hover:not(:disabled) {
+  background-color: var(--bg-floating);
+}
+
+/* ── Destructive commit — the RED poster sticker ─────────────────────
+   shiki 2026-07-26: every red confirm ("Delete 这类的红色弹窗") should
+   look like the Delete Computer button at the page footer — white paper,
+   red sticker, a hover background change — reached through ONE hook so
+   later destructive surfaces just consume it.
+
+   `[data-destructive-action]` (see `features/common/DestructiveAction.ts`)
+   is the whole family: the page-footer Delete trigger and every dialog
+   CTA that actually performs a delete / revoke. Painting it HERE and not
+   at the consumer is what lets other themes keep their solid `danger`
+   fill — in warm-script / slack-dark a white outline CTA would rank equal
+   to its own Cancel peer, while forza6 can invert it because the red
+   frame + red shadow out-shout an ink-framed Cancel by hue alone.
+
+   The shadow follows the FRAME's hue, never the ink default: a hard ink
+   shadow under a red frame reads as two unrelated decisions stacked on
+   one element (shiki, same day). The poster recipe transfers across
+   semantics only when frame + label + shadow swap hue as a SET — a hue
+   swap, never an alpha or blur change.
+
+   HOVER IS THE PEEL, NOT THE GROUND. Two grounds were tried and both
+   failed on the same element, which is what settled it:
+     · `--error-soft` (16% red) → on white paper that IS `#F6D6E0`, a
+       pastel — the only pastel in a theme whose other hover grounds are
+       flat inked blocks. shiki: "hover 之后有点不协调".
+     · solid `--error` → shiki: "背景色和 border 和 post sticker 颜色完全
+       重叠" — fill, frame and hard shadow collapse into one red mass and
+       the sticker loses its structure.
+   The two failures bracket the whole channel: keeping the red LABEL legible
+   (≥4.5:1) forces any red ground to be pale, and any ground dark enough to
+   read as inked coincides with the frame it sits inside. So this sticker's
+   hover uses the channel forza6 already uses everywhere else
+   (`[data-find-action]`, `[data-attachment-row-action]`): the shadow GROWS
+   1.5px → 2.5px while the consumer's 1px lift moves the sticker the other
+   way, so the gap opens and it reads as peeling off the paper. Geometry and
+   hard shadow are exactly what shiki asked to keep ("我需要 poster sticker
+   的几何与硬投影效果") — this makes them the hover, instead of decorating
+   them with a colour that has nowhere safe to land. Paper, frame, label and
+   hue set never move; `transition` is restated here because box-shadow is
+   not in the consumer's list and a snapping shadow next to a moving
+   element is a visible off-beat. */
+[data-theme='forza6'] [data-destructive-action='commit'] {
+  background-color: var(--bg-floating);
+  color: var(--error);
+  border: var(--control-border-width) solid var(--error);
+  box-shadow: 1.5px 1.5px 0 var(--error);
+  transition:
+    transform 150ms var(--ease, ease),
+    box-shadow 150ms ease;
+}
+[data-theme='forza6'] [data-destructive-action='commit']:hover:not(:disabled) {
+  /* Hold the paper: the page-footer trigger's own `hover:bg-error-soft`
+     (correct in warm-script / slack-dark, where the sticker doesn't exist)
+     would otherwise put the rejected pastel back under this frame. */
+  background-color: var(--bg-floating);
+  box-shadow: 2.5px 2.5px 0 var(--error);
+}
+
+/* The Cancel that stands beside it (shiki 2026-07-26: "cancel 的样式也需要
+   跟上,比如 Delete agent 的 cancel 样式就没有匹配"). A red sticker next to a
+   bare ghost button reads as one styled button and one unstyled one, so
+   the pair ships together: the commit above is the red sticker, this is
+   the same sticker in ink. Ranking is by HUE, not by one side being
+   unstyled — the frame + hover ground come from `CONTROL_SURFACE_BUTTON`
+   at the consumer, so this rule only adds the hard ink drop shadow that
+   has no cross-theme token.
+
+   Same sticker means the same MOTION too (shiki 2026-07-26: "刚才你对
+   Delete 的 hover 抬起 box-shadow,对 cancel 也做一下"): the ink shadow
+   grows 1.5px → 2.5px on hover exactly like the red one, so a pair whose
+   halves peel by different amounts can't happen. `transition` is restated
+   for the same reason as the commit — box-shadow is not in the consumer's
+   transition list. */
+[data-theme='forza6'] [data-destructive-action='cancel'] {
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+  transition:
+    transform 150ms var(--ease, ease),
+    box-shadow 150ms ease;
+}
+[data-theme='forza6'] [data-destructive-action='cancel']:hover:not(:disabled) {
+  box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
+}
+
+/* Keyboard focus for the whole poster-action family. These sticker rules
+   set `box-shadow`, and the Button primitive's focus signal is a Tailwind
+   `ring` — which is ALSO box-shadow, at lower specificity, on a base that
+   already declared `outline-none`. So the sticker silently swallowed the
+   focus ring: nothing at all was visible on tab. An `outline` is the one
+   channel the shadow can't contest (and the file's own precedent —
+   `[data-find-action]`, `[data-attachment-row-action]`). Ink for the
+   neutral half, `--error` for the destructive commit, so focus joins each
+   sticker's hue set instead of introducing a third colour. */
+[data-theme='forza6'] [data-destructive-action='commit']:focus-visible {
+  outline: 2px solid var(--error);
+  outline-offset: 2px;
+}
+[data-theme='forza6'] [data-destructive-action='cancel']:focus-visible,
+[data-theme='forza6'] [data-host-action]:focus-visible {
+  outline: 2px solid var(--forza6-ink);
+  outline-offset: 2px;
+}
+
+/* The confirm modal's brand-filled NEUTRAL CTA — the retry that stands in
+   for the commit when the impact read failed (shiki 2026-07-26: "Delete
+   Computer Modal 的 action button 也加上一样的效果"). Pressing a poster
+   sticker must not open a dialog answering in a flat language, so the
+   modal footer joins the family: its Cancel peer carries `neutral`
+   (framed surface + shared hover), the retry carries `commit`, and the
+   destructive commit takes `[data-destructive-action]` above.
+
+   `commit` is PRIMARY BY FILL, so the frame is added here rather than at
+   the consumer — the cross-theme `--border-focus` is ink only in forza6
+   (slack-dark = brand blue, warm-script = 25%-alpha brown), and a frame
+   disagreeing with its own fill is the mistake to avoid. Ink here agrees
+   with the ink drop shadow inherited from the base rule above, and the
+   fill is left to carry the hue — the same division of labour as
+   `[data-channel-settings-save]`. */
+[data-theme='forza6'] [data-host-action='commit'] {
+  border: var(--control-border-width) solid var(--forza6-ink);
+}

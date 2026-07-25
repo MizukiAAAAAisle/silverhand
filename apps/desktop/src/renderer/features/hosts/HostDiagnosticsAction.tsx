@@ -11,10 +11,7 @@ import {
 } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { ApiError } from '@/lib/api';
-import {
-  CONTROL_HOVER_LIFT,
-  CONTROL_INK_BORDER,
-} from '@/features/common/ControlInkBorder';
+import { HOST_ACTION_BUTTON } from './host-action-button';
 import { computerCopy } from './computer-copy';
 import {
   useBackendInfoSnapshot,
@@ -45,6 +42,10 @@ import {
  * button is never disabled and needs no separate error state — only a transient
  * copied confirmation. It reads its own (React-Query-deduped) status + backend
  * snapshot so the caller only passes `host`.
+ *
+ * Renders a BARE button, not its own framed section (#task:1619): it is the
+ * first row of the page's footer action group, which owns the divider and the
+ * spacing. Shared geometry/hover live in `host-action-button.ts`.
  */
 export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element {
   // Same query keys HostDetailView already mounts — React Query returns the
@@ -78,21 +79,15 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
   };
 
   return (
-    <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => void handleCopy()}
-        className={`gap-2 self-start ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-bg-floating`}
-      >
-        {copied ? (
-          <Check className="size-3.5" />
-        ) : (
-          <Copy className="size-3.5" />
-        )}
-        {copied ? computerCopy.copied : computerCopy.copyDiagnostics}
-      </Button>
-    </section>
+    <Button
+      variant="outline"
+      onClick={() => void handleCopy()}
+      data-host-action="neutral"
+      className={`gap-2 ${HOST_ACTION_BUTTON}`}
+    >
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+      {copied ? computerCopy.copied : computerCopy.copyDiagnostics}
+    </Button>
   );
 }
 
