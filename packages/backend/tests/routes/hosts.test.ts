@@ -3,6 +3,7 @@ import {
   HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
+  HostStatusResponseSchema,
   apiPaths,
   assembleConnectCommand,
 } from '@silverhand/shared';
@@ -18,6 +19,7 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import {
   HostWsCommandResponseError,
+  type HostWsAdmissionFailure,
   type HostWsServerController,
 } from '../../src/ws/host-ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -2630,6 +2632,137 @@ describe('host routes', () => {
       // onto a non-`available` arm (Cindy `nTB67NWSepk054UL` constraint).
       expect(body).not.toHaveProperty('snapshot');
       expect(body).not.toHaveProperty('reason');
+      // #task:1631 — ordinary offline carries NO reason. Absence is the
+      // signal that "waiting may help"; presence must stay rare and earned.
+      expect(body).not.toHaveProperty('admission_failure');
+    });
+
+    it('projects a protocol-mismatch refusal on the `disconnected` arm (#task:1631)', async () => {
+      // A Computer whose daemon is too old to be admitted is offline AND will
+      // stay offline until the binary is upgraded. Availability stays
+      // `disconnected` (no fifth state, no schema migration); the refusal
+      // rides along as a separate fact so the surface can stop promising a
+      // reconnect that can never land.
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const fake = new FakeHostWsController(async () => ({}));
+      fake.connectionId = null; // the refused connection is already closed
+      fake.admissionFailure = {
+        kind: 'protocol_mismatch',
+        connectionId: 'conn-refused',
+        offeredProtocolVersion: 7,
+        expectedProtocolVersion: 8,
+        observedAt: 1_700_000_000_000,
+      };
+      controller = fake;
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host.id),
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toMatchObject({
+        host_id: host.id,
+        availability: 'disconnected',
+        admission_failure: {
+          kind: 'protocol_mismatch',
+          offered_protocol_version: 7,
+          expected_protocol_version: 8,
+          observed_at: 1_700_000_000_000,
+        },
+      });
+      // The arm is `.strict()` — parse proves the renderer-facing schema
+      // actually admits the field instead of the route smuggling it past a
+      // type-only `satisfies`.
+      expect(HostStatusResponseSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('projects the refusal even while the refused socket is still attached — the failure outranks the read model (#task:1631)', async () => {
+      // Cindy `dI7Zbf_p8tte6Hef` falsifier. The refused connection's id is
+      // removed from the connection map only in the ws `close` listener, so a
+      // read can land while the mismatch is already recorded AND the id is
+      // still there. If the availability projection won that race the answer
+      // would be `unreachable` with no reason — and since clients invalidate
+      // this query on events instead of polling, the second (close-triggered)
+      // invalidation can be coalesced away and the wrong answer sticks
+      // permanently. So the refusal must decide the read.
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const fake = new FakeHostWsController(async () => ({}));
+      fake.connectionId = 'conn-live'; // close listener has not run yet
+      fake.admissionFailure = {
+        kind: 'protocol_mismatch',
+        connectionId: 'conn-live', // ...and this is that same socket
+        offeredProtocolVersion: 7,
+        expectedProtocolVersion: 8,
+        observedAt: 1_700_000_000_000,
+      };
+      controller = fake;
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host.id),
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body).toMatchObject({
+        host_id: host.id,
+        availability: 'disconnected',
+        admission_failure: {
+          kind: 'protocol_mismatch',
+          offered_protocol_version: 7,
+          expected_protocol_version: 8,
+        },
+      });
+      expect(body.availability).not.toBe('unreachable');
+      expect(HostStatusResponseSchema.safeParse(body).success).toBe(true);
+    });
+
+    it('does NOT project a refusal that belongs to an older connection generation (#task:1631)', async () => {
+      // The other side of the same race: the user upgraded the daemon and it
+      // reconnected, so a NEW socket is attached and has not sent `ready`
+      // yet (the record clears on that `ready`). The stale refusal describes a
+      // socket that is already gone — claiming "upgrade this machine" here
+      // would be a false terminal verdict on a host that is coming back. Fall
+      // through to the transient `unreachable` arm instead.
+      let controller: FakeHostWsController | null = null;
+      t = buildTestApp({ hostWsController: () => controller });
+      const fake = new FakeHostWsController(async () => ({}));
+      fake.connectionId = 'conn-2'; // the upgraded daemon's socket
+      fake.admissionFailure = {
+        kind: 'protocol_mismatch',
+        connectionId: 'conn-1', // the refused, long-dead one
+        offeredProtocolVersion: 7,
+        expectedProtocolVersion: 8,
+        observedAt: 1_700_000_000_000,
+      };
+      controller = fake;
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
+
+      const res = await sessionHttp(t, userToken).get(
+        apiPaths.hostStatus(host.id),
+      );
+
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, unknown>;
+      expect(body).toMatchObject({
+        host_id: host.id,
+        availability: 'unreachable',
+      });
+      expect(body).not.toHaveProperty('admission_failure');
+      expect(HostStatusResponseSchema.safeParse(body).success).toBe(true);
     });
 
     it('returns `unreachable` (pending seed) with registration list when the seed failed — and the GET itself never dispatches (#task:1588 gate #4)', async () => {
@@ -2842,8 +2975,12 @@ class FakeHostWsController implements HostWsServerController {
     return ['host'];
   }
 
+  /** #task:1631 — set to null to model "the connection is gone" (the read
+   *  model's `disconnected` arm) while the controller still remembers WHY. */
+  connectionId: string | null = 'conn-1';
+
   connectionIdForHost(): string | null {
-    return 'conn-1';
+    return this.connectionId;
   }
 
   getAttachment(hostId: string) {
@@ -2855,6 +2992,14 @@ class FakeHostWsController implements HostWsServerController {
       hostname: this.attachment.hostname,
       capabilities: [],
     };
+  }
+
+  /** #task:1631 — set by a test to model a host whose last authenticated
+   *  connection attempt was refused for an unrecoverable reason. */
+  admissionFailure: HostWsAdmissionFailure | null = null;
+
+  getAdmissionFailure(): HostWsAdmissionFailure | null {
+    return this.admissionFailure;
   }
 
   async sendCommand<K extends OutboundServerCommandKind>(

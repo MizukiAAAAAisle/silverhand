@@ -20,6 +20,14 @@ export const computerCopy = {
   dialogTitle: 'Add a computer',
   dialogIntro: 'Run this command on the computer you want to add.',
   connectionCommandLabel: 'Connection command',
+  /** The published package a user-managed computer installs to connect
+   *  (`npx <name>@latest connect …`). Named in prose only where the user
+   *  must act on it — currently `describeAdmissionFailure`, where "update
+   *  Silverhand on that machine" would not say what to run. Version-free
+   *  on purpose: the server owns the pinned spec
+   *  (`SILVERHAND_DAEMON_NPM_SPEC`), and every published copy of this
+   *  package is reached by the same name. */
+  connectionPackageName: '@silverhand-ai/daemon',
   reveal: 'Reveal',
   hide: 'Hide',
   copy: 'Copy',

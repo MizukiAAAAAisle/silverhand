@@ -108,6 +108,107 @@ describe('host outbound WebSocket server', () => {
     metrics.close();
   });
 
+  // #task:1631 — the metric above is fleet-wide and answers "how many stale
+  // daemons are out there"; it cannot tell ONE user why THEIR Computer is
+  // offline. These three pin the per-host fact: recorded on refusal, survives
+  // the connection it came from, cleared only by a daemon that actually
+  // speaks our version, and never invented from a malformed frame.
+  it('keeps the refused version pair on the host after the incompatible connection is gone', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    // Capture the generation that is about to be refused: the recorded fact
+    // must name it, so a reader can tell "this refusal explains the socket
+    // still being torn down" from "a newer socket has attached since".
+    const refusedConnectionId = server.controller.connectionIdForHost(host.id);
+    expect(refusedConnectionId).not.toBeNull();
+
+    ws.send(
+      JSON.stringify({
+        ...(readyFrame({ hostName: 'Old Mac' }) as Record<string, unknown>),
+        protocol_version: OUTBOUND_PROTOCOL_VERSION - 1,
+      }),
+    );
+    await waitForClose(ws);
+    await waitFor(() => server!.controller.getAttachment(host.id) === null);
+
+    // The connection is gone — which is exactly the state that needs
+    // explaining, so the fact must outlive it.
+    expect(server.controller.getAdmissionFailure(host.id)).toMatchObject({
+      kind: 'protocol_mismatch',
+      connectionId: refusedConnectionId,
+      offeredProtocolVersion: OUTBOUND_PROTOCOL_VERSION - 1,
+      expectedProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+    });
+    expect(
+      server.controller.getAdmissionFailure(host.id)!.observedAt,
+    ).toBeGreaterThan(0);
+    expect(server.controller.getAdmissionFailure('other-host')).toBeNull();
+  });
+
+  it('clears a recorded refusal once the host sends a compatible ready frame', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+
+    const stale = await connectHost(server.url, issued.hostToken);
+    sockets.push(stale);
+    stale.send(
+      JSON.stringify({
+        ...(readyFrame({ hostName: 'Old Mac' }) as Record<string, unknown>),
+        protocol_version: OUTBOUND_PROTOCOL_VERSION - 1,
+      }),
+    );
+    await waitForClose(stale);
+    await waitFor(() => server!.controller.getAdmissionFailure(host.id) !== null);
+    await waitFor(() => server!.controller.getAttachment(host.id) === null);
+
+    // Same host, upgraded daemon: a schema-valid `ready` is the only thing
+    // that resolves the reason.
+    const upgraded = await connectHost(server.url, issued.hostToken);
+    sockets.push(upgraded);
+    upgraded.send(JSON.stringify(readyFrame({ hostName: 'Old Mac' })));
+    await waitFor(
+      () => server!.controller.getAttachment(host.id)?.hostname === 'Old Mac',
+    );
+
+    expect(server.controller.getAdmissionFailure(host.id)).toBeNull();
+  });
+
+  it('records no refusal for a ready frame whose protocol version is not a version', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    // A garbage `protocol_version` is a corrupt-dialer signal, not an
+    // actionable "upgrade your daemon" fact — telling the user to upgrade
+    // would be a guess.
+    ws.send(
+      JSON.stringify({
+        ...(readyFrame({ hostName: 'Old Mac' }) as Record<string, unknown>),
+        protocol_version: 'v-not-a-number',
+      }),
+    );
+    const closed = await waitForClose(ws);
+
+    expect(closed.code).toBe(1002);
+    expect(server.controller.getAdmissionFailure(host.id)).toBeNull();
+  });
+
   it('rejects missing, unknown, and revoked host tokens before upgrade', async () => {
     t = buildTestApp();
     server = await openServer(t);

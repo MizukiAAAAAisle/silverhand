@@ -124,6 +124,7 @@
   "HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE",
   "HOST_WS_CLOSE_REASON_DISCONNECTED",
   "HOST_WS_CLOSE_REASON_REVOKED",
+  "HostAdmissionFailureSchema",
   "HostAgentLivenessChangedEventSchema",
   "HostAgentResourceSchema",
   "HostAvailabilitySchema",

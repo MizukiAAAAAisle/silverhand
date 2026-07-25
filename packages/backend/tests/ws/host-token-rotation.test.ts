@@ -165,6 +165,10 @@ class FakeHostWsController implements HostWsServerController {
     return null;
   }
 
+  getAdmissionFailure(): null {
+    return null;
+  }
+
   async sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

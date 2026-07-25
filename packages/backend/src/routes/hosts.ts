@@ -949,6 +949,47 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     // seed-landed `host_connection_changed` republish converges clients.
     const dispatch = hostStatusReadModel.read(hostId);
 
+    // #task:1631 — "offline" alone can't tell the user whether waiting helps.
+    // If the last authenticated connection attempt was refused for a terminal
+    // reason (today: an incompatible daemon wire protocol), that refusal is a
+    // STRONGER read outcome than the availability projection: the refused
+    // socket's id is removed from the connection map only in the `close`
+    // listener, so a read that lands in between would otherwise answer
+    // `unreachable` — and because clients invalidate this query on events
+    // rather than polling, that answer can stick. So decide the refusal first
+    // and return the terminal reason instead of promising a reconnect that
+    // will never land.
+    //
+    // Gated on the refused generation: if a DIFFERENT connection is now
+    // attached, the refusal describes a socket that is already gone and the
+    // new daemon has simply not reported yet — a bare existence check would
+    // pin a false "upgrade this machine" on a host that just reconnected with
+    // a fixed daemon (the record clears on its `ready`, which lands after
+    // attach). Absent = ordinary offline. Memory-only and process-local: after
+    // a server restart it is absent until the daemon dials again, which
+    // degrades to plain offline rather than to a lie.
+    const wsController = ctx.hostWsController?.() ?? null;
+    const admissionFailure = wsController?.getAdmissionFailure(hostId) ?? null;
+    const liveConnectionId = wsController?.connectionIdForHost(hostId) ?? null;
+    if (
+      admissionFailure &&
+      (liveConnectionId === null ||
+        liveConnectionId === admissionFailure.connectionId)
+    ) {
+      return c.json({
+        host_id: hostId,
+        availability: 'disconnected',
+        agents: buildAgentRows(null),
+        last_seen_at: host.last_seen_at,
+        admission_failure: {
+          kind: admissionFailure.kind,
+          offered_protocol_version: admissionFailure.offeredProtocolVersion,
+          expected_protocol_version: admissionFailure.expectedProtocolVersion,
+          observed_at: admissionFailure.observedAt,
+        },
+      } satisfies HostStatusResponse);
+    }
+
     if (dispatch.kind === 'disconnected') {
       return c.json({
         host_id: hostId,

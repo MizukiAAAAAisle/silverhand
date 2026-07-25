@@ -59,6 +59,7 @@
  */
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   Check,
   CheckCircle2,
   Cpu,
@@ -80,6 +81,7 @@ import {
 } from 'react';
 import type {
   AgentOnHostDto,
+  HostAdmissionFailure,
   HostAgentResource,
   HostDto,
   HostWorkspaceResource,
@@ -142,6 +144,7 @@ import {
   HOST_MODAL_BUTTON,
 } from './host-action-button';
 import {
+  describeAdmissionFailure,
   describeHostStatus,
   formatUptime,
   type HostStatusTone,
@@ -271,6 +274,13 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
           </div>
         ) : statusQuery.data ? (
           <>
+            {statusQuery.data.availability === 'disconnected'
+            && statusQuery.data.admission_failure ? (
+              <AdmissionFailureNotice
+                failure={statusQuery.data.admission_failure}
+                appManaged={host.provisioning_source === 'app_install'}
+              />
+            ) : null}
             {statusQuery.data.availability === 'available' ? (
               <SystemSection snapshot={statusQuery.data.snapshot} />
             ) : (
@@ -1472,18 +1482,65 @@ function SystemField({
 
 /* ─── Offline arms ──────────────────────────────────────────────── */
 
+/**
+ * #task:1631 — the "this one needs attention" notice on a computer page.
+ *
+ * shiki interaction gate (2026-07-26): an incompatible-version prompt for
+ * a computer is **not** a banner — it is a notice placed on that
+ * computer's page, pale-yellow fill + icon. So it reuses the established
+ * caution-callout vocabulary of this file (`--warning-surface` fill +
+ * `--control-radius`, the same form as `CascadeImpact` /
+ * `WorkspaceImpact`) instead of the status `Banner`, and the status
+ * chrome keeps saying plain "Offline" — one voice per question: the pill
+ * answers "is it connected", this answers "what do I do about it".
+ *
+ * `AlertTriangle`, deliberately not an update/download glyph: the only
+ * fix runs on that machine, so an icon that reads like an in-app update
+ * affordance would promise a button that does not exist.
+ *
+ * `appManaged` selects which artifact the action clause names (the app
+ * itself vs the published package the connection command installs) — see
+ * `describeAdmissionFailure`.
+ */
+function AdmissionFailureNotice({
+  failure,
+  appManaged,
+}: {
+  failure: HostAdmissionFailure;
+  appManaged: boolean;
+}): JSX.Element {
+  return (
+    <div
+      role="status"
+      className="mt-5 flex items-start gap-2.5 rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5"
+    >
+      <AlertTriangle
+        className="mt-0.5 size-4 shrink-0 text-[var(--warning)]"
+        aria-hidden
+      />
+      <p className="min-w-0 flex-1 text-sm text-text-primary">
+        {describeAdmissionFailure(failure, { appManaged })}
+      </p>
+    </div>
+  );
+}
+
 function OfflineSection({
   status,
 }: {
   status: Exclude<HostStatusResponse, { availability: 'available' }>;
 }): JSX.Element {
   const view = describeHostStatus(status);
+  // No generic "will appear when the computer is back online" fallback:
+  // every non-available arm already carries its own detail, and one of
+  // them (`disconnected` + `admission_failure`, `#task:1631`) is offline
+  // precisely BECAUSE it will not come back unattended — printing a
+  // wait-and-see promise there would be the one wrong thing to say.
   return (
     <HostSection title="System">
       <Banner tone={view.tone}>
         <span className="font-medium">{view.label}.</span>{' '}
-        {view.detail ??
-          'Live system facts will appear when the host is back online.'}
+        {view.detail}
       </Banner>
     </HostSection>
   );

@@ -69,10 +69,49 @@ export interface HostWsAttachment {
   capabilities: readonly string[];
 }
 
+/**
+ * #task:1631 — why the LAST authenticated connection attempt for a host was
+ * refused, when it was refused for a reason the daemon cannot recover from by
+ * retrying. This is **not** a fifth `availability` value and **not** a second
+ * liveness source. The host is plainly `disconnected`; this record only answers
+ * the follow-up question "is that offline state self-healing?".
+ *
+ * Recorded only **after** host-token authentication succeeded, so it can never
+ * be attributed to an unrelated or hostile dialer. Cleared when the host next
+ * sends a valid `ready` frame — presence therefore means "still unresolved",
+ * and a stale daemon that reconnect-loops keeps the record continuously set
+ * instead of flickering once per attempt.
+ */
+export interface HostWsAdmissionFailure {
+  kind: 'protocol_mismatch';
+  /**
+   * The connection generation that was refused. Consumers compare it with
+   * `connectionIdForHost(hostId)` to tell "the refused connection is still
+   * being torn down" (same id — the refusal explains this host's state)
+   * from "a NEW connection has since attached and has not reported yet"
+   * (different id — say nothing terminal about it yet).
+   */
+  connectionId: string;
+  /** Wire protocol version the daemon offered in its `ready` frame. */
+  offeredProtocolVersion: number;
+  /** Version this server accepts (`OUTBOUND_PROTOCOL_VERSION`). */
+  expectedProtocolVersion: number;
+  /** Epoch ms of the refused attempt. */
+  observedAt: number;
+}
+
 export interface HostWsServerController {
   activeConnectionCount(): number;
   connectedHostIds(): string[];
   connectionIdForHost(hostId: string): string | null;
+  /**
+   * The most recent unrecovered admission failure for `hostId`, or `null`
+   * when the last authenticated attempt was not refused for a known terminal
+   * reason (the ordinary-offline case). Memory-only and process-local, like
+   * `getAttachment` — a server restart forgets it and the next connection
+   * attempt re-establishes the fact.
+   */
+  getAdmissionFailure(hostId: string): HostWsAdmissionFailure | null;
   /**
    * Returns a snapshot of the currently-active outbound websocket
    * attachment for `hostId`, or `null` when no live connection exists.
@@ -196,6 +235,12 @@ export function installHostWebSocketServer(
   // the captured `connectionId` is still the registered one
   // (replacement-safe).
   const attachmentsByHost = new Map<string, HostWsAttachment>();
+  // #task:1631 — outlives the connection it describes on purpose: the whole
+  // point is to explain an offline host, which by definition has no live
+  // connection left to carry the reason. Keyed by host (not connection) and
+  // cleared only by a valid `ready`, so a stale daemon reconnect-loop keeps it
+  // continuously set rather than clearing it once per attempt.
+  const admissionFailuresByHost = new Map<string, HostWsAdmissionFailure>();
   const commandIdPrefix = `hostws-${randomUUID()}`;
   let commandSeq = 0;
   let connectionSeq = 0;
@@ -257,6 +302,12 @@ export function installHostWebSocketServer(
             capabilities,
           });
         },
+        recordAdmissionFailure: failure => {
+          admissionFailuresByHost.set(auth.host.hostId, failure);
+        },
+        clearAdmissionFailure: () => {
+          admissionFailuresByHost.delete(auth.host.hostId);
+        },
       });
       connections.set(ws, connection);
       connectionsByHost.set(auth.host.hostId, connection);
@@ -310,6 +361,7 @@ export function installHostWebSocketServer(
     connectionIdForHost: hostId =>
       connectionsByHost.get(hostId)?.connectionId ?? null,
     getAttachment: hostId => attachmentsByHost.get(hostId) ?? null,
+    getAdmissionFailure: hostId => admissionFailuresByHost.get(hostId) ?? null,
     sendCommand: (hostId, kind, params, commandOpts) => {
       const startedAt = performance.now();
       const connection = connectionsByHost.get(hostId);
@@ -442,6 +494,8 @@ class HostWsConnection {
         hostname: string,
         capabilities: readonly string[],
       ) => void;
+      recordAdmissionFailure: (failure: HostWsAdmissionFailure) => void;
+      clearAdmissionFailure: () => void;
     },
   ) {
     this.connectionId = opts.connectionId;
@@ -452,9 +506,15 @@ class HostWsConnection {
     this.eventSink = opts.eventSink;
     this.deploymentMode = opts.deploymentMode;
     this.updateAttachmentReady = opts.updateAttachmentReady;
+    this.recordAdmissionFailure = opts.recordAdmissionFailure;
+    this.clearAdmissionFailure = opts.clearAdmissionFailure;
   }
 
   private readonly eventSink?: HostWsEventSink;
+  private readonly recordAdmissionFailure: (
+    failure: HostWsAdmissionFailure,
+  ) => void;
+  private readonly clearAdmissionFailure: () => void;
   private readonly updateAttachmentReady: (
     hostname: string,
     capabilities: readonly string[],
@@ -689,6 +749,33 @@ class HostWsConnection {
         offeredProtocolVersion,
         String(OUTBOUND_PROTOCOL_VERSION),
       );
+      // #task:1631 — the metric is fleet-wide; this records the same refusal
+      // per-host so the offline Computer can say WHY it will stay offline.
+      // Only a well-formed-but-wrong version qualifies: `'invalid'` means the
+      // frame wasn't a readable `ready` at all, which is a corrupt-dialer
+      // signal, not an actionable "upgrade your daemon" fact. Recorded BEFORE
+      // the fall-through close so the close handler's
+      // `publishHostConnectionChanged` already sees it and the refetch it
+      // triggers carries the reason.
+      const offered = Number(offeredProtocolVersion);
+      if (Number.isSafeInteger(offered)) {
+        this.recordAdmissionFailure({
+          kind: 'protocol_mismatch',
+          connectionId: this.connectionId,
+          offeredProtocolVersion: offered,
+          expectedProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+          observedAt: Date.now(),
+        });
+        this.ctx.logger.warn(
+          {
+            hostId: this.host.hostId,
+            connectionId: this.connectionId,
+            offeredProtocolVersion: offered,
+            expectedProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+          },
+          'host-ws: refused daemon on incompatible wire protocol',
+        );
+      }
     }
 
     const response =
@@ -745,6 +832,12 @@ class HostWsConnection {
 
   private handleDaemonEvent(frame: OutboundDaemonToServerEventFrame): void {
     if (frame.kind === 'ready') {
+      // #task:1631 — a schema-valid `ready` proves this daemon speaks our wire
+      // version, which is the ONLY thing that resolves a recorded
+      // protocol-mismatch refusal. Clearing here (rather than on authenticated
+      // upgrade) is what keeps a stale daemon's reconnect loop from flickering
+      // the reason off between attempts.
+      this.clearAdmissionFailure();
       if (this.readyProtocolVersion === null) {
         this.readyProtocolVersion = String(frame.protocol_version);
         this.ctx.metrics?.changeHostWsReadyConnections(

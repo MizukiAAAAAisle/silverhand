@@ -2586,6 +2586,10 @@ class FakeTransport implements HostWsServerController {
 
   attachmentCapabilities: readonly string[] | null = null;
 
+  getAdmissionFailure(): null {
+    return null;
+  }
+
   sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

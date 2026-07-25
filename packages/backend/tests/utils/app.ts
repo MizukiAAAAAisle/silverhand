@@ -423,6 +423,9 @@ export class FakeHostWsServerController implements HostWsServerController {
   getAttachment(): null {
     return null;
   }
+  getAdmissionFailure(): null {
+    return null;
+  }
   async sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,
     kind: K,

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { HostStatusResponse } from '@silverhand/shared';
+import type {
+  HostAdmissionFailure,
+  HostStatusResponse,
+} from '@silverhand/shared';
 import {
+  describeAdmissionFailure,
   describeHostStatus,
   describeUnreachableReason,
   formatUptime,
@@ -99,6 +103,78 @@ describe('describeHostStatus', () => {
     } as HostStatusResponse);
     expect(revoked.label).not.toBe(disconnected.label);
   });
+
+  it('leaves the availability view untouched when `admission_failure` is present', () => {
+    // `#task:1631` + shiki 2026-07-26: the upgrade prompt is a page-level
+    // notice, not status chrome. So the pill must NOT fork — same label,
+    // same tone, same detail as ordinary offline; the extra fact is
+    // rendered by `AdmissionFailureNotice` from `describeAdmissionFailure`.
+    const stale = describeHostStatus({
+      ...aHost(),
+      availability: 'disconnected',
+      agents: [],
+      admission_failure: {
+        kind: 'protocol_mismatch',
+        offered_protocol_version: 7,
+        expected_protocol_version: 8,
+        observed_at: 1_700_000_000_000,
+      },
+    } as HostStatusResponse);
+    const ordinary = describeHostStatus({
+      ...aHost(),
+      availability: 'disconnected',
+      agents: [],
+    } as HostStatusResponse);
+    expect(stale).toEqual(ordinary);
+  });
+});
+
+describe('describeAdmissionFailure', () => {
+  function mismatch(offered: number, expected: number): HostAdmissionFailure {
+    return {
+      kind: 'protocol_mismatch',
+      offered_protocol_version: offered,
+      expected_protocol_version: expected,
+      observed_at: 1_700_000_000_000,
+    };
+  }
+
+  it('carries both versions in the fact clause', () => {
+    const text = describeAdmissionFailure(mismatch(7, 8), {
+      appManaged: false,
+    });
+    expect(text).toContain('v7');
+    expect(text).toContain('v8');
+  });
+
+  it('points at the stale side — the computer when it is behind, the server when it is ahead', () => {
+    // Both directions are reachable (rolling the server back inverts
+    // which side is old), and sending the user to upgrade the machine
+    // that is already ahead is a dead end.
+    expect(
+      describeAdmissionFailure(mismatch(7, 8), { appManaged: false }),
+    ).toMatch(/on this computer to restore/);
+    expect(
+      describeAdmissionFailure(mismatch(9, 8), { appManaged: false }),
+    ).toMatch(/Update Silverhand on the server/);
+  });
+
+  it('names the artifact the stale side actually installs', () => {
+    // shiki 2026-07-26: the action clause must say WHAT to update. A
+    // user-managed computer runs the published package, so it is named
+    // verbatim; an app-managed computer runs the copy bundled in the app,
+    // where naming that package would point at something it never
+    // installed.
+    expect(
+      describeAdmissionFailure(mismatch(7, 8), { appManaged: false }),
+    ).toContain(`Update ${computerCopy.connectionPackageName} on this computer`);
+    expect(
+      describeAdmissionFailure(mismatch(7, 8), { appManaged: true }),
+    ).toContain('Update Silverhand on this computer');
+    expect(
+      describeAdmissionFailure(mismatch(7, 8), { appManaged: true }),
+    ).not.toContain(computerCopy.connectionPackageName);
+  });
 });
 
 describe('describeUnreachableReason', () => {
@@ -155,7 +231,8 @@ describe('formatUptime', () => {
 /**
  * Copy-gate — §7.1 (line 820): internal concepts (`host` / `daemon` /
  * `remote` / `connect-token` / bare `token`) must NEVER appear in
- * user-facing prose, only inside the literal connection-command string.
+ * user-facing prose, only inside a literal string the user copies or
+ * runs (the connection command, the published package name).
  *
  * The prior guard only checked `describeUnreachableReason` labels, so
  * jargon could (and did) leak into `detail` prose and the `computerCopy`
@@ -248,6 +325,29 @@ describe('copy-gate: no internal jargon in user-facing prose (§7.1)', () => {
       }
     }
 
+    // Terminal admission-failure prose (`#task:1631`) — swept in both
+    // directions AND both artifact forms, since each produces its own
+    // action clause.
+    for (const [offered, expected] of [
+      [7, 8],
+      [9, 8],
+    ] as const) {
+      for (const appManaged of [false, true] as const) {
+        out.push({
+          label: `describeAdmissionFailure(protocol_mismatch ${offered}→${expected}, appManaged=${appManaged})`,
+          text: describeAdmissionFailure(
+            {
+              kind: 'protocol_mismatch',
+              offered_protocol_version: offered,
+              expected_protocol_version: expected,
+              observed_at: 1_700_000_000_000,
+            },
+            { appManaged },
+          ),
+        });
+      }
+    }
+
     // Local embedded-host supervisor pill (`connection-state.ts`): a
     // separate bounded context, but its shared words are the SAME single
     // source, so its prose must clear the same gate (Alice: the old gate
@@ -289,9 +389,14 @@ describe('copy-gate: no internal jargon in user-facing prose (§7.1)', () => {
   it.each(collectUserFacingCopy())(
     '$label has no internal jargon',
     ({ label, text }) => {
+      // The published package identifier is exempt for the same reason the
+      // connection command string is: it is a copy-pasteable name the user
+      // types, not prose. Strip the literal (only the literal) so a bare
+      // "daemon" anywhere else in the same sentence still trips the gate.
+      const prose = text.split(computerCopy.connectionPackageName).join('');
       for (const { name, re } of JARGON) {
         expect(
-          re.test(text),
+          re.test(prose),
           `${label} = "${text}" leaks internal term "${name}"`,
         ).toBe(false);
       }

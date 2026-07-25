@@ -101,6 +101,8 @@ export type UpdateHostResponse = z.infer<typeof UpdateHostResponseSchema>;
 //   - 'available'    — daemon connected + responsive; `snapshot` populated.
 //   - 'disconnected' — host row OK but no live daemon connection. Renderer
 //                      shows persistent fields + "Computer is offline".
+//                      `admission_failure` (#task:1631) tells the renderer
+//                      whether that offline state can self-heal.
 //   - 'unreachable'  — connected but RPC failed (timeout / protocol error).
 //                      `reason` carries the typed failure.
 //   - 'revoked'      — host has `revoked_at` set. Explicit so the renderer
@@ -161,6 +163,42 @@ export const HostUnreachableReasonSchema = z.enum([
   'protocol_error',
 ]);
 export type HostUnreachableReason = z.infer<typeof HostUnreachableReasonSchema>;
+
+/**
+ * #task:1631 — why the LAST authenticated connection attempt from this
+ * computer's daemon was refused, projected onto the `disconnected` arm.
+ *
+ * This is **not** a fifth availability value and not a second liveness
+ * source. `availability` still answers "is there a live connection right
+ * now" (`disconnected`); this answers the different question "is the
+ * offline state self-healing?". A daemon whose wire protocol the server
+ * refuses will never come back on its own, so the renderer must not
+ * render the generic "will appear when the host is back online" promise
+ * for it — the only effective user action is upgrading Silverhand on
+ * that machine.
+ *
+ * Recorded only AFTER host-token authentication, so it is always
+ * attributable to a real Computer (the version is read from the daemon's
+ * `ready` frame, which arrives post-auth). Cleared by the next valid
+ * `ready` — presence therefore means "still unresolved as of now",
+ * never a historical log. Absent means the offline state carries no
+ * known terminal cause: treat it as ordinary, possibly-self-healing
+ * offline.
+ *
+ * Both version integers are carried (not a boolean) because the
+ * actionable copy needs them: which version the machine offers vs which
+ * one this server requires.
+ */
+export const HostAdmissionFailureSchema = z
+  .object({
+    kind: z.literal('protocol_mismatch'),
+    offered_protocol_version: z.number().int().nonnegative(),
+    expected_protocol_version: z.number().int().nonnegative(),
+    /** Epoch ms of the refused attempt. */
+    observed_at: z.number(),
+  })
+  .strict();
+export type HostAdmissionFailure = z.infer<typeof HostAdmissionFailureSchema>;
 
 /** Per-agent registration entry returned at the top level of every
  *  `HostStatusResponse` 200 arm. This is a DB-persisted **registration**
@@ -244,7 +282,10 @@ export type HostStatusSnapshot = z.infer<typeof HostStatusSnapshotSchema>;
  *                    enrichment; no reason; last_seen_at optional.
  * - `disconnected` — host row OK, no live daemon connection. No snapshot,
  *                    no reason; agents all offline; `last_seen_at` for
- *                    "last seen 5m ago" UX.
+ *                    "last seen 5m ago" UX. `admission_failure` present
+ *                    only when the last authenticated attempt was refused
+ *                    for a terminal reason (#task:1631) — that is the
+ *                    "offline, and it will NOT self-heal" signal.
  * - `unreachable`  — connected but RPC failed. No snapshot; typed `reason`
  *                    REQUIRED; agents all offline; `last_seen_at` optional.
  * - `revoked`      — host has `revoked_at` set. No snapshot, no reason;
@@ -267,6 +308,11 @@ const HostStatusDisconnectedArmSchema = z
     availability: z.literal('disconnected'),
     agents: z.array(AgentOnHostDtoSchema),
     last_seen_at: z.number().nullable().optional(),
+    /** #task:1631 — present only when the last authenticated connection
+     *  attempt was refused for a known terminal reason (today: wire
+     *  protocol mismatch). Absent = ordinary offline. See
+     *  {@link HostAdmissionFailureSchema}. */
+    admission_failure: HostAdmissionFailureSchema.optional(),
   })
   .strict();
 

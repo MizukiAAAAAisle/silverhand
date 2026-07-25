@@ -1066,7 +1066,7 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       const forged = join(root, 'run', NS, 'workspaces', 'not-a-real-slug');
       const registryPath = join(root, 'run', NS, 'workspace-registry.json');
       const parsed = JSON.parse(readFileSync(registryPath, 'utf8')) as {
-        workspaces: Record<string, { path: string }>;
+        workspaces: Record<string, { path: string; provisioned_at: number }>;
       };
       parsed.workspaces['w_forged'] = { path: forged, provisioned_at: 1 };
       writeFileSync(
