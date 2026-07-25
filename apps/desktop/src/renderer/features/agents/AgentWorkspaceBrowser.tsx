@@ -554,13 +554,16 @@ function WorkspaceFilePreview({
           data-panel-card="placeholder"
           className="shrink-0 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[11px] text-text-on-warning"
         >
-          Preview truncated at 64 KB. The full file lives on the agent's host —
+          Preview truncated at 512 KB. The full file lives on the agent's host —
           not all of it is shown here.
         </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto bg-bg-floating px-4 py-3 text-sm text-text-primary">
         {isMarkdown ? (
-          <Markdown content={file.content} />
+          // No render budget here: a single large markdown file is not a
+          // rendering problem, and the content is already bounded by the
+          // daemon's read cap (the banner above says so when it bit).
+          <Markdown content={file.content} renderBudget="unbounded" />
         ) : (
           <pre className="whitespace-pre-wrap break-words font-mono text-[12px]">
             {file.content}

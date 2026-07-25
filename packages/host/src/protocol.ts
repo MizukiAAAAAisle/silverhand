@@ -2113,7 +2113,7 @@ export type AgentWorkspaceFileReadParams = z.infer<
 export const AgentWorkspaceFileReadResultSchema = z
   .object({
     ok: z.literal(true),
-    /** Single-file read: 64KB preview cap with a `truncated` flag the
+    /** Single-file read: bounded preview (daemon-side cap) with a `truncated` flag the
      *  renderer surfaces as a banner. */
     file: AgentWorkspaceFileReadSchema,
   })

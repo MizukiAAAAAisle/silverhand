@@ -295,7 +295,8 @@ export type AgentWorkspaceTree = z.infer<typeof AgentWorkspaceTreeSchema>;
 
 /**
  * Single-file read result. `truncated` flips when the file exceeds the
- * 64KB preview cap; the renderer just labels the preview accordingly.
+ * daemon's preview cap (`MAX_PREVIEW_BYTES`); the renderer just labels the
+ * preview accordingly.
  * `path` is the canonical virtual path the caller asked for, echoed for
  * cache-key stability.
  */

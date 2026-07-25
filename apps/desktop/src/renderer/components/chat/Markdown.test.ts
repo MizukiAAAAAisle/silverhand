@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { TaskSummaryDto, UserDto } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import { Markdown } from './Markdown';
+import { MESSAGE_RENDER_BUDGET_BYTES } from './markdown-render-budget';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
@@ -1614,13 +1615,16 @@ describe('Markdown mermaid fences (#task:1322)', () => {
 });
 
 describe('oversized-content guard (#task:1550)', () => {
-  const CAP = 64 * 1024;
+  // The default budget is the message content cap (chat bodies were bounded
+  // there on the way in); the workspace file preview opts out entirely
+  // (shiki 2026-07-26). Import the bound rather than restating a number, so the
+  // assertions stay about BEHAVIOUR — heavy pipeline bypassed, preview
+  // hard-bounded — not about copy or a magic constant.
+  const CAP = MESSAGE_RENDER_BUDGET_BYTES;
 
-  it('renders over-cap content as a bounded plain preview, never through the markdown pipeline', () => {
+  it('renders over-budget content as a bounded plain preview, never through the markdown pipeline', () => {
     const content = '# heading\n```js\ncode\n```\n' + 'x'.repeat(CAP);
     const html = render(content);
-    expect(html).toContain('内容过长');
-    expect(html).toContain('复制全文');
     // Heavy pipeline untouched: no heading, no code-block chrome.
     expect(html).not.toContain('<h1');
     expect(html).not.toContain('class="code-block"');
@@ -1628,19 +1632,34 @@ describe('oversized-content guard (#task:1550)', () => {
     expect(html.length).toBeLessThan(10_000);
   });
 
-  it('renders exactly-at-cap content through the normal markdown pipeline', () => {
+  it('renders exactly-at-budget content through the normal markdown pipeline', () => {
     const pad = 'a'.repeat(CAP - '# t\n\n'.length);
     const content = '# t\n\n' + pad;
     const html = render(content);
     expect(html).toContain('<h1');
-    expect(html).not.toContain('内容过长');
   });
 
-  it('covers the 140KiB legacy system-message shape (bytes, not code units)', () => {
-    // CJK: 48k chars ≈ 140KiB UTF-8 — under the cap in UTF-16 units,
-    // over it in bytes. Must hit the guard.
-    const html = render('汉'.repeat(48_000));
-    expect(html).toContain('内容过长');
+  it('measures the budget in UTF-8 bytes, not UTF-16 code units', () => {
+    // CJK: 3 bytes per char — under the budget in code units, over it in bytes.
+    const html = render('# t\n\n' + '汉'.repeat(CAP / 3));
     expect(html).not.toContain('<h1');
+  });
+
+  it('renders an unbounded surface (workspace file preview) past the message budget', () => {
+    // The daemon reads up to its own cap and appends a truncation line, so a
+    // large note arrives well over the message cap. Under the old shared guard
+    // this exact shape degraded to plain text (a 97KB work-log.md showed 4000
+    // chars); the file preview is bounded upstream, not here.
+    const preview =
+      '# work log\n\n' +
+      'a'.repeat(CAP * 2) +
+      '\n\n… (truncated; open in Finder for full content)';
+    const html = renderToStaticMarkup(
+      React.createElement(Markdown, {
+        content: preview,
+        renderBudget: 'unbounded',
+      }),
+    );
+    expect(html).toContain('<h1');
   });
 });

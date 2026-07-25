@@ -315,7 +315,7 @@ export class FakeHostWsServerController implements HostWsServerController {
    * #task:811 — override the `agent_workspace_file_read` ack. Default
    * mirrors the daemon: validate the virtual path (segment shape +
    * leaf is a regular file under the seeded L1 dir) and return the
-   * file content with the 64KB cap. Tests swap this to surface typed
+   * file content with a preview cap. Tests swap this to surface typed
    * errors or to assert that the daemon receives the path opaquely.
    */
   agentWorkspaceFileReadAckOverride:
@@ -845,6 +845,9 @@ async function readFakeAgentWorkspaceFile(
   const full = joinPath(baseDir, virtualPath);
   const stat = await fsp.lstat(full).catch(() => null);
   if (!stat || !stat.isFile()) return null;
+  // Fake-daemon preview cap. The real bound is the daemon's
+  // `MAX_PREVIEW_BYTES`; this value only has to be large enough for the
+  // seeded fixtures and small enough that a test can trip `truncated`.
   const MAX = 64 * 1024;
   const buf = await fsp.readFile(full);
   const truncated = buf.byteLength > MAX;

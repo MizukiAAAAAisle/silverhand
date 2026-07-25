@@ -17,7 +17,7 @@ import {
  * helper does the security work (segment-shape parse, per-segment
  * lstat-walk to refuse symlinks intermediate or leaf, realpath
  * boundary check, root-symlink rejection); this function only adds the
- * "is it a file?" check and a hard 64KiB read cap.
+ * "is it a file?" check and a hard read cap.
  *
  * Resource bound: the read is bounded at the syscall layer — `open` +
  * a loop of `read(buf, offset, MAX+1-offset, offset)` calls that fills
@@ -42,8 +42,25 @@ import {
 export interface ReadAgentWorkspaceFileDeps
   extends ResolveAgentWorkspaceBaseDeps {}
 
-const MAX_PREVIEW_BYTES = 64 * 1024;
+/**
+ * Read cap for one file preview. This is a WIRE bound, not a UI one: the
+ * result travels back inside a single protocol frame, and `encodeFrame` /
+ * `encodeOutboundFrame` throw above `MAX_FRAME_BYTES` (1 MiB) — a read that
+ * overflows the frame fails the request outright rather than degrading.
+ *
+ * So the cap is the frame ceiling with room for JSON escaping and the envelope:
+ * `"` / `\` / newline each encode to 2 bytes, so 512KiB of ordinary markdown
+ * lands around 530-560KiB on the wire, and even a quote-dense file stays under
+ * 1 MiB. (Raised from 64KiB — shiki 2026-07-26: a workspace file preview should
+ * not be capped at chat-message size. Going the whole 1 MiB would require
+ * raising `MAX_FRAME_BYTES` in both transports, which is a protocol change.)
+ */
+const MAX_PREVIEW_BYTES = 512 * 1024;
 const TRUNCATED_SUFFIX = '\n\n… (truncated; open in Finder for full content)';
+
+/** Exported so callers and tests state the bound once instead of restating a
+ *  number (the renderer labels the truncation banner from its own copy). */
+export { MAX_PREVIEW_BYTES };
 
 export async function readAgentWorkspaceFile(
   params: AgentWorkspaceFileReadParams,

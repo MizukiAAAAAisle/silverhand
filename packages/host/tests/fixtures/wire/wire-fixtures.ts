@@ -402,7 +402,7 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_workspace_file_read',
     description:
-      "#task:811: read one file from the agent home dir by virtual path. Backend forwards a /-joined virtual path (no leading or trailing slash, no `.`/`..`/dotfile/NUL/backslash segments); the daemon enforces those rules + a per-segment lstat walk (refuses symlinks intermediate or leaf) + a final realpath boundary check against the agent-home base. 64KB preview cap; `truncated` is set when exceeded.",
+      "#task:811: read one file from the agent home dir by virtual path. Backend forwards a /-joined virtual path (no leading or trailing slash, no `.`/`..`/dotfile/NUL/backslash segments); the daemon enforces those rules + a per-segment lstat walk (refuses symlinks intermediate or leaf) + a final realpath boundary check against the agent-home base. Bounded preview cap (daemon-side); `truncated` is set when exceeded.",
     frame: enc({
       id: 'req-agent-workspace-file-read-1',
       intent: 'agent_workspace_file_read',
@@ -1360,7 +1360,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/agent_workspace_file_read',
     description:
-      '#task:811: daemon read one file under the agent home dir host-side and returned `{path, content, size, mtime, truncated}`. `path` echoes the caller-supplied virtual path verbatim for cache-key stability; `truncated:false` here (≤64KB).',
+      '#task:811: daemon read one file under the agent home dir host-side and returned `{path, content, size, mtime, truncated}`. `path` echoes the caller-supplied virtual path verbatim for cache-key stability; `truncated:false` here (under the preview cap).',
     frame: enc({
       id: 'req-agent-workspace-file-read-1',
       result: {

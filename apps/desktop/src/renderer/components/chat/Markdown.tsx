@@ -7,9 +7,10 @@ import { AtSign, Check, Copy, Hash } from 'lucide-react';
 import { rehypeHighlightTerm } from './rehypeHighlightTerm';
 import type { AgentDto, UserDto } from '@silverhand/shared';
 import {
-  messageContentByteLength,
-  messageContentExceedsLimit,
-} from '@silverhand/shared';
+  exceedsRenderBudget,
+  markdownByteLength,
+  MESSAGE_RENDER_BUDGET_BYTES,
+} from './markdown-render-budget';
 import { Mention } from './Mention';
 import { MermaidDiagram } from './MermaidDiagram';
 import { ChannelRef, type ChannelReference } from './ChannelRef';
@@ -90,6 +91,12 @@ interface MarkdownProps {
    *  wrapped in `<mark class="search-hit">` by a rehype plugin. Absent / empty
    *  → the exact pre-find pipeline (no extra plugin, no re-processing). */
   searchQuery?: string;
+  /** How much markdown this surface is willing to render (see
+   *  `markdown-render-budget.ts`). `'message'` (default) bounds the body at the
+   *  message content cap and falls back to a plain-text preview above it;
+   *  `'unbounded'` renders whatever it is handed — for callers already bounded
+   *  upstream, i.e. the workspace file preview. */
+  renderBudget?: 'message' | 'unbounded';
 }
 
 const MENTION_PREFIX = 'silverhand-mention:';
@@ -133,17 +140,20 @@ function MarkdownInner({
   interactive = true,
   mermaidSvgByCode,
   searchQuery,
+  renderBudget = 'message',
 }: MarkdownProps): JSX.Element {
-  // Oversized guard: legacy DB rows may hold multi-MB content that
-  // predates the send-side byte cap. Feeding it to ReactMarkdown pins
-  // the renderer process (observed as 99% CPU + heartbeat loss), so
-  // anything over the cap renders as a bounded plain-text preview.
+  // Oversized guard: a multi-MB body (legacy DB rows predating the send-side
+  // byte cap) pins the renderer process in remark/rehype, so anything over this
+  // surface's budget falls back to a bounded plain-text preview. The budget is
+  // per consumer (`markdown-render-budget.ts`): a chat body is bounded by the
+  // message cap, the workspace file preview is bounded by the daemon's read cap
+  // and so opts out here rather than inheriting a chat limit.
+  const budget =
+    renderBudget === 'unbounded' ? null : MESSAGE_RENDER_BUDGET_BYTES;
   const oversizedBytes = useMemo(
     () =>
-      messageContentExceedsLimit(content)
-        ? messageContentByteLength(content)
-        : null,
-    [content],
+      exceedsRenderBudget(content, budget) ? markdownByteLength(content) : null,
+    [content, budget],
   );
 
   // Plugin instance is recreated per render but is a thin closure;
@@ -725,9 +735,9 @@ function canStartRef(text: string, index: number, lastRefEnd: number): boolean {
 
 const OVERSIZED_PREVIEW_CHARS = 4000;
 
-/** Bounded plain-text rendering for legacy oversized message rows.
- *  Never touches the markdown pipeline; full content stays retrievable
- *  via copy. */
+/** Bounded plain-text rendering for bodies over the render budget (legacy
+ *  oversized rows). Never touches the markdown pipeline; full content stays
+ *  retrievable via copy. */
 function OversizedContent({
   content,
   bytes,
@@ -752,9 +762,9 @@ function OversizedContent({
   return (
     <div className="markdown-body">
       <div className="flex items-center gap-2 text-xs opacity-60">
-        <span>内容过长 · {label} · 已截断预览</span>
+        <span>{label} · too large to render as Markdown</span>
         <button type="button" onClick={onCopy} className="underline hover:opacity-80">
-          {copied ? '已复制' : '复制全文'}
+          {copied ? 'Copied' : 'Copy full text'}
         </button>
       </div>
       <pre className="whitespace-pre-wrap break-words">

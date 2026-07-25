@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AgentWorkspaceFsError,
+  MAX_PREVIEW_BYTES,
   readAgentWorkspaceFile,
 } from '../../src/daemon/agent-workspace-fs/index.js';
 import {
@@ -25,7 +26,9 @@ import { AgentWorkspaceFileReadParamsSchema } from '../../src/protocol.js';
  * handler (#task:811). Cases covered:
  *  - normal read (system_prompt + nested notes/foo.md), echoes the
  *    canonical virtual path back in the result.
- *  - 64KB cap → `truncated: true` with the in-band suffix.
+ *  - read cap → `truncated: true` with the in-band suffix. Every size
+ *    here is derived from the exported `MAX_PREVIEW_BYTES` so raising
+ *    the cap doesn't silently turn a boundary case into a small file.
  *  - shape-bad inputs → `forbidden_path` (no I/O).
  *  - symlink leaf or intermediate → `forbidden_path`.
  *  - missing leaf / intermediate → `not_found`.
@@ -158,10 +161,10 @@ describe('readAgentWorkspaceFile', () => {
     expect(r.file.content).toBe('## entry');
   });
 
-  it('caps a large file at 64 KiB and marks it truncated', async () => {
+  it('caps a large file at the preview cap and marks it truncated', async () => {
     const dir = agentDir();
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'MEMORY.md'), 'x'.repeat(64 * 1024 + 500));
+    writeFileSync(join(dir, 'MEMORY.md'), 'x'.repeat(MAX_PREVIEW_BYTES + 500));
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'MEMORY.md' },
       { homeDir },
@@ -169,11 +172,11 @@ describe('readAgentWorkspaceFile', () => {
     expect(r.file.truncated).toBe(true);
     expect(r.file.content).toContain('(truncated;');
     // size reflects the real on-disk size, not the capped preview length.
-    expect(r.file.size).toBe(64 * 1024 + 500);
+    expect(r.file.size).toBe(MAX_PREVIEW_BYTES + 500);
   });
 
   it('does not slurp the entire file: bounded read at the syscall layer', async () => {
-    // Cindy round-1 P1 #1 — 64KiB cap must be a RESOURCE bound, not
+    // Cindy round-1 P1 #1 — the cap must be a RESOURCE bound, not
     // just a response truncation. We patch `fs.promises.readFile` to
     // flag if it ever runs (the new implementation uses `open` +
     // bounded `read`); a regression that re-introduces `fs.readFile`
@@ -183,10 +186,9 @@ describe('readAgentWorkspaceFile', () => {
     // bindings, can't reassign).
     const dir = agentDir();
     mkdirSync(dir, { recursive: true });
-    // 256KiB on disk — still small for the test runner, but FAR over
-    // the 64KiB cap so we can prove the truncated arm fires AND that
-    // metadata reflects the on-disk size, not the bytes read.
-    const big = 'a'.repeat(256 * 1024);
+    // Comfortably over the cap so we can prove the truncated arm fires
+    // AND that metadata reflects the on-disk size, not the bytes read.
+    const big = 'a'.repeat(MAX_PREVIEW_BYTES + 64 * 1024);
     writeFileSync(join(dir, 'MEMORY.md'), big);
 
     const fs = await import('node:fs');
@@ -207,7 +209,7 @@ describe('readAgentWorkspaceFile', () => {
       // Preview content stays at the cap + suffix; never the full file.
       expect(
         r.file.content.length,
-      ).toBeLessThanOrEqual(64 * 1024 + 200 /* suffix headroom */);
+      ).toBeLessThanOrEqual(MAX_PREVIEW_BYTES + 200 /* suffix headroom */);
     } finally {
       fs.promises.readFile = original;
     }
@@ -218,7 +220,7 @@ describe('readAgentWorkspaceFile', () => {
     // The "+1" extra read returns exactly MAX bytes, not MAX+1.
     const dir = agentDir();
     mkdirSync(dir, { recursive: true });
-    const exact = 'b'.repeat(64 * 1024);
+    const exact = 'b'.repeat(MAX_PREVIEW_BYTES);
     writeFileSync(join(dir, 'MEMORY.md'), exact);
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'MEMORY.md' },
@@ -239,7 +241,7 @@ describe('readAgentWorkspaceFile', () => {
     // `Buffer.allocUnsafe`'s tail) into the preview.
     const dir = agentDir();
     mkdirSync(dir, { recursive: true });
-    const oneOver = 'c'.repeat(64 * 1024 + 1);
+    const oneOver = 'c'.repeat(MAX_PREVIEW_BYTES + 1);
     writeFileSync(join(dir, 'MEMORY.md'), oneOver);
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'MEMORY.md' },
@@ -250,24 +252,25 @@ describe('readAgentWorkspaceFile', () => {
     // Preview MUST start with exactly the first MAX bytes of file
     // content — proves we sliced what we read, not unread tail of
     // `allocUnsafe`. End MUST be the truncation suffix.
-    expect(r.file.content.startsWith('c'.repeat(64 * 1024))).toBe(true);
+    expect(r.file.content.startsWith('c'.repeat(MAX_PREVIEW_BYTES))).toBe(true);
     expect(r.file.content.endsWith('(truncated;')).toBe(false); // suffix has trailing chars after
     expect(r.file.content).toContain('(truncated;');
     // Preview length is bounded: MAX preview bytes + suffix headroom.
-    expect(r.file.content.length).toBeLessThanOrEqual(64 * 1024 + 200);
+    expect(r.file.content.length).toBeLessThanOrEqual(MAX_PREVIEW_BYTES + 200);
   });
 
-  it('survives short reads: forcing the read syscall to return 1 byte at a time still fills the preview', async () => {
-    // Cindy round-2 P2 — even under pathological short-read pressure
-    // (filesystem returning 1 byte per `read(2)` call), the loop must
-    // accumulate MAX_PREVIEW_BYTES + 1 bytes (or hit EOF) and the
-    // truncation flag must come from `lstat.size`, NOT a single
-    // syscall's return. We simulate by wrapping `fs.promises.open` to
-    // override the returned FileHandle's `read` method.
+  it('survives short reads: forcing the first read syscalls to return 1 byte at a time still fills the preview', async () => {
+    // Cindy round-2 P2 — even under short-read pressure (filesystem
+    // returning 1 byte per `read(2)` call), the loop must accumulate
+    // MAX_PREVIEW_BYTES + 1 bytes (or hit EOF) and the truncation flag
+    // must come from `lstat.size`, NOT a single syscall's return. We
+    // simulate by wrapping `fs.promises.open` to override the returned
+    // FileHandle's `read` method.
     const dir = agentDir();
     mkdirSync(dir, { recursive: true });
-    // 70 KiB > MAX (64 KiB). Pattern lets us assert byte-exact preview.
-    const total = 70 * 1024;
+    // Over the cap, so the preview is the first MAX bytes verbatim and
+    // the flag is lstat-driven. Pattern lets us assert byte-exact.
+    const total = MAX_PREVIEW_BYTES + 6 * 1024;
     const big = 'd'.repeat(total);
     writeFileSync(join(dir, 'MEMORY.md'), big);
 
@@ -276,9 +279,14 @@ describe('readAgentWorkspaceFile', () => {
     fs.promises.open = (async (...args: Parameters<typeof origOpen>) => {
       const handle = await origOpen(...args);
       const origRead = handle.read.bind(handle);
-      // Force every `read` call to return at most 1 byte, regardless
-      // of `length`. The loop in `read-file.ts` should keep calling
-      // until it has MAX+1 bytes (or EOF).
+      // Force the FIRST calls to return 1 byte each, then let the real
+      // syscall through. One byte per call for the whole cap would be
+      // half a million awaits; the bug this guards (trusting a single
+      // `read`'s `bytesRead`) is already exposed by the first short
+      // return, and the tail proves the loop resumes full-length reads
+      // from the right offset.
+      const SHORT_CALLS = 16;
+      let call = 0;
       // (typed loosely: FileHandle.read is overloaded — `Parameters<…>`
       // only sees the options-form overload. The production caller
       // hits the positional overload, which is what we wrap here.)
@@ -292,9 +300,10 @@ describe('readAgentWorkspaceFile', () => {
       }).read = async (
         buffer: Buffer,
         offset: number,
-        _length: number,
+        length: number,
         position: number,
       ) => {
+        call += 1;
         const r = await (
           origRead as unknown as (
             buf: Buffer,
@@ -302,7 +311,7 @@ describe('readAgentWorkspaceFile', () => {
             len: number,
             pos: number,
           ) => Promise<{ bytesRead: number; buffer: Buffer }>
-        )(buffer, offset, 1, position);
+        )(buffer, offset, call <= SHORT_CALLS ? 1 : length, position);
         return r;
       };
       return handle;
@@ -314,7 +323,9 @@ describe('readAgentWorkspaceFile', () => {
       );
       expect(r.file.truncated).toBe(true); // lstat-driven, not bytesRead-driven
       expect(r.file.size).toBe(total);
-      expect(r.file.content.startsWith('d'.repeat(64 * 1024))).toBe(true);
+      expect(r.file.content.startsWith('d'.repeat(MAX_PREVIEW_BYTES))).toBe(
+        true,
+      );
       expect(r.file.content).toContain('(truncated;');
     } finally {
       fs.promises.open = origOpen;

@@ -89,7 +89,7 @@ export const apiPaths = {
    *  The `path` query param is parsed segment-by-segment and rejects
    *  empty / `.` / `..` / dotfile / NUL / backslash segments; symlinks
    *  (intermediate or leaf) and any escape from the agent-home base are
-   *  fail-closed (404 not_found, never a leaked path). 64KB preview cap;
+   *  fail-closed (404 not_found, never a leaked path). Daemon-side preview cap;
    *  the response carries `truncated` so the UI can surface a banner. */
   agentWorkspaceFile: (id: string) => `/api/agents/${id}/workspace/file`,
   /** #task:1135 — read an agent's profile MCP config for the agent-pane

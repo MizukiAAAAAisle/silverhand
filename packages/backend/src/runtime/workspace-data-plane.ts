@@ -296,8 +296,8 @@ export async function dispatchAgentWorkspaceTree(
  * The daemon enforces the path security rules (segment shape, per-segment
  * lstat, realpath boundary) under the selected semantic source before
  * returning the file bytes; the backend forwards `path` opaquely and surfaces
- * the daemon's typed error verdict directly. The 64KB cap is daemon-side; the
- * backend just relays `truncated`.
+ * the daemon's typed error verdict directly. The read cap is daemon-side (it is
+ * a frame-size bound, not a UI one); the backend just relays `truncated`.
  */
 export async function dispatchAgentWorkspaceFileRead(
   adapter: OutboundFrameAdapter,
