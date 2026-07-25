@@ -45,6 +45,7 @@ import type {
   AgentRuntimeHost,
   ReapIdleRuntimesOptions,
   ReapIdleRuntimesResult,
+  StopOptions,
 } from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import {
@@ -95,6 +96,9 @@ export class FakeConversationManager implements AgentRuntimeHost {
   stops: Array<{
     conversationId: string;
     agentId: string;
+    /** Routing the caller supplied instead of letting the dispatcher re-read
+     *  `agents`/`hosts` — load-bearing for post-delete teardown (#task:1616). */
+    hostId?: string;
   }> = [];
   clearedSessions: Array<{
     conversationId: string;
@@ -167,8 +171,16 @@ export class FakeConversationManager implements AgentRuntimeHost {
     if (this.startError) throw this.startError;
     this.starts.push({ conversationId, agentId });
   }
-  async stop(conversationId: string, agentId: string): Promise<void> {
-    this.stops.push({ conversationId, agentId });
+  async stop(
+    conversationId: string,
+    agentId: string,
+    opts?: StopOptions,
+  ): Promise<void> {
+    this.stops.push({
+      conversationId,
+      agentId,
+      ...(opts?.hostId !== undefined ? { hostId: opts.hostId } : {}),
+    });
     if (this.stopError) throw this.stopError;
   }
   pendingDrives: Array<{ conversationId: string; agentId: string }> = [];

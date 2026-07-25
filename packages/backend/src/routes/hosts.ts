@@ -3,7 +3,8 @@
 //   - POST /api/hosts                  create pending user-managed computer
 //   - GET  /api/hosts/connect-token/resolve daemon resolves copied token to host id
 //   - GET  /api/hosts/:id              owner-scoped host read (incl. setup draft)
-//   - DELETE /api/hosts/:id            delete empty user-managed computer/setup
+//   - DELETE /api/hosts/:id            delete user-managed computer + its dependents
+//   - GET  /api/hosts/:id/resources    agents + regular workspaces rooted here
 //   - POST /api/hosts/claim_or_create  desktop main registers + mints host_token
 //   - POST /api/hosts/:id/revoke       soft-delete (delegates to revokeHost use case)
 //   - POST /api/hosts/:id/rotate-token long-lived token rotation
@@ -39,6 +40,7 @@ import {
   UpdateHostInputSchema,
   type AgentOnHostDto,
   type HostProxyConfigResponse,
+  type HostResourcesResponse,
   type RuntimeCatalogResponse,
   type HostStatusResponse,
 } from '@silverhand/shared';
@@ -65,9 +67,9 @@ import {
   dispatchHostProxyConfigSet,
   type HostProxyConfigOutcome,
 } from '../runtime/host-proxy-config-dispatch.js';
-import { resolveOutboundForHost } from '../runtime/workspace-data-plane.js';
 import { revokeHost } from '../application/revoke-host.js';
-import { deleteAgentControlPlaneOnly } from '../application/delete-agent.js';
+import { deleteComputer } from '../application/delete-computer.js';
+import { listHostResources } from '../read-model/host-resources.js';
 import { hostRuntimeDisabledResponse } from './responses.js';
 
 const DEFAULT_DAEMON_NPM_SPEC = '@silverhand-ai/daemon@latest';
@@ -205,12 +207,44 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     });
   });
 
-  // DELETE /api/hosts/:id — delete an empty user-managed computer/setup.
-  // This is intentionally a hard-delete, not the normal revoke lifecycle.
-  // The DB already has RESTRICT foreign keys from agents/workspaces to hosts;
-  // this route pre-counts those dependencies so the UI gets a typed 409 with
-  // counts instead of an opaque SQLite constraint error. Pending setup drafts
-  // naturally have zero dependents and use the same path.
+  // GET /api/hosts/:id/resources — what is persistently rooted on this computer.
+  //
+  // A general Computer-domain query, owner-scoped and action-free (see
+  // `read-model/host-resources.ts`). The delete dialog is its first consumer —
+  // it shows this list, then sends one `cascade_dependents` confirmation — but
+  // nothing here is delete-specific, and the DELETE never trusts this
+  // projection: it re-reads its own set inside the transaction (#task:1617).
+  app.get(apiPaths.hostResources(':id'), c => {
+    const userId = requireSessionBearerUser(c, ctx);
+    if (userId instanceof Response) return userId;
+
+    const hostId = c.req.param('id') ?? '';
+    const host = hostId ? hosts.get(hostId) : null;
+    // Same owner-scoped 404 as GET /api/hosts/:id: a computer the caller does
+    // not own must not be distinguishable from one that does not exist.
+    if (!host || host.user_id !== userId) {
+      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
+    }
+
+    const response: HostResourcesResponse = listHostResources(
+      { ctx, agents, workspaces },
+      hostId,
+      { kind: 'user', userId },
+    );
+    return c.json(response);
+  });
+
+  // DELETE /api/hosts/:id — delete a user-managed computer/setup together with
+  // everything rooted on it (its agents and its `regular` workspaces), once the
+  // user has confirmed the impact `GET /api/hosts/:id/resources` showed them.
+  //
+  // This is intentionally a hard-delete, not the normal revoke lifecycle. All
+  // policy, atomicity and consent logic lives in the `deleteComputer` use case
+  // (`application/delete-computer.ts`); this handler only maps its result kinds
+  // to HTTP. The DB's RESTRICT foreign keys from agents/workspaces to hosts stay
+  // as the second line of defense: the cascade deletes those rows inside its own
+  // transaction, so a violation reaching here means a reference nobody modeled
+  // and it fails loud rather than being dressed as a user-actionable 409.
   app.delete(apiPaths.hostDelete(':id'), async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
@@ -218,19 +252,6 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     const hostId = c.req.param('id') ?? '';
     if (!hostId) {
       return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
-    }
-    const host = hosts.get(hostId);
-    if (!host || host.user_id !== userId) {
-      return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
-    }
-    if (host.provisioning_source !== 'user_invite' || host.kind !== 'remote') {
-      return c.json(
-        {
-          error: 'delete is only supported for user-managed computers',
-          error_code: 'provisioning_source_not_supported',
-        },
-        409,
-      );
     }
 
     const parsedBody = HostDeleteInputSchema.safeParse(
@@ -240,111 +261,60 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsedBody.error.issues }, 400);
     }
 
-    const dependents = hosts.countDeleteDependents(hostId);
-    const hostAgents = agents.listByHost(hostId);
-    const hostDeleteAgents = hostAgents.map(agent => ({
-      id: agent.id,
-      name: agent.name,
-      display_name: agent.display_name,
-      runtime: agent.runtime,
-    }));
-    const pendingAgents = hostAgents.filter(
-      agent => agent.materialization_status === 'pending_materialization',
-    ).length;
-    const canCascadeAgents =
-      dependents.agents > 0 && dependents.workspaces === 0 && pendingAgents === 0;
-    if (dependents.workspaces === 0 && pendingAgents > 0) {
-      return c.json(
-        {
-          error:
-            'computer has agents whose creation is still in progress; try again after creation finishes',
-          error_code: 'has_pending_agents',
-          pending_agents: pendingAgents,
-        },
-        409,
-      );
-    }
-    if (dependents.workspaces > 0 || (dependents.agents > 0 && !parsedBody.data.cascade_agents)) {
-      return c.json(
-        {
-          error: 'computer has dependent resources',
-          error_code: 'has_dependents',
-          dependents,
-          agents: hostDeleteAgents,
-          can_cascade_agents: canCascadeAgents,
-        },
-        409,
-      );
-    }
+    const result = await deleteComputer(
+      { ctx, hosts, agents, workspaces, conversations, conversationInboxes },
+      {
+        hostId,
+        requesterUserId: userId,
+        cascadeDependents: parsedBody.data.cascade_dependents,
+      },
+    );
 
-    try {
-      if (dependents.agents > 0) {
-        if (!canCascadeAgents) {
-          return c.json(
-            {
-              error: 'computer has dependent resources',
-              error_code: 'has_dependents',
-              dependents,
-              agents: hostDeleteAgents,
-              can_cascade_agents: false,
-            },
-            409,
-          );
-        }
-        const outbound = resolveOutboundForHost(
-          ctx.outboundFrameAdapter?.() ?? null,
-          hostId,
-        );
-        const purgeHostLocal = outbound.kind === 'ok';
-        for (const agent of hostAgents) {
-          const deletedAgent = await deleteAgentControlPlaneOnly(
-            { ctx, agents, workspaces, conversations, conversationInboxes },
-            agent.id,
-            { reason: 'computer_delete_cascade', purgeHostLocal },
-          );
-          if (deletedAgent.kind === 'pendingInFlight') {
-            return c.json(
-              {
-                error:
-                  'computer has agents whose creation is still in progress; try again after creation finishes',
-                error_code: 'has_pending_agents',
-                pending_agents: 1,
-              },
-              409,
-            );
-          }
-          if (deletedAgent.kind === 'failClosed') {
-            return c.json(
-              { error: deletedAgent.error, code: deletedAgent.code },
-              deletedAgent.status,
-            );
-          }
-        }
-      }
-
-      const deleted = hosts.deleteOwnedUserInvite({ hostId, userId });
-      if (!deleted) {
+    switch (result.kind) {
+      case 'notFound':
         return c.json({ error: 'host not found', error_code: 'host_not_found' }, 404);
-      }
-    } catch (err) {
-      if (isForeignKeyConstraintError(err)) {
+      case 'provisioningSourceNotSupported':
+        return c.json(
+          {
+            error: 'delete is only supported for user-managed computers',
+            error_code: 'provisioning_source_not_supported',
+          },
+          409,
+        );
+      case 'pendingAgents':
+        return c.json(
+          {
+            error:
+              'computer has agents whose creation is still in progress; try again after creation finishes',
+            error_code: 'has_pending_agents',
+            pending_agents: result.pendingAgents,
+          },
+          409,
+        );
+      case 'hasDependents':
         return c.json(
           {
             error: 'computer has dependent resources',
             error_code: 'has_dependents',
-            dependents: hosts.countDeleteDependents(hostId),
-            agents: agents.listByHost(hostId).map(agent => ({
-              id: agent.id,
-              name: agent.name,
-              display_name: agent.display_name,
-              runtime: agent.runtime,
-            })),
-            can_cascade_agents: false,
+            ...result.payload,
           },
           409,
         );
+      case 'workspaceForbidden':
+        return c.json(
+          {
+            error: 'you are not an owner of every workspace on this computer',
+            error_code: 'workspace_forbidden',
+            workspaces: result.workspaces,
+          },
+          403,
+        );
+      case 'deleted':
+        break;
+      default: {
+        const exhaustive: never = result;
+        throw new Error(`unhandled delete-computer result: ${JSON.stringify(exhaustive)}`);
       }
-      throw err;
     }
 
     const wsController = ctx.hostWsController?.();
@@ -1093,8 +1063,4 @@ function daemonNpmSpec(): string {
 function bearerToken(header: string | undefined): string | null {
   const match = header?.match(/^Bearer\s+(.+)$/i);
   return match?.[1]?.trim() || null;
-}
-
-function isForeignKeyConstraintError(err: unknown): boolean {
-  return err instanceof Error && /FOREIGN KEY constraint failed/.test(err.message);
 }

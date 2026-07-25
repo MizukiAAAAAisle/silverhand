@@ -74,6 +74,16 @@ function describeFailure(f: UploadFailure): string {
   }
 }
 
+/** What a best-effort blob sweep actually did. Returned rather than logged so
+ *  the caller can attribute the residue to its own delete (workspace / agent /
+ *  computer) — the service has no logger and no idea whose sweep this is. */
+export interface BlobSweepOutcome {
+  attempted: number;
+  failed: number;
+  /** First storage error, for the caller's log line. */
+  firstError?: unknown;
+}
+
 /**
  * Application layer that owns attachment business rules. The blob/file
  * storage infra below it is intentionally generic — only this service
@@ -242,20 +252,58 @@ export class AttachmentService {
     return { ok: true, snapshots };
   }
 
-  /** Channel-delete sweep: returns rows so the caller can remove the
-   *  storage objects after the DB rows cascade. */
-  async sweepForChannel(channelId: string): Promise<void> {
-    const rows = this.attachments.listByChannel(channelId);
+  /**
+   * The storage objects a channel delete must remove, captured while the
+   * `attachments` rows still exist.
+   *
+   * SYNCHRONOUS and read-only on purpose: a caller that deletes its rows inside
+   * a `db.transaction` (delete-computer's cascade) has to capture the refs
+   * BEFORE the commit, because after the FK cascade there is no row left to
+   * derive a `storageKey` from — a post-commit `listByChannel` returns empty and
+   * the blobs leak forever. Pair it with {@link deleteBlobs} after the commit.
+   */
+  collectChannelBlobRefs(channelIds: readonly string[]): StoredFileRef[] {
+    const refs: StoredFileRef[] = [];
+    for (const channelId of channelIds) {
+      for (const row of this.attachments.listByChannel(channelId)) {
+        refs.push(refOf(row));
+      }
+    }
+    return refs;
+  }
+
+  /** Remove captured storage objects. Best-effort by contract: the DB rows are
+   *  already gone (or about to be), so a storage failure must never reverse the
+   *  delete — it leaves a leaked blob, not a dangling row.
+   *
+   *  Best-effort is not the same as unobservable: a swallowed failure means bytes
+   *  stay on disk with no row left to name them, so the outcome is RETURNED
+   *  (attempted/failed + the first error) and the caller — which owns a logger —
+   *  reports it. Never throws. */
+  async deleteBlobs(refs: readonly StoredFileRef[]): Promise<BlobSweepOutcome> {
+    const errors: unknown[] = [];
     await Promise.all(
-      rows.map(async row => {
+      refs.map(async ref => {
         try {
-          await this.storage.delete(refOf(row));
-        } catch {
-          // Storage cleanup is best-effort — the DB CASCADE has already
-          // removed the row by the time this runs.
+          await this.storage.delete(ref);
+        } catch (err) {
+          // Best-effort — see the contract above; counted, not rethrown.
+          errors.push(err);
         }
       }),
     );
+    return {
+      attempted: refs.length,
+      failed: errors.length,
+      ...(errors.length > 0 ? { firstError: errors[0] } : {}),
+    };
+  }
+
+  /** Channel-delete sweep for callers whose rows still exist at call time
+   *  (single-object deletes). Capture-then-delete in one step; a transactional
+   *  caller must split the two halves around its commit instead. */
+  async sweepForChannel(channelId: string): Promise<BlobSweepOutcome> {
+    return this.deleteBlobs(this.collectChannelBlobRefs([channelId]));
   }
 
   /** Single-attachment delete, orphan-only.

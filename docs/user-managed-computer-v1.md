@@ -185,8 +185,8 @@ Canonical examples: runtime-catalog detection and proxy editing are
 workspace deletion is `offline-completable` + best-effort runtime cleanup (a
 disconnected computer must not make a workspace undeletable); direct delete-agent
 is `requires-connection` (fail-closed host-local purge protects files/secrets);
-delete-computer is `cascade-with-residue` for its own agents; pending
-materialization is `retry-later`.
+delete-computer is `cascade-with-residue` for its own agents and workspaces;
+pending materialization is `retry-later`.
 
 Review rule: when adding or changing any computer-touching operation, classify its
 partition semantics first. If it cannot be classified, the model is incomplete —
@@ -263,17 +263,47 @@ legitimate `provisioning_source` flow-selection use, not a capability fork):
 - **Revoke** (app-managed) — soft-delete: one transaction sets `revoked_at`,
   sweeps credentials, and post-commit disconnects the WS; it does **not** cascade
   agents / workspaces / conversations. A user-managed host rejects revoke.
-- **Delete** (user-managed) — hard-delete: an empty computer deletes directly; a
-  computer with only agent dependents deletes via an explicit agent cascade (see
-  the dependency gating below). A user-managed host has no revoke.
+- **Delete** (user-managed) — hard-delete: it removes the computer together with
+  everything rooted on it, its agents **and** its `regular` workspaces (channels,
+  messages, memberships, attachments included).
 
-**Dependency gating is three-way and must not collapse:**
-- agent-only dependents → `has_dependents` (carries `can_cascade_agents`; a
-  two-step confirm makes the backend recompute the delete-set, then cascade).
-- regular workspace dependents → **hard 409 always** (structural; clear them in
-  their own context first).
-- pending materialization → a **separate** `has_pending_agents` (a transient state,
-  never collapsed into `has_dependents` — collapsing it causes a confirm → 409 loop).
+**The delete flow is two steps, and the second one is atomic:**
+
+1. `GET /api/hosts/:id/resources` — the ordinary Computer-domain query: which
+   agents are placed on this computer and which `regular` workspaces keep their
+   files there (each with the viewer's `viewer_role`). The dialog shows this as
+   the impact. It is *not* a delete-impact read model: it carries no action
+   fields and predicts nothing about whether the delete will succeed.
+2. `DELETE /api/hosts/:id` with `{ cascade_dependents: true }` — ONE boolean.
+   The server re-reads the current dependency set inside a single transaction,
+   re-checks the per-workspace owner gate and pending materialization there,
+   captures everything the post-commit teardown needs (runtime-stop pairs **and
+   their routing**, purge targets, attachment storage refs), and deletes
+   workspaces + agents + the computer atomically. Non-2xx means nothing
+   happened — no row, no blob, no host-local purge.
+
+Consent is an intent over the computer, not an id snapshot: a dependency that
+appears between step 1 and step 2 is deleted too. Exact-id confirmation, set
+equality and a `dependents_changed` re-confirmation were considered and
+**rejected** — everything reachable is rooted on the computer the user just
+condemned, so a snapshot could not protect a different CLASS of object, and it
+bought a second consent model plus a UI branch for a near-impossible window.
+
+**Refusals that remain, and why each is the only path to its state:**
+- `409 has_dependents` (no flag, non-empty computer) — a guard for a caller that
+  skipped step 1. The renderer never hits it; it is not a UI state.
+- `409 has_pending_agents` — a materialization in flight cannot be torn down
+  safely. Transient, so it answers "retry", and it must **never** collapse into
+  `has_dependents` (that causes a confirm → 409 loop). It is also the only path
+  to that state: `/resources` deliberately does not carry
+  `materialization_status`, because a query lists the affected objects, it does
+  not predict whether the command will succeed.
+- `403 workspace_forbidden` — re-checked authoritatively at execution time.
+  Step 1 already named the non-owned workspaces via `viewer_role`, so this can
+  only mean ownership drifted.
+- An FK violation from a reference this cascade does not model **fails loud**
+  (500), instead of being dressed up as an actionable `has_dependents` with
+  nothing named.
 
 **Safety pivot: default-safe vs walled-dangerous.** Routine delete-agent is
 fail-closed (host unreachable → 503, never silent residue); "leave host-local
@@ -310,10 +340,10 @@ not a disposable code.
     recovery.
   - **Revoke computer** (app-managed) = *lifecycle terminal*. Sets `revoked_at`;
     the credential dies and the computer leaves the rail — recreate to use again.
-  - **Delete computer** (user-managed) = *terminal removal*. An empty computer
-    deletes directly; a computer with only agent dependents deletes via an
-    explicit agent cascade (§5); the credential dies and the computer leaves the
-    rail.
+  - **Delete computer** (user-managed) = *terminal removal*. The dialog lists what
+    lives on the computer (its agents and its `regular` workspaces), one
+    confirmation deletes all of it atomically (§5); the credential dies and the
+    computer leaves the rail.
   "Disconnect" (reconnectable) and the terminal removals ("Revoke" / "Delete",
   both irreversible) especially must not read as near-synonyms.
 - **Concurrency rejection is legible and escapable** — it names the machine
@@ -357,7 +387,7 @@ never appear in user prose; they exist only inside the literal command string):
 | Add one | **Add computer** |
 | The command | **Connection command** |
 | Re-issue the command | **Generate new connection command** |
-| Remove | **Revoke computer** (app-managed) / **Delete computer** (user-managed — empty deletes directly, agent-only dependents via explicit cascade) |
+| Remove | **Revoke computer** (app-managed) / **Delete computer** (user-managed — one confirmation cascades its agents + `regular` workspaces) |
 | Concurrency escape | **Disconnect current connection** |
 | Reveal-once notice | "This connection command is shown only once. Copy it now; it can't be retrieved later." |
 

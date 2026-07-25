@@ -29,6 +29,24 @@ export interface StartOptions {
   model?: string | null;
 }
 
+/**
+ * Optional `stop()` overrides.
+ *
+ * `hostId` supplies the routing authority the dispatcher would otherwise
+ * re-derive from the DB (`agents.host_id` → `hosts`). A caller that stops runs
+ * whose agent/host rows are ALREADY DELETED — the delete-computer cascade stops
+ * after its commit, on purpose, so a refused request destroys nothing — must
+ * pass the host it captured before the commit. Without it the resolve throws
+ * `agent not found`, the caller's `catch` degrades it to a warning, and the stop
+ * is a silent no-op that leaves the daemon's child process running (#task:1616).
+ *
+ * Normal callers omit it: for a live agent the DB is the authority and must stay
+ * the authority.
+ */
+export interface StopOptions {
+  hostId?: string;
+}
+
 /** Pre-clear snapshot returned by `clearSession()`. Callers use this
  *  to decide whether to publish an audit message and what to log. */
 export interface ClearSessionResult {
@@ -134,8 +152,15 @@ export interface AgentRuntimeHost {
 
   /**
    * Stop the (conv, agent) runtime: SIGTERM then SIGKILL.
+   *
+   * Routing is derived from the DB unless {@link StopOptions.hostId} names it —
+   * see `StopOptions` for the post-delete case that requires the override.
    */
-  stop(conversationId: string, agentId: string): Promise<void>;
+  stop(
+    conversationId: string,
+    agentId: string,
+    opts?: StopOptions,
+  ): Promise<void>;
 
   /**
    * Clear the persisted `cli_session_id` for (conv, agent) so the next

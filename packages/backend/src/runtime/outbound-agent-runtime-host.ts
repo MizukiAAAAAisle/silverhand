@@ -9,6 +9,7 @@ import type {
   ReapIdleRuntimesOptions,
   ReapIdleRuntimesResult,
   StartOptions,
+  StopOptions,
 } from './agent-runtime-host.js';
 
 const UNAVAILABLE_REASON =
@@ -29,8 +30,15 @@ export interface OutboundAgentRuntimeProjection {
    * `runtime_exit` event (`RuntimeStatusProjector.runtimeExit`),
    * which clears pid and flips status while preserving
    * `cli_session_id` for the next `--resume`.
+   *
+   * `opts.hostId` bypasses the DB-backed host resolution for callers whose
+   * agent/host rows are already gone (see {@link StopOptions}).
    */
-  stop(conversationId: string, agentId: string): Promise<void>;
+  stop(
+    conversationId: string,
+    agentId: string,
+    opts?: StopOptions,
+  ): Promise<void>;
   /**
    * D4.c C7 — dispatch `runtime_clear_session` over the outbound
    * WS, bounded-wait for the resulting `runtime_exit` projection
@@ -134,10 +142,14 @@ export class OutboundAgentRuntimeHost implements AgentRuntimeHost {
     throw this.unavailable('deliverPending', { conversationId, agentId });
   }
 
-  async stop(conversationId: string, agentId: string): Promise<void> {
+  async stop(
+    conversationId: string,
+    agentId: string,
+    opts?: StopOptions,
+  ): Promise<void> {
     const projection = this.projection?.();
     if (projection) {
-      await projection.stop(conversationId, agentId);
+      await projection.stop(conversationId, agentId, opts);
       return;
     }
     throw this.unavailable('stop', { conversationId, agentId });

@@ -4,7 +4,6 @@ import { z } from 'zod';
 import {
   HostCancelPendingResponseSchema,
   HostCreateResponseSchema,
-  HostDeleteBlockedResponseSchema,
   HostDeletePendingAgentsResponseSchema,
   HostDeleteResponseSchema,
   HostDisconnectResponseSchema,
@@ -14,6 +13,7 @@ import {
   HostProxyConfigOfflineResponseSchema,
   HostProxyConfigResponseSchema,
   HostProxyConfigSchema,
+  HostResourcesResponseSchema,
   HostRotateTokenUserManagedResponseSchema,
   HostStatusResponseSchema,
   HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
@@ -23,9 +23,8 @@ import {
   type HostAvailability,
   type HostCancelPendingResponse,
   type HostCreateResponse,
-  type HostDeleteDependentAgent,
-  type HostDeleteDependents,
   type HostDeleteResponse,
+  type HostResourcesResponse,
   type HostDisconnectResponse,
   type HostDto,
   type HostListResponse,
@@ -54,6 +53,14 @@ export const hostStatusKey = (hostId: string) =>
   ['host-status', hostId] as const;
 export const hostProxyConfigKey = (hostId: string) =>
   ['host-proxy-config', hostId] as const;
+/** #task:1618 — per-computer PERSISTENT-OWNERSHIP query key (`/resources`).
+ *  Deliberately separate from {@link hostStatusKey}: that one caches dynamic
+ *  availability and is invalidated by attach/detach/liveness events, which say
+ *  nothing about which agents and workspaces are rooted here. Sharing one key
+ *  would make a disconnect event refetch ownership (pointless) and an agent
+ *  creation leave the availability cache untouched (wrong). */
+export const hostResourcesKey = (hostId: string) =>
+  ['host-resources', hostId] as const;
 /** Per-host runtime-detection catalog query key. Each computer's installed
  *  runtimes are host-local truth (the daemon resolves them on that machine),
  *  so the catalog is cached per host and never shared across computers. */
@@ -833,46 +840,53 @@ export function useRevokeComputerMutation(hostId: string) {
 }
 
 /**
- * #task:1354 — a `409 has_dependents` delete block, surfaced as a typed
- * error so the UI can render the dependency-block state (how many agents /
- * workspaces still pin this computer) instead of a generic failure. Carries
- * the shared `dependents` value object verbatim — no renderer-local reshape.
+ * #task:1618 — `GET /api/hosts/:id/resources`: the agents placed on a computer
+ * and the `regular` workspaces whose files live there, each with the viewer's
+ * `viewer_role`.
+ *
+ * An ordinary Computer-domain ownership query, not a delete-impact endpoint —
+ * the delete dialog is only its first consumer, and it is the consumer (not this
+ * hook, not the backend) that reads the list as "what deleting this destroys".
+ * Ownership is orthogonal to `/status` availability, so an unreachable computer
+ * still answers this in full: that computer is precisely the one being deleted.
+ *
+ * Freshness: `staleTime: 0` and `enabled` gated on the dialog being open, so
+ * every open takes a fresh read rather than confirming against a list that could
+ * be minutes old. `retry: false` — a failed read is a *decision point* for the
+ * caller (fail closed: no destructive confirm), not something to silently
+ * re-attempt behind a spinner.
  */
-export class ComputerHasDependentsError extends Error {
-  constructor(
-    readonly dependents: HostDeleteDependents,
-    /** #task:1380 — backend marks an *agent-only* dependency set as
-     *  cascade-able. When true the UI offers a second "also deletes its N
-     *  agents" confirm that re-issues DELETE with `{ cascade_agents: true }`;
-     *  when false (a regular workspace still pins this computer) it stays a
-     *  hard block the user must clear in its own context first. */
-    readonly canCascadeAgents: boolean,
-    /** #task:1380 — the identities of the agents that would be cascade-deleted,
-     *  as the backend's DB delete-set (`listByHost` — the SAME rows the cascade
-     *  loop deletes, so shown == deleted, and it stays populated even when the
-     *  computer is offline). The cascade confirm lists these under the
-     *  "Agents will be removed" impact block. Empty for a non-cascade-able
-     *  block (a regular workspace pins the computer). Never sourced from the
-     *  daemon host-status view, which is empty/stale offline (Alice #task:1380). */
-    readonly agents: HostDeleteDependentAgent[],
-  ) {
-    super('has_dependents');
-    this.name = 'ComputerHasDependentsError';
-  }
+export function useHostResourcesQuery(
+  hostId: string | null | undefined,
+  options?: { enabled?: boolean },
+) {
+  return useQuery<HostResourcesResponse>({
+    queryKey: hostResourcesKey(hostId ?? '__none__'),
+    queryFn: async () => {
+      const raw = await api<unknown>(apiPaths.hostResources(hostId!));
+      return HostResourcesResponseSchema.parse(raw);
+    },
+    enabled: (options?.enabled ?? true) && Boolean(hostId),
+    staleTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
 }
 
 /**
  * #task:1380 — a `409 has_pending_agents` block, surfaced as its OWN typed
- * error so the UI keeps it OFF the structural cascade/hard-block axis. An agent
- * on this computer is still materializing (a transient state that resolves on
- * its own), so the correct UX is "wait and retry", NOT a cascade confirm.
+ * error because it is the ONLY path on which the user can learn this state: an
+ * agent on this computer is still materializing, which `/resources` deliberately
+ * does not predict (a read model lists objects, it does not forecast whether a
+ * command will succeed — shiki 2026-07-25). Transient and self-clearing, so the
+ * correct UX is wait-and-retry.
  *
- * Distinct code, distinct type on purpose (Alice #task:1380 invariant): if
- * pending collapsed into `has_dependents`, the pending agent would count into
- * `dependents.agents` with `can_cascade_agents: true`, the UI would render a
- * cascade confirm, the user would confirm, the backend would re-`409`-pending,
- * and the confirm screen would reappear — a dead-end. Routing it here renders a
- * transient retry hint instead.
+ * Every other refusal is NOT typed here. `409 has_dependents` (a DELETE that
+ * skipped the confirmation) and `403 workspace_forbidden` (an ownership drift
+ * between the preview and the request) both describe facts the preview already
+ * showed, so from this dialog they are unreachable-by-construction and get the
+ * generic failure line — giving them named screens would rebuild the
+ * discovery-through-error path this task removed.
  */
 export class ComputerHasPendingAgentsError extends Error {
   constructor(readonly pendingAgents: number) {
@@ -882,32 +896,33 @@ export class ComputerHasPendingAgentsError extends Error {
 }
 
 /**
- * #task:1354 / #task:1380 — delete a user-managed computer (the single removal
+ * #task:1354 / #task:1618 — delete a user-managed computer (the single removal
  * verb; there is no user-facing revoke).
  *
- * The backend `DELETE /api/hosts/:id` covers both unfinalized Add-computer
- * drafts and finalized empty computers:
- *   - empty → hard-deletes the row, cascades its credential, force-drops any
- *     live WS; success is `{ host_id, deleted: true }`.
- *   - still owns agents / workspaces → refused with `409 has_dependents`
- *     (nothing deleted; the RESTRICT FK is the correctness backstop). We map
- *     that to `ComputerHasDependentsError` carrying the counts +
- *     `can_cascade_agents` so the caller shows the block state (hard) or the
- *     agent-cascade confirm.
+ * Two steps, and this is the second one. The dialog first reads
+ * `GET /api/hosts/:id/resources` (see {@link useHostResourcesQuery}) and shows
+ * what is rooted on the computer; this mutation then sends the ONE
+ * `cascade_dependents` boolean the user confirmed. The flag is consent to an
+ * intent — "delete this computer and what it holds" — not an id snapshot, so the
+ * backend deletes whatever belongs at execution time (it re-reads the set, the
+ * pending-materialization state and the per-workspace owner gate inside its
+ * delete transaction, #task:1617).
  *
- * #task:1380 — pass `{ cascadeAgents: true }` on the confirm re-issue. That
- * sends `{ cascade_agents: true }` in the DELETE body; it is an INTENT
- * confirmation only, never a bypass — the backend re-computes the dependency
- * set on its own truth and still 409s if a regular workspace pins the computer
- * (Alice invariant), so this mutation may reject with `ComputerHasDependentsError`
- * even on the cascade attempt and the caller must not assume success.
+ * Which means: this can still reject after a confirm, and the caller must not
+ * assume success. Only `409 has_pending_agents` gets a typed branch — see
+ * {@link ComputerHasPendingAgentsError} for why the other refusals do not.
  *
  * On success we invalidate `hostsKey`; the app-shell then drops the deleted
  * row from `computerHosts`, which auto-clears the detail selection — no
  * explicit navigation needed here.
  */
 export interface DeleteComputerVars {
-  cascadeAgents?: boolean;
+  /** The user's single confirmation bit, sent verbatim as `cascade_dependents`.
+   *  Set when the preview listed anything AND when it listed nothing: consent is
+   *  over the computer, not over the rows that happened to be on screen (Cindy
+   *  2026-07-25 — gating the flag on "preview was non-empty" would smuggle a
+   *  1-bit staleness check back into the protocol). */
+  cascadeDependents?: boolean;
 }
 
 export function useDeleteComputerMutation(hostId: string) {
@@ -917,8 +932,8 @@ export function useDeleteComputerMutation(hostId: string) {
       try {
         const raw = await api<unknown>(apiPaths.host(hostId), {
           method: 'DELETE',
-          ...(vars?.cascadeAgents
-            ? { body: JSON.stringify({ cascade_agents: true }) }
+          ...(vars?.cascadeDependents
+            ? { body: JSON.stringify({ cascade_dependents: true }) }
             : {}),
         });
         return HostDeleteResponseSchema.parse(raw);
@@ -1004,33 +1019,28 @@ export function useHostRuntimeCatalog(
 }
 
 /**
- * Pure: interpret a delete failure. A `409 has_dependents` envelope (parsed
- * via the shared `HostDeleteBlockedResponseSchema` — single source, never a
- * renderer-local reshape) becomes a typed `ComputerHasDependentsError`
- * carrying the counts; every other failure passes through unchanged.
+ * Pure: interpret a delete failure. A `409 has_pending_agents` envelope (parsed
+ * via the shared `HostDeletePendingAgentsResponseSchema` — single source, never a
+ * renderer-local reshape) becomes a typed `ComputerHasPendingAgentsError`; every
+ * other failure passes through unchanged and the dialog shows its generic
+ * failure line.
  *
- * Exported so a unit test pins the contract-boundary parse (nested
- * `dependents`, `error_code` discriminator) without rendering the hook.
+ * #task:1618 — that is the whole mapping now. The named `has_dependents` /
+ * `dependents_changed` / `workspace_forbidden` branches are gone with the
+ * discovery-through-error flow: the dialog learns the impact from
+ * `/resources` BEFORE asking, so those refusals are unreachable from here and a
+ * dedicated screen for each would be code with no trigger.
+ *
+ * Exported so a unit test pins the contract-boundary parse (`error_code`
+ * discriminator, non-JSON body) without rendering the hook.
  */
 export function interpretDeleteComputerError(err: unknown): Error {
   if (err instanceof ApiError && err.status === 409) {
-    const body = safeJsonParse(err.body);
-    // Transient pending-agents block: its own typed error, kept off the
-    // structural cascade/hard-block axis (Alice invariant — see
-    // ComputerHasPendingAgentsError). Parsed via the shared schema
-    // (`@silverhand/shared`, Cindy #task:1380) — single source, no
-    // renderer-local reshape.
-    const pending = HostDeletePendingAgentsResponseSchema.safeParse(body);
+    const pending = HostDeletePendingAgentsResponseSchema.safeParse(
+      safeJsonParse(err.body),
+    );
     if (pending.success) {
       return new ComputerHasPendingAgentsError(pending.data.pending_agents);
-    }
-    const blocked = HostDeleteBlockedResponseSchema.safeParse(body);
-    if (blocked.success) {
-      return new ComputerHasDependentsError(
-        blocked.data.dependents,
-        blocked.data.can_cascade_agents,
-        blocked.data.agents,
-      );
     }
   }
   return err instanceof Error ? err : new Error(String(err));

@@ -1652,6 +1652,59 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
+  // #task:1616 — the delete-computer / delete-workspace cascade stops its runs
+  // AFTER the commit that deleted the `agents` + `hosts` rows (nothing
+  // destructive may precede the commit decision point). On THIS path — the
+  // production, placement-aware dispatcher, not a test double — the default
+  // routing (`hostIdForAgent`) re-reads exactly those deleted rows, so a stop
+  // that does not carry the captured host is a silent no-op: it throws, the
+  // caller's best-effort `catch` degrades it to a warning, and the daemon's
+  // child keeps running while the backend marks the run terminal.
+  it('stop routes by the captured hostId after the agent and host rows are deleted', async () => {
+    const fix = makeFixture();
+    try {
+      const capturedHostId = fix.hostId;
+      // The cascade's own deletes, reproduced: by teardown time no row that
+      // could name the route exists.
+      deleteComputerRows(fix);
+
+      await fix.fanout.stop(fix.channelId, fix.agentId, {
+        hostId: capturedHostId,
+      });
+
+      const stops = fix.transport.calls.filter(c => c.kind === 'runtime_stop');
+      expect(stops).toHaveLength(1);
+      expect(stops[0]!.hostId).toBe(capturedHostId);
+      expect(stops[0]!.params).toEqual({
+        conversation_id: fix.channelId,
+        agent_id: fix.agentId,
+        mode: 'hard',
+      });
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  // The falsifier for the line above: drop the captured route and the same
+  // post-cascade stop dispatches NOTHING. This is what the cascade did before
+  // `StopOptions.hostId` existed, and it is why the capture — not just the
+  // `(conversation, agent)` identity — is load-bearing.
+  it('stop without the captured hostId cannot dispatch once the rows are gone', async () => {
+    const fix = makeFixture();
+    try {
+      deleteComputerRows(fix);
+
+      await expect(
+        fix.fanout.stop(fix.channelId, fix.agentId),
+      ).rejects.toThrow(/not found/);
+      expect(fix.transport.calls.filter(c => c.kind === 'runtime_stop')).toEqual(
+        [],
+      );
+    } finally {
+      fix.cleanup();
+    }
+  });
+
   it('reapIdleRuntimes stops only stale live-idle runtimes and pins the connection', async () => {
     const fix = makeFixture();
     try {
@@ -2239,6 +2292,20 @@ function emitRuntimeExit(fix: Fixture): void {
     },
     'conn-1',
   );
+}
+
+/**
+ * The state the delete-computer cascade leaves behind at teardown time
+ * (#task:1616): its workspaces, agents and the host row are all gone, committed
+ * as one transaction. Order follows the FK graph (agents and workspaces both
+ * reference `hosts`).
+ */
+function deleteComputerRows(fix: Fixture): void {
+  fix.db.prepare('DELETE FROM agents WHERE host_id = ?').run(fix.hostId);
+  fix.db
+    .prepare('DELETE FROM workspaces WHERE workspace_host_id = ?')
+    .run(fix.hostId);
+  fix.db.prepare('DELETE FROM hosts WHERE id = ?').run(fix.hostId);
 }
 
 async function hydrateRuntime(

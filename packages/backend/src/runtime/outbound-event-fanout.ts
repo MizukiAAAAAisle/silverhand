@@ -50,6 +50,7 @@ import {
   type ClearSessionResult,
   type ReapIdleRuntimesOptions,
   type ReapIdleRuntimesResult,
+  type StopOptions,
 } from './agent-runtime-host.js';
 import { RuntimeDeliveryCoordinator, type RuntimeDelivery } from './delivery-coordinator.js';
 import {
@@ -592,9 +593,19 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    * D4.b-4: dispatch `runtime_stop` over the outbound WS. The
    * standalone backend owns the projection of the resulting
    * `runtime_exit` event (`RuntimeStatusProjector.runtimeExit`).
+   *
+   * `opts.hostId` is the CAPTURED routing authority: `hostIdForAgent` re-reads
+   * `agents` + `hosts`, so a caller stopping runs whose rows it has already
+   * deleted (the delete-computer cascade, by design, stops after its commit)
+   * must name the host itself or the dispatch would throw and be degraded to a
+   * warning — a silent no-op leaving the daemon's child alive (#task:1616).
    */
-  async stop(conversationId: string, agentId: string): Promise<void> {
-    const hostId = this.hostIdForAgent(agentId);
+  async stop(
+    conversationId: string,
+    agentId: string,
+    opts?: StopOptions,
+  ): Promise<void> {
+    const hostId = opts?.hostId ?? this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_stop');
     await this.dispatchStop(hostId, connectionId, conversationId, agentId);
   }

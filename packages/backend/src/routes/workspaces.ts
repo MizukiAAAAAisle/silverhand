@@ -246,7 +246,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'workspace id required' }, 400);
     const result = await deleteWorkspace(
-      { ctx, workspaces, conversations },
+      { ctx, workspaces, conversations, agents },
       { workspaceId: id, requesterUserId: getUserPrincipal(c).userId },
     );
     switch (result.kind) {

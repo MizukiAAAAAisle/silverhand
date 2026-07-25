@@ -108,14 +108,37 @@ export const computerCopy = {
   deleteConfirm: 'Delete',
   deleting: 'Deleting…',
   deleteFailed: "Couldn't delete this computer. Please try again.",
-  /** Agent-cascade confirm (#task:1380, backend `409 has_dependents` with
-   *  `can_cascade_agents: true`). The computer's only dependents are agents,
-   *  so deleting it removes them too. shiki interaction gate (2026-07-07): the
-   *  second confirm does NOT replace the first — it keeps the standard delete
-   *  copy and adds a pale-amber impact block below it, headed by this line and
-   *  followed by the list of agents that go with it. Naming the consequence +
-   *  showing exactly who is affected carries the weight; no extra prose. */
+  /** Shared retry label for the two recoverable delete screens (impact read
+   *  failed / an agent is still materializing). */
+  deleteRetry: 'Try again',
+  /** Agent-cascade impact block (#task:1380). The computer's agents go with it,
+   *  so the confirm names them. shiki interaction gate (2026-07-07): the impact
+   *  does NOT replace the standard delete copy — it keeps it and adds a
+   *  pale-amber block below, headed by this line and followed by the list.
+   *  Naming the consequence + showing exactly who is affected carries the
+   *  weight; no extra prose. */
   deleteCascadeImpactTitle: 'Agents will be removed',
+  /** #task:1618 — the parallel workspace impact block. Same pale-amber form as
+   *  the agent block, listed beside it rather than as a new interaction.
+   *  Title-only, no scope sentence: shiki 2026-07-26 cut the
+   *  "Their channels, messages, and members are deleted too" line — the title
+   *  plus the standard delete consequence above already say it, and the extra
+   *  prose only spent attention on what the confirm was already saying. */
+  deleteWorkspaceImpactTitle: 'Workspaces will be deleted',
+  /** #task:1618 — the impact read (`GET /hosts/:id/resources`) failed. Fail
+   *  closed: the dialog offers no Delete at all, because "we couldn't check" is
+   *  not "there's nothing on it". Copy says which of the two it is, so the user
+   *  doesn't read a missing impact list as an empty computer. */
+  deleteImpactUnavailable:
+    "Couldn't check what this computer holds, so it can't be deleted safely yet.",
+  /** #task:1618 — unowned-workspace block: the computer holds workspaces this
+   *  user doesn't own, so no confirm is offered. Names them so the user knows who
+   *  has to act — the whole point of this task was to stop saying "blocked"
+   *  without saying by what. */
+  deleteUnauthorizedTitle: 'Some workspaces need their owner',
+  deleteUnauthorizedBody:
+    "You don't own these workspaces, so they can't be deleted with this computer. Their owner can delete them, or transfer them to you.",
+  deleteBlockedDismiss: 'OK',
   /** Transient pending-agents block (#task:1380, backend `409
    *  has_pending_agents`). An agent on this computer is still being created —
    *  a state that clears on its own — so this is a wait-and-retry hint, NOT a
@@ -123,22 +146,6 @@ export const computerCopy = {
    *  terms (no "materialize" / "daemon"). */
   deletePendingTitle: 'Agent creation in progress',
   deletePendingBody: 'An agent is still being set up. Try again in a moment.',
-  deletePendingRetry: 'Try again',
-  /** Dependency-block state (backend `409 has_dependents`). We can't delete
-   *  a computer that still owns agents / workspaces — the user clears those
-   *  in their own context first. */
-  deleteBlockedTitle: "This computer is still in use",
-  deleteBlockedBody: (agents: number, workspaces: number): string => {
-    const parts: string[] = [];
-    if (agents > 0) parts.push(`${agents} ${agents === 1 ? 'agent' : 'agents'}`);
-    if (workspaces > 0)
-      parts.push(
-        `${workspaces} ${workspaces === 1 ? 'workspace' : 'workspaces'}`,
-      );
-    const list = parts.join(' and ');
-    return `It still has ${list}. Remove them first, then delete the computer.`;
-  },
-  deleteBlockedDismiss: 'OK',
 
   /* ── Proxy ─────────────────────────────────────────────────────── */
   /** Section heading for the per-computer network-proxy editor. */

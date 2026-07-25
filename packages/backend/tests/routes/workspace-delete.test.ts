@@ -232,7 +232,9 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     expect(t.fake.stops).toContainEqual({
       conversationId: channelId,
       agentId,
-      directive: undefined,
+      // The captured routing authority (#task:1616): the teardown runs after the
+      // rows are gone, so the stop must name the computer itself.
+      hostId,
     });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.objectContaining({

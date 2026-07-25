@@ -8,6 +8,7 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
+import type { StoredFileRef } from '../storage/blob-file-storage.js';
 import { canEditAgent, canViewAgent } from '../permissions.js';
 import {
   dispatchAgentFilesPurge,
@@ -36,10 +37,14 @@ import {
  * exactly mirroring the route, which only validated confirm after the
  * pending/failed dispatch, so a failed row + malformed body stays 204 (not 400).
  *
- * There is intentionally NO outer `db.transaction`: the original handler tore
- * down sequentially (per-conversation `removeAgent`, then `removeMember`, then
- * `agents.delete` relying on FK cascade), and P11a is a pure lift — it neither
- * adds nor removes a unit of work.
+ * There is intentionally NO outer `db.transaction` here: the original handler
+ * tore down sequentially (per-conversation `removeAgent`, then `removeMember`,
+ * then `agents.delete` relying on FK cascade), and this route deletes exactly
+ * one agent, so a partial teardown cannot straddle two independent objects.
+ * The delete-computer cascade is different — it deletes N agents plus the
+ * computer as ONE user-visible act — so `teardownAgentControlPlaneRows` below
+ * is factored out as a synchronous, transaction-safe step it can commit
+ * together with the workspace and host rows (`delete-computer.ts`).
  */
 
 // DELETE opts in to ALL three materialization statuses so the dispatch below can
@@ -73,16 +78,6 @@ export interface DeleteAgentCommand {
    */
   body: unknown;
 }
-
-export interface DeleteAgentControlPlaneOnlyOptions {
-  reason: string;
-  purgeHostLocal?: boolean;
-}
-
-export type DeleteAgentControlPlaneOnlyResult =
-  | { kind: 'deleted' }
-  | { kind: 'pendingInFlight' }
-  | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus };
 
 /**
  * Named result — no HTTP status policy. The route maps kind → status/body with
@@ -190,73 +185,7 @@ export async function deleteAgent(
   return { kind: 'deleted' };
 }
 
-/**
- * Delete an agent's control-plane rows without requiring host-local purge.
- *
- * This is intentionally NOT used by the normal `DELETE /api/agents/:id` route:
- * direct agent deletion remains fail-closed so a temporarily disconnected
- * computer does not silently retain host-local agent files. It is only for the
- * delete-computer cascade, where the user explicitly removes the whole
- * computer and accepts that unreachable host-local files cannot be cleaned
- * remotely.
- */
-export async function deleteAgentControlPlaneOnly(
-  deps: DeleteAgentDeps,
-  agentId: string,
-  options: DeleteAgentControlPlaneOnlyOptions,
-): Promise<DeleteAgentControlPlaneOnlyResult> {
-  const { ctx, agents } = deps;
-  const agent = agents.get(agentId);
-  if (!agent) return { kind: 'deleted' };
-  if (agent.materialization_status === 'pending_materialization') {
-    return { kind: 'pendingInFlight' };
-  }
-  if (agent.materialization_status === 'failed') {
-    deleteFailedAgentRowOnly(ctx, agents, agent);
-    return { kind: 'deleted' };
-  }
-
-  const impact = computeDeleteImpact(deps, agentId);
-  for (const live of impact.running_conversation_agents) {
-    await ctx.runtimeHost
-      .stop(live.conversation_id, agentId)
-      .catch(err =>
-        ctx.logger.warn(
-          { conversationId: live.conversation_id, agentId, err },
-          'delete computer cascade: stop failed (continuing)',
-        ),
-      );
-  }
-
-  let purgedCount: number | null = null;
-  let skippedUnprovisioned: number | null = null;
-  if (options.purgeHostLocal) {
-    const purge = await purgeAgentHostLocalFiles(deps, agent, impact);
-    if (purge.kind === 'failClosed') return purge;
-    purgedCount = purge.purgedCount;
-    skippedUnprovisioned = purge.skippedUnprovisioned;
-  }
-
-  await teardownAgentControlPlane(deps, agentId, impact);
-  ctx.logger.info(
-    {
-      agentId,
-      agentName: agent.name,
-      hostId: agent.host_id,
-      reason: options.reason,
-      dmChannelId: impact.dm_channel?.id ?? null,
-      regularWorkspaces: impact.regular_memberships.length,
-      stoppedConversations: impact.running_conversation_agents.length,
-      hostLocalPurge: options.purgeHostLocal ? 'purged' : 'skipped',
-      purgedCount,
-      skippedUnprovisioned,
-    },
-    'agent control-plane deleted during computer cascade',
-  );
-  return { kind: 'deleted' };
-}
-
-function deleteFailedAgentRowOnly(
+export function deleteFailedAgentRowOnly(
   ctx: BackendContext,
   agents: AgentRepo,
   agent: NonNullable<ReturnType<AgentRepo['get']>>,
@@ -272,7 +201,7 @@ function deleteFailedAgentRowOnly(
   );
 }
 
-async function purgeAgentHostLocalFiles(
+export async function purgeAgentHostLocalFiles(
   deps: DeleteAgentDeps,
   agent: NonNullable<ReturnType<AgentRepo['get']>>,
   impact: AgentDeleteImpact,
@@ -340,7 +269,80 @@ async function teardownAgentControlPlane(
   agentId: string,
   impact: AgentDeleteImpact,
 ): Promise<void> {
-  const { ctx, agents, workspaces, conversations } = deps;
+  // Sweep DM blobs before dropping rows. DB rows cascade through
+  // agent -> agent_home -> conversations, but physical files need an explicit
+  // pass. Best-effort — must not block the 204.
+  await sweepAgentDmAttachments(deps, agentId, impact);
+  teardownAgentControlPlaneRows(deps, agentId, impact);
+}
+
+/** The DM channels whose attachment blobs the delete must sweep. Captured
+ *  BEFORE any row delete: afterwards the conversation rows are gone and the
+ *  sweep could no longer enumerate them. */
+export function collectAgentDmChannelIds(
+  deps: DeleteAgentDeps,
+  impact: AgentDeleteImpact,
+): string[] {
+  const { conversations } = deps;
+  return impact.owned_home
+    ? conversations
+        .listAllDmChannelsForWorkspace(impact.owned_home.id)
+        .map(dm => dm.id)
+    : [];
+}
+
+/** The DM storage objects the delete must remove, captured while the
+ *  `attachments` rows still exist. Required by any caller that deletes its rows
+ *  inside a transaction and sweeps after the commit (delete-computer): by then
+ *  no row is left to derive a `storageKey` from. */
+export function collectAgentDmBlobRefs(
+  deps: DeleteAgentDeps,
+  impact: AgentDeleteImpact,
+): StoredFileRef[] {
+  return deps.ctx.attachmentService.collectChannelBlobRefs(
+    collectAgentDmChannelIds(deps, impact),
+  );
+}
+
+/** Best-effort blob sweep for the single-agent path, whose rows still exist at
+ *  call time. Never blocks or reverses the delete — but a swallowed storage
+ *  failure is logged, because the rows that could name those bytes are gone. */
+export async function sweepAgentDmAttachments(
+  deps: DeleteAgentDeps,
+  agentId: string,
+  impact: AgentDeleteImpact,
+): Promise<void> {
+  const { ctx } = deps;
+  const refs = collectAgentDmBlobRefs(deps, impact);
+  const outcome = await ctx.attachmentService
+    .deleteBlobs(refs)
+    .catch((err: unknown) => ({
+      attempted: refs.length,
+      failed: refs.length,
+      firstError: err,
+    }));
+  if (outcome.failed > 0) {
+    ctx.logger.warn(
+      { agentId, blobs: outcome.attempted, failed: outcome.failed, err: outcome.firstError },
+      'delete agent: DM attachment sweep left blobs behind (continuing)',
+    );
+  }
+}
+
+/**
+ * The agent's whole control-plane row teardown — SYNCHRONOUS by construction so
+ * the delete-computer cascade can commit it inside one `db.transaction`
+ * together with the workspace and host rows (`delete-computer.ts`). Anything
+ * cross-process (runtime stop, host-local purge) or unrollbackable (blob sweep)
+ * stays outside; putting it in the transaction would only manufacture a fake
+ * atomicity where the DB rolls back but remote bytes are already gone.
+ */
+export function teardownAgentControlPlaneRows(
+  deps: DeleteAgentDeps,
+  agentId: string,
+  impact: AgentDeleteImpact,
+): void {
+  const { workspaces, conversations, agents } = deps;
 
   // Remove from every regular workspace and its conversations.
   for (const ws of impact.regular_memberships) {
@@ -352,21 +354,6 @@ async function teardownAgentControlPlane(
       }
     }
     workspaces.removeMember(workspace.id, agentId);
-  }
-
-  // Sweep DM blobs before deleting the agent. DB rows cascade through
-  // agent -> agent_home -> conversations, but physical files need an explicit
-  // pass. Best-effort — must not block the 204.
-  const dmChannels = impact.owned_home
-    ? conversations.listAllDmChannelsForWorkspace(impact.owned_home.id)
-    : [];
-  for (const dm of dmChannels) {
-    await ctx.attachmentService.sweepForChannel(dm.id).catch(err =>
-      ctx.logger.warn(
-        { agentId, conversationId: dm.id, err },
-        'delete agent: DM attachment sweep failed (continuing)',
-      ),
-    );
   }
 
   // Drop the agent. owner_agent_id ON DELETE CASCADE removes its agent_home

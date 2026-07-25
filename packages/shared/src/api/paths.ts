@@ -47,12 +47,18 @@ export const apiPaths = {
    *  `UpdateHostInput { display_label }`. Only `display_label` is
    *  mutable today; `name` is the stable identifier set at claim time. */
   host: (id: string) => `/api/hosts/${id}`,
-  /** Delete an empty user-managed computer. Non-empty computers are rejected
-   *  with `has_dependents`; unfinalized Add-computer drafts are naturally empty
+  /** Delete a user-managed computer together with everything rooted on it (its
+   *  agents and its `regular` workspaces). Body = `HostDeleteInput`
+   *  `{ cascade_dependents }`; without the flag a non-empty computer is refused
+   *  with `has_dependents`. Unfinalized Add-computer drafts are naturally empty
    *  and use this same hard-delete path. */
   hostDelete: (id: string) => `/api/hosts/${id}`,
   /** Legacy alias for the Add-computer modal cancel path. */
   hostCancelPending: (id: string) => `/api/hosts/${id}`,
+  /** What is persistently rooted on this computer: the agents placed on it and
+   *  the `regular` workspaces whose files live on it. PERSISTENT OWNERSHIP —
+   *  contrast `hostStatus`, which reports dynamic daemon/runtime availability. */
+  hostResources: (id: string) => `/api/hosts/${id}/resources`,
   /** v36 (#task:808): dynamic host snapshot (OS / daemon version /
    *  registered agents + online state). Always HTTP 200 with tagged
    *  `availability` once owner ACL passes. 404 for missing / cross-user. */

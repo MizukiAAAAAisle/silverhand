@@ -80,14 +80,15 @@ import {
 } from 'react';
 import type {
   AgentOnHostDto,
-  HostDeleteDependentAgent,
-  HostDeleteDependents,
+  HostAgentResource,
   HostDto,
+  HostWorkspaceResource,
   HostStatusResponse,
   RuntimeKind,
 } from '@silverhand/shared';
 import { RuntimeKindSchema, RUNTIME_ORDER_LIST, runtimeLabel } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
@@ -112,6 +113,7 @@ import {
   useAgentOnlineByHost,
   useBackendInfoSnapshot,
   useHostProxyConfigQuery,
+  useHostResourcesQuery,
   useHostStatusQuery,
   useDeleteComputerMutation,
   useDisconnectHostMutation,
@@ -121,10 +123,13 @@ import {
   useSaveHostProxyConfigMutation,
   useUpdateHostMutation,
   isHostProxyOfflineError,
-  ComputerHasDependentsError,
-  ComputerHasPendingAgentsError,
   type HostProxyConfig,
 } from './hooks';
+import {
+  resolveDeleteComputerPhase,
+  resolveDeleteFailure,
+  type DeleteComputerFailure,
+} from './delete-computer-phase';
 import { computerActions } from './computer-actions';
 import {
   CONTROL_HOVER_LIFT,
@@ -599,74 +604,58 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
  * an outline button (the saturated fill is reserved for the actual commit
  * inside the dialog).
  *
- * Three dialog phases, no upfront dependency probe:
- *   - **confirm** — one line of consequence + a destructive Delete. On an
- *     empty computer this hard-deletes; the row leaves `computerHosts` and the
- *     app-shell auto-clears the detail selection (no explicit nav here).
- *   - **cascade** (#task:1380) — reached when the first DELETE is refused with
- *     `409 has_dependents` AND `can_cascade_agents === true` (an agent-only
- *     dependency set). Shows "also deletes its N agents" + a destructive Delete
- *     that re-issues DELETE with `{ cascade_agents: true }`. The flag is an
- *     intent confirmation, not a bypass: the backend re-checks its own truth,
- *     so this re-issue can itself come back blocked (Alice invariant) — we fall
- *     through to the block state rather than assume success.
- *   - **blocked** — reached when the backend refuses with `409 has_dependents`
- *     and it is NOT agent-cascade-able (a regular workspace still pins this
- *     computer). Shows how many agents / workspaces remain so the user clears
- *     those in their own context first. Nothing was deleted.
+ * TWO STEPS, not a discovery loop (shiki 2026-07-25): opening the dialog reads
+ * `GET /hosts/:id/resources` — the ordinary "what is rooted on this computer"
+ * query — shows the impact, and takes ONE confirm that sends
+ * `cascade_dependents: true`. The structural branch is decided by
+ * `resolveDeleteComputerPhase` (pure, unit-tested) off that read, BEFORE anything
+ * destructive is offered; this component only renders what it returns:
+ *   - **loading** — the standard confirm screen with Delete disabled. The impact
+ *     must be on screen before the button can be pressed.
+ *   - **confirm** — the impact is known: keeps the standard delete copy and adds
+ *     one pale-amber block per kind (shiki's 2026-07-07 gate), then takes one
+ *     confirm. An EMPTY impact is a legitimate read (an empty computer), so it
+ *     renders the same screen with no blocks — and still sends the same flag,
+ *     because consent is over the computer, not over the rows that happened to be
+ *     listed (Cindy: gating the flag on "preview was non-empty" would smuggle a
+ *     1-bit staleness check back into the protocol).
+ *   - **unavailable** — the read failed. Fail closed: no Delete at all, retry or
+ *     cancel. "Couldn't check" must never render as "nothing on it".
+ *   - **blocked** — the computer holds workspaces this user doesn't own, so the
+ *     DELETE cannot succeed. Names them instead of offering a doomed confirm.
+ * Execution failures add to the current screen rather than replacing it, except
+ * `pending` (an agent is still materializing — a transient wait-and-retry that
+ * the preview deliberately does not predict).
  */
 function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
   const del = useDeleteComputerMutation(host.id);
   const [open, setOpen] = useState(false);
-  const [blocked, setBlocked] = useState<HostDeleteDependents | null>(null);
-  const [cascade, setCascade] = useState<HostDeleteDependentAgent[] | null>(
-    null,
-  );
-  const [pending, setPending] = useState(false);
-  const [failed, setFailed] = useState(false);
-
-  const resetPhase = (): void => {
-    setBlocked(null);
-    setCascade(null);
-    setPending(false);
-    setFailed(false);
-  };
+  const [failure, setFailure] = useState<DeleteComputerFailure | null>(null);
+  // Fresh read per open (see `useHostResourcesQuery`): the confirm must show
+  // current ownership, not a list cached from a previous visit — which is why
+  // `isFetching` is part of the gate, not just `isPending`.
+  const resources = useHostResourcesQuery(host.id, { enabled: open });
+  const phase = resolveDeleteComputerPhase({
+    isPending: resources.isPending,
+    isFetching: resources.isFetching,
+    isError: resources.isError,
+    data: resources.data,
+  });
 
   const openConfirm = (): void => {
-    resetPhase();
+    setFailure(null);
     setOpen(true);
   };
 
-  const handleDelete = async (cascadeAgents: boolean): Promise<void> => {
-    setFailed(false);
+  const handleDelete = async (): Promise<void> => {
+    setFailure(null);
     try {
-      await del.mutateAsync(cascadeAgents ? { cascadeAgents: true } : undefined);
+      await del.mutateAsync({ cascadeDependents: true });
       // Success: the deleted row drops out of the host list, which clears the
       // selection app-side. Close the dialog; this view will unmount/remount.
       setOpen(false);
     } catch (err) {
-      if (err instanceof ComputerHasPendingAgentsError) {
-        // Transient: an agent is still materializing. Off the cascade/block
-        // axis — a wait-and-retry hint, not a confirm (Alice invariant).
-        setPending(true);
-        setBlocked(null);
-        setCascade(null);
-      } else if (err instanceof ComputerHasDependentsError) {
-        // Backend truth decides the branch — an agent-only set is cascade-able
-        // (offer the confirm); anything else is a hard block. This also covers
-        // the cascade re-issue coming back blocked (a regular workspace
-        // appeared / the flag was ignored server-side): we degrade to block.
-        setPending(false);
-        if (err.canCascadeAgents) {
-          setCascade(err.agents);
-          setBlocked(null);
-        } else {
-          setBlocked(err.dependents);
-          setCascade(null);
-        }
-      } else {
-        setFailed(true);
-      }
+      setFailure(resolveDeleteFailure(err));
     }
   };
 
@@ -687,30 +676,13 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
         open={open}
         onOpenChange={next => {
           // Reset transient state whenever the dialog fully closes so a
-          // re-open always starts from the confirm phase.
+          // re-open always starts from a fresh read + clean confirm.
           setOpen(next);
-          if (!next) resetPhase();
+          if (!next) setFailure(null);
         }}
       >
         <DialogContent className="max-w-md">
-          {blocked ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>{computerCopy.deleteBlockedTitle}</DialogTitle>
-                <DialogDescription>
-                  {computerCopy.deleteBlockedBody(
-                    blocked.agents,
-                    blocked.workspaces,
-                  )}
-                </DialogDescription>
-              </DialogHeader>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setOpen(false)}>
-                  {computerCopy.deleteBlockedDismiss}
-                </Button>
-              </DialogFooter>
-            </>
-          ) : pending ? (
+          {failure === 'pending' ? (
             <>
               <DialogHeader>
                 <DialogTitle>{computerCopy.deletePendingTitle}</DialogTitle>
@@ -718,9 +690,6 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   {computerCopy.deletePendingBody}
                 </DialogDescription>
               </DialogHeader>
-              {failed ? (
-                <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
-              ) : null}
               <DialogFooter>
                 <Button
                   variant="outline"
@@ -730,56 +699,58 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                   {computerCopy.cancel}
                 </Button>
                 <Button
-                  onClick={() => void handleDelete(false)}
+                  onClick={() => void handleDelete()}
                   disabled={del.isPending}
                   className="gap-2"
                 >
                   {del.isPending ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : null}
-                  {computerCopy.deletePendingRetry}
+                  {computerCopy.deleteRetry}
                 </Button>
               </DialogFooter>
             </>
-          ) : cascade ? (
+          ) : phase.kind === 'blocked' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  {computerCopy.deleteUnauthorizedTitle}
+                </DialogTitle>
+                <DialogDescription>
+                  {computerCopy.deleteUnauthorizedBody}
+                </DialogDescription>
+              </DialogHeader>
+              <WorkspaceImpact
+                workspaces={phase.unauthorized}
+                title={computerCopy.deleteUnauthorizedTitle}
+              />
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setOpen(false)}>
+                  {computerCopy.deleteBlockedDismiss}
+                </Button>
+              </DialogFooter>
+            </>
+          ) : phase.kind === 'unavailable' ? (
             <>
               <DialogHeader>
                 <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
-                {/* shiki interaction gate (2026-07-07): the cascade confirm
-                    does NOT replace the standard delete copy — it keeps it and
-                    adds the impact block below, so the user reads the same base
-                    consequence plus exactly who else goes. */}
                 <DialogDescription>
-                  {computerCopy.deleteConfirmBody}
+                  {computerCopy.deleteImpactUnavailable}
                 </DialogDescription>
               </DialogHeader>
-              <CascadeImpact agents={cascade} />
-              {failed ? (
-                <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
-              ) : null}
               <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setOpen(false)}
-                  disabled={del.isPending}
-                >
+                <Button variant="outline" onClick={() => setOpen(false)}>
                   {computerCopy.cancel}
                 </Button>
                 <Button
-                  variant="danger"
-                  onClick={() => void handleDelete(true)}
-                  disabled={del.isPending}
+                  onClick={() => void resources.refetch()}
+                  disabled={resources.isFetching}
                   className="gap-2"
-                  aria-label={`${computerCopy.deleteComputer}: ${label}`}
                 >
-                  {del.isPending ? (
+                  {resources.isFetching ? (
                     <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="size-3.5" />
-                  )}
-                  {del.isPending
-                    ? computerCopy.deleting
-                    : computerCopy.deleteConfirm}
+                  ) : null}
+                  {computerCopy.deleteRetry}
                 </Button>
               </DialogFooter>
             </>
@@ -787,11 +758,24 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
             <>
               <DialogHeader>
                 <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
+                {/* shiki interaction gate (2026-07-07): the impact does NOT
+                    replace the standard delete copy — it keeps it and adds the
+                    blocks below, so the user reads the same base consequence
+                    plus exactly what else goes. */}
                 <DialogDescription>
                   {computerCopy.deleteConfirmBody}
                 </DialogDescription>
               </DialogHeader>
-              {failed ? (
+              {phase.kind === 'confirm' && phase.agents.length > 0 ? (
+                <CascadeImpact agents={phase.agents} />
+              ) : null}
+              {phase.kind === 'confirm' && phase.workspaces.length > 0 ? (
+                <WorkspaceImpact
+                  workspaces={phase.workspaces}
+                  title={computerCopy.deleteWorkspaceImpactTitle}
+                />
+              ) : null}
+              {failure === 'generic' ? (
                 <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
               ) : null}
               <DialogFooter>
@@ -804,12 +788,15 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 </Button>
                 <Button
                   variant="danger"
-                  onClick={() => void handleDelete(false)}
-                  disabled={del.isPending}
+                  onClick={() => void handleDelete()}
+                  // Armed only once the impact is on screen: the `loading` phase
+                  // renders this same confirm, so this guard is what stops a
+                  // confirm of an impact the user has not seen.
+                  disabled={phase.kind !== 'confirm' || del.isPending}
                   className="gap-2"
                   aria-label={`${computerCopy.deleteComputer}: ${label}`}
                 >
-                  {del.isPending ? (
+                  {del.isPending || phase.kind === 'loading' ? (
                     <Loader2 className="size-3.5 animate-spin" />
                   ) : (
                     <Trash2 className="size-3.5" />
@@ -840,16 +827,17 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
  * 2026-07-07). Radius follows `--control-radius` (forza6 = 0 poster corners,
  * warm = rounded), matching the other in-dialog blocks.
  *
- * The list is the backend's DB delete-set (409 `agents`), so it stays populated
- * and accurate even when the computer is offline — the primary case for this
- * flow (Alice #task:1380: never source it from the daemon host-status view).
+ * The list comes from `/resources` — DB ownership, so it stays populated and
+ * accurate even when the computer is offline, which is the primary case for this
+ * flow (never source it from the daemon host-status view, which is empty offline
+ * — Alice #task:1380).
  * Each row reuses `AgentAvatar` (runtime tint) so the identities read in the
  * same visual vocab as "Agents on this machine" above.
  */
 function CascadeImpact({
   agents,
 }: {
-  agents: HostDeleteDependentAgent[];
+  agents: HostAgentResource[];
 }): JSX.Element {
   return (
     <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
@@ -881,6 +869,54 @@ function CascadeImpact({
             </li>
           );
         })}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * #task:1618 — workspace impact block. Same pale-amber form as `CascadeImpact`
+ * (one shared visual vocabulary for "here is what else goes"), listed beside it
+ * rather than as a new interaction, so a computer holding both kinds reads as one
+ * confirm with two consequences.
+ *
+ * Rows use the canonical `WorkspaceIcon` — the same identity primitive the rail
+ * and every workspace filter render, so a workspace looks like a workspace here
+ * too and each theme paints its own poster badge. A local `FolderOpen` in a grey
+ * box was a second glyph for an entity that already has one (#task:1192 SSOT).
+ *
+ * Deliberately name-only, no `workspace_path`: the path is length-unbounded and
+ * this dialog is `max-w-md`, so showing it would either wrap the block open or
+ * truncate mid-path into something unreadable (shiki: 宁可砍内容, 也不要把长度不
+ * 可控的字段塞进窄面板). Names truncate at one line.
+ *
+ * No scope prose. The block titles ("Workspaces will be deleted" / "Some
+ * workspaces need their owner") plus the standard delete line above already
+ * carry it; a sentence enumerating channels/messages/members only spent the
+ * user's attention budget on what the confirm itself is saying (shiki
+ * 2026-07-26).
+ */
+function WorkspaceImpact({
+  workspaces,
+  title,
+}: {
+  workspaces: HostWorkspaceResource[];
+  title: string;
+}): JSX.Element {
+  return (
+    <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--warning)]">
+        {title}
+      </p>
+      <ul className="mt-2 flex flex-col gap-1.5" aria-label={title}>
+        {workspaces.map(ws => (
+          <li key={ws.id} className="flex items-center gap-2">
+            <WorkspaceIcon kind="regular" dmAgentId={null} size={AVATAR_PX.sm} />
+            <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
+              {ws.name}
+            </span>
+          </li>
+        ))}
       </ul>
     </div>
   );

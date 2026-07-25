@@ -1,78 +1,30 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ComputerHasDependentsError,
   ComputerHasPendingAgentsError,
   interpretDeleteComputerError,
 } from './hooks';
 import { ApiError } from '@/lib/api';
 
 /**
- * #task:1354 — contract-boundary parse for the Delete-computer flow. The
- * risky part isn't the mutation plumbing, it's mapping the backend's
- * `409 has_dependents` envelope onto the typed error the UI renders as the
- * dependency-block state. These pin the shared-schema shape (nested
- * `dependents`, `error_code` discriminator) so a future wire drift fails
- * here instead of silently rendering a generic "couldn't delete".
+ * #task:1354 / #task:1618 — contract-boundary parse for the Delete-computer
+ * flow. After the two-step rework there is exactly ONE typed mapping left:
+ * `409 has_pending_agents`, the only refusal the dialog cannot learn from its
+ * `/resources` read (a query lists objects, it does not predict whether the
+ * command will succeed). These pin that discriminator plus the pass-through
+ * behaviour, so a wire drift fails here instead of silently rendering the
+ * transient state as a permanent "couldn't delete".
+ *
+ * The removed cases are deliberate, not forgotten: `has_dependents`,
+ * `dependents_changed` and `workspace_forbidden` no longer have typed branches —
+ * see `interpretDeleteComputerError` for why they must fold into the generic
+ * line.
  */
 describe('interpretDeleteComputerError', () => {
   function api409(body: unknown): ApiError {
     return new ApiError(409, 'Conflict', JSON.stringify(body));
   }
 
-  it('maps a 409 has_dependents envelope to a typed error with counts', () => {
-    const out = interpretDeleteComputerError(
-      api409({
-        error: 'computer still has dependents',
-        error_code: 'has_dependents',
-        dependents: { agents: 3, workspaces: 2 },
-      }),
-    );
-    expect(out).toBeInstanceOf(ComputerHasDependentsError);
-    expect((out as ComputerHasDependentsError).dependents).toEqual({
-      agents: 3,
-      workspaces: 2,
-    });
-    // #task:1380 — absent `can_cascade_agents` defaults false (a mixed /
-    // workspace-pinned computer is NOT agent-cascade-able), so the UI keeps the
-    // hard block rather than offering a cascade confirm. An absent `agents`
-    // list defaults to empty (the block state renders counts, not identities).
-    expect((out as ComputerHasDependentsError).canCascadeAgents).toBe(false);
-    expect((out as ComputerHasDependentsError).agents).toEqual([]);
-  });
-
-  it('carries can_cascade_agents=true + the agent delete-set for an agent-only dependency set', () => {
-    // #task:1380 — the agent-cascade discriminator + the identities the cascade
-    // confirm lists under "Agents will be removed". The list is the backend's
-    // DB delete-set (shown == deleted, populated even offline); it rides the
-    // same typed error alongside the boolean.
-    const out = interpretDeleteComputerError(
-      api409({
-        error: 'computer still has dependents',
-        error_code: 'has_dependents',
-        dependents: { agents: 2, workspaces: 0 },
-        can_cascade_agents: true,
-        agents: [
-          { id: 'a1', name: 'norman', display_name: 'Norman', runtime: 'claude' },
-          { id: 'a2', name: 'cindy', display_name: 'Cindy', runtime: 'codex' },
-        ],
-      }),
-    );
-    expect(out).toBeInstanceOf(ComputerHasDependentsError);
-    expect((out as ComputerHasDependentsError).dependents).toEqual({
-      agents: 2,
-      workspaces: 0,
-    });
-    expect((out as ComputerHasDependentsError).canCascadeAgents).toBe(true);
-    expect((out as ComputerHasDependentsError).agents).toEqual([
-      { id: 'a1', name: 'norman', display_name: 'Norman', runtime: 'claude' },
-      { id: 'a2', name: 'cindy', display_name: 'Cindy', runtime: 'codex' },
-    ]);
-  });
-
   it('maps a 409 has_pending_agents envelope to the transient typed error', () => {
-    // #task:1380 — the pending block is its OWN axis, never `has_dependents`.
-    // If it collapsed into the dependency error it would render a cascade
-    // confirm on a transient state → confirm/re-409 dead-end (Alice invariant).
     const out = interpretDeleteComputerError(
       api409({
         error: 'agent creation still in progress',
@@ -81,16 +33,51 @@ describe('interpretDeleteComputerError', () => {
       }),
     );
     expect(out).toBeInstanceOf(ComputerHasPendingAgentsError);
-    expect(out).not.toBeInstanceOf(ComputerHasDependentsError);
     expect((out as ComputerHasPendingAgentsError).pendingAgents).toBe(1);
   });
 
-  it('passes through an unrelated 409 (not the dependency block)', () => {
-    const err = api409({ error: 'nope', error_code: 'host_already_active' });
+  it('passes a 409 has_dependents through untyped', () => {
+    // Unreachable from the dialog by construction: the preview already showed
+    // what is on the computer, and the confirm always sends the flag. It stays a
+    // backend guard for callers that skipped the preview, so the UI treats it as
+    // a plain failure rather than rebuilding a discovery screen for it.
+    const err = api409({
+      error: 'computer still has dependents',
+      error_code: 'has_dependents',
+      dependents: { agents: 3, workspaces: 2 },
+    });
     expect(interpretDeleteComputerError(err)).toBe(err);
     expect(interpretDeleteComputerError(err)).not.toBeInstanceOf(
-      ComputerHasDependentsError,
+      ComputerHasPendingAgentsError,
     );
+  });
+
+  it('passes a 403 workspace_forbidden through untyped', () => {
+    // Ownership is named in the PREVIEW (`viewer_role`), which is where the user
+    // can still act on it. A 403 after a confirm means drift — a rare,
+    // recoverable state that gets the generic failure line, not its own screen.
+    const err = new ApiError(
+      403,
+      'Forbidden',
+      JSON.stringify({
+        error: 'not the workspace owner',
+        error_code: 'workspace_forbidden',
+        workspaces: [
+          {
+            id: 'w9',
+            name: 'not-mine',
+            workspace_path: '/tmp/w9',
+            viewer_role: 'member',
+          },
+        ],
+      }),
+    );
+    expect(interpretDeleteComputerError(err)).toBe(err);
+  });
+
+  it('passes through an unrelated 409', () => {
+    const err = api409({ error: 'nope', error_code: 'host_already_active' });
+    expect(interpretDeleteComputerError(err)).toBe(err);
   });
 
   it('passes through a non-409 ApiError unchanged', () => {

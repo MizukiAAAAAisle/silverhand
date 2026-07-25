@@ -13,6 +13,7 @@
   "POST /api/hosts",
   "GET /api/hosts/connect-token/resolve",
   "GET /api/hosts/:id",
+  "GET /api/hosts/:id/resources",
   "DELETE /api/hosts/:id",
   "POST /api/hosts/claim-or-create",
   "POST /api/hosts/:id/revoke",

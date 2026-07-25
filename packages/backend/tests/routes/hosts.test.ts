@@ -13,9 +13,13 @@ import type {
 } from '@silverhand/host';
 import { HostTokenService, hashHostToken } from '../../src/auth/host-token.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
-import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
+import {
+  HostWsCommandResponseError,
+  type HostWsServerController,
+} from '../../src/ws/host-ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('host routes', () => {
@@ -494,6 +498,126 @@ describe('host routes', () => {
   });
 
   // ── DELETE /api/hosts/:id — delete empty user-managed computer/setup ──
+  // ── GET /api/hosts/:id/resources (#task:1617) ─────────────────
+  //
+  // The generic "what belongs to this computer" query. Step 1 of the delete flow
+  // is its first consumer, but nothing here is delete-shaped: no action fields,
+  // no would-succeed prediction.
+  describe('GET /api/hosts/:id/resources', () => {
+    it('lists the agents placed here and the regular workspaces rooted here, with the viewers role', async () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const other = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      for (const hostId of [created.host_id, other.host_id]) {
+        repo.markActivated(hostId, 1_700_000_000_000);
+        repo.markFinalized(hostId, 1_700_000_000_100);
+      }
+      const agentId = insertTestAgent(t, {
+        name: 'resident-agent',
+        displayName: 'Resident Agent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      const agent = new AgentRepo(t.ctx.db).get(agentId);
+      const workspaces = new WorkspaceRepo(t.ctx.db);
+      // Cascades with its owner agent, so it is not a separately listed resource.
+      workspaces.insertAgentHome({ agent: agent!, workspacePath: `/tmp/${agentId}` });
+      const mine = workspaces.insert({
+        name: 'Mine',
+        description: null,
+        workspacePath: '/tmp/mine',
+        workspaceHostId: created.host_id,
+      });
+      workspaces.addUserMember(mine.id, t.viewerUserId, 'owner');
+      const theirs = workspaces.insert({
+        name: 'Theirs',
+        description: null,
+        workspacePath: '/tmp/theirs',
+        workspaceHostId: created.host_id,
+      });
+      workspaces.addUserMember(theirs.id, t.viewerUserId, 'member');
+      // Rooted on the OTHER computer — never this computer's resource, even
+      // though the same user owns both.
+      const elsewhere = workspaces.insert({
+        name: 'Elsewhere',
+        description: null,
+        workspacePath: '/tmp/elsewhere',
+        workspaceHostId: other.host_id,
+      });
+      workspaces.addUserMember(elsewhere.id, t.viewerUserId, 'owner');
+
+      const body = await h.json<any>(h.get(apiPaths.hostResources(created.host_id)));
+
+      expect(body).toEqual({
+        agents: [
+          {
+            id: agentId,
+            name: 'resident-agent',
+            display_name: 'Resident Agent',
+            runtime: 'codex',
+          },
+        ],
+        workspaces: [
+          {
+            id: mine.id,
+            name: 'Mine',
+            workspace_path: '/tmp/mine',
+            viewer_role: 'owner',
+          },
+          {
+            id: theirs.id,
+            name: 'Theirs',
+            workspace_path: '/tmp/theirs',
+            viewer_role: 'member',
+          },
+        ],
+      });
+    });
+
+    it('returns an empty pair for a computer with nothing on it', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+
+      const body = await h.json<any>(h.get(apiPaths.hostResources(created.host_id)));
+
+      // An empty result is a legal FACT here, not a failure to discover: this
+      // route is the only discovery path, so the caller may act on it.
+      expect(body).toEqual({ agents: [], workspaces: [] });
+    });
+
+    it('404s for another users computer and for an unknown id', async () => {
+      t = buildTestApp({ ownedLocalHostUserIds: ['alice', 'bob'] });
+      const aliceToken = t.ctx.authSessions.issueSession({
+        userId: 'alice',
+      }).userToken;
+      const bobToken = t.ctx.authSessions.issueSession({ userId: 'bob' }).userToken;
+      const bobHost = await sessionHttp(t, bobToken).json<any>(
+        sessionHttp(t, bobToken).post(apiPaths.hosts, {}),
+      );
+
+      const alice = sessionHttp(t, aliceToken);
+      const crossUser = await alice.get(apiPaths.hostResources(bobHost.host_id));
+      expect(crossUser.status).toBe(404);
+      // Indistinguishable from a missing row: ownership must not leak through
+      // the error shape.
+      expect(await crossUser.json()).toEqual({
+        error: 'host not found',
+        error_code: 'host_not_found',
+      });
+      const unknown = await alice.get(apiPaths.hostResources('nope'));
+      expect(unknown.status).toBe(404);
+    });
+  });
+
   describe('DELETE /api/hosts/:id', () => {
     it('hard-deletes a pending user-managed computer setup and invalidates its connect-token', async () => {
       t = buildTestApp();
@@ -586,7 +710,17 @@ describe('host routes', () => {
       });
     });
 
-    it('rejects delete for user-managed computers with dependent agents/workspaces', async () => {
+    // ── #task:1616 / #task:1617 — the two-step cascade contract ───────
+    //
+    // Step 1 is `GET /api/hosts/:id/resources` (its own describe block below):
+    // the dialog reads the impact and shows it. Step 2 is this DELETE with ONE
+    // `cascade_dependents` boolean — consent over the computer, not an id set,
+    // so a dependency that drifts in between the two steps is deleted rather
+    // than re-confirmed. The 409 below is only a guard for a caller that skipped
+    // step 1. Every refusal is proven side-effect-free: the tests assert not
+    // just the status but that the host/agent/workspace rows survive AND that no
+    // `agent_files_purge` reached the daemon.
+    it('names what it would delete when no confirmation is sent', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -602,12 +736,14 @@ describe('host routes', () => {
         runtime: 'codex',
         hostId: created.host_id,
       });
-      new WorkspaceRepo(t.ctx.db).insert({
+      const workspaces = new WorkspaceRepo(t.ctx.db);
+      const workspace = workspaces.insert({
         name: 'Dependent Workspace',
         description: null,
         workspacePath: '/tmp/dependent-workspace',
         workspaceHostId: created.host_id,
       });
+      workspaces.addUserMember(workspace.id, t.viewerUserId, 'owner');
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id));
 
@@ -627,9 +763,20 @@ describe('host routes', () => {
             runtime: 'codex',
           },
         ],
-        can_cascade_agents: false,
+        workspaces: [
+          {
+            id: workspace.id,
+            name: 'Dependent Workspace',
+            workspace_path: '/tmp/dependent-workspace',
+            viewer_role: 'owner',
+          },
+        ],
       });
       expect(repo.get(created.host_id)).not.toBeNull();
+      expect(workspaces.get(workspace.id)).not.toBeNull();
+      expect(
+        t.fakeHostWs!.calls.some(call => call.kind === 'agent_files_purge'),
+      ).toBe(false);
       expect(
         new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
       ).toMatchObject({
@@ -638,7 +785,88 @@ describe('host routes', () => {
       });
     });
 
-    it('returns a cascadable dependency block for agent-only computers', async () => {
+    it('reports the requesters role on each workspace it lists', async () => {
+      // Owner-gate boundary: the default fixture trigger seeds the viewer as
+      // `owner` on every workspace insert, which would mask the gate entirely.
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const workspaces = new WorkspaceRepo(t.ctx.db);
+      const workspace = workspaces.insert({
+        name: 'Someone Elses Workspace',
+        description: null,
+        workspacePath: '/tmp/not-mine',
+        workspaceHostId: created.host_id,
+      });
+      // Member, not owner — the delete needs the owner role.
+      workspaces.addUserMember(workspace.id, t.viewerUserId, 'member');
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id));
+
+      expect(res.status).toBe(409);
+      expect(await res.json()).toMatchObject({
+        error_code: 'has_dependents',
+        // A resource fact, not a verdict: the dialog reads "not owner" as "this
+        // one needs its owner", and the DELETE re-checks the gate itself.
+        workspaces: [
+          {
+            id: workspace.id,
+            viewer_role: 'member',
+          },
+        ],
+      });
+      expect(workspaces.get(workspace.id)).not.toBeNull();
+    });
+
+    it('refuses with a named 403 when a workspace on the computer is not the requesters to delete', async () => {
+      // See above: explicit memberships only, so `member` really is `member`.
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const workspaces = new WorkspaceRepo(t.ctx.db);
+      const workspace = workspaces.insert({
+        name: 'Someone Elses Workspace',
+        description: null,
+        workspacePath: '/tmp/not-mine',
+        workspaceHostId: created.host_id,
+      });
+      workspaces.addUserMember(workspace.id, t.viewerUserId, 'member');
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_dependents: true }),
+      });
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({
+        error: 'you are not an owner of every workspace on this computer',
+        error_code: 'workspace_forbidden',
+        workspaces: [
+          {
+            id: workspace.id,
+            name: 'Someone Elses Workspace',
+            workspace_path: '/tmp/not-mine',
+            viewer_role: 'member',
+          },
+        ],
+      });
+      expect(repo.get(created.host_id)).not.toBeNull();
+      expect(workspaces.get(workspace.id)).not.toBeNull();
+    });
+
+    it('excludes an agents own agent_home from the dependency list', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -664,6 +892,9 @@ describe('host routes', () => {
       const res = await h.del(apiPaths.hostCancelPending(created.host_id));
 
       expect(res.status).toBe(409);
+      // The agent's own `agent_home` workspace is NOT a dependent: it cascades
+      // with its owner agent, so listing it would ask the user to confirm an
+      // object they cannot act on independently.
       expect(await res.json()).toEqual({
         error: 'computer has dependent resources',
         error_code: 'has_dependents',
@@ -679,12 +910,12 @@ describe('host routes', () => {
             runtime: 'codex',
           },
         ],
-        can_cascade_agents: true,
+        workspaces: [],
       });
       expect(repo.get(created.host_id)).not.toBeNull();
     });
 
-    it('returns a transient pending-agent block before offering agent cascade', async () => {
+    it('returns a transient pending-agent block instead of deleting a materializing agent', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -704,7 +935,7 @@ describe('host routes', () => {
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cascade_agents: true }),
+        body: JSON.stringify({ cascade_dependents: true }),
       });
 
       expect(res.status).toBe(409);
@@ -719,7 +950,7 @@ describe('host routes', () => {
       expect(t.fakeHostWs!.calls).toHaveLength(0);
     });
 
-    it('deletes an agent-only computer when cascade_agents is confirmed', async () => {
+    it('deletes an agent-only computer when the cascade is confirmed', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -745,7 +976,7 @@ describe('host routes', () => {
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cascade_agents: true }),
+        body: JSON.stringify({ cascade_dependents: true }),
       });
 
       expect(res.status).toBe(200);
@@ -769,6 +1000,152 @@ describe('host routes', () => {
           },
         },
       ]);
+    });
+
+    it('cascades regular workspaces together with the computers agents', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'agent-with-workspace',
+        displayName: 'Agent With Workspace',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      const agent = new AgentRepo(t.ctx.db).get(agentId);
+      const workspaces = new WorkspaceRepo(t.ctx.db);
+      const home = workspaces.insertAgentHome({
+        agent: agent!,
+        workspacePath: `/tmp/${agentId}`,
+      });
+      const workspace = workspaces.insert({
+        name: 'Doomed Workspace',
+        description: null,
+        workspacePath: '/tmp/doomed-workspace',
+        workspaceHostId: created.host_id,
+      });
+      workspaces.addUserMember(workspace.id, t.viewerUserId, 'owner');
+      const conversations = new ConversationRepo(t.ctx.db);
+      const channel = conversations.insertChannel({
+        workspaceId: workspace.id,
+        workspacePath: '/tmp/doomed-workspace',
+        title: 'general',
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_dependents: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        host_id: created.host_id,
+        deleted: true,
+      });
+      expect(repo.get(created.host_id)).toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
+      expect(workspaces.get(home.id)).toBeNull();
+      expect(workspaces.get(workspace.id)).toBeNull();
+      expect(conversations.get(channel.id)).toBeNull();
+    });
+
+    it('keeps a workspace rooted on another computer untouched', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const doomed = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const survivor = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      for (const hostId of [doomed.host_id, survivor.host_id]) {
+        repo.markActivated(hostId, 1_700_000_000_000);
+        repo.markFinalized(hostId, 1_700_000_000_100);
+      }
+      const workspaces = new WorkspaceRepo(t.ctx.db);
+      const shared = workspaces.insert({
+        name: 'Shared Workspace',
+        description: null,
+        workspacePath: '/tmp/shared-workspace',
+        workspaceHostId: survivor.host_id,
+      });
+      workspaces.addUserMember(shared.id, t.viewerUserId, 'owner');
+      const agentId = insertTestAgent(t, {
+        name: 'guest-agent',
+        displayName: 'Guest Agent',
+        runtime: 'codex',
+        hostId: doomed.host_id,
+      });
+      // The doomed computer's agent is a MEMBER of a workspace rooted on the
+      // other computer: deleting its computer removes the agent, never the
+      // workspace (cross-computer membership, #task:1600).
+      workspaces.insertMembership(shared.id, agentId);
+
+      const res = await h.del(apiPaths.hostCancelPending(doomed.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_dependents: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(repo.get(doomed.host_id)).toBeNull();
+      expect(repo.get(survivor.host_id)).not.toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
+      expect(workspaces.get(shared.id)).not.toBeNull();
+    });
+
+    it('deletes a dependency that appeared after the dialog listed the impact', async () => {
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const listedAgentId = insertTestAgent(t, {
+        name: 'listed-agent',
+        displayName: 'Listed Agent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      // Landed on the computer AFTER the dialog read `/resources`. The user
+      // confirmed "delete this computer and everything on it", so this one goes
+      // too: the confirmation is an intent over the computer, not a snapshot to
+      // diff. Refusing here would only cost a re-confirmation round trip and
+      // could never protect a different CLASS of object — everything reachable
+      // is rooted on the computer already condemned.
+      const driftedAgentId = insertTestAgent(t, {
+        name: 'drifted-agent',
+        displayName: 'Drifted Agent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_dependents: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(repo.get(created.host_id)).toBeNull();
+      const agents = new AgentRepo(t.ctx.db);
+      expect(agents.get(listedAgentId)).toBeNull();
+      expect(agents.get(driftedAgentId)).toBeNull();
+      // The drifted agent was deleted through the same captured teardown as the
+      // listed one, not silently row-deleted: both purges reached the daemon.
+      expect(
+        t
+          .fakeHostWs!.calls.filter(call => call.kind === 'agent_files_purge')
+          .map(call => (call.params as { agent_id: string }).agent_id)
+          .sort(),
+      ).toEqual([listedAgentId, driftedAgentId].sort());
     });
 
     it('deletes an agent-only computer while offline by skipping host-local purge', async () => {
@@ -798,7 +1175,7 @@ describe('host routes', () => {
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cascade_agents: true }),
+        body: JSON.stringify({ cascade_dependents: true }),
       });
 
       expect(res.status).toBe(200);
@@ -812,6 +1189,47 @@ describe('host routes', () => {
       expect(
         t.fakeHostWs!.calls.some(call => call.kind === 'agent_files_purge'),
       ).toBe(false);
+    });
+
+    it('completes the delete when a reachable daemon fails the host-local purge', async () => {
+      t = buildTestApp();
+      // Best-effort by design (see delete-computer.ts phase 2): a purge failure
+      // leaves files on the disowned computer; refusing would recreate the
+      // undeletable-computer dead end.
+      t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
+        throw new HostWsCommandResponseError(
+          'partial_purge' as never,
+          'failed to remove 1 target(s): EACCES',
+          {
+            hostId: 'host',
+            commandKind: 'agent_files_purge',
+            requestId: 'r',
+          },
+        );
+      };
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const h = sessionHttp(t, userToken);
+      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
+      const repo = new HostRepo(t.ctx.db);
+      repo.markActivated(created.host_id, 1_700_000_000_000);
+      repo.markFinalized(created.host_id, 1_700_000_000_100);
+      const agentId = insertTestAgent(t, {
+        name: 'purge-failure-agent',
+        displayName: 'Purge Failure Agent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+
+      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ cascade_dependents: true }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(repo.get(created.host_id)).toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
     });
 
     it('row-deletes failed agents during computer cascade without host-local purge', async () => {
@@ -834,7 +1252,7 @@ describe('host routes', () => {
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cascade_agents: true }),
+        body: JSON.stringify({ cascade_dependents: true }),
       });
 
       expect(res.status).toBe(200);
@@ -847,55 +1265,6 @@ describe('host routes', () => {
       expect(
         t.fakeHostWs!.calls.some(call => call.kind === 'agent_files_purge'),
       ).toBe(false);
-    });
-
-    it('does not let cascade_agents bypass regular workspace dependents', async () => {
-      t = buildTestApp();
-      const userToken = t.ctx.authSessions.issueSession({
-        userId: t.viewerUserId,
-      }).userToken;
-      const h = sessionHttp(t, userToken);
-      const created = await h.json<any>(h.post(apiPaths.hosts, {}));
-      const repo = new HostRepo(t.ctx.db);
-      repo.markActivated(created.host_id, 1_700_000_000_000);
-      repo.markFinalized(created.host_id, 1_700_000_000_100);
-      const agentId = insertTestAgent(t, {
-        name: 'agent-with-workspace-dependent',
-        displayName: 'Agent With Workspace Dependent',
-        runtime: 'codex',
-        hostId: created.host_id,
-      });
-      new WorkspaceRepo(t.ctx.db).insert({
-        name: 'Dependent Workspace',
-        description: null,
-        workspacePath: '/tmp/dependent-workspace',
-        workspaceHostId: created.host_id,
-      });
-
-      const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cascade_agents: true }),
-      });
-
-      expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({
-        error: 'computer has dependent resources',
-        error_code: 'has_dependents',
-        dependents: {
-          agents: 1,
-          workspaces: 1,
-        },
-        agents: [
-          {
-            id: agentId,
-            name: 'agent-with-workspace-dependent',
-            display_name: 'Agent With Workspace Dependent',
-            runtime: 'codex',
-          },
-        ],
-        can_cascade_agents: false,
-      });
-      expect(repo.get(created.host_id)).not.toBeNull();
     });
 
     it('hard-deletes a revoked empty user-managed row rather than exposing a second user-facing remove verb', async () => {

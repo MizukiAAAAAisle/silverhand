@@ -6,6 +6,7 @@ import {
   HostProvisioningSourceSchema,
   RuntimeKindSchema,
 } from '../db/schema.js';
+import { WorkspaceRoleSchema } from './workspace.js';
 
 export const HostLifecycleStatusSchema = z.enum([
   'pending',
@@ -387,9 +388,10 @@ export const HostGetResponseSchema = z.object({
 export type HostGetResponse = z.infer<typeof HostGetResponseSchema>;
 
 /** `DELETE /api/hosts/{id}` user-managed computer delete. The same route covers
- *  unfinalized Add-computer drafts and finalized empty computers. Non-empty
- *  computers are rejected with `has_dependents`; the row is never soft-revoked
- *  by this user-facing delete action. */
+ *  unfinalized Add-computer drafts, finalized empty computers, and — after an
+ *  explicit two-phase confirmation — a computer whose agents and regular
+ *  workspaces are cascade-deleted with it. The row is never soft-revoked by
+ *  this user-facing delete action. */
 export const HostCancelPendingResponseSchema = z.object({
   host_id: z.string(),
   deleted: z.literal(true),
@@ -400,9 +402,27 @@ export type HostCancelPendingResponse = z.infer<
 export const HostDeleteResponseSchema = HostCancelPendingResponseSchema;
 export type HostDeleteResponse = HostCancelPendingResponse;
 
+/**
+ * Delete-computer cascade confirmation.
+ *
+ * ONE boolean, deliberately: the user is confirming "delete this computer and
+ * everything on it", not a per-object consent list. Everything the cascade can
+ * reach is rooted on the computer the user just decided to destroy, so a
+ * dependency that appears between the dialog and the request cannot change the
+ * CLASS of what is deleted — and an exact-id snapshot would have bought only
+ * that, at the price of a second consent model (set equality, a
+ * `dependents_changed` refusal, a re-confirmation screen).
+ *
+ * The flag is a guard, not an authorization: the server re-reads the current
+ * dependency set, the pending-materialization state and the per-workspace owner
+ * gate inside its delete transaction, and refuses there.
+ *
+ * Discovery is not this route's job: the dialog reads the impact from
+ * `GET /api/hosts/{id}/resources` first and shows it, then sends this flag once.
+ */
 export const HostDeleteInputSchema = z
   .object({
-    cascade_agents: z.boolean().optional().default(false),
+    cascade_dependents: z.boolean().optional().default(false),
   })
   .optional()
   .default({});
@@ -414,25 +434,83 @@ export const HostDeleteDependentsSchema = z.object({
 });
 export type HostDeleteDependents = z.infer<typeof HostDeleteDependentsSchema>;
 
-export const HostDeleteDependentAgentSchema = z.object({
+/** One agent rooted on a computer. Named for the resource, not for the action:
+ *  the same shape describes "the agents on this computer" wherever it is asked,
+ *  and the delete refusal below is only one consumer.
+ *
+ *  Plain facts only. It deliberately does NOT carry
+ *  `materialization_status`: a read model lists the affected objects, it does not
+ *  predict whether a later command will succeed. A materialization racing this
+ *  delete is rare and already answered by the DELETE's own
+ *  `has_pending_agents`, so mirroring it here would only buy a UI state that
+ *  almost never renders. */
+export const HostAgentResourceSchema = z.object({
   id: z.string(),
   name: z.string(),
   display_name: z.string(),
   runtime: RuntimeKindSchema,
 });
-export type HostDeleteDependentAgent = z.infer<
-  typeof HostDeleteDependentAgentSchema
->;
+export type HostAgentResource = z.infer<typeof HostAgentResourceSchema>;
 
+/** One `regular` workspace rooted on a computer. `viewer_role` is the
+ *  requester's membership role — a resource fact, not an action verdict, so the
+ *  consumer decides what it implies (the delete dialog reads "not owner" as
+ *  "this one needs its owner"; the DELETE re-checks the gate itself). Null when
+ *  the requester holds no membership edge. */
+export const HostWorkspaceResourceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  workspace_path: z.string(),
+  viewer_role: WorkspaceRoleSchema.nullable(),
+});
+export type HostWorkspaceResource = z.infer<typeof HostWorkspaceResourceSchema>;
+
+/**
+ * `GET /api/hosts/{id}/resources` — everything persistently rooted on one
+ * computer: the agents placed on it and the `regular` workspaces whose files
+ * live on it.
+ *
+ * A general Computer-domain query, not a delete-flavoured read model. It answers
+ * "what belongs to this computer" and carries no action fields; deciding what
+ * that means (deletion impact, a move, a diagnostic) is the caller's job.
+ * Distinct from `GET /api/hosts/{id}/status`, which reports the DYNAMIC
+ * availability of the daemon and its live runtimes — availability vs ownership.
+ */
+export const HostResourcesResponseSchema = z.object({
+  agents: z.array(HostAgentResourceSchema),
+  workspaces: z.array(HostWorkspaceResourceSchema),
+});
+export type HostResourcesResponse = z.infer<typeof HostResourcesResponseSchema>;
+
+/**
+ * `409 has_dependents` — a DELETE arrived WITHOUT `cascade_dependents` while the
+ * computer still has agents or workspaces. This is a guard for callers that
+ * skipped the confirmation step (the dialog reads the lists itself), not the
+ * UI's discovery path; it still names the objects so a CLI/API caller learns
+ * what it would destroy. Guarantees zero deletion.
+ */
 export const HostDeleteBlockedResponseSchema = z.object({
   error: z.string(),
   error_code: z.literal('has_dependents'),
   dependents: HostDeleteDependentsSchema,
-  agents: z.array(HostDeleteDependentAgentSchema).optional().default([]),
-  can_cascade_agents: z.boolean().optional().default(false),
+  agents: z.array(HostAgentResourceSchema).optional().default([]),
+  workspaces: z.array(HostWorkspaceResourceSchema).optional().default([]),
 });
 export type HostDeleteBlockedResponse = z.infer<
   typeof HostDeleteBlockedResponseSchema
+>;
+
+/** The confirmation covered a workspace the requester does not own (re-checked
+ *  inside the delete transaction). Whole delete is refused with zero
+ *  destruction; `workspaces` names the unauthorized subset so the UI can say
+ *  which ones need their owner. */
+export const HostDeleteWorkspaceForbiddenResponseSchema = z.object({
+  error: z.string(),
+  error_code: z.literal('workspace_forbidden'),
+  workspaces: z.array(HostWorkspaceResourceSchema),
+});
+export type HostDeleteWorkspaceForbiddenResponse = z.infer<
+  typeof HostDeleteWorkspaceForbiddenResponseSchema
 >;
 
 export const HostDeletePendingAgentsResponseSchema = z.object({

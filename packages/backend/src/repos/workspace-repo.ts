@@ -117,6 +117,26 @@ export class WorkspaceRepo {
     return row ? rowToDto(row) : null;
   }
 
+  /** Every `regular` workspace whose root lives on this computer — the delete
+   *  dependents of `DELETE /api/hosts/:id`, named rather than counted.
+   *
+   *  `agent_home` is excluded on purpose and is NOT a missing case: a home
+   *  workspace is owned by its agent (`owner_agent_id ON DELETE CASCADE`) and
+   *  its `workspace_host_id` is always the owner agent's `host_id`, so it
+   *  disappears with the agent cascade instead of needing its own confirmation.
+   */
+  listRegularByHost(hostId: string): WorkspaceDto[] {
+    return this.db
+      .prepare<[string], WorkspaceSelectRow>(
+        `${WORKSPACE_SELECT}
+         WHERE w.workspace_host_id = ?
+           AND w.workspace_kind = 'regular'
+         ORDER BY w.name ASC, w.created_at ASC`,
+      )
+      .all(hostId)
+      .map(rowToDto);
+  }
+
 
   getByName(name: string): WorkspaceDto | null {
     const row = this.db

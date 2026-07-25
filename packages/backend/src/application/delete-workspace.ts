@@ -2,6 +2,9 @@ import type { BackendContext } from '../context.js';
 import type { UserPrincipal } from '../auth/principal.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { AgentRepo } from '../repos/agent-repo.js';
+import type { StoredFileRef } from '../storage/blob-file-storage.js';
+import type { BlobSweepOutcome } from '../services/attachment-service.js';
 import { canGovernWorkspace } from '../permissions.js';
 
 /**
@@ -18,14 +21,21 @@ import { canGovernWorkspace } from '../permissions.js';
  * exhaustive `switch` + `never` fallback. It never imports Hono `Context` and
  * never builds a `Response`.
  *
- * There is intentionally NO outer `db.transaction` — the unit of work is a
- * single repo `delete` + FK CASCADE, and P13a is a pure lift that neither adds
- * nor removes a unit of work.
+ * The unit of work is a single repo `delete` + FK CASCADE, so this use case
+ * needs no `db.transaction` of its own. The delete-computer cascade
+ * (`delete-computer.ts`) DOES need one — it commits workspaces + agents + the
+ * host row as one atomic unit — which is why the pieces below are exported
+ * separately: the plan/stop/sweep/publish steps are cross-process or
+ * best-effort and must stay OUTSIDE a transaction, while `deleteWorkspaceRow`
+ * is the only synchronous DB step and is safe to call inside one.
  */
 export interface DeleteWorkspaceDeps {
   ctx: BackendContext;
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
+  /** Needed only to capture each member agent's owning computer BEFORE the rows
+   *  go away — see {@link WorkspaceTeardownPlan.runtimeStops}. */
+  agents: AgentRepo;
 }
 
 export interface DeleteWorkspaceCommand {
@@ -44,7 +54,7 @@ export async function deleteWorkspace(
   deps: DeleteWorkspaceDeps,
   cmd: DeleteWorkspaceCommand,
 ): Promise<DeleteWorkspaceResult> {
-  const { ctx, workspaces, conversations } = deps;
+  const { ctx, workspaces } = deps;
 
   const workspace = workspaces.get(cmd.workspaceId);
   if (!workspace) {
@@ -58,14 +68,7 @@ export async function deleteWorkspace(
     return { kind: 'forbidden' };
   }
 
-  const workspaceConversations = conversations
-    .list()
-    .filter(conversation => conversation.workspace_id === workspace.id);
-
-  // Capture viewer members BEFORE the cascade delete — afterwards the
-  // `workspace_users` rows are gone, so we could no longer address them. Used to
-  // emit `viewer_workspaces_changed(removed)` post-commit (#task:1404).
-  const viewerUserIds = workspaces.listUserMemberIds(workspace.id);
+  const plan = collectWorkspaceTeardownPlan(deps, workspace.id);
 
   // Cross-computer slice 2 (#task:1600): the old D4.c C3 placement preflight
   // (every member agent's host must equal `workspace_host_id`) is gone — a
@@ -76,56 +79,164 @@ export async function deleteWorkspace(
   // a future explicit local cleanup on that computer (#1594: zero implicit
   // deletion; after the cascade the membership rows are gone, so no current
   // purge path can even enumerate them).
+  stopWorkspaceRuntime(deps, plan);
+  await sweepWorkspaceAttachments(deps, plan);
+  deleteWorkspaceRow(deps, workspace.id);
+  publishWorkspaceRemoved(deps, plan);
+  return { kind: 'deleted' };
+}
 
-  for (const conversation of workspaceConversations) {
-    ctx.runtimeHost.resolveConversationRuns(conversation.id, 'conversation_closed');
-    for (const ca of conversations.listAgents(conversation.id)) {
-      void ctx.runtimeHost.stop(conversation.id, ca.agent_id).catch(err =>
-        ctx.logger.warn(
-          {
-            workspaceId: workspace.id,
-            conversationId: conversation.id,
-            agentId: ca.agent_id,
-            err,
-          },
-          'delete workspace: runtime stop failed (continuing)',
-        ),
-      );
-    }
-  }
-  // Sweep physical attachment blobs for every top-level channel before dropping
-  // the workspace. attachments.channel_id only points at channel/dm_channel rows
-  // (threads upload via parent), so iterate those — DB rows go via CASCADE, blobs
-  // need an explicit delete.
-  for (const conversation of workspaceConversations) {
-    if (conversation.kind === 'channel' || conversation.kind === 'dm_channel') {
-      await ctx.attachmentService
-        .sweepForChannel(conversation.id)
-        .catch(err =>
-          ctx.logger.warn(
-            { workspaceId: workspace.id, conversationId: conversation.id, err },
-            'delete workspace: attachment sweep failed (continuing)',
-          ),
-        );
-    }
-  }
-  workspaces.delete(workspace.id);
+/**
+ * Everything the teardown needs to know BEFORE any row is deleted.
+ *
+ * EVERY field here is a capture, not a hint: after the cascade the
+ * `workspace_users` rows are gone (so the viewers could no longer be
+ * addressed), the `conversation_agents` rows are gone (so the runtime-stop set
+ * could no longer be enumerated) and the `attachments` rows are gone (so no
+ * `storageKey` could be derived — a post-delete `listByChannel` returns empty
+ * and the blobs would leak forever). The delete-computer cascade
+ * (`delete-computer.ts`) deletes its rows inside a transaction and runs every
+ * step below AFTER the commit, so a step that re-queried the DB would silently
+ * become a no-op there.
+ */
+export interface WorkspaceTeardownPlan {
+  workspaceId: string;
+  conversationIds: string[];
+  /**
+   * The `(conversation, agent)` runs to hard-stop, each carrying the computer it
+   * runs on. Members may live on other computers (#task:1600), so routing is
+   * per agent — and it is CAPTURED, not looked up at stop time: the dispatcher
+   * resolves `agents.host_id` → `hosts` from the DB, which is empty by the time
+   * a post-commit teardown runs (#task:1616). Identity without routing is still
+   * a silent no-op.
+   */
+  runtimeStops: { conversationId: string; agentId: string; hostId: string }[];
+  /** Storage objects to remove, captured while the rows still exist. */
+  blobRefs: StoredFileRef[];
+  viewerUserIds: string[];
+}
 
-  // The workspace is gone — tell every viewer member so their UI drops it whole,
-  // list AND unread contribution (#task:1404). delete-workspace previously
-  // emitted NOTHING to viewers, so a viewer with unread in the deleted workspace
-  // kept a phantom workspace/total badge (the #1284 summary cache is patched in
-  // place, never refetched, until this signal or a manual reload). Post-commit,
-  // per-viewer on the `viewer:<id>` scope, mirroring conversation-member's
-  // `viewer_workspaces_changed` shape (change/workspace_id; the wire stays
-  // `unknown` and each side validates independently —
-  // docs/viewer-visibility-sync-v1.md). The renderer half (#task:1404) drops the
-  // removed workspace's unread contribution from the summary on this same event.
-  for (const userId of viewerUserIds) {
-    ctx.events.publishToScope(`viewer:${userId}`, 'viewer_workspaces_changed', {
+export function collectWorkspaceTeardownPlan(
+  deps: DeleteWorkspaceDeps,
+  workspaceId: string,
+): WorkspaceTeardownPlan {
+  const { ctx, workspaces, conversations } = deps;
+  const workspaceConversations = conversations
+    .list()
+    .filter(conversation => conversation.workspace_id === workspaceId);
+  const conversationIds = workspaceConversations.map(conversation => conversation.id);
+  // Top-level channels only — `attachments.channel_id` never points at a thread
+  // (threads upload via their parent).
+  const sweepChannelIds = workspaceConversations
+    .filter(
+      conversation =>
+        conversation.kind === 'channel' || conversation.kind === 'dm_channel',
+    )
+    .map(conversation => conversation.id);
+  const runtimeStops = conversationIds.flatMap(conversationId =>
+    conversations.listAgents(conversationId).flatMap(ca => {
+      const agent = deps.agents.get(ca.agent_id);
+      // No agent row means nothing to route to; the run cannot exist either.
+      return agent
+        ? [{ conversationId, agentId: ca.agent_id, hostId: agent.host_id }]
+        : [];
+    }),
+  );
+  return {
+    workspaceId,
+    conversationIds,
+    runtimeStops,
+    blobRefs: ctx.attachmentService.collectChannelBlobRefs(sweepChannelIds),
+    viewerUserIds: workspaces.listUserMemberIds(workspaceId),
+  };
+}
+
+/** Hard-stop every captured run in the workspace. Runtime-only and idempotent,
+ *  and it stops by CAPTURED pairs — so it is correct both before the row delete
+ *  (single-workspace path) and after a committed transaction
+ *  (delete-computer cascade), where the membership rows no longer exist. */
+export function stopWorkspaceRuntime(
+  deps: DeleteWorkspaceDeps,
+  plan: WorkspaceTeardownPlan,
+): void {
+  const { ctx } = deps;
+  for (const conversationId of plan.conversationIds) {
+    ctx.runtimeHost.resolveConversationRuns(conversationId, 'conversation_closed');
+  }
+  for (const { conversationId, agentId, hostId } of plan.runtimeStops) {
+    void ctx.runtimeHost.stop(conversationId, agentId, { hostId }).catch(err =>
+      ctx.logger.warn(
+        {
+          workspaceId: plan.workspaceId,
+          conversationId,
+          agentId,
+          err,
+        },
+        'delete workspace: runtime stop failed (continuing)',
+      ),
+    );
+  }
+}
+
+/** Delete physical attachment blobs by captured ref. DB rows go via CASCADE;
+ *  blobs need an explicit pass. Best-effort — never blocks or reverses the
+ *  delete. */
+export async function sweepWorkspaceAttachments(
+  deps: DeleteWorkspaceDeps,
+  plan: WorkspaceTeardownPlan,
+): Promise<BlobSweepOutcome> {
+  const { ctx } = deps;
+  const outcome = await ctx.attachmentService
+    .deleteBlobs(plan.blobRefs)
+    .catch((err: unknown) => ({
+      attempted: plan.blobRefs.length,
+      failed: plan.blobRefs.length,
+      firstError: err,
+    }));
+  if (outcome.failed > 0) {
+    // Best-effort, but never invisible: these bytes now have no row that names
+    // them, so the log line is the only trace of the residue.
+    ctx.logger.warn(
+      {
+        workspaceId: plan.workspaceId,
+        blobs: outcome.attempted,
+        failed: outcome.failed,
+        err: outcome.firstError,
+      },
+      'delete workspace: attachment sweep left blobs behind (continuing)',
+    );
+  }
+  return outcome;
+}
+
+/** The single synchronous DB step — transaction-safe by construction. */
+export function deleteWorkspaceRow(
+  deps: DeleteWorkspaceDeps,
+  workspaceId: string,
+): void {
+  deps.workspaces.delete(workspaceId);
+}
+
+/**
+ * The workspace is gone — tell every viewer member so their UI drops it whole,
+ * list AND unread contribution (#task:1404). delete-workspace previously
+ * emitted NOTHING to viewers, so a viewer with unread in the deleted workspace
+ * kept a phantom workspace/total badge (the #1284 summary cache is patched in
+ * place, never refetched, until this signal or a manual reload). Post-commit,
+ * per-viewer on the `viewer:<id>` scope, mirroring conversation-member's
+ * `viewer_workspaces_changed` shape (change/workspace_id; the wire stays
+ * `unknown` and each side validates independently —
+ * docs/viewer-visibility-sync-v1.md). The renderer half (#task:1404) drops the
+ * removed workspace's unread contribution from the summary on this same event.
+ */
+export function publishWorkspaceRemoved(
+  deps: DeleteWorkspaceDeps,
+  plan: WorkspaceTeardownPlan,
+): void {
+  for (const userId of plan.viewerUserIds) {
+    deps.ctx.events.publishToScope(`viewer:${userId}`, 'viewer_workspaces_changed', {
       change: 'removed',
-      workspace_id: workspace.id,
+      workspace_id: plan.workspaceId,
     });
   }
-  return { kind: 'deleted' };
 }
