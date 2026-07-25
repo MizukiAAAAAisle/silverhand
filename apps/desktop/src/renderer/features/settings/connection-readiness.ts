@@ -34,7 +34,10 @@ import type { BackendInfoSnapshot } from '@/features/hosts/hooks';
  * `attachedAt`/`localHostStatus` actually re-enter React Query cache
  * during the connecting window. Without the poll opt-in the values
  * this projection reads never change, and a correct pure function
- * settles on a stale answer forever.
+ * settles on a stale answer forever. That debt is **embedded-only**:
+ * in remote mode the projection above reads only `wsStatus`, and the
+ * hook deliberately refuses to poll (`#task:1628` — `attachedAt` never
+ * moves there, so the poll would run forever and buy nothing).
  */
 export type DesktopServerMode = 'embedded' | 'remote';
 

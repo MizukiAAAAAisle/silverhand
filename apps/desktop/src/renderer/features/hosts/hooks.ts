@@ -155,10 +155,12 @@ export function useBackendInfoSnapshot(options?: {
    * on "Connecting…" indefinitely.
    *
    * When opted in we poll ONLY while the snapshot is actually in the
-   * connecting window (`claimed + attached_at===null`); the moment
-   * attached_at lands or the status moves to a terminal arm
-   * (revoked / error / failed) we stop polling. Callers that don't
-   * render the connection pill should NOT opt in.
+   * connecting window (`embedded + claimed + attached_at===null`); the
+   * moment attached_at lands or the status moves to a terminal arm
+   * (revoked / error / failed) we stop polling. In remote mode we never
+   * start — `attached_at` is structurally null there, so the window has
+   * no exit (`#task:1628`). Callers that don't render the connection pill
+   * should NOT opt in.
    */
   pollWhileConnecting?: boolean;
   /** Periodically re-check the remote server's advertised outbound protocol
@@ -188,7 +190,9 @@ export function useBackendInfoSnapshot(options?: {
  * terminal / attached" matrix without spinning up React Query.
  *
  * Returns:
- *   - `false` (no refetch) for terminal / attached / pre-claim states
+ *   - `false` (no refetch) for remote mode (no observable exit
+ *     condition — see the gate below) and for terminal / attached /
+ *     pre-claim states
  *   - `CONNECTING_POLL_MS` (number) for the transitional connecting
  *     window so the pill flips Connecting → Connected within ~1
  *     poll cycle after the daemon's outbound WS lands.
@@ -224,6 +228,22 @@ export function connectingRefetchIntervalMs(
   data: BackendInfoSnapshot | null,
 ): number | false {
   if (!data) return false;
+  // `#task:1628` — this window is EMBEDDED-ONLY, because its exit
+  // condition (`attached_at` becomes a number) is embedded-only.
+  // `snapshotLocalHostInfo` reads `getEmbeddedHostWsController()`,
+  // which returns null on the remote arm (the attachment registry
+  // lives in the remote backend process), so a remote-mode snapshot
+  // is structurally `claimed + attached_at === null` forever — even
+  // while the daemon is genuinely attached and agents run fine. Without
+  // this gate the "connecting" poll never terminates: a remote app sat
+  // refetching `backend:info` every 1.5s for as long as the window was
+  // open, which is what the user read as "the computer keeps retrying".
+  // `describeConnectionState` / `desktopServerConnectionStatus` already
+  // learned this in `#task:1010` — remote connectedness is proven by the
+  // renderer event WS + host-status availability, never by `attached_at`
+  // — so remote mode has no use for this poll at all. The 30s protocol-
+  // compatibility poll is a separate opt-in and still applies.
+  if (data.mode !== 'embedded') return false;
   // Only poll while we're explicitly waiting for the outbound WS
   // to land. Any other state — including `claimed + attached_at`
   // (already connected), `revoked` / `error` / `failed` (terminal),

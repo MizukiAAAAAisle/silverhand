@@ -131,7 +131,9 @@ export function ConnectionPane(): JSX.Element {
   // readiness derivation below is correct, but a static cache would let
   // it settle on the pre-attach snapshot forever — banner stuck on
   // "Reconnecting…", pip stuck on Connecting/Offline. The hook already
-  // stops polling on any terminal / attached state, so this is cheap.
+  // stops polling on any terminal / attached state — and never starts in
+  // remote mode, where this pane reads `wsStatus` instead (`#task:1628`)
+  // — so this is cheap.
   const backendInfoQuery = useBackendInfoSnapshot({
     pollWhileConnecting: true,
   });

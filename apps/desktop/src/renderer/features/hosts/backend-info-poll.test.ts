@@ -42,11 +42,21 @@ describe('connectingRefetchIntervalMs — only polls inside the connecting windo
     expect(connectingRefetchIntervalMs(null)).toBe(false);
   });
 
-  it('claimed + attached_at===null → polls (this is the connecting window)', () => {
+  it('embedded + claimed + attached_at===null → polls (this is the connecting window)', () => {
     // The whole reason this hook exists. The pill is showing
     // "Connecting…" right now and we need the next snapshot to
     // observe the outbound WS landing.
     expect(connectingRefetchIntervalMs(snap())).toBe(CONNECTING_POLL_MS);
+  });
+
+  it('remote + claimed + attached_at===null → no poll (`#task:1628`: the window has no exit)', () => {
+    // Regression pin. `attached_at` comes from the in-process embedded
+    // attachment registry, so on the remote arm it is structurally null
+    // forever — even while the daemon is attached and agents run. The
+    // old helper saw `claimed + null` and polled `backend:info` every
+    // 1.5s for the whole life of the pane; the user read that endless
+    // request loop as "this computer keeps retrying".
+    expect(connectingRefetchIntervalMs(snap({ mode: 'remote' }))).toBe(false);
   });
 
   it('claimed + attached_at===number → stops polling (already connected)', () => {
@@ -129,9 +139,32 @@ describe('backendInfoRefetchIntervalMs — protocol compatibility', () => {
     ).toBe(PROTOCOL_COMPATIBILITY_POLL_MS);
   });
 
-  it('keeps the faster connecting poll when both probes are enabled', () => {
+  it('remote falls back to the 30s protocol poll even with pollWhileConnecting on', () => {
+    // This case used to assert the opposite (`CONNECTING_POLL_MS`),
+    // which is exactly how the `#task:1628` runaway got codified: a
+    // remote snapshot is permanently `claimed + attached_at===null`, so
+    // "keep the faster poll" meant "poll forever at 1.5s". Remote
+    // connectedness is proven by the event WS, so the only remaining
+    // periodic read here is the protocol-compatibility probe.
     expect(
       backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+        pollWhileConnecting: true,
+        pollProtocolCompatibility: true,
+      }),
+    ).toBe(PROTOCOL_COMPATIBILITY_POLL_MS);
+  });
+
+  it('remote + pollWhileConnecting alone → no polling at all', () => {
+    expect(
+      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+        pollWhileConnecting: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('embedded keeps the faster connecting poll when both probes are enabled', () => {
+    expect(
+      backendInfoRefetchIntervalMs(snap(), {
         pollWhileConnecting: true,
         pollProtocolCompatibility: true,
       }),
