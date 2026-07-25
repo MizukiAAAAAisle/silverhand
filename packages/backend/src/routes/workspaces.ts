@@ -27,6 +27,7 @@ import {
   UpdateWorkspaceInputSchema,
   systemSubtype,
   type NameAvailabilityDto,
+  type WorkspaceLocalPathsResponse,
 } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
@@ -42,6 +43,10 @@ import { timedRouteSpan } from '../observability/route-span.js';
 import { createWorkspace } from '../application/create-workspace.js';
 import { deleteWorkspace } from '../application/delete-workspace.js';
 import { isWorkspaceNameAvailable } from '../application/name-availability.js';
+import {
+  dispatchWorkspacePathIndex,
+  resolveOutboundForHost,
+} from '../runtime/workspace-data-plane.js';
 import { AgentHomeChannelError } from '../services/channel-service.js';
 import { channelServiceErrorResponse, placementErrorResponse } from './responses.js';
 
@@ -75,6 +80,81 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         visible.filter(w => w.archived_at == null).map(w => w.id),
       ),
     });
+  });
+
+  // Daemon-authoritative path projection for human UI. The request carries no
+  // ids: the backend derives the complete visible set, groups it by home
+  // computer, then asks each connected daemon to resolve its own registry/L1.
+  // Offline/unprovisioned rows degrade individually and never fall back to the
+  // legacy DB `workspace_path`.
+  app.get(apiPaths.workspaceLocalPaths, async c => {
+    const principal = getUserPrincipal(c);
+    const visible = workspaces
+      .list()
+      .filter(workspace => canViewWorkspace(ctx, principal, workspace.id));
+    const unavailable = new Set(visible.map(workspace => workspace.id));
+    const entries: WorkspaceLocalPathsResponse['entries'] = [];
+    const groups = new Map<string, typeof visible>();
+
+    for (const workspace of visible) {
+      const group = groups.get(workspace.workspace_host_id);
+      if (group) group.push(workspace);
+      else groups.set(workspace.workspace_host_id, [workspace]);
+    }
+
+    const adapter = ctx.outboundFrameAdapter?.() ?? null;
+    await Promise.all(
+      [...groups.entries()].map(async ([hostId, hostWorkspaces]) => {
+        const outbound = resolveOutboundForHost(adapter, hostId);
+        if (outbound.kind === 'failed') return;
+
+        const indexed = await dispatchWorkspacePathIndex(
+          outbound.adapter,
+          hostId,
+          outbound.connectionId,
+          {
+            workspaces: hostWorkspaces.map(workspace => ({
+              workspace_id: workspace.id,
+              kind: workspace.workspace_kind,
+              owner_agent_id: workspace.owner_agent_id,
+            })),
+          },
+        );
+        if (indexed.kind === 'failed') {
+          ctx.logger.warn(
+            {
+              event: 'workspace_local_paths_unavailable',
+              host_id: hostId,
+              code: indexed.code,
+              workspace_count: hostWorkspaces.length,
+            },
+            'daemon workspace path index failed',
+          );
+          return;
+        }
+
+        const requestedIds = new Set(
+          hostWorkspaces.map(workspace => workspace.id),
+        );
+        const accepted = new Set<string>();
+        for (const entry of indexed.result.entries) {
+          if (
+            !requestedIds.has(entry.workspace_id) ||
+            accepted.has(entry.workspace_id)
+          ) {
+            continue;
+          }
+          accepted.add(entry.workspace_id);
+          unavailable.delete(entry.workspace_id);
+          entries.push(entry);
+        }
+      }),
+    );
+
+    return c.json({
+      entries,
+      unavailable_workspace_ids: [...unavailable],
+    } satisfies WorkspaceLocalPathsResponse);
   });
 
   // GET /api/workspaces/name-availability?name= — create-form onBlur uniqueness

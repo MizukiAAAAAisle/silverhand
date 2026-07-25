@@ -118,22 +118,6 @@ export interface BackendUploadRequest {
   files: BackendUploadFile[];
 }
 
-export interface LocalWorkspacePathRef {
-  workspace_id: string;
-  workspace_kind: 'regular' | 'dm';
-  owner_agent_id: string | null;
-}
-
-export type LocalWorkspacePathsResult =
-  | {
-      ok: true;
-      entries: Array<{ workspace_id: string; path: string }>;
-    }
-  | {
-      ok: false;
-      reason: 'not_bound' | 'invalid_input' | 'registry_unavailable';
-    };
-
 export interface DesktopHostProxyConfig {
   proxy_url: string | null;
   proxy_runtimes: RuntimeKind[];
@@ -511,10 +495,6 @@ const api = {
   > => ipcRenderer.invoke('attachment:save', input),
   showItemInFolder: (path: string): Promise<void> =>
     ipcRenderer.invoke('shell:showItemInFolder', path),
-  resolveLocalWorkspacePaths: (
-    refs: LocalWorkspacePathRef[],
-  ): Promise<LocalWorkspacePathsResult> =>
-    ipcRenderer.invoke('workspacePaths:resolveLocal', refs),
   /** Subscribe to shutdown progress steps emitted by the main process
    *  just before and during graceful shutdown. Drives the in-app overlay
    *  so the user sees what's happening instead of a frozen window. */

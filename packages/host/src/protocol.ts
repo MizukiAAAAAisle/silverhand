@@ -1976,6 +1976,73 @@ const WorkspaceProvisionIpcErrorSchema = z
   })
   .strict();
 
+// ── #task:1627 — workspace_path_index ───────────────────────────────
+//
+// Viewer-facing read projection of daemon-local workspace roots. The backend
+// sends only semantic refs it has already authorized from DB membership; the
+// daemon resolves regular roots through WorkspaceRegistry and agent-home roots
+// through its local L1 layout. No server-cached path crosses the boundary.
+
+export const WorkspacePathIndexRefSchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    kind: WorkspaceKindSchema,
+    owner_agent_id: z.string().min(1).nullable(),
+  })
+  .strict();
+export type WorkspacePathIndexRef = z.infer<
+  typeof WorkspacePathIndexRefSchema
+>;
+
+export const WorkspacePathIndexParamsSchema = z
+  .object({
+    workspaces: z.array(WorkspacePathIndexRefSchema),
+  })
+  .strict();
+export type WorkspacePathIndexParams = z.infer<
+  typeof WorkspacePathIndexParamsSchema
+>;
+
+export const WorkspacePathIndexEntrySchema = z
+  .object({
+    workspace_id: z.string().min(1),
+    path: z.string().min(1),
+  })
+  .strict();
+export type WorkspacePathIndexEntry = z.infer<
+  typeof WorkspacePathIndexEntrySchema
+>;
+
+export const WorkspacePathIndexResultSchema = z
+  .object({
+    ok: z.literal(true),
+    entries: z.array(WorkspacePathIndexEntrySchema),
+    /** Missing binding/directory or an invalid agent-home semantic ref. */
+    unresolved: z.array(z.string().min(1)),
+  })
+  .strict();
+export type WorkspacePathIndexResult = z.infer<
+  typeof WorkspacePathIndexResultSchema
+>;
+
+export const WorkspacePathIndexErrorCodeSchema = z.enum([
+  'registry_unavailable',
+  'internal_error',
+]);
+export type WorkspacePathIndexErrorCode = z.infer<
+  typeof WorkspacePathIndexErrorCodeSchema
+>;
+
+const WorkspacePathIndexIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      WorkspacePathIndexErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
 export const AgentWorkspaceIndexParamsSchema = z
   .object({
     agent_id: z.string().min(1),
@@ -2592,6 +2659,11 @@ export const intentSchemas = {
     params: WorkspaceProvisionParamsSchema,
     result: WorkspaceProvisionResultSchema,
     error: WorkspaceProvisionIpcErrorSchema,
+  },
+  workspace_path_index: {
+    params: WorkspacePathIndexParamsSchema,
+    result: WorkspacePathIndexResultSchema,
+    error: WorkspacePathIndexIpcErrorSchema,
   },
   agent_workspace_index: {
     params: AgentWorkspaceIndexParamsSchema,

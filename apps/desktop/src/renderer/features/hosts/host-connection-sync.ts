@@ -17,6 +17,7 @@ import {
   hostsKey,
   hostStatusKey,
 } from './hooks';
+import { localWorkspacePathsKey } from '@/features/workspaces/local-paths';
 
 export type HostConnectionSyncAction =
   | { kind: 'invalidate-all' }
@@ -72,6 +73,7 @@ function invalidateHostConnectionQueries(
 
   void qc.invalidateQueries({ queryKey: hostsKey });
   void qc.invalidateQueries({ queryKey: backendInfoKey });
+  void qc.invalidateQueries({ queryKey: localWorkspacePathsKey });
 
   if (action.kind === 'invalidate-all') {
     void qc.invalidateQueries({ queryKey: ['host'] });

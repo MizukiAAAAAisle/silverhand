@@ -110,22 +110,6 @@ export interface BackendUploadRequest {
   files: BackendUploadFile[];
 }
 
-export interface LocalWorkspacePathRef {
-  workspace_id: string;
-  workspace_kind: 'regular' | 'dm';
-  owner_agent_id: string | null;
-}
-
-export type LocalWorkspacePathsResult =
-  | {
-      ok: true;
-      entries: Array<{ workspace_id: string; path: string }>;
-    }
-  | {
-      ok: false;
-      reason: 'not_bound' | 'invalid_input' | 'registry_unavailable';
-    };
-
 export interface DesktopHostProxyConfig {
   proxy_url: string | null;
   proxy_runtimes: RuntimeKind[];
@@ -587,9 +571,6 @@ declare global {
         | { ok: false; reason: string }
       >;
       showItemInFolder(path: string): Promise<void>;
-      resolveLocalWorkspacePaths(
-        refs: LocalWorkspacePathRef[],
-      ): Promise<LocalWorkspacePathsResult>;
       showSystemNotification(opts: {
         title: string;
         body: string;

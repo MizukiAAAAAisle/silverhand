@@ -5,11 +5,11 @@ describe('localWorkspacePathMap', () => {
   it('indexes only daemon-local entries', () => {
     expect(
       localWorkspacePathMap({
-        ok: true,
         entries: [
           { workspace_id: 'w1', path: '/local/w1' },
           { workspace_id: 'w2', path: '/local/w2' },
         ],
+        unavailable_workspace_ids: [],
       }),
     ).toEqual(
       new Map([
@@ -19,9 +19,12 @@ describe('localWorkspacePathMap', () => {
     );
   });
 
-  it('returns no paths when local authority is unavailable', () => {
+  it('returns no paths when every daemon-local path is unavailable', () => {
     expect(
-      localWorkspacePathMap({ ok: false, reason: 'registry_unavailable' }),
+      localWorkspacePathMap({
+        entries: [],
+        unavailable_workspace_ids: ['w1'],
+      }),
     ).toEqual(new Map());
   });
 });

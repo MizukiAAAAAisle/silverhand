@@ -290,6 +290,11 @@ export class FakeHostWsServerController implements HostWsServerController {
         params: OutboundServerCommandParams<'workspace_provision'>,
       ) => OutboundServerCommandResult<'workspace_provision'>)
     | null = null;
+  workspacePathIndexAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'workspace_path_index'>,
+      ) => OutboundServerCommandResult<'workspace_path_index'>)
+    | null = null;
   /**
    * D4.e-1 3b — override the `agent_workspace_index` ack. Tests that want to
    * exercise `unresolved` (read fail-closed) or a specific daemon-stamped
@@ -544,6 +549,49 @@ export class FakeHostWsServerController implements HostWsServerController {
           workspace_id,
           agent_dir: joinPath(boundPath, '.silverhand', 'agents', p.agent_id),
         });
+      }
+      return {
+        ok: true as const,
+        entries,
+        unresolved,
+      } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'workspace_path_index') {
+      const p = params as OutboundServerCommandParams<'workspace_path_index'>;
+      if (this.workspacePathIndexAckOverride) {
+        return this.workspacePathIndexAckOverride(
+          p,
+        ) as OutboundServerCommandResult<K>;
+      }
+      const entries: { workspace_id: string; path: string }[] = [];
+      const unresolved: string[] = [];
+      for (const workspace of p.workspaces) {
+        if (
+          workspace.kind === 'agent_home' &&
+          workspace.owner_agent_id &&
+          isAgentHomeWorkspaceId(
+            workspace.workspace_id,
+            workspace.owner_agent_id,
+          )
+        ) {
+          entries.push({
+            workspace_id: workspace.workspace_id,
+            path: joinPath(
+              this.silverhandDir,
+              'agents',
+              workspace.owner_agent_id,
+            ),
+          });
+          continue;
+        }
+        const boundPath = this.boundWorkspacePaths.get(
+          workspace.workspace_id,
+        );
+        if (!boundPath) {
+          unresolved.push(workspace.workspace_id);
+          continue;
+        }
+        entries.push({ workspace_id: workspace.workspace_id, path: boundPath });
       }
       return {
         ok: true as const,

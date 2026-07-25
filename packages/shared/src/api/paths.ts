@@ -131,6 +131,7 @@ export const apiPaths = {
 
   // workspaces / conversations (new workspace -> channel -> thread model)
   workspaces: '/api/workspaces',
+  workspaceLocalPaths: '/api/workspaces/local-paths',
   /** Create-form onBlur uniqueness probe. Static segment — MUST be
    *  registered before `workspace(:id)` so it is not shadowed. */
   workspaceNameAvailability: '/api/workspaces/name-availability',

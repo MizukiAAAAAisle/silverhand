@@ -17,6 +17,8 @@ import type {
   AgentWorkspaceFileReadResult,
   WorkspaceProvisionParams,
   WorkspaceProvisionResult,
+  WorkspacePathIndexParams,
+  WorkspacePathIndexResult,
 } from '@silverhand/host';
 import {
   HostWsCommandResponseError,
@@ -236,6 +238,29 @@ export async function dispatchWorkspaceProvision(
       timeoutMs: PROVISION_TIMEOUT_MS,
       expectedConnectionId: connectionId,
     });
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/** Dispatch the viewer-facing, read-only workspace-root snapshot. */
+export async function dispatchWorkspacePathIndex(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: WorkspacePathIndexParams,
+): Promise<DataPlaneOutcome<WorkspacePathIndexResult>> {
+  try {
+    const result = await adapter.sendCommand(
+      hostId,
+      'workspace_path_index',
+      params,
+      {
+        timeoutMs: INDEX_TIMEOUT_MS,
+        expectedConnectionId: connectionId,
+      },
+    );
     return { kind: 'ok', result };
   } catch (err) {
     return mapDataPlaneError(err);

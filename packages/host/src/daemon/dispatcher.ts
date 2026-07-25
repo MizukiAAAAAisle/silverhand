@@ -75,6 +75,8 @@ import {
   type RuntimeStopParams,
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
+  type WorkspacePathIndexParams,
+  type WorkspacePathIndexResult,
 } from '../protocol.js';
 import { detectRuntimeCatalog } from '../runtimes.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
@@ -187,6 +189,10 @@ export interface DispatcherOptions {
   workspaceProvisionHandler?: (
     params: WorkspaceProvisionParams,
   ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult>;
+  /** #task:1627 — daemon-authoritative workspace-root snapshot. */
+  workspacePathIndexHandler?: (
+    params: WorkspacePathIndexParams,
+  ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult>;
   /**
    * D4.e-1 — handler for `agent_workspace_index` (route-time `agent_dir`
    * resolver). Production wiring: `indexAgentWorkspaces`. Typed errors
@@ -298,6 +304,11 @@ export class IntentDispatcher {
         params: WorkspaceProvisionParams,
       ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult>)
     | undefined;
+  private readonly workspacePathIndexHandler:
+    | ((
+        params: WorkspacePathIndexParams,
+      ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult>)
+    | undefined;
   private readonly agentWorkspaceIndexHandler:
     | ((
         params: AgentWorkspaceIndexParams,
@@ -362,6 +373,7 @@ export class IntentDispatcher {
     this.hostProxyConfigSetHandler = opts.hostProxyConfigSetHandler;
     this.agentMaterializeHandler = opts.agentMaterializeHandler;
     this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
+    this.workspacePathIndexHandler = opts.workspacePathIndexHandler;
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
     this.agentWorkspaceTreeHandler = opts.agentWorkspaceTreeHandler;
     this.agentWorkspaceFileReadHandler = opts.agentWorkspaceFileReadHandler;
@@ -835,6 +847,10 @@ export class IntentDispatcher {
         return this.requireWorkspaceProvisionHandler()(
           params as WorkspaceProvisionParams,
         );
+      case 'workspace_path_index':
+        return this.requireWorkspacePathIndexHandler()(
+          params as WorkspacePathIndexParams,
+        );
       case 'agent_workspace_index':
         // D4.e-1 — route-time agent_dir resolver. Slot wired to
         // `indexAgentWorkspaces`.
@@ -990,6 +1006,17 @@ export class IntentDispatcher {
       );
     }
     return this.workspaceProvisionHandler;
+  }
+
+  private requireWorkspacePathIndexHandler(): (
+    params: WorkspacePathIndexParams,
+  ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult> {
+    if (!this.workspacePathIndexHandler) {
+      throw new Error(
+        'workspace_path_index intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.workspacePathIndexHandler;
   }
 
   private requireAgentWorkspaceIndexHandler(): (

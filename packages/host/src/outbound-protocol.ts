@@ -78,6 +78,9 @@ import {
   WorkspaceProvisionErrorCodeSchema,
   WorkspaceProvisionParamsSchema,
   WorkspaceProvisionResultSchema,
+  WorkspacePathIndexErrorCodeSchema,
+  WorkspacePathIndexParamsSchema,
+  WorkspacePathIndexResultSchema,
 } from './protocol.js';
 
 // D4.d D2: agent_materialize schemas live in `protocol.ts` so the
@@ -103,6 +106,9 @@ export {
   WorkspaceProvisionParamsSchema,
   WorkspaceProvisionResultSchema,
   WorkspaceProvisionErrorCodeSchema,
+  WorkspacePathIndexParamsSchema,
+  WorkspacePathIndexResultSchema,
+  WorkspacePathIndexErrorCodeSchema,
   AgentWorkspaceIndexParamsSchema,
   AgentWorkspaceIndexResultSchema,
   AgentWorkspaceIndexErrorCodeSchema,
@@ -127,6 +133,9 @@ export {
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
   type WorkspaceProvisionErrorCode,
+  type WorkspacePathIndexParams,
+  type WorkspacePathIndexResult,
+  type WorkspacePathIndexErrorCode,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceIndexErrorCode,
@@ -298,6 +307,19 @@ export const WorkspaceProvisionWireErrorSchema = z
   .strict();
 export type WorkspaceProvisionWireError = z.infer<
   typeof WorkspaceProvisionWireErrorSchema
+>;
+
+export const WorkspacePathIndexWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      WorkspacePathIndexErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type WorkspacePathIndexWireError = z.infer<
+  typeof WorkspacePathIndexWireErrorSchema
 >;
 
 export const AgentWorkspaceIndexWireErrorSchema = z
@@ -490,6 +512,11 @@ export const outboundServerCommandSchemas = {
     params: WorkspaceProvisionParamsSchema,
     result: WorkspaceProvisionResultSchema,
     error: WorkspaceProvisionWireErrorSchema,
+  },
+  workspace_path_index: {
+    params: WorkspacePathIndexParamsSchema,
+    result: WorkspacePathIndexResultSchema,
+    error: WorkspacePathIndexWireErrorSchema,
   },
   agent_workspace_index: {
     params: AgentWorkspaceIndexParamsSchema,

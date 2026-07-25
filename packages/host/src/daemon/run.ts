@@ -68,6 +68,8 @@ import {
   WorkspaceRegistryError,
   WorkspaceProvisionError,
   provisionWorkspace,
+  WorkspacePathIndexError,
+  indexWorkspacePaths,
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
   AgentL2SeedError,
@@ -911,6 +913,28 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         m => new WorkspaceProvisionError('registry_unavailable', m),
       );
       return provisionWorkspace(params, { registry, logger });
+    },
+    // #task:1627 — read-only workspace-root snapshot. The backend sends only
+    // viewer-authorized semantic refs; this daemon resolves local path truth.
+    workspacePathIndexHandler: async params => {
+      const ctx = computerContext;
+      if (ctx == null) {
+        throw new WorkspacePathIndexError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = buildRegistryAs(
+        ctx,
+        m => new WorkspacePathIndexError('registry_unavailable', m),
+      );
+      return indexWorkspacePaths(params, {
+        registry,
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir: agentsRootFor(
+          m => new WorkspacePathIndexError('registry_unavailable', m),
+        ),
+      });
     },
     // D4.e-1 — agent_workspace_index: route-time `agent_dir` resolver.
     // agent-home dirs resolve from the daemon's homedir (test override via

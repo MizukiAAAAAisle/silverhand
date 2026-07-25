@@ -328,27 +328,11 @@ function RegisteredAppShell(): JSX.Element {
   } | null>(null);
 
   const { data: workspaces = [] } = useWorkspaces();
-  // Local paths are keyed by the active computer/control-plane binding. A
-  // profile switch or revoke changes this revision and forces a fresh main
-  // process snapshot even when the two servers happen to expose identical
-  // workspace ids. The same backend-info query keeps protocol skew fresh via
-  // its 30s + window-focus refetch (#task:1462).
-  const backendInfoQuery = useBackendInfoSnapshot({
-    pollProtocolCompatibility: true,
-  });
-  const localWorkspaceBindingRevision = backendInfoQuery.data
-    ? [
-        backendInfoQuery.data.mode,
-        backendInfoQuery.data.url,
-        backendInfoQuery.data.local_host_id ?? '',
-        backendInfoQuery.data.local_host_status,
-        backendInfoQuery.data.local_host_server_url ?? '',
-      ].join('\0')
-    : null;
-  const localWorkspacePaths = useLocalWorkspacePaths(
-    workspaces,
-    localWorkspaceBindingRevision,
+  const visibleWorkspaceIds = useMemo(
+    () => workspaces.map(workspace => workspace.id),
+    [workspaces],
   );
+  const localWorkspacePaths = useLocalWorkspacePaths(visibleWorkspaceIds);
   const { data: agents = [] } = useAgents();
   // Stable id → agent lookup shared with the sidebar (DM avatar
   // resolution) and any future agent-keyed surface. Memoized on the
@@ -762,6 +746,13 @@ function RegisteredAppShell(): JSX.Element {
   // takes the data as props; HostDetailView gets the resolved selectedHost
   // directly.
   const hostsQuery = useHostsQuery();
+  // `pollProtocolCompatibility` keeps the outbound-protocol skew field
+  // (#task:1462) fresh via a 30s + window-focus refetch, so a future
+  // server protocol bump surfaces in `AppStatusBanner` without the
+  // user having to retry an agent action first.
+  const backendInfoQuery = useBackendInfoSnapshot({
+    pollProtocolCompatibility: true,
+  });
   const computerHosts = hostsQuery.data?.hosts ?? [];
   const localHostIdForComputers =
     backendInfoQuery.data?.local_host_id ?? null;

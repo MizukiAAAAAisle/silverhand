@@ -30,7 +30,6 @@ export { enableNodeSystemCa, type NodeSystemCaActivation } from './node-system-c
 export {
   bindingSlug,
   managedWorkspaceSlug,
-  WorkspaceRegistry,
   type RegistryBinding,
 } from './daemon/workspace-registry/registry.js';
 // #task:1608 workspace-data convergence — one-time flatten consumed by the
@@ -160,6 +159,10 @@ export {
   type WorkspaceProvisionParams,
   type WorkspaceProvisionResult,
   type WorkspaceProvisionErrorCode,
+  type WorkspacePathIndexParams,
+  type WorkspacePathIndexResult,
+  type WorkspacePathIndexEntry,
+  type WorkspacePathIndexErrorCode,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceIndexEntry,

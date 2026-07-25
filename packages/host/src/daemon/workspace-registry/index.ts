@@ -16,6 +16,11 @@ export {
   type ProvisionWorkspaceDeps,
 } from './provision-handler.js';
 export {
+  WorkspacePathIndexError,
+  indexWorkspacePaths,
+  type IndexWorkspacePathsDeps,
+} from './path-index-handler.js';
+export {
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
   type IndexAgentWorkspacesDeps,

@@ -59,6 +59,7 @@ describe('outbound protocol — command catalogue', () => {
       'runtime_status',
       'runtime_stop',
       'runtime_stop_all',
+      'workspace_path_index',
       'workspace_provision',
     ]);
 

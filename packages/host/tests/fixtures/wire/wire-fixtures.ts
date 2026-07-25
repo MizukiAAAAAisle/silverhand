@@ -373,6 +373,30 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'workspace_provision' },
   },
   {
+    name: 'request/workspace_path_index-mixed',
+    description:
+      '#task:1627: viewer-authorized workspace-root query. Backend sends semantic refs grouped by home computer; daemon resolves regular roots from its registry and agent-home roots from local L1.',
+    frame: enc({
+      id: 'req-workspace-path-index-1',
+      intent: 'workspace_path_index',
+      params: {
+        workspaces: [
+          {
+            workspace_id: 'ws_8K2nQ',
+            kind: 'regular',
+            owner_agent_id: null,
+          },
+          {
+            workspace_id: 'wsah_aid_FpzaAEM',
+            kind: 'agent_home',
+            owner_agent_id: 'aid_FpzaAEM',
+          },
+        ],
+      },
+    }),
+    kind: { kind: 'request', intent: 'workspace_path_index' },
+  },
+  {
     name: 'request/agent_workspace_index-mixed',
     description:
       'D4.e-1: route-time agent_dir resolver. Backend sends only {agent_id, workspace_ids} (already ACL/DB-authorized) — no path, no kind. The daemon resolves each agent_dir host-side (agent-home → L1 dir; regular → registry), so the backend never assembles a path from workspace_path.',
@@ -1288,6 +1312,29 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     kind: { kind: 'response_success', intent: 'workspace_provision' },
   },
   {
+    name: 'response/workspace_path_index-mixed',
+    description:
+      '#task:1627: daemon-stamped workspace roots. Unresolved ids have no binding/local directory and carry no fabricated server path.',
+    frame: enc({
+      id: 'req-workspace-path-index-1',
+      result: {
+        ok: true,
+        entries: [
+          {
+            workspace_id: 'ws_8K2nQ',
+            path: '/home/silverhand/workspaces/ws_8K2nQ',
+          },
+          {
+            workspace_id: 'wsah_aid_FpzaAEM',
+            path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
+          },
+        ],
+        unresolved: ['ws_missing'],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'workspace_path_index' },
+  },
+  {
     name: 'response/agent_workspace_index-mixed',
     description:
       'D4.e-1: daemon stamped each agent_dir host-side. agent-home resolves to the L1 dir; the provisioned regular workspace resolves under the managed root; the never-provisioned id comes back in unresolved (read fail-closed — the backend MUST NOT fall back to a workspace_path-derived path).',
@@ -1742,6 +1789,35 @@ const WORKSPACE_PROVISION_ERROR_FIXTURES: WireFixture[] = [
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
+  },
+];
+
+const WORKSPACE_PATH_INDEX_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/workspace_path_index-error-registry_unavailable',
+    description:
+      '#task:1627: foreign/corrupt daemon registry fails the whole root snapshot.',
+    frame: enc({
+      id: 'req-workspace-path-index-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry file is bound to another control plane',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_path_index' },
+  },
+  {
+    name: 'response/workspace_path_index-error-internal_error',
+    description:
+      '#task:1627: unexpected local path resolver failure stays typed.',
+    frame: enc({
+      id: 'req-workspace-path-index-1',
+      error: {
+        code: 'internal_error',
+        message: 'unexpected workspace path resolver failure',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_path_index' },
   },
 ];
 
@@ -2240,6 +2316,7 @@ const MCP_PROBE_ERROR_FIXTURES: WireFixture[] = [
 ];
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
+  ...WORKSPACE_PATH_INDEX_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_TREE_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES,

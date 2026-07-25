@@ -31,6 +31,23 @@ export const WorkspaceDtoSchema = z.object({
 });
 export type WorkspaceDto = z.infer<typeof WorkspaceDtoSchema>;
 
+/** Daemon-authoritative workspace roots visible to the current human viewer. */
+export const WorkspaceLocalPathEntrySchema = z.object({
+  workspace_id: z.string().min(1),
+  path: z.string().min(1),
+});
+export type WorkspaceLocalPathEntry = z.infer<
+  typeof WorkspaceLocalPathEntrySchema
+>;
+
+export const WorkspaceLocalPathsResponseSchema = z.object({
+  entries: z.array(WorkspaceLocalPathEntrySchema),
+  unavailable_workspace_ids: z.array(z.string().min(1)),
+});
+export type WorkspaceLocalPathsResponse = z.infer<
+  typeof WorkspaceLocalPathsResponseSchema
+>;
+
 export const WorkspaceMemberDtoSchema = z.object({
   workspace_id: z.string(),
   agent_id: z.string(),
