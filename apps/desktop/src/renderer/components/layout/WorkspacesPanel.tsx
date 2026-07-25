@@ -72,8 +72,12 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   /** Shown when `workspaces` is empty. */
   emptyHint?: ReactNode;
   /** Whether the group starts expanded. Defaults to true; archive group
-   *  defaults to false so it stays out of the way. */
+   *  defaults to false so it stays out of the way. With `persistId` this is
+   *  only the first-run value. */
   defaultExpanded?: boolean;
+  /** Storage identity for cross-restart collapse state (see
+   *  `SidebarSection`). Omit for session-only collapse. */
+  persistId?: string;
   /** Lookup of all workspace agents, keyed by id. DM workspace rows resolve
    *  their `dm_agent_id` here for the agent's runtime + display name. The
    *  avatar object URLs themselves come via `dmAgentAvatarUrls` (resolved ONCE
@@ -141,6 +145,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   headerAction,
   emptyHint,
   defaultExpanded,
+  persistId,
   agentsById,
   dmAgentAvatarUrls,
   sort,
@@ -162,6 +167,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
       action={headerAction}
       collapsible
       defaultExpanded={defaultExpanded ?? true}
+      persistId={persistId}
     >
       {workspaces.length === 0 ? (
         <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? '空'}</li>

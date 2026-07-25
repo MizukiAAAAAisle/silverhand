@@ -132,6 +132,7 @@ export function FavoritesGroup(props: {
       count={items.length}
       collapsible
       defaultExpanded
+      persistId="starred"
       action={
         <SortModeMenu
           mode={mode}

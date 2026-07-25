@@ -1,11 +1,79 @@
 import {
   forwardRef,
+  useCallback,
   useState,
   type ButtonHTMLAttributes,
   type ReactNode,
 } from 'react';
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+
+/**
+ * Namespace for persisted section-collapse state (#task:1632). The prefix
+ * lives HERE, not at the call sites: consumers pass a short `persistId`
+ * (`'starred'`, `'dm'`, …) and can neither collide with another layout key
+ * nor fork the naming convention. Same `silverhand:layout.*` family and the
+ * same `'1'|'0'` encoding as `useSidebarPane`'s per-sidebar visibility, so
+ * "how the device owner likes the chrome" stays one storage vocabulary.
+ *
+ * Device-scoped by design, and deliberately NOT identity-bound: a collapsed
+ * section reveals nothing about who was signed in, so it survives logout with
+ * the rest of the chrome ergonomics (see `IDENTITY_BOUND_KEYS` in
+ * features/me/hooks.ts). This is the localStorage-eligible family — unlike
+ * list sort mode / rank, which is viewer-scoped server state
+ * (docs/list-sort-v1.md) and must not fork per surface.
+ */
+const SECTION_KEY_PREFIX = 'silverhand:layout.sidebar-section.';
+
+function readExpanded(persistId: string, fallback: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(SECTION_KEY_PREFIX + persistId);
+    if (raw === '1') return true;
+    if (raw === '0') return false;
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistExpanded(persistId: string, value: boolean): void {
+  try {
+    localStorage.setItem(SECTION_KEY_PREFIX + persistId, value ? '1' : '0');
+  } catch {
+    /* private mode / quota — in-memory state still wins */
+  }
+}
+
+/**
+ * Collapse state for one sidebar section. With a `persistId` the toggle is
+ * written through to localStorage and re-read on mount, so it survives an app
+ * restart; without one the state is session-local (the previous behavior, kept
+ * for sections whose collapse isn't worth remembering).
+ *
+ * `defaultExpanded` is the FIRST-RUN value only — once the user has toggled the
+ * section, the stored choice wins. Read lazily in the initializer so the first
+ * paint is already in the restored state (no expanded→collapsed flash).
+ * `persistId` is treated as fixed for the section's lifetime; every caller
+ * passes a literal.
+ */
+function useSectionExpanded(
+  persistId: string | undefined,
+  defaultExpanded: boolean,
+): [boolean, () => void] {
+  const [expanded, setExpanded] = useState(() =>
+    persistId === undefined
+      ? defaultExpanded
+      : readExpanded(persistId, defaultExpanded),
+  );
+  const toggle = useCallback(() => {
+    setExpanded(prev => {
+      const next = !prev;
+      if (persistId !== undefined) persistExpanded(persistId, next);
+      return next;
+    });
+  }, [persistId]);
+  return [expanded, toggle];
+}
 
 interface SectionProps {
   label: string;
@@ -23,8 +91,14 @@ interface SectionProps {
   /** When true, the header acts as a toggle and the body collapses.
    *  Defaults to false to preserve callers that expect always-open. */
   collapsible?: boolean;
-  /** Initial expanded state for collapsible sections. Defaults to true. */
+  /** Initial expanded state for collapsible sections. Defaults to true.
+   *  With `persistId` set this is only the first-run value. */
   defaultExpanded?: boolean;
+  /** When set, the collapse state persists across app restarts under
+   *  `silverhand:layout.sidebar-section.<persistId>`. Short and stable — it
+   *  is the storage identity of this section, so renaming it resets every
+   *  user's choice. Omit for session-only collapse. */
+  persistId?: string;
   children: ReactNode;
 }
 
@@ -36,9 +110,13 @@ export function SidebarSection({
   action,
   collapsible = false,
   defaultExpanded = true,
+  persistId,
   children,
 }: SectionProps): JSX.Element {
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expanded, toggleExpanded] = useSectionExpanded(
+    collapsible ? persistId : undefined,
+    defaultExpanded,
+  );
   const showBody = !collapsible || expanded;
 
   return (
@@ -51,7 +129,7 @@ export function SidebarSection({
         action={action}
         collapsible={collapsible}
         expanded={expanded}
-        onToggle={() => setExpanded(v => !v)}
+        onToggle={toggleExpanded}
       />
       {showBody ? <ul className="space-y-0.5">{children}</ul> : null}
     </section>

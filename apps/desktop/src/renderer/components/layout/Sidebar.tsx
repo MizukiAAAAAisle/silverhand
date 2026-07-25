@@ -234,7 +234,14 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         {/* STARRED = global Favorites overlay (#task:1253/#task:1254).
           * Self-contained (owns its read-model, dm-avatar resolution, unstar);
           * renders nothing when empty. EXCLUSIVE — a starred entity lives HERE
-          * only; it has been removed from the DM/WORKSPACES groups below. */}
+          * only; it has been removed from the DM/WORKSPACES groups below.
+          *
+          * Every rail section persists its collapse state across restarts
+          * (#task:1632) — the rail is nav chrome the user arranges once, so
+          * re-collapsing three sections on every launch is a chore. The
+          * `persistId` (storage identity — see `SidebarSection`) is passed at
+          * each section below; STARRED carries its own inside FavoritesGroup,
+          * which owns its whole section. */}
         <FavoritesGroup
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
@@ -258,6 +265,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           dmAgentAvatarUrls={dmAgentAvatarUrls}
           headerAction={sortMenuFor('dm')}
           sort={sortConfigFor('dm')}
+          persistId="dm"
         />
         <WorkspaceGroup
           label="WORKSPACES"
@@ -295,6 +303,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           agentsById={props.agentsById}
           dmAgentAvatarUrls={dmAgentAvatarUrls}
           sort={sortConfigFor('regular')}
+          persistId="workspaces"
         />
         {archived.length > 0 ? (
           <WorkspaceGroup
@@ -307,6 +316,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
               hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
             }
             defaultExpanded={false}
+            persistId="archived"
             agentsById={props.agentsById}
             dmAgentAvatarUrls={dmAgentAvatarUrls}
           />
