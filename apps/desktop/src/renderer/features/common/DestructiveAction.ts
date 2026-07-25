@@ -38,6 +38,23 @@ import {
 const DESTRUCTIVE_COMMIT_CLASS = `${CONTROL_HOVER_LIFT} hover:opacity-100`;
 
 /**
+ * The RED-ON-PAPER half of the destructive rank: token frame in `--error`, red
+ * label, red-tint hover ground. Layer it onto `variant="outline"` +
+ * `destructiveAction()` when the destructive button sits on a settings page or
+ * inline confirm rather than in a dialog footer — i.e. wherever a solid `danger`
+ * fill would out-rank that surface's own primary (`Delete computer`, `Revoke`,
+ * `Log out`, the channel-settings `Leave` confirm).
+ *
+ * One definition on purpose: this was duplicated as `HOST_ACTION_BUTTON_DANGER`
+ * (Computer page) and, alpha-thinned to `border-error/40 hover:bg-error/10`, in
+ * the channel-settings modal — the washed variant shiki rejected on the Delete
+ * trigger. Full-strength `--error` + `--error-soft` is the recipe; a thinned red
+ * reads as disabled, not as caution.
+ */
+export const DESTRUCTIVE_TRIGGER =
+  'border-[length:var(--control-border-width)] border-error text-error hover:bg-error-soft';
+
+/**
  * Spread onto the destructive commit `Button` — `{...destructiveAction()}`, or
  * `{...destructiveAction('gap-2 w-full')}` to add layout classes.
  *

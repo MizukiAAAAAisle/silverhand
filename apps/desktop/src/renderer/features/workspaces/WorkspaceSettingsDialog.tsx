@@ -9,6 +9,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
+import { neutralAction } from '@/features/common/ControlInkBorder';
 import {
   destructiveAction,
   destructiveCancel,
@@ -326,7 +328,7 @@ function GeneralSection({
             autoFocus={!isDm}
             className="transition-colors hover:border-[color:var(--border-control-hover)]"
           />
-          <Button type="submit" disabled={renameDisabled}>
+          <Button type="submit" disabled={renameDisabled} {...primaryAction()}>
             {renamePending ? 'Saving…' : 'Save'}
           </Button>
         </div>
@@ -351,6 +353,7 @@ function GeneralSection({
               onClick={onCopyWorkspace}
               aria-label="Copy working directory path"
               title="Copy working directory path"
+              {...neutralAction()}
             >
               {copied ? (
                 <Check className="size-3.5" />
@@ -380,6 +383,7 @@ function GeneralSection({
               variant="outline"
               onClick={onToggleArchive}
               disabled={!workspaceId || archivePending}
+              {...neutralAction()}
             >
               {isArchived ? (
                 <>

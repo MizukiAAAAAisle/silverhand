@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
 import {
   useBackendInfoSnapshot,
   useCancelPendingComputerMutation,
@@ -263,6 +264,7 @@ export function NewComputerDialog({
               <Button
                 type="submit"
                 disabled={rename.isPending || name.trim() === ''}
+                {...primaryAction()}
               >
                 {computerCopy.finish}
               </Button>

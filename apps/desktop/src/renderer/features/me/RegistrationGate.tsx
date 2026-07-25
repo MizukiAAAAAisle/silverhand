@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { KeyRound, Loader2, LogIn, UserPlus } from 'lucide-react';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
 import { cn } from '@/lib/cn';
 import { useLoginUser, useSignupUser } from './hooks';
 
@@ -172,7 +173,7 @@ export function RegistrationGate({
           <Button
             type="submit"
             disabled={!canSubmit}
-            className="w-full justify-center"
+            {...primaryAction('w-full justify-center')}
           >
             {submitting ? (
               <>

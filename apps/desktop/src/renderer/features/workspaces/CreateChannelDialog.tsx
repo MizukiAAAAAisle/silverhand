@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
 import { cn } from '@/lib/cn';
 import {
   isBackendUnreachable,
@@ -248,12 +249,17 @@ export function CreateChannelDialog({
           <DialogFooter className="mt-2">
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               onClick={() => onOpenChange(false)}
+              {...primaryCancel()}
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={createChannel.isPending}>
+            <Button
+              type="submit"
+              disabled={createChannel.isPending}
+              {...primaryAction()}
+            >
               {createChannel.isPending ? 'Creating…' : 'Create'}
             </Button>
           </DialogFooter>

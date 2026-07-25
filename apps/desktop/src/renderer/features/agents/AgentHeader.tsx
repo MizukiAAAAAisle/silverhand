@@ -4,6 +4,11 @@ import type { AgentDto, AgentRuntimeStateDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { Button } from '@/components/ui/button';
+import { neutralAction } from '@/features/common/ControlInkBorder';
+import {
+  destructiveAction,
+  DESTRUCTIVE_TRIGGER,
+} from '@/features/common/DestructiveAction';
 import {
   HeroDot,
   PersonHero,
@@ -80,6 +85,16 @@ export function AgentHeader({
         bio={agent.description}
         actions={
           <>
+            {/* The hero's action pair is ONE group, ranked by hue, not by how
+                loud each button is (shiki 2026-07-26: "agent header 那一对要一起
+                看"). Stop is a reversible runtime action → the neutral framed
+                rank; Delete is terminal → the same red-on-paper trigger as
+                `Delete computer` / `Log out`. Before this, Stop was a bare
+                `outline` and Delete a `ghost` with `hover:bg-error/10` — two
+                different amounts of "not quite a button" sitting side by side,
+                and Delete's alpha-thinned red was the washed recipe already
+                rejected elsewhere. Neither is a primary CTA: this page has no
+                commit, so nothing here takes a fill. */}
             <Button
               variant="outline"
               size="sm"
@@ -90,16 +105,17 @@ export function AgentHeader({
                   ? 'Nothing is running'
                   : `Hard-stop ${runningCount} running conversation${runningCount === 1 ? '' : 's'}`
               }
+              {...neutralAction()}
             >
               <Power className="size-3.5" />
               Stop
             </Button>
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="text-error hover:bg-error/10 hover:text-error"
               onClick={() => setDeleteOpen(true)}
               title="Delete agent…"
+              {...destructiveAction(DESTRUCTIVE_TRIGGER)}
             >
               <Trash2 className="size-3.5" />
               Delete

@@ -8,6 +8,7 @@ import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { Button } from '@/components/ui/button';
+import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/cn';
 import { buildCapabilityGroups, CAPABILITY_COUNT } from './capability-meta';
@@ -335,14 +336,16 @@ function AgentCapabilityEditor({
             size="sm"
             onClick={() => void onSave()}
             disabled={!dirty || update.isPending}
+            {...primaryAction()}
           >
             {update.isPending ? 'Saving…' : 'Save'}
           </Button>
           <Button
-            variant="ghost"
+            variant="outline"
             size="sm"
             onClick={() => setDraft(null)}
             disabled={!dirty || update.isPending}
+            {...primaryCancel()}
           >
             Cancel
           </Button>

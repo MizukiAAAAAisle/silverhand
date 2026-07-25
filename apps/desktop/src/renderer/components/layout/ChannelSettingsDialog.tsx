@@ -37,20 +37,32 @@
  * is exactly-one).
  *
  * Unified action buttons: Visibility, Archive and Leave are the SAME full-width
- * settings-action button — one `variant="outline"` carrying
- * `data-channel-settings-action` (the forza6 poster-sticker hook), no
- * per-button frame divergence. Each carries a leading glyph of the state/action
- * it commits to (matching Archive / Leave in the same group, shiki 2026-07-21):
- * the Visibility action shows the TARGET-state glyph — `LockOpen` for
- * `Make public`, `Lock` for `Make private` (one lock metaphor, open ↔ closed) —
- * the way Archive shows `Archive` / `ArchiveRestore`.
+ * neutral action — one `variant="outline"` carrying `neutralAction()`, the
+ * app-wide framed rank (shiki 2026-07-26: "channel settings 里的 Archive/Restore
+ * 是不是应该从旧 hook 统一到 neutralAction?"). They used to carry a modal-local
+ * `data-channel-settings-action` hook that resolved to the same forza6 sticker by
+ * coincidence rather than by contract — two definitions of one rank, only one of
+ * which got the cross-theme hover pair. Each carries a leading glyph of the
+ * state/action it commits to (matching Archive / Leave in the same group, shiki
+ * 2026-07-21): the Visibility action shows the TARGET-state glyph — `LockOpen`
+ * for `Make public`, `Lock` for `Make private` (one lock metaphor, open ↔
+ * closed) — the way Archive shows `Archive` / `ArchiveRestore`.
  * Save (rename) is the only solid `default` primary; the three action buttons
  * never compete with it.
  *
  * Destructive weight lives at the CONFIRM step, not the resting row: the
  * resting Leave button is the same neutral action button as the others; only
- * Leave's warning-tip confirm button is error-tinted, so the modal stays calm
- * until the moment the choice is committed.
+ * Leave's warning-tip confirm buttons carry the destructive rank, so the modal
+ * stays calm until the moment the choice is committed.
+ *
+ * That confirm is a PAIR and joins the app-wide destructive family (shiki
+ * 2026-07-26: "Channel settings 里 Leave 确认的那个 Cancel 和 Leave 两个 action
+ * button 也一起统一"): `Leave` = `destructiveAction()` + `DESTRUCTIVE_TRIGGER`
+ * (red frame on paper, the `Delete computer` shape), `Cancel` =
+ * `destructiveCancel()` (the one neutral framed surface). Before this the Cancel
+ * was `ghost` — no paper at all beside a tinted Leave — and the Leave's red was
+ * a local `border-error/40` + `hover:bg-error/10`, the alpha-thinned recipe shiki
+ * had already rejected elsewhere for reading as washed.
  */
 import { Fragment, useEffect, useState, type FormEvent } from 'react';
 import { Archive, ArchiveRestore, Loader2, Lock, LockOpen, LogOut } from 'lucide-react';
@@ -66,14 +78,16 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
+import { neutralAction } from '@/features/common/ControlInkBorder';
+import {
+  destructiveAction,
+  destructiveCancel,
+  DESTRUCTIVE_TRIGGER,
+} from '@/features/common/DestructiveAction';
 
 /** Client-side cap. Keep in sync with the backend rename schema. */
 const MAX_TITLE_LENGTH = 128;
-
-/** Error-tinted, non-primary confirm/action style (destructive palette carries
- *  the warning; never a solid fill that would compete with Save as primary). */
-const DESTRUCTIVE_OUTLINE =
-  'border-error/40 text-error hover:bg-error/10 hover:text-error';
 
 interface ChannelSettingsDialogProps {
   open: boolean;
@@ -253,8 +267,7 @@ export function ChannelSettingsDialog({
         <Button
           type="submit"
           disabled={saveDisabled}
-          data-channel-settings-save
-          className="shrink-0"
+          {...primaryAction('shrink-0')}
         >
           {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
           Save
@@ -274,8 +287,7 @@ export function ChannelSettingsDialog({
           <Button
             type="button"
             variant="outline"
-            data-channel-settings-action
-            className="w-full"
+            {...neutralAction('w-full')}
             disabled={visSaving}
             onClick={() => void handleToggleVisibility()}
           >
@@ -303,8 +315,7 @@ export function ChannelSettingsDialog({
           variant="outline"
           disabled={archivePending}
           onClick={handleToggleArchive}
-          data-channel-settings-action
-          className="w-full"
+          {...neutralAction('w-full')}
         >
           {isArchived ? (
             <ArchiveRestore className="size-3.5" />
@@ -327,8 +338,7 @@ export function ChannelSettingsDialog({
           <Button
             type="button"
             variant="outline"
-            data-channel-settings-action
-            className="w-full"
+            {...neutralAction('w-full')}
             disabled={leaving}
             onClick={() => setLeaveConfirm(true)}
           >
@@ -346,21 +356,20 @@ export function ChannelSettingsDialog({
               </div>
               <div className="flex items-center justify-end gap-2">
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
-                  data-channel-settings-action
                   disabled={leaving}
                   onClick={() => setLeaveConfirm(false)}
+                  {...destructiveCancel()}
                 >
                   Cancel
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  data-channel-settings-action
-                  className={DESTRUCTIVE_OUTLINE}
                   disabled={leaving}
                   onClick={() => void handleConfirmLeave()}
+                  {...destructiveAction(DESTRUCTIVE_TRIGGER)}
                 >
                   {leaving ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -382,8 +391,7 @@ export function ChannelSettingsDialog({
             type="button"
             variant="outline"
             disabled
-            data-channel-settings-action
-            className="w-full"
+            {...neutralAction('w-full')}
           >
             <LogOut className="size-3.5" />
             Leave channel

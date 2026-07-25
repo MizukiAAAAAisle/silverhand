@@ -32,6 +32,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, Pencil, RefreshCw, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
 import type { SaveServerUrlBanner } from '@/features/settings/describe-save-server-url-outcome';
@@ -254,7 +255,11 @@ export function BackendUnreachableGate({
             {message}
           </pre>
         ) : null}
-        <Button type="button" onClick={onRetry} className="w-full justify-center">
+        <Button
+          type="button"
+          onClick={onRetry}
+          {...primaryAction('w-full justify-center')}
+        >
           <RefreshCw className="size-3.5" />
           Retry connection
         </Button>

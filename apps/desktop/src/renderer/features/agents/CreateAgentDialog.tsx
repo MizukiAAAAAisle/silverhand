@@ -26,6 +26,7 @@ import {
 import { Combobox } from '@/components/ui/combobox';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
 import { cn } from '@/lib/cn';
 import { describeApiError } from '@/lib/api-error-message';
 import {
@@ -327,8 +328,9 @@ export function CreateAgentDialog({
           <DialogFooter className="mt-2">
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               onClick={() => onOpenChange(false)}
+              {...primaryCancel()}
             >
               Cancel
             </Button>
@@ -341,6 +343,7 @@ export function CreateAgentDialog({
                 || runtimeGate.allAbsent
                 || nameCheck.blocking
               }
+              {...primaryAction()}
             >
               {createAgent.isPending ? 'Creating…' : 'Create'}
             </Button>

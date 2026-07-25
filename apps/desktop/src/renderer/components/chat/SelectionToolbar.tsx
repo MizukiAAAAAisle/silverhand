@@ -1,34 +1,31 @@
 import { ClipboardCopy, Download } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { neutralAction } from '@/features/common/ControlInkBorder';
+import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
 
 /**
- * Top bar shown while MessageList is in multi-select mode.
+ * Top bar shown while MessageList is in multi-select mode — the "share messages
+ * as image" entry point.
  *
- * Three right-aligned buttons (shiki `el2J5BByCR02Cy07`,
- * `RNx6OVt9TlK26kjB`):
- * - **Cancel** (variant: 'neutral') — exit selection mode entirely.
- *   Hover lifts the button (`-translate-y-px`) but does NOT add a
- *   background fill — Cancel is a recovery affordance, not a primary
- *   action; lighting it up the same as Copy/Save would muddy the
- *   semantics.
- * - **Copy markdown** (variant: 'primary') — write the selected
- *   messages' transcript directly to the clipboard.
- * - **Save image** (variant: 'primary') — open the image preview
- *   modal. Uses the Download lucide icon (download is the verb).
+ * Three right-aligned buttons, ranked by the app-wide poster-action family
+ * (shiki 2026-07-26: "share message as image 的时候,顶部的工具条,以及 Image
+ * preview 的几个 button 规范也统一一下"):
+ * - **Save image** → `primaryAction()`, the green CTA. This bar exists to
+ *   produce an image, so exactly ONE button is the commit.
+ * - **Copy markdown** → `neutralAction()`, the framed neutral rank. It is a
+ *   second, cheaper export path, not a second primary.
+ * - **Cancel** → `primaryCancel()`, the way out of selection mode.
  *
- * Theme tokens (shiki `RNx6OVt9TlK26kjB` lock):
- *   - border color: `--border-row-selected` — shared with sidebar's
- *     selected-row stroke. forza6 = `#0A0A0A` (hard black), warm =
- *     `var(--accent)` (warm dark).
- *   - radius: `--control-radius` (forza6 0, warm 6px).
- *   - border width: `--control-border-width` (forza6 2px, warm 1px).
- * All three buttons share `font-bold` at rest (shiki `3FRyRtUdrYh1Or29`:
- * Cancel 常态也是 bold). The variant only diverges on hover:
- *   - Primary (Copy / Save) hover: bg → `--brand-primary` (full
- *     festival color: forza6 #FF2C7A pink, warm #FFD440 yellow);
- *     text → `--text-on-brand` (forza6 near-black, warm warm-dark)
- *     for legibility on the saturated fill.
- *   - Neutral (Cancel) hover: lift only, no fill, no text inversion.
- * Both variants share the `-translate-y-px` micro-lift.
+ * What this replaced: a local recipe where BOTH exports were "primary" and
+ * ranked only on hover, by filling with `--brand-primary` (forza6 #FF2C7A hot
+ * pink / warm #FFD440) — two equal primaries, a hue that no longer belongs to
+ * commits after #task:1623 moved the CTA to `--bg-control-primary`, and a
+ * resting state where all three buttons were indistinguishable. Cancel's
+ * lift-only, frameless rest is gone with it: the family's Cancel is a framed
+ * surface, the same one every dialog footer uses.
+ *
+ * `size="xs"` keeps the previous dense metrics (h-6 / px-2 / text-xs) — this bar
+ * sits above the message list, not in a dialog footer.
  */
 export function SelectionToolbar({
   count,
@@ -52,16 +49,16 @@ export function SelectionToolbar({
         {count === 0 ? '未选择' : `已选 ${count} 条`}
       </span>
       <div className="flex items-center gap-2">
-        <ToolbarButton variant="neutral" label="Cancel" onClick={onCancel} />
-        <ToolbarButton
-          variant="primary"
+        <SelectionActionButton rank="cancel" label="Cancel" onClick={onCancel} />
+        <SelectionActionButton
+          rank="secondary"
           icon={<ClipboardCopy className="size-3.5" />}
           label="Copy markdown"
           disabled={!hasSelection || !onCopyMarkdown}
           onClick={onCopyMarkdown}
         />
-        <ToolbarButton
-          variant="primary"
+        <SelectionActionButton
+          rank="primary"
           icon={<Download className="size-3.5" />}
           label="Save image"
           disabled={!hasSelection || !onSaveImage}
@@ -72,61 +69,47 @@ export function SelectionToolbar({
   );
 }
 
-function ToolbarButton(props: ToolbarButtonProps): JSX.Element {
-  return <SelectionActionButton {...props} />;
-}
-
 /**
- * Shared "selection action" button — exported for reuse by the image
- * preview modal so its Cancel / Copy / Save row visually matches the
- * SelectionToolbar at the top of the message list. Same border /
- * radius / width / font-bold contract, same primary/neutral hover
- * fork. See SelectionToolbar's docblock for the rationale.
+ * Shared "selection action" button — exported for reuse by the image preview
+ * modal so its Copy / Save row is the same three-rank family as this toolbar
+ * (one commit, one neutral, one way out). It only maps a rank onto the app-wide
+ * hooks; every visual decision lives in those hooks and in the theme rules they
+ * paint, so this surface can never drift from a dialog footer again.
  */
 export function SelectionActionButton({
-  variant,
+  rank,
   icon,
   label,
   disabled,
   onClick,
-}: ToolbarButtonProps): JSX.Element {
-  // Static base — radius, border width, padding, font weight, lift
-  // transition. All three buttons share `font-bold` at rest; the only
-  // per-variant divergence is hover bg/text.
-  const base =
-    'inline-flex items-center gap-1 rounded-[var(--control-radius)] ' +
-    'border-[length:var(--control-border-width)] ' +
-    'border-[color:var(--border-row-selected)] bg-bg-floating ' +
-    'px-2 py-1 font-bold text-text-primary transition-[background-color,color,transform,box-shadow] duration-150 ' +
-    'hover:-translate-y-px ' +
-    'disabled:cursor-not-allowed disabled:opacity-50 ' +
-    'disabled:hover:translate-y-0 disabled:hover:bg-bg-floating disabled:hover:text-text-primary ' +
-    'focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus';
-  const variantCls =
-    variant === 'primary'
-      ? // Copy / Save hover: festival fill + inverted text. Cancel
-        // doesn't get this — it's a recovery affordance, not a
-        // primary action.
-        'hover:bg-[color:var(--brand-primary)] hover:text-[color:var(--text-on-brand)]'
-      : // Cancel: lift only, no fill, no text inversion.
-        '';
+}: SelectionActionButtonProps): JSX.Element {
+  const rankProps =
+    rank === 'primary'
+      ? primaryAction('gap-1')
+      : rank === 'cancel'
+        ? primaryCancel('gap-1')
+        : neutralAction('gap-1');
   return (
-    <button
+    <Button
       type="button"
+      size="xs"
+      variant={rank === 'primary' ? 'default' : 'outline'}
       onClick={onClick}
       disabled={disabled}
       title={label}
       aria-label={label}
-      className={base + (variantCls ? ' ' + variantCls : '')}
+      {...rankProps}
     >
       {icon}
       <span>{label}</span>
-    </button>
+    </Button>
   );
 }
 
-interface ToolbarButtonProps {
-  variant: 'primary' | 'neutral';
+interface SelectionActionButtonProps {
+  /** `primary` = the commit (filled), `secondary` = framed neutral peer,
+   *  `cancel` = the way out. */
+  rank: 'primary' | 'secondary' | 'cancel';
   icon?: React.ReactNode;
   label: string;
   disabled?: boolean;

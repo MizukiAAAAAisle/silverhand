@@ -1,7 +1,5 @@
-import {
-  CONTROL_HOVER_LIFT,
-  CONTROL_SURFACE_BUTTON,
-} from '@/features/common/ControlInkBorder';
+import { CONTROL_SURFACE_BUTTON } from '@/features/common/ControlInkBorder';
+import { DESTRUCTIVE_TRIGGER } from '@/features/common/DestructiveAction';
 
 /**
  * #task:1619 — the Computer page's footer action stack: `Copy diagnostics`
@@ -51,25 +49,14 @@ export const HOST_ACTION_BUTTON = `w-full ${CONTROL_SURFACE_BUTTON}`;
  * — the peer of the brand-filled retry. The peer of a DESTRUCTIVE commit uses
  * `destructiveCancel()` instead, so the red-sticker pair is defined once for the
  * whole app.
+ *
+ * The retry it stands beside has no recipe here: it is an ordinary primary CTA
+ * and consumes the app-wide `primaryAction()` hook (#task:1623), the same one the
+ * Create / Save family uses. The earlier `HOST_MODAL_BUTTON_COMMIT` +
+ * `[data-host-action='commit']` pair was a second copy of "primary by fill + ink
+ * frame" and drifted from the first; there is one now.
  */
 export const HOST_MODAL_BUTTON = CONTROL_SURFACE_BUTTON;
-
-/**
- * The modal's brand-filled NEUTRAL CTA — the retry that stands in for the commit
- * when the impact read failed (`data-host-action="commit"`). The destructive
- * commit itself is NOT this: it consumes the shared `destructiveAction()` hook,
- * so every red confirm in the app wears one recipe.
- *
- * It stays PRIMARY BY FILL, not by shape: the saturated fill is the whole point
- * of the in-dialog commit, so this recipe adds no frame of its own. That is
- * deliberate — `CONTROL_INK_BORDER` resolves to `--border-focus`, which is ink
- * only in forza6 (slack-dark maps it to the brand blue, warm-script to a
- * 25%-alpha brown), and a frame that disagrees with its own fill is the mistake
- * to avoid. forza6 paints the poster frame itself, in ink, on
- * `[data-host-action='commit']`, where ink agrees with the ink drop shadow and
- * the fill is left to carry the hue.
- */
-export const HOST_MODAL_BUTTON_COMMIT = CONTROL_HOVER_LIFT;
 
 /**
  * Terminal action (Delete) at the page footer. Same geometry, error hue — and
@@ -94,5 +81,9 @@ export const HOST_MODAL_BUTTON_COMMIT = CONTROL_HOVER_LIFT;
  * against a button the user cannot see. What separates them is the verb and the
  * confirm copy; the footer slot itself always means "this is the terminal action
  * for this computer".
+ *
+ * The hue itself now lives in `DESTRUCTIVE_TRIGGER` beside the hook it pairs
+ * with — Settings' `Log out` and the channel-settings `Leave` confirm wear the
+ * same red-on-paper recipe, and this constant is just that recipe at page width.
  */
-export const HOST_ACTION_BUTTON_DANGER = `w-full border-[length:var(--control-border-width)] border-error text-error hover:bg-error-soft`;
+export const HOST_ACTION_BUTTON_DANGER = `w-full ${DESTRUCTIVE_TRIGGER}`;

@@ -170,9 +170,19 @@ apps/desktop/src/renderer/
 
 | Token | 含义 | 选值原则 |
 |---|---|---|
-| `--bg-control-primary` | 主 CTA 背景 | 暖系退化到 `var(--accent)`；海报系用 `var(--brand-primary)`（不能跟着被压暗成 deep accent，CTA 背景太暗）|
-| `--bg-control-primary-hover` | hover bg | 暖系 `var(--accent-hover)`；海报系把 brand 往黑里压深一档 |
-| `--text-on-control-primary` | 配 bg 的字色 | 暖系 `var(--text-on-accent)`；海报系 `var(--text-on-brand)`（对比度过 AA）|
+| `--bg-control-primary` | 主 CTA 背景 | 独立色值，不复用 `--accent` / `--brand-primary`（那两个另有语义）；深底主题取浅段、亮纸主题取深段，判据是**字色**能不能过 AA |
+| `--bg-control-primary-hover` | hover bg | 浅色主题往暗走一档；**深色主题往亮走**（高程语言：越上层越亮）。forza6 的海报 hook 会把 hover 填充钉回 resting（hover 只揭起），所以那里这个值只作用于未戴 hook 的按钮 |
+| `--text-on-control-primary` | 配 bg 的字色 | 跟 bg 一起选，≥4.5:1；写字面值或专属 token，别复用 `--text-on-accent` / `--text-on-brand`（它们还服务别的表面）|
+
+**当前值（#task:1623，牛油果绿）**：三主题共享"主操作 = 牛油果绿"这一个语义 —— warm-script 深段 `#55701F` + 白字（纸面太亮，浅段对底只 1.9:1 会糊边），forza6 / slack-dark 浅段 `#9CBF5C` + 墨字（forza6 靠 2px 墨框给边界，slack 靠深底）。中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。
+
+**主 CTA 的形状走一个 hook，且它是「一对」**：`primaryAction()` / `primaryCancel()`（`features/common/PrimaryAction.ts`）分别挂 `[data-primary-action='commit'|'cancel']`，consumer 只出 motion + layout，主题在 `[data-theme='...'] [data-primary-action='commit']` 里画 identity（forza6 = 2px 墨框 + 直角 + 硬投影 + hover 揭起）。新增主 CTA 直接消费它，别再造第二份配方。
+
+Cancel 必须跟着一起换：commit 有框有填充有投影、Cancel 是裸 ghost 时，一个弹窗读起来是「一个按钮 + 一个文字」而不是「一个决定的两个答案」（shiki 2026-07-26）。`primaryCancel()` 出的就是全 app 唯一那份中性 framed surface `CONTROL_SURFACE_BUTTON`，并且**跟 `destructiveCancel()` 共用同一条主题规则** —— Cancel 回答绿色 Create 和红色 Delete 长得一样是刻意的：两个弹窗之间变的是「哪个 commit 在喊」，不是「出口长什么样」。用 `variant="outline"`，`ghost` 没有自己的纸给框落。
+
+**海报动作有三个 rank**：`primaryAction()`（填充 commit）/ `destructiveAction()`（红框）/ `neutralAction()`（墨框中性，`features/common/ControlInkBorder.ts` → `[data-neutral-action]`）。**可逆的状态变更**（Workspace Settings 的 Archive、Computer 的 Disconnect、Log out）是 neutral：不给填充（填充是 primary 的语义），但要有家族的框 + hover 抬起 + forza6 的墨贴纸。反例就是它们原来的样子 —— 夹在绿贴纸和红贴纸之间、唯一没有框和投影的按钮。
+
+neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、行内编辑的 ✓/✕）和 `h-6` 微型 chip（MCP pane 的 Reload / Check config）**故意保持安静**，给 24px 控件挂海报贴纸是用力过重。判据是「它是独立的一次动作，还是某个输入框 / 密集列表的附件」。`[data-host-action='neutral']` 与 `[data-channel-settings-action]` 是同 rank 的旧别名，渲染一致，碰到那两个 surface 时再并入。
 
 **为什么独立 token**：在 loud 主题里 `--accent` 要同时承担"浅底可读 foreground"（text-accent、agent name）和"loud CTA 表面"，两个角色对色彩的需求冲突（foreground 要深 ≥4.5:1，CTA 要亮做品牌识别），拆成不同 token 是唯一的解。暖系无此冲突，三个 token 都退化到 accent 家族。
 

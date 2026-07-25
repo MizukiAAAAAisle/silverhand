@@ -263,18 +263,26 @@
      forza6 保留 `0`（海报硬楔=正确，shiki 确认）。 */
   --tab-segment-radius: 4px;
 
-  /* ── Primary control surface (§3.2.3, PR-10 token promotion) ──
-     `Button` default variant (CTA — 各 dialog 的 Create / Save 主按钮)
-     的 bg / text / hover 出口。warm-script 退化到 accent 家族
-     (pixel-zero) —— warm 的 `--accent` 已经是暖近黑，CTA bg 用它和
-     foreground 一致没问题。forza6 用 `--brand-primary` (#FF2C7A 主题粉)
-     而不是 `--accent` (#B3186A deep magenta)，因为 forza6 的 `--accent`
-     被压成 deep 是为了浅底 text-accent AA，当 CTA bg 看起来太暗 ——
-     shiki `Ao2TTCQ6Q2r5OG-a` 报"create workspace/channel/settings 里
-     button 粉色太暗"。让 CTA 跟 accent foreground 解耦。 */
-  --bg-control-primary: var(--accent);
-  --bg-control-primary-hover: var(--accent-hover);
-  --text-on-control-primary: var(--text-on-accent);
+  /* ── Primary control surface (CTA) ──
+     `Button` default variant 的 bg / text / hover 出口 —— 即所有主操作:
+     New Agent / New Workspace / New Computer 的确认键,以及各处 Save /
+     Save settings。
+
+     牛油果绿(shiki 2026-07-26,#task:1623):CTA 从 accent 家族**解耦**,
+     拿到自己的饱和 hue。此前 warm 的 CTA = `var(--accent)` 暖近黑,主操作
+     只能靠"黑"压过纸面,没有颜色身份;现在绿是 CTA 独占语义。
+     **绿只进这一簇,`--accent` 不动** —— `--accent` 还兼 focus ring /
+     row-hover 边框 / in-review 状态,染绿会让"主操作"和"焦点/状态"抢同
+     一个饱和色(一个饱和 hue 只服务一个语义)。
+
+     取深段牛油果 + 白字:纸面 #F8F6F2 太亮,CTA 必须自己压得住 —— 浅段
+     (#9CBF5C,forza6/slack 用的那档)对这个底只有 1.9:1,按钮边界会糊掉。
+     白字 on #55701F = 5.64:1 AA;hover 加深到 #49601B = 7.07:1。
+     `--text-on-control-primary` 写字面值而不是复用 `--text-on-accent`:
+     后者还给 in-review 状态文字用,CTA 底色换了就不该再跟它绑。 */
+  --bg-control-primary: #55701F;
+  --bg-control-primary-hover: #49601B;
+  --text-on-control-primary: #FFFFFF;
 
   /* ── Accent (暖近黑 — 高对比·低噪音) ──
      #2D2316 在 #FFFAEF 上对比度 ≈ 15:1（AAA）；

@@ -765,20 +765,16 @@
   padding-right: 5.5rem;
 }
 
-/* ── Non-member Join button — poster sticker ─────────────────────────
+/* ── Non-member Join button — press stamp ────────────────────────────
    The composer-slot Join affordance a workspace user sees while browsing a
-   public channel they have not joined (`ChannelJoinBar`). The base button
-   already fills with `--bg-row-selected` (forza6 = acid lime, the selection
-   identity) and inks its label via `--text-on-selected`; corners are already
-   square through `--control-radius` (0 in forza6). Here we stamp it into the
-   same poster-sticker family the selected sidebar row and the chat-header `#`
-   chip wear — a 1.5px ink frame plus a hard offset ink shadow — so the button
-   reads as "step onto this channel". Press collapses the lift for a tactile
-   stamp. Other themes keep the flat token fill, untouched. */
-[data-theme='forza6'] [data-channel-join] {
-  border: 1.5px solid var(--forza6-ink);
-  box-shadow: 2px 2px 0 var(--forza6-ink);
-}
+   public channel they have not joined (`ChannelJoinBar`). It is a primary CTA
+   and takes its whole poster identity from `[data-primary-action='commit']`
+   below — green fill, 2px ink frame, hard ink shadow, hover peel. This hook is
+   left with the ONE thing that is specific to it: a full-width composer-slot
+   button is big enough to feel like a physical stamp, so pressing it collapses
+   the lift. (It used to duplicate the frame + shadow here on top of a
+   `--bg-row-selected` fill; the fill was the selection identity, not a commit,
+   and the duplicated geometry drifted from the family by half a pixel.) */
 [data-theme='forza6'] [data-channel-join]:active:not(:disabled) {
   transform: translate(1px, 1px);
   box-shadow: 1px 1px 0 var(--forza6-ink);
@@ -986,55 +982,79 @@
   padding: 0;
   background: transparent;
 }
-[data-theme='forza6'] [data-channel-actions] button,
-[data-theme='forza6'] [data-channel-settings-action] {
+[data-theme='forza6'] [data-channel-actions] button {
   background-color: var(--bg-floating);
   border: 2px solid #0A0A0A;
   border-radius: 0;
   /* Poster sticker drop (shiki `NBHpEtEc42PDCGFX`): promote the bordered
      box to a true sticker — hard ink shadow at rest, growing on the hover
      lift. Same offset family as `[data-channel-icon]` / `[data-collection-card]`.
-     `[data-channel-settings-action]` marks every button in the channel-settings
-     modal that should speak the forza6 poster language — the three full-width
-     action buttons (Visibility Make private/public, Archive/Restore, Leave
-     channel) AND the Leave confirm's Cancel / Leave buttons (which sit below the
-     warning note, not inside it) — so they all read as one sticker family. The
-     confirm's destructive intent shows in its red text; the ink border stays
-     poster-black. Other themes keep the JSX defaults. */
+     The channel-settings modal used to have its OWN copy of this rank on
+     `[data-channel-settings-action]`; its buttons now consume the app-wide
+     `neutralAction()` / `destructiveAction()` hooks instead, so that selector is
+     gone and this rule is back to the one surface it names. Other themes keep
+     the JSX defaults. */
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
 }
-[data-theme='forza6'] [data-channel-actions] button:hover:not(:disabled),
-[data-theme='forza6'] [data-channel-settings-action]:hover:not(:disabled) {
+[data-theme='forza6'] [data-channel-actions] button:hover:not(:disabled) {
   background-color: var(--bg-floating);
   transform: translateY(-1px);
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
 }
-/* The Rename Save button is the settings modal's single PRIMARY CTA. It keeps
-   the base `default` variant's brand fill + on-brand label (so it stays the
-   only solid primary), but wears the SAME poster frame + hard ink shadow as the
-   `[data-channel-settings-action]` group so it reads as one sticker family in
-   forza6 — primary by fill, not by a divergent shape. At REST no
-   `background-color` (that would flatten the primary fill to neutral). On HOVER
-   the fill is PINNED back to the resting `--bg-control-primary` to cancel the
-   base variant's `hover:bg-[--bg-control-primary-hover]` darken — hover reads as
-   a pure poster LIFT (shadow grows, box rises), the fill never shifts. Other
-   themes keep the JSX default. */
-[data-theme='forza6'] [data-channel-settings-save] {
-  border: 2px solid #0A0A0A;
+/* ── Primary CTA — the filled poster sticker (#task:1623) ─────────────
+   Every solid-filled commit in the app: the settings modals' `Save`, the
+   Create agent / workspace / channel confirms, New computer's Finish,
+   `Save settings`, Switch runtime, the connect / retry gates. One hook
+   (`[data-primary-action]`, see `features/common/PrimaryAction.ts`) after
+   shiki 2026-07-26: "遇到这类 button 在 forza6 下没有 post sticker 以及
+   hover 效果的一起加上" — the avocado fill alone left these reading as flat
+   rectangles beside ink-framed stickers. This replaces two divergent
+   one-offs (`[data-channel-settings-save]`, `[data-host-action='commit']`);
+   don't add a third — consume the hook.
+
+   PRIMARY BY FILL, not by shape: the base `default` variant's
+   `--bg-control-primary` fill and its label colour are left untouched (no
+   `background-color` at REST — that would flatten the fill to neutral), and
+   this rule contributes only the poster chrome the other stickers share:
+   2px ink frame, hard corners, hard ink drop shadow.
+
+   On HOVER the fill is PINNED back to the resting `--bg-control-primary`,
+   cancelling the variant's `hover:bg-[--bg-control-primary-hover]` shift, so
+   hover is a pure poster PEEL — the shadow grows 1.5px → 2.5px against the
+   consumer's 1px lift, exactly like `[data-destructive-action]` and
+   `[data-host-action]`. A fill that also changed hue would be a second,
+   redundant hover channel on top of the peel.
+
+   Motion lives at the consumer (`primaryAction()`), NOT here: Tailwind v4's
+   `-translate-y-px` writes the `translate` property while a theme
+   `transform: translateY()` is a separate property, so declaring the lift in
+   both places stacks them into a 2px jump. Identity here, motion there. */
+[data-theme='forza6'] [data-primary-action='commit'] {
+  border: var(--control-border-width) solid var(--forza6-ink);
   border-radius: 0;
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
-  transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
 }
-[data-theme='forza6'] [data-channel-settings-save]:hover:not(:disabled) {
+[data-theme='forza6'] [data-primary-action='commit']:hover:not(:disabled) {
   background-color: var(--bg-control-primary);
-  transform: translateY(-1px);
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
 }
-[data-theme='forza6'] [data-channel-settings-save]:active:not(:disabled) {
-  transform: translate(1px, 1px);
-  box-shadow: 1px 1px 0 var(--forza6-ink);
+/* Focus is an `outline`, never a ring: the sticker's `box-shadow` and the
+   Button primitive's Tailwind focus ring are the same property, and the base
+   already declared `outline-none` — so the sticker silently swallowed the ring
+   and tab showed nothing at all (the bug `[data-sticker-close]` /
+   `[data-destructive-action]` already fixed the same way). Ink joins the
+   sticker's own hue set. */
+[data-theme='forza6'] [data-primary-action='commit']:focus-visible {
+  outline: 2px solid var(--forza6-ink);
+  outline-offset: 2px;
 }
+/* The Cancel peer of this commit (`[data-primary-action='cancel']`) is NOT
+   painted here — it is the SAME ink sticker as the destructive pair's Cancel and
+   shares its rules verbatim further down in this file (search
+   `data-destructive-action='cancel'`). One definition on purpose: a Cancel
+   answers a green Create and a red Delete identically, so the two must not be
+   able to drift apart by a half-pixel of shadow. */
 /* aria-pressed buttons in the cluster (conv-header Threads toggle, and
    the Thread-header follow/unfollow toggle) get NO forza6 active fill —
    shiki `rkfn6GQ1O7G8OBaL` (#task:1126): a filled "selected" ground on a
@@ -2004,7 +2024,9 @@
    variant's RESTING paper (`--bg-floating`, what `outline` sits on) rather than
    `transparent`, so the button keeps its own surface over whatever it's on. */
 [data-theme='forza6'] [data-host-action='neutral']:hover:not(:disabled),
-[data-theme='forza6'] [data-destructive-action='cancel']:hover:not(:disabled) {
+[data-theme='forza6'] [data-destructive-action='cancel']:hover:not(:disabled),
+[data-theme='forza6'] [data-primary-action='cancel']:hover:not(:disabled),
+[data-theme='forza6'] [data-neutral-action]:hover:not(:disabled) {
   background-color: var(--bg-floating);
 }
 
@@ -2081,13 +2103,17 @@
    halves peel by different amounts can't happen. `transition` is restated
    for the same reason as the commit — box-shadow is not in the consumer's
    transition list. */
-[data-theme='forza6'] [data-destructive-action='cancel'] {
+[data-theme='forza6'] [data-destructive-action='cancel'],
+[data-theme='forza6'] [data-primary-action='cancel'],
+[data-theme='forza6'] [data-neutral-action] {
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   transition:
     transform 150ms var(--ease, ease),
     box-shadow 150ms ease;
 }
-[data-theme='forza6'] [data-destructive-action='cancel']:hover:not(:disabled) {
+[data-theme='forza6'] [data-destructive-action='cancel']:hover:not(:disabled),
+[data-theme='forza6'] [data-primary-action='cancel']:hover:not(:disabled),
+[data-theme='forza6'] [data-neutral-action]:hover:not(:disabled) {
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
 }
 
@@ -2105,6 +2131,8 @@
   outline-offset: 2px;
 }
 [data-theme='forza6'] [data-destructive-action='cancel']:focus-visible,
+[data-theme='forza6'] [data-primary-action='cancel']:focus-visible,
+[data-theme='forza6'] [data-neutral-action]:focus-visible,
 [data-theme='forza6'] [data-host-action]:focus-visible {
   outline: 2px solid var(--forza6-ink);
   outline-offset: 2px;
@@ -2112,19 +2140,9 @@
 
 /* The confirm modal's brand-filled NEUTRAL CTA — the retry that stands in
    for the commit when the impact read failed (shiki 2026-07-26: "Delete
-   Computer Modal 的 action button 也加上一样的效果"). Pressing a poster
-   sticker must not open a dialog answering in a flat language, so the
-   modal footer joins the family: its Cancel peer carries `neutral`
-   (framed surface + shared hover), the retry carries `commit`, and the
-   destructive commit takes `[data-destructive-action]` above.
-
-   `commit` is PRIMARY BY FILL, so the frame is added here rather than at
-   the consumer — the cross-theme `--border-focus` is ink only in forza6
-   (slack-dark = brand blue, warm-script = 25%-alpha brown), and a frame
-   disagreeing with its own fill is the mistake to avoid. Ink here agrees
-   with the ink drop shadow inherited from the base rule above, and the
-   fill is left to carry the hue — the same division of labour as
-   `[data-channel-settings-save]`. */
-[data-theme='forza6'] [data-host-action='commit'] {
-  border: var(--control-border-width) solid var(--forza6-ink);
-}
+   Computer Modal 的 action button 也加上一样的效果") — is now the app-wide
+   `[data-primary-action]` sticker above, not a `data-host-action` rank of its
+   own (#task:1623). It was the second copy of "primary by fill + ink frame",
+   and two copies of one recipe drift. Its Cancel peer keeps `neutral` (framed
+   surface + shared hover), and a destructive commit still takes
+   `[data-destructive-action]`. */

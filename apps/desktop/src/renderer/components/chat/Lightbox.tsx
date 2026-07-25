@@ -379,14 +379,14 @@ export function Lightbox({
             </div>
             <div className="flex items-center gap-2">
               <SelectionActionButton
-                variant={onDownload ? 'neutral' : 'primary'}
+                rank={onDownload ? 'secondary' : 'primary'}
                 label="Copy"
                 disabled={busy}
                 onClick={onCopy}
               />
               {onDownload ? (
                 <SelectionActionButton
-                  variant="primary"
+                  rank="primary"
                   icon={<Download className="size-3.5" />}
                   label="Download"
                   disabled={downloading}

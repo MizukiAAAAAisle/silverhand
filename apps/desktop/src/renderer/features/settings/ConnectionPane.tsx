@@ -54,10 +54,7 @@ import {
   type DesktopServerConnectionStatus,
   type DesktopServerMode,
 } from './connection-readiness';
-import {
-  CONTROL_HOVER_LIFT,
-  CONTROL_INK_BORDER,
-} from '@/features/common/ControlInkBorder';
+import { primaryAction } from '@/features/common/PrimaryAction';
 
 const STATUS_LABEL: Record<DesktopServerConnectionStatus, string> = {
   connected: 'Connected',
@@ -354,8 +351,7 @@ export function ConnectionPane(): JSX.Element {
             />
             <Button
               type="submit"
-              variant="outline"
-              className={`shrink-0 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-bg-floating`}
+              {...primaryAction('shrink-0')}
               disabled={saveDisabled}
               title={
                 classification.kind === 'reject'

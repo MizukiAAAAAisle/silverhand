@@ -363,20 +363,29 @@
      跟 control trigger 同节拍。 */
   --tab-segment-radius: 0;
 
-  /* ── Primary control surface (§3.2.3, PR-10 token promotion) ──
-     `Button` default variant (CTA — 各 dialog 的 Create / Save 主按钮)
-     在 forza6 下走 **主题粉** (`--brand-primary` #FF2C7A) 而不是
-     `--accent` (#B3186A deep magenta) —— `--accent` 在 forza6 被压成
-     deep 是为了浅底 text-accent AA (Cindy `JzkPVNV3svN97WSR`)，但 CTA
-     bg 被这个压制连累显得太暗 (shiki `Ao2TTCQ6Q2r5OG-a` 在 create
-     workspace/channel/settings dialog 直接反馈)。让 CTA 跟 accent
-     foreground 解耦。
-     hover 用 `color-mix` 把热粉往黑里走 12%，保留品牌识别度但有清晰
-     hover 反馈。`--text-on-control-primary` 沿用 `--text-on-brand`
-     (近黑 #0A0A0A on #FF2C7A ≈ 5.56:1 AA)，hover 状态色更深仍 AA 通过。 */
-  --bg-control-primary: var(--brand-primary);
-  --bg-control-primary-hover: color-mix(in oklab, var(--brand-primary) 88%, #000000);
-  --text-on-control-primary: var(--text-on-brand);
+  /* ── Primary control surface (CTA) ──
+     `Button` default variant 的 bg / text / hover 出口 —— 所有主操作:
+     New Agent / New Workspace / New Computer 的确认键,以及各处 Save。
+
+     牛油果绿(shiki 2026-07-26,#task:1623):CTA 从**品牌热粉**
+     (`--brand-primary` #FF2C7A) 换成亮牛油果 #9CBF5C + 墨字。shiki 明确
+     点头把这里的粉让出去 —— 粉留给品牌身份面(海报贴纸/brand 强调),CTA
+     独占绿,主操作在整个 app 三主题里读同一个颜色语义。
+     **`--accent` / `--brand-primary` 都不动**,绿只进这一簇:accent 还兼
+     focus ring / row-hover 边框 / in-review,染绿会跟"主操作"抢饱和色。
+
+     取浅段 + 墨字(而非 warm 的深段 + 白字):海报语汇本就是「高饱和块 +
+     2px 墨框 + 硬投影」,亮块配墨字才是这套语言;而且按钮边界由墨框给,
+     不依赖底色反差,所以浅段在 forza6 反而最稳(浅底上它对底只有 ~2:1,
+     没有墨框的主题不能这么用)。
+     墨字 `--forza6-ink` #0A0A0A on #9CBF5C = 9.45:1;hover 往黑走一档
+     #8CAC53 仍 7.68:1。注意 forza6-components.css 的 `[data-primary-action]`
+     (海报贴纸)把 hover 填充**钉回** resting —— forza6 下 hover 只揭起不换
+     色,所以这个 hover 值实际只作用于还没戴 hook 的 primary 按钮(以及
+     checkbox 选中态那类复用同簇 token 的控件)。 */
+  --bg-control-primary: #9CBF5C;
+  --bg-control-primary-hover: #8CAC53;
+  --text-on-control-primary: var(--forza6-ink);
 
   /* ── forza6 syntax palette (theme-private; PR-7 internal cleanup) ──
      The `.markdown-body .code-block .hljs-*` rules in

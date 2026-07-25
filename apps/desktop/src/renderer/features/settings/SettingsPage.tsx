@@ -17,6 +17,10 @@ import {
 } from 'lucide-react';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  destructiveAction,
+  DESTRUCTIVE_TRIGGER,
+} from '@/features/common/DestructiveAction';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
 import {
@@ -403,7 +407,15 @@ function AppearancePane({
  *  (`features/hosts/HostDetailView`) because sessions are user-level
  *  and independent of Computer lifecycle. Display name and avatar
  *  edits live on `HumanProfileCard` in the Members panel, so
- *  `/api/me` mutations have exactly one long-lived surface. */
+ *  `/api/me` mutations have exactly one long-lived surface.
+ *
+ *  Log out wears the DESTRUCTIVE rank (shiki 2026-07-26: "Settings → Account 的
+ *  Log out,用 Delete 语义,因为也是 danger 操作") — red frame on paper, the same
+ *  `DESTRUCTIVE_TRIGGER` recipe as `Delete computer` / `Revoke`, not a solid fill
+ *  (this is a settings page, and a filled red would out-rank every other pane's
+ *  primary). It is the only action on the pane, so the red is not competing with
+ *  anything; what it buys is that the one irreversible-feeling verb in Settings
+ *  is not dressed as a reversible one. */
 function AccountPane(): JSX.Element {
   const viewer = useViewerUser();
   const logout = useLogout();
@@ -465,7 +477,7 @@ function AccountPane(): JSX.Element {
             variant="outline"
             onClick={() => void onLogout()}
             disabled={logout.isPending}
-            className="border-[length:var(--control-border-width)] border-border-focus transition-[color,background-color,border-color,transform] hover:-translate-y-px hover:bg-bg-floating"
+            {...destructiveAction(DESTRUCTIVE_TRIGGER)}
           >
             {logout.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />

@@ -438,13 +438,13 @@ export function ImagePreviewModal({
 
           <div className="mt-3 flex items-center justify-end gap-2 text-xs">
             <SelectionActionButton
-              variant="neutral"
+              rank="secondary"
               label="Copy"
               disabled={phase !== 'ready' || busy}
               onClick={onCopy}
             />
             <SelectionActionButton
-              variant="primary"
+              rank="primary"
               label="Save"
               disabled={phase !== 'ready' || busy}
               onClick={onSave}

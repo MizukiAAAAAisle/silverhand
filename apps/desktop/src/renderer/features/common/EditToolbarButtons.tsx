@@ -1,6 +1,7 @@
 import type { JSX } from 'react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/cn';
+import { primaryAction, primaryCancel } from './PrimaryAction';
 
 /**
  * Save / Cancel button pair for profile-card edit sessions (display
@@ -14,6 +15,16 @@ import { cn } from '@/lib/cn';
  *  - Save uses the theme primary fill (`variant="default"`), Cancel
  *    stays neutral (`variant="outline"`). Main/subordinate hierarchy
  *    intentional — visually differentiated but both bordered.
+ *  - Save also carries `primaryAction()`, the app-wide primary-CTA hook
+ *    (#task:1623), so this inline Save is the same affordance as the
+ *    dialogs' Save / Create — a poster sticker in forza6, a lifting solid
+ *    fill elsewhere. Its own ink border stays for the OTHER themes; in
+ *    forza6 the theme rule supersedes it with the sticker frame.
+ *  - Cancel carries the matching `primaryCancel()` — the pair's neutral
+ *    framed surface. Its own two-token border is dropped because the hook's
+ *    `CONTROL_SURFACE_BUTTON` already ships exactly that border plus the
+ *    canonical control-hover pair, and in forza6 the ink sticker shadow, so
+ *    the two halves peel by the same amount.
  */
 
 const EDIT_BUTTON_BORDER =
@@ -33,7 +44,7 @@ export function CancelButton({
       size="xs"
       onClick={onClick}
       disabled={disabled}
-      className={cn(EDIT_BUTTON_BORDER)}
+      {...primaryCancel()}
     >
       Cancel
     </Button>
@@ -56,7 +67,7 @@ export function SaveButton({
       size="xs"
       onClick={onClick}
       disabled={disabled || pending}
-      className={cn(EDIT_BUTTON_BORDER)}
+      {...primaryAction(cn(EDIT_BUTTON_BORDER))}
     >
       {pending ? 'Saving…' : 'Save'}
     </Button>

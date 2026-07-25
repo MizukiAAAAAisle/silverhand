@@ -132,17 +132,14 @@ import {
 } from './delete-computer-phase';
 import { computerActions } from './computer-actions';
 import {
-  CONTROL_HOVER_LIFT,
-  CONTROL_INK_BORDER,
-} from '@/features/common/ControlInkBorder';
-import {
   destructiveAction,
   destructiveCancel,
 } from '@/features/common/DestructiveAction';
+import { primaryAction } from '@/features/common/PrimaryAction';
+import { neutralAction } from '@/features/common/ControlInkBorder';
 import {
   HOST_ACTION_BUTTON_DANGER,
   HOST_MODAL_BUTTON,
-  HOST_MODAL_BUTTON_COMMIT,
 } from './host-action-button';
 import {
   describeHostStatus,
@@ -402,7 +399,7 @@ function ConnectionSection({
             size="sm"
             onClick={() => void handleGenerate()}
             disabled={rotate.isPending}
-            className="gap-2"
+            {...primaryAction('gap-2')}
           >
             {rotate.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -418,7 +415,7 @@ function ConnectionSection({
               variant="outline"
               onClick={() => void handleDisconnect()}
               disabled={disconnect.isPending}
-              className="gap-2"
+              {...neutralAction('gap-2')}
             >
               {disconnect.isPending ? (
                 <Loader2 className="size-3.5 animate-spin" />
@@ -484,7 +481,7 @@ function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Element {
             size="sm"
             onClick={() => void handleRefresh()}
             disabled={rotate.isPending}
-            className={`gap-2 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-[var(--bg-control-primary)]`}
+            {...primaryAction('gap-2')}
           >
             {rotate.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -728,8 +725,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 <Button
                   onClick={() => void handleDelete()}
                   disabled={del.isPending}
-                  data-host-action="commit"
-                  className={`gap-2 ${HOST_MODAL_BUTTON_COMMIT}`}
+                  {...primaryAction('gap-2')}
                 >
                   {del.isPending ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -783,8 +779,7 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 <Button
                   onClick={() => void resources.refetch()}
                   disabled={resources.isFetching}
-                  data-host-action="commit"
-                  className={`gap-2 ${HOST_MODAL_BUTTON_COMMIT}`}
+                  {...primaryAction('gap-2')}
                 >
                   {resources.isFetching ? (
                     <Loader2 className="size-3.5 animate-spin" />
@@ -1212,7 +1207,7 @@ function ProxySection({
             <Button
               type="submit"
               disabled={saving || settingsLoading}
-              className={`gap-2 ${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:bg-[var(--bg-control-primary)]`}
+              {...primaryAction('gap-2')}
             >
               {saving ? (
                 <Loader2 className="size-3.5 animate-spin" />

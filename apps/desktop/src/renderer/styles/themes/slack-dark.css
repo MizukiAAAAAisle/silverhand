@@ -239,11 +239,18 @@
   --tab-segment-radius: 4px;
 
   /* ── Primary control surface (CTA) ──
-     Slack 的 Send 按钮是 workhouse green #007A5A — 跟 accent 蓝（link 色）
-     语义解耦。white on #007A5A ≈ 5.34:1 AA pass；hover 进一步加深。 */
-  --bg-control-primary: #007A5A;
-  --bg-control-primary-hover: #006044;
-  --text-on-control-primary: #FFFFFF;
+     牛油果绿(shiki 2026-07-26,#task:1623):替掉原先的 workhorse green
+     #007A5A，语义位置不变(CTA:New Agent / New Workspace / New Computer
+     的确认键 + 各处 Save)，三主题现在共用同一个"主操作=牛油果绿"语义。
+     跟 accent 蓝(link 色)依旧解耦 —— slack-dark 本来就是这个分法,这次
+     只换 hue，`--accent` 不动。
+
+     深底 #1A1D21 上取浅段 + 墨字:对字 9.45:1、对底 8.07:1，双向都亮。
+     hover 往**亮**走一档(#A8C770，墨字 10.43:1) —— 深色主题的高程语言是
+     越上层越亮，跟浅色主题 hover 加深相反，不要照抄 warm 的方向。 */
+  --bg-control-primary: #9CBF5C;
+  --bg-control-primary-hover: #A8C770;
+  --text-on-control-primary: #0A0A0A;
 
   /* ── Accent (Slack 蓝, foreground primary) ──
      #1D9BD1 是 Slack 的 link/accent 蓝（"Highlight Color" in their brand
