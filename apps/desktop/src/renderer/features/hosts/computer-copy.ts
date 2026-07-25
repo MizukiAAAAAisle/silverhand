@@ -108,13 +108,14 @@ export const computerCopy = {
    *  that actually matters — everything the computer holds goes with it.
    *  Availability wording belongs to Disconnect/Revoke, never here.
    *
-   *  "Everything it holds" stays generic on purpose: the named impact blocks
-   *  below list the agents and workspaces, so restating those nouns here would
-   *  duplicate them, and an empty computer would be described by a list of
-   *  things that aren't there. Same noun as `deleteImpactUnavailable` ("what
-   *  this computer holds") so the two screens read as one idea. */
+   *  Wording is shiki's (2026-07-26). "Associated resources" stays generic on
+   *  purpose: the named impact blocks below list the agents and workspaces, so
+   *  restating those nouns here would duplicate them, and an empty computer
+   *  would be described by a list of things that aren't there. Irreversibility
+   *  rides on "permanently" — do not re-add a separate "This can't be undone."
+   *  sentence beside it. */
   deleteConfirmBody:
-    "This computer and everything it holds are deleted. This can't be undone.",
+    'This computer and its associated resources will be permanently deleted.',
   deleteConfirm: 'Delete',
   deleting: 'Deleting…',
   deleteFailed: "Couldn't delete this computer. Please try again.",
