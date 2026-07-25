@@ -40,6 +40,7 @@ import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
+import { useLocalWorkspacePaths } from '@/features/workspaces/local-paths';
 import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
 import { SettingsPage } from '@/features/settings/SettingsPage';
@@ -327,6 +328,27 @@ function RegisteredAppShell(): JSX.Element {
   } | null>(null);
 
   const { data: workspaces = [] } = useWorkspaces();
+  // Local paths are keyed by the active computer/control-plane binding. A
+  // profile switch or revoke changes this revision and forces a fresh main
+  // process snapshot even when the two servers happen to expose identical
+  // workspace ids. The same backend-info query keeps protocol skew fresh via
+  // its 30s + window-focus refetch (#task:1462).
+  const backendInfoQuery = useBackendInfoSnapshot({
+    pollProtocolCompatibility: true,
+  });
+  const localWorkspaceBindingRevision = backendInfoQuery.data
+    ? [
+        backendInfoQuery.data.mode,
+        backendInfoQuery.data.url,
+        backendInfoQuery.data.local_host_id ?? '',
+        backendInfoQuery.data.local_host_status,
+        backendInfoQuery.data.local_host_server_url ?? '',
+      ].join('\0')
+    : null;
+  const localWorkspacePaths = useLocalWorkspacePaths(
+    workspaces,
+    localWorkspaceBindingRevision,
+  );
   const { data: agents = [] } = useAgents();
   // Stable id → agent lookup shared with the sidebar (DM avatar
   // resolution) and any future agent-keyed surface. Memoized on the
@@ -337,6 +359,9 @@ function RegisteredAppShell(): JSX.Element {
     [agents],
   );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  const selectedWorkspacePath = selectedWorkspaceId
+    ? localWorkspacePaths.get(selectedWorkspaceId) ?? null
+    : null;
   // Activity is a GLOBAL list — it shows rows from every workspace, so it needs
   // workspace_id → identity (name + icon inputs), so a GLOBAL list (Activity)
   // can show each row's workspace icon and disambiguate same-named channels
@@ -733,20 +758,10 @@ function RegisteredAppShell(): JSX.Element {
     nav.go(routes.membersAgent(target), { replace: true });
   }, [agents, appSection, nav, selectedAgentId, selectedUserId]);
 
-  // #task:808 slice 4 — host list + auto-default selection. We own the
-  // hosts/backend-info queries here so the master `ComputersPanel` and
-  // the right-pane `HostDetailView` both read from a single resolved
-  // list (no double React Query subscription, no race between them
-  // mid-update). ComputersPanel takes the data as props; HostDetailView
-  // gets the resolved `selectedHost` directly.
+  // #task:808 slice 4 — host list + auto-default selection. ComputersPanel
+  // takes the data as props; HostDetailView gets the resolved selectedHost
+  // directly.
   const hostsQuery = useHostsQuery();
-  // `pollProtocolCompatibility` keeps the outbound-protocol skew field
-  // (#task:1462) fresh via a 30s + window-focus refetch, so a future
-  // server protocol bump surfaces in `AppStatusBanner` without the
-  // user having to retry an agent action first.
-  const backendInfoQuery = useBackendInfoSnapshot({
-    pollProtocolCompatibility: true,
-  });
   const computerHosts = hostsQuery.data?.hosts ?? [];
   const localHostIdForComputers =
     backendInfoQuery.data?.local_host_id ?? null;
@@ -1630,7 +1645,7 @@ function RegisteredAppShell(): JSX.Element {
         workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={selectedWorkspace?.name ?? null}
         workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-        workspacePath={selectedWorkspace?.workspace_path ?? null}
+        workspacePath={selectedWorkspacePath}
         workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
         onOpenWorkspaceSettings={
           selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
@@ -1939,8 +1954,6 @@ function RegisteredAppShell(): JSX.Element {
                       id: w.id,
                       name: w.name,
                       kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
-                      workspace_path: w.workspace_path,
-                      workspace_host_id: w.workspace_host_id,
                       dm_agent_id: w.dm_agent_id,
                       unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
                       starred_at: workspaceStarredAt.get(w.id) ?? null,
@@ -1948,6 +1961,7 @@ function RegisteredAppShell(): JSX.Element {
                       created_at: w.created_at,
                     }))}
                     agentsById={agentsById}
+                    localWorkspacePaths={localWorkspacePaths}
                     selectedWorkspaceId={selectedWorkspaceId}
                     onSelectWorkspace={handleSelectWorkspace}
                     onStarWorkspace={(workspaceId, starred) =>
@@ -2166,7 +2180,7 @@ function RegisteredAppShell(): JSX.Element {
         workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={selectedWorkspace?.name ?? null}
         workspaceKind={selectedWorkspace?.kind ?? null}
-        workspacePath={selectedWorkspace?.workspace_path ?? null}
+        workspacePath={selectedWorkspacePath}
         archivedAt={selectedWorkspace?.archived_at ?? null}
         onDeleted={handleWorkspaceDeleted}
       />

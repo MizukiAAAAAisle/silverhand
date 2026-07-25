@@ -26,7 +26,6 @@ import {
   useListDragSort,
 } from '@/components/layout/list-drag-sort';
 import { WorkspaceContextMenu } from './WorkspaceContextMenu';
-import type { WorkspaceItem } from './WorkspacesPanel';
 import { SidebarSection } from './sidebar-shared';
 
 /** The favorites list's own sort namespace. A single FLAT group (`favorites`),
@@ -81,12 +80,7 @@ export function FavoritesGroup(props: {
    *  view (Activity/Saved/…) owns selection. */
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
-  /** The RAW full workspace set keyed by id (a starred workspace stays in it —
-   *  star only MOVES it out of the home render groups). Lets a favorite row
-   *  resolve its `workspace_path` / reveal capability so its context menu
-   *  matches the home-rail one (#task:1439). */
-  workspacesById: ReadonlyMap<string, WorkspaceItem>;
-  canRevealWorkspace: (workspace: WorkspaceItem) => boolean;
+  localWorkspacePaths: ReadonlyMap<string, string>;
 }): JSX.Element | null {
   const { data } = useFavorites();
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -145,7 +139,8 @@ export function FavoritesGroup(props: {
         onReorder={o => onReorder(FAVORITES_GROUP, o)}
       >
         {ordered.map(item => {
-          const ws = props.workspacesById.get(item.workspace_id);
+          const workspacePath =
+            props.localWorkspacePaths.get(item.workspace_id) ?? null;
           return (
             <SortableFavoriteRow
               key={item.favorite_key}
@@ -155,8 +150,8 @@ export function FavoritesGroup(props: {
                 props.selectedWorkspaceId,
               )}
               dmAvatarUrl={dmAvatarUrls.get(item.entity_id) ?? null}
-              workspacePath={ws?.workspace_path ?? null}
-              canReveal={ws ? props.canRevealWorkspace(ws) : false}
+              workspacePath={workspacePath}
+              canReveal={workspacePath !== null}
               onSelectWorkspace={props.onSelectWorkspace}
               onUnstar={() => unstar.mutate(item)}
             />
@@ -171,8 +166,7 @@ interface FavoriteRowProps {
   item: FavoriteRowDto;
   tier: RowSelectionTier;
   dmAvatarUrl: string | null;
-  /** From the joined `WorkspaceItem` — powers the shared menu's Open in Finder /
-   *  Copy path. Null in the brief window before the workspace record resolves. */
+  /** Daemon-local path for Open in Finder / Copy path. */
   workspacePath: string | null;
   canReveal: boolean;
   onSelectWorkspace: (id: string) => void;

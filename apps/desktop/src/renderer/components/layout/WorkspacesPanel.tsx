@@ -18,8 +18,6 @@ export interface WorkspaceItem {
   id: string;
   name: string;
   kind: WorkspaceUiKind;
-  workspace_path: string;
-  workspace_host_id: string;
   dm_agent_id: string | null;
   starred_at?: number | null;
   active?: boolean;
@@ -61,7 +59,7 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
-  canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
+  localWorkspacePaths: ReadonlyMap<string, string>;
   /** Optional `+` button. DM groups omit this — DM workspaces are
    *  auto-created when an agent is provisioned. Ignored when `headerAction`
    *  is set (the caller composes its own action cluster, e.g. sort + add). */
@@ -100,7 +98,7 @@ interface RailRowContext {
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
-  canRevealWorkspace?: (workspace: WorkspaceItem) => boolean;
+  localWorkspacePaths: ReadonlyMap<string, string>;
   agentsById?: ReadonlyMap<string, AgentDto>;
   dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
 }
@@ -140,7 +138,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   selectedWorkspaceId,
   onSelectWorkspace,
   onStarWorkspace,
-  canRevealWorkspace,
+  localWorkspacePaths,
   onAdd,
   headerAction,
   emptyHint,
@@ -154,7 +152,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
     selectedWorkspaceId,
     onSelectWorkspace,
     onStarWorkspace,
-    canRevealWorkspace,
+    localWorkspacePaths,
     agentsById,
     dmAgentAvatarUrls,
   };
@@ -261,7 +259,7 @@ function WorkspaceRow({
   const title = workspace.kind === 'dm' ? dmWorkspaceLabel(workspace.name) : workspace.name;
   const icon = rowIconFor(workspace, ctx);
   const canStar = canStarWorkspace(workspace, ctx);
-  const canReveal = ctx.canRevealWorkspace?.(workspace) ?? false;
+  const workspacePath = ctx.localWorkspacePaths.get(workspace.id) ?? null;
   // Selection rule (#task:1254): the workspace/DM row is `primary` iff it is the
   // selected workspace. Channels never appear in the rail/STARRED, so an open
   // channel just leaves its parent workspace selected. One function
@@ -326,8 +324,8 @@ function WorkspaceRow({
       canStar={canStar}
       isStarred={isStarred}
       onToggleStar={() => ctx.onStarWorkspace?.(workspace.id, !isStarred)}
-      canReveal={canReveal}
-      workspacePath={workspace.workspace_path}
+      canReveal={workspacePath !== null}
+      workspacePath={workspacePath}
     />
   );
 }

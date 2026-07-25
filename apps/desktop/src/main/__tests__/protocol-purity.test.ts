@@ -79,6 +79,7 @@ const cataloguedIpcHandlers = [
   'settings:saveServerUrl',
   'shell:openExternal',
   'shell:showItemInFolder',
+  'workspacePaths:resolveLocal',
 ].sort();
 
 interface SourceFile {

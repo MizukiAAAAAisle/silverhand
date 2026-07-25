@@ -3,7 +3,6 @@ import { Archive, Bookmark, Plus, Search } from 'lucide-react';
 import type { AgentDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { Button } from '@/components/ui/button';
-import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import {
   useAgentAvatarObjectUrls,
   type AgentAvatarSource,
@@ -49,6 +48,7 @@ interface SidebarProps {
    *  on first paint (before the query resolves) so the badge stays
    *  hidden instead of flashing 0. */
   savedCount: number | undefined;
+  localWorkspacePaths: ReadonlyMap<string, string>;
 }
 
 /** The rail is one sortable list (`list_key='workspaces'`) with two live hard
@@ -64,7 +64,6 @@ function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
 }
 
 export function Sidebar(props: SidebarProps): JSX.Element {
-  const hostProvenance = useHostProvenanceGate();
   // Home rail groups by KIND (DM / regular), plus archived. STARRED is NOT a rail
   // partition — it is the global Favorites overlay (#task:1253/#task:1254). Under
   // the EXCLUSIVE model a starred (non-archived) workspace/DM is MOVED into
@@ -75,15 +74,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // RAW full visible set; these are the home projections (see lib/home-grouping).
   const { dms: homeDms, regular: homeRegular, archived } = useMemo(
     () => partitionRailWorkspaces(props.workspaces),
-    [props.workspaces],
-  );
-
-  // The STARRED section renders from its own favorites read-model (no
-  // `workspace_path`), so key the RAW full set by id to hand each starred row its
-  // full workspace record — its context menu resolves path / reveal from here and
-  // matches the home-rail menu (#task:1439).
-  const workspacesById = useMemo(
-    () => new Map(props.workspaces.map(w => [w.id, w])),
     [props.workspaces],
   );
 
@@ -245,10 +235,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <FavoritesGroup
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
-          workspacesById={workspacesById}
-          canRevealWorkspace={workspace =>
-            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
-          }
+          localWorkspacePaths={props.localWorkspacePaths}
         />
         <WorkspaceGroup
           label="DM"
@@ -257,9 +244,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
-          canRevealWorkspace={workspace =>
-            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
-          }
+          localWorkspacePaths={props.localWorkspacePaths}
           emptyHint="新建 agent 时会自动创建 DM"
           agentsById={props.agentsById}
           dmAgentAvatarUrls={dmAgentAvatarUrls}
@@ -274,9 +259,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
-          canRevealWorkspace={workspace =>
-            hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
-          }
+          localWorkspacePaths={props.localWorkspacePaths}
           headerAction={
             <span className="flex items-center">
               {sortMenuFor('regular')}
@@ -312,9 +295,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             workspaces={archived}
             selectedWorkspaceId={workspaceHighlight}
             onSelectWorkspace={props.onSelectWorkspace}
-            canRevealWorkspace={workspace =>
-              hostProvenance.canUseLocalHostPathFor(workspace.workspace_host_id)
-            }
+            localWorkspacePaths={props.localWorkspacePaths}
             defaultExpanded={false}
             persistId="archived"
             agentsById={props.agentsById}

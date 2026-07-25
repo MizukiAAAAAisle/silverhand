@@ -148,6 +148,10 @@ import {
 import {
   registerSurfaceIpcHandlers,
 } from './ipc/surface-ipc.js';
+import {
+  resolveLocalWorkspacePaths,
+  type LocalWorkspacePathContext,
+} from './workspace-local-paths.js';
 
 const nodeSystemCaActivation = enableNodeSystemCa();
 
@@ -3247,6 +3251,26 @@ ipcMain.handle(
   'partialApply:retry',
   (): Promise<PartialApplyRetryResult> => handlePartialApplyRetry(),
 );
+
+ipcMain.handle('workspacePaths:resolveLocal', (_event, input: unknown) => {
+  const paths = desktopAppPaths();
+  const claimedHostId =
+    localHostClaim.status === 'claimed' ? localHostClaim.hostId : null;
+  const config = readDaemonHostConfig(paths.desktop.computerBinding);
+  const context: LocalWorkspacePathContext | null =
+    backend !== null &&
+    claimedHostId !== null &&
+    config !== null &&
+    config.host_id === claimedHostId
+      ? {
+          app_root: paths.appRoot,
+          host_id: claimedHostId,
+          backend_mode: backend.kind,
+          server_url: config.server_url,
+        }
+      : null;
+  return resolveLocalWorkspacePaths(input, context);
+});
 
 
 registerSurfaceIpcHandlers();
