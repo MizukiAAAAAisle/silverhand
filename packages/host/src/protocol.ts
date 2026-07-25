@@ -198,6 +198,11 @@ export const KNOWN_CAPABILITIES_V1 = [
   'fs.local',
   'proxy.env_inherit',
   'agent.freshness_authority',
+  // #task:1614 — this daemon serves the `agent_stale_receive` intent
+  // (deferred-pull second consumer). The CLI gates the command on this
+  // token so a new CLI against an old daemon fails with a clear message
+  // instead of `unknown_intent`.
+  'agent.stale_receive.v1',
 ] as const;
 export type KnownCapabilityV1 = typeof KNOWN_CAPABILITIES_V1[number];
 
@@ -565,6 +570,124 @@ export const AgentStreamObservedResultSchema = z
 export type AgentStreamObservedResult = z.infer<
   typeof AgentStreamObservedResultSchema
 >;
+
+// ── agent_stale_receive (CLI→daemon, #task:1614 deferred pull) ──────
+//
+// After a `message_stale` 409 the agent may PULL the daemon's deferred
+// delivery batch as a tool result instead of waiting for the stdin
+// push. Custody contract lives on `DeferredEntry` / `flushDeferred`
+// (#task:1606): the pull is a SECOND CONSUMER of the same daemon-owned
+// deferred queue — same lifecycle lock, same bounded FIFO prefix, one
+// release winner — never a second release surface over backend
+// pending / runtime-written content.
+//
+// Outcome arms state only provable facts (#task:1606 P2b):
+//   - `batch_covered`        — a prefix was taken AND its coverage
+//                              reaches the stale head's stream/seq.
+//   - `batch_partial_armed`  — a prefix was taken but the stale head is
+//                              NOT covered; the stale event stays armed.
+//   - `no_pending_stale`     — typed no-op; nothing to receive for.
+//   - `already_admitted`     — the observed cursor already covers the
+//                              ORIGINAL stale head (proves only that; a
+//                              newer head may exist — the send CAS is
+//                              still the authority).
+//   - `normal_delivery_in_progress` — the covering content already
+//                              entered normal release/admission (stdin
+//                              write in flight or parked mid-turn
+//                              admission); the tool will not take it
+//                              back.
+//   - `timeout`              — no matching daemon batch was obtained in
+//                              this wait window. States nothing else:
+//                              custody and the stale event are both
+//                              unchanged, and no cause is inferred.
+export const AgentStaleReceiveParamsSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    agent_id: z.string().min(1),
+    /** Bounded wait for a deferred batch to arrive. Waiting never holds
+     *  the lifecycle lock and never takes custody. Clamped to
+     *  [0, 120_000]; default 20_000. */
+    wait_ms: z.number().int().min(0).max(120_000).optional(),
+  })
+  .strict();
+export type AgentStaleReceiveParams = z.infer<
+  typeof AgentStaleReceiveParamsSchema
+>;
+
+const staleReceiveBatchFields = {
+  ok: z.literal(true),
+  stale_event_id: z.string().min(1),
+  /** Verbatim combined batch text — the exact bytes the turn_end flush
+   *  would have written to stdin (ids/owner/text/stream metadata are
+   *  preserved; the batch is opaque and never split). */
+  text: z.string().min(1),
+  delivery_ids: z.array(z.number().int().positive()).min(1),
+  /** Per-stream max seq the batch actually covers — the same derivation
+   *  admission uses. Observed advances by exactly this, never jumped to
+   *  the stale `current_seq`. */
+  covered_seq_by_stream: z.array(
+    z.tuple([z.string().min(1), z.number().int().positive()]),
+  ),
+} as const;
+
+export const AgentStaleReceiveResultSchema = z.discriminatedUnion('outcome', [
+  z.object({ outcome: z.literal('batch_covered'), ...staleReceiveBatchFields }).strict(),
+  z
+    .object({ outcome: z.literal('batch_partial_armed'), ...staleReceiveBatchFields })
+    .strict(),
+  z.object({ ok: z.literal(true), outcome: z.literal('no_pending_stale') }).strict(),
+  z
+    .object({
+      ok: z.literal(true),
+      outcome: z.literal('already_admitted'),
+      stale_event_id: z.string().min(1),
+      stale_current_seq: z.number().int().positive(),
+      observed_seq: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(true),
+      outcome: z.literal('normal_delivery_in_progress'),
+      stale_event_id: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      ok: z.literal(true),
+      outcome: z.literal('timeout'),
+      stale_event_id: z.string().min(1),
+      waited_ms: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+export type AgentStaleReceiveResult = z.infer<
+  typeof AgentStaleReceiveResultSchema
+>;
+
+/** Non-custody arbitration failures. Each states "this call cannot
+ *  arbitrate", never a custody fact — custody facts travel only in the
+ *  result outcomes above.
+ *   - `pull_already_active`: one waiter/reservation per handle; a second
+ *     concurrent pull is refused.
+ *   - `stale_event_replaced`: the pending stale event changed identity
+ *     after this call bound to it; the old waiter is invalid by contract.
+ *   - `runtime_replaced`: the runtime handle this call bound to exited or
+ *     was respawned while waiting.
+ *   - `handoff_unsupported`: the ingress cannot prove a response
+ *     transport handoff (only the control socket can), so the pull is
+ *     refused before any custody decision (fail closed). */
+export const AgentStaleReceiveErrorCodeSchema = z.enum([
+  'pull_already_active',
+  'stale_event_replaced',
+  'runtime_replaced',
+  'handoff_unsupported',
+]);
+export type AgentStaleReceiveErrorCode = z.infer<
+  typeof AgentStaleReceiveErrorCodeSchema
+>;
+// `AgentStaleReceiveIpcErrorSchema` lives next to the other per-intent
+// widened error schemas below (after `ResponseErrorCodeSchema`).
 
 // ── PR-2 runtime_* surface ──────────────────────────────────────────
 //
@@ -1726,6 +1849,15 @@ const RuntimeSpawnIpcErrorSchema = z
   })
   .strict();
 
+/** Per-intent widened wire error for `agent_stale_receive` (#task:1614);
+ *  taxonomy documented at `AgentStaleReceiveErrorCodeSchema`. */
+const AgentStaleReceiveIpcErrorSchema = z
+  .object({
+    code: z.union([ResponseErrorCodeSchema, AgentStaleReceiveErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+
 
 // ── D4.e-1: workspace_provision + agent_workspace_index ───────────────
 //
@@ -2352,6 +2484,15 @@ export const intentSchemas = {
   agent_stream_observed: {
     params: AgentStreamObservedParamsSchema,
     result: AgentStreamObservedResultSchema,
+  },
+  agent_stale_receive: {
+    // #task:1614 — deferred-pull second consumer. Result arms carry the
+    // custody facts; the widened error schema carries the non-custody
+    // arbitration failures (pull_already_active / stale_event_replaced /
+    // runtime_replaced / handoff_unsupported).
+    params: AgentStaleReceiveParamsSchema,
+    result: AgentStaleReceiveResultSchema,
+    error: AgentStaleReceiveIpcErrorSchema,
   },
   runtime_start: {
     params: RuntimeStartParamsSchema,

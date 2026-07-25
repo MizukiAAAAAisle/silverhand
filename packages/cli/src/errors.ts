@@ -66,7 +66,13 @@ export type ErrorSubkind =
   /** `task create --source-message-id` hit the permanent 1:1 provenance lock:
    *  another task already owns that source. Carries `details.existing_task` so
    *  the agent can hand off to the winner instead of retrying. */
-  | 'source_conflict';
+  | 'source_conflict'
+  /** `message stale-receive` non-custody arbitration failures (#task:1614),
+   *  mirroring the daemon's typed codes 1:1 — the pull call could not
+   *  arbitrate; custody and the stale event are unchanged. */
+  | 'pull_already_active'
+  | 'stale_event_replaced'
+  | 'runtime_replaced';
 
 export interface CliErrorPayload {
   code: ErrorCode;

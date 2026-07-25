@@ -57,6 +57,7 @@ import {
   type RuntimeClearSessionParams,
   type ConversationLogDebugParams,
   type AgentMessageSendParams,
+  type AgentStaleReceiveParams,
   type AgentStaleResolveParams,
   type AgentStreamObservedParams,
   type HostOutboundAttachParams,
@@ -375,6 +376,15 @@ export class HostClient {
     params: AgentStreamObservedParams,
   ): Promise<IntentResult<'agent_stream_observed'>> {
     return this.call('agent_stream_observed', params);
+  }
+
+  /** #task:1614 — deferred-pull second consumer. Callers must size the
+   *  client's `requestTimeoutMs` above `params.wait_ms`: the daemon
+   *  legitimately holds the response for the whole wait window. */
+  agentStaleReceive(
+    params: AgentStaleReceiveParams,
+  ): Promise<IntentResult<'agent_stale_receive'>> {
+    return this.call('agent_stale_receive', params);
   }
 
   // ── PR-2 runtime_* typed helpers ───────────────────────────────

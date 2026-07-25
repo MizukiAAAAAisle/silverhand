@@ -139,6 +139,77 @@ export const INPUT_PAYLOAD_UUID_CAP = 200;
 export interface PendingStaleEvent {
   id: string;
   currentSeq: number;
+  /** Stream the conflicted head lives in (`main` or `thread:<root>`),
+   *  from the 409's `details.stream_key`. `null` when the backend did
+   *  not surface one — coverage checks then fail CLOSED: a pull can
+   *  still take the FIFO prefix but never claims `batch_covered` /
+   *  `already_admitted` without a provable stream. */
+  streamKey: string | null;
+}
+
+/**
+ * Short-lived pull-in-flight reservation (#task:1614; contract
+ * #task:1606): the ONE new custody state the stale-receive pull adds.
+ * Created under the lifecycle lock the instant the pull splices its
+ * FIFO prefix out of `deferredQueue`; resolved exactly once by the
+ * response transport handoff (`consumed` + observed advance on success,
+ * FIFO restore in place on pre-proof failure). While it is non-null NO
+ * later prefix may be released — `deliver()`'s admit arm and
+ * `flushDeferred` both hold, preserving presentation FIFO.
+ *
+ * Reconnect visibility (review P1-1): a re-submit of a RESERVED id-set
+ * (backend rolled the rows back on the old owner's disconnect and
+ * re-drove them under a new connection) must NOT enqueue a second copy —
+ * `enqueueDeferred` dedups against these entries and rebinds the
+ * matching entry's owner in place, mirroring the queue rebind path.
+ * `batch` is therefore an element-replaceable array (binding readonly).
+ */
+export interface PullReservation {
+  readonly staleEventId: string;
+  /** The spliced entries, verbatim, for a pre-proof FIFO restore.
+   *  Elements may be owner-rebound by `enqueueDeferred` (see above). */
+  readonly batch: DeferredEntry[];
+  /** The combined batch (same `combineDeferredBatch` product the flush
+   *  would have written) — the settlement's delivery_ids/coverage
+   *  source and the response's verbatim text. */
+  readonly combined: StartupDeliveryState;
+  /**
+   * Resolves once `settleStaleReceiveHandoff` has fully run (either
+   * arm). This is the ONLY caller-visible happens-before for
+   * settlement: the response frame can reach the peer before the
+   * server's write callback runs in this process (the kernel gives no
+   * cross-process ordering), so anything that must read
+   * post-settlement state — the send freshness barrier — awaits THIS,
+   * never the write callback's scheduling position (review P1-2 v2).
+   */
+  readonly settled: Promise<void>;
+  /** Resolves {@link settled}; called exactly once by
+   *  `settleStaleReceiveHandoff` after its locked section completes. */
+  readonly markSettled: () => void;
+}
+
+/** Why a registered waiter's wait promise resolved. `arrival` prompts a
+ *  locked re-evaluation; `cancelled` (the owning control connection
+ *  closed) aborts the call — zero custody either way. */
+export type PullWakeReason = 'arrival' | 'cancelled';
+
+/**
+ * Registered stale-receive waiter (#task:1614). At most one per handle;
+ * bound to the exact stale event AND the exact call (`token`) — a
+ * concurrent second pull is refused, and its cleanup can never clear a
+ * waiter it does not own (review P1-3). `owner` is the issuing control
+ * connection's delivery-owner token: that connection's close cancels
+ * the waiter (review P1-4) — cancel-before-take only unregisters, it
+ * never touches custody. Registration/removal happen under the
+ * lifecycle lock; the WAIT itself never holds the lock.
+ */
+export interface PullWaiter {
+  readonly staleEventId: string;
+  /** Unique per stale-receive CALL, minted by the supervisor. */
+  readonly token: number;
+  /** Delivery-owner token of the issuing control connection. */
+  readonly owner: string;
+  readonly wake: (reason: PullWakeReason) => void;
 }
 
 /** Gated legacy default-reply-target inference shape (see
@@ -346,6 +417,14 @@ export interface RuntimeHandle {
    *  second boundary-reopen / post-write cascade from racing a flush.
    *  Mirrors the backend coordinator's `flushing` guard. */
   flushingDeferred: boolean;
+  /** Pull-in-flight reservation (#task:1614); see {@link PullReservation}.
+   *  Non-null blocks BOTH `flushDeferred` and `deliver()`'s admit arm
+   *  from releasing any later prefix. */
+  pullReservation: PullReservation | null;
+  /** Registered stale-receive waiter (#task:1614); see {@link PullWaiter}.
+   *  At most one; its presence makes a second concurrent pull fail with
+   *  `pull_already_active`. */
+  pullWaiter: PullWaiter | null;
 
   // ── 3c-b additions ───────────────────────────────────────────────
 

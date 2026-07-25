@@ -19,6 +19,8 @@
 import type {
   AgentMessageSendParams,
   AgentMessageSendResult,
+  AgentStaleReceiveParams,
+  AgentStaleReceiveResult,
   AgentStaleResolveParams,
   AgentStaleResolveResult,
   AgentStreamObservedParams,
@@ -62,6 +64,27 @@ import type {
  */
 export interface DeliveryOwnerContext {
   owner: string;
+  /**
+   * Ingress declaration: this connection can prove a RESPONSE transport
+   * handoff (#task:1614 stale-receive). Only the control-socket ingress
+   * sets it — it writes the response frame with a completion callback.
+   * A handler whose custody settlement is deferred to that handoff (the
+   * deferred pull) MUST fail closed when this is absent: settling on
+   * "result returned" would be before the transport proof point, and
+   * never settling would hold the pull reservation — and with it the
+   * whole deferred queue — forever.
+   */
+  supportsResponseHandoff?: true;
+  /**
+   * Set BY THE HANDLER (never the ingress) when this request's custody
+   * settlement is deferred to the response transport handoff. The
+   * ingress invokes it exactly once after the response frame's write
+   * settles: `true` when the frame reached the peer's transport,
+   * `false` on write failure OR when the response is an error frame
+   * (content not delivered). While it stays unset the ingress write
+   * path is byte-for-byte unchanged.
+   */
+  responseHandoff?: (handoffOk: boolean) => void;
 }
 
 /**
@@ -101,6 +124,19 @@ export interface SupervisorContract {
   agentStreamObserved(
     params: AgentStreamObservedParams,
   ): AgentStreamObservedResult | Promise<AgentStreamObservedResult>;
+  /**
+   * Deferred-pull second consumer (#task:1614, contract #task:1606).
+   * Arbitrates against `flushDeferred` under the same per-handle
+   * lifecycle lock for the same bounded FIFO prefix; single release
+   * winner. Custody settles only via `ctx.responseHandoff` after the
+   * ingress proves the response transport handoff — the handler MUST
+   * fail closed (`handoff_unsupported`) when
+   * `ctx.supportsResponseHandoff` is absent.
+   */
+  agentStaleReceive(
+    params: AgentStaleReceiveParams,
+    ctx: DeliveryOwnerContext,
+  ): AgentStaleReceiveResult | Promise<AgentStaleReceiveResult>;
   start(params: RuntimeStartParams): RuntimeStartResult | Promise<RuntimeStartResult>;
   stop(params: RuntimeStopParams): RuntimeStopResult | Promise<RuntimeStopResult>;
   /**

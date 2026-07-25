@@ -48,6 +48,7 @@ describe('command catalogue', () => {
     const expected: Array<[string, string]> = [
       ['message', 'send'],
       ['message', 'stale-resolve'],
+      ['message', 'stale-receive'],
       ['message', 'react'],
       ['message', 'history'],
       ['message', 'search'],
@@ -77,7 +78,7 @@ describe('command catalogue', () => {
       expect(cmd, `${noun} ${verb}`).toBeDefined();
     }
     const total = COMMAND_GROUPS.reduce((acc, g) => acc + g.commands.length, 0);
-    expect(total).toBe(25);
+    expect(total).toBe(26);
   });
 
   it('every command has a non-empty help block', () => {

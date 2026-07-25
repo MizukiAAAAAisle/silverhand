@@ -237,6 +237,10 @@ describe('§3.4 — IntentDispatcher payload redaction', () => {
       reason: 'no_pending_stale_event',
     }),
     agentStreamObserved: async () => ({ ok: true }),
+    agentStaleReceive: async () => ({
+      ok: true,
+      outcome: 'no_pending_stale' as const,
+    }),
     start: async () => ({ started: true, pid: 1, started_at: 0 }),
     stop: async () => ({ mode: 'hard', stopped: true, exit_code: 0 }),
     deliver: async () => ({ disposition: 'admitted', pid: 1, started_at: 0 }),

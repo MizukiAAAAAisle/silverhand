@@ -314,6 +314,12 @@ export function conversationMessageServiceErrorResponse(
     // the observed boundary advances via admission evidence, not via this
     // response. The hint keeps the current turn actionable while pending
     // content continues through the existing normal-delivery path.
+    //
+    // #task:1614: this hint is deliberately the ONLY prompt surface that
+    // mentions `message stale-receive` — the command's sole legal calling
+    // context is an unresolved message_stale, so the one-shot hint here
+    // is its entire discovery path (shiki + Cindy, 2026-07-25). Do not
+    // add it to the persistent platform prompt.
     return c.json(
       {
         error: {
@@ -328,7 +334,7 @@ export function conversationMessageServiceErrorResponse(
               : 'main',
             seen_up_to_seq: err.seenUpToSeq,
             current_seq: err.currentSeq,
-            hint: 'send rejected; stop this send attempt until pending messages arrive through normal delivery',
+            hint: 'send rejected; run `silverhand message stale-receive` to pull the pending messages now, or stop this send attempt until they arrive through normal delivery',
           },
         },
       },

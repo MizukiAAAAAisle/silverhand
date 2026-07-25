@@ -43,6 +43,8 @@
 import type {
   AgentMessageSendParams,
   AgentMessageSendResult,
+  AgentStaleReceiveParams,
+  AgentStaleReceiveResult,
   AgentStaleResolveParams,
   AgentStaleResolveResult,
   AgentStreamObservedParams,
@@ -168,6 +170,16 @@ export class FakeSupervisor {
     // Daemon-local intent — the fake just acks; per-stream observed state
     // lives on the real Supervisor's handles, not here.
     return { ok: true };
+  }
+
+  agentStaleReceive(
+    _params: AgentStaleReceiveParams,
+    _ctx: DeliveryOwnerContext,
+  ): AgentStaleReceiveResult {
+    // The fake holds no stale/deferred state; the typed no-op arm is the
+    // honest answer. Custody arbitration is exercised against the real
+    // Supervisor only.
+    return { ok: true, outcome: 'no_pending_stale' };
   }
 
   // ── runtime_start ──────────────────────────────────────────────

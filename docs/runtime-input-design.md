@@ -353,6 +353,37 @@ signal-only 的前提：**凡是推进 stream head（能造成 409）的消息�
    推）→ agent 无法在缺口上继续发言，除非显式 `--anyway`（有审计）。
 3. 5.2 保证缺口必然由正常投递闭合 → 不漏；单一释放面 → 不重复。
 
+### 5.4 Deferred pull（`message stale-receive`，#task:1614；不变量 #task:1606）
+
+v8 否决的是"从 backend/history 再取一份"的第二释放面；pull 不是它的复活：
+它是 **daemon 已持有的 deferred custody 的第二个消费入口** —— 同一
+per-handle lifecycle lock、同一 profile-specific bounded FIFO prefix
+（`spliceBoundedDeferredPrefix` / FIFO-one + `combineDeferredBatch`）、单一
+release winner。谁取走，另一边就看不到；"正文只释放一次"的合同不变，变的
+只是这一次释放可以走 tool result 而不是 stdin。承重不变量钉在代码注释
+（`DeferredEntry` custody contract / `flushDeferred` 仲裁点）；本节只补
+admission 证据分类：
+
+- **证据类别**：pull 的 consumed/observed 结算是 **scheduler/CLI 构造性证据**
+  （与 §3.1 的 stdin-write 结算同类），不是任何 driver profile 的新协议证据。
+  proof point = 响应帧的 transport handoff（控制 socket write 回调）；此前
+  timeout/cancel/失败零结算、prefix 原位归还 FIFO；此后 crash 沿用 §6
+  "write 成功后崩溃不重投"。唯一新状态 = 短命 pull-in-flight reservation，
+  未决期间任何后续 prefix（含 boundary 开放时的新到 admit）一律 defer。
+- **observed 推进**：按批次真实 per-stream 覆盖（`admitNow=true`——正文进入
+  的是当前 turn 的上下文，这正是同 turn retry 能过 CAS 的机制），永不跳到
+  stale `current_seq`；部分覆盖时 stale 保持 armed。pull admission 不制造
+  turn activity（它不开始新 turn，伪造会关死 next-turn-batch 边界）。
+- **caller outcome 枚举**（每臂只陈述可证事实）：`batch_covered` /
+  `batch_partial_armed` / `no_pending_stale` / `already_admitted`（只证原
+  stale head 已覆盖）/ `normal_delivery_in_progress`（正文已进正常
+  release/admission，工具不取回）/ `timeout`（零 custody 变化、不推断原因）。
+  非 custody 仲裁失败走 typed error（`pull_already_active` /
+  `stale_event_replaced` / `runtime_replaced` / `handoff_unsupported`）。
+- **不触碰**：backend pending（lease 仍是唯一持久权威）、`startupDelivery`
+  （release-in-progress 永不回收）、runtime-written 内容；全路径不调用
+  backend history/fetch。无 pull 调用时行为与现状逐字节一致。
+
 ## 6. 失败语义
 
 | 故障点 | 后果 | 恢复 |

@@ -139,6 +139,9 @@ describe('IntentDispatcher', () => {
       async agentStreamObserved() {
         throw new Error('not used');
       },
+      async agentStaleReceive() {
+        throw new Error('not used');
+      },
       async start() {
         throw new Error('not used');
       },

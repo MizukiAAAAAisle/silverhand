@@ -534,6 +534,21 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_stream_observed' },
   },
   {
+    name: 'request/agent_stale_receive',
+    description:
+      '#task:1614 deferred pull: after a message_stale 409 the agent asks the daemon for the deferred delivery batch as a tool result, with a bounded wait window. Custody arbitration is daemon-side (same lifecycle lock / bounded FIFO prefix as the auto-flush).',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      intent: 'agent_stale_receive',
+      params: {
+        conversation_id: 'conv_A',
+        agent_id: 'agent_A',
+        wait_ms: 20_000,
+      },
+    }),
+    kind: { kind: 'request', intent: 'agent_stale_receive' },
+  },
+  {
     name: 'request/workspace_provision-with-requested-path',
     description:
       'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
@@ -720,6 +735,94 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       result: { ok: true },
     }),
     kind: { kind: 'response_success', intent: 'agent_stream_observed' },
+  },
+  {
+    name: 'response/agent_stale_receive-batch_covered',
+    description:
+      '#task:1614 pull took the next bounded FIFO prefix and its per-stream coverage reaches the stale head. Text is the verbatim combined batch the turn_end flush would have written.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      result: {
+        ok: true,
+        outcome: 'batch_covered',
+        stale_event_id: 'stale-evt-1',
+        text: '[msg from @alice] the newer message body',
+        delivery_ids: [201, 202],
+        covered_seq_by_stream: [['main', 30]],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-batch_partial_armed',
+    description:
+      '#task:1614 pull took the prefix but the stale head is NOT covered; the stale event stays armed. Observed advances only by the actual coverage.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      result: {
+        ok: true,
+        outcome: 'batch_partial_armed',
+        stale_event_id: 'stale-evt-1',
+        text: '[msg from @alice] an earlier message body',
+        delivery_ids: [201],
+        covered_seq_by_stream: [['main', 21]],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-no_pending_stale',
+    description: '#task:1614 typed no-op: no unresolved message_stale for this agent.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      result: { ok: true, outcome: 'no_pending_stale' },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-already_admitted',
+    description:
+      '#task:1614 the observed cursor already covers the ORIGINAL stale head (proves only that; a newer head may exist — the send CAS stays authoritative).',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      result: {
+        ok: true,
+        outcome: 'already_admitted',
+        stale_event_id: 'stale-evt-1',
+        stale_current_seq: 30,
+        observed_seq: 31,
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-normal_delivery_in_progress',
+    description:
+      '#task:1614 the covering content already entered normal release/admission (stdin write in flight or parked mid-turn admission); the pull takes nothing back.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      result: {
+        ok: true,
+        outcome: 'normal_delivery_in_progress',
+        stale_event_id: 'stale-evt-1',
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-timeout',
+    description:
+      '#task:1614 no matching daemon batch was obtained in the wait window. States nothing else: custody and the stale event are unchanged, no cause is inferred.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      result: {
+        ok: true,
+        outcome: 'timeout',
+        stale_event_id: 'stale-evt-1',
+        waited_ms: 20_000,
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'agent_stale_receive' },
   },
   {
     name: 'response/runtime_start-success',
@@ -1484,6 +1587,61 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
+  },
+  // #task:1614 agent_stale_receive non-custody arbitration failures —
+  // each states "this call cannot arbitrate", never a custody fact
+  // (custody facts travel only in the result outcomes).
+  {
+    name: 'response/agent_stale_receive-error-pull_already_active',
+    description:
+      'One waiter/reservation per handle: a second concurrent pull is refused; the first call is unaffected.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      error: {
+        code: 'pull_already_active',
+        message: 'another stale-receive pull is already active for this runtime',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-error-stale_event_replaced',
+    description:
+      'The pending stale event changed identity after this call bound to it; the old waiter is invalid by contract — re-issue against the new event.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      error: {
+        code: 'stale_event_replaced',
+        message: 'pending stale event changed while the pull was waiting; re-issue against the new event',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-error-runtime_replaced',
+    description:
+      'The runtime handle this call bound to exited or was respawned while waiting; zero custody was taken.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      error: {
+        code: 'runtime_replaced',
+        message: 'runtime handle exited or was replaced while the pull was waiting',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_stale_receive' },
+  },
+  {
+    name: 'response/agent_stale_receive-error-handoff_unsupported',
+    description:
+      'Fail closed before any custody decision: only the control-socket ingress can prove a response transport handoff; any other ingress is refused.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      error: {
+        code: 'handoff_unsupported',
+        message: 'agent_stale_receive requires an ingress that proves response transport handoff (control socket only)',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_stale_receive' },
   },
 ];
 

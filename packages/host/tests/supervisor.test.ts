@@ -33,6 +33,7 @@ import {
 import { tmpdir } from 'node:os';
 
 import { Supervisor } from '../src/daemon/supervisor/index.js';
+import type { DeliveryOwnerContext } from '../src/daemon/supervisor-contract.js';
 import { CodexDriver } from '../src/drivers/codex.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
@@ -6760,5 +6761,758 @@ describe('Supervisor #task:1486 — reasoning-effort is forwarded, not product-g
     const argv = new CodexDriver().buildArgs(captured!);
     expect(argv[argv.indexOf('-c') + 1]).toBe('model_reasoning_effort="giga"');
     await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+  });
+});
+
+describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody contract #task:1606)', () => {
+  /** Same drivable stub the Stage 3 suite uses: hand-driven stdout,
+   *  observable stdin writes, park-able write completion. */
+  class PullDriveStub extends EventEmitter {
+    readonly pid = 66_666;
+    readonly stdout = new EventEmitter();
+    readonly stderr = new EventEmitter();
+    readonly written: string[] = [];
+    parkWrites = false;
+    pendingWriteCb: ((err?: Error | null) => void) | null = null;
+    readonly stdin = {
+      write: (line: string, cb?: (err?: Error | null) => void): boolean => {
+        this.written.push(line);
+        if (this.parkWrites) {
+          this.pendingWriteCb = cb ?? null;
+          return true;
+        }
+        setImmediate(() => cb?.());
+        return true;
+      },
+      end: () => {},
+      destroyed: false,
+      once: () => {},
+    };
+    resolveParkedWrite(): void {
+      const cb = this.pendingWriteCb;
+      this.pendingWriteCb = null;
+      cb?.();
+    }
+    kill(_sig?: NodeJS.Signals | number): boolean {
+      setImmediate(() => this.emit('exit', 0, null));
+      return true;
+    }
+  }
+
+  /** Gated next-turn-batch (qoder-class) harness with per-delivery seq
+   *  metadata — the pull's coverage arithmetic needs real seqs. */
+  function makePullHarness() {
+    let stub = new PullDriveStub();
+    const base = makeProgrammableDriver([], 'requires_first_message').driver;
+    let nextParse: ParsedEvent[] = [];
+    const driver: Driver = {
+      ...base,
+      releaseProfile: 'next-turn-batch',
+      parseLine: () => {
+        const out = nextParse;
+        nextParse = [];
+        return out;
+      },
+    };
+    const spy = makeEmitSpy();
+    let firstSpawn = true;
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveBinary: async (_kind, fallback) => fallback,
+      spawnFn: () => {
+        if (!firstSpawn) stub = new PullDriveStub();
+        firstSpawn = false;
+        return stub as unknown as ChildProcess;
+      },
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps(),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+    const drive = (events: ParsedEvent[]) => {
+      nextParse = events;
+      stub.stdout.emit('data', 'line\n');
+    };
+    /** Deliver one message with structured per-delivery seq metadata. */
+    const deliverSeq = (id: number, seq: number, owner = 'owner-A') =>
+      supervisor.deliver(
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          delivery_ids: [id],
+          kind: 'message',
+          text: `msg-${id}`,
+          delivered_up_to_seq: seq,
+          deliveries: [
+            {
+              delivery_id: id,
+              message_id: `m${id}`,
+              seq,
+              thread_root_id: null,
+              delivery_kind: 'turn' as const,
+            },
+          ],
+          spawn_options: baseStartParams.options,
+        },
+        { owner },
+      );
+    const consumedFor = (id: number) =>
+      spy.events.filter(
+        e =>
+          e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id),
+      );
+    /** Arm the daemon's pendingStaleEvent through a production-shaped
+     *  409, then keep answering sends by CAS against `headSeq`:
+     *  seen_up_to_seq >= headSeq → 200, else another 409. */
+    const stubBackendWithCas = (headSeq: number) => {
+      const postedBodies: Record<string, unknown>[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          postedBodies.push(body);
+          const seen = body['seen_up_to_seq'];
+          if (typeof seen === 'number' && seen >= headSeq) {
+            return new Response(
+              JSON.stringify({ message_id: 'm-ok', message_seq: headSeq + 1 }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            );
+          }
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: 'stale-1',
+                  stream_key: 'main',
+                  seen_up_to_seq: seen ?? null,
+                  current_seq: headSeq,
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }),
+      );
+      return postedBodies;
+    };
+    /** Ready a spawned gated handle: spawn-with-batch [1] seq 1, then
+     *  session_init → ready; the spawn write settles delivery 1. */
+    const boot = async () => {
+      const spawn0 = await deliverSeq(1, 1);
+      expect(spawn0.disposition).toBe('spawning');
+      drive([{ kind: 'session_init', sessionId: 's1' }]);
+      await waitForDeliveryConsumed(spy.events, 1);
+    };
+    /** The pull entry, with the server-side handoff emulated: returns the
+     *  result plus a `settle` you invoke like the control socket would. */
+    const pull = async (waitMs: number) => {
+      const ctx: DeliveryOwnerContext = {
+        owner: 'control:test',
+        supportsResponseHandoff: true,
+      };
+      const result = await supervisor.agentStaleReceive(
+        { conversation_id: 'c1', agent_id: 'a1', wait_ms: waitMs },
+        ctx,
+      );
+      return { result, settle: ctx.responseHandoff };
+    };
+    const stop = () =>
+      supervisor
+        .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .catch(() => undefined);
+    return {
+      get stub() {
+        return stub;
+      },
+      supervisor,
+      events: spy.events,
+      drive,
+      deliverSeq,
+      consumedFor,
+      stubBackendWithCas,
+      boot,
+      pull,
+      stop,
+    };
+  }
+
+  const send = (
+    supervisor: Supervisor,
+    content: string,
+    staleResolution?: 'unaffected' | 'revised',
+  ) =>
+    supervisor.agentMessageSend({
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      content,
+      ...(staleResolution ? { stale_resolution_reason: staleResolution } : {}),
+    });
+
+  it('core falsifier: 409 → pull takes the deferred batch atomically → observed covers → same-turn revised send passes CAS → turn_end releases nothing twice', async () => {
+    const h = makePullHarness();
+    const postedBodies = h.stubBackendWithCas(3);
+    try {
+      await h.boot();
+      const writesAfterBoot = h.stub.written.length;
+
+      // Send from inside the (reserved) turn → 409 arms the stale event.
+      const stale = await send(h.supervisor, 'draft');
+      expect(stale).toMatchObject({ ok: false, status: 409 });
+
+      // The unseen window arrives mid-turn → deferred, never written.
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      expect((await h.deliverSeq(3, 3)).disposition).toBe('deferred');
+      expect(h.consumedFor(2)).toHaveLength(0);
+
+      // PULL: takes the whole bounded FIFO prefix; coverage reaches the
+      // stale head (seq 3 on main) → batch_covered.
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+      if (result.outcome !== 'batch_covered') throw new Error('unreachable');
+      expect([...result.delivery_ids].sort()).toEqual([2, 3]);
+      expect(result.text).toContain('msg-2');
+      expect(result.text).toContain('msg-3');
+      expect(settle).toBeTypeOf('function');
+
+      // Reservation unresolved: a turn_end flush must NOT release the
+      // remainder or anything else — zero new stdin writes.
+      h.drive([{ kind: 'turn_end' }]);
+      await wait(30);
+      expect(h.stub.written.length).toBe(writesAfterBoot);
+      expect(h.consumedFor(2)).toHaveLength(0);
+
+      // Transport handoff proven → exactly one consumed covering [2,3],
+      // observed advanced by the batch's ACTUAL coverage.
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+      const consumed = h.events.filter(
+        e =>
+          e.event === 'runtime_delivery_consumed' &&
+          (e.delivery_ids.includes(2) || e.delivery_ids.includes(3)),
+      );
+      expect(consumed).toHaveLength(1);
+
+      // Same-turn retry is now fresh: CAS sees seen_up_to_seq = 3.
+      const retry = await send(h.supervisor, 'revised draft', 'revised');
+      expect(retry).toMatchObject({ ok: true, message_id: 'm-ok' });
+      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(3);
+      expect(postedBodies.at(-1)?.['stale_event_id']).toBe('stale-1');
+
+      // turn_end after settlement: the pulled batch is GONE from daemon
+      // custody — nothing re-flushes, zero duplicate exposure.
+      h.drive([{ kind: 'turn_end' }]);
+      await wait(30);
+      expect(h.stub.written.length).toBe(writesAfterBoot);
+      expect(
+        h.events.filter(
+          e =>
+            e.event === 'runtime_delivery_consumed' &&
+            e.delivery_ids.includes(2),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('handoff failure before the proof point: FIFO restored in place, zero consumed, zero observed; the next flush releases it exactly once', async () => {
+    const h = makePullHarness();
+    const postedBodies = h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      // Pre-proof failure → restore, no settlement of any kind.
+      settle!(false);
+      await wait(30);
+      expect(h.consumedFor(2)).toHaveLength(0);
+      expect(
+        h.events.some(e => e.event === 'runtime_delivery_failed'),
+      ).toBe(false);
+
+      // Observed did NOT advance: a retry send is still stale.
+      const retry = await send(h.supervisor, 'retry', 'unaffected');
+      expect(retry).toMatchObject({ ok: false, status: 409 });
+      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(1);
+
+      // The restored batch releases through the NORMAL path at turn_end —
+      // exactly once.
+      h.drive([{ kind: 'turn_end' }]);
+      await waitForDeliveryConsumed(h.events, 2);
+      expect(h.consumedFor(2)).toHaveLength(1);
+      expect(
+        h.stub.written.filter(w => w.includes('msg-2')),
+      ).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('push wins the interleave: after the auto-flush admitted the head, the pull reports already_admitted and takes nothing', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      // turn_end BEFORE any pull: the normal flush wins, writes + admits.
+      h.drive([{ kind: 'turn_end' }]);
+      await waitForDeliveryConsumed(h.events, 2);
+
+      const { result, settle } = await h.pull(0);
+      expect(result.outcome).toBe('already_admitted');
+      if (result.outcome !== 'already_admitted') throw new Error('unreachable');
+      expect(result.observed_seq).toBeGreaterThanOrEqual(2);
+      // No custody was taken → no handoff settlement was registered.
+      expect(settle).toBeUndefined();
+      expect(h.consumedFor(2)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('release-in-progress is never stolen: a covering write in flight yields normal_delivery_in_progress and the batch stays on the stdin path', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      // Close the boot turn so the next delivery takes the ADMIT arm —
+      // that path sets `startupDelivery` and returns while the stdin
+      // write is still in flight, the observable release-in-progress
+      // window. (The gated FLUSH path performs its write inside the
+      // lifecycle lock, so a pull can never observe that variant.)
+      h.drive([{ kind: 'turn_end' }]);
+      await wait(10);
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+
+      h.stub.parkWrites = true;
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('admitted');
+      await waitFor(() => h.stub.pendingWriteCb !== null);
+
+      const { result, settle } = await h.pull(0);
+      expect(result.outcome).toBe('normal_delivery_in_progress');
+      expect(settle).toBeUndefined();
+      expect(h.consumedFor(2)).toHaveLength(0);
+
+      // The parked write settles through the NORMAL path — exactly once.
+      h.stub.resolveParkedWrite();
+      await waitForDeliveryConsumed(h.events, 2);
+      expect(h.consumedFor(2)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('partial coverage keeps the stale armed: the pull takes the same bounded FIFO prefix the flush would, reports batch_partial_armed, and a retry still 409s', async () => {
+    const h = makePullHarness();
+    const postedBodies = h.stubBackendWithCas(50);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      // Head is seq 50; only seq 2 arrives.
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_partial_armed');
+      if (result.outcome !== 'batch_partial_armed') throw new Error('unreachable');
+      expect(result.delivery_ids).toEqual([2]);
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+
+      // Observed advanced by ACTUAL coverage (2), never jumped to the
+      // stale head (50): the retry is honestly still stale.
+      const retry = await send(h.supervisor, 'retry', 'revised');
+      expect(retry).toMatchObject({ ok: false, status: 409 });
+      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('no_pending_stale is a typed no-op; timeout changes neither custody nor the stale event', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(9);
+    try {
+      await h.boot();
+
+      // No stale armed → typed no-op, nothing registered.
+      const noop = await h.pull(0);
+      expect(noop.result).toEqual({ ok: true, outcome: 'no_pending_stale' });
+      expect(noop.settle).toBeUndefined();
+
+      // Arm the stale; the queue stays empty → bounded wait → timeout.
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      const before = h.events.length;
+      const { result, settle } = await h.pull(50);
+      expect(result.outcome).toBe('timeout');
+      expect(settle).toBeUndefined();
+      // Zero settlement events of any kind were emitted by the pull.
+      expect(
+        h.events
+          .slice(before)
+          .filter(
+            e =>
+              e.event === 'runtime_delivery_consumed' ||
+              e.event === 'runtime_delivery_failed',
+          ),
+      ).toHaveLength(0);
+
+      // The stale event survives the timeout: a bare retry still carries
+      // the SAME stale_event_id (daemon state unchanged).
+      const retry = await send(h.supervisor, 'retry');
+      expect(retry).toMatchObject({ ok: false, status: 409 });
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('a waiting pull is woken by the arrival instead of polling: deliver mid-wait fulfills with the batch', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+
+      // Start the pull FIRST (empty queue) — it must park as the waiter.
+      const pending = h.pull(2_000);
+      await wait(20);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      const { result, settle } = await pending;
+      expect(result.outcome).toBe('batch_covered');
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('one pull per handle: a rejected second call cannot clear the first call\'s waiter — the first fulfills on ARRIVAL, far before its deadline (P1-3)', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+
+      // Window is 10s — far beyond this test's budget, so a pass can only
+      // come from the arrival wake, never from the timeout-fallback
+      // re-check that made the pre-fix version falsely green.
+      const first = h.pull(10_000);
+      await wait(20); // first is parked as the waiter
+      await expect(h.pull(0)).rejects.toMatchObject({
+        code: 'pull_already_active',
+      });
+
+      // The first call is unaffected: the rejected call's cleanup ran,
+      // and the ARRIVAL must still fulfill promptly (call-token keyed
+      // waiter — the second call cannot have cleared it).
+      const deliveredAt = Date.now();
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      const { result, settle } = await first;
+      expect(Date.now() - deliveredAt).toBeLessThan(1_500);
+      expect(result.outcome).toBe('batch_covered');
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('an ingress that cannot prove the response handoff is refused fail-closed before any custody decision', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      await expect(
+        h.supervisor.agentStaleReceive(
+          { conversation_id: 'c1', agent_id: 'a1', wait_ms: 0 },
+          { owner: 'outbound:1' },
+        ),
+      ).rejects.toMatchObject({ code: 'handoff_unsupported' });
+
+      // Custody untouched: the batch still flushes normally.
+      h.drive([{ kind: 'turn_end' }]);
+      await waitForDeliveryConsumed(h.events, 2);
+      expect(h.consumedFor(2)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('a delivery arriving while the reservation is unresolved defers behind it (no later release), and flushes only after settlement', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      const writesAfterBoot = h.stub.written.length;
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      // Arrives during the reservation window — and, adversarially, with
+      // the boundary OPEN (turn_end already parsed): must still defer.
+      h.drive([{ kind: 'turn_end' }]);
+      await wait(10);
+      expect((await h.deliverSeq(4, 4)).disposition).toBe('deferred');
+      await wait(20);
+      expect(h.stub.written.length).toBe(writesAfterBoot);
+
+      // Settlement re-drives the flush: seq 4 now releases via stdin.
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 4);
+      expect(h.consumedFor(4)).toHaveLength(1);
+      expect(
+        h.stub.written.filter(w => w.includes('msg-4')),
+      ).toHaveLength(1);
+      // The pulled batch itself was consumed exactly once and never
+      // written to stdin.
+      expect(h.consumedFor(2)).toHaveLength(1);
+      expect(h.stub.written.filter(w => w.includes('msg-2'))).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('P1-1 owner disconnect: a re-driven copy of a RESERVED id-set never enqueues — one consumed, zero stdin exposure of the pulled bodies', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      const writesAfterBoot = h.stub.written.length;
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2, 'owner-A')).disposition).toBe('deferred');
+
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      // Old owner's connection drops mid-reservation: backend rolls the
+      // rows back and re-drives the SAME ids under a new connection. The
+      // cleanup must not touch the reservation; the re-drive must dedup
+      // against it instead of queuing a second copy.
+      h.supervisor.cleanupDeferredForOwner('owner-A');
+      expect((await h.deliverSeq(2, 2, 'owner-B')).disposition).toBe('deferred');
+
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+      expect(h.consumedFor(2)).toHaveLength(1);
+
+      // turn_end after settlement: the re-driven copy must NOT release
+      // via stdin — the bodies were already exposed once as the tool
+      // result. Zero new writes, no second consumed.
+      h.drive([{ kind: 'turn_end' }]);
+      await wait(30);
+      expect(h.stub.written.length).toBe(writesAfterBoot);
+      expect(h.consumedFor(2)).toHaveLength(1);
+      expect(h.stub.written.filter(w => w.includes('msg-2'))).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('P1-1 restore variant: after an owner rebind, a pre-proof failure restores the prefix under the NEW owner and it releases exactly once via stdin', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2, 'owner-A')).disposition).toBe('deferred');
+
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      h.supervisor.cleanupDeferredForOwner('owner-A');
+      expect((await h.deliverSeq(2, 2, 'owner-B')).disposition).toBe('deferred');
+
+      // Handoff fails before the proof point → restore in place. The
+      // restored entry now belongs to owner-B (the DB's current
+      // in-flight owner), so a LATER owner-A cleanup cannot discard it.
+      settle!(false);
+      await wait(10);
+      h.supervisor.cleanupDeferredForOwner('owner-A');
+
+      h.drive([{ kind: 'turn_end' }]);
+      await waitForDeliveryConsumed(h.events, 2);
+      expect(h.consumedFor(2)).toHaveLength(1);
+      expect(h.stub.written.filter(w => w.includes('msg-2'))).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('P1-2 settlement-before-send: with the response in the peer\'s hands and the server write callback NOT yet executed, a resend BLOCKS on the settlement barrier, then passes CAS', async () => {
+    const h = makePullHarness();
+    const postedBodies = h.stubBackendWithCas(3);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      expect((await h.deliverSeq(3, 3)).disposition).toBe('deferred');
+
+      // `result` returned = the response bytes are (as far as this
+      // process can know) in the peer's hands. The write callback has
+      // deliberately NOT run — this is exactly the cross-process
+      // interleave the kernel permits: the CLI can react before the
+      // daemon's event loop executes the callback. Lock-chain position
+      // proves nothing in this state.
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      // The resend must BLOCK on the reservation's `settled` barrier —
+      // not race the un-queued settlement into a spurious 409, and not
+      // sneak through on Node scheduling habits.
+      let retryResolved: Awaited<ReturnType<typeof send>> | null = null;
+      const retry = send(h.supervisor, 'revised draft', 'revised').then(r => {
+        retryResolved = r;
+        return r;
+      });
+      await wait(100);
+      expect(retryResolved).toBeNull();
+
+      // The callback finally runs (flush/error/destroy always fires it);
+      // settlement completes and releases the barrier with the new
+      // watermark already in place.
+      settle!(true);
+      const retryResult = await retry;
+      expect(retryResult).toMatchObject({ ok: true, message_id: 'm-ok' });
+      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(3);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('P1-2 companion: a pre-proof settlement failure releases the barrier WITHOUT advancing observed — the blocked resend honestly 409s again', async () => {
+    const h = makePullHarness();
+    const postedBodies = h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      const retry = send(h.supervisor, 'retry', 'unaffected');
+      await wait(50);
+      settle!(false); // handoff failed: content never reached the peer
+      const retryResult = await retry;
+      expect(retryResult).toMatchObject({ ok: false, status: 409 });
+      expect(postedBodies.at(-1)?.['seen_up_to_seq']).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('P1-4 cancel leg: closing the issuing control connection unregisters the waiter promptly (zero custody) and frees the slot for the next pull', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(9);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+
+      // Waiter parked with a 10s window under the control connection's
+      // owner token; the connection then closes (Ctrl-C / CLI exit).
+      const cancelledAt = Date.now();
+      const parked = h.pull(10_000);
+      await wait(20);
+      h.supervisor.cleanupDeferredForOwner('control:test');
+      const { result, settle } = await parked;
+      // Aborts with the timeout arm's exact statement — nothing obtained,
+      // custody and the stale event unchanged — well before the window.
+      expect(result.outcome).toBe('timeout');
+      expect(settle).toBeUndefined();
+      expect(Date.now() - cancelledAt).toBeLessThan(1_500);
+
+      // The waiter slot is free: an immediate retry registers instead of
+      // failing pull_already_active, and fulfills on arrival.
+      const next = h.pull(5_000);
+      await wait(20);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      const fulfilled = await next;
+      expect(fulfilled.result.outcome).toBe('batch_partial_armed');
+      fulfilled.settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('P1-4 pre-registration cancel (round-3): a pull still QUEUED behind the lifecycle lock when its connection closes never registers a waiter and never squats the slot', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(9);
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+
+      // Park the (conv, agent) lifecycle lock with an unrelated locked
+      // section so the pull's FIRST evaluation cannot run yet — its
+      // waiter does not exist when the cleanup fires.
+      let releaseLock!: () => void;
+      const lockHeld = new Promise<void>(resolve => {
+        releaseLock = resolve;
+      });
+      const lockTail = (
+        h.supervisor as unknown as {
+          withLifecycleLock: (k: string, fn: () => Promise<void>) => Promise<void>;
+        }
+      ).withLifecycleLock('c1\x00a1', () => lockHeld);
+
+      const cancelledAt = Date.now();
+      const queued = h.pull(10_000); // queued behind the parked lock
+      await wait(20);
+      // Connection closes while the call is still pre-registration: a
+      // waiter scan alone sees nothing to cancel here.
+      h.supervisor.cleanupDeferredForOwner('control:test');
+      releaseLock();
+      await lockTail;
+
+      const { result, settle } = await queued;
+      expect(result.outcome).toBe('timeout');
+      expect(settle).toBeUndefined();
+      expect(Date.now() - cancelledAt).toBeLessThan(1_500);
+
+      // The dead call registered nothing: a fresh pull takes the slot
+      // immediately and fulfills on arrival.
+      const next = h.pull(5_000);
+      await wait(20);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      const fulfilled = await next;
+      expect(fulfilled.result.outcome).toBe('batch_partial_armed');
+      fulfilled.settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
   });
 });

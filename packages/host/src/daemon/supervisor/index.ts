@@ -47,6 +47,8 @@ import {
   MAX_FRAME_BYTES,
   type AgentMessageSendParams,
   type AgentMessageSendResult,
+  type AgentStaleReceiveParams,
+  type AgentStaleReceiveResult,
   type AgentStaleResolveParams,
   type AgentStaleResolveResult,
   type AgentStreamObservedParams,
@@ -99,12 +101,15 @@ import type {
   DeliveryOwnerContext,
   SupervisorContract,
 } from '../supervisor-contract.js';
+import { DaemonTypedError } from '../typed-error.js';
 import type {
   ActivitySnippetKind,
   DeferredEntry,
   DefaultReplyTarget,
   InitTimeoutReason,
   PendingStaleEvent,
+  PullReservation,
+  PullWakeReason,
   RuntimeHandle,
   RuntimePhase,
   StartupDeliveryState,
@@ -619,8 +624,45 @@ function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
   ) {
     return null;
   }
-  return { id, currentSeq };
+  // Stream of the conflicted head (#task:1614): lets the stale-receive
+  // pull evaluate coverage. Absence fails CLOSED on coverage claims —
+  // never inferred as `main`.
+  const streamKeyRaw = d['stream_key'];
+  const streamKey =
+    typeof streamKeyRaw === 'string' && streamKeyRaw.length > 0
+      ? streamKeyRaw
+      : null;
+  return { id, currentSeq, streamKey };
 }
+
+// ── agent_stale_receive (#task:1614) ────────────────────────────────
+
+/** Bounds for the deferred-pull wait window. Waiting never holds the
+ *  lifecycle lock and never takes custody, so the cap only bounds how
+ *  long a CLI call can sit registered as the handle's waiter. */
+export const STALE_RECEIVE_DEFAULT_WAIT_MS = 20_000;
+export const STALE_RECEIVE_MAX_WAIT_MS = 120_000;
+
+/** Typed non-custody arbitration failure for `agent_stale_receive`
+ *  (taxonomy: `AgentStaleReceiveErrorCodeSchema` in protocol.ts). */
+export class AgentStaleReceiveError extends DaemonTypedError {
+  constructor(
+    readonly code:
+      | 'pull_already_active'
+      | 'stale_event_replaced'
+      | 'runtime_replaced'
+      | 'handoff_unsupported',
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** Locked single-step evaluation product for the stale-receive loop. */
+type StaleReceiveStep =
+  | { kind: 'result'; result: AgentStaleReceiveResult }
+  | { kind: 'cancelled' }
+  | { kind: 'wait'; wakePromise: Promise<PullWakeReason> };
 
 async function safeReadResponseText(res: Response): Promise<string> {
   try {
@@ -657,6 +699,22 @@ export class Supervisor implements SupervisorContract {
    *  Survives across watchdog-triggered respawns within the same
    *  incident window. Cleared by a successful `session_init`. */
   private readonly initRetryStates = new Map<string, InitRetryState>();
+  /** Monotonic stale-receive CALL token source (#task:1614 review
+   *  P1-3): each pull call mints one so waiter cleanup is keyed to the
+   *  exact call, never to the (shared) stale event id. */
+  private pullWaiterSeq = 0;
+  /** Live stale-receive calls per control-connection owner (#task:1614
+   *  review round-3): cancellation must cover the window BEFORE the
+   *  waiter is registered — a call can be queued behind the lifecycle
+   *  lock when its connection closes, and a scan of the current
+   *  `pullWaiter` alone would miss it (the dead call would then
+   *  register and squat the slot for the full wait window). Call-scoped
+   *  only: entries are added at call entry and removed in its
+   *  `finally`; no persistent state. */
+  private readonly activePullCallsByOwner = new Map<
+    string,
+    Set<{ cancelled: boolean }>
+  >();
   /** Per-(conv, agent) lifecycle serialization (Cindy plan v2 issue
    *  #6 + tightening `ixAq6GPTn4fVSpCF`). Each entry is the tail
    *  promise for the *most recent* lifecycle operation on that key;
@@ -775,6 +833,8 @@ export class Supervisor implements SupervisorContract {
       'runtime freshness observed seq advanced',
     );
     this.drainBypassMerges(handle, streamKey);
+    // A stale-receive waiter (#task:1614) may now prove `already_admitted`.
+    this.wakePullWaiter(handle);
   }
 
   /** Countgame P1 (bypass hole): merge the agent's own forced seqs into
@@ -859,6 +919,9 @@ export class Supervisor implements SupervisorContract {
       },
       'runtime freshness pending admission queued',
     );
+    // A stale-receive waiter (#task:1614) may now prove
+    // `normal_delivery_in_progress`.
+    this.wakePullWaiter(handle);
   }
 
   private admitPendingSeqForNewTurn(handle: RuntimeHandle, source: string): void {
@@ -1157,6 +1220,22 @@ export class Supervisor implements SupervisorContract {
       params.conversation_id,
       params.agent_id,
     );
+    // P1-2 v2 (#task:1614): settlement-before-send ordering barrier.
+    // The response frame can reach the CLI BEFORE this process runs the
+    // write callback (the kernel gives no cross-process ordering), so a
+    // resend reacting to `batch_covered` may arrive while the
+    // settlement has not even been queued yet — lock-chain position
+    // proves nothing here. The reservation's `settled` promise is the
+    // explicit happens-before: it resolves only after
+    // `settleStaleReceiveHandoff` finished (observed advanced on a
+    // proven handoff, FIFO restored otherwise), and the write callback
+    // is guaranteed to fire eventually (flush, error, or destroy), so
+    // this wait is bounded by transport liveness, never by scheduling
+    // luck. Loop: a new reservation may exist by the time one resolves.
+    // The lock is NOT held here.
+    while (handle.pullReservation !== null) {
+      await handle.pullReservation.settled;
+    }
     const pendingStale = handle.pendingStaleEvent;
     // Resolve which per-stream observed boundary this send is anchored to
     // (reply-cluster §6.4):
@@ -1416,6 +1495,403 @@ export class Supervisor implements SupervisorContract {
       this.rememberReplyTargetStream(handle, messageId, streamKey);
     }
     return { ok: true };
+  }
+
+  // ── agent_stale_receive (#task:1614; custody contract #task:1606) ──
+
+  /**
+   * Deferred-pull second consumer. Everything custody-relevant happens
+   * in `evaluateStaleReceiveLocked` under the per-handle lifecycle lock;
+   * this method only owns the bind-once entry checks, the (lock-free)
+   * bounded wait, and waiter cleanup. Custody settles exclusively in
+   * `settleStaleReceiveHandoff`, driven by the ingress's response
+   * transport handoff — never here.
+   */
+  async agentStaleReceive(
+    params: AgentStaleReceiveParams,
+    ctx: DeliveryOwnerContext,
+  ): Promise<AgentStaleReceiveResult> {
+    if (ctx.supportsResponseHandoff !== true) {
+      // Fail closed BEFORE any custody decision: without a transport
+      // handoff proof point the reservation could never settle and the
+      // deferred queue would be held forever.
+      throw new AgentStaleReceiveError(
+        'handoff_unsupported',
+        'agent_stale_receive requires an ingress that proves response transport handoff (control socket only)',
+      );
+    }
+    const handle = this.getHandleForAgentIntent(
+      params.conversation_id,
+      params.agent_id,
+    );
+    const boundStale = handle.pendingStaleEvent;
+    if (!boundStale) {
+      return { ok: true, outcome: 'no_pending_stale' };
+    }
+    const staleEventId = boundStale.id;
+    const waitMs = Math.min(
+      params.wait_ms ?? STALE_RECEIVE_DEFAULT_WAIT_MS,
+      STALE_RECEIVE_MAX_WAIT_MS,
+    );
+    const k = key(params.conversation_id, params.agent_id);
+    // Unique CALL identity (review P1-3): waiter registration/cleanup is
+    // keyed by this token, so a rejected concurrent call's cleanup can
+    // never clear a waiter it does not own.
+    const waiterToken = ++this.pullWaiterSeq;
+    // Call-scoped cancellation bit (review round-3): registered BEFORE
+    // any lock wait so a connection close can cancel this call even
+    // while it is still queued behind the lifecycle lock — i.e. before
+    // any waiter exists to scan.
+    const pullCall = { cancelled: false };
+    let ownerCalls = this.activePullCallsByOwner.get(ctx.owner);
+    if (!ownerCalls) {
+      ownerCalls = new Set();
+      this.activePullCallsByOwner.set(ctx.owner, ownerCalls);
+    }
+    ownerCalls.add(pullCall);
+    const startedAt = this.now();
+    const deadline = startedAt + waitMs;
+    const cancelledOutcome = (): AgentStaleReceiveResult => ({
+      ok: true,
+      outcome: 'timeout',
+      stale_event_id: staleEventId,
+      waited_ms: Math.max(0, this.now() - startedAt),
+    });
+    try {
+      for (;;) {
+        const step = await this.withLifecycleLock(k, async () =>
+          this.evaluateStaleReceiveLocked(
+            k,
+            handle,
+            staleEventId,
+            waiterToken,
+            pullCall,
+            ctx,
+          ),
+        );
+        if (step.kind === 'cancelled') return cancelledOutcome();
+        if (step.kind === 'result') return step.result;
+        const remaining = deadline - this.now();
+        if (remaining <= 0) {
+          return {
+            ok: true,
+            outcome: 'timeout',
+            stale_event_id: staleEventId,
+            waited_ms: Math.max(0, this.now() - startedAt),
+          };
+        }
+        // The WAIT itself: outside the lock, zero custody. `arrival` is
+        // only a re-evaluation prompt; `cancelled` (the issuing control
+        // connection closed — review P1-4) aborts the call with the
+        // timeout arm's exact statement: nothing was obtained, custody
+        // and the stale event are unchanged. Timer expiry loops back
+        // into the deadline check above.
+        const woke = await Promise.race([
+          step.wakePromise,
+          new Promise<'timer'>(resolve => {
+            const timer = setTimeout(() => resolve('timer'), remaining);
+            timer.unref?.();
+          }),
+        ]);
+        if (woke === 'cancelled') return cancelledOutcome();
+        await this.clearOwnPullWaiter(k, handle, waiterToken);
+      }
+    } finally {
+      ownerCalls.delete(pullCall);
+      if (ownerCalls.size === 0) {
+        this.activePullCallsByOwner.delete(ctx.owner);
+      }
+      await this.clearOwnPullWaiter(k, handle, waiterToken);
+    }
+  }
+
+  /**
+   * One locked arbitration step. Ordering is the contract's:
+   *   1. binding validity (live handle, same stale event) — typed errors;
+   *   2. `already_admitted` (observed covers the ORIGINAL head);
+   *   3. take the next bounded FIFO prefix when — and only when — the
+   *      queue is non-empty, no release is in progress
+   *      (`startupDelivery === null`), and no reservation is unresolved;
+   *   4. `normal_delivery_in_progress` when the covering content already
+   *      entered release/admission (in-flight write covers the head, or
+   *      the head is parked in mid-turn pending admission);
+   *   5. otherwise register the waiter (still under the lock) and wait.
+   * Queue-empty / timeout are never admission evidence (#task:1606).
+   */
+  private evaluateStaleReceiveLocked(
+    k: string,
+    handle: RuntimeHandle,
+    staleEventId: string,
+    waiterToken: number,
+    pullCall: { cancelled: boolean },
+    ctx: DeliveryOwnerContext,
+  ): StaleReceiveStep {
+    // Round-3 pre-registration cancel: the issuing connection may have
+    // closed while this call was queued behind the lifecycle lock. Bail
+    // BEFORE any custody read or waiter registration — a dead call must
+    // never take a batch or squat the waiter slot.
+    if (pullCall.cancelled) return { kind: 'cancelled' };
+    const live = this.handles.get(k);
+    if (live !== handle || handle.phase === 'exited' || handle.phase === 'draining') {
+      throw new AgentStaleReceiveError(
+        'runtime_replaced',
+        'runtime handle exited or was replaced while the pull was waiting',
+      );
+    }
+    const stale = live.pendingStaleEvent;
+    if (!stale) {
+      // Resolved while we waited (e.g. a parallel send succeeded).
+      return { kind: 'result', result: { ok: true, outcome: 'no_pending_stale' } };
+    }
+    if (stale.id !== staleEventId) {
+      throw new AgentStaleReceiveError(
+        'stale_event_replaced',
+        'pending stale event changed while the pull was waiting; re-issue against the new event',
+      );
+    }
+    if (live.pullWaiter !== null || live.pullReservation !== null) {
+      // One waiter/reservation per handle. Our own waiter is always
+      // cleared before re-evaluating, so anything present here belongs
+      // to a concurrent call.
+      throw new AgentStaleReceiveError(
+        'pull_already_active',
+        'another stale-receive pull is already active for this runtime',
+      );
+    }
+    const streamKey = stale.streamKey;
+    if (streamKey !== null) {
+      const observed = live.observedSeqByStream.get(streamKey);
+      if (observed !== undefined && observed >= stale.currentSeq) {
+        return {
+          kind: 'result',
+          result: {
+            ok: true,
+            outcome: 'already_admitted',
+            stale_event_id: staleEventId,
+            stale_current_seq: stale.currentSeq,
+            observed_seq: observed,
+          },
+        };
+      }
+    }
+    if (
+      live.deferredQueue.length > 0 &&
+      live.startupDelivery === null &&
+      live.phase === 'ready'
+    ) {
+      // TAKE — the single release-winner moment. Identical selection to
+      // `flushDeferred` (same bounded FIFO prefix, same combine), so the
+      // pull returns exactly what the next auto-flush would have written.
+      const gated = profileUsesBoundaryGate(live);
+      const batch = gated
+        ? spliceBoundedDeferredPrefix(live.deferredQueue)
+        : live.deferredQueue.splice(0, 1);
+      const combined = combineDeferredBatch(batch, gated);
+      let markSettled!: () => void;
+      const settled = new Promise<void>(resolve => {
+        markSettled = resolve;
+      });
+      live.pullReservation = { staleEventId, batch, combined, settled, markSettled };
+      // Custody settles only at the response transport handoff; the
+      // ingress invokes this exactly once (#task:1614 proof point).
+      ctx.responseHandoff = handoffOk => {
+        void this.settleStaleReceiveHandoff(k, handle, handoffOk);
+      };
+      const coveredPairs = coveredSeqPairsForBatch(combined);
+      const coveredSeq =
+        streamKey === null
+          ? undefined
+          : coveredPairs.find(([s]) => s === streamKey)?.[1];
+      const covered =
+        coveredSeq !== undefined && coveredSeq >= stale.currentSeq;
+      this.logger.info(
+        {
+          kind: 'process',
+          action: 'stale_receive_prefix_reserved',
+          conversationId: live.conversationId,
+          agent_id: live.agentId,
+          stale_event_id: staleEventId,
+          delivery_ids: [...combined.deliveryIds],
+          covered,
+        },
+        'stale-receive pull reserved the next deferred FIFO prefix',
+      );
+      return {
+        kind: 'result',
+        result: {
+          ok: true,
+          outcome: covered ? 'batch_covered' : 'batch_partial_armed',
+          stale_event_id: staleEventId,
+          text: combined.text,
+          delivery_ids: [...combined.deliveryIds],
+          covered_seq_by_stream: coveredPairs.map(
+            ([s, seq]) => [s, seq] as [string, number],
+          ),
+        },
+      };
+    }
+    if (streamKey !== null) {
+      const pendingAdmission = live.pendingAdmissionSeqByStream.get(streamKey);
+      const inFlightCovers =
+        live.startupDelivery !== null &&
+        (coveredSeqPairsForBatch(live.startupDelivery).find(
+          ([s]) => s === streamKey,
+        )?.[1] ?? 0) >= stale.currentSeq;
+      if (
+        inFlightCovers ||
+        (pendingAdmission !== undefined && pendingAdmission >= stale.currentSeq)
+      ) {
+        return {
+          kind: 'result',
+          result: {
+            ok: true,
+            outcome: 'normal_delivery_in_progress',
+            stale_event_id: staleEventId,
+          },
+        };
+      }
+    }
+    // Nothing takeable and nothing provable: register the waiter under
+    // the lock; the wait itself happens outside it. The waiter carries
+    // this call's token (P1-3) and the issuing connection's owner
+    // (P1-4 cancel leg).
+    const wakePromise = new Promise<PullWakeReason>(resolve => {
+      live.pullWaiter = {
+        staleEventId,
+        token: waiterToken,
+        owner: ctx.owner,
+        wake: resolve,
+      };
+    });
+    return { kind: 'wait', wakePromise };
+  }
+
+  /**
+   * Resolve the pull-in-flight reservation — the ONLY place it clears.
+   * Runs under the lifecycle lock, exactly once per reservation
+   * (double invocations no-op on the null check).
+   *
+   *   - handoff OK → the tool result reached the CLI transport:
+   *     constructive admission. One `runtime_delivery_consumed` for the
+   *     whole batch, observed advanced by the batch's ACTUAL per-stream
+   *     coverage with `admitNow=true` — the content is in the CURRENT
+   *     turn's context (that immediacy is the tool's entire point: the
+   *     same-turn resend passes CAS). Post-handoff crashes follow the
+   *     existing stdin-write at-most-once handoff-loss semantics.
+   *   - handoff failed, handle live → pre-proof failure: restore the
+   *     prefix at the queue FRONT (later arrivals queued behind keep
+   *     FIFO), zero consumed, zero observed.
+   *   - handoff failed, handle gone → the queue it would restore into
+   *     was already failed out by exit cleanup; settle the batch failed
+   *     so the backend rolls the rows back to pending (exactly one
+   *     settlement either way — exit cleanup never touches the
+   *     reservation).
+   */
+  private async settleStaleReceiveHandoff(
+    k: string,
+    handle: RuntimeHandle,
+    handoffOk: boolean,
+  ): Promise<void> {
+    let settledReservation: PullReservation | null = null;
+    try {
+      await this.withLifecycleLock(k, async () => {
+        const reservation = handle.pullReservation;
+        if (!reservation) return;
+        settledReservation = reservation;
+        handle.pullReservation = null;
+        const live =
+          this.handles.get(k) === handle &&
+          handle.phase !== 'exited' &&
+          handle.phase !== 'draining';
+        if (handoffOk) {
+          this.emitStartupDeliveryConsumed(handle, reservation.combined.deliveryIds);
+          // Constructive admission of content into the CURRENT context —
+          // NOT the start of a new turn. `advanceObservedStream` (inside
+          // `admitDeliveryBatch`) marks turn activity because a stdin
+          // write starts one; a pull starts nothing: the turn it fed was
+          // either already active (normal mid-turn case) or already over
+          // (turn_end crossed the handoff window). Fabricating activity
+          // here would close the next-turn-batch boundary with no
+          // terminal left to reopen it — starving the queue remainder.
+          const turnActiveBefore = handle.inputTurnActive;
+          this.admitDeliveryBatch(
+            handle,
+            reservation.combined.deliveries,
+            reservation.combined.deliveredUpToSeq,
+            true,
+            'stale_receive_pull_admitted',
+          );
+          handle.inputTurnActive = turnActiveBefore;
+          await this.writeLastDeliveredSeq(
+            handle,
+            reservation.combined.deliveredUpToSeq,
+          );
+          this.logger.info(
+            {
+              kind: 'process',
+              action: 'stale_receive_settled_consumed',
+              conversationId: handle.conversationId,
+              agent_id: handle.agentId,
+              delivery_ids: [...reservation.combined.deliveryIds],
+            },
+            'stale-receive handoff proven; batch consumed and admitted',
+          );
+        } else if (live) {
+          handle.deferredQueue.unshift(...reservation.batch);
+          this.logger.warn(
+            {
+              kind: 'process',
+              action: 'stale_receive_restored',
+              conversationId: handle.conversationId,
+              agent_id: handle.agentId,
+              delivery_ids: [...reservation.combined.deliveryIds],
+            },
+            'stale-receive handoff failed before the proof point; prefix restored to the deferred queue in place',
+          );
+        } else {
+          for (const entry of reservation.batch) {
+            this.emitStartupDeliveryFailed(handle, entry.deliveryIds, 'child_exit');
+          }
+          this.logger.warn(
+            {
+              kind: 'process',
+              action: 'stale_receive_failed_dead_handle',
+              conversationId: handle.conversationId,
+              agent_id: handle.agentId,
+              delivery_ids: [...reservation.combined.deliveryIds],
+            },
+            'stale-receive handoff failed and the runtime is gone; batch settled failed for backend rollback',
+          );
+        }
+        this.maybeScheduleDeferredFlush(handle);
+      });
+    } finally {
+      // The caller-visible settlement happens-before (P1-2 v2): resolve
+      // AFTER the locked section completed, unconditionally — a hung
+      // `settled` promise would block the send barrier forever.
+      (settledReservation as PullReservation | null)?.markSettled();
+    }
+  }
+
+  /** Remove this CALL's own waiter under the lock, keyed by the call
+   *  token (P1-3) — idempotent, never touches another call's waiter. */
+  private clearOwnPullWaiter(
+    k: string,
+    handle: RuntimeHandle,
+    waiterToken: number,
+  ): Promise<void> {
+    return this.withLifecycleLock(k, async () => {
+      if (handle.pullWaiter?.token === waiterToken) {
+        handle.pullWaiter = null;
+      }
+    });
+  }
+
+  /** Prompt a registered stale-receive waiter to re-evaluate. Purely a
+   *  wake — custody decisions happen only in the waiter's next locked
+   *  evaluation step. */
+  private wakePullWaiter(handle: RuntimeHandle): void {
+    handle.pullWaiter?.wake('arrival');
   }
 
   // ── runtime_start ──────────────────────────────────────────────
@@ -1772,6 +2248,8 @@ export class Supervisor implements SupervisorContract {
       busy: { outstandingToolUses: 0, compacting: false },
       deferredQueue: [],
       flushingDeferred: false,
+      pullReservation: null,
+      pullWaiter: null,
       // 3c-b additions
       // Strip `startup_delivery` from the cached params so an internal
       // retry respawn doesn't try to replay a payload the previous
@@ -2170,6 +2648,11 @@ export class Supervisor implements SupervisorContract {
     // Guarded + lock-serialized inside; a no-op while a flush is active
     // (that path re-drives from its own `finally`).
     this.maybeScheduleDeferredFlush(handle);
+    // A stale-receive waiter (#task:1614) re-evaluates too: the freed slot
+    // may make the queue takeable, or the settled write's admission may
+    // now prove its outcome. Fair race with the flush above — both sides
+    // arbitrate under the same lifecycle lock, single winner.
+    this.wakePullWaiter(handle);
   }
 
   /**
@@ -2514,10 +2997,18 @@ export class Supervisor implements SupervisorContract {
       //   - a prior write still in flight (the single `startupDelivery`
       //     slot is busy) — the consecutive-delivery window, re-driven
       //     after that write's consumed clears the slot.
+      // A third hold (#task:1614): an unresolved pull-in-flight
+      // reservation. Its prefix is EARLIER in presentation FIFO than this
+      // arrival, so admitting now would release later content first —
+      // defer until the reservation settles.
       // `deferred` is a custody transfer, NOT an ack — `delivered_at` still
       // moves only on the async `runtime_delivery_consumed` the eventual
       // flush emits.
-      if (writeInFlight || (gated && !boundaryOpen)) {
+      if (
+        writeInFlight ||
+        handle.pullReservation !== null ||
+        (gated && !boundaryOpen)
+      ) {
         this.enqueueDeferred(handle, params, ctx.owner);
         this.scheduleReservationStallCheck(handle);
         return {
@@ -2561,8 +3052,40 @@ export class Supervisor implements SupervisorContract {
    * another owner's entries; idempotent.
    */
   cleanupDeferredForOwner(owner: string): void {
+    // Round-3: cancel this owner's live pull CALLS first — this covers
+    // the pre-registration window (call queued behind the lifecycle
+    // lock, no waiter to scan yet). The waiter leg below handles the
+    // post-registration window; both are zero-custody.
+    const ownerCalls = this.activePullCallsByOwner.get(owner);
+    if (ownerCalls) {
+      for (const call of ownerCalls) call.cancelled = true;
+    }
     let discarded = 0;
     for (const handle of this.handles.values()) {
+      // P1-4 cancel leg (#task:1614): a stale-receive waiter registered
+      // by this connection dies with it — unregister and wake it as
+      // `cancelled` so the call returns instead of squatting the
+      // handle's single waiter slot for up to the full wait window.
+      // Zero custody: a waiter holds nothing by contract. An unresolved
+      // pull RESERVATION is deliberately NOT touched here — its response
+      // may already be in flight and `settleStaleReceiveHandoff` owns
+      // its exactly-once settlement; the re-driven rows dedup against
+      // the reservation in `enqueueDeferred` (P1-1).
+      const waiter = handle.pullWaiter;
+      if (waiter && waiter.owner === owner) {
+        handle.pullWaiter = null;
+        waiter.wake('cancelled');
+        this.logger.info(
+          {
+            kind: 'process',
+            action: 'stale_receive_waiter_cancelled',
+            conversationId: handle.conversationId,
+            agent_id: handle.agentId,
+            owner,
+          },
+          'stale-receive waiter cancelled: issuing control connection closed',
+        );
+      }
       if (handle.deferredQueue.length === 0) continue;
       const before = handle.deferredQueue.length;
       handle.deferredQueue = handle.deferredQueue.filter(
@@ -2652,6 +3175,47 @@ export class Supervisor implements SupervisorContract {
     owner: string,
   ): void {
     const dedupKey = deferredDedupKey(params.delivery_ids);
+    // P1-1 (#task:1614): the reservation is part of daemon custody for
+    // dedup purposes. A re-submit of a RESERVED id-set (old owner's
+    // connection dropped → backend rolled the rows back → re-drove them
+    // under a new connection) must not enqueue a second copy: the pull
+    // may still hand the SAME bodies to the agent as a tool result, and
+    // a queued copy would additionally release them via stdin at the
+    // next boundary — double exposure. Rebind the reservation entry's
+    // owner in place (mirroring the queue rebind below) so a pre-proof
+    // restore lands in the queue under the DB's current in-flight owner.
+    const reservation = handle.pullReservation;
+    if (reservation) {
+      const reservedIdx = reservation.batch.findIndex(
+        entry => deferredDedupKey(entry.deliveryIds) === dedupKey,
+      );
+      if (reservedIdx !== -1) {
+        const reserved = reservation.batch[reservedIdx]!;
+        if (reserved.owner !== owner) {
+          reservation.batch[reservedIdx] = {
+            deliveryIds: [...params.delivery_ids],
+            ...(params.delivered_up_to_seq !== undefined
+              ? { deliveredUpToSeq: params.delivered_up_to_seq }
+              : {}),
+            ...(params.deliveries ? { deliveries: params.deliveries } : {}),
+            text: params.text,
+            owner,
+          };
+          this.logger.info(
+            {
+              kind: 'process',
+              action: 'stale_receive_reservation_rebind',
+              conversation_id: handle.conversationId,
+              agent_id: handle.agentId,
+              from_owner: reserved.owner,
+              to_owner: owner,
+            },
+            'rebound reserved (pull-in-flight) delivery to current owner (reconnect/reclaim race)',
+          );
+        }
+        return;
+      }
+    }
     const existingIdx = handle.deferredQueue.findIndex(
       entry => deferredDedupKey(entry.deliveryIds) === dedupKey,
     );
@@ -2693,6 +3257,8 @@ export class Supervisor implements SupervisorContract {
       text: params.text,
       owner,
     });
+    // A stale-receive waiter (#task:1614) may now have a takeable prefix.
+    this.wakePullWaiter(handle);
   }
 
   /**
@@ -2736,6 +3302,11 @@ export class Supervisor implements SupervisorContract {
       // A write is still in flight — the post-write re-drive will retry once
       // the slot clears. Never stomp a batch mid-consume.
       if (live.startupDelivery !== null) return;
+      // An unresolved pull-in-flight reservation blocks every later
+      // prefix (#task:1614): its content precedes this queue in
+      // presentation FIFO. Settlement re-drives via
+      // `maybeScheduleDeferredFlush`.
+      if (live.pullReservation !== null) return;
       const gated = profileUsesBoundaryGate(live);
       // Still mid-turn for a gated driver — wait for the next boundary.
       if (gated && !strategyBoundaryOpen(live)) return;
@@ -2766,6 +3337,7 @@ export class Supervisor implements SupervisorContract {
   private maybeScheduleDeferredFlush(handle: RuntimeHandle): void {
     if (handle.deferredQueue.length === 0) return;
     if (handle.flushingDeferred) return;
+    if (handle.pullReservation !== null) return;
     void this.flushDeferred(handle);
   }
 
@@ -3909,6 +4481,13 @@ export class Supervisor implements SupervisorContract {
       handle.deferredQueue = [];
     }
     this.clearReservationStallTimer(handle);
+    // A waiting stale-receive pull (#task:1614) re-evaluates immediately
+    // and observes `runtime_replaced` instead of running out its window.
+    // An unresolved pull RESERVATION is deliberately NOT touched here:
+    // its batch is no longer in the queue, and `settleStaleReceiveHandoff`
+    // owns its exactly-once settlement (consumed on a proven handoff,
+    // failed-for-rollback otherwise).
+    this.wakePullWaiter(handle);
 
     // 3c-b retry branch (Cindy plan v2 issue #3 + override precedence
     // `-pdNvRYOWip5e9yA`): if the init watchdog killed the child AND

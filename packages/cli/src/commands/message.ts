@@ -17,6 +17,8 @@ import {
   HostClient,
   HostClientError,
   type AgentMessageSendParams,
+  type AgentStaleReceiveParams,
+  type AgentStaleReceiveResult,
   type AgentStaleResolveParams,
   type AgentStreamObservedParams,
 } from '@silverhand/host';
@@ -311,6 +313,73 @@ stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale
   },
 };
 
+const staleReceiveCommand: Command = {
+  verb: 'stale-receive',
+  summary: 'After message_stale: pull the pending deferred delivery batch.',
+  help: `silverhand message stale-receive [--wait <seconds>]
+
+After a send failed with \`message_stale\`, pull the delivery batch the
+daemon is already holding for you (mid-turn deferred queue) as this
+command's output, instead of waiting for it to arrive as your next
+turn's input. Message bodies are returned exactly once: a batch this
+command returns will NOT be delivered again at the next turn boundary,
+and vice versa.
+
+The command only reads what the daemon already holds — it never fetches
+from server history. If nothing is held yet it waits (bounded) for the
+next delivery to arrive.
+
+Outcomes (stdout JSON, discriminated by "outcome"):
+  batch_covered            The returned batch covers the stale head.
+                           Process it, then re-send with
+                           \`--stale-resolution unaffected|revised\`.
+  batch_partial_armed      A batch was returned but the stale head is
+                           NOT covered yet; the stale event stays armed.
+  no_pending_stale         No unresolved message_stale for this agent.
+  already_admitted         Your context already covers the original
+                           stale head; re-send with
+                           \`--stale-resolution unaffected|revised\`.
+  normal_delivery_in_progress
+                           The covering content already entered the
+                           normal input path; it arrives as regular
+                           pending input, not through this command.
+  timeout                  Nothing was obtained in the wait window.
+                           Nothing changed; you may retry.
+
+Flags:
+  --wait <seconds>   Max seconds to wait for a batch to arrive.
+                     Default 20, max 120. 0 checks once without waiting.`,
+  flags: ['wait'] as const,
+  async run({ env, args }) {
+    const waitSeconds = flagNumber(args, 'wait') ?? 20;
+    if (
+      !Number.isFinite(waitSeconds) ||
+      waitSeconds < 0 ||
+      waitSeconds > 120
+    ) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--wait must be between 0 and 120 seconds',
+        retriable: false,
+      });
+    }
+    if (!env.daemonSocketPath) {
+      throw new CliError({
+        code: 'validation_error',
+        message:
+          'message stale-receive requires the silverhand daemon (no daemon socket in this environment)',
+        retriable: false,
+      });
+    }
+    const waitMs = Math.round(waitSeconds * 1000);
+    return await staleReceiveViaDaemon(env.daemonSocketPath, {
+      conversation_id: env.conversationId,
+      agent_id: env.agentId,
+      wait_ms: waitMs,
+    });
+  },
+};
+
 const reactCommand: Command = {
   verb: 'react',
   summary: 'Add or remove your emoji reaction on a message.',
@@ -587,6 +656,7 @@ function parseSearchPositionalQuery(positional: readonly string[]): string | und
 export const messageCommands: readonly Command[] = [
   sendCommand,
   staleResolveCommand,
+  staleReceiveCommand,
   reactCommand,
   historyCommand,
   searchCommand,
@@ -738,6 +808,55 @@ function requireFreshnessAuthority(host: HostClient): void {
       'silverhand daemon does not advertise agent.freshness_authority; restart the app/daemon from the same build as this CLI',
     retriable: false,
   });
+}
+
+/**
+ * `agent_stale_receive` over the daemon socket (#task:1614). The client
+ * request timeout is sized ABOVE the daemon-side wait window — the
+ * daemon legitimately holds the response until a batch arrives or the
+ * window elapses.
+ */
+async function staleReceiveViaDaemon(
+  socketPath: string,
+  input: AgentStaleReceiveParams,
+): Promise<AgentStaleReceiveResult> {
+  const host = new HostClient({
+    socketPath,
+    requestTimeoutMs: (input.wait_ms ?? 20_000) + 10_000,
+  });
+  try {
+    await host.connect();
+    if (!host.capabilities.has('agent.stale_receive.v1')) {
+      throw new CliError({
+        code: 'internal',
+        message:
+          'silverhand daemon does not advertise agent.stale_receive.v1; restart the app/daemon from the same build as this CLI',
+        retriable: false,
+      });
+    }
+    return await host.agentStaleReceive(input);
+  } catch (err) {
+    if (err instanceof HostClientError) {
+      const transient = err.code === 'disconnected' || err.code === 'timeout';
+      const arbitration =
+        err.code === 'pull_already_active' ||
+        err.code === 'stale_event_replaced' ||
+        err.code === 'runtime_replaced';
+      throw new CliError({
+        code: transient
+          ? 'upstream_unavailable'
+          : arbitration
+            ? 'conflict'
+            : 'internal',
+        ...(arbitration ? { subkind: err.code } : {}),
+        message: `silverhand daemon stale-receive failed: ${err.message}`,
+        retriable: transient,
+      });
+    }
+    throw err;
+  } finally {
+    await host.close().catch(() => undefined);
+  }
 }
 
 /** Read every byte off `process.stdin` into a single Buffer. Does NOT

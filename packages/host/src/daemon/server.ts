@@ -44,6 +44,7 @@ import {
 import type { IntentDispatcher } from './dispatcher.js';
 import type { DaemonLogger } from './logger.js';
 import { resolveDeliveryOwner } from './supervisor-contract.js';
+import type { DeliveryOwnerContext } from './supervisor-contract.js';
 import {
   OutputBackpressure,
   type OutputBackpressureOptions,
@@ -324,12 +325,57 @@ export class DaemonServer {
       socket.destroy();
       return;
     }
+    // Control socket is the one ingress that can PROVE a response
+    // transport handoff (#task:1614): it writes the response frame with a
+    // completion callback below. Declared on the ctx so a handler whose
+    // custody settlement depends on that proof (agent_stale_receive) can
+    // proceed; all other intents ignore both fields.
+    const ctx: DeliveryOwnerContext = { owner, supportsResponseHandoff: true };
     const response: ResponseFrame = await this.dispatcher.dispatch(
       request.id,
       request.intent,
       request.params,
-      { owner },
+      ctx,
     );
+    const handoff = ctx.responseHandoff;
+    if (handoff && 'error' in response) {
+      // The peer receives an error frame — the content the handler
+      // reserved was NOT delivered. Settle failed BEFORE writing so the
+      // failure ordering cannot race the peer's retry.
+      try {
+        socket.write(encodeFrame(response));
+      } catch (err) {
+        this.logger.warn(
+          { err: (err as Error).message, id: request.id },
+          'failed to write response; peer likely closed',
+        );
+      }
+      handoff(false);
+      return;
+    }
+    if (handoff) {
+      // Proof point: the write callback fires once the frame is flushed
+      // to the kernel (or errors). Exactly one invocation either way.
+      // `err == null` IS the proof — Node invokes the callback with an
+      // error (ERR_STREAM_DESTROYED and friends) when the socket dies
+      // BEFORE the flush, so a null error means the bytes were handed
+      // to the kernel. The peer closing immediately AFTER reading the
+      // frame must NOT be read back as a pre-proof failure: a
+      // `socket.destroyed` term here would restore + redeliver bodies
+      // the peer already has (review round-3 note).
+      try {
+        socket.write(encodeFrame(response), err => {
+          handoff(err == null);
+        });
+      } catch (err) {
+        this.logger.warn(
+          { err: (err as Error).message, id: request.id },
+          'failed to write response; peer likely closed',
+        );
+        handoff(false);
+      }
+      return;
+    }
     try {
       socket.write(encodeFrame(response));
     } catch (err) {

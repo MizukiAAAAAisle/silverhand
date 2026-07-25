@@ -31,6 +31,7 @@ import {
   intentSchemas,
   HOST_ACTIVE_RUNTIME_PHASES,
   type AgentMessageSendParams,
+  type AgentStaleReceiveParams,
   type AgentStaleResolveParams,
   type AgentStreamObservedParams,
   type AgentMaterializeParams,
@@ -730,6 +731,16 @@ export class IntentDispatcher {
       case 'agent_stream_observed':
         return this.requireSupervisor().agentStreamObserved(
           params as AgentStreamObservedParams,
+        );
+      case 'agent_stale_receive':
+        // #task:1614 — deferred-pull second consumer. `ctx` carries the
+        // ingress's response-handoff capability; the supervisor defers
+        // custody settlement to `ctx.responseHandoff` (invoked by the
+        // control-socket ingress after the response frame's write
+        // settles) and fails closed on ingresses that cannot prove it.
+        return this.requireSupervisor().agentStaleReceive(
+          params as AgentStaleReceiveParams,
+          ctx,
         );
       // ── runtime_* family ────────────────────────────────────────
       // Each case below requires `this.supervisor` to be set; when
