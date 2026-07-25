@@ -101,10 +101,20 @@ export const computerCopy = {
   // preserved). The two never share a component, mutation, or copy.
   deleteComputer: 'Delete computer',
   deleteConfirmTitle: 'Delete this computer?',
-  /** One line of consequence — deleting invalidates the connection command
-   *  and drops the computer from the list. Recoverable by adding it again. */
+  /** The umbrella consequence, and deliberately NOT on the connection axis
+   *  (shiki 2026-07-26): the old line led with "its connection command stops
+   *  working", which framed a terminal delete as a credential event, said the
+   *  same thing whether or not the computer was connected, and buried the part
+   *  that actually matters — everything the computer holds goes with it.
+   *  Availability wording belongs to Disconnect/Revoke, never here.
+   *
+   *  "Everything it holds" stays generic on purpose: the named impact blocks
+   *  below list the agents and workspaces, so restating those nouns here would
+   *  duplicate them, and an empty computer would be described by a list of
+   *  things that aren't there. Same noun as `deleteImpactUnavailable` ("what
+   *  this computer holds") so the two screens read as one idea. */
   deleteConfirmBody:
-    "Its connection command stops working and it's removed from your computers. This can't be undone.",
+    "This computer and everything it holds are deleted. This can't be undone.",
   deleteConfirm: 'Delete',
   deleting: 'Deleting…',
   deleteFailed: "Couldn't delete this computer. Please try again.",
