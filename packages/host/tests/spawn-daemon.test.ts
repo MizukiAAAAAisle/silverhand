@@ -57,6 +57,10 @@ describe('e2e — spawnDaemonChild subprocess', () => {
       socketPath,
       pidFilePath,
       logDir,
+      // #task:1613 — ride the existing subprocess boot to prove the FULL
+      // production observation chain: spawn argv → entry parse → runDaemon
+      // → handshake capabilities (asserted on the client below).
+      layoutMigrationOutcome: 'migrated',
       alsoStderr: false,
       maxRestarts: 0,        // disable auto-restart for this test
       restartWindowMs: 1_000,
@@ -73,6 +77,8 @@ describe('e2e — spawnDaemonChild subprocess', () => {
     const ping = await client.ping();
     expect(ping.daemon_pid).toBe(handle.pid);
     expect(ping.pong).toBe(true);
+    expect(client.capabilities.has('layout_migration.v2.migrated')).toBe(true);
+    expect(client.capabilities.has('layout_migration.v2.already_current')).toBe(false);
 
     await client.close();
     await handle.kill({ gracefulMs: 2_000 });

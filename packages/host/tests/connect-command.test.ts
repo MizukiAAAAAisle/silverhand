@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -381,6 +381,19 @@ describe('silverhand-daemon connect command', () => {
       ]);
       expect(code).toBe(1);
       expect(stderrWrites.join('')).toContain('workspace-data migration failed');
+      // #task:1613 — the pre-connection failure leaves daemon-local
+      // STRUCTURED evidence (typed code + stage + versions + hostId), not
+      // just stderr text: the daemon never attaches, so this line is the
+      // only failure record the deletion gate can consult.
+      const logDir = join(stateRoot, 'logs', 'connect-host-real');
+      const logFiles = readdirSync(logDir).filter(f => f.endsWith('.log'));
+      expect(logFiles.length).toBeGreaterThan(0);
+      const logBody = logFiles
+        .map(f => readFileSync(join(logDir, f), 'utf8'))
+        .join('\n');
+      expect(logBody).toContain('"action":"layout_v2_migration_failed"');
+      expect(logBody).toContain('"stage":"workspace_data_convergence"');
+      expect(logBody).toContain('"hostId":"host-real"');
       // Fail closed: source registry not retired, no daemon run-state.
       expect(
         existsSync(join(wsData, bindingSlug(binding), 'workspace-registry.json')),

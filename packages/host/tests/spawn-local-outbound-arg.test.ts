@@ -61,6 +61,7 @@ async function captureSpawnArgs(
     silverhandStateRootDir?: string | null;
     daemonIdentityPath?: string | null;
     controlPlaneServerUrlPath?: string | null;
+    layoutMigrationOutcome?: 'migrated' | 'already_current' | null;
   } = {},
 ): Promise<readonly string[]> {
   const socketPath = '/tmp/silverhand-fake.sock';
@@ -99,6 +100,9 @@ async function captureSpawnArgs(
       : {}),
     ...(opts.controlPlaneServerUrlPath !== undefined
       ? { controlPlaneServerUrlPath: opts.controlPlaneServerUrlPath }
+      : {}),
+    ...(opts.layoutMigrationOutcome !== undefined
+      ? { layoutMigrationOutcome: opts.layoutMigrationOutcome }
       : {}),
   });
   // Let the supervisor register its stdout listener, then hand it ready.
@@ -219,5 +223,30 @@ describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', (
       controlPlaneServerUrlPath: null,
     });
     expect(nullArgs).not.toContain('--control-plane-server-url-path');
+  });
+
+  it('forwards --layout-migration-outcome when set (#task:1613)', async () => {
+    // Load-bearing observation chain: desktop prepare outcome -> spawn
+    // argv -> entry parse -> runDaemon ready capabilities. A dropped flag
+    // silently turns every desktop boot into "unobserved" for the
+    // migration-unit deletion gate.
+    const args = await captureSpawnArgs({ layoutMigrationOutcome: 'migrated' });
+    const idx = args.indexOf('--layout-migration-outcome');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    expect(args[idx + 1]).toBe('migrated');
+
+    const alreadyArgs = await captureSpawnArgs({
+      layoutMigrationOutcome: 'already_current',
+    });
+    const idx2 = alreadyArgs.indexOf('--layout-migration-outcome');
+    expect(alreadyArgs[idx2 + 1]).toBe('already_current');
+  });
+
+  it('omits --layout-migration-outcome when unset or null', async () => {
+    const unsetArgs = await captureSpawnArgs();
+    expect(unsetArgs).not.toContain('--layout-migration-outcome');
+
+    const nullArgs = await captureSpawnArgs({ layoutMigrationOutcome: null });
+    expect(nullArgs).not.toContain('--layout-migration-outcome');
   });
 });

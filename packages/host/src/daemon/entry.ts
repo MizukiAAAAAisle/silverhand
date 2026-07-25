@@ -39,6 +39,12 @@
  *                         Desktop passes the resolver's
  *                         `localComputer.run.identity`; omitted → the
  *                         bare-daemon default under `~/.silverhand/daemon`.
+ *   --layout-migration-outcome <migrated|already_current>
+ *                         optional (#task:1613); outcome of the layout-v2
+ *                         migration the LAUNCHER ran before this spawn
+ *                         (desktop startup engine). The ready handshake
+ *                         advertises it as a `layout_migration.v2.*`
+ *                         capability token for the backend observation log.
  *   --stderr              optional; mirror log lines to stderr too
  *
  * Stdout:
@@ -61,6 +67,7 @@
  * dev run.
  */
 import { runDaemon } from './run.js';
+import type { LayoutMigrationOutcome } from '../protocol.js';
 import { Supervisor } from './supervisor/index.js';
 import { runConnectCommand, runStopCommand } from './connect-command.js';
 import { enableNodeSystemCa } from '../node-system-ca.js';
@@ -80,6 +87,7 @@ interface ParsedArgv {
   proxyConfigPath: string | null;
   legacyProxyConfigPath: string | null;
   controlPlaneServerUrlPath: string | null;
+  layoutMigrationOutcome: LayoutMigrationOutcome | null;
   alsoStderr: boolean;
 }
 
@@ -96,6 +104,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   let proxyConfigPath: string | null = null;
   let legacyProxyConfigPath: string | null = null;
   let controlPlaneServerUrlPath: string | null = null;
+  let layoutMigrationOutcome: LayoutMigrationOutcome | null = null;
   let alsoStderr = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -136,6 +145,17 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
       case '--control-plane-server-url-path':
         controlPlaneServerUrlPath = argv[++i] ?? null;
         break;
+      case '--layout-migration-outcome': {
+        const value = argv[++i] ?? null;
+        if (value !== 'migrated' && value !== 'already_current') {
+          return {
+            error:
+              '--layout-migration-outcome must be migrated|already_current',
+          };
+        }
+        layoutMigrationOutcome = value;
+        break;
+      }
       case '--stderr':
         alsoStderr = true;
         break;
@@ -195,6 +215,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
     proxyConfigPath,
     legacyProxyConfigPath,
     controlPlaneServerUrlPath,
+    layoutMigrationOutcome,
     alsoStderr,
   };
 }
@@ -230,6 +251,7 @@ async function main(): Promise<void> {
       legacyProxyConfigPath: parsed.legacyProxyConfigPath ?? undefined,
       controlPlaneServerUrlPath:
         parsed.controlPlaneServerUrlPath ?? undefined,
+      layoutMigrationOutcome: parsed.layoutMigrationOutcome ?? undefined,
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,

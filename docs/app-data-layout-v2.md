@@ -587,6 +587,54 @@ delete residual `workspaces/`, `daemon/`, top-level `run/` leftovers, old
 bootstrap files, or `db.sqlite`; each has a different provenance and deletion
 proof.
 
+### Observation log for the deletion gate (#task:1613)
+
+The rollout evidence above is collected through the existing attach
+handshake, with no new protocol or migration state:
+
+- Each migration composition entry stamps its outcome on the daemon boot it
+  precedes — the desktop startup engine via `--layout-migration-outcome`
+  on the spawned daemon, the `connect` convergence pass in-process — and the
+  daemon's `ready` handshake advertises it as a `layout_migration.v2.migrated`
+  / `layout_migration.v2.already_current` token on the OPEN
+  `capabilities: string[]` (both transports: outbound WS and the embedded
+  local frame server). Outcome semantics are each entry's stable fact, not
+  a byte accounting: desktop reports `migrated` when THIS boot ran the
+  migration/catch-up and stamped the complete marker (fresh-install
+  initialization included) and `already_current` when the complete marker
+  predates the boot; `connect` reports `migrated` when its convergence
+  pass flattened and `already_current` otherwise.
+- The backend writes a structured line per attaching daemon boot:
+  `action=layout_migration_status` with `hostId`, `outcome`,
+  `layoutVersion: 2`, `daemonVersion`, `daemonInstance`. Dedupe is
+  best-effort and in-process only (keyed by the boot's instance key, so
+  socket reconnects of the same boot do not re-log; a backend restart or
+  host-state eviction may repeat a line). Consumers of the gate count
+  after deduping by `(hostId, daemonInstance, outcome)` — duplicate lines
+  never affect the gate. Exactly ONE outcome token is trusted evidence:
+  a ready advertising both tokens is malformed and is warned
+  (`layout_migration_status_contradictory`), never counted as a status.
+- A **failed** migration never starts the daemon, so it cannot appear in the
+  backend log by construction. Failure evidence is daemon-local and
+  structured on both entries: the desktop writes
+  `action=layout_v2_migration_failed` with `stage` (`quiesce`/`engine`),
+  the typed code, `layoutVersion`, and `appVersion` before blocking
+  startup (`layout-migration/prepare.ts`); `connect` writes the same
+  action with `stage=workspace_data_convergence`, the typed
+  `FlattenLayoutError`/`SessionMigrationError` code, `daemonVersion`, and
+  `hostId` into its daemon log dir, plus the operator-facing stderr line,
+  then exits 1.
+- **Gate predicate:** the migration unit is deletable when, over an agreed
+  observation window (default: since the first build shipping the token, and
+  at least one attach per supported computer), every supported `hostId` has
+  logged `layout_migration_status` with outcome `migrated` or
+  `already_current` on a supported `daemonVersion`. Token ABSENCE (an older
+  daemon build) counts as unobserved and keeps the gate closed — it is never
+  read as migrated.
+- The log is observation evidence only. The completed-marker file remains the
+  persistent migration authority; the log is never re-read to decide whether
+  to migrate.
+
 ## 8. Acceptance matrix
 
 ### Resolver

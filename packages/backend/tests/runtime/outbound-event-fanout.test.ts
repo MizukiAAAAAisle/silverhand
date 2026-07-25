@@ -2771,7 +2771,10 @@ function runtimeDto(
   };
 }
 
-function readyEvent(): OutboundDaemonToServerEventFrame {
+function readyEvent(overrides?: {
+  capabilities?: string[];
+  started_at?: number;
+}): OutboundDaemonToServerEventFrame {
   return {
     direction: 'daemon_to_server',
     type: 'event',
@@ -2781,9 +2784,9 @@ function readyEvent(): OutboundDaemonToServerEventFrame {
     daemon_id: 'local',
     instance_id: 'instance-1',
     host_descriptor: { name: 'local', kind: 'local' },
-    capabilities: [...KNOWN_CAPABILITIES_V1],
+    capabilities: overrides?.capabilities ?? [...KNOWN_CAPABILITIES_V1],
     daemon_pid: 123,
-    started_at: 1700000000000,
+    started_at: overrides?.started_at ?? 1700000000000,
   };
 }
 
@@ -2986,6 +2989,139 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+describe('layout-v2 migration observation log (#task:1613)', () => {
+  // The wire tokens are pinned LITERALLY here (not via the host helper) so
+  // a silent rename on either side of the capability contract fails a test.
+  const MIGRATED_TOKEN = 'layout_migration.v2.migrated';
+  const ALREADY_CURRENT_TOKEN = 'layout_migration.v2.already_current';
+
+  function collectingLogger() {
+    const entries: { fields: Record<string, unknown>; msg: unknown }[] = [];
+    return {
+      entries,
+      logger: {
+        info(...args: unknown[]) {
+          entries.push({
+            fields: args[0] as Record<string, unknown>,
+            msg: args[1],
+          });
+        },
+        warn(..._args: unknown[]) {},
+        error(..._args: unknown[]) {},
+      },
+    };
+  }
+
+  function layoutLogs(entries: { fields: Record<string, unknown> }[]) {
+    return entries.filter(e => e.fields?.action === 'layout_migration_status');
+  }
+
+  it('logs migrated ONCE per daemon boot — a reconnect of the same boot does not re-log', async () => {
+    const { entries, logger } = collectingLogger();
+    const fix = makeFixture({ logger });
+    try {
+      const caps = [...KNOWN_CAPABILITIES_V1, MIGRATED_TOKEN];
+      fix.fanout.onEvent(fix.hostId, readyEvent({ capabilities: caps }), 'conn-1');
+      expect(layoutLogs(entries)).toHaveLength(1);
+      expect(layoutLogs(entries)[0]!.fields).toMatchObject({
+        action: 'layout_migration_status',
+        hostId: fix.hostId,
+        outcome: 'migrated',
+        layoutVersion: 2,
+        daemonVersion: '0.0.0-test',
+      });
+
+      // Same daemon boot (same pid+started_at) reconnecting on a fresh
+      // socket must NOT produce a second observation line.
+      fix.fanout.onDisconnect(fix.hostId, 'conn-1');
+      fix.transport.connectionId = 'conn-2';
+      fix.fanout.onEvent(fix.hostId, readyEvent({ capabilities: caps }), 'conn-2');
+      expect(layoutLogs(entries)).toHaveLength(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('logs already_current, and a NEW daemon boot is logged again', async () => {
+    const { entries, logger } = collectingLogger();
+    const fix = makeFixture({ logger });
+    try {
+      const caps = [...KNOWN_CAPABILITIES_V1, ALREADY_CURRENT_TOKEN];
+      fix.fanout.onEvent(fix.hostId, readyEvent({ capabilities: caps }), 'conn-1');
+      expect(layoutLogs(entries)).toHaveLength(1);
+      expect(layoutLogs(entries)[0]!.fields).toMatchObject({
+        outcome: 'already_current',
+      });
+
+      // A different boot generation (new started_at) is a new observation.
+      fix.fanout.onDisconnect(fix.hostId, 'conn-1');
+      fix.transport.connectionId = 'conn-2';
+      fix.fanout.onEvent(
+        fix.hostId,
+        readyEvent({ capabilities: caps, started_at: 1700000009999 }),
+        'conn-2',
+      );
+      expect(layoutLogs(entries)).toHaveLength(2);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('a ready WITHOUT a layout token (pre-#1613 daemon) logs nothing — unobserved, never migrated', async () => {
+    const { entries, logger } = collectingLogger();
+    const fix = makeFixture({ logger });
+    try {
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      expect(layoutLogs(entries)).toHaveLength(0);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('BOTH tokens at once is malformed evidence: warned, never logged as a success status', async () => {
+    const entries: { level: string; fields: Record<string, unknown> }[] = [];
+    const logger = {
+      info(...args: unknown[]) {
+        entries.push({ level: 'info', fields: args[0] as Record<string, unknown> });
+      },
+      warn(...args: unknown[]) {
+        entries.push({ level: 'warn', fields: args[0] as Record<string, unknown> });
+      },
+      error(..._args: unknown[]) {},
+    };
+    const fix = makeFixture({ logger });
+    try {
+      const caps = [...KNOWN_CAPABILITIES_V1, MIGRATED_TOKEN, ALREADY_CURRENT_TOKEN];
+      fix.fanout.onEvent(fix.hostId, readyEvent({ capabilities: caps }), 'conn-1');
+      // No success status may land for contradictory evidence.
+      expect(
+        entries.filter(
+          e => e.level === 'info' && e.fields?.action === 'layout_migration_status',
+        ),
+      ).toHaveLength(0);
+      const warns = entries.filter(
+        e =>
+          e.level === 'warn' &&
+          e.fields?.action === 'layout_migration_status_contradictory',
+      );
+      expect(warns).toHaveLength(1);
+      expect(warns[0]!.fields).toMatchObject({ hostId: fix.hostId });
+
+      // Reconnect of the same boot does not repeat the warn either.
+      fix.fanout.onDisconnect(fix.hostId, 'conn-1');
+      fix.transport.connectionId = 'conn-2';
+      fix.fanout.onEvent(fix.hostId, readyEvent({ capabilities: caps }), 'conn-2');
+      expect(
+        entries.filter(
+          e => e.fields?.action === 'layout_migration_status_contradictory',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      fix.cleanup();
+    }
+  });
+});
 
 describe('host agent liveness event + eager seed (#task:1588 slice 2)', () => {
   function stateEvent(

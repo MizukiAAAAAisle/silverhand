@@ -34,6 +34,7 @@ import {
   computersRootDir,
 } from '@silverhand/shared/app-data-layout';
 import { runDaemon } from './run.js';
+import type { LayoutMigrationOutcome } from '../protocol.js';
 // #task:1608 (Cindy R4 P2-4) — sibling imports, never the public barrel.
 import { runWorkspaceDataConvergencePass } from './workspace-registry/convergence-pass.js';
 import { FlattenLayoutError } from './workspace-registry/flatten-layout.js';
@@ -46,6 +47,8 @@ import type { DaemonIdentity } from './identity.js';
 import { hostConnectWebSocketUrl } from './outbound-client.js';
 import { defaultConnectDataRoot, defaultSilverhandStateRoot } from './computer-profile.js';
 import { logDaemon } from './daemon-logging.js';
+import { createDaemonLogger } from './logger.js';
+import { DAEMON_VERSION } from './version.js';
 
 const execFileAsync = promisify(execFile);
 const CONNECT_READY_TIMEOUT_MS = 10_000;
@@ -299,8 +302,9 @@ export async function runConnectCommand(
   // renames). Only the current root is touched — never another computer's
   // directory. Failure is fail-closed: the daemon does not start, no new
   // resolver coordinates are materialized.
+  let layoutMigrationOutcome: LayoutMigrationOutcome;
   try {
-    runWorkspaceDataConvergencePass({
+    const convergence = runWorkspaceDataConvergencePass({
       workspaceDataRoot: paths.workspaceDataRootDir,
       // The ONE candidate a connect daemon can own: its full runtime
       // binding (Cindy R4 P0-1 — never a bare host id).
@@ -320,8 +324,34 @@ export async function runConnectCommand(
         warn: (_f, m) => process.stderr.write(`silverhand-daemon connect: ${m}\n`),
       },
     });
+    // #task:1613 — the observation token for the backend log: a pass that
+    // actually flattened bytes is `migrated`; already-flat and
+    // nothing-to-converge both mean the layout is already final.
+    layoutMigrationOutcome =
+      convergence.status === 'flattened' ? 'migrated' : 'already_current';
   } catch (err) {
     if (err instanceof FlattenLayoutError || err instanceof SessionMigrationError) {
+      // #task:1613 — pre-connection failure: the backend is unreachable by
+      // construction, so this daemon-local structured line (typed code,
+      // versions, hostId) IS the failure evidence. stderr keeps the
+      // operator-facing text; neither is ever reported upstream.
+      const failureLogger = createDaemonLogger({
+        dir: paths.logDir,
+        alsoStderr: false,
+        base: { component: 'silverhand-daemon' },
+      });
+      failureLogger.error(
+        {
+          action: 'layout_v2_migration_failed',
+          stage: 'workspace_data_convergence',
+          code: err.code,
+          layoutVersion: 2,
+          daemonVersion: DAEMON_VERSION,
+          hostId,
+        },
+        'layout-v2 workspace-data convergence failed; daemon not started',
+      );
+      await failureLogger.close();
       process.stderr.write(
         `silverhand-daemon connect: workspace-data migration failed (${err.code}): ${err.message}\n`,
       );
@@ -357,6 +387,7 @@ export async function runConnectCommand(
     hostConfig,
     daemonIdentity,
     daemonIdentityPath: null,
+    layoutMigrationOutcome,
     installSignals: true,
     writeStdoutHandshake: false,
     alsoStderr: parsed.options.alsoStderr,

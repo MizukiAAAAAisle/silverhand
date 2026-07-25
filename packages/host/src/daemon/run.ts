@@ -40,8 +40,10 @@ import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
 import {
   encodeFrame,
+  layoutMigrationCapability,
   type EventFrame,
   type AgentMaterializeParams,
+  type LayoutMigrationOutcome,
 } from '../protocol.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { logDaemon } from './daemon-logging.js';
@@ -227,6 +229,16 @@ export interface RunDaemonOptions {
    *  ready event report the target machine hostname as diagnostic metadata
    *  without creating a desktop-style identity file. */
   daemonIdentity?: DaemonIdentity | null;
+  /**
+   * #task:1613 — outcome of the layout-v2 migration entry that ran before
+   * this daemon boot (desktop startup engine / connect convergence pass).
+   * When set, the ready handshake advertises the matching
+   * `layout_migration.v2.*` capability token so the backend can write the
+   * observation log that gates deleting the migration unit. Omitted for
+   * protocol-only assemblies and pre-#1613 launchers — absence is
+   * "unobserved", never "migrated".
+   */
+  layoutMigrationOutcome?: LayoutMigrationOutcome;
   /**
    * D5.a-2 — optional local outbound frame socket path. When set
    * (non-null), the daemon starts a {@link LocalOutboundFrameServer} on
@@ -431,6 +443,11 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         ? undefined
         : readOrCreateDaemonIdentity(daemonIdentityPath);
   const helloResult = createDaemonHelloResult(daemonInstanceId, daemonIdentity);
+  if (opts.layoutMigrationOutcome) {
+    helloResult.capabilities.push(
+      layoutMigrationCapability(opts.layoutMigrationOutcome),
+    );
+  }
   const readyEvent = (): Extract<EventFrame, { event: 'ready' }> => ({
     event: 'ready',
     ...helloResult,

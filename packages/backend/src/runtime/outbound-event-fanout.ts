@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 import {
   EventFrameSchema,
   isHostActiveRuntimePhase,
+  layoutMigrationOutcomeFromCapabilities,
   type EventFrame,
   type OutboundDaemonToServerEventFrame,
   type OutboundServerCommandKind,
@@ -138,6 +139,16 @@ interface HostFanoutState {
    * `currentDaemonKey`, and the stale value simply stops matching.
    */
   hydratedDaemonKey: string | null;
+  /**
+   * #task:1613 — daemon boot key (`makeDaemonInstanceKey`) whose
+   * layout-migration outcome has already been logged. IN-PROCESS
+   * BEST-EFFORT dedupe only: it survives socket reconnects of the same
+   * boot (deliberately NOT reset in
+   * {@link OutboundRuntimeEventFanout.onDisconnect}) but not a backend
+   * restart, so duplicate lines are possible; the deletion gate dedupes
+   * by (hostId, daemonInstance, outcome) when counting.
+   */
+  layoutMigrationLoggedDaemonKey: string | null;
   /**
    * #task:1588 slice 2 — signature of the last PUBLISHED active-agent
    * set (sorted, joined). `maybePublishLivenessChanged` compares the
@@ -296,6 +307,52 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         event.daemon_pid,
         event.started_at,
       );
+      // #task:1613 — observation log for the layout-v2 migration-unit
+      // deletion gate. The daemon advertises its migration outcome as a
+      // `layout_migration.v2.*` capability token; log it once per daemon
+      // boot within this backend process (in-process best-effort dedupe
+      // keyed by the boot's instance key — it survives socket reconnects
+      // but NOT a backend restart or an A→B→A host-state eviction, so
+      // duplicates are possible; consumers of the deletion gate dedupe by
+      // (hostId, daemonInstance, outcome)). No token = pre-#1613 daemon
+      // build = unobserved: deliberately not logged, so the gate stays
+      // closed for that computer instead of silently passing.
+      // Contradictory tokens (both outcomes at once) are malformed
+      // evidence: warn, never a success status. The log is evidence
+      // only — never a persistent migration authority (the marker file is).
+      const layoutOutcome = layoutMigrationOutcomeFromCapabilities(
+        event.capabilities,
+      );
+      if (
+        layoutOutcome !== null &&
+        state.layoutMigrationLoggedDaemonKey !== state.currentDaemonKey
+      ) {
+        state.layoutMigrationLoggedDaemonKey = state.currentDaemonKey;
+        if (layoutOutcome === 'contradictory') {
+          this.opts.logger.warn(
+            {
+              action: 'layout_migration_status_contradictory',
+              hostId,
+              layoutVersion: 2,
+              daemonVersion: event.daemon_version,
+              daemonInstance: state.currentDaemonKey,
+            },
+            'attaching daemon advertised BOTH layout migration outcomes — malformed evidence, not counted',
+          );
+        } else {
+          this.opts.logger.info(
+            {
+              action: 'layout_migration_status',
+              hostId,
+              outcome: layoutOutcome,
+              layoutVersion: 2,
+              daemonVersion: event.daemon_version,
+              daemonInstance: state.currentDaemonKey,
+            },
+            'layout-v2 migration status reported by attaching daemon',
+          );
+        }
+      }
       // Reattach re-drive is wired through the handler's
       // `onHydrateComplete` callback (see `stateForHost` below), NOT
       // here on `ready`. The handler's `onDaemonReady(ready)` path
@@ -1347,6 +1404,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       currentDaemonKey: null,
       dispatchConnectionId: null,
       hydratedDaemonKey: null,
+      layoutMigrationLoggedDaemonKey: null,
       lastLivenessSignature: '',
     };
     const bridge: RuntimeStatusBridge = {

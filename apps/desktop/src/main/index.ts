@@ -51,8 +51,7 @@ import {
   spawnDaemonChild,
   type DaemonHandle,
 } from '@silverhand/host';
-import { migrateDesktopAppDataLayout } from './layout-migration/engine.js';
-import { quiesceLegacyLocalRuntime } from './layout-migration/quiesce.js';
+import { prepareDesktopDataLayout } from './layout-migration/prepare.js';
 import {
   initializeDesktopLayoutVersion,
   electronUserDataPath,
@@ -1948,11 +1947,16 @@ async function bootstrap(): Promise<void> {
     // Quiesce any legacy daemon + orphan runtime children, run the eager
     // two-facet migration, then flip the resolver selector to the marker's
     // version. Both desktop modes execute this identically; migration
-    // failures are startup-blocking by design (fail closed, bytes intact).
-    await quiesceLegacyLocalRuntime(silverhandDir(), desktopAppPaths().logs);
-    migrateDesktopAppDataLayout(silverhandDir(), {
-      info: (f, m) => logger?.info(f, m),
-      warn: (f, m) => logger?.warn(f, m),
+    // failures are startup-blocking by design (fail closed, bytes intact),
+    // and `prepareDesktopDataLayout` writes the daemon-local structured
+    // failure evidence before rethrowing (#task:1613). The returned outcome
+    // is advertised by the spawned daemon's ready handshake for the backend
+    // observation log.
+    const layoutMigrationOutcome = await prepareDesktopDataLayout({
+      appRoot: silverhandDir(),
+      logsDir: desktopAppPaths().logs,
+      logger,
+      appVersion: app.getVersion(),
     });
     initializeDesktopLayoutVersion('v2');
     logger.info(
@@ -2116,6 +2120,7 @@ async function bootstrap(): Promise<void> {
       computersRootDir: paths.computersRootDir,
       silverhandStateRootDir: paths.silverhandStateRootDir,
       daemonIdentityPath: paths.daemonIdentityPath,
+      layoutMigrationOutcome,
       proxyConfigPath: null,
       legacyProxyConfigPath: paths.legacyProxyConfigPath,
       controlPlaneServerUrlPath:
