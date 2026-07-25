@@ -47,14 +47,23 @@ interface ConnectionCommandCardProps {
  * caller owns the mint and decides when to mount/unmount.
  *
  * **Terminal chrome** (shiki dogfood: "command background 不是 shell 那种
- * 感觉；reveal/copy button 位置也不对"): the command is a command you run in
- * a shell, so it's dressed as one — it reuses the app's `island` code-block
- * token family (`--bg-island` / `--bg-island-deep` / `--text-island` /
- * `--border-island`), the same surface chat renders fenced code on, so each
- * theme owns the palette (forza6's deep teal-black HUD, warm-script's warm
- * stone, slack-dark's ink). A header strip carries the label + the
- * Reveal/Copy actions (top-right, terminal-title-bar style — not a footer
- * bar); the body shows a `$` prompt before the monospace command.
+ * 感觉；reveal/copy button 位置也不对"; then 2026-07-26: "黑色背景 + 绿色字体，
+ * 就像终端那样"): the command is a command you run in a shell, so the card is
+ * dressed as the shell itself — the non-themable `terminal` token family
+ * (`--bg-terminal` / `--bg-terminal-chrome` / `--text-terminal` /
+ * `--border-terminal`, defined once in `global.css`). It deliberately does NOT
+ * follow the theme palette: it used to ride the `island` code-block family,
+ * whose whole contract is "each theme owns the code surface", which made this
+ * card read as three different app surfaces and as no terminal at all. A header
+ * strip carries the label + the Reveal/Copy actions (top-right,
+ * terminal-title-bar style — not a footer bar); the body shows a `$` prompt
+ * before the monospace command. The green is spent on the COMMAND only — the
+ * title bar keeps neutral ink (`--text-terminal-chrome`; shiki: "卡片的 header
+ * 不需要一起变绿"), so the phosphor marks shell output instead of decorating the
+ * whole card. Selection is scoped too, via the `data-terminal-surface` hook on
+ * the root: a surface that opts out of the theme palette must design its own
+ * `::selection`, or the global theme wash lands on a ground it was never
+ * chosen for (shiki saw forza6's faint magenta read as muddy purple here).
  */
 export function ConnectionCommandCard({
   daemonNpmSpec,
@@ -98,10 +107,13 @@ export function ConnectionCommandCard({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="overflow-hidden rounded-[var(--floating-radius)] border border-[var(--border-island)] bg-[var(--bg-island)]">
+      <div
+        data-terminal-surface
+        className="overflow-hidden rounded-[var(--floating-radius)] border border-[var(--border-terminal)] bg-[var(--bg-terminal)]"
+      >
         {/* Terminal title bar: label left, Reveal + Copy right. */}
-        <div className="flex items-center justify-between gap-2 border-b border-[var(--border-island)] bg-[var(--bg-island-deep)] px-3 py-1.5">
-          <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--text-island)] opacity-70">
+        <div className="flex items-center justify-between gap-2 border-b border-[var(--border-terminal)] bg-[var(--bg-terminal-chrome)] px-3 py-1.5">
+          <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--text-terminal-chrome)]">
             <Terminal className="size-3.5" aria-hidden />
             {label}
           </span>
@@ -110,7 +122,7 @@ export function ConnectionCommandCard({
               type="button"
               onClick={() => setRevealed(v => !v)}
               disabled={!daemonCommand}
-              className="inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-medium text-[var(--text-island)] opacity-70 transition-opacity hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[11px] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={revealed ? computerCopy.hide : computerCopy.reveal}
             >
               {revealed ? (
@@ -124,7 +136,7 @@ export function ConnectionCommandCard({
               type="button"
               onClick={() => void handleCopy()}
               disabled={!daemonCommand}
-              className="inline-flex items-center gap-1 px-1.5 py-1 text-[11px] font-medium text-[var(--text-island)] opacity-70 transition-opacity hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[11px] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={computerCopy.copy}
             >
               {copied ? (
@@ -139,8 +151,8 @@ export function ConnectionCommandCard({
         {/* Body: `$` prompt + the command. The prompt is decorative
           * (select-none, its own span) so it's never part of the copy. */}
         <div className="max-h-32 overflow-y-auto px-3 py-2.5">
-          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--text-island)]">
-            <span className="select-none opacity-40" aria-hidden>
+          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--text-terminal)]">
+            <span className="select-none opacity-50" aria-hidden>
               ${' '}
             </span>
             {displayCommand}

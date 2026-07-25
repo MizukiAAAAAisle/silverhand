@@ -114,6 +114,48 @@
   --titlebar-controls-safe-width: 138px;
 }
 
+/* ── Terminal skin (shiki: connect command 要"黑底绿字，就像终端那样") ──
+   Deliberately NOT part of the per-theme palette. The connection-command
+   card is not app chrome quoting a command — it is a stand-in for the
+   shell the user is about to paste into, so it should read as a terminal
+   in every theme, the way a screenshot of a terminal would. The `island`
+   family it used before is the opposite contract: it exists so each theme
+   OWNS the code surface (warm stone / teal HUD / ink), which made the
+   card look like three different app surfaces and like no terminal.
+
+   Kept as tokens rather than hardcoded hexes in the component so a theme
+   MAY still re-skin it (forza6 could pull the phosphor toward its lime)
+   without touching TSX — but no theme overrides it today, by design. */
+:root {
+  --bg-terminal: #0A0B0A;
+  /* Title strip — one step off the ground, like a terminal window bar. */
+  --bg-terminal-chrome: #141715;
+  /* Phosphor green (shiki picked the hue). Spent ONLY on the command
+     itself — the title bar stays neutral (shiki: "卡片的 header 不需要一起
+     变绿"), so the green marks "this is shell output", not "this whole
+     card is decorated". */
+  --text-terminal: #a9d877;
+  /* Title-bar ink: neutral on the dark chrome, so the label + actions
+     read as window chrome rather than as more command text. */
+  --text-terminal-chrome: rgba(255, 255, 255, 0.62);
+  --border-terminal: rgba(255, 255, 255, 0.1);
+  /* Selection inside the terminal card. The global `::selection` is
+     `--accent-soft` + `--text-primary`, i.e. a theme wash designed for the
+     app's own light/ink surfaces — on this near-black ground forza6's faint
+     magenta read as a muddy purple with near-black text (shiki). A surface
+     that opts out of the theme palette must design its own selection too:
+     a translucent phosphor wash that keeps the green text as-is, the way a
+     terminal highlights. */
+  --bg-terminal-select: rgba(169, 216, 119, 0.28);
+}
+
+/* Scoped by the `data-terminal-surface` hook the card puts on its root, so
+   the rule travels with the surface instead of with a feature path. */
+[data-terminal-surface] ::selection {
+  background: var(--bg-terminal-select);
+  color: var(--text-terminal);
+}
+
 html, body, #root {
   height: 100%;
   width: 100%;
