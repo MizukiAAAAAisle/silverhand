@@ -397,7 +397,7 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
       };
       expect(reqBody.attachment_ids).toEqual(['att-big']);
       expect(Buffer.byteLength(reqBody.content, 'utf8')).toBeLessThanOrEqual(64 * 1024);
-      expect(reqBody.content).toContain('附件');
+      expect(reqBody.content).toContain('message-body-x.txt');
     }, 30_000);
   });
 

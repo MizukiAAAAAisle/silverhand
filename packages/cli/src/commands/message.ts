@@ -232,8 +232,8 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
         const uploaded = await uploadBodyAsAttachment(client, buffer);
         attachmentIds = [...(attachmentIds ?? []), uploaded.id];
         content =
-          `已将较长内容作为文本附件发送（${uploaded.filename}，` +
-          `${formatByteSize(uploaded.size)}；正文超过 ${MAX_MESSAGE_CONTENT_LABEL} 上限）`;
+          `Sent the long body as a text attachment (${uploaded.filename}, ` +
+          `${formatByteSize(uploaded.size)}; the body is over ${MAX_MESSAGE_CONTENT_LABEL})`;
       }
     }
 
