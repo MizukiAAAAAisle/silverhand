@@ -30,7 +30,10 @@
  * is to convey one fact.
  */
 import { LayoutMigrationError } from './layout-migration/engine.js';
-import { ProfileUnusableError } from './backend-boot-mode.js';
+import {
+  ProfileUnusableError,
+  RemoteOnlyServerProfileRequiredError,
+} from './backend-boot-mode.js';
 
 export interface StartupFailureNotice {
   /** Which layer refused to start, in product terms. */
@@ -65,6 +68,16 @@ export function describeStartupFailure(error: unknown): StartupFailureNotice {
       // window shows the address and the classifier's reason, which is
       // what identifies the profile to fix.
       detail: shorten(`${error.profileUrl} — ${error.classifyMessage}`),
+    };
+  }
+  if (error instanceof RemoteOnlyServerProfileRequiredError) {
+    return {
+      headline: 'This build needs a remote server address to start.',
+      code: 'remote_profile_required',
+      // `reason` is the one fact that distinguishes this refusal (which
+      // boot decision was reached); the error's own message appends the
+      // repackage/repair options, which belong in the log.
+      detail: shorten(error.reason),
     };
   }
   const message = error instanceof Error ? error.message : String(error);

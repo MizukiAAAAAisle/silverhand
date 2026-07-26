@@ -344,6 +344,31 @@ export class ProfileUnusableError extends Error {
 }
 
 /**
+ * A remote-only package (`--server-url` at package time) refused to boot
+ * an embedded backend because no usable remote profile was available.
+ *
+ * Lives beside {@link ProfileUnusableError} because it is the same kind
+ * of thing: an explicit, named boot-gate refusal with one determinate
+ * repair, not an unexpected crash. `reason` carries the short,
+ * greppable "why this boot decision" clause so the startup failure exit
+ * can show it without the constructor's full repair text
+ * (#task:1641 review, @Alice).
+ */
+export class RemoteOnlyServerProfileRequiredError extends Error {
+  readonly reason: string;
+  constructor(reason: string) {
+    super(
+      `This Silverhand Desktop package was built as remote-only, but no ` +
+        `usable remote server profile is available. ${reason} ` +
+        `Repackage with --server-url <https-origin>, or save a non-loopback ` +
+        `remote server profile before launching this build.`,
+    );
+    this.name = 'RemoteOnlyServerProfileRequiredError';
+    this.reason = reason;
+  }
+}
+
+/**
  * D4.a Commit 3 fixup (Cindy P1-A) → Commit 5d lift — the persistence
  * guard that `handleProfileSaveWithTest` consults BEFORE writing a
  * probed URL to disk.

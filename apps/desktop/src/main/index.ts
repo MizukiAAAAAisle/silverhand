@@ -127,6 +127,7 @@ import {
   localOutboundSocketPathForStartupPlan,
   planBackendStartup,
   ProfileUnusableError,
+  RemoteOnlyServerProfileRequiredError,
 } from './backend-boot-mode.js';
 import {
   buildRemoteBackendHandle,
@@ -193,18 +194,6 @@ type DesktopHostProxyConfigResult =
         | 'invalid_input';
       message?: string;
     };
-
-class RemoteOnlyServerProfileRequiredError extends Error {
-  constructor(reason: string) {
-    super(
-      `This Silverhand Desktop package was built as remote-only, but no ` +
-        `usable remote server profile is available. ${reason} ` +
-        `Repackage with --server-url <https-origin>, or save a non-loopback ` +
-        `remote server profile before launching this build.`,
-    );
-    this.name = 'RemoteOnlyServerProfileRequiredError';
-  }
-}
 
 let backend: BackendHandle | null = null;
 let daemon: DaemonHandle | null = null;

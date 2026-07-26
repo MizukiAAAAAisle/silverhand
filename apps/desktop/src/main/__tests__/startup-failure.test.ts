@@ -8,7 +8,10 @@ import {
   type StartupFailureExitDeps,
 } from '../startup-failure-exit';
 import { LayoutMigrationError } from '../layout-migration/engine';
-import { ProfileUnusableError } from '../backend-boot-mode';
+import {
+  ProfileUnusableError,
+  RemoteOnlyServerProfileRequiredError,
+} from '../backend-boot-mode';
 
 const NOTICE = {
   headline: 'Silverhand could not migrate its data folder.',
@@ -191,6 +194,22 @@ describe('describeStartupFailure', () => {
     expect(notice.detail).toBe(
       'http://box.local:8765 — plaintext http remote requires an opt-in build',
     );
+  });
+
+  it('names the remote-only refusal instead of letting it fall through', () => {
+    const notice = describeStartupFailure(
+      new RemoteOnlyServerProfileRequiredError(
+        'Boot decision landed on embedded/no_profile.',
+      ),
+    );
+    // The error's own message ends in the repackage/save-a-profile repair
+    // options — long enough that the generic arm truncated them mid-clause,
+    // which is why this classification is named.
+    expect(notice).toEqual({
+      headline: 'This build needs a remote server address to start.',
+      code: 'remote_profile_required',
+      detail: 'Boot decision landed on embedded/no_profile.',
+    });
   });
 
   it('collapses whitespace, caps length, and omits an empty detail', () => {
