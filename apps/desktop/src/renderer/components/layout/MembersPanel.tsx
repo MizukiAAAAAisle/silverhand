@@ -150,7 +150,7 @@ export function MembersPanel({
             size="icon"
             className="h-6 w-6"
             onClick={() => setOpen(true)}
-            aria-label="新建 agent"
+            aria-label="New agent"
           >
             <Plus className="size-3.5" />
           </Button>
@@ -158,7 +158,7 @@ export function MembersPanel({
       >
         {agents.length === 0 ? (
           <li className="px-2 py-2 text-xs text-text-muted">
-            还没有 agent。点 + 创建一个。
+            No agents yet. Use + to create one.
           </li>
         ) : showGroups ? (
           agentGroups.map(group => (

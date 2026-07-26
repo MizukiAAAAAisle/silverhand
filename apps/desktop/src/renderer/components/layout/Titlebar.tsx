@@ -246,8 +246,8 @@ export function Titlebar({
         <ManageMembersPopover workspaceId={workspaceId!}>
           <button
             type="button"
-            aria-label="管理成员"
-            title="管理成员"
+            aria-label="Manage members"
+            title="Manage members"
             className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
           >
             <Users className="size-3.5" />
@@ -259,8 +259,8 @@ export function Titlebar({
         <button
           type="button"
           onClick={onOpenWorkspaceSettings}
-          aria-label="Workspace 设置"
-          title="Workspace 设置"
+          aria-label="Workspace settings"
+          title="Workspace settings"
           className="no-drag flex size-6 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
         >
           <Settings className="size-3.5" />

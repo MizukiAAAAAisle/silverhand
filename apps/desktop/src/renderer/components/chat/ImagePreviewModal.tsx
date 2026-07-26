@@ -84,13 +84,13 @@ function formatCaptureFailure(err: unknown): string {
   if (typeof Event !== 'undefined' && err instanceof Event) {
     const target = err.target as HTMLImageElement | null;
     const src = target && 'src' in target ? target.src : '';
-    if (src) return `图像加载失败：${truncate(src, 96)}`;
-    return `图像加载失败 (${err.type})`;
+    if (src) return `The image failed to load: ${truncate(src, 96)}`;
+    return `The image failed to load (${err.type})`;
   }
   if (err && typeof err === 'object') {
     const e = err as { message?: unknown; type?: unknown };
     if (typeof e.message === 'string' && e.message.length > 0) return e.message;
-    if (typeof e.type === 'string') return `事件 ${e.type}`;
+    if (typeof e.type === 'string') return `Event ${e.type}`;
   }
   return 'unknown_error';
 }
@@ -364,11 +364,11 @@ export function ImagePreviewModal({
     try {
       const result = await window.silverhand.copyPngExport({ pngBytes });
       if (result.ok) {
-        toast.success('图片已复制到剪贴板');
+        toast.success('Image copied to clipboard');
         onExportComplete?.();
         onOpenChange(false);
       } else {
-        toast.error('复制失败：' + result.error);
+        toast.error("Couldn't copy: " + result.error);
       }
     } finally {
       setBusy(false);
@@ -384,13 +384,13 @@ export function ImagePreviewModal({
         suggestedName,
       });
       if (result.ok) {
-        toast.success('已保存：' + result.path);
+        toast.success('Saved to ' + result.path);
         onExportComplete?.();
         onOpenChange(false);
       } else if ('canceled' in result && result.canceled) {
         // user dismissed dialog — silent, keep selection so they can retry
       } else if ('error' in result) {
-        toast.error('保存失败：' + result.error);
+        toast.error("Couldn't save: " + result.error);
       }
     } finally {
       setBusy(false);
@@ -415,17 +415,17 @@ export function ImagePreviewModal({
             </Dialog.Close>
           </div>
           <Dialog.Description className="mt-1 text-xs text-text-muted">
-            {messages.length === 0 ? '请选择至少一条消息' : ''}
+            {messages.length === 0 ? 'Select at least one message' : ''}
           </Dialog.Description>
 
           <div className="mt-3 min-h-[200px] flex-1 overflow-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-elevated p-2">
             {phase === 'rendering' || phase === 'idle' ? (
               <div className="flex h-full items-center justify-center text-xs text-text-muted">
-                渲染中…
+                Rendering…
               </div>
             ) : phase === 'error' ? (
               <div className="flex h-full items-center justify-center text-xs text-error">
-                渲染失败：{error}
+                Couldn't render: {error}
               </div>
             ) : dataUrl ? (
               <img

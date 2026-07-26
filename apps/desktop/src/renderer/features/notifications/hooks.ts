@@ -252,14 +252,14 @@ export function useNotificationToasts(
       const label = buildToastLabel(n);
       // Sonner's `ExternalToast` doesn't expose a whole-surface
       // `onClick`; the idiomatic pattern is the `action` button. We
-      // surface "查看" so a click on the toast's affordance jumps to
+      // surface "View" so a click on the toast's affordance jumps to
       // the source message. The system-notification path (main process)
       // still fires on full-surface click — that one is governed by
       // the OS-level Notification semantics, not sonner.
       const toastOptions = isClickableKind(n.kind)
         ? {
             action: {
-              label: '查看',
+              label: 'View',
               onClick: () => handleClickById(n.id),
             },
           }
@@ -420,25 +420,25 @@ function buildToastLabel(n: NotificationDto): string {
   if (n.kind === 'agent_start_failed') {
     const name = (n.payload?.['agent_name'] as string | undefined) ?? n.agent_id ?? 'Agent';
     const reason = n.payload?.['reason'] as string | undefined;
-    if (reason === 'init_timeout') return `@${name} 启动超时`;
+    if (reason === 'init_timeout') return `@${name} timed out while starting`;
     if (reason === 'runtime_crash') {
       const code = n.payload?.['exit_code'];
-      return `@${name} 运行异常退出${code != null ? `（exit ${code}）` : ''}`;
+      return `@${name} exited unexpectedly${code != null ? ` (exit ${code})` : ''}`;
     }
     const error = (n.payload?.['error'] as string | undefined) ?? 'unknown error';
-    return `@${name} 启动失败：${error}`;
+    return `@${name} didn't start: ${error}`;
   }
   if (n.kind === 'mention_external') {
     const channelName = n.payload?.['source_workspace_name'] as string | undefined;
-    return channelName ? `你在 #${channelName} 有新提及` : '新提及消息';
+    return channelName ? `New mention in #${channelName}` : 'New mention';
   }
   if (n.kind === 'mention_self') {
     const conversationTitle = n.payload?.['conversation_title'] as string | undefined;
     return conversationTitle
-      ? `你在 #${conversationTitle} 被提及`
-      : '你被提及了';
+      ? `You were mentioned in #${conversationTitle}`
+      : 'You were mentioned';
   }
-  return '新通知';
+  return 'New notification';
 }
 
 function payloadString(n: NotificationDto, key: string): string | null {
@@ -448,11 +448,11 @@ function payloadString(n: NotificationDto, key: string): string | null {
 
 function buildSystemNotificationBody(n: NotificationDto): string {
   if (n.kind === 'mention_self') {
-    const triggerName = payloadString(n, 'trigger_name') ?? '有人';
+    const triggerName = payloadString(n, 'trigger_name') ?? 'Someone';
     const conversationTitle = payloadString(n, 'conversation_title');
     return conversationTitle
-      ? `${triggerName} 在 # ${conversationTitle} 中 @ 了你。`
-      : `${triggerName} @ 了你。`;
+      ? `${triggerName} mentioned you in #${conversationTitle}.`
+      : `${triggerName} mentioned you.`;
   }
   return buildToastLabel(n);
 }

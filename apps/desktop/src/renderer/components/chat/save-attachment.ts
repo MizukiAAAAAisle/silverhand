@@ -26,14 +26,14 @@ export async function saveAttachmentToDisk(
     const { bytes } = await deps.fetchBytes(attachment.id);
     const result = await deps.save({ filename: attachment.filename, bytes });
     if (result.ok) {
-      deps.toastSuccess('已保存');
+      deps.toastSuccess('Saved');
       return;
     }
     if ('canceled' in result) return;
-    deps.toastError('保存失败：' + result.reason);
+    deps.toastError("Couldn't save: " + result.reason);
   } catch (err) {
     deps.toastError(
-      '保存失败：' + (err instanceof Error ? err.message : String(err)),
+      "Couldn't save: " + (err instanceof Error ? err.message : String(err)),
     );
   }
 }

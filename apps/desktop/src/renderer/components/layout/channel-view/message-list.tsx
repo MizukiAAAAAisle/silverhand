@@ -706,7 +706,7 @@ export function MessageList({
         <MessageRowsSkeleton className="absolute inset-0" />
       ) : items.length === 0 && !leadingSlot ? (
         <div className="px-4 py-3 text-sm text-text-muted">
-          还没有消息。在下方输入。
+          No messages yet. Write one below.
         </div>
       ) : (
         <Virtuoso<typeof items[number]>
@@ -751,7 +751,7 @@ export function MessageList({
               <>
                 {isFetchingEarlier ? (
                   <div className="pb-2 text-center text-xs text-text-muted">
-                    加载更早消息…
+                    Loading earlier messages…
                   </div>
                 ) : null}
                 {leadingSlot ? (
@@ -781,8 +781,8 @@ export function MessageList({
         <button
           type="button"
           data-scroll-bottom
-          aria-label={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
-          title={shouldResetToLatest ? '跳到最新消息' : '滚动到底部'}
+          aria-label={shouldResetToLatest ? 'Jump to latest' : 'Scroll to bottom'}
+          title={shouldResetToLatest ? 'Jump to latest' : 'Scroll to bottom'}
           onClick={() => {
             // Back-to-bottom is ONE command: cancel the jump + arm the bottom
             // intent first (both branches), then obtain the tail window. The

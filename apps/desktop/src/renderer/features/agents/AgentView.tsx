@@ -521,13 +521,13 @@ function AgentSidePanel({
         {section === 'activity' ? (
           !contextConversationId ? (
             <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
-              打开一个频道后，这里会显示该频道里的活动。
+              Open a channel to see this agent's activity there.
             </div>
           ) : !runtimeLoaded ? (
             <p className="py-8 text-center text-xs text-text-muted">Loading…</p>
           ) : !inThisChannel ? (
             <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
-              {agent.display_name || agent.name} 不在当前频道。
+              {agent.display_name || agent.name} is not in this channel.
             </div>
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">

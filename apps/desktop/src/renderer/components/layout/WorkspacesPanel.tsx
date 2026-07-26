@@ -168,7 +168,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
       persistId={persistId}
     >
       {workspaces.length === 0 ? (
-        <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? '空'}</li>
+        <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? 'Empty'}</li>
       ) : sort ? (
         renderSortableGroups(workspaces, sort, ctx)
       ) : (

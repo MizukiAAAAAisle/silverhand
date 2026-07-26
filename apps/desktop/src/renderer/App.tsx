@@ -1537,8 +1537,8 @@ function RegisteredAppShell(): JSX.Element {
           onCloseChild={closeSecondary}
           // The secondary pane only ever renders a channel/dm `?side`
           // overlay, so the close affordance is the generic
-          // "关闭侧栏" — never the thread wording.
-          closeLabel="关闭侧栏"
+          // "Close side pane" — never the thread wording.
+          closeLabel="Close side pane"
           isFullscreen={false}
           // PR-2: cross-workspace archive invalidation — the secondary
           // pane uses a dedicated callback so the React Query
@@ -1778,7 +1778,7 @@ function RegisteredAppShell(): JSX.Element {
                   overflow: 'hidden',
                 }}
               >
-                选一个 agent 看详情
+                Select an agent to see its details
               </main>
             )}
           </>
@@ -1820,7 +1820,7 @@ function RegisteredAppShell(): JSX.Element {
               >
                 {hostsQuery.isLoading
                   ? 'Loading computers…'
-                  : '选一台 computer 看详情'}
+                  : 'Select a computer to see its details'}
               </main>
             )}
           </>
@@ -2215,7 +2215,7 @@ function RegisteredAppShell(): JSX.Element {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-semibold text-text-primary">
-                  正在安全退出
+                  Quitting Silverhand
                 </p>
                 <p className="mt-1 text-xs leading-5 text-text-muted">
                   {shutdownStep}

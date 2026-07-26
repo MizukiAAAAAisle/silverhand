@@ -20,22 +20,21 @@ interface SidePlaceholderProps {
 
 const STATUS_COPY: Record<
   SidePlaceholderStatus,
-  { header: string; body: string; hint: string }
+  { header: string; body: string; hint?: string }
 > = {
   loading: {
-    header: '正在解析引用…',
-    body: '正在加载这条会话的元信息。',
-    hint: '通常一两秒内完成；如果一直停在这里，请关闭重试。',
+    header: 'Resolving reference…',
+    body: 'Loading this conversation.',
   },
   unauthorized: {
-    header: '没有访问权限',
-    body: '你没有权限查看这条会话所在的工作区。',
-    hint: '请联系工作区成员，或关闭这个引用。',
+    header: 'No access',
+    body: "You don't have access to the workspace this conversation belongs to.",
+    hint: 'Ask a workspace member for access, or close the reference.',
   },
   not_found: {
-    header: '会话不存在',
-    body: '这条引用指向的会话已被删除或从未存在。',
-    hint: '关闭这个引用，或核对来源。',
+    header: 'Conversation not found',
+    body: 'This reference points to a conversation that was deleted or never existed.',
+    hint: 'Close the reference, or check where it came from.',
   },
 };
 
@@ -77,8 +76,8 @@ export function SideUnresolvedPlaceholder({
         <button
           type="button"
           onClick={onClose}
-          aria-label="关闭侧栏"
-          title="关闭侧栏"
+          aria-label="Close side pane"
+          title="Close side pane"
           className="ml-2 flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
         >
           <X className="size-4" strokeWidth={1.8} />
@@ -90,7 +89,9 @@ export function SideUnresolvedPlaceholder({
         ) : null}
         <p>{copy.body}</p>
         <p className="font-mono text-xs text-text-disabled">#conv:{shortId}</p>
-        <p className="text-xs text-text-disabled">{copy.hint}</p>
+        {copy.hint ? (
+          <p className="text-xs text-text-disabled">{copy.hint}</p>
+        ) : null}
       </div>
     </main>
   );

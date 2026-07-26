@@ -132,10 +132,10 @@ export function useMessageActionSurface(deps: {
       if (!isCommittedMessage(msg)) return;
       try {
         await navigator.clipboard.writeText(msg.content);
-        toast.success('已复制到剪贴板');
+        toast.success('Copied to clipboard');
       } catch (err) {
         toast.error(
-          '复制失败：' + (err instanceof Error ? err.message : String(err)),
+          "Couldn't copy: " + (err instanceof Error ? err.message : String(err)),
         );
       }
     },
@@ -155,11 +155,11 @@ export function useMessageActionSurface(deps: {
     const text = buildMarkdownTranscript(snapshots, { agentsById, viewer });
     try {
       await navigator.clipboard.writeText(text);
-      toast.success(`已复制 ${snapshots.length} 条消息到剪贴板`);
+      toast.success(`Copied ${snapshots.length} messages`);
       selection.exit();
     } catch (err) {
       toast.error(
-        '复制失败：' + (err instanceof Error ? err.message : String(err)),
+        "Couldn't copy: " + (err instanceof Error ? err.message : String(err)),
       );
     }
   }, [selection, agentsById, viewer]);

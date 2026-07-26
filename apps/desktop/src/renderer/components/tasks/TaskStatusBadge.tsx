@@ -147,8 +147,8 @@ export function TaskStatusBadge({
       <button
         type="button"
         data-task-status={status}
-        aria-label={`更改状态（当前 ${LABELS[status]}）`}
-        title="更改状态"
+        aria-label={`Change status (currently ${LABELS[status]})`}
+        title="Change status"
         // Stop the click from reaching the card's stretched jump
         // overlay underneath.
         onClick={e => e.stopPropagation()}

@@ -813,8 +813,8 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
           type="button"
           onClick={onCopy}
           className="code-block__copy"
-          title={copied ? '已复制' : '复制代码'}
-          aria-label="复制代码"
+          title={copied ? 'Copied' : 'Copy code'}
+          aria-label="Copy code"
         >
           {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
           <span>{copied ? 'copied' : 'copy'}</span>

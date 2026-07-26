@@ -467,7 +467,7 @@ export function WorkspaceTasksDrawer({
               type="button"
               onPointerDown={closeDrawer}
               onClick={closeDrawer}
-              aria-label="关闭 Tasks"
+              aria-label="Close tasks"
               data-sticker-close
               className="ml-auto flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
@@ -683,7 +683,7 @@ function KanbanColumn({
         <div className="min-h-0 flex-auto overflow-y-auto p-2">
           {isLoading ? (
             <p className="px-2 py-3 text-center text-[11px] text-text-muted">
-              加载中…
+              Loading…
             </p>
           ) : tasks.length === 0 && !dragOver ? (
             <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">

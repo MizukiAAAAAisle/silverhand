@@ -229,12 +229,12 @@ export function Lightbox({
       const bytes = new Uint8Array(await blob.arrayBuffer());
       const result = await window.silverhand.copyPngExport({ pngBytes: bytes });
       if (result.ok) {
-        toast.success('图片已复制到剪贴板');
+        toast.success('Image copied to clipboard');
       } else {
-        toast.error('复制失败：' + result.error);
+        toast.error("Couldn't copy: " + result.error);
       }
     } catch (err) {
-      toast.error('复制失败：' + (err instanceof Error ? err.message : String(err)));
+      toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setBusy(false);
     }

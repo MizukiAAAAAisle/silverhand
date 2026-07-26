@@ -800,10 +800,10 @@ export function Composer({
             disabled={disabled}
             placeholder={
               archived
-                ? '会话已归档，无法发送'
+                ? 'This conversation is archived'
                 : disabled
-                  ? '会话已关闭，无法发送'
-                  : 'Enter 发送，Shift + Enter 换行，@member，#channel'
+                  ? 'This conversation is closed'
+                  : 'Enter to send · Shift + Enter for a new line · @member · #channel'
             }
             // No bottom/right padding to dodge buttons anymore — they
             // live in the toolbar below. `min-h-[60px]` keeps the
@@ -833,7 +833,7 @@ export function Composer({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || pending.length >= MAX_ATTACHMENTS}
-              title="附件"
+              title="Attach a file"
               className="inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Paperclip className="size-4" />
@@ -843,7 +843,7 @@ export function Composer({
               variant="default"
               size="sm"
               disabled={sendDisabled}
-              title="发送消息（Enter）"
+              title="Send (Enter)"
               data-composer-action="send"
               className="h-7"
             >
@@ -906,7 +906,7 @@ function AttachmentChip({
           onClick={onPreview}
           disabled={!onPreview}
           className="block size-8 shrink-0 overflow-hidden rounded-sm border border-border-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-          aria-label="预览图片"
+          aria-label="Preview image"
         >
           <img
             src={item.previewUrl}
@@ -937,7 +937,7 @@ function AttachmentChip({
           ) : null}
           {item.label ? <span aria-hidden>·</span> : null}
           <span className="shrink-0">
-            {item.state === 'uploading' ? '上传中…' : sizeLabel}
+            {item.state === 'uploading' ? 'Uploading…' : sizeLabel}
           </span>
         </div>
       </div>
@@ -945,7 +945,7 @@ function AttachmentChip({
         type="button"
         onClick={onRemove}
         className="ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-text-muted hover:text-text-primary"
-        aria-label="移除附件"
+        aria-label="Remove attachment"
       >
         <X className="size-3" />
       </button>

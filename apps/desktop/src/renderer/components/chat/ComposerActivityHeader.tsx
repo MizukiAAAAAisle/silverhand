@@ -262,12 +262,12 @@ export function ComposerActivityHeader({
             type="button"
             onClick={() => setExpanded(false)}
             aria-expanded
-            aria-label="收起运行详情"
+            aria-label="Collapse run details"
             className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
           >
             <Loader2 className="size-3 shrink-0 animate-spin text-accent" />
             <span className="font-medium text-text-secondary">
-              运行中{active.length > 1 ? ` · ${active.length} 个 agent` : ''}
+              Running{active.length > 1 ? ` · ${active.length} agents` : ''}
             </span>
             <span className="min-w-0 flex-1" />
             <ChevronUp className="size-3 shrink-0 text-text-muted/60" />
@@ -300,7 +300,7 @@ export function ComposerActivityHeader({
             }
           }}
           aria-expanded={false}
-          aria-label={`${subjectName} 运行中 — 展开运行详情`}
+          aria-label={`${subjectName} is running — expand run details`}
           title={`${subjectName}: ${snippet}`}
           className="flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-hover/50"
         >
@@ -315,8 +315,8 @@ export function ComposerActivityHeader({
               e.stopPropagation();
               openAgentActivity(subject.agentId);
             }}
-            title={`打开 ${subjectName} 的 Activity`}
-            aria-label={`打开 ${subjectName} 的 Activity`}
+            title={`Open ${subjectName}'s activity`}
+            aria-label={`Open ${subjectName}'s activity`}
             className="shrink-0 cursor-pointer outline-none ring-[color:var(--border-control-hover)] focus-visible:ring-2"
           >
             <AgentAvatar
@@ -342,7 +342,7 @@ export function ComposerActivityHeader({
               e.stopPropagation();
               openAgentActivity(subject.agentId);
             }}
-            title={`打开 ${subjectName} 的 Activity`}
+            title={`Open ${subjectName}'s activity`}
             className="shrink-0 cursor-pointer font-medium text-accent outline-none focus-visible:underline"
           >
             {subjectName}
@@ -414,8 +414,8 @@ function ActivityDetailRow({
         <button
           type="button"
           onClick={() => onOpenActivity(state.agentId)}
-          title={`打开 ${name} 的 Activity`}
-          aria-label={`打开 ${name} 的 Activity`}
+          title={`Open ${name}'s activity`}
+          aria-label={`Open ${name}'s activity`}
           className="block shrink-0 cursor-pointer outline-none ring-[color:var(--border-control-hover)] focus-visible:ring-2"
         >
           <AgentAvatar
@@ -431,7 +431,7 @@ function ActivityDetailRow({
           <button
             type="button"
             onClick={() => onOpenActivity(state.agentId)}
-            title={`打开 ${name} 的 Activity`}
+            title={`Open ${name}'s activity`}
             className="shrink-0 cursor-pointer font-medium text-accent outline-none focus-visible:underline"
           >
             {name}

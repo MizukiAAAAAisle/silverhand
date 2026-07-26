@@ -56,9 +56,9 @@ export function AgentPicker({
   candidates,
   value,
   onChange,
-  placeholder = '添加成员…',
-  emptyText = '没有可用的成员',
-  allSelectedText = '已添加全部成员',
+  placeholder = 'Add a member…',
+  emptyText = 'No members available',
+  allSelectedText = 'Everyone is already added',
   selectId,
 }: AgentPickerProps): JSX.Element {
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
@@ -90,9 +90,9 @@ export function MemberPicker({
   candidates,
   value,
   onChange,
-  placeholder = '添加成员…',
-  emptyText = '没有可用的成员',
-  allSelectedText = '已添加全部成员',
+  placeholder = 'Add a member…',
+  emptyText = 'No members available',
+  allSelectedText = 'Everyone is already added',
   selectId,
 }: MemberPickerProps): JSX.Element {
   const byKey = new Map(candidates.map(c => [memberKey(c), c]));
@@ -129,7 +129,7 @@ export function MemberPicker({
       {selectedKeys.length > 0 ? (
         <ul
           className="flex flex-wrap gap-1.5"
-          aria-label="已选成员"
+          aria-label="Selected members"
         >
           {selectedKeys.map(id => {
             const candidate = byKey.get(id);
@@ -144,7 +144,7 @@ export function MemberPicker({
                     displayName={id.slice(0, 8)}
                     handle={null}
                     onRemove={() => removeMember(id)}
-                    ariaRemoveLabel={`移除 ${id.slice(0, 8)}`}
+                    ariaRemoveLabel={`Remove ${id.slice(0, 8)}`}
                     muted
                   />
                 </li>
@@ -183,7 +183,7 @@ export function MemberPicker({
                   displayName={displayName}
                   handle={handle}
                   onRemove={() => removeMember(id)}
-                  ariaRemoveLabel={`移除 @${handle}`}
+                  ariaRemoveLabel={`Remove @${handle}`}
                 />
               </li>
             );
@@ -200,7 +200,7 @@ export function MemberPicker({
       >
         <Select.Trigger
           id={selectId}
-          aria-label="添加成员"
+          aria-label="Add member"
           className="flex w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-[placeholder]:text-text-muted"
         >
           <span className="flex min-w-0 items-center gap-1.5">
@@ -332,7 +332,7 @@ function SelectedTag({
         type="button"
         onClick={onRemove}
         aria-label={ariaRemoveLabel}
-        title="移除成员"
+        title="Remove member"
         className="flex size-4 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
         <X className="size-3" aria-hidden />

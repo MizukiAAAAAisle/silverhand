@@ -326,8 +326,8 @@ function SavedItem({
               onUnsave();
             }}
             className="ml-auto text-accent hover:text-accent-hover"
-            title="取消保存"
-            aria-label="取消保存"
+            title="Remove from saved"
+            aria-label="Remove from saved"
           >
             <Bookmark className="size-3.5 fill-current" />
           </button>

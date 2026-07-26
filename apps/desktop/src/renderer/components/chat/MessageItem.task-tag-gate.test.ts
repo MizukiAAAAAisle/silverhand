@@ -44,7 +44,7 @@ describe('MessageTaskTag — status-picker mutation is member-gated', () => {
   });
 
   it('names the write affordance on the interactive chip (button role exposes aria-label)', () => {
-    expect(source).toContain('（${label}）— 点击更改状态`}');
+    expect(source).toContain('(${label}) — click to change status`}');
   });
 
   it('exposes status to assistive tech on the read-only chip via real sr-only text', () => {

@@ -245,7 +245,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
           localWorkspacePaths={props.localWorkspacePaths}
-          emptyHint="新建 agent 时会自动创建 DM"
+          emptyHint="Creating an agent opens a DM"
           agentsById={props.agentsById}
           dmAgentAvatarUrls={dmAgentAvatarUrls}
           headerAction={sortMenuFor('dm')}
@@ -276,11 +276,11 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           }
           emptyHint={
             <>
-              还没有工作区。点{' '}
+              No workspaces yet. Use{' '}
               <kbd className="inline-flex size-4 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated align-text-bottom text-[11px] leading-none">
                 +
               </kbd>{' '}
-              新建。
+              to create one.
             </>
           }
           agentsById={props.agentsById}

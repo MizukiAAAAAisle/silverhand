@@ -3469,13 +3469,13 @@ async function shutdown(): Promise<void> {
 
   try {
     if (backend) {
-      pushProgress('正在停止 agents…');
+      pushProgress('Stopping agents…');
       // D4.a Commit 5d — `close()` exists on both arms. Embedded
       // owns a Hono server / runtime host / scheduler; remote's
       // `close()` is a no-op (nothing to tear down — the server is
       // remote, daemon + hostClient teardown happen below).
       await (backend.kind === 'embedded' ? backend.running.close() : backend.close());
-      pushProgress('清理完成');
+      pushProgress('Cleanup finished');
       backend = null;
     }
   } catch (err) {

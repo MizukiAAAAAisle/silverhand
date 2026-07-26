@@ -29,7 +29,7 @@ describe('prepareSendMessageBody — authoritative oversized conversion', () => 
     });
     expect(uploadText).toHaveBeenCalledWith('ch-1', content);
     expect(body.attachment_ids).toEqual(['att-conv']);
-    expect(body.content).toContain('附件');
+    expect(body.content).toContain('message-body-x.txt');
     expect(body.content.length).toBeLessThan(200);
   });
 
@@ -99,7 +99,7 @@ describe('prepareSendMessageBody — attachment capacity fail-fast', () => {
         input: { content, attachments },
         uploadText,
       }),
-    ).rejects.toThrow('附件已达');
+    ).rejects.toThrow('Remove one attachment');
     // No orphan: the uploader must never have been called.
     expect(uploadText).not.toHaveBeenCalled();
   });

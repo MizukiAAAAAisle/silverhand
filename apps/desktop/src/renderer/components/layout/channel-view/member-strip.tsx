@@ -91,7 +91,7 @@ export function MemberStrip({
   if (visibleMembers.length === 0 && conversationAgents.length === 0) {
     return (
       <span className="shrink-0 text-[10px] italic text-text-muted">
-        Channel 还没有成员
+        No members yet
       </span>
     );
   }

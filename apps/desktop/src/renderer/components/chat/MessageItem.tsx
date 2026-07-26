@@ -843,7 +843,7 @@ function MessageTaskTag({
         // border / colour utilities here — they would fight the tokens.
         data-task-status={status}
         title={title}
-        aria-label={`Task #${linkedTask.task_number}（${label}）— 点击更改状态`}
+        aria-label={`Task #${linkedTask.task_number} (${label}) — click to change status`}
         // Stop the click from reaching the row's selection/jump capture.
         onClick={e => e.stopPropagation()}
         className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
@@ -1256,7 +1256,7 @@ function AttachmentTile({
             />
           ) : (
             <div className="flex h-32 w-48 items-center justify-center text-xs text-text-muted">
-              {error ?? '加载中…'}
+              {error ?? 'Loading…'}
             </div>
           )}
         </button>
@@ -1319,8 +1319,8 @@ function AttachmentTile({
           type="button"
           onClick={() => void saveAttachmentToDisk(attachment)}
           className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-          title="下载"
-          aria-label={`下载 ${attachment.filename}`}
+          title="Download"
+          aria-label={`Download ${attachment.filename}`}
         >
           <Download className="size-3.5" />
         </button>

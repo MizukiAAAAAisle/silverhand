@@ -51,20 +51,20 @@ export async function openAttachmentExternally(
  *  exceptions identically. */
 export function formatOpenException(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
-  return `打开失败：${msg}`;
+  return `Can't open the attachment: ${msg}`;
 }
 
 /** Translate the IPC failure reason into a user-facing string. Kept short —
  *  used both as a toast body and a tile's `title` hint. */
 export function describeOpenFailure(reason: string): string {
   if (reason === 'unsafe_extension') {
-    return '该类型的文件不能直接在应用内打开（出于安全考虑）。';
+    return "This file type can't be opened from Silverhand.";
   }
   if (reason.startsWith('open_failed')) {
-    return '系统未能打开此文件。';
+    return 'macOS could not open this file.';
   }
   if (reason === 'empty_payload' || reason === 'invalid_payload') {
-    return '附件数据无效。';
+    return 'The attachment data is invalid.';
   }
   return reason;
 }

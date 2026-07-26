@@ -46,7 +46,7 @@ export function SelectionToolbar({
       className="flex items-center justify-between gap-3 border-b border-border-subtle bg-bg-floating px-3 py-2 text-xs text-text-primary"
     >
       <span className="font-medium">
-        {count === 0 ? '未选择' : `已选 ${count} 条`}
+        {count === 0 ? 'None selected' : `${count} selected`}
       </span>
       <div className="flex items-center gap-2">
         <SelectionActionButton rank="cancel" label="Cancel" onClick={onCancel} />

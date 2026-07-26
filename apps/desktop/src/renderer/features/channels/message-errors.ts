@@ -24,20 +24,20 @@ export function formatStartAgentError(err: unknown): string {
           ? body.message
           : err.body || err.message;
     if (code === 'host_attach_pending') {
-      return 'Agent 启动失败：daemon host 还未连接，稍后重试。';
+      return "Can't start the agent: its computer is not connected yet.";
     }
     if (code === 'workspace_path_missing') {
-      return `Agent 启动失败：${detail}`;
+      return `Can't start the agent: ${detail}`;
     }
     if (code === 'workspace_not_provisioned') {
-      return `Agent 启动失败：workspace 尚未 provision。${detail}`;
+      return `Can't start the agent: the workspace is not provisioned yet. ${detail}`;
     }
     if (code === 'registry_unavailable') {
-      return `Agent 启动失败：daemon workspace registry 不可用。${detail}`;
+      return `Can't start the agent: the workspace registry on its computer is unavailable. ${detail}`;
     }
-    return `Agent 启动失败：${detail}`;
+    return `Can't start the agent: ${detail}`;
   }
-  return `Agent 启动失败：${err instanceof Error ? err.message : String(err)}`;
+  return `Can't start the agent: ${err instanceof Error ? err.message : String(err)}`;
 }
 
 export function formatRemoveAgentError(err: unknown): string {
@@ -45,20 +45,21 @@ export function formatRemoveAgentError(err: unknown): string {
     const body = parseApiErrorBody(err);
     const code = typeof body?.code === 'string' ? body.code : null;
     if (code === 'conversation_member_remove_unsupported') {
-      return '只能从 channel 或 thread 移除成员(DM 不支持)。';
+      return 'Members can be removed from a channel or a thread, not a DM.';
     }
     if (code === 'conversation_closed') {
-      return '该会话已关闭,无法移除成员。';
+      return "This conversation is closed. Members can't be removed.";
     }
-    if (err.status === 403) return '没有权限将该 agent 从此频道移除。';
-    if (err.status === 404) return '该 agent 已不在此频道。';
+    if (err.status === 403)
+      return "You don't have permission to remove this agent.";
+    if (err.status === 404) return 'This agent is no longer a member.';
     const detail =
       typeof body?.error === 'string'
         ? body.error
         : typeof body?.message === 'string'
           ? body.message
           : `HTTP ${err.status}`;
-    return `移除失败：${detail}`;
+    return `Can't remove the agent: ${detail}`;
   }
-  return `移除失败：${err instanceof Error ? err.message : String(err)}`;
+  return `Can't remove the agent: ${err instanceof Error ? err.message : String(err)}`;
 }

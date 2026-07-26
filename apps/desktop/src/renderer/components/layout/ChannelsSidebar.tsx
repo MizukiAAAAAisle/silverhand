@@ -194,8 +194,8 @@ export function ChannelsSidebar({
                     size="icon"
                     className="h-6 w-6"
                     onClick={onCreateChannel}
-                    aria-label="新建 Channel"
-                    title="新建 Channel"
+                    aria-label="New channel"
+                    title="New channel"
                   >
                     <Plus className="size-3.5" />
                   </Button>
@@ -208,9 +208,9 @@ export function ChannelsSidebar({
 
       <div className="scrollbar-hide flex-1 overflow-y-auto px-1.5 pb-1.5">
         {!workspaceName ? (
-          <EmptyHint message="选择左侧 Workspace" />
+          <EmptyHint message="Select a workspace" />
         ) : topLevelCount === 0 ? (
-          <EmptyHint message="还没有 Channel。点 + 开始" />
+          <EmptyHint message="No channels yet. Use + to create one." />
         ) : (
           <ul className="space-y-0.5">
             {renderGroup(starredTop, 'starred')}
@@ -462,8 +462,8 @@ function ChannelRow({
 async function copyChannelName(name: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(name);
-    toast.success('已复制名称');
+    toast.success('Name copied');
   } catch {
-    toast.error('复制名称失败');
+    toast.error("Couldn't copy the name");
   }
 }

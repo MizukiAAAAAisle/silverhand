@@ -266,14 +266,14 @@ export function SearchPanel({
         {!hasIntent ? (
           <EmptyState
             icon={<SearchIcon className="size-5" />}
-            text="输入关键词开始搜索"
+            text="Type to search"
           />
         ) : isLoading ? (
           <ListRowsSkeleton withIcon />
         ) : results.length === 0 ? (
           <EmptyState
             icon={<SearchIcon className="size-5" />}
-            text="没有匹配结果"
+            text="No matches"
           />
         ) : (
           <div className="space-y-5">
@@ -524,7 +524,7 @@ function SenderFilterSelect({
               </Select.Label>
               {agents.length === 0 ? (
                 <div className="px-2 py-1.5 text-xs italic text-text-muted">
-                  没有 agent
+                  No agents
                 </div>
               ) : (
                 agents.map(agent => (

@@ -213,7 +213,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
           boxShadow: 'var(--card-shadow, none)',
         }}
       >
-        从左侧选择一个 Channel
+        Select a channel
       </main>
     );
   }
@@ -250,7 +250,7 @@ function ActiveChannelView({
   onToggleFilesList,
   filesListActive = false,
   onCloseChild,
-  closeLabel = '关闭 Thread',
+  closeLabel = 'Close thread',
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
@@ -622,7 +622,7 @@ function ActiveChannelView({
                 type="button"
                 onClick={() => onJumpToOriginal(anchorMessageId)}
                 className="text-xs text-accent hover:underline"
-                title="跳转到原消息"
+                title="Jump to the source message"
               >
                 view in channel
               </button>
@@ -765,8 +765,8 @@ function ActiveChannelView({
             <button
               type="button"
               onClick={onToggleFullscreen}
-              aria-label={isFullscreen ? '退出全屏' : '全屏'}
-              title={isFullscreen ? '退出全屏' : '全屏'}
+              aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+              title={isFullscreen ? 'Exit full screen' : 'Full screen'}
               className="flex size-7 shrink-0 items-center justify-center rounded text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               {isFullscreen ? (

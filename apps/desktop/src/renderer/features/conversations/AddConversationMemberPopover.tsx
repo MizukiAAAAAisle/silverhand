@@ -181,10 +181,10 @@ function PopoverBody({
         {candidates.length === 0 ? (
           <li className="px-2 py-3 text-center text-xs italic text-text-muted">
             {isLoading
-              ? '加载中…'
+              ? 'Loading…'
               : query
-                ? '没有匹配项'
-                : '所有可添加成员都已在此会话'}
+                ? 'No matches'
+                : 'Everyone is already in this conversation'}
           </li>
         ) : (
           candidates.map(c => {
@@ -275,25 +275,26 @@ function formatError(err: unknown): string {
     const code = parseCode(err.body);
     switch (code) {
       case 'workspace_membership_required':
-        return 'Agent 需要先加入 workspace 后才能添加。';
+        return 'This agent has to join the workspace first.';
       case 'host_attach_pending':
-        return '当前 host 未连接,稍后再试。';
+        return 'Its computer is not connected yet.';
       case 'candidate_not_found':
-        return '候选不存在,可能刚被删除。';
+        return 'This candidate no longer exists.';
       case 'handle_ambiguous':
-        return '同名候选有多个,无法消歧。';
+        return 'Several candidates share this handle.';
       case 'conversation_member_add_unsupported':
-        return '只能向 channel 或 thread 添加成员(DM 不支持)。';
+        return 'Members can be added to a channel or a thread, not a DM.';
       case 'conversation_closed':
-        return '该会话已关闭,无法添加成员。';
+        return "This conversation is closed. Members can't be added.";
       default:
         break;
     }
-    if (err.status === 403) return '没有权限向此会话添加成员。';
-    if (err.status === 404) return '该会话已不存在。';
-    return `添加失败 (HTTP ${err.status})。`;
+    if (err.status === 403)
+      return "You don't have permission to add members here.";
+    if (err.status === 404) return 'This conversation no longer exists.';
+    return `Can't add the member (HTTP ${err.status}).`;
   }
-  return '添加失败,请重试。';
+  return "Can't add the member. Try again.";
 }
 
 function parseCode(body: string): string | null {

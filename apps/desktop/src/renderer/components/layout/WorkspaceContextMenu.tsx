@@ -73,8 +73,8 @@ export function WorkspaceContextMenu({
 async function copyWorkspacePath(path: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(path);
-    toast.success('已复制路径');
+    toast.success('Path copied');
   } catch {
-    toast.error('复制路径失败');
+    toast.error("Couldn't copy the path");
   }
 }

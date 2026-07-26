@@ -890,7 +890,7 @@ export function ThreadPanel({
         // Distinct from "no replies yet" — the thread can't be shown at
         // all, and replying would have no valid target.
         <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
-          无法加载该消息,它可能已被删除或不可用
+          This message can't be loaded. It may have been deleted.
         </div>
       ) : rootCtx.isLoading && !rootCtx.root ? (
         // Root still loading: the shared message skeleton under the thread
@@ -926,7 +926,7 @@ export function ThreadPanel({
                 onClick={() => void cluster.fetchPreviousPage()}
                 className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
               >
-                {cluster.isFetchingPreviousPage ? '加载中…' : '加载更早的回复'}
+                {cluster.isFetchingPreviousPage ? 'Loading…' : 'Load earlier replies'}
               </button>
             ) : null}
 
@@ -980,8 +980,8 @@ export function ThreadPanel({
             <button
               type="button"
               data-scroll-bottom
-              aria-label={shouldResetToLatest ? '跳到最新回复' : '滚动到底部'}
-              title={shouldResetToLatest ? '跳到最新回复' : '滚动到底部'}
+              aria-label={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
+              title={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
               onClick={handleScrollBottomClick}
               className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
             >

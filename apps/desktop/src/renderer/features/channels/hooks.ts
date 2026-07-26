@@ -702,7 +702,7 @@ export function useFollowThread(
       });
     },
     onError: () => {
-      toast.error('关注失败,请重试');
+      toast.error("Couldn't follow the thread. Try again.");
     },
   });
 }
@@ -730,7 +730,7 @@ export function useUnfollowThread(
       });
     },
     onError: () => {
-      toast.error('取消关注失败,请重试');
+      toast.error("Couldn't unfollow the thread. Try again.");
     },
   });
 }
@@ -1078,12 +1078,12 @@ export async function prepareSendMessageBody(opts: {
     // draft and pending list intact.
     if ((opts.input.attachments?.length ?? 0) >= MAX_MESSAGE_ATTACHMENTS) {
       throw new Error(
-        `正文超过 ${MAX_MESSAGE_CONTENT_LABEL} 需要自动转为附件，但附件已达 ${MAX_MESSAGE_ATTACHMENTS} 个上限——请移除一个附件或缩短正文后重试`,
+        `The body is over ${MAX_MESSAGE_CONTENT_LABEL} and has to be sent as an attachment, but this message already carries ${MAX_MESSAGE_ATTACHMENTS}. Remove one attachment, or shorten the body.`,
       );
     }
     convertedAttachment = await upload(opts.channelId, content);
     const kb = Math.round(convertedAttachment.size / 1024);
-    content = `已将较长内容作为文本附件发送（${convertedAttachment.filename}，${kb} KB）`;
+    content = `Sent the long body as a text attachment (${convertedAttachment.filename}, ${kb} KB)`;
   }
   const body: PreparedSendBody = { content };
   const attachmentRefs: Array<string | AttachmentRefInput> = [];
