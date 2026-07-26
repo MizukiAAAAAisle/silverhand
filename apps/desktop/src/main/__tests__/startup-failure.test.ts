@@ -58,7 +58,12 @@ describe('presentStartupFailure — every path reaches the user and exits', () =
     expect(d.calls).toEqual(['showErrorBox', 'exit:1']);
   });
 
-  it('still exits 1 when even the native box throws', async () => {
+  it('still exits 1 when even the native box throws, and does not reject', async () => {
+    // The adapter discards this promise (`void presentStartupFailure(…)`),
+    // so a rejection here would make the ONE controlled failure exit
+    // produce an unhandled rejection. At this limit the provable claim
+    // shrinks: not "the user was told", only "told if telling was
+    // possible, and non-zero exit either way".
     const d = deps({
       openWindow: async () => {
         throw new Error('ERR_FAILED');
@@ -69,7 +74,7 @@ describe('presentStartupFailure — every path reaches the user and exits', () =
     });
     await expect(
       presentStartupFailure({ notice: NOTICE, logsDir: null }, d),
-    ).rejects.toThrow('no display');
+    ).resolves.toBeUndefined();
     expect(d.calls).toEqual(['exit:1']);
   });
 

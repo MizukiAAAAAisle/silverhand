@@ -197,7 +197,15 @@ export function renderStartupFailureErrorBox(
  * Shows the failure exit. Resolving means the window owns the process
  * lifetime from here (its close handler exits); any failure to get that
  * window on screen degrades to a native error box and exits immediately.
- * Never throws.
+ *
+ * **Never rejects**, and the adapter relies on that (`void
+ * presentStartupFailure(…)` has nowhere to route a rejection, and this
+ * module exists precisely so the last exit is controlled). What it
+ * guarantees is therefore the weaker, provable pair: *tell the user if
+ * telling is possible, and exit non-zero in every case.* A native error
+ * box that itself throws (no display, headless X, disposed app) is
+ * swallowed — nothing is left to escalate to, and the non-zero exit is
+ * the remaining honest signal.
  */
 export async function presentStartupFailure(
   input: { notice: StartupFailureNotice; logsDir: string | null },
@@ -222,6 +230,8 @@ export async function presentStartupFailure(
         STARTUP_FAILURE_TITLE,
         renderStartupFailureErrorBox(notice, logsDir),
       );
+    } catch {
+      // Deliberately swallowed — see the contract above.
     } finally {
       deps.exit(STARTUP_FAILURE_EXIT_CODE);
     }
