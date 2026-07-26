@@ -56,6 +56,8 @@ import {
   type DaemonHandle,
 } from '@silverhand/host';
 import { prepareDesktopDataLayout } from './layout-migration/prepare.js';
+import { describeStartupFailure } from './startup-failure.js';
+import { showStartupFailureWindow } from './startup-failure-window.js';
 import {
   initializeDesktopLayoutVersion,
   electronUserDataPath,
@@ -3349,7 +3351,38 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
-});
+}).catch(reportStartupFailure);
+
+/**
+ * The single startup failure exit. `bootstrap()` and the window bring-up
+ * above are fail-closed on purpose (refused layout migration, refused
+ * server profile, unreachable-but-required work); this is the only place
+ * that turns such a refusal into something the user can see and act on.
+ * Without it the rethrow died in an un-`.catch`ed promise and a
+ * double-click produced no window and no message at all.
+ */
+function reportStartupFailure(err: unknown): void {
+  const notice = describeStartupFailure(err);
+  console.error('[main] startup failed:', err);
+  logger?.error({ err, code: notice.code }, 'startup failed');
+  if (HEADLESS) {
+    // Headless is a test/CI harness: stderr above plus a non-zero exit
+    // IS its failure surface. A window here would hang the harness.
+    app.exit(1);
+    return;
+  }
+  // Evaluated at failure time, and defensively: the logs directory is
+  // layout-version independent (it is shared across v1/v2), but a
+  // failure this early must not depend on any path resolution
+  // succeeding to be able to say what happened.
+  let logsDir: string | null = null;
+  try {
+    logsDir = desktopAppPaths().logs;
+  } catch {
+    logsDir = null;
+  }
+  showStartupFailureWindow({ notice, logsDir });
+}
 
 app.on('window-all-closed', () => {
   // In headless mode there are no windows to begin with — that signal
