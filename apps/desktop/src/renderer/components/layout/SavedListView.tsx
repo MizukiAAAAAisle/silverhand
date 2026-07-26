@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Bookmark, Layers, User } from 'lucide-react';
+import { Bookmark, Clock, Layers, User } from 'lucide-react';
 import dayjs from 'dayjs';
 import type { AgentDto, SavedMessageDto, UserDto } from '@silverhand/shared';
 import { Markdown } from '@/components/chat/Markdown';
@@ -291,7 +291,14 @@ function SavedItem({
             wears its own icon, the CHANNEL owns the `#`, and the SENDER gets an
             avatar — the `#` no longer sits (wrongly) in front of the workspace
             name. Canonical primitives throughout (WorkspaceIcon / ChannelIcon /
-            Agent|UserAvatar), so this row reads like every other identity row. */}
+            Agent|UserAvatar), so this row reads like every other identity row.
+
+            No `·` separators (shiki 2026-07-27, the same call as the task card
+            meta row in #task:1579): every segment already opens with its own
+            glyph, so the glyph + `gap-2` delimit the row and the middots were
+            pure ink. The timestamp is the one segment with no identity glyph, so
+            it gets a `Clock` — utility scale (14px), a notch under the 16px
+            identity glyphs beside it. */}
         <header className="mb-2 flex items-center gap-2 text-xs text-text-muted">
           <span className="inline-flex items-center gap-1 font-medium text-text-primary">
             <WorkspaceIcon
@@ -302,12 +309,10 @@ function SavedItem({
             />
             {item.workspace_name}
           </span>
-          <span>·</span>
           <span className="inline-flex min-w-0 items-center gap-1">
             <ChannelIcon variant="sticker" density="sm" />
             <span className="truncate">{item.conversation_title}</span>
           </span>
-          <span>·</span>
           <span className="inline-flex items-center gap-1">
             <SavedSenderAvatar
               item={item}
@@ -317,8 +322,10 @@ function SavedItem({
             />
             <span>{sender}</span>
           </span>
-          <span>·</span>
-          <span>{when}</span>
+          <span className="inline-flex shrink-0 items-center gap-1">
+            <Clock aria-hidden className="size-3.5 shrink-0" />
+            {when}
+          </span>
           <button
             type="button"
             onClick={e => {

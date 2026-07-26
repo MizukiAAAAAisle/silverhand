@@ -367,7 +367,14 @@ function GeneralSection({
 
       {!isDm ? (
         <>
-          <div className="flex items-center justify-between gap-3 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3 transition-colors hover:border-[color:var(--border-control-hover)]">
+          {/* Administrative blocks are static panels, not controls: the only
+              affordance is the Button inside, so neither this one nor the
+              Delete block below reacts to hover (shiki 2026-07-27 — Archive
+              used to light up its border while Delete stayed inert). A hover
+              frame on a whole panel promises a click the panel does not
+              honour, and the Delete block's `border-error/30` is identity
+              (danger tint) that hover must not recolour anyway. */}
+          <div className="flex items-center justify-between gap-3 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3">
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-text-primary">
                 {isArchived ? 'Archived' : 'Archive workspace'}

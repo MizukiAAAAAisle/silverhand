@@ -376,6 +376,52 @@
    genuine dark structural strip (per Cindy: "等有自然黑结构落点
    再用"). Don't force it. */
 
+/* ── Add-member `+` — resting block, not a hover-only ghost ──────────
+   shiki 2026-07-27: "add icon 现在 hover 才会有背景色，在 forza6 下，我想
+   保持背景色常驻，这样可以保持 forza6 下 icon 都是 block style 的统一".
+
+   The JSX keeps the trigger deliberately low-key (transparent, hover-only
+   fill) — correct for the soft themes, wrong here: forza6 has no ghost
+   icons. Every glyph in this header is a box (member chips = filled square;
+   the right-hand action cluster = white square + 2px ink + sticker drop;
+   the `#` = pink hero sticker), so a bare `+` reads as an unfinished
+   control.
+
+   FILL ONLY — one declaration, no border, and nothing changes on hover.
+   shiki pared this back in four passes (2026-07-27: the white ground, then
+   the hover ground, then the hover border, then the resting border). What
+   survives is the minimum that makes it a block: a square of
+   `--bg-elevated`, square because the JSX takes `--control-radius: 0` here.
+   The reasoning behind each cut, in case someone is tempted to add a layer
+   back:
+     - ground is `--bg-elevated`, not `--bg-floating`: white on the header's
+       `--bg-chat` is barely a block at all, and elevated is what a member
+       chip's ground actually reads as here (the agent chip's white is hidden
+       under its avatar image; the human fallback and the `+N` chip both sit
+       on elevated), so the row shares one visible ground.
+     - no border: this `+` is a utility affordance sitting next to identity
+       chips. The fill already separates it from the header; a hairline on top
+       is a second chrome layer buying nothing, and a bordered box competes
+       with the members it's meant to serve.
+     - nothing on hover: once a control carries a permanent block, hover has
+       nothing left to build — swapping the ground is a colour reversal (and
+       forza6's pale lime would make a utility `+` louder than the members),
+       and inking an outline draws chrome that the resting state doesn't have.
+       Hover is carried entirely by the glyph darkening from `text-text-muted`
+       to `text-text-primary`, which is the JSX's own
+       `hover:text-text-primary` — these rules never touch `color`.
+   The hover rule therefore exists only to PIN the fill: the JSX carries
+   `hover:bg-bg-hover`, and only this higher-specificity rule can hold it
+   still. Never `--bg-row-hover` here either, which is magenta in forza6.
+   Focus is untouched and stays the JSX's `focus-visible:ring-2` — with no
+   resting border, that ring is the only focus signal this control has. */
+[data-theme='forza6'] [data-member-chip='add'] {
+  background-color: var(--bg-elevated);
+}
+[data-theme='forza6'] [data-member-chip='add']:hover:not(:disabled) {
+  background-color: var(--bg-elevated);
+}
+
 /* ── #v5.3 — Display caps on chrome titles ──────────────────────────
    shiki `G-dQuqVN5-HTDi-6` "Display caps 字体扩散". Forza HUD
    character comes from display-caps everywhere chrome labels live.

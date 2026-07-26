@@ -19,6 +19,7 @@ import { groupMessages } from '@/components/chat/groupMessages';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
 import { MessageRowsSkeleton } from '@/components/layout/ConversationViewSkeleton';
+import { EmptyConversation } from './empty-conversation';
 import {
   type CachedMessage,
   isCommittedMessage,
@@ -705,9 +706,7 @@ export function MessageList({
         // inset-0` fills this `relative` box.
         <MessageRowsSkeleton className="absolute inset-0" />
       ) : items.length === 0 && !leadingSlot ? (
-        <div className="px-4 py-3 text-sm text-text-muted">
-          No messages yet. Write one below.
-        </div>
+        <EmptyConversation />
       ) : (
         <Virtuoso<typeof items[number]>
           // Remount on channel switches and full window replacements

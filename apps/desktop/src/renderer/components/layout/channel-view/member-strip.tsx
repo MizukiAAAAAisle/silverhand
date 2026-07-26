@@ -6,6 +6,7 @@ import type {
   MemberDto,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
@@ -37,7 +38,7 @@ export function MemberStrip({
   channelId: string;
   conversationAgents: ConversationAgentDto[];
   agentAvatarUrls: Map<string, string | null>;
-}): JSX.Element {
+}): JSX.Element | null {
   const { data: agents = [] } = useAgents();
   const agentById = useMemo(() => {
     const m = new Map<string, AgentDto>();
@@ -86,15 +87,10 @@ export function MemberStrip({
   );
   const humanMemberAvatarUrls = useUserAvatarObjectUrls(humanAvatarSources);
 
-  // Empty-state: no agents AND no other humans. Keep the original copy
-  // when only the agent side is empty (the strip's pre-PR-C contract).
-  if (visibleMembers.length === 0 && conversationAgents.length === 0) {
-    return (
-      <span className="shrink-0 text-[10px] italic text-text-muted">
-        No members yet
-      </span>
-    );
-  }
+  // An empty room renders nothing: the header is identity, not a place for a
+  // status line, and the adjacent add-member control already says what to do
+  // (shiki, 2026-07-26 "直接去掉").
+  if (visibleMembers.length === 0) return null;
 
   const inline = visibleMembers.slice(0, MEMBER_STRIP_VISIBLE_CAP);
   const overflow = visibleMembers.slice(MEMBER_STRIP_VISIBLE_CAP);
@@ -159,6 +155,8 @@ export function MemberStrip({
         <MemberOverflowChip
           overflow={overflow}
           totalVisible={visibleMembers.length}
+          agentAvatarUrls={agentAvatarUrls}
+          humanAvatarUrls={humanMemberAvatarUrls}
         />
       ) : null}
     </div>
@@ -233,13 +231,27 @@ function HumanMemberChip({
  * members so the cap doesn't hide the room. Click is a no-op (v1):
  * the design rejects navigation from chips, and a dedicated members
  * panel/route is out of scope here.
+ *
+ * Each row carries the member's avatar (`AVATAR_PX.sm` — the member/candidate
+ * row tier) because a collapsed member must be recognizable the same way an
+ * inline chip is: the strip's contract is "who is in this room", and a name-only
+ * list drops the identity primitive the chips taught (shiki, 2026-07-26). Rows
+ * are inert — no nested hover popover inside a hover-driven host.
+ *
+ * The `+N more` count sits at the BOTTOM as a footnote: the members are the
+ * content, and a heading above them made the popover read as a titled panel
+ * rather than a continuation of the chip that opened it (shiki, 2026-07-26).
  */
 function MemberOverflowChip({
   overflow,
   totalVisible,
+  agentAvatarUrls,
+  humanAvatarUrls,
 }: {
   overflow: MemberDto[];
   totalVisible: number;
+  agentAvatarUrls: Map<string, string | null>;
+  humanAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
   const trigger = (
     <button
@@ -262,9 +274,6 @@ function MemberOverflowChip({
           data-member-overflow-list
           data-member-total={totalVisible}
         >
-          <div className="text-[11px] uppercase tracking-wider text-text-muted">
-            +{overflow.length} more
-          </div>
           {overflow.map(m => {
             const id = m.kind === 'agent' ? m.agent_id : m.user_id;
             const label = m.display_name?.trim() || m.name;
@@ -276,15 +285,35 @@ function MemberOverflowChip({
                 data-member-id={id}
                 data-member-kind={m.kind}
               >
-                <span className="truncate text-sm text-text-primary">
+                {m.kind === 'agent' ? (
+                  // `runtime` rides on the member DTO itself, so a collapsed
+                  // agent renders its brand mark without waiting on (or
+                  // depending on) the agents directory.
+                  <AgentAvatar
+                    runtime={m.runtime}
+                    size={AVATAR_PX.sm}
+                    avatarObjectUrl={agentAvatarUrls.get(m.agent_id) ?? null}
+                    alt={label}
+                  />
+                ) : (
+                  <UserAvatar
+                    size={AVATAR_PX.sm}
+                    avatarObjectUrl={humanAvatarUrls.get(m.user_id) ?? null}
+                    alt={label}
+                  />
+                )}
+                <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
                   {label}
                 </span>
-                <span className="truncate font-mono text-xs text-text-muted">
+                <span className="max-w-[45%] shrink-0 truncate font-mono text-xs text-text-muted">
                   @{m.name}
                 </span>
               </div>
             );
           })}
+          <div className="border-t border-border-subtle pt-2 text-[11px] uppercase tracking-wider text-text-muted">
+            +{overflow.length} more
+          </div>
         </div>
       }
     />

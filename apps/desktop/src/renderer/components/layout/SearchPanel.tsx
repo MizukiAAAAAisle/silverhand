@@ -667,11 +667,18 @@ function SearchResultRow({
 }
 
 /**
- * Header for a message search result: workspace · channel · sender · time, each
+ * Header for a message search result: workspace, channel, sender, time, each
  * named entity carrying its canonical icon/avatar (#task:1336). The type itself
  * is expressed by the left row icon, so no "Message" text label here. Reuses the
  * same name resolvers as the rest of the panel (no second metadata source) and
  * the shared avatar-url caches for the sender glyph.
+ *
+ * No `·` separators between the segments (shiki 2026-07-27, matching the task
+ * card meta row from #task:1579 and the saved-item header): each segment already
+ * opens with its own identity glyph, so glyph + gap delimit the row and the
+ * middots were pure ink. The timestamp is the only segment without an identity
+ * glyph, so it gets a `Clock` at utility scale (14px, a notch under the 16px
+ * identity glyphs).
  */
 function MessageResultHeader({
   result,
@@ -688,7 +695,7 @@ function MessageResultHeader({
 }): JSX.Element {
   const senderName = messageSenderName(result, agentsById, userResolver);
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-text-muted">
+    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
       <span className="flex min-w-0 items-center gap-1">
         <WorkspaceIcon
           kind={result.workspace.kind === 'dm' ? 'dm' : 'regular'}
@@ -696,7 +703,6 @@ function MessageResultHeader({
         />
         <span className="truncate">{workspaceDisplayName(result.workspace)}</span>
       </span>
-      <MetaDot />
       <span className="flex min-w-0 items-center gap-1">
         {/* Same channel glyph the sidebar / saved / activity lists use, via
             the shared ChannelIcon primitive. `sticker` → the `data-channel-icon`
@@ -710,23 +716,14 @@ function MessageResultHeader({
         <ChannelIcon variant="sticker" density="sm" />
         <span className="truncate">{result.conversation.title}</span>
       </span>
-      <MetaDot />
       <span className="flex min-w-0 items-center gap-1">
         {messageSenderAvatar(result, agentsById, agentAvatarUrls, userAvatarUrls)}
         <span className="truncate">{senderName}</span>
       </span>
-      <MetaDot />
-      <span className="shrink-0 tabular-nums">
+      <span className="flex shrink-0 items-center gap-1 tabular-nums">
+        <Clock aria-hidden className="size-3.5 shrink-0" />
         {dayjs(result.message.created_at).format('YYYY-MM-DD HH:mm')}
       </span>
-    </span>
-  );
-}
-
-function MetaDot(): JSX.Element {
-  return (
-    <span aria-hidden className="shrink-0 text-xs text-text-muted/60">
-      ·
     </span>
   );
 }

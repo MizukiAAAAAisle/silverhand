@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { CONTROL_HOVER_LIFT } from '@/features/common/ControlInkBorder';
 import {
   destructiveAction,
   DESTRUCTIVE_TRIGGER,
@@ -304,11 +305,23 @@ function AppearancePane({
                     // uniform scaffolding. Fixed `rounded-[10px]` across
                     // all three, no hook, no per-target override.
                     onClick={() => setTheme(id)}
+                    // Hover moves the card, it does not recolour it (shiki
+                    // 2026-07-27: "hover 不要改变任何 border，直接去掉，使用
+                    // hover 上移 1px 效果"). The old `hover:border-accent` was
+                    // both wrong and dead: wrong because the border here is
+                    // IDENTITY — the idle tile paints the previewed theme's own
+                    // border and the active tile paints `accent` to mark "you
+                    // are here", so a hover recolour would impersonate the
+                    // selected state; dead because the idle border arrives as
+                    // an inline `style.borderColor`, which outranks any
+                    // Tailwind hover class. Motion is the honest channel:
+                    // `CONTROL_HOVER_LIFT` is the app's shared 1px lift plus
+                    // the transition tuple it needs (a bare
+                    // `transition-colors` would not animate transform).
                     className={cn(
-                      'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
-                      active
-                        ? 'border-accent'
-                        : 'border-border-subtle hover:border-accent',
+                      'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+                      CONTROL_HOVER_LIFT,
+                      active ? 'border-accent' : 'border-border-subtle',
                     )}
                     style={{
                       background: `linear-gradient(135deg, ${meta.bg}, ${meta.surface})`,
@@ -558,7 +571,10 @@ function SharedFontSizeControl({
             data-settings-card
             onClick={onReset}
             disabled={!isOverride}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+            // Hover border = `--border-control-hover` (ink in every theme),
+            // not `accent` — see the font-preset pill below for why the
+            // saturated hue can't be spent on a utility state.
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
             <RotateCcw className="size-3.5" />
             Reset
@@ -692,7 +708,7 @@ function MarkdownFontControl({
           data-settings-card
           onClick={onReset}
           disabled={!fontValue}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-accent hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
         >
           <RotateCcw className="size-3.5" />
           Reset
@@ -731,7 +747,16 @@ function MarkdownFontControl({
                   'rounded-[999px] border px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
                   isSelected
                     ? 'border-accent bg-accent text-text-on-accent'
-                    : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-accent hover:text-text-primary',
+                    // Hover is a UTILITY state, so its border rides the
+                    // canonical control token, never `accent` (shiki
+                    // 2026-07-27: in forza6 `--accent` is MAGENTA, so
+                    // `hover:border-accent` put a hot pink frame around an
+                    // unselected font pill and read as a selection signal).
+                    // `--border-control-hover` is ink in every theme
+                    // (forza6 near-black / warm dark brown / slack neutral),
+                    // which keeps the saturated hue budget for the SELECTED
+                    // pill above.
+                    : 'border-border-subtle bg-bg-primary text-text-secondary hover:border-[color:var(--border-control-hover)] hover:text-text-primary',
                 )}
               >
                 {preset.label}
