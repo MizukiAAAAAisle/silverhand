@@ -344,6 +344,10 @@ export function migrateDesktopAppDataLayout(
         pair => !registryManagedPairs.some(managed => managed.oldCwd === pair.oldCwd),
       ),
     ];
+    // This pass MUST finish before runFacet can persist an adoption. The
+    // predecessor registry paths are the evidence used to derive the direct
+    // predecessor→final cwd pairs; rewriting them first would make a retry
+    // unable to recover session buckets that had not yet moved.
     pass = wrapFlatten(() =>
       runSessionRenamePass(
         [...flatPairs, ...pairs.filter(p => !flatPairs.some(f => f.oldCwd === p.oldCwd))],
@@ -557,8 +561,10 @@ function readRegistryStrictForMigration(
 
 /**
  * Read the namespace registries from the facet's authoritative roots.
- * A namespace may be in legacy, staging, OR final during crash recovery,
- * but never in two roots at once.
+ * Root order follows the existing workspace convergence planner:
+ * staging, then legacy, then final. A namespace duplicated across roots
+ * is not a second planning authority; classifyFacet/runFacet still owns
+ * the physical collision decision and will fail closed before activation.
  */
 function collectRegistryNamespaceSnapshots(
   workspaceDataRoots: readonly string[],
@@ -586,12 +592,7 @@ function collectRegistryNamespaceSnapshots(
         );
       }
       const binding = assertRegistryBindingProvenance(filePath, namespace, 'cross-binding');
-      if (snapshots.has(namespace)) {
-        throw new LayoutMigrationError(
-          'layout_conflict',
-          `workspace registry namespace ${namespace} exists in multiple migration roots`,
-        );
-      }
+      if (snapshots.has(namespace)) continue;
       snapshots.set(namespace, {
         workspaceDataRoot,
         namespace,
@@ -1477,7 +1478,7 @@ export function rewriteStagedRegistries(
           changed = true;
           continue;
         }
-        if (entry.path === legacyRunRoot || entry.path.startsWith(legacyRunRoot + sep)) {
+        if (pathInside(legacyRunRoot, entry.path)) {
           // Inside the legacy root but NOT the exact managed shape for
           // this key: forged/foreign — block, never prefix-rewrite.
           throw new LayoutMigrationError(

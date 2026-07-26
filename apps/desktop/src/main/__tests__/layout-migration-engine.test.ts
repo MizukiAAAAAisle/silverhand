@@ -20,6 +20,7 @@ import { bindingSlug, cwdSessionSlug, managedWorkspaceSlug } from '@silverhand/h
 import {
   LayoutMigrationError,
   migrateDesktopAppDataLayout,
+  rewriteStagedRegistries,
 } from '../layout-migration/engine.js';
 import {
   layoutVersionFromMarker,
@@ -395,6 +396,39 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       expect(readFileSync(join(currentManaged, 'MEMORY.md'), 'utf8')).toBe(
         'different-current-memory',
       );
+      expect(
+        layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
+      ).toBe('legacy-v1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('duplicate namespace snapshots defer to the facet ownership conflict instead of adding a planner-only rejection', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    try {
+      seedLegacyLocalComputer(root);
+      const stagingNamespace = join(
+        root,
+        'computers',
+        '.local-layout-v2.staging',
+        'workspace-data',
+        NS,
+      );
+      mkdirSync(stagingNamespace, { recursive: true });
+      writeFileSync(
+        join(stagingNamespace, 'workspace-registry.json'),
+        readFileSync(join(root, 'run', NS, 'workspace-registry.json')),
+      );
+
+      expect(() =>
+        migrateDesktopAppDataLayout(root, silent, Date.now, {
+          sessionStoreHome: home,
+          env: {},
+        }),
+      ).toThrow(/staged copy .* already exists while the legacy source is still present/);
       expect(
         layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
       ).toBe('legacy-v1');
@@ -1344,6 +1378,39 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       expect(
         layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
       ).toBe('legacy-v1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('registry rewrite normalizes paths before deciding whether they are inside managed storage', () => {
+    const root = makeRoot();
+    try {
+      const stagedWorkspaceData = join(root, 'staging');
+      const namespaceDir = join(stagedWorkspaceData, NS);
+      mkdirSync(namespaceDir, { recursive: true });
+      const disguisedManagedPath =
+        `${root}/run-sibling/../run/${NS}/workspaces/not-a-real-slug`;
+      writeFileSync(
+        join(namespaceDir, 'workspace-registry.json'),
+        JSON.stringify({
+          schema_version: 1,
+          binding: BINDING,
+          workspaces: {
+            w_forged: { path: disguisedManagedPath, provisioned_at: 1 },
+          },
+        }),
+      );
+
+      expect(() =>
+        rewriteStagedRegistries(
+          stagedWorkspaceData,
+          join(root, 'run'),
+          join(root, 'computers', 'h1', 'workspace-data'),
+          [],
+          silent,
+        ),
+      ).toThrow(/inside the legacy root without exact managed provenance/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
