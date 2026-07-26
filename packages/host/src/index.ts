@@ -30,7 +30,9 @@ export { enableNodeSystemCa, type NodeSystemCaActivation } from './node-system-c
 export {
   bindingSlug,
   managedWorkspaceSlug,
+  parseWorkspaceRegistryFileStrict,
   type RegistryBinding,
+  type WorkspaceRegistryFile,
 } from './daemon/workspace-registry/registry.js';
 // #task:1608 workspace-data convergence — one-time flatten consumed by the
 // desktop layout engine (and, if sanctioned, the connect startup pass).

@@ -30,6 +30,10 @@ import {
 const silent = { info: () => {}, warn: () => {} };
 const BINDING = { server_origin: 'local-embedded', host_id: 'h1' };
 const NS = bindingSlug(BINDING);
+const REMOTE_BINDING = { server_origin: 'https://silverhand.example', host_id: 'h1' };
+const REMOTE_NS = bindingSlug(REMOTE_BINDING);
+const PLACEHOLDER_BINDING = { server_origin: 'local-embedded', host_id: 'local' };
+const PLACEHOLDER_NS = bindingSlug(PLACEHOLDER_BINDING);
 const WS_ID = 'w_test_1';
 
 function makeRoot(): string {
@@ -69,6 +73,53 @@ function seedLegacyLocalComputer(root: string): { managed: string } {
   mkdirSync(join(root, 'run', 'runtime-pids'), { recursive: true });
   writeFileSync(join(root, 'daemon-config.json'), '{"host_id":"h1","server_url":"http://127.0.0.1:1234"}');
   return { managed };
+}
+
+/**
+ * Released pre-v2 handoff shape: the active remote registry copied the
+ * exact managed entry from the pre-claim local placeholder registry.
+ * Both registries intentionally reference one physical predecessor dir.
+ */
+function seedCrossBindingLegacyWorkspace(root: string): { predecessorManaged: string } {
+  const predecessorManaged = join(
+    root,
+    'run',
+    PLACEHOLDER_NS,
+    'workspaces',
+    managedWorkspaceSlug(WS_ID),
+  );
+  mkdirSync(predecessorManaged, { recursive: true });
+  writeFileSync(join(predecessorManaged, 'MEMORY.md'), 'cross-binding-memory');
+  writeFileSync(
+    join(root, 'run', PLACEHOLDER_NS, 'workspace-registry.json'),
+    JSON.stringify({
+      schema_version: 1,
+      binding: PLACEHOLDER_BINDING,
+      workspaces: {
+        [WS_ID]: { path: predecessorManaged, provisioned_at: 1 },
+      },
+    }),
+  );
+  mkdirSync(join(root, 'run', REMOTE_NS), { recursive: true });
+  writeFileSync(
+    join(root, 'run', REMOTE_NS, 'workspace-registry.json'),
+    JSON.stringify({
+      schema_version: 1,
+      binding: REMOTE_BINDING,
+      workspaces: {
+        [WS_ID]: { path: predecessorManaged, provisioned_at: 1 },
+        w_external: { path: '/Users/u/real-project', provisioned_at: 2 },
+      },
+    }),
+  );
+  writeFileSync(
+    join(root, 'daemon-config.json'),
+    JSON.stringify({
+      host_id: REMOTE_BINDING.host_id,
+      server_url: REMOTE_BINDING.server_origin,
+    }),
+  );
+  return { predecessorManaged };
 }
 
 /** A fake session-store home with claude+qoder buckets for a cwd. */
@@ -158,6 +209,195 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       });
       expect(again.migrated).toBe(false);
       expect(again.sessions).toBe('already');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('adopts an exact managed workspace copied from a pre-claim binding into the current remote binding', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    try {
+      const { predecessorManaged } = seedCrossBindingLegacyWorkspace(root);
+      seedSessionStores(home, predecessorManaged);
+
+      const result = migrateDesktopAppDataLayout(root, silent, Date.now, {
+        sessionStoreHome: home,
+        env: {},
+      });
+
+      expect(result.migrated).toBe(true);
+      const workspaceData = join(root, 'computers', REMOTE_BINDING.host_id, 'workspace-data');
+      const finalManaged = join(workspaceData, 'workspaces', WS_ID);
+      expect(readFileSync(join(finalManaged, 'MEMORY.md'), 'utf8')).toBe('cross-binding-memory');
+      const currentRegistry = JSON.parse(
+        readFileSync(join(workspaceData, 'workspace-registry.json'), 'utf8'),
+      ) as { binding: typeof REMOTE_BINDING; workspaces: Record<string, { path: string }> };
+      expect(currentRegistry.binding).toEqual(REMOTE_BINDING);
+      expect(currentRegistry.workspaces[WS_ID]!.path).toBe(finalManaged);
+      expect(currentRegistry.workspaces['w_external']!.path).toBe('/Users/u/real-project');
+
+      // The pre-claim registry remains inert historical provenance, but its
+      // managed bytes have one owner: the active remote binding.
+      const predecessorRegistry = join(
+        workspaceData,
+        PLACEHOLDER_NS,
+        'workspace-registry.json',
+      );
+      expect(existsSync(predecessorRegistry)).toBe(true);
+      expect(
+        existsSync(
+          join(
+            workspaceData,
+            PLACEHOLDER_NS,
+            'workspaces',
+            managedWorkspaceSlug(WS_ID),
+          ),
+        ),
+      ).toBe(false);
+
+      // Session identity follows the ownership adoption directly from
+      // predecessor cwd to the final flat remote cwd.
+      for (const store of ['.claude', '.qoder']) {
+        expect(
+          existsSync(join(home, store, 'projects', cwdSessionSlug(finalManaged), 'session-1.jsonl')),
+        ).toBe(true);
+        expect(
+          existsSync(join(home, store, 'projects', cwdSessionSlug(predecessorManaged))),
+        ).toBe(false);
+      }
+      expect(
+        layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
+      ).toBe('v2');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('cross-binding adoption resumes after the managed dir moved into staging but before registry replacement', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    try {
+      const { predecessorManaged } = seedCrossBindingLegacyWorkspace(root);
+      seedSessionStores(home, predecessorManaged);
+      const stagingWorkspaceData = join(
+        root,
+        'computers',
+        '.local-layout-v2.staging',
+        'workspace-data',
+      );
+      mkdirSync(stagingWorkspaceData, { recursive: true });
+      renameSync(
+        join(root, 'run', PLACEHOLDER_NS),
+        join(stagingWorkspaceData, PLACEHOLDER_NS),
+      );
+      renameSync(
+        join(root, 'run', REMOTE_NS),
+        join(stagingWorkspaceData, REMOTE_NS),
+      );
+      const slug = managedWorkspaceSlug(WS_ID);
+      mkdirSync(join(stagingWorkspaceData, REMOTE_NS, 'workspaces'), { recursive: true });
+      renameSync(
+        join(stagingWorkspaceData, PLACEHOLDER_NS, 'workspaces', slug),
+        join(stagingWorkspaceData, REMOTE_NS, 'workspaces', slug),
+      );
+
+      expect(() =>
+        migrateDesktopAppDataLayout(root, silent, Date.now, {
+          sessionStoreHome: home,
+          env: {},
+        }),
+      ).not.toThrow();
+      expect(
+        readFileSync(
+          join(
+            root,
+            'computers',
+            REMOTE_BINDING.host_id,
+            'workspace-data',
+            'workspaces',
+            WS_ID,
+            'MEMORY.md',
+          ),
+          'utf8',
+        ),
+      ).toBe('cross-binding-memory');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a cross-binding path without a same-id exact predecessor registry proof remains blocked', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    try {
+      const { predecessorManaged } = seedCrossBindingLegacyWorkspace(root);
+      const predecessorRegistry = join(
+        root,
+        'run',
+        PLACEHOLDER_NS,
+        'workspace-registry.json',
+      );
+      writeFileSync(
+        predecessorRegistry,
+        JSON.stringify({
+          schema_version: 1,
+          binding: PLACEHOLDER_BINDING,
+          workspaces: {},
+        }),
+      );
+
+      expect(() =>
+        migrateDesktopAppDataLayout(root, silent, Date.now, {
+          sessionStoreHome: home,
+          env: {},
+        }),
+      ).toThrow(/predecessor registry/);
+      expect(readFileSync(join(predecessorManaged, 'MEMORY.md'), 'utf8')).toBe(
+        'cross-binding-memory',
+      );
+      expect(
+        layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
+      ).toBe('legacy-v1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('cross-binding source and current managed dirs coexisting is an ownership conflict, never a merge', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    try {
+      const { predecessorManaged } = seedCrossBindingLegacyWorkspace(root);
+      const currentManaged = join(
+        root,
+        'run',
+        REMOTE_NS,
+        'workspaces',
+        managedWorkspaceSlug(WS_ID),
+      );
+      mkdirSync(currentManaged, { recursive: true });
+      writeFileSync(join(currentManaged, 'MEMORY.md'), 'different-current-memory');
+
+      expect(() =>
+        migrateDesktopAppDataLayout(root, silent, Date.now, {
+          sessionStoreHome: home,
+          env: {},
+        }),
+      ).toThrow(/both predecessor and current coordinates/);
+      expect(readFileSync(join(predecessorManaged, 'MEMORY.md'), 'utf8')).toBe(
+        'cross-binding-memory',
+      );
+      expect(readFileSync(join(currentManaged, 'MEMORY.md'), 'utf8')).toBe(
+        'different-current-memory',
+      );
+      expect(
+        layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
+      ).toBe('legacy-v1');
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
@@ -1017,14 +1257,34 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       });
       expect(r.migrated).toBe(true);
       const v2Managed = join(
-        root, 'computers', 'h1', 'workspace-data', NS, 'workspaces', managedWorkspaceSlug(WS_ID),
+        root, 'computers', 'h1', 'workspace-data', 'workspaces', WS_ID,
       );
       // Session pair derived from the STAGED source still uses the
-      // resolver-computed old cwd.
+      // resolver-computed old cwd and targets the final flat coordinate.
       expect(
         existsSync(join(home, '.claude', 'projects', cwdSessionSlug(v2Managed), 'session-1.jsonl')),
       ).toBe(true);
       expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug(managed)))).toBe(false);
+      expect(
+        existsSync(
+          join(
+            home,
+            '.claude',
+            'projects',
+            cwdSessionSlug(
+              join(
+                root,
+                'computers',
+                'h1',
+                'workspace-data',
+                NS,
+                'workspaces',
+                managedWorkspaceSlug(WS_ID),
+              ),
+            ),
+          ),
+        ),
+      ).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });

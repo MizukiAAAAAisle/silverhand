@@ -412,6 +412,18 @@ external paths stay byte-for-byte unchanged. An entry inside the legacy root
 that does not have this exact provenance is a typed conflict, not a candidate
 for broad prefix replacement.
 
+Released pre-v2 builds had one narrower, legitimate cross-binding shape: after
+claiming a remote Computer, its registry copied an exact managed entry from the
+pre-claim `local-embedded/local` predecessor registry while both entries kept
+pointing at the predecessor's one physical directory. Layout v2 adopts that
+directory into the current binding before flattening, but ONLY when both strict
+registries prove the same workspace id and the same deterministic predecessor
+coordinate. The predecessor registry remains as inert historical provenance; it
+is not a second runtime authority. Missing proof, multiple predecessor claims,
+symlinks/special files, or source-and-target coexistence fail closed. Runtime
+session namespaces move directly from the predecessor cwd to the final flat
+cwd, including crash-resume from a namespace already staged.
+
 Registry rewrites use atomic temp-file replacement with owner-only mode.
 Recovery accepts either the exact legacy managed path or the exact v2 managed
 path and deterministically converges to v2. This makes a crash between moving
@@ -665,6 +677,9 @@ handshake, with no new protocol or migration state:
 - Every daemon-managed registry entry is rewritten from the exact legacy
   binding/workspace coordinate to the resolver's v2 coordinate; external
   requested paths are unchanged.
+- A same-workspace exact managed entry copied from a proven predecessor
+  binding is adopted by the current binding with its bytes and cwd-scoped
+  runtime sessions intact; an unproven cross-binding path remains blocked.
 - A forged, wrong-binding, wrong-workspace-slug, or merely prefix-matching
   registry path blocks migration instead of being rewritten.
 - Crash before, during, and after registry-file replacement resumes

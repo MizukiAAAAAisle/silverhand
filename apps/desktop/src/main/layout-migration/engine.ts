@@ -46,6 +46,7 @@ import {
   executeWorkspaceDataConvergence,
   FlattenLayoutError,
   managedWorkspaceSlug,
+  parseWorkspaceRegistryFileStrict,
   planWorkspaceDataConvergence,
   runSessionRenamePass,
   runWorkspaceDataConvergencePass,
@@ -53,6 +54,7 @@ import {
   type RegistryBinding,
   type SessionCwdPair,
   type SessionStoreEnv,
+  type WorkspaceRegistryFile,
 } from '@silverhand/host';
 import {
   resolveComputerSlotPaths,
@@ -284,6 +286,16 @@ export function migrateDesktopAppDataLayout(
     // physically be mid-crash; a flat registry already present means the
     // session pass completed in the run that started the flatten.
     const candidates = candidateBindingsFor(bindingFacts!);
+    const adoptionPlan = planCrossBindingManagedAdoptions({
+      workspaceDataRoots: [
+        join(localStaging, 'workspace-data'),
+        legacy.run.root,
+        slot.workspaceData,
+      ],
+      legacyRunRoot: legacy.run.root,
+      v2WorkspaceData: slot.workspaceData,
+      candidateBindings: candidates,
+    });
     const flattenPlan = wrapFlatten(() => {
       for (const root of [
         join(localStaging, 'workspace-data'),
@@ -298,7 +310,26 @@ export function migrateDesktopAppDataLayout(
       }
       return null;
     });
-    const flatPairs: SessionCwdPair[] = (flattenPlan?.managed ?? []).map(entry => ({
+    const registryManagedPairs: SessionCwdPair[] = adoptionPlan.managedSessionSources.flatMap(entry => {
+      const legacyNamespaced = join(
+        legacy.run.root,
+        entry.namespace,
+        'workspaces',
+        managedWorkspaceSlug(entry.workspaceId),
+      );
+      const slotNamespaced = join(
+        slot.workspaceData,
+        entry.namespace,
+        'workspaces',
+        managedWorkspaceSlug(entry.workspaceId),
+      );
+      const target = join(slot.workspaceData, 'workspaces', entry.workspaceId);
+      return [
+        { oldCwd: legacyNamespaced, newCwd: target },
+        { oldCwd: slotNamespaced, newCwd: target },
+      ];
+    });
+    const flattenedPairs: SessionCwdPair[] = (flattenPlan?.managed ?? []).map(entry => ({
       oldCwd: join(
         legacy.run.root,
         entry.namespaceName,
@@ -307,6 +338,12 @@ export function migrateDesktopAppDataLayout(
       ),
       newCwd: join(slot.workspaceData, 'workspaces', entry.workspaceId),
     }));
+    const flatPairs = [
+      ...registryManagedPairs,
+      ...flattenedPairs.filter(
+        pair => !registryManagedPairs.some(managed => managed.oldCwd === pair.oldCwd),
+      ),
+    ];
     pass = wrapFlatten(() =>
       runSessionRenamePass(
         [...flatPairs, ...pairs.filter(p => !flatPairs.some(f => f.oldCwd === p.oldCwd))],
@@ -327,6 +364,7 @@ export function migrateDesktopAppDataLayout(
           join(localStaging, 'workspace-data'),
           legacy.run.root,
           slot.workspaceData,
+          candidates,
           logger,
         ),
     });
@@ -458,6 +496,304 @@ function candidateBindingsFor(facts: BindingConfigFacts): RegistryBinding[] {
   return out;
 }
 
+interface RegistryNamespaceSnapshot {
+  workspaceDataRoot: string;
+  namespace: string;
+  filePath: string;
+  binding: RegistryBinding;
+}
+
+interface StrictRegistryNamespaceSnapshot extends RegistryNamespaceSnapshot {
+  file: WorkspaceRegistryFile;
+}
+
+interface CrossBindingManagedAdoption {
+  workspaceId: string;
+  sourceNamespace: string;
+  targetNamespace: string;
+  sourceDir: string;
+  targetDir: string;
+  targetLegacyPath: string;
+  move: 'required' | 'resumed' | 'unmaterialized';
+}
+
+interface CrossBindingAdoptionPlan {
+  target: StrictRegistryNamespaceSnapshot | null;
+  adoptions: CrossBindingManagedAdoption[];
+  managedSessionSources: Array<{ workspaceId: string; namespace: string }>;
+}
+
+function bindingsEqual(a: RegistryBinding, b: RegistryBinding): boolean {
+  return a.server_origin === b.server_origin && a.host_id === b.host_id;
+}
+
+function pathInside(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+function readRegistryStrictForMigration(
+  snapshot: RegistryNamespaceSnapshot,
+): StrictRegistryNamespaceSnapshot {
+  let raw: string;
+  try {
+    raw = readFileSync(snapshot.filePath, 'utf-8');
+  } catch (err) {
+    throw new LayoutMigrationError(
+      'layout_registry_rewrite_blocked',
+      `registry for namespace ${snapshot.namespace} cannot be read: ${(err as Error).message}`,
+    );
+  }
+  const file = parseWorkspaceRegistryFileStrict(
+    raw,
+    message =>
+      new LayoutMigrationError(
+        'layout_registry_rewrite_blocked',
+        `registry for namespace ${snapshot.namespace} is invalid: ${message}`,
+      ),
+  );
+  return { ...snapshot, file };
+}
+
+/**
+ * Read the namespace registries from the facet's authoritative roots.
+ * A namespace may be in legacy, staging, OR final during crash recovery,
+ * but never in two roots at once.
+ */
+function collectRegistryNamespaceSnapshots(
+  workspaceDataRoots: readonly string[],
+): RegistryNamespaceSnapshot[] {
+  const snapshots = new Map<string, RegistryNamespaceSnapshot>();
+  for (const workspaceDataRoot of [...new Set(workspaceDataRoots)]) {
+    const rootState = entryState(workspaceDataRoot);
+    if (rootState === 'absent') continue;
+    if (rootState !== 'dir') {
+      throw new LayoutMigrationError(
+        rootState === 'unreadable' ? 'layout_unreadable' : 'layout_special_file',
+        `workspace-data root ${basename(workspaceDataRoot)} cannot be inspected or is not a directory`,
+      );
+    }
+    for (const namespace of readdirSync(workspaceDataRoot)) {
+      const namespaceDir = join(workspaceDataRoot, namespace);
+      if (entryState(namespaceDir) !== 'dir') continue;
+      const filePath = join(namespaceDir, 'workspace-registry.json');
+      const fileState = entryState(filePath);
+      if (fileState === 'absent') continue;
+      if (fileState !== 'file') {
+        throw new LayoutMigrationError(
+          'layout_registry_rewrite_blocked',
+          `registry for namespace ${namespace} cannot be inspected or is not a regular file`,
+        );
+      }
+      const binding = assertRegistryBindingProvenance(filePath, namespace, 'cross-binding');
+      if (snapshots.has(namespace)) {
+        throw new LayoutMigrationError(
+          'layout_conflict',
+          `workspace registry namespace ${namespace} exists in multiple migration roots`,
+        );
+      }
+      snapshots.set(namespace, {
+        workspaceDataRoot,
+        namespace,
+        filePath,
+        binding,
+      });
+    }
+  }
+  return [...snapshots.values()];
+}
+
+/**
+ * The released registry handoff copied an exact managed entry from a
+ * trusted predecessor binding into the active binding while preserving
+ * the predecessor registry as history. Layout v2 removes cross-binding physical
+ * aliases, so the active binding adopts those bytes before flattening.
+ *
+ * This is NOT a prefix-rewrite escape hatch. Both registry files must
+ * strictly parse, both namespace directories must prove their binding
+ * slug, and the same workspace id must carry the same exact predecessor
+ * managed coordinate in both files.
+ */
+function planCrossBindingManagedAdoptions(input: {
+  workspaceDataRoots: readonly string[];
+  legacyRunRoot: string;
+  v2WorkspaceData: string;
+  candidateBindings: readonly RegistryBinding[];
+}): CrossBindingAdoptionPlan {
+  const snapshots = collectRegistryNamespaceSnapshots(input.workspaceDataRoots);
+  const strictSnapshots = new Map<string, StrictRegistryNamespaceSnapshot>();
+  const strictSnapshot = (
+    snapshot: RegistryNamespaceSnapshot,
+  ): StrictRegistryNamespaceSnapshot => {
+    const cached = strictSnapshots.get(snapshot.namespace);
+    if (cached !== undefined) return cached;
+    const parsed = readRegistryStrictForMigration(snapshot);
+    strictSnapshots.set(snapshot.namespace, parsed);
+    return parsed;
+  };
+  const targets = snapshots
+    .filter(snapshot =>
+      input.candidateBindings.some(candidate => bindingsEqual(snapshot.binding, candidate)),
+    )
+    .map(strictSnapshot);
+  if (targets.length > 1) {
+    throw new LayoutMigrationError(
+      'layout_registry_rewrite_blocked',
+      `multiple current-binding registry namespaces exist (${targets.map(target => target.namespace).join(', ')})`,
+    );
+  }
+  const target = targets[0] ?? null;
+  if (target === null) {
+    return { target: null, adoptions: [], managedSessionSources: [] };
+  }
+
+  const adoptions: CrossBindingManagedAdoption[] = [];
+  const managedSessionSources: Array<{ workspaceId: string; namespace: string }> = [];
+  for (const [workspaceId, targetEntry] of Object.entries(target.file.workspaces)) {
+    const slug = managedWorkspaceSlug(workspaceId);
+    const ownLegacyPath = join(input.legacyRunRoot, target.namespace, 'workspaces', slug);
+    const ownV2Path = join(input.v2WorkspaceData, target.namespace, 'workspaces', slug);
+    if (targetEntry.path === ownLegacyPath || targetEntry.path === ownV2Path) {
+      managedSessionSources.push({ workspaceId, namespace: target.namespace });
+      continue;
+    }
+
+    const sources = snapshots.filter(source => {
+      if (source.namespace === target.namespace) return false;
+      const sourceLegacyPath = join(input.legacyRunRoot, source.namespace, 'workspaces', slug);
+      const sourceV2Path = join(input.v2WorkspaceData, source.namespace, 'workspaces', slug);
+      if (targetEntry.path !== sourceLegacyPath && targetEntry.path !== sourceV2Path) {
+        return false;
+      }
+      const strictSource = strictSnapshot(source);
+      return strictSource.file.workspaces[workspaceId]?.path === targetEntry.path;
+    });
+    if (sources.length === 0) {
+      if (pathInside(input.legacyRunRoot, targetEntry.path) || pathInside(input.v2WorkspaceData, targetEntry.path)) {
+        throw new LayoutMigrationError(
+          'layout_registry_rewrite_blocked',
+          `registry entry for workspace ${workspaceId} in namespace ${target.namespace} points inside managed storage without exact managed provenance from a predecessor registry`,
+        );
+      }
+      continue; // external user-requested path
+    }
+    if (sources.length !== 1) {
+      throw new LayoutMigrationError(
+        'layout_registry_rewrite_blocked',
+        `workspace ${workspaceId} is claimed by multiple predecessor registries`,
+      );
+    }
+
+    const source = sources[0]!;
+    const sourceDir = join(
+      source.workspaceDataRoot,
+      source.namespace,
+      'workspaces',
+      slug,
+    );
+    const targetDir = join(
+      target.workspaceDataRoot,
+      target.namespace,
+      'workspaces',
+      slug,
+    );
+    const sourceState = entryState(sourceDir);
+    const targetState = entryState(targetDir);
+    if (sourceState === 'unreadable' || targetState === 'unreadable') {
+      throw new LayoutMigrationError(
+        'layout_unreadable',
+        `cross-binding workspace ${workspaceId} cannot be inspected`,
+      );
+    }
+    if (
+      (sourceState !== 'absent' && sourceState !== 'dir') ||
+      (targetState !== 'absent' && targetState !== 'dir')
+    ) {
+      throw new LayoutMigrationError(
+        'layout_special_file',
+        `cross-binding workspace ${workspaceId} is a symlink or special file`,
+      );
+    }
+    if (sourceState === 'dir' && targetState === 'dir') {
+      throw new LayoutMigrationError(
+        'layout_conflict',
+        `cross-binding workspace ${workspaceId} exists at both predecessor and current coordinates`,
+      );
+    }
+    adoptions.push({
+      workspaceId,
+      sourceNamespace: source.namespace,
+      targetNamespace: target.namespace,
+      sourceDir,
+      targetDir,
+      targetLegacyPath: ownLegacyPath,
+      move:
+        sourceState === 'dir'
+          ? 'required'
+          : targetState === 'dir'
+            ? 'resumed'
+            : 'unmaterialized',
+    });
+    managedSessionSources.push({ workspaceId, namespace: source.namespace });
+  }
+  return { target, adoptions, managedSessionSources };
+}
+
+function adoptCrossBindingManagedWorkspaces(input: {
+  stagedWorkspaceData: string;
+  legacyRunRoot: string;
+  v2WorkspaceData: string;
+  candidateBindings: readonly RegistryBinding[];
+  logger: MigrationLogger;
+}): void {
+  const plan = planCrossBindingManagedAdoptions({
+    workspaceDataRoots: [input.stagedWorkspaceData],
+    legacyRunRoot: input.legacyRunRoot,
+    v2WorkspaceData: input.v2WorkspaceData,
+    candidateBindings: input.candidateBindings,
+  });
+  if (plan.target === null || plan.adoptions.length === 0) return;
+
+  for (const adoption of plan.adoptions) {
+    if (adoption.move !== 'required') continue;
+    mkdirSync(dirname(adoption.targetDir), { recursive: true, mode: 0o700 });
+    try {
+      renameSync(adoption.sourceDir, adoption.targetDir);
+    } catch (err) {
+      throw new LayoutMigrationError(
+        'layout_move_failed',
+        `adopting cross-binding workspace ${adoption.workspaceId} failed (${(err as NodeJS.ErrnoException).code ?? 'rename error'})`,
+      );
+    }
+  }
+
+  for (const adoption of plan.adoptions) {
+    plan.target.file.workspaces[adoption.workspaceId]!.path = adoption.targetLegacyPath;
+  }
+  const tempPath = `${plan.target.filePath}.adopting`;
+  try {
+    writeFileSync(tempPath, `${JSON.stringify(plan.target.file, null, 2)}\n`, {
+      encoding: 'utf-8',
+      mode: 0o600,
+    });
+    chmodSync(tempPath, 0o600);
+    renameSync(tempPath, plan.target.filePath);
+  } catch (err) {
+    throw new LayoutMigrationError(
+      'layout_move_failed',
+      `persisting cross-binding workspace adoption failed (${(err as NodeJS.ErrnoException).code ?? 'fs error'})`,
+    );
+  }
+  input.logger.info(
+    {
+      action: 'layout_v2_cross_binding_workspaces_adopted',
+      namespace: plan.target.namespace,
+      workspaces: plan.adoptions.length,
+    },
+    'historical managed workspaces adopted by the current binding',
+  );
+}
+
 /** Single-file atomic relocation of the binding config (legacy
  *  `daemon-config.json` → `desktop/computer-binding.json`). Idempotent. */
 function relocateBindingFile(
@@ -546,7 +882,13 @@ function runComputerSlotCatchUp(
   // Registry rewrite IN PLACE on the alias tree (exact provenance:
   // alias-managed coordinate → slot-managed coordinate; idempotent — it
   // also accepts the already-rewritten slot value).
-  rewriteStagedRegistries(oldWorkspaceData, oldWorkspaceData, slot.workspaceData, logger);
+  rewriteStagedRegistries(
+    oldWorkspaceData,
+    oldWorkspaceData,
+    slot.workspaceData,
+    candidateBindingsFor(facts!),
+    logger,
+  );
   // Per-child idempotent moves (#task:1608 P1-1): each durable child is
   // its own atomic boundary. alias-present + slot-absent → rename;
   // alias-absent + slot-present → already moved (a prior run crashed
@@ -731,7 +1073,7 @@ function assertRegistryBindingProvenance(
   registryPath: string,
   namespace: string,
   where: string,
-): void {
+): RegistryBinding {
   let binding: { server_origin?: unknown; host_id?: unknown } | undefined;
   try {
     binding = (
@@ -755,6 +1097,10 @@ function assertRegistryBindingProvenance(
       `${where} registry for namespace ${namespace} lacks exact binding provenance (slug mismatch)`,
     );
   }
+  return {
+    server_origin: binding.server_origin,
+    host_id: binding.host_id,
+  };
 }
 
 function localComputerEntries(
@@ -1074,6 +1420,7 @@ export function rewriteStagedRegistries(
   stagedWorkspaceData: string,
   legacyRunRoot: string,
   v2WorkspaceData: string,
+  candidateBindings: readonly RegistryBinding[],
   logger: MigrationLogger,
 ): void {
   const rootState = entryState(stagedWorkspaceData);
@@ -1084,6 +1431,13 @@ export function rewriteStagedRegistries(
       'the staged workspace-data tree cannot be inspected or is not a directory',
     );
   }
+  adoptCrossBindingManagedWorkspaces({
+    stagedWorkspaceData,
+    legacyRunRoot,
+    v2WorkspaceData,
+    candidateBindings,
+    logger,
+  });
   for (const ns of readdirSync(stagedWorkspaceData)) {
     const nsDir = join(stagedWorkspaceData, ns);
     const nsState = entryState(nsDir);
