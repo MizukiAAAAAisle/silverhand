@@ -1,27 +1,33 @@
 /**
  * Startup failure classification — the ONE place that decides what a
- * fail-closed launch is allowed to tell the user.
+ * fail-closed launch tells the user.
  *
  * Startup is fail-closed by design: the layout migration and the
- * boot-mode gate both refuse to continue rather than merge, copy, or
- * fall back (`docs/app-data-layout-v2.md` §5/§6, D4.a Commit 3 boot
- * gate). Refusing correctly is worthless if the user sees nothing, so
- * `index.ts` catches the rethrow and shows a single failure exit built
- * from this notice.
+ * boot-mode gate refuse to continue rather than merge, copy, or fall
+ * back (`docs/app-data-layout-v2.md` §5/§6, D4.a Commit 3 boot gate).
+ * Refusing correctly is worthless if the user sees nothing, so
+ * `index.ts` catches the rethrow and shows one failure exit built from
+ * this notice.
  *
- * Two rules live here, and only here:
+ * **There is deliberately no "your data was not modified" claim here**
+ * (#task:1641 review, @Cindy + @Alice). The tempting version graded it
+ * by error class — `LayoutMigrationError` reads like a pre-write
+ * refusal — and that is false: the engine renames the session pass,
+ * facet children, and the adopted registry (`layout-migration/engine.ts`
+ * `:762` / `:781` / `:822` / `:933`) and then throws the SAME class from
+ * `:766` / `:785` / `:935` / `:982`, so the class straddles pre- and
+ * post-write, and so do individual codes (`layout_unreadable` on both
+ * sides). `ProfileUnusableError` is a genuine pre-write refusal but is
+ * evaluated AFTER the migration, so for the launch as a whole it cannot
+ * promise nothing moved either. A claim that can only be made
+ * sometimes, and cannot be derived from the error, is not made at all:
+ * the window states which layer failed, one line of specifics, and
+ * where the logs are.
  *
- *   1. **"Your data was not modified" is a claim, not a comfort line.**
- *      It may only be made for the typed refusals that are proven to
- *      abort before mutating anything (`LayoutMigrationError` —
- *      everything stages then activates with one rename;
- *      `ProfileUnusableError` — the classifier refuses the profile
- *      before any backend/daemon work). An unknown crash may have
- *      happened anywhere, including mid-write, so it says nothing.
- *   2. **Detail is one short line, never the raw essay.** Both typed
- *      errors carry operator-facing messages (repair options, paths);
- *      that belongs in the log file the exit points at, not in a window
- *      the user has to read to find the one fact they need.
+ * Detail is one short line on purpose. Both typed errors carry
+ * operator-facing messages (repair options, absolute paths); that
+ * belongs in the log file the exit points at, not in a window whose job
+ * is to convey one fact.
  */
 import { LayoutMigrationError } from './layout-migration/engine.js';
 import { ProfileUnusableError } from './backend-boot-mode.js';
@@ -33,8 +39,6 @@ export interface StartupFailureNotice {
   code: string;
   /** One short line of specifics, or null when there is nothing short to say. */
   detail: string | null;
-  /** True only for typed refusals that abort before writing anything. */
-  dataUntouched: boolean;
 }
 
 const DETAIL_LIMIT = 200;
@@ -51,7 +55,6 @@ export function describeStartupFailure(error: unknown): StartupFailureNotice {
       headline: 'Silverhand could not migrate its data folder.',
       code: error.code,
       detail: shorten(error.message),
-      dataUntouched: true,
     };
   }
   if (error instanceof ProfileUnusableError) {
@@ -62,7 +65,6 @@ export function describeStartupFailure(error: unknown): StartupFailureNotice {
       // window shows the address and the classifier's reason, which is
       // what identifies the profile to fix.
       detail: shorten(`${error.profileUrl} — ${error.classifyMessage}`),
-      dataUntouched: true,
     };
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -70,6 +72,5 @@ export function describeStartupFailure(error: unknown): StartupFailureNotice {
     headline: 'Silverhand could not finish starting.',
     code: 'startup_failed',
     detail: message.trim().length > 0 ? shorten(message) : null,
-    dataUntouched: false,
   };
 }
