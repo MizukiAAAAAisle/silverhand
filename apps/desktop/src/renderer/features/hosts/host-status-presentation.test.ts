@@ -10,10 +10,6 @@ import {
   formatUptime,
 } from './host-status-presentation';
 import { computerCopy } from './computer-copy';
-import {
-  describeConnectionState,
-  type LocalHostStatus,
-} from './connection-state';
 
 /**
  * #task:808 slice 4 — pure mapper tests for `HostStatusResponse` →
@@ -237,13 +233,16 @@ describe('formatUptime', () => {
  * The prior guard only checked `describeUnreachableReason` labels, so
  * jargon could (and did) leak into `detail` prose and the `computerCopy`
  * lexicon untested (Alice: "测有洞 → 漏进 prose 测不出、还会 regress").
- * This sweeps EVERY user-facing string — the whole `computerCopy` single
- * source (including its function-valued entries), every
- * `describeHostStatus` label + detail, AND every `describeConnectionState`
- * label + detail (the local supervisor pill — a separate context that
- * shares the same word source) — so a future jargon leak fails here
- * instead of shipping. This is the production-path guard for the §7.1
- * rule, not a spot-check.
+ * This sweeps EVERY user-facing string reachable from a pure mapper — the
+ * whole `computerCopy` single source (including its function-valued
+ * entries) and every `describeHostStatus` label + detail — so a future
+ * jargon leak fails here instead of shipping. This is the production-path
+ * guard for the §7.1 rule, not a spot-check.
+ *
+ * Surfaces that hold their words as component-local literals (the
+ * ConnectionPane status pill) are covered by reading them FROM
+ * `computerCopy` rather than by a second sweep here; that is why the pill
+ * must not re-spell "Connected" / "Offline" locally.
  */
 describe('copy-gate: no internal jargon in user-facing prose (§7.1)', () => {
   const JARGON: Array<{ name: string; re: RegExp }> = [
@@ -348,41 +347,6 @@ describe('copy-gate: no internal jargon in user-facing prose (§7.1)', () => {
       }
     }
 
-    // Local embedded-host supervisor pill (`connection-state.ts`): a
-    // separate bounded context, but its shared words are the SAME single
-    // source, so its prose must clear the same gate (Alice: the old gate
-    // didn't cover this file → jargon here would regress untested). Sweep
-    // every arm, including the `claimed` attach/remote branches.
-    const localArms: LocalHostStatus[] = [
-      'unclaimed',
-      'claimed',
-      'revoked',
-      'error',
-      'failed',
-    ];
-    const NOW = 1_700_000_100_000;
-    for (const status of localArms) {
-      for (const attachedAt of [null, 1_700_000_000_000] as const) {
-        for (const remoteAttached of [false, true] as const) {
-          const view = describeConnectionState(status, attachedAt, NOW, {
-            remoteAttached,
-          });
-          const suffix = `${status}/attach=${attachedAt !== null}/remote=${remoteAttached}`;
-          if (view.label) {
-            out.push({
-              label: `describeConnectionState(${suffix}).label`,
-              text: view.label,
-            });
-          }
-          if (view.detail) {
-            out.push({
-              label: `describeConnectionState(${suffix}).detail`,
-              text: view.detail,
-            });
-          }
-        }
-      }
-    }
     return out;
   }
 

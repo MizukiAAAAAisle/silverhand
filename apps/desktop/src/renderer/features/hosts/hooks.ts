@@ -282,11 +282,10 @@ export function connectingRefetchIntervalMs(
   // carried this discriminant the poll ran every 1.5s for as long as the
   // window was open — which is what the user read as "the computer keeps
   // retrying" — and each tick also re-probed the remote `GET
-  // /api/server-info`. `describeConnectionState` /
-  // `desktopServerConnectionStatus` learned the same lesson in `#task:1010`:
-  // remote connectedness is proven by the renderer event WS and host-status
-  // availability, never by this timestamp. The 30s protocol-compatibility
-  // poll is a separate opt-in and still applies.
+  // /api/server-info`. `desktopServerConnectionStatus` learned the same
+  // lesson in `#task:1010`: remote connectedness is proven by the renderer
+  // event WS and host-status availability, never by this timestamp. The 30s
+  // protocol-compatibility poll is a separate opt-in and still applies.
   if (!attachment.observable) return false;
   // Only poll while we're explicitly waiting for the outbound WS
   // to land. Any other state — including `claimed + attached_at`

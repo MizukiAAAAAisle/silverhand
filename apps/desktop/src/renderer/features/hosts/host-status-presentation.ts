@@ -1,11 +1,11 @@
 /**
  * `#task:808` slice 4 — UI mapper for `HostStatusResponse` arms.
  *
- * Sibling to `connection-state.ts` but a deliberately separate file
- * because the source data is different: `connection-state.ts` works on
- * `BackendInfoSnapshot` (LOCAL host only, via the IPC backend-info
- * snapshot) and powers the Settings → Connection pane's pill;
- * `host-status-presentation.ts` works on the wire-shape
+ * Deliberately separate from the Settings → Connection pane's own
+ * Desktop→Server projection (`settings/connection-readiness.ts`) because
+ * the source data is different: that one works on `BackendInfoSnapshot`
+ * (LOCAL host only, via the IPC backend-info snapshot) and answers "can
+ * this desktop reach its server"; this file works on the wire-shape
  * `HostStatusResponse` returned by `GET /api/hosts/:id/status` for ANY
  * host (forward-compatible with future remote hosts — shiki: "功能应是
  * hosts 主语的通用功能，不是 local only").
@@ -23,9 +23,12 @@
  *     will render every host through this mapper without any
  *     local/remote branching at the component layer.
  *
- * Tone keys stay aligned with `connection-state.ts` (`accent` /
- * `success` / `muted` / `warning` / `error`) so the same Tailwind
- * utilities (`text-success` etc.) work in both surfaces, and theme
+ * What the split does NOT license is two vocabularies: the shared
+ * availability words come from `computerCopy` on both paths (§7.1).
+ *
+ * Tone keys are the shared status palette (`accent` / `success` /
+ * `muted` / `warning` / `error`) so the same Tailwind utilities
+ * (`text-success` etc.) work in every status surface, and theme
  * tokens (warm-script.css / forza6.css) need no new definitions.
  */
 import type {
@@ -53,9 +56,9 @@ export interface HostStatusView {
    *  effective action, or the registration-only "(0 agents online)"
    *  string. `null` when not applicable. */
   detail: string | null;
-  /** Token-key for the pill's border + text color. Matches
-   *  `connection-state.ts` so consumers reuse the same `text-{tone}` /
-   *  `border-{tone}` Tailwind utilities. */
+  /** Token-key for the pill's border + text color. Shares the status
+   *  palette with every other status surface so consumers reuse the same
+   *  `text-{tone}` / `border-{tone}` Tailwind utilities. */
   tone: HostStatusTone;
 }
 

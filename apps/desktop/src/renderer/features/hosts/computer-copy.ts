@@ -53,12 +53,13 @@ export const computerCopy = {
 
   // ── Availability labels (realtime) ─────────────────────────────────
   // Single source for the availability/lifecycle words shared across
-  // surfaces: `describeHostStatus` (user-managed /status) AND
-  // `connection-state.ts` (the local embedded-host supervisor pill) both
-  // read these — the Unified Computer model forbids one surface saying
-  // "Connected" while another says "Ready" for the same availability fact
-  // (Alice §7.1 / no source-fork). Context-unique supervisor states
-  // (Connecting… / Stopped) stay local to connection-state.ts.
+  // surfaces: `describeHostStatus` (user-managed /status) AND the
+  // Desktop→Server pill in `settings/ConnectionPane.tsx` both read these —
+  // the Unified Computer model forbids one surface saying "Connected"
+  // while another says "Ready" for the same availability fact (Alice §7.1
+  // / no source-fork). Words with no availability equivalent (the pill's
+  // `Connecting…` attach window) stay literal at their one call site
+  // rather than being minted into this lexicon.
   availabilityConnected: 'Connected',
   availabilityOffline: 'Offline',
   availabilityUnreachable: 'Unreachable',

@@ -43,6 +43,7 @@ import {
   hostStatusKey,
   useBackendInfoSnapshot,
 } from '@/features/hosts/hooks';
+import { computerCopy } from '@/features/hosts/computer-copy';
 import { eventWsClient, type WsClientStatus } from '@/lib/ws-client';
 import { describeProbeOutcome } from '@/features/setup/describe-probe-outcome';
 import {
@@ -64,13 +65,21 @@ import {
 } from './connection-readiness';
 import { primaryAction } from '@/features/common/PrimaryAction';
 
+/**
+ * Availability words come from the `computerCopy` single source — the
+ * Unified Computer model forbids one surface saying "Connected" while
+ * another says "Ready"/"Online" for the same availability fact (§7.1, no
+ * source-fork), and a local literal here is exactly how that fork starts.
+ * `Connecting…` stays literal: it is the Desktop→Server attach window,
+ * a state the availability lexicon has no word for.
+ */
 const STATUS_LABEL: Record<
   Exclude<DesktopServerConnectionStatus, 'unknown'>,
   string
 > = {
-  connected: 'Connected',
+  connected: computerCopy.availabilityConnected,
   connecting: 'Connecting…',
-  offline: 'Offline',
+  offline: computerCopy.availabilityOffline,
 };
 
 const STATUS_TONE_CLASS: Record<
@@ -91,8 +100,7 @@ function ServerStatusPill({
   // status word we have not earned: every candidate ("Connecting…",
   // "Offline") is a claim about a connection nobody has looked at, and a
   // word that later walks backwards reads as a glitch (`#task:1630`
-  // review). Same discipline as `describeConnectionState`'s
-  // `visible: false` arm.
+  // review).
   if (status === 'unknown') return null;
   return (
     <span
