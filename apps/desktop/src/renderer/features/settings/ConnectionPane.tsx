@@ -213,8 +213,19 @@ export function ConnectionPane(): JSX.Element {
         ? snapshot.url
         : snapshot.local_host_server_url ?? snapshot.url;
 
+  // `#task:1640` — the field FOLLOWS the authority only while the user
+  // has not typed in it. Re-seeding on every `currentUrl` change wiped
+  // whatever was being typed, and `currentUrl` changes for reasons that
+  // have nothing to do with this field: the first snapshot landing (the
+  // unknown window `#task:1630` made explicit — `''` → real address),
+  // and any `pollWhileConnecting` refetch that carries a new
+  // `local_host_server_url` / `url`. Once edited the draft is the user's
+  // until the save lands (`onSuccess` clears the flag so the field
+  // re-follows the newly saved authority).
   const [draft, setDraft] = useState<string>('');
+  const draftEditedRef = useRef(false);
   useEffect(() => {
+    if (draftEditedRef.current) return;
     setDraft(currentUrl);
   }, [currentUrl]);
 
@@ -236,6 +247,7 @@ export function ConnectionPane(): JSX.Element {
   }, []);
   const updateDraft = (value: string): void => {
     setDraft(value);
+    draftEditedRef.current = true;
     setBanner(null);
     setSavedAt(null);
   };
@@ -260,6 +272,10 @@ export function ConnectionPane(): JSX.Element {
       setBanner(nextBanner);
       setSavedAt(nextBanner.dismissOnReady ? Date.now() : null);
       if (saveResult.result.ok) {
+        // The saved address IS the authority now, so let the field follow
+        // it again (`#task:1640`). A FAILED save keeps the edited flag —
+        // the user's text stays put so they can fix it.
+        draftEditedRef.current = false;
         if (saveResult.source === 'profile') {
           // Remote-mode Settings edits must retarget the renderer transport too.
           // The profile pipeline updates main's active backend handle; forcing a
