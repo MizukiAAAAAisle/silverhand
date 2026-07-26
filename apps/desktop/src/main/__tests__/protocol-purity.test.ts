@@ -328,32 +328,45 @@ describe('desktop protocol purity catalogue', () => {
   // null/empty in a remote-server deployment (the registry lives in the
   // remote backend, not the desktop). Reading one without a remote second
   // source is the #task:1132 / #task:1010 bug class (a connected local
-  // computer rendered offline). These two guards keep new consumers from
-  // re-introducing it.
-  it('every renderer local_host_ws_attached_at consumer also consults the remote availability fallback (#task:1132 class)', () => {
-    // `local_host_ws_attached_at` is the in-process WS attach timestamp;
-    // it is structurally null when the backend runs remotely. Any renderer
-    // surface that derives connection/online state from it MUST also
-    // consult host-status `availability` — directly through the
-    // connection-state helpers (`isLocalHostAttached` /
-    // `describeConnectionState`) / `useHostStatusQuery` that fold it in,
-    // OR by routing the judgment through a canonical Desktop→Server
-    // projection function (`desktopServerConnectionStatus(` /
-    // `isDesktopServerReadyAfterSave(`) whose mode-aware body already
-    // consults the renderer WS status for the remote arm. The
-    // #task:1132 bug was App.tsx mapping `attached_at === null` straight
-    // to offline with no availability fallback. Comments/docstrings that
-    // merely mention the attach field are stripped first — only actual
-    // code counts.
-    const fallbackTokens =
-      /\bavailability\b|\bisLocalHostAttached\b|\bdescribeConnectionState\b|\buseHostStatusQuery\b|\bdesktopServerConnectionStatus\(|\bisDesktopServerReadyAfterSave\(/;
-    const offenders = sourceFiles(rendererRoot, new Set(['.ts', '.tsx']))
-      .map(source => ({ ...source, code: stripComments(source.content) }))
-      .filter(source => source.code.includes('local_host_ws_attached_at'))
-      .filter(source => !fallbackTokens.test(source.code))
-      .map(source => source.path);
+  // computer rendered offline).
+  //
+  // #task:1630 retired the file-level regex fence that used to sit here
+  // ("every renderer `local_host_ws_attached_at` consumer must also
+  // mention an availability token"). That field no longer exists: the
+  // BackendInfo surface now carries a discriminated
+  // `local_host_ws_attachment` (`{observable:true; attached_at} |
+  // {observable:false}`), so a consumer physically cannot read the
+  // timestamp without first handling the unobservable arm — the
+  // typechecker enforces at every call site what the regex could only
+  // approximate by scanning for co-located tokens. A grep fence that can
+  // no longer fail is worse than no fence: it reads as protection while
+  // guarding a name nothing uses.
+  //
+  // What the type still cannot express is where observability comes
+  // FROM, so that is the one fence kept below.
+  it('derives attachment observability from the backend discriminant, not from a null controller (#task:1630)', () => {
+    // `getEmbeddedHostWsController()` returns null in TWO different
+    // situations: the remote arm (no in-process registry — genuinely
+    // unobservable) AND an embedded backend whose accessor is not wired
+    // yet (observable, just nothing attached). Minting the flag as
+    // `observable: getEmbeddedHostWsController() !== null` compiles
+    // fine and re-opens #task:1010 from the other side: the renderer
+    // would be told to stop waiting on an embedded attach that is merely
+    // slow. Pin the producer to the `backend.kind` discriminant.
+    const mainSource = readFileSync(join(mainRoot, 'index.ts'), 'utf8');
+    const producer =
+      /local_host_ws_attachment:\s*\n?\s*backend\?\.kind === 'embedded'/;
+    expect(producer.test(mainSource)).toBe(true);
 
-    expect(offenders).toEqual([]);
+    const code = stripComments(mainSource);
+    // Every `observable:` in main — type declaration and producer arms
+    // alike — must be followed by a bare literal. A computed source
+    // (`observable: getEmbeddedHostWsController() !== null`) lands its
+    // callee name in this set and fails.
+    const observableSources = new Set(
+      [...code.matchAll(/observable:\s*(\w+)/g)].map(m => m[1]),
+    );
+    expect([...observableSources].sort()).toEqual(['false', 'true']);
   });
 
   it('keeps main getEmbeddedHostWsController() call sites catalogued with remote-arm degrade semantics (#task:1133)', () => {

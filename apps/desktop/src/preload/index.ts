@@ -14,6 +14,20 @@ import {
   type DesktopBuildConfig,
 } from '../build-flags.js';
 
+/**
+ * #task:1630 — the daemon's outbound-WS attachment as seen from THIS
+ * desktop process. Pinned to `preload/api.d.ts` and `main/index.ts` —
+ * the three copies stay in lock-step. `observable: false` = the
+ * attachment registry lives in a remote backend process, so this app
+ * cannot see it and the consumer must pick another authority (renderer
+ * event WS for Desktop→Server, host-status `availability` for a
+ * Computer). See `api.d.ts` for the full rationale (three shipped
+ * regressions from expressing this as `number | null`).
+ */
+export type LocalHostWsAttachment =
+  | { observable: true; attached_at: number | null }
+  | { observable: false };
+
 export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
@@ -36,19 +50,21 @@ export interface BackendInfo {
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
-   * D3.a Commit 4 — diagnostic timestamp from
-   * `HostWsServerController.getAttachment(local_host_id)?.attachedAt`.
-   * `null` when no live outbound WS attachment for this host.
-   * Renderer can surface as "connected since" but must NOT derive a
-   * new status word — the user-facing status enum stays
-   * `local_host_status` and nothing else.
+   * D3.a Commit 4 — the daemon outbound WS attachment from
+   * `HostWsServerController.getAttachment(local_host_id)`. See
+   * {@link LocalHostWsAttachment}: `{ observable: true, attached_at }`
+   * only when the registry lives in THIS process (embedded);
+   * `{ observable: false }` on the remote arm. Renderer can surface
+   * `attached_at` as "connected since" but must NOT derive a new status
+   * word — the user-facing status enum stays `local_host_status` and
+   * nothing else.
    *
    * D3.b Commit 2 — `'failed'` value added: surfaced when the daemon
-   * supervisor budget is exhausted (see `local-host-failure.ts`).
-   * `local_host_ws_attached_at` stays a separate diagnostic field;
-   * renderer must not derive status from it.
+   * supervisor budget is exhausted (see `local-host-failure.ts`). The
+   * attachment stays a separate diagnostic field; renderer must not
+   * derive status from it.
    */
-  local_host_ws_attached_at: number | null;
+  local_host_ws_attachment: LocalHostWsAttachment;
   /**
    * D3.c Commit 4 — `server_url` currently persisted in
    * `daemon-config.json` (the address the daemon dials to reach the
@@ -153,7 +169,7 @@ export type DesktopHostMutationResult =
       host: HostDto;
       local_host_id: BackendInfo['local_host_id'];
       local_host_status: BackendInfo['local_host_status'];
-      local_host_ws_attached_at: BackendInfo['local_host_ws_attached_at'];
+      local_host_ws_attachment: BackendInfo['local_host_ws_attachment'];
       /** D3.c Commit 4 — same field as `BackendInfo.local_host_server_url`.
        *  Mutation success payloads are built via
        *  `...snapshotLocalHostInfo()`, so this field is structurally

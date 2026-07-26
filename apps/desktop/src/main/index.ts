@@ -269,6 +269,19 @@ type DesktopAuthState =
   // when the server is unreachable.
   | { status: 'backend_unreachable'; server_url: string; message: string };
 
+/**
+ * #task:1630 — the daemon's outbound-WS attachment as seen from THIS
+ * process. Pinned to `preload/index.ts` and `preload/api.d.ts` — the
+ * three copies stay in lock-step. The discriminant exists because the
+ * attachment registry only lives here on the embedded arm; expressing
+ * the remote arm as a `null` timestamp made "cannot observe" and
+ * "claimed but not attached yet" indistinguishable, which shipped three
+ * times (#task:1010 / #task:1132 / #task:1628). See `api.d.ts`.
+ */
+type LocalHostWsAttachment =
+  | { observable: true; attached_at: number | null }
+  | { observable: false };
+
 interface BackendProxyRequest {
   path: string;
   method?: string;
@@ -1177,7 +1190,7 @@ type DesktopHostMutationResult =
       host: HostDto;
       local_host_id: string | null;
       local_host_status: LocalHostClaimStatus['status'];
-      local_host_ws_attached_at: number | null;
+      local_host_ws_attachment: LocalHostWsAttachment;
       local_host_server_url: string | null;
     }
   | {
@@ -1196,7 +1209,7 @@ type DesktopHostMutationResult =
 function snapshotLocalHostInfo(): {
   local_host_id: string | null;
   local_host_status: LocalHostClaimStatus['status'];
-  local_host_ws_attached_at: number | null;
+  local_host_ws_attachment: LocalHostWsAttachment;
   local_host_server_url: string | null;
 } {
   return {
@@ -1208,10 +1221,26 @@ function snapshotLocalHostInfo(): {
     // word — the user-facing status enum is the 5-value
     // `local_host_status` and nothing else (per the D3.a/D3.d locked
     // scope on host status semantics).
-    local_host_ws_attached_at:
-      localHostClaim.status === 'claimed'
-        ? getEmbeddedHostWsController()?.getAttachment(localHostClaim.hostId)?.attachedAt ?? null
-        : null,
+    //
+    // #task:1630: observability is derived from the backend discriminant
+    // DIRECTLY, never from `getEmbeddedHostWsController() === null` — that
+    // helper also returns null for an embedded process whose controller
+    // accessor is missing (an upstream bug, see `:1696`), and reporting
+    // THAT as `observable: false` would tell the renderer to stop looking
+    // instead of surfacing the stuck attach. So: observable ⇔ the registry
+    // is in this process; `attached_at: null` inside the observable arm
+    // keeps its old meaning (claimed but nothing attached yet).
+    local_host_ws_attachment:
+      backend?.kind === 'embedded'
+        ? {
+            observable: true,
+            attached_at:
+              localHostClaim.status === 'claimed'
+                ? getEmbeddedHostWsController()?.getAttachment(localHostClaim.hostId)
+                    ?.attachedAt ?? null
+                : null,
+          }
+        : { observable: false },
     // D3.c Commit 4: surface the daemon-config `server_url` so the
     // Settings "Server" pane (and any future Hosts page readout) can
     // distinguish "what the daemon dials" from `backend.url` ("what

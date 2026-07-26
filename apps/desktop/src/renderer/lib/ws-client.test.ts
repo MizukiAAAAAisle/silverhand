@@ -9,7 +9,7 @@ vi.mock('./api', () => ({
     mode: 'embedded',
     local_host_id: 'host-local',
     local_host_status: 'claimed',
-    local_host_ws_attached_at: null,
+    local_host_ws_attachment: { observable: true, attached_at: null },
     // D3.c Commit 4 — `BackendInfo` snapshot now carries the
     // daemon-config `server_url` view. ws-client doesn't read this
     // field, but the mock matches the typed surface so future typed

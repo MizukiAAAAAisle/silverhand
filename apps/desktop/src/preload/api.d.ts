@@ -9,6 +9,32 @@ import type {
   UserDto,
 } from '@silverhand/shared';
 
+/**
+ * #task:1630 — the daemon's outbound-WS attachment as seen from THIS
+ * desktop process, made explicit about whether it can be seen at all.
+ *
+ * The attachment registry (`HostWsServerController`) lives inside the
+ * backend process. In an embedded deployment that process IS this app, so
+ * main can read the attach timestamp directly. In a remote deployment the
+ * registry lives on the remote server and this process has NO way to
+ * observe it — the old `local_host_ws_attached_at: number | null` field
+ * collapsed that into the same `null` the embedded arm uses for "claimed
+ * but not attached yet", which is why the identical bug shipped three
+ * times (#task:1010 pill stuck on Connecting, #task:1132 local computer
+ * rendered offline, #task:1628 a 1.5s connecting poll that could never
+ * terminate in remote mode).
+ *
+ * Consumers therefore get a discriminant instead of a nullable scalar:
+ * `observable: false` means "ask a different authority" (renderer event WS
+ * for Desktop→Server, host-status `availability` for a Computer), and
+ * forgetting to do so no longer typechecks. This carries no second
+ * authority itself — adding remote availability here would mint a third
+ * connection-state projection.
+ */
+export type LocalHostWsAttachment =
+  | { observable: true; attached_at: number | null }
+  | { observable: false };
+
 export interface BackendInfo {
   url: string;
   mode: 'embedded' | 'remote';
@@ -31,13 +57,17 @@ export interface BackendInfo {
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
-   * D3.a Commit 4 — diagnostic timestamp of the daemon outbound WS
-   * attachment for `local_host_id`, as reported by the backend's
-   * `HostWsServerController.getAttachment`. `null` when no
-   * attachment is live (pre-attach, post-revoke, daemon down).
+   * D3.a Commit 4 — the daemon outbound WS attachment for
+   * `local_host_id`, as reported by the backend's
+   * `HostWsServerController.getAttachment`. See
+   * {@link LocalHostWsAttachment}: `{ observable: false }` on the remote
+   * arm (the registry is in the remote backend process, not here);
+   * `{ observable: true, attached_at: null }` when this process CAN see
+   * the registry and no attachment is live (pre-attach, post-revoke,
+   * daemon down).
    *
-   * Renderer may surface this as "connected since" UI. It MUST NOT
-   * be used to derive a new status word — the user-facing status
+   * Renderer may surface `attached_at` as "connected since" UI. It MUST
+   * NOT be used to derive a new status word — the user-facing status
    * enum stays the 5-value `local_host_status` and nothing else.
    *
    * D3.b Commit 2 — `'failed'` value added: surfaced when the daemon
@@ -45,7 +75,7 @@ export interface BackendInfo {
    * `daemon.onExit` callback in `main/index.ts`; no other path may
    * flip into `failed`.
    */
-  local_host_ws_attached_at: number | null;
+  local_host_ws_attachment: LocalHostWsAttachment;
   /**
    * D3.c Commit 4 — `server_url` currently persisted in
    * `daemon-config.json` (i.e. the address the daemon dials to
@@ -140,7 +170,7 @@ export type DesktopHostMutationResult =
       host: HostDto;
       local_host_id: BackendInfo['local_host_id'];
       local_host_status: BackendInfo['local_host_status'];
-      local_host_ws_attached_at: BackendInfo['local_host_ws_attached_at'];
+      local_host_ws_attachment: BackendInfo['local_host_ws_attachment'];
       /** D3.c Commit 4 — see `preload/index.ts` for the rationale.
        *  Built from `...snapshotLocalHostInfo()` so the typed surface
        *  must include it; renderer post-mutation refresh keys off this

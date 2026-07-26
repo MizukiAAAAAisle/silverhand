@@ -16,8 +16,7 @@ describe('isDesktopServerReadyAfterSave — falsifier: local IPC freshness alone
     // resolves regardless of remote reachability.
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'remote',
-        attachedAt: null,
+        attachment: { observable: false },
         localHostStatus: 'claimed',
         wsStatus: 'disconnected',
         wsConnectedAt: null,
@@ -27,14 +26,12 @@ describe('isDesktopServerReadyAfterSave — falsifier: local IPC freshness alone
   });
 
   it('embedded save succeeds but the daemon never re-attaches — banner may NOT dismiss', () => {
-    // Same falsifier for embedded mode: `local_host_ws_attached_at`
-    // stays NULL (or at its old value) while the daemon retries the
-    // unreachable backend. IPC-freshness would lie; this predicate
-    // returns false.
+    // Same falsifier on the observable arm: `attached_at` stays NULL (or
+    // at its old value) while the daemon retries the unreachable
+    // backend. IPC-freshness would lie; this predicate returns false.
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'embedded',
-        attachedAt: null,
+        attachment: { observable: true, attached_at: null },
         localHostStatus: 'claimed',
         wsStatus: 'connected',
         wsConnectedAt: 500,
@@ -45,8 +42,7 @@ describe('isDesktopServerReadyAfterSave — falsifier: local IPC freshness alone
     // for this save either — the timestamp must move forward past savedAt.
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'embedded',
-        attachedAt: 500,
+        attachment: { observable: true, attached_at: 500 },
         localHostStatus: 'claimed',
         wsStatus: 'connected',
         wsConnectedAt: null,
@@ -65,8 +61,7 @@ describe('isDesktopServerReadyAfterSave — embedded terminal / pre-claim gates'
     for (const localHostStatus of ['revoked', 'error', 'failed'] as const) {
       expect(
         isDesktopServerReadyAfterSave({
-          mode: 'embedded',
-          attachedAt: 1_500,
+          attachment: { observable: true, attached_at: 1_500 },
           localHostStatus,
           wsStatus: 'idle',
           wsConnectedAt: null,
@@ -79,8 +74,7 @@ describe('isDesktopServerReadyAfterSave — embedded terminal / pre-claim gates'
   it('embedded pre-claim (unclaimed) has no attach to wait for — not ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'embedded',
-        attachedAt: null,
+        attachment: { observable: true, attached_at: null },
         localHostStatus: 'unclaimed',
         wsStatus: 'idle',
         wsConnectedAt: null,
@@ -96,16 +90,14 @@ describe('isDesktopServerReadyAfterSave — embedded terminal / pre-claim gates'
     // post-save attachedAt DOES flip ready → true.
     const savedAt = 1_000;
     const first = isDesktopServerReadyAfterSave({
-      mode: 'embedded',
-      attachedAt: null,
+      attachment: { observable: true, attached_at: null },
       localHostStatus: 'claimed',
       wsStatus: 'idle',
       wsConnectedAt: null,
       savedAt,
     });
     const second = isDesktopServerReadyAfterSave({
-      mode: 'embedded',
-      attachedAt: 1_500,
+      attachment: { observable: true, attached_at: 1_500 },
       localHostStatus: 'claimed',
       wsStatus: 'idle',
       wsConnectedAt: null,
@@ -126,8 +118,7 @@ describe('isDesktopServerReadyAfterSave — remote current-state gate', () => {
     // worse than not clearing at all.
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'remote',
-        attachedAt: null,
+        attachment: { observable: false },
         localHostStatus: 'claimed',
         wsStatus: 'disconnected',
         wsConnectedAt: 1_500,
@@ -138,8 +129,7 @@ describe('isDesktopServerReadyAfterSave — remote current-state gate', () => {
     // proof isn't enough while the current connection is unsettled.
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'remote',
-        attachedAt: null,
+        attachment: { observable: false },
         localHostStatus: 'claimed',
         wsStatus: 'authenticating',
         wsConnectedAt: 1_500,
@@ -151,8 +141,7 @@ describe('isDesktopServerReadyAfterSave — remote current-state gate', () => {
   it('post-save WS connected AND still connected right now → ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'remote',
-        attachedAt: null,
+        attachment: { observable: false },
         localHostStatus: 'claimed',
         wsStatus: 'connected',
         wsConnectedAt: 1_500,
@@ -166,8 +155,7 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('remote: renderer WS transitioned to connected AFTER save → ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'remote',
-        attachedAt: null,
+        attachment: { observable: false },
         localHostStatus: 'claimed',
         wsStatus: 'connected',
         wsConnectedAt: 1_500,
@@ -179,8 +167,7 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('embedded: daemon attach timestamp moved forward past save on a claimed row → ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'embedded',
-        attachedAt: 1_500,
+        attachment: { observable: true, attached_at: 1_500 },
         localHostStatus: 'claimed',
         wsStatus: 'idle',
         wsConnectedAt: null,
@@ -192,8 +179,7 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('no save in progress → not ready (nothing to dismiss)', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'remote',
-        attachedAt: 5_000,
+        attachment: { observable: false },
         localHostStatus: 'claimed',
         wsStatus: 'connected',
         wsConnectedAt: 5_000,
@@ -205,8 +191,7 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('remote WS connected but the transition predates the save → not ready (stale proof)', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        mode: 'remote',
-        attachedAt: null,
+        attachment: { observable: false },
         localHostStatus: 'claimed',
         wsStatus: 'connected',
         wsConnectedAt: 500,
@@ -217,7 +202,12 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
 });
 
 describe('desktopServerConnectionStatus — persistent status pip', () => {
-  it('remote maps WS status directly to the three-tone connection view', () => {
+  it('unobservable attachment maps WS status directly to the three-tone connection view', () => {
+    // `#task:1630`: the arm is selected by the attachment discriminant,
+    // NOT by a `mode` field the caller has to remember to pass. The old
+    // "remote + a non-null attachedAt" input is now unrepresentable, so
+    // the previous runtime assertion ("remote ignores the timestamp")
+    // has been promoted to a type error at every call site.
     for (const [wsStatus, expected] of [
       ['idle', 'offline'],
       ['connecting', 'connecting'],
@@ -227,12 +217,33 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
     ] as const) {
       expect(
         desktopServerConnectionStatus({
-          mode: 'remote',
-          attachedAt: 999,
+          attachment: { observable: false },
           localHostStatus: 'claimed',
           wsStatus,
         }),
       ).toBe(expected);
+    }
+  });
+
+  it('unobservable attachment does not fall through to the claim gate', () => {
+    // `#task:1010` regression: reading the (unreadable) attach timestamp
+    // here answered "connecting" forever. A terminal/pre-claim
+    // `localHostStatus` must not override an observed live renderer WS
+    // either — in a remote deployment that row's lifecycle is not the
+    // Desktop→Server authority.
+    for (const localHostStatus of [
+      'unclaimed',
+      'revoked',
+      'error',
+      'failed',
+    ] as const) {
+      expect(
+        desktopServerConnectionStatus({
+          attachment: { observable: false },
+          localHostStatus,
+          wsStatus: 'connected',
+        }),
+      ).toBe('connected');
     }
   });
 
@@ -242,16 +253,14 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
     // reachability while the daemon is still dialing.
     expect(
       desktopServerConnectionStatus({
-        mode: 'embedded',
-        attachedAt: 1_000,
+        attachment: { observable: true, attached_at: 1_000 },
         localHostStatus: 'claimed',
         wsStatus: 'disconnected',
       }),
     ).toBe('connected');
     expect(
       desktopServerConnectionStatus({
-        mode: 'embedded',
-        attachedAt: null,
+        attachment: { observable: true, attached_at: null },
         localHostStatus: 'claimed',
         wsStatus: 'disconnected',
       }),
@@ -264,8 +273,7 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
     for (const localHostStatus of ['revoked', 'error', 'failed'] as const) {
       expect(
         desktopServerConnectionStatus({
-          mode: 'embedded',
-          attachedAt: 5_000,
+          attachment: { observable: true, attached_at: 5_000 },
           localHostStatus,
           wsStatus: 'connected',
         }),
@@ -276,8 +284,7 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
   it('embedded: pre-claim (unclaimed) → offline (no attach expected yet)', () => {
     expect(
       desktopServerConnectionStatus({
-        mode: 'embedded',
-        attachedAt: null,
+        attachment: { observable: true, attached_at: null },
         localHostStatus: 'unclaimed',
         wsStatus: 'connected',
       }),

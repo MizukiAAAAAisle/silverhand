@@ -9,8 +9,9 @@
  *
  * The pane renders:
  *   - a persistent Desktop→Server status pip (`desktopServerConnectionStatus`)
- *     sourced from the mode-appropriate authoritative signal (renderer
- *     event WS in remote, daemon `local_host_ws_attached_at` in embedded),
+ *     sourced from whichever authority actually exists here (renderer
+ *     event WS when `local_host_ws_attachment` is unobservable, i.e.
+ *     remote; the daemon attach timestamp when it is observable),
  *   - the address form (edit + Save), embedded and remote modes both
  *     supported by branching inside the save mutation,
  *   - a save-result banner that ONLY dismisses on an observed
@@ -30,6 +31,7 @@ import { Loader2, Save } from 'lucide-react';
 import type {
   DesktopProfileSaveWithTestResult,
   DesktopSaveServerUrlResult,
+  LocalHostWsAttachment,
 } from '../../../preload/api';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
@@ -126,7 +128,7 @@ function describeProfileSaveForConnection(
 
 export function ConnectionPane(): JSX.Element {
   const qc = useQueryClient();
-  // Opt into `pollWhileConnecting` so `attachedAt` / `local_host_status`
+  // Opt into `pollWhileConnecting` so the attachment / `local_host_status`
   // actually flip in cache during the embedded connecting window. The
   // readiness derivation below is correct, but a static cache would let
   // it settle on the pre-attach snapshot forever — banner stuck on
@@ -140,14 +142,14 @@ export function ConnectionPane(): JSX.Element {
 
   const mode: DesktopServerMode =
     backendInfoQuery.data?.mode === 'remote' ? 'remote' : 'embedded';
-  const attachedAt =
-    backendInfoQuery.data?.local_host_ws_attached_at ?? null;
+  const attachment: LocalHostWsAttachment =
+    backendInfoQuery.data?.local_host_ws_attachment ?? { observable: false };
   const localHostStatus =
     backendInfoQuery.data?.local_host_status ?? 'unclaimed';
 
   // Renderer event WS status — authoritative Desktop→Server signal in
   // remote mode (in embedded the WS is against embedded main, so the
-  // pip falls back to daemon `attachedAt` via the derivation).
+  // pip falls back to the daemon attachment via the derivation).
   const [wsStatus, setWsStatus] = useState<WsClientStatus>(() =>
     eventWsClient.getStatus(),
   );
@@ -164,8 +166,7 @@ export function ConnectionPane(): JSX.Element {
   }, []);
 
   const connectionStatus = desktopServerConnectionStatus({
-    mode,
-    attachedAt,
+    attachment,
     localHostStatus,
     wsStatus,
   });
@@ -263,14 +264,14 @@ export function ConnectionPane(): JSX.Element {
 
   // Dismiss the "Saved. Reconnecting…" banner only on an authoritative
   // Desktop→Server reachability proof observed AFTER save started —
-  // renderer WS `connected` (remote) or daemon `attachedAt` moving
-  // forward past `savedAt` (embedded). See `connection-readiness.ts`.
+  // renderer WS `connected` (attachment unobservable / remote) or daemon
+  // `attached_at` moving forward past `savedAt` (observable / embedded).
+  // See `connection-readiness.ts`.
   // Explicitly NOT `backendInfoQuery.dataUpdatedAt`: the `backend:info`
   // IPC always resolves regardless of remote reachability, so trusting
   // it dismisses the banner on a save-then-unreachable.
   const ready = isDesktopServerReadyAfterSave({
-    mode,
-    attachedAt,
+    attachment,
     localHostStatus,
     wsStatus,
     wsConnectedAt: wsConnectedAtRef.current,

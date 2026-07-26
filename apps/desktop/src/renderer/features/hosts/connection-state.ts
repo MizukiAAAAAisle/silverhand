@@ -3,9 +3,14 @@
  *
  * What this is and isn't:
  *
- *   - This file maps the (server-defined `local_host_status`,
- *     diagnostic `local_host_ws_attached_at`) pair to a UI-only
- *     presentation label. It does NOT mint a new status word — the
+ *   - This file maps the (server-defined `local_host_status`, observed
+ *     attach timestamp) pair to a UI-only presentation label. It takes
+ *     the timestamp as a plain `number | null` argument, NOT
+ *     `BackendInfo.local_host_ws_attachment`: whether an attach
+ *     timestamp is observable at all is a transport fact the caller
+ *     resolves at the BackendInfo boundary (`#task:1630`), and a
+ *     presentation mapper that re-decided it would be a second
+ *     authority. It does NOT mint a new status word — the
  *     5-value `local_host_status` enum from
  *     `BackendInfo.local_host_status` stays the single source of
  *     truth server-side. The "Connecting" vs "Connected" split here

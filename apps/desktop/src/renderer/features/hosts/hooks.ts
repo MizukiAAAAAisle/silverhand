@@ -33,6 +33,7 @@ import {
   type RuntimeCatalogResponse,
   type UpdateHostInput,
 } from '@silverhand/shared';
+import type { LocalHostWsAttachment } from '../../../preload/api';
 import { api, ApiError } from '@/lib/api';
 import { canUseLocalHostPath } from './host-provenance';
 
@@ -95,12 +96,17 @@ export interface BackendInfoSnapshot {
   local_host_id: string | null;
   local_host_status: 'unclaimed' | 'claimed' | 'revoked' | 'error' | 'failed';
   /**
-   * D3.a Commit 4 — diagnostic timestamp from the backend's
-   * `HostWsServerController.getAttachment` for `local_host_id`.
-   * `null` when no live attachment. Renderer may show a "connected
-   * since" string but must NOT derive a new status word.
+   * D3.a Commit 4 / #task:1630 — the daemon outbound WS attachment as
+   * seen from the desktop main process. `{ observable: false }` in remote
+   * deployments (the backend's `HostWsServerController` is on the remote
+   * server, so this app cannot see it at all); inside the observable arm
+   * `attached_at: null` means "claimed, nothing attached yet". Renderer
+   * may show a "connected since" string from `attached_at` but must NOT
+   * derive a new status word.
+   *
+   * Type-only re-use of the preload contract so the two cannot drift.
    */
-  local_host_ws_attached_at: number | null;
+  local_host_ws_attachment: LocalHostWsAttachment;
   /**
    * D3.c Commit 4 — `server_url` currently in `daemon-config.json`,
    * i.e. the address the daemon dials to reach the backend. This
@@ -127,7 +133,9 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
       outbound_protocol_compatibility: null,
       local_host_id: null,
       local_host_status: 'error',
-      local_host_ws_attached_at: null,
+      // No backend handle yet ⇒ there is no in-process registry to read,
+      // which is exactly what `observable: false` states (#task:1630).
+      local_host_ws_attachment: { observable: false },
       local_host_server_url: null,
     };
   }
@@ -137,7 +145,7 @@ async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
     outbound_protocol_compatibility: info.outbound_protocol_compatibility,
     local_host_id: info.local_host_id,
     local_host_status: info.local_host_status,
-    local_host_ws_attached_at: info.local_host_ws_attached_at,
+    local_host_ws_attachment: info.local_host_ws_attachment,
     local_host_server_url: info.local_host_server_url,
   };
 }
@@ -155,12 +163,12 @@ export function useBackendInfoSnapshot(options?: {
    * on "Connecting…" indefinitely.
    *
    * When opted in we poll ONLY while the snapshot is actually in the
-   * connecting window (`embedded + claimed + attached_at===null`); the
-   * moment attached_at lands or the status moves to a terminal arm
-   * (revoked / error / failed) we stop polling. In remote mode we never
-   * start — `attached_at` is structurally null there, so the window has
-   * no exit (`#task:1628`). Callers that don't render the connection pill
-   * should NOT opt in.
+   * connecting window (`observable attachment + claimed +
+   * attached_at===null`); the moment attached_at lands or the status moves
+   * to a terminal arm (revoked / error / failed) we stop polling. In remote
+   * mode we never start — the attachment is `{ observable: false }` there,
+   * so the window has no exit (`#task:1628` / `#task:1630`). Callers that
+   * don't render the connection pill should NOT opt in.
    */
   pollWhileConnecting?: boolean;
   /** Periodically re-check the remote server's advertised outbound protocol
@@ -228,29 +236,29 @@ export function connectingRefetchIntervalMs(
   data: BackendInfoSnapshot | null,
 ): number | false {
   if (!data) return false;
-  // `#task:1628` — this window is EMBEDDED-ONLY, because its exit
-  // condition (`attached_at` becomes a number) is embedded-only.
-  // `snapshotLocalHostInfo` reads `getEmbeddedHostWsController()`,
-  // which returns null on the remote arm (the attachment registry
-  // lives in the remote backend process), so a remote-mode snapshot
-  // is structurally `claimed + attached_at === null` forever — even
-  // while the daemon is genuinely attached and agents run fine. Without
-  // this gate the "connecting" poll never terminates: a remote app sat
-  // refetching `backend:info` every 1.5s for as long as the window was
-  // open, which is what the user read as "the computer keeps retrying".
-  // `describeConnectionState` / `desktopServerConnectionStatus` already
-  // learned this in `#task:1010` — remote connectedness is proven by the
-  // renderer event WS + host-status availability, never by `attached_at`
-  // — so remote mode has no use for this poll at all. The 30s protocol-
-  // compatibility poll is a separate opt-in and still applies.
-  if (data.mode !== 'embedded') return false;
+  const attachment = data.local_host_ws_attachment;
+  // `#task:1628` / `#task:1630` — this window only exists where its exit
+  // condition is observable. `attached_at` comes from the backend's
+  // attachment registry, which lives in the remote backend process on the
+  // remote arm; there `local_host_ws_attachment` is `{ observable: false }`
+  // and a "claimed, not attached yet" reading would be permanent even while
+  // the daemon is genuinely attached and agents run fine. Before the field
+  // carried this discriminant the poll ran every 1.5s for as long as the
+  // window was open — which is what the user read as "the computer keeps
+  // retrying" — and each tick also re-probed the remote `GET
+  // /api/server-info`. `describeConnectionState` /
+  // `desktopServerConnectionStatus` learned the same lesson in `#task:1010`:
+  // remote connectedness is proven by the renderer event WS and host-status
+  // availability, never by this timestamp. The 30s protocol-compatibility
+  // poll is a separate opt-in and still applies.
+  if (!attachment.observable) return false;
   // Only poll while we're explicitly waiting for the outbound WS
   // to land. Any other state — including `claimed + attached_at`
   // (already connected), `revoked` / `error` / `failed` (terminal),
   // and `unclaimed` (pre-claim, nothing to attach) — stops the
   // poll loop.
   if (data.local_host_status !== 'claimed') return false;
-  if (data.local_host_ws_attached_at !== null) return false;
+  if (attachment.attached_at !== null) return false;
   return CONNECTING_POLL_MS;
 }
 

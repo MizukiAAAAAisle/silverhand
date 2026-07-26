@@ -5,7 +5,7 @@
  * The bug being prevented: before this hook accepted
  * `pollWhileConnecting`, a renderer that mounted while
  * `local_host_status === 'claimed'` AND
- * `local_host_ws_attached_at === null` (the transitional window
+ * an observable attachment whose `attached_at` is null (the transitional window
  * between claim success and outbound WS landing) would never see the
  * pill flip Connecting → Connected unless another mutation invalidated
  * `backendInfoKey`. The `connectingRefetchIntervalMs` helper now
@@ -20,9 +20,17 @@ import {
   type BackendInfoSnapshot,
 } from './hooks';
 
+/**
+ * The attachment default tracks `mode` because that is what a real
+ * `backend:info` snapshot does — main derives observability from
+ * `backend.kind` (`#task:1630`). Tests that want the two to disagree
+ * must say so explicitly; the poll gate reads the attachment, never
+ * `mode`.
+ */
 function snap(over: Partial<BackendInfoSnapshot> = {}): BackendInfoSnapshot {
+  const mode = over.mode ?? 'embedded';
   return {
-    mode: 'embedded',
+    mode,
     url: 'http://127.0.0.1:1234',
     outbound_protocol_compatibility: {
       status: 'compatible',
@@ -31,7 +39,8 @@ function snap(over: Partial<BackendInfoSnapshot> = {}): BackendInfoSnapshot {
     },
     local_host_id: 'host-1',
     local_host_status: 'claimed',
-    local_host_ws_attached_at: null,
+    local_host_ws_attachment:
+      mode === 'embedded' ? { observable: true, attached_at: null } : { observable: false },
     local_host_server_url: 'http://127.0.0.1:1234',
     ...over,
   };
@@ -49,14 +58,24 @@ describe('connectingRefetchIntervalMs — only polls inside the connecting windo
     expect(connectingRefetchIntervalMs(snap())).toBe(CONNECTING_POLL_MS);
   });
 
-  it('remote + claimed + attached_at===null → no poll (`#task:1628`: the window has no exit)', () => {
-    // Regression pin. `attached_at` comes from the in-process embedded
-    // attachment registry, so on the remote arm it is structurally null
-    // forever — even while the daemon is attached and agents run. The
-    // old helper saw `claimed + null` and polled `backend:info` every
-    // 1.5s for the whole life of the pane; the user read that endless
-    // request loop as "this computer keeps retrying".
+  it('unobservable attachment + claimed → no poll (`#task:1628`: the window has no exit)', () => {
+    // Regression pin. The attach timestamp comes from the in-process
+    // embedded attachment registry, so where that registry does not
+    // exist there is nothing to wait for — not "null right now" but
+    // "unreadable, always". The old helper saw `claimed + null` and
+    // polled `backend:info` every 1.5s for the whole life of the pane;
+    // the user read that endless request loop as "this computer keeps
+    // retrying".
     expect(connectingRefetchIntervalMs(snap({ mode: 'remote' }))).toBe(false);
+    // `#task:1630`: the gate is the attachment discriminant, not the
+    // mode string. A snapshot that claims `embedded` but cannot observe
+    // attachments must still not poll — the previous mode-derived gate
+    // would have polled forever here.
+    expect(
+      connectingRefetchIntervalMs(
+        snap({ mode: 'embedded', local_host_ws_attachment: { observable: false } }),
+      ),
+    ).toBe(false);
   });
 
   it('claimed + attached_at===number → stops polling (already connected)', () => {
@@ -65,7 +84,12 @@ describe('connectingRefetchIntervalMs — only polls inside the connecting windo
     // backend:info every 1.5s indefinitely.
     expect(
       connectingRefetchIntervalMs(
-        snap({ local_host_ws_attached_at: 1_700_000_000_000 }),
+        snap({
+          local_host_ws_attachment: {
+            observable: true,
+            attached_at: 1_700_000_000_000,
+          },
+        }),
       ),
     ).toBe(false);
   });
@@ -112,7 +136,10 @@ describe('connectingRefetchIntervalMs — terminal arms with stale attached_at a
       connectingRefetchIntervalMs(
         snap({
           local_host_status: 'revoked',
-          local_host_ws_attached_at: 1_700_000_000_000,
+          local_host_ws_attachment: {
+            observable: true,
+            attached_at: 1_700_000_000_000,
+          },
         }),
       ),
     ).toBe(false);
@@ -123,7 +150,10 @@ describe('connectingRefetchIntervalMs — terminal arms with stale attached_at a
       connectingRefetchIntervalMs(
         snap({
           local_host_status: 'failed',
-          local_host_ws_attached_at: 1_700_000_000_000,
+          local_host_ws_attachment: {
+            observable: true,
+            attached_at: 1_700_000_000_000,
+          },
         }),
       ),
     ).toBe(false);
