@@ -14,8 +14,11 @@
  *     remote; the daemon attach timestamp when it is observable; and NO
  *     pill at all until a snapshot has been observed — see the
  *     `observation` binding below),
- *   - the address form (edit + Save), embedded and remote modes both
- *     supported by branching inside the save mutation,
+ *   - the address form (edit + Save). Which owner a save is sent to —
+ *     the daemon's outbound config (embedded) or the app's server
+ *     connection profile (remote) — is decided by `planServerUrlSave`
+ *     from the observed `mode`, and no save exists at all until a
+ *     snapshot says which deployment this is,
  *   - a save-result banner that ONLY dismisses on an observed
  *     Desktop→Server reachability proof — never on a local IPC bump
  *     (`isDesktopServerReadyAfterSave`), so a save-then-unreachable
@@ -30,10 +33,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Save } from 'lucide-react';
-import type {
-  DesktopProfileSaveWithTestResult,
-  DesktopSaveServerUrlResult,
-} from '../../../preload/api';
+import type { DesktopProfileSaveWithTestResult } from '../../../preload/api';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
@@ -49,13 +49,17 @@ import {
   describeSaveServerUrlOutcome,
   type SaveServerUrlBanner,
 } from './describe-save-server-url-outcome';
-import { saveServerConnectionProfileWithSettingsRetry } from './save-server-url-retry';
+import {
+  planServerUrlSave,
+  runServerUrlSave,
+  type ServerUrlSaveCommand,
+  type ServerUrlSaveResult,
+} from './server-url-save-command';
 import { validateServerUrlDraft } from './server-url-validation';
 import {
   desktopServerConnectionStatus,
   isDesktopServerReadyAfterSave,
   type DesktopServerConnectionStatus,
-  type DesktopServerMode,
   type DesktopServerObservation,
 } from './connection-readiness';
 import { primaryAction } from '@/features/common/PrimaryAction';
@@ -104,10 +108,6 @@ function ServerStatusPill({
   );
 }
 
-type ServerUrlSaveResult =
-  | { source: 'daemon_reload'; result: DesktopSaveServerUrlResult }
-  | { source: 'profile'; result: DesktopProfileSaveWithTestResult };
-
 function describeProfileSaveForConnection(
   result: DesktopProfileSaveWithTestResult,
 ): SaveServerUrlBanner {
@@ -155,18 +155,20 @@ export function ConnectionPane(): JSX.Element {
     pollWhileConnecting: true,
   });
 
-  const mode: DesktopServerMode =
-    backendInfoQuery.data?.mode === 'remote' ? 'remote' : 'embedded';
-  // `#task:1630` forward fix — "no snapshot yet" stays NULL. It is a query
-  // state, and the two facts below only mean anything as a pair from one
-  // snapshot; defaulting them separately (`?? { observable: false }`,
-  // `?? 'unclaimed'`) manufactured an observation that says "this
-  // deployment cannot observe attachments", which hands the pip to the
-  // renderer WS — a LOCAL socket in embedded mode.
-  const observation: DesktopServerObservation | null = backendInfoQuery.data
+  // `#task:1630` forward fix — "no snapshot yet" stays NULL, everywhere.
+  // It is a query state, and every fact below only means anything as
+  // part of one snapshot; defaulting them separately (`?? 'embedded'`,
+  // `?? { observable: false }`, `?? 'unclaimed'`) manufactured an
+  // observation that says "this deployment cannot observe attachments"
+  // (which hands the pip to the renderer WS — a LOCAL socket in
+  // embedded mode) and a mode that says "the daemon owns this address"
+  // (which points Save at a daemon reload on a remote install).
+  const snapshot = backendInfoQuery.data ?? null;
+
+  const observation: DesktopServerObservation | null = snapshot
     ? {
-        attachment: backendInfoQuery.data.local_host_ws_attachment,
-        localHostStatus: backendInfoQuery.data.local_host_status,
+        attachment: snapshot.local_host_ws_attachment,
+        localHostStatus: snapshot.local_host_status,
       }
     : null;
 
@@ -202,10 +204,14 @@ export function ConnectionPane(): JSX.Element {
   //   daemon-config without changing the profile; showing daemon-config there
   //   would make the form look unchanged while the app is still on the old
   //   backend.
-  const savedUrl = backendInfoQuery.data?.local_host_server_url ?? null;
-  const fallbackUrl = backendInfoQuery.data?.url ?? '';
+  // - No snapshot: no source of truth to show yet, so the field seeds
+  //   empty (and Save stays disabled via `saveCommand === null` below).
   const currentUrl =
-    mode === 'remote' ? fallbackUrl : savedUrl ?? fallbackUrl;
+    snapshot === null
+      ? ''
+      : snapshot.mode === 'remote'
+        ? snapshot.url
+        : snapshot.local_host_server_url ?? snapshot.url;
 
   const [draft, setDraft] = useState<string>('');
   useEffect(() => {
@@ -235,21 +241,17 @@ export function ConnectionPane(): JSX.Element {
   };
 
   const save = useMutation({
-    mutationFn: async (serverUrl: string): Promise<ServerUrlSaveResult> => {
-      if (mode === 'remote') {
-        return {
-          source: 'profile',
-          result: await saveServerConnectionProfileWithSettingsRetry({
-            serverUrl,
-            save: input => window.silverhand.saveServerConnectionProfile(input),
-          }),
-        };
-      }
-      return {
-        source: 'daemon_reload',
-        result: await window.silverhand.saveServerUrl({ serverUrl }),
-      };
-    },
+    // The variables ARE the routing decision (`planServerUrlSave`), so
+    // this function cannot re-guess which owner should receive the
+    // address — there is no `mode` left for it to default.
+    mutationFn: async (
+      command: ServerUrlSaveCommand,
+    ): Promise<ServerUrlSaveResult> =>
+      runServerUrlSave(command, {
+        saveServerConnectionProfile: input =>
+          window.silverhand.saveServerConnectionProfile(input),
+        saveServerUrl: input => window.silverhand.saveServerUrl(input),
+      }),
     onSuccess: saveResult => {
       const nextBanner =
         saveResult.source === 'profile'
@@ -268,7 +270,7 @@ export function ConnectionPane(): JSX.Element {
         }
         void qc.invalidateQueries({ queryKey: backendInfoKey });
         void qc.invalidateQueries({ queryKey: hostsKey });
-        const hostId = backendInfoQuery.data?.local_host_id ?? null;
+        const hostId = snapshot?.local_host_id ?? null;
         if (hostId !== null) {
           void qc.invalidateQueries({ queryKey: hostStatusKey(hostId) });
         }
@@ -310,15 +312,29 @@ export function ConnectionPane(): JSX.Element {
   }, [allowInsecureRemote, draft]);
 
   const isUnchanged = draft.trim() === currentUrl.trim();
+  // One source for "which owner receives this address, if any". `null`
+  // means the deployment shape has not been observed yet, so there is
+  // no command to send — the Save affordance and the submit handler
+  // both read that same absence instead of each keeping their own copy
+  // of the rule. The address field stays editable: what the user typed
+  // is theirs to keep while the (sub-second, self-healing) snapshot
+  // lands.
+  const saveCommand = planServerUrlSave({
+    mode: snapshot?.mode ?? null,
+    serverUrl: draft.trim(),
+  });
   const saveDisabled =
-    save.isPending || classification.kind !== 'ok' || isUnchanged;
+    save.isPending ||
+    classification.kind !== 'ok' ||
+    isUnchanged ||
+    saveCommand === null;
 
   const onSubmit = (e: FormEvent): void => {
     e.preventDefault();
-    if (saveDisabled) return;
+    if (saveDisabled || saveCommand === null) return;
     setBanner(null);
     setSavedAt(null);
-    save.mutate(draft.trim());
+    save.mutate(saveCommand);
   };
 
   return (

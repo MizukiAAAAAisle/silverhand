@@ -428,6 +428,37 @@ describe('ConnectionPane consumer contract', () => {
     expect(CONNECTION_PANE_CODE).not.toMatch(/local_host_status\s*\?\?/);
   });
 
+  it('never defaults an unobserved `mode`, and gates Save on the planned command (#task:1630)', () => {
+    // The command twin of the pill bug (Cindy's review): defaulting
+    // `mode` to `'embedded'` for the unknown window routed a REMOTE
+    // app's Save into `settings:saveServerUrl` (daemon-config rewrite +
+    // daemon reload) while its own profile stayed on the old origin.
+    // `planServerUrlSave` owns that decision and answers null for an
+    // unknown mode — see `server-url-save-command.test.ts` for the
+    // executable "zero IPC calls" falsifier. Locked as source fences
+    // because the pane itself is not unit-renderable here.
+    expect(CONNECTION_PANE_CODE).not.toMatch(/\?\?\s*'embedded'/);
+    expect(CONNECTION_PANE_CODE).not.toMatch(/mode\s*===\s*'remote'\s*\?\s*'remote'/);
+    expect(CONNECTION_PANE_CODE).toMatch(
+      /saveCommand\s*=\s*planServerUrlSave\(\{[\s\S]*?mode:\s*snapshot\?\.mode\s*\?\?\s*null/,
+    );
+    expect(CONNECTION_PANE_CODE).toMatch(
+      /saveDisabled\s*=[\s\S]*?saveCommand\s*===\s*null/,
+    );
+    // The mutation receives the planned command, never a bare URL it
+    // would have to route itself.
+    expect(CONNECTION_PANE_CODE).toMatch(/save\.mutate\(saveCommand\)/);
+  });
+
+  it('keeps the address field editable while the snapshot is unknown', () => {
+    // Norman's presentation call: the unknown window is sub-second and
+    // self-heals, so it must not swallow what the user typed. Only an
+    // in-flight save may disable the input.
+    expect(CONNECTION_PANE_CODE).toMatch(
+      /<Input[\s\S]*?disabled=\{save\.isPending\}/,
+    );
+  });
+
   it('does not read backendInfoQuery.dataUpdatedAt as a reachability signal', () => {
     // The earlier bug was dismissing the banner on local IPC freshness;
     // this fence stops that regression path from re-opening.
