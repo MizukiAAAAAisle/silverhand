@@ -8,32 +8,20 @@ import type {
   TlsErrorCode,
   UserDto,
 } from '@silverhand/shared';
+import type { LocalHostWsAttachment } from '../backend-info-contract.js';
 
 /**
  * #task:1630 — the daemon's outbound-WS attachment as seen from THIS
  * desktop process, made explicit about whether it can be seen at all.
  *
- * The attachment registry (`HostWsServerController`) lives inside the
- * backend process. In an embedded deployment that process IS this app, so
- * main can read the attach timestamp directly. In a remote deployment the
- * registry lives on the remote server and this process has NO way to
- * observe it — the old `local_host_ws_attached_at: number | null` field
- * collapsed that into the same `null` the embedded arm uses for "claimed
- * but not attached yet", which is why the identical bug shipped three
- * times (#task:1010 pill stuck on Connecting, #task:1132 local computer
- * rendered offline, #task:1628 a 1.5s connecting poll that could never
- * terminate in remote mode).
- *
- * Consumers therefore get a discriminant instead of a nullable scalar:
- * `observable: false` means "ask a different authority" (renderer event WS
- * for Desktop→Server, host-status `availability` for a Computer), and
- * forgetting to do so no longer typechecks. This carries no second
- * authority itself — adding remote availability here would mint a third
- * connection-state projection.
+ * Declared once in `src/backend-info-contract.ts` (the rationale and the
+ * three shipped regressions are documented there) and re-exported here
+ * because the renderer's whole view of the preload surface is this file.
+ * It used to be a third hand-copy kept "in lock-step" by comment — for a
+ * discriminant whose entire purpose is to forbid a read, a dropped arm
+ * would compile and run (Cindy's review of `e82f8a23`).
  */
-export type LocalHostWsAttachment =
-  | { observable: true; attached_at: number | null }
-  | { observable: false };
+export type { LocalHostWsAttachment };
 
 export interface BackendInfo {
   url: string;

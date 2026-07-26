@@ -11,7 +11,9 @@
  *   - a persistent Desktop→Server status pip (`desktopServerConnectionStatus`)
  *     sourced from whichever authority actually exists here (renderer
  *     event WS when `local_host_ws_attachment` is unobservable, i.e.
- *     remote; the daemon attach timestamp when it is observable),
+ *     remote; the daemon attach timestamp when it is observable; and NO
+ *     pill at all until a snapshot has been observed — see the
+ *     `observation` binding below),
  *   - the address form (edit + Save), embedded and remote modes both
  *     supported by branching inside the save mutation,
  *   - a save-result banner that ONLY dismisses on an observed
@@ -31,7 +33,6 @@ import { Loader2, Save } from 'lucide-react';
 import type {
   DesktopProfileSaveWithTestResult,
   DesktopSaveServerUrlResult,
-  LocalHostWsAttachment,
 } from '../../../preload/api';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
@@ -55,16 +56,23 @@ import {
   isDesktopServerReadyAfterSave,
   type DesktopServerConnectionStatus,
   type DesktopServerMode,
+  type DesktopServerObservation,
 } from './connection-readiness';
 import { primaryAction } from '@/features/common/PrimaryAction';
 
-const STATUS_LABEL: Record<DesktopServerConnectionStatus, string> = {
+const STATUS_LABEL: Record<
+  Exclude<DesktopServerConnectionStatus, 'unknown'>,
+  string
+> = {
   connected: 'Connected',
   connecting: 'Connecting…',
   offline: 'Offline',
 };
 
-const STATUS_TONE_CLASS: Record<DesktopServerConnectionStatus, string> = {
+const STATUS_TONE_CLASS: Record<
+  Exclude<DesktopServerConnectionStatus, 'unknown'>,
+  string
+> = {
   connected: 'border-success text-success',
   connecting: 'border-border-subtle text-text-secondary',
   offline: 'border-warning text-warning',
@@ -74,7 +82,14 @@ function ServerStatusPill({
   status,
 }: {
   status: DesktopServerConnectionStatus;
-}): JSX.Element {
+}): JSX.Element | null {
+  // `unknown` = no BackendInfo observed yet. Render no pill rather than a
+  // status word we have not earned: every candidate ("Connecting…",
+  // "Offline") is a claim about a connection nobody has looked at, and a
+  // word that later walks backwards reads as a glitch (`#task:1630`
+  // review). Same discipline as `describeConnectionState`'s
+  // `visible: false` arm.
+  if (status === 'unknown') return null;
   return (
     <span
       role="status"
@@ -142,10 +157,18 @@ export function ConnectionPane(): JSX.Element {
 
   const mode: DesktopServerMode =
     backendInfoQuery.data?.mode === 'remote' ? 'remote' : 'embedded';
-  const attachment: LocalHostWsAttachment =
-    backendInfoQuery.data?.local_host_ws_attachment ?? { observable: false };
-  const localHostStatus =
-    backendInfoQuery.data?.local_host_status ?? 'unclaimed';
+  // `#task:1630` forward fix — "no snapshot yet" stays NULL. It is a query
+  // state, and the two facts below only mean anything as a pair from one
+  // snapshot; defaulting them separately (`?? { observable: false }`,
+  // `?? 'unclaimed'`) manufactured an observation that says "this
+  // deployment cannot observe attachments", which hands the pip to the
+  // renderer WS — a LOCAL socket in embedded mode.
+  const observation: DesktopServerObservation | null = backendInfoQuery.data
+    ? {
+        attachment: backendInfoQuery.data.local_host_ws_attachment,
+        localHostStatus: backendInfoQuery.data.local_host_status,
+      }
+    : null;
 
   // Renderer event WS status — authoritative Desktop→Server signal in
   // remote mode (in embedded the WS is against embedded main, so the
@@ -166,8 +189,7 @@ export function ConnectionPane(): JSX.Element {
   }, []);
 
   const connectionStatus = desktopServerConnectionStatus({
-    attachment,
-    localHostStatus,
+    observation,
     wsStatus,
   });
 
@@ -271,8 +293,7 @@ export function ConnectionPane(): JSX.Element {
   // IPC always resolves regardless of remote reachability, so trusting
   // it dismisses the banner on a save-then-unreachable.
   const ready = isDesktopServerReadyAfterSave({
-    attachment,
-    localHostStatus,
+    observation,
     wsStatus,
     wsConnectedAt: wsConnectedAtRef.current,
     savedAt,

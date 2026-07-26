@@ -344,7 +344,7 @@ describe('desktop protocol purity catalogue', () => {
   //
   // What the type still cannot express is where observability comes
   // FROM, so that is the one fence kept below.
-  it('derives attachment observability from the backend discriminant, not from a null controller (#task:1630)', () => {
+  it('mints the attachment discriminant only in the unit-tested producer (#task:1630)', () => {
     // `getEmbeddedHostWsController()` returns null in TWO different
     // situations: the remote arm (no in-process registry — genuinely
     // unobservable) AND an embedded backend whose accessor is not wired
@@ -352,21 +352,29 @@ describe('desktop protocol purity catalogue', () => {
     // `observable: getEmbeddedHostWsController() !== null` compiles
     // fine and re-opens #task:1010 from the other side: the renderer
     // would be told to stop waiting on an embedded attach that is merely
-    // slow. Pin the producer to the `backend.kind` discriminant.
-    const mainSource = readFileSync(join(mainRoot, 'index.ts'), 'utf8');
-    const producer =
-      /local_host_ws_attachment:\s*\n?\s*backend\?\.kind === 'embedded'/;
-    expect(producer.test(mainSource)).toBe(true);
+    // slow.
+    //
+    // The producer therefore lives in `local-host-ws-attachment.ts`,
+    // where both wrong derivations are falsified by unit test
+    // (`__tests__/local-host-ws-attachment.test.ts`) rather than by a
+    // regex over this file's source — a source pattern for
+    // "`observable:` is followed by a literal" is satisfied by any decoy
+    // that happens to be shaped right. What a regex CAN still prove is
+    // that no second producer exists: main must contain no `observable:`
+    // literal of its own, so every BackendInfo / host-mutation reply
+    // goes through the tested seam. The type declaration also no longer
+    // lives here (one cross-process contract in
+    // `src/backend-info-contract.ts`), so the expected count is zero.
+    const producerFile = join(mainRoot, 'local-host-ws-attachment.ts');
+    const inlineMints = sourceFiles(mainRoot, new Set(['.ts']))
+      .filter(source => source.path !== producerFile)
+      .filter(source => /observable:/.test(stripComments(source.content)))
+      .map(source => source.path);
 
-    const code = stripComments(mainSource);
-    // Every `observable:` in main — type declaration and producer arms
-    // alike — must be followed by a bare literal. A computed source
-    // (`observable: getEmbeddedHostWsController() !== null`) lands its
-    // callee name in this set and fails.
-    const observableSources = new Set(
-      [...code.matchAll(/observable:\s*(\w+)/g)].map(m => m[1]),
-    );
-    expect([...observableSources].sort()).toEqual(['false', 'true']);
+    expect(inlineMints).toEqual([]);
+    expect(
+      readFileSync(join(mainRoot, 'index.ts'), 'utf8'),
+    ).toMatch(/describeLocalHostWsAttachment\(\{\s*\n?\s*backendKind:/);
   });
 
   it('keeps main getEmbeddedHostWsController() call sites catalogued with remote-arm degrade semantics (#task:1133)', () => {

@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONNECTING_POLL_MS,
   PROTOCOL_COMPATIBILITY_POLL_MS,
+  UNKNOWN_SNAPSHOT_RETRY_MS,
   backendInfoRefetchIntervalMs,
   connectingRefetchIntervalMs,
   type BackendInfoSnapshot,
@@ -207,6 +208,44 @@ describe('backendInfoRefetchIntervalMs — protocol compatibility', () => {
         pollProtocolCompatibility: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe('backendInfoRefetchIntervalMs — no snapshot observed yet (#task:1630)', () => {
+  // The forward fix's self-heal path. `fetchBackendInfo` now THROWS when
+  // `backend:info` answers null (main has no backend handle yet) instead
+  // of synthesising `{mode:'embedded', observable:false}`. That
+  // synthesised value passed neither poll gate — `connectingRefetchIntervalMs`
+  // bails on `!observable`, the protocol poll requires `mode === 'remote'`
+  // — so one transient null pinned every consumer with no exit path until
+  // some unrelated mutation invalidated the key. With no data at all, the
+  // query must keep retrying on its own.
+  it('retries while there is no data, with or without any poll opt-in', () => {
+    expect(backendInfoRefetchIntervalMs(null)).toBe(UNKNOWN_SNAPSHOT_RETRY_MS);
+    expect(
+      backendInfoRefetchIntervalMs(null, { pollWhileConnecting: true }),
+    ).toBe(UNKNOWN_SNAPSHOT_RETRY_MS);
+    expect(
+      backendInfoRefetchIntervalMs(null, { pollProtocolCompatibility: true }),
+    ).toBe(UNKNOWN_SNAPSHOT_RETRY_MS);
+  });
+
+  it('stops the retry the moment a real snapshot lands', () => {
+    // A remote snapshot with no poll opt-in is the strictest case: it
+    // must settle on "no polling" rather than inherit the unknown-window
+    // retry (that would re-create the `#task:1628` runaway with a new
+    // name).
+    expect(backendInfoRefetchIntervalMs(snap({ mode: 'remote' }))).toBe(false);
+    expect(
+      backendInfoRefetchIntervalMs(snap({ mode: 'remote' }), {
+        pollWhileConnecting: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('is a cheap local-IPC cadence, not a network poll', () => {
+    expect(UNKNOWN_SNAPSHOT_RETRY_MS).toBeGreaterThanOrEqual(500);
+    expect(UNKNOWN_SNAPSHOT_RETRY_MS).toBeLessThanOrEqual(3000);
   });
 });
 

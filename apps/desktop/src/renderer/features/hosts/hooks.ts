@@ -124,21 +124,41 @@ async function fetchHosts(): Promise<HostListResponse> {
   return HostListResponseSchema.parse(raw);
 }
 
-async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
-  const info = await window.silverhand.getBackendInfo();
-  if (!info) {
-    return {
-      mode: 'embedded',
-      url: '',
-      outbound_protocol_compatibility: null,
-      local_host_id: null,
-      local_host_status: 'error',
-      // No backend handle yet ⇒ there is no in-process registry to read,
-      // which is exactly what `observable: false` states (#task:1630).
-      local_host_ws_attachment: { observable: false },
-      local_host_server_url: null,
-    };
+/**
+ * `#task:1630` (Cindy + Norman review of `e82f8a23`) — a missing
+ * `BackendInfo` is a QUERY state, not a snapshot.
+ *
+ * `backend:info` answers `null` while desktop main has no backend handle
+ * yet (window painted before bootstrap finished — reachable, and the
+ * reason this code path exists). Synthesising a snapshot for that moment
+ * is what re-opened the bug this task closes: any invented value is read
+ * downstream as an observation. `{ observable: false }` in particular
+ * tells every consumer "the attach timestamp is unreadable here, use
+ * your remote authority", which in an embedded deployment means the
+ * renderer's own local event WS — instantly `connected` — so a
+ * pre-bootstrap frame renders Desktop→Server as Connected and could
+ * dismiss a save banner on a purely local signal. It also silently
+ * removed the exit path: neither poll gate matches
+ * `{mode:'embedded', observable:false}`, so a single transient null
+ * pinned the pane until some unrelated mutation invalidated the key.
+ *
+ * So: throw. The query surfaces `isPending`/`isError` with no data,
+ * consumers render "unknown" (no status word) rather than guessing, and
+ * `backendInfoRefetchIntervalMs` schedules a cheap local-IPC retry until
+ * the first real snapshot lands. `meta.backendReachability: 'neutral'`
+ * below keeps this failure out of the backend-unreachable snitch — it
+ * says nothing about the server.
+ */
+export class BackendInfoUnavailableError extends Error {
+  constructor() {
+    super('backend:info returned no snapshot (no backend handle yet)');
+    this.name = 'BackendInfoUnavailableError';
   }
+}
+
+export async function fetchBackendInfo(): Promise<BackendInfoSnapshot> {
+  const info = await window.silverhand.getBackendInfo();
+  if (!info) throw new BackendInfoUnavailableError();
   return {
     mode: info.mode,
     url: info.url,
@@ -214,6 +234,18 @@ export function useBackendInfoSnapshot(options?: {
  */
 export const CONNECTING_POLL_MS = 1500;
 export const PROTOCOL_COMPATIBILITY_POLL_MS = 30_000;
+/**
+ * `#task:1630` — retry cadence while NO snapshot has been observed yet
+ * (first fetch in flight, or `backend:info` answered `null` because main
+ * has no backend handle). This is the self-heal path that replaces the
+ * synthesised snapshot: without it a single pre-bootstrap `null` leaves
+ * every consumer on "unknown" until an unrelated mutation invalidates the
+ * key. Deliberately unconditional (not behind an option) — it is not a
+ * feature poll, it is the query reaching its first value, and it is a
+ * local IPC. It stops the moment data exists; a LATER failed refetch
+ * keeps the last known snapshot in cache and is not re-tried here.
+ */
+export const UNKNOWN_SNAPSHOT_RETRY_MS = 1000;
 
 export function backendInfoRefetchIntervalMs(
   data: BackendInfoSnapshot | null,
@@ -222,6 +254,10 @@ export function backendInfoRefetchIntervalMs(
     pollProtocolCompatibility?: boolean;
   },
 ): number | false {
+  // No snapshot yet ⇒ keep asking, cheaply, until there is one. Ordered
+  // FIRST because the option-gated polls below all read fields of a
+  // snapshot that does not exist yet.
+  if (data === null) return UNKNOWN_SNAPSHOT_RETRY_MS;
   if (options?.pollWhileConnecting) {
     const connectingInterval = connectingRefetchIntervalMs(data);
     if (connectingInterval !== false) return connectingInterval;

@@ -30,6 +30,14 @@ import type { LocalHostWsAttachment } from '../../../preload/api';
  *     a stale `attachedAt` on a terminal-state row
  *     (`revoked`/`error`/`failed`) is NOT proof of reachability, and a
  *     pre-claim `unclaimed` row has no attach to wait for.
+ *   - **no snapshot at all** (query pending / `backend:info` answered
+ *     `null` pre-bootstrap): neither of the above is knowable, so both
+ *     projections answer with the absence — pip `unknown`, never ready.
+ *     This third case is a query state, so it is represented by a NULL
+ *     observation rather than by an arm of the domain type; inventing
+ *     `{ observable: false }` for it silently hands authority to the
+ *     renderer WS, which in embedded is a local socket that says
+ *     `connected` immediately.
  *
  * Purely derivational so both signals + the falsifier are unit-testable
  * without React or WS wiring. Consumers (`ConnectionPane`) still owe
@@ -49,7 +57,15 @@ export type DesktopServerMode = 'embedded' | 'remote';
 export type DesktopServerConnectionStatus =
   | 'connected'
   | 'connecting'
-  | 'offline';
+  | 'offline'
+  /**
+   * No `BackendInfo` observed yet (`#task:1630` forward fix). NOT a
+   * connection state — the absence of one. The pane renders no status
+   * word for it: "Connecting…" would be a claim about the daemon we
+   * have not made, and "Offline" a claim about the server we cannot
+   * make. See {@link DesktopServerObservation}.
+   */
+  | 'unknown';
 
 /**
  * The subset of `BackendInfoSnapshot.local_host_status` this projection
@@ -59,18 +75,29 @@ export type DesktopServerConnectionStatus =
  */
 export type LocalHostStatus = BackendInfoSnapshot['local_host_status'];
 
-export interface DesktopServerReadinessInput {
-  /** `BackendInfo.local_host_ws_attachment` — the daemon's last
-   *  successful attach to the backend, or the explicit statement that this
-   *  process cannot observe attachments at all (remote deployment). It is
-   *  the discriminant, not `mode`, that selects the proof below: an
-   *  unobservable attachment has no falsifier of its own, so the renderer
-   *  WS becomes the only authority (`#task:1630`). */
+/**
+ * The two `BackendInfo` facts these projections read, as ONE value —
+ * because they are one observation. Passing them separately let a
+ * consumer pair a real `localHostStatus` with an invented attachment
+ * (`?? { observable: false }`), which reads as "this deployment cannot
+ * observe attachments" rather than "we have not looked yet", and is the
+ * defect Cindy + Norman caught in `e82f8a23`.
+ *
+ * `null` is the only representation of "no snapshot yet" — a query
+ * state, deliberately unrepresentable inside the domain arms.
+ */
+export interface DesktopServerObservation {
   attachment: LocalHostWsAttachment;
-  /** `BackendInfo.local_host_status`. Required for the observable arm so
-   *  a stale `attached_at` on a terminal row does not read as connected,
-   *  and a pre-claim row is not treated as an in-flight attach. */
   localHostStatus: LocalHostStatus;
+}
+
+export interface DesktopServerReadinessInput {
+  /** `BackendInfo`'s attachment + local host status, or NULL when no
+   *  snapshot has been observed yet. On the observable arm
+   *  `localHostStatus` is what stops a stale `attached_at` on a terminal
+   *  row from reading as connected; on the unobservable arm the renderer
+   *  WS is the only authority (`#task:1630`). */
+  observation: DesktopServerObservation | null;
   /** Renderer event WS status. Falsifier signal when the attachment is
    *  unobservable (renderer transport IS Desktop→Server in remote
    *  deployments). */
@@ -88,6 +115,12 @@ export interface DesktopServerReadinessInput {
 /**
  * Steady-state Desktop→Server connection view for the persistent status
  * pip. Consumes whichever truth source actually exists here:
+ *   - no observation yet: `unknown` — the pane shows no status word. An
+ *     embedded first frame is the reason: with a fabricated
+ *     `{ observable: false }` this function would trust the renderer WS,
+ *     which in embedded talks to LOCAL main and reports `connected`
+ *     within a tick, so the pip would read Connected and then walk
+ *     BACKWARDS to Connecting… once the real snapshot landed.
  *   - attachment observable (embedded): `local_host_status` +
  *     `attached_at` together — `claimed + attached_at` → connected;
  *     `claimed + null` → connecting (the daemon-outbound-attach window is
@@ -101,11 +134,12 @@ export interface DesktopServerReadinessInput {
  * Never claims `connected` without observation.
  */
 export function desktopServerConnectionStatus(input: {
-  attachment: LocalHostWsAttachment;
-  localHostStatus: LocalHostStatus;
+  observation: DesktopServerObservation | null;
   wsStatus: WsClientStatus;
 }): DesktopServerConnectionStatus {
-  if (!input.attachment.observable) {
+  if (input.observation === null) return 'unknown';
+  const { attachment, localHostStatus } = input.observation;
+  if (!attachment.observable) {
     switch (input.wsStatus) {
       case 'connected':
         return 'connected';
@@ -117,8 +151,8 @@ export function desktopServerConnectionStatus(input: {
         return 'offline';
     }
   }
-  if (input.localHostStatus !== 'claimed') return 'offline';
-  return input.attachment.attached_at !== null ? 'connected' : 'connecting';
+  if (localHostStatus !== 'claimed') return 'offline';
+  return attachment.attached_at !== null ? 'connected' : 'connecting';
 }
 
 /**
@@ -129,7 +163,8 @@ export function desktopServerConnectionStatus(input: {
  * been verified (or has since dropped).
  *
  * Returns false when no save is in progress (`savedAt === null`) —
- * there is nothing to dismiss.
+ * there is nothing to dismiss. Also false when no snapshot has been
+ * observed yet (`observation === null`): "we cannot see" is not proof.
  *
  * Remote proof (unobservable attachment) requires BOTH the historical
  * transition (`wsConnectedAt >= savedAt`) AND the current-state gate
@@ -147,14 +182,16 @@ export function isDesktopServerReadyAfterSave(
   input: DesktopServerReadinessInput,
 ): boolean {
   if (input.savedAt === null) return false;
-  if (!input.attachment.observable) {
+  if (input.observation === null) return false;
+  const { attachment, localHostStatus } = input.observation;
+  if (!attachment.observable) {
     return (
       input.wsStatus === 'connected' &&
       input.wsConnectedAt !== null &&
       input.wsConnectedAt >= input.savedAt
     );
   }
-  if (input.localHostStatus !== 'claimed') return false;
-  const attachedAt = input.attachment.attached_at;
+  if (localHostStatus !== 'claimed') return false;
+  const attachedAt = attachment.attached_at;
   return attachedAt !== null && attachedAt >= input.savedAt;
 }

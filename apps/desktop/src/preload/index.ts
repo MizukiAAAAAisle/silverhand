@@ -13,20 +13,16 @@ import {
   desktopBuildConfig,
   type DesktopBuildConfig,
 } from '../build-flags.js';
+import type { LocalHostWsAttachment } from '../backend-info-contract.js';
 
 /**
- * #task:1630 — the daemon's outbound-WS attachment as seen from THIS
- * desktop process. Pinned to `preload/api.d.ts` and `main/index.ts` —
- * the three copies stay in lock-step. `observable: false` = the
- * attachment registry lives in a remote backend process, so this app
- * cannot see it and the consumer must pick another authority (renderer
- * event WS for Desktop→Server, host-status `availability` for a
- * Computer). See `api.d.ts` for the full rationale (three shipped
- * regressions from expressing this as `number | null`).
+ * #task:1630 — re-exported from the single cross-process declaration in
+ * `src/backend-info-contract.ts` (Cindy's review of `e82f8a23`: three
+ * hand-copied unions with a comment asking for "lock-step" is not
+ * lock-step). Preload keeps exporting the name because renderer/main code
+ * imports it from here and from `api.d.ts`.
  */
-export type LocalHostWsAttachment =
-  | { observable: true; attached_at: number | null }
-  | { observable: false };
+export type { LocalHostWsAttachment };
 
 export interface BackendInfo {
   url: string;

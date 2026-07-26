@@ -43,6 +43,10 @@ import {
   DESKTOP_REMOTE_ONLY,
   PACKAGED_DEFAULT_SERVER_URL,
 } from '../build-flags.js';
+// #task:1630 — one declaration of the attachment discriminant, imported by
+// main / preload / (via `preload/api.d.ts`) renderer, and one producer for it.
+import type { LocalHostWsAttachment } from '../backend-info-contract.js';
+import { describeLocalHostWsAttachment } from './local-host-ws-attachment.js';
 import {
   enableNodeSystemCa,
   HostClient,
@@ -268,19 +272,6 @@ type DesktopAuthState =
   // copies stay in lock-step. **No `signup_enabled`** — unknown
   // when the server is unreachable.
   | { status: 'backend_unreachable'; server_url: string; message: string };
-
-/**
- * #task:1630 — the daemon's outbound-WS attachment as seen from THIS
- * process. Pinned to `preload/index.ts` and `preload/api.d.ts` — the
- * three copies stay in lock-step. The discriminant exists because the
- * attachment registry only lives here on the embedded arm; expressing
- * the remote arm as a `null` timestamp made "cannot observe" and
- * "claimed but not attached yet" indistinguishable, which shipped three
- * times (#task:1010 / #task:1132 / #task:1628). See `api.d.ts`.
- */
-type LocalHostWsAttachment =
-  | { observable: true; attached_at: number | null }
-  | { observable: false };
 
 interface BackendProxyRequest {
   path: string;
@@ -598,6 +589,21 @@ function embeddedBootstrapPath(): string {
 function requireBackendUrl(): string {
   if (!backend) throw new Error('backend not ready');
   return backend.kind === 'embedded' ? backend.running.url : backend.url;
+}
+
+/**
+ * #task:1630 — the deployment arm this process is serving.
+ *
+ * Throws rather than defaulting: every caller here is answering a
+ * question that only makes sense once a backend handle exists
+ * (`BackendInfo` and the host mutation replies built from
+ * `snapshotLocalHostInfo()`). Guessing `'remote'` for a not-yet-booted
+ * handle would report the attachment as unobservable — the one lie the
+ * discriminant exists to prevent (see `local-host-ws-attachment.ts`).
+ */
+function requireBackendKind(): 'embedded' | 'remote' {
+  if (!backend) throw new Error('backend not ready');
+  return backend.kind;
 }
 
 function requireEmbeddedBackend(reason: string): RunningBackend {
@@ -1206,6 +1212,18 @@ type DesktopHostMutationResult =
       message?: string;
     };
 
+/**
+ * The `local_host_*` block of `BackendInfo` (and of the host mutation
+ * replies, which spread it).
+ *
+ * REQUIRES a live backend handle — it throws otherwise (see
+ * {@link requireBackendKind}). All three callers already prove one:
+ * `backend:info` answers `null` before reaching here, and both host
+ * mutations bail on `!backend` before their request. There is
+ * deliberately no degraded snapshot: the honest answer to "no backend
+ * yet" is no snapshot at all, not a snapshot whose attachment claims to
+ * be unobservable (#task:1630).
+ */
 function snapshotLocalHostInfo(): {
   local_host_id: string | null;
   local_host_status: LocalHostClaimStatus['status'];
@@ -1229,18 +1247,17 @@ function snapshotLocalHostInfo(): {
     // THAT as `observable: false` would tell the renderer to stop looking
     // instead of surfacing the stuck attach. So: observable ⇔ the registry
     // is in this process; `attached_at: null` inside the observable arm
-    // keeps its old meaning (claimed but nothing attached yet).
-    local_host_ws_attachment:
-      backend?.kind === 'embedded'
-        ? {
-            observable: true,
-            attached_at:
-              localHostClaim.status === 'claimed'
-                ? getEmbeddedHostWsController()?.getAttachment(localHostClaim.hostId)
-                    ?.attachedAt ?? null
-                : null,
-          }
-        : { observable: false },
+    // keeps its old meaning (claimed but nothing attached yet). The
+    // derivation itself lives in `local-host-ws-attachment.ts` so it is
+    // unit-falsifiable; this file mints no discriminant of its own.
+    local_host_ws_attachment: describeLocalHostWsAttachment({
+      backendKind: requireBackendKind(),
+      attachedAt:
+        localHostClaim.status === 'claimed'
+          ? getEmbeddedHostWsController()?.getAttachment(localHostClaim.hostId)
+              ?.attachedAt ?? null
+          : null,
+    }),
     // D3.c Commit 4: surface the daemon-config `server_url` so the
     // Settings "Server" pane (and any future Hosts page readout) can
     // distinguish "what the daemon dials" from `backend.url` ("what

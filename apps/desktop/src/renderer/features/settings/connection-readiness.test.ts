@@ -5,7 +5,16 @@ import path from 'node:path';
 import {
   desktopServerConnectionStatus,
   isDesktopServerReadyAfterSave,
+  type DesktopServerObservation,
 } from './connection-readiness';
+
+/** Shorthand for the (attachment, localHostStatus) pair that always
+ *  arrives together from one `BackendInfo` snapshot. */
+function observed(
+  observation: DesktopServerObservation,
+): DesktopServerObservation {
+  return observation;
+}
 
 describe('isDesktopServerReadyAfterSave — falsifier: local IPC freshness alone is NOT reachability', () => {
   it('remote save succeeds but the renderer WS never (re)connects — banner may NOT dismiss', () => {
@@ -16,8 +25,10 @@ describe('isDesktopServerReadyAfterSave — falsifier: local IPC freshness alone
     // resolves regardless of remote reachability.
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: false },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: false },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'disconnected',
         wsConnectedAt: null,
         savedAt: 1_000,
@@ -31,8 +42,10 @@ describe('isDesktopServerReadyAfterSave — falsifier: local IPC freshness alone
     // backend. IPC-freshness would lie; this predicate returns false.
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: true, attached_at: null },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: true, attached_at: null },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'connected',
         wsConnectedAt: 500,
         savedAt: 1_000,
@@ -42,8 +55,10 @@ describe('isDesktopServerReadyAfterSave — falsifier: local IPC freshness alone
     // for this save either — the timestamp must move forward past savedAt.
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: true, attached_at: 500 },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: true, attached_at: 500 },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'connected',
         wsConnectedAt: null,
         savedAt: 1_000,
@@ -61,8 +76,10 @@ describe('isDesktopServerReadyAfterSave — embedded terminal / pre-claim gates'
     for (const localHostStatus of ['revoked', 'error', 'failed'] as const) {
       expect(
         isDesktopServerReadyAfterSave({
-          attachment: { observable: true, attached_at: 1_500 },
-          localHostStatus,
+          observation: observed({
+            attachment: { observable: true, attached_at: 1_500 },
+            localHostStatus,
+          }),
           wsStatus: 'idle',
           wsConnectedAt: null,
           savedAt: 1_000,
@@ -74,8 +91,10 @@ describe('isDesktopServerReadyAfterSave — embedded terminal / pre-claim gates'
   it('embedded pre-claim (unclaimed) has no attach to wait for — not ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: true, attached_at: null },
-        localHostStatus: 'unclaimed',
+        observation: observed({
+          attachment: { observable: true, attached_at: null },
+          localHostStatus: 'unclaimed',
+        }),
         wsStatus: 'idle',
         wsConnectedAt: null,
         savedAt: 1_000,
@@ -90,21 +109,45 @@ describe('isDesktopServerReadyAfterSave — embedded terminal / pre-claim gates'
     // post-save attachedAt DOES flip ready → true.
     const savedAt = 1_000;
     const first = isDesktopServerReadyAfterSave({
-      attachment: { observable: true, attached_at: null },
-      localHostStatus: 'claimed',
+      observation: observed({
+        attachment: { observable: true, attached_at: null },
+        localHostStatus: 'claimed',
+      }),
       wsStatus: 'idle',
       wsConnectedAt: null,
       savedAt,
     });
     const second = isDesktopServerReadyAfterSave({
-      attachment: { observable: true, attached_at: 1_500 },
-      localHostStatus: 'claimed',
+      observation: observed({
+        attachment: { observable: true, attached_at: 1_500 },
+        localHostStatus: 'claimed',
+      }),
       wsStatus: 'idle',
       wsConnectedAt: null,
       savedAt,
     });
     expect(first).toBe(false);
     expect(second).toBe(true);
+  });
+});
+
+describe('isDesktopServerReadyAfterSave — no snapshot observed yet (#task:1630 forward fix)', () => {
+  it('a null observation is never proof, even with a post-save WS connect', () => {
+    // The regression this closes: `ConnectionPane` used to default the
+    // missing snapshot to `{ observable: false }` + `'unclaimed'`, which
+    // routes the proof to the renderer WS. In an EMBEDDED deployment
+    // that WS talks to local main and is `connected` almost immediately,
+    // so a save whose new URL is unreachable would have its banner
+    // dismissed by a purely local signal. "We have not looked yet" must
+    // never satisfy a reachability proof.
+    expect(
+      isDesktopServerReadyAfterSave({
+        observation: null,
+        wsStatus: 'connected',
+        wsConnectedAt: 1_500,
+        savedAt: 1_000,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -118,8 +161,10 @@ describe('isDesktopServerReadyAfterSave — remote current-state gate', () => {
     // worse than not clearing at all.
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: false },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: false },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'disconnected',
         wsConnectedAt: 1_500,
         savedAt: 1_000,
@@ -129,8 +174,10 @@ describe('isDesktopServerReadyAfterSave — remote current-state gate', () => {
     // proof isn't enough while the current connection is unsettled.
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: false },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: false },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'authenticating',
         wsConnectedAt: 1_500,
         savedAt: 1_000,
@@ -141,8 +188,10 @@ describe('isDesktopServerReadyAfterSave — remote current-state gate', () => {
   it('post-save WS connected AND still connected right now → ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: false },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: false },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'connected',
         wsConnectedAt: 1_500,
         savedAt: 1_000,
@@ -155,8 +204,10 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('remote: renderer WS transitioned to connected AFTER save → ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: false },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: false },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'connected',
         wsConnectedAt: 1_500,
         savedAt: 1_000,
@@ -167,8 +218,10 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('embedded: daemon attach timestamp moved forward past save on a claimed row → ready', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: true, attached_at: 1_500 },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: true, attached_at: 1_500 },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'idle',
         wsConnectedAt: null,
         savedAt: 1_000,
@@ -179,8 +232,10 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('no save in progress → not ready (nothing to dismiss)', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: false },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: false },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'connected',
         wsConnectedAt: 5_000,
         savedAt: null,
@@ -191,8 +246,10 @@ describe('isDesktopServerReadyAfterSave — real proof of reachability', () => {
   it('remote WS connected but the transition predates the save → not ready (stale proof)', () => {
     expect(
       isDesktopServerReadyAfterSave({
-        attachment: { observable: false },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: false },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'connected',
         wsConnectedAt: 500,
         savedAt: 1_000,
@@ -217,8 +274,10 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
     ] as const) {
       expect(
         desktopServerConnectionStatus({
-          attachment: { observable: false },
-          localHostStatus: 'claimed',
+          observation: observed({
+            attachment: { observable: false },
+            localHostStatus: 'claimed',
+          }),
           wsStatus,
         }),
       ).toBe(expected);
@@ -239,8 +298,10 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
     ] as const) {
       expect(
         desktopServerConnectionStatus({
-          attachment: { observable: false },
-          localHostStatus,
+          observation: observed({
+            attachment: { observable: false },
+            localHostStatus,
+          }),
           wsStatus: 'connected',
         }),
       ).toBe('connected');
@@ -253,15 +314,19 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
     // reachability while the daemon is still dialing.
     expect(
       desktopServerConnectionStatus({
-        attachment: { observable: true, attached_at: 1_000 },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: true, attached_at: 1_000 },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'disconnected',
       }),
     ).toBe('connected');
     expect(
       desktopServerConnectionStatus({
-        attachment: { observable: true, attached_at: null },
-        localHostStatus: 'claimed',
+        observation: observed({
+          attachment: { observable: true, attached_at: null },
+          localHostStatus: 'claimed',
+        }),
         wsStatus: 'disconnected',
       }),
     ).toBe('connecting');
@@ -273,8 +338,10 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
     for (const localHostStatus of ['revoked', 'error', 'failed'] as const) {
       expect(
         desktopServerConnectionStatus({
-          attachment: { observable: true, attached_at: 5_000 },
-          localHostStatus,
+          observation: observed({
+            attachment: { observable: true, attached_at: 5_000 },
+            localHostStatus,
+          }),
           wsStatus: 'connected',
         }),
       ).toBe('offline');
@@ -284,11 +351,36 @@ describe('desktopServerConnectionStatus — persistent status pip', () => {
   it('embedded: pre-claim (unclaimed) → offline (no attach expected yet)', () => {
     expect(
       desktopServerConnectionStatus({
-        attachment: { observable: true, attached_at: null },
-        localHostStatus: 'unclaimed',
+        observation: observed({
+          attachment: { observable: true, attached_at: null },
+          localHostStatus: 'unclaimed',
+        }),
         wsStatus: 'connected',
       }),
     ).toBe('offline');
+  });
+});
+
+describe('desktopServerConnectionStatus — no snapshot observed yet (#task:1630 forward fix)', () => {
+  it('null observation answers `unknown` for every WS status, never a status word', () => {
+    // Norman's review of `e82f8a23`: with a fabricated
+    // `{ observable: false }` first frame, an EMBEDDED launch reads the
+    // (local, immediately connected) renderer WS and paints
+    // "Connected"; the real snapshot then arrives as
+    // `claimed + attached_at === null` and the SAME pip walks backwards
+    // to "Connecting…". Status words may only move forward, so the
+    // pre-snapshot frame must claim nothing at all.
+    for (const wsStatus of [
+      'idle',
+      'connecting',
+      'authenticating',
+      'connected',
+      'disconnected',
+    ] as const) {
+      expect(
+        desktopServerConnectionStatus({ observation: null, wsStatus }),
+      ).toBe('unknown');
+    }
   });
 });
 
@@ -316,15 +408,24 @@ describe('ConnectionPane consumer contract', () => {
     );
   });
 
-  it('passes localHostStatus into both readiness projections', () => {
+  it('passes one observation into both readiness projections', () => {
     // Guards against silently re-dropping the status gate on the pip
     // or the ready-after-save call.
     expect(CONNECTION_PANE_CODE).toMatch(
-      /desktopServerConnectionStatus\(\{[\s\S]*?localHostStatus[\s\S]*?\}\)/,
+      /desktopServerConnectionStatus\(\{[\s\S]*?observation[\s\S]*?\}\)/,
     );
     expect(CONNECTION_PANE_CODE).toMatch(
-      /isDesktopServerReadyAfterSave\(\{[\s\S]*?localHostStatus[\s\S]*?\}\)/,
+      /isDesktopServerReadyAfterSave\(\{[\s\S]*?observation[\s\S]*?\}\)/,
     );
+  });
+
+  it('never synthesises an observation for a missing snapshot (#task:1630)', () => {
+    // The forward fix: the pane must read the pair off `data` or pass
+    // NULL. A `?? { observable: false }` / `?? 'unclaimed'` default is
+    // what handed the pip to a local WS and pinned the pane on a
+    // transient pre-bootstrap `backend:info` null.
+    expect(CONNECTION_PANE_CODE).not.toMatch(/observable:\s*false/);
+    expect(CONNECTION_PANE_CODE).not.toMatch(/local_host_status\s*\?\?/);
   });
 
   it('does not read backendInfoQuery.dataUpdatedAt as a reachability signal', () => {
