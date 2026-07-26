@@ -18,12 +18,8 @@ import {
 } from '@silverhand/backend';
 import type { ServerConfig } from '@silverhand/shared';
 import {
-  DEFAULT_EMBEDDED_SILVERHAND_MIGRATE,
   resolveEmbeddedMigrationEnv,
-  resolveMigrationEnv,
-  resolveOptionalMetricsListen,
   resolveStandaloneServerEnv,
-  SILVERHAND_METRICS_LISTEN_ENV,
   type StandaloneServerEnvConfig,
 } from './config.js';
 

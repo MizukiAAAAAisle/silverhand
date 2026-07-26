@@ -117,11 +117,6 @@ function applyMigrationsThrough(
   }
 }
 
-function pragmaNumber(db: Database.Database, name: string): number {
-  const row = db.pragma(name) as Array<Record<string, number>>;
-  return Object.values(row[0] ?? {})[0] ?? 0;
-}
-
 const SYNTHETIC_UPGRADE_BASE_VERSION = MIN_SUPPORTED_SCHEMA_VERSION;
 const SYNTHETIC_UPGRADE_TARGET_VERSION = MIN_SUPPORTED_SCHEMA_VERSION + 1;
 

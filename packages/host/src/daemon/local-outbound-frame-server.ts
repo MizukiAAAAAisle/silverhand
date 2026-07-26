@@ -40,7 +40,6 @@
 import { Server, type Socket } from 'node:net';
 import { homedir } from 'node:os';
 import { chmodSync, existsSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   OutboundServerToDaemonCommandFrameSchema,
   OutboundHeartbeatFrameSchema,

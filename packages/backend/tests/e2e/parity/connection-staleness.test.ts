@@ -69,10 +69,6 @@ async function waitFor<T>(
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function settle(ms = 60): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, ms));
-}
-
 function readyEvent(daemonPid: number): OutboundDaemonToServerEventFrame {
   return {
     direction: 'daemon_to_server',

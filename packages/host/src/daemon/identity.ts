@@ -4,7 +4,6 @@ import {
   defaultAppRoot,
   resolveLegacyStandaloneDaemonPaths,
 } from '@silverhand/shared/app-data-layout';
-import { z } from 'zod';
 
 import { HelloResultSchema, type HelloResult } from '../protocol.js';
 

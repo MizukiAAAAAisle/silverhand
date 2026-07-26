@@ -52,7 +52,6 @@ import type {
   DaemonHostConfig,
   ServerConnectionProfile,
 } from '@silverhand/shared';
-import type { HostWsAttachment } from '@silverhand/backend';
 import type {
   HostOutboundReloadFailureReason,
   HostOutboundReloadResult,

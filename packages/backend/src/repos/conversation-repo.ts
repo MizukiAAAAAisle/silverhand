@@ -748,9 +748,3 @@ export interface ArchivedAggregateRow {
 export interface RepoError extends Error {
   code: string;
 }
-
-function repoError(code: string, message: string): RepoError {
-  const err = new Error(message) as RepoError;
-  err.code = code;
-  return err;
-}

@@ -13,10 +13,8 @@ import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AttachmentService } from '../../src/services/attachment-service.js';
 import {
   ActorError,
-  AttachmentError,
   ConversationError,
   ConversationMessageService,
-  MessageFreshnessError,
   PolicyError,
 } from '../../src/services/conversation-message-service.js';
 import type { BackendLogger } from '../../src/context.js';

@@ -139,9 +139,8 @@ function resolveReactionContext(
   }
 
   // §12.F: a reaction is a write — reject closed/archived, reusing the same
-  // guard sendMessage applies. For a legacy isolated-thread conversation,
-  // also honor the parent channel's state (parity with the send target check).
-  const closedArchived = checkOpen(deps, conversation);
+  // guard sendMessage applies to its source conversation.
+  const closedArchived = checkOpen(conversation);
   if (closedArchived) return { ok: false, error: closedArchived };
 
   return {
@@ -155,10 +154,9 @@ function resolveReactionContext(
 
 type ConversationLike = NonNullable<ReturnType<ConversationRepo['get']>>;
 
-/** Closed/archived guard. Returns an error when the conversation (or, for a
- *  legacy thread, its parent channel) is closed/archived; null when open. */
+/** Closed/archived guard. Returns an error when the conversation is
+ *  closed/archived; null when open. */
 function checkOpen(
-  deps: ReactMessageDeps,
   conversation: ConversationLike,
 ): ReactionError | null {
   if (conversation.closed_at !== null) {

@@ -527,15 +527,6 @@ async function createWorkspaceAndConversation(t: TestApp): Promise<string> {
   return body.onboarding_channel_id;
 }
 
-async function connect(url: string): Promise<WebSocket> {
-  const ws = new WebSocket(url);
-  await new Promise<void>((resolve, reject) => {
-    ws.once('open', () => resolve());
-    ws.once('error', reject);
-  });
-  return ws;
-}
-
 async function connectAuthenticated(
   url: string,
   token: string,

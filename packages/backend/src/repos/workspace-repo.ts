@@ -15,7 +15,6 @@ import {
   type WorkspaceUserMemberRow,
 } from '@silverhand/shared';
 import { agentRowToDto } from './agent-repo.js';
-import { RuntimeHostPlacementError } from '../host-placement-errors.js';
 
 // Re-exported from the shared single source (`agent-home-workspace.ts`)
 // so existing backend importers (`./repos/workspace-repo.js`) keep

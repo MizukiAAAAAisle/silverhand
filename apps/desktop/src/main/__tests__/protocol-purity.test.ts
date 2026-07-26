@@ -26,12 +26,6 @@ const allowedBackendImports = [
   // zero-runtime guarantee — second occurrence allowed for the
   // second consumer file.
   'HostWsAttachment',
-  // D4.a Commit 5c-2: `profile-phase2.ts` is the profile-driven
-  // sibling of `outbound-reload.ts` (§7.5 phase-2 orchestrator).
-  // Same structural `HostWsAttachment` dep for the same fresh-attach
-  // watchdog predicate — third occurrence allowed for the third
-  // consumer file.
-  'HostWsAttachment',
 ].sort();
 
 const allowedServerImports = [

@@ -63,12 +63,6 @@ async function setupFixture(
   return { dir, socketPath, pidFilePath, logDir, localOutboundSocketPath, daemon };
 }
 
-async function teardown(f: E2eFixture, client?: HostClient): Promise<void> {
-  await client?.close();
-  await f.daemon.stop('test_done');
-  rmSync(f.dir, { recursive: true, force: true });
-}
-
 describe('e2e — real Unix socket', () => {
   const fixtures: E2eFixture[] = [];
   const clients: HostClient[] = [];

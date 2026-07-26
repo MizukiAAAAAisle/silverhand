@@ -8,7 +8,6 @@ import { HostClient } from '../src/client/index.js';
 import { writeHostConfigAtomic } from '../src/daemon/outbound-client.js';
 import {
   bindingSlug,
-  managedWorkspaceSlug,
 } from '../src/daemon/workspace-registry/registry.js';
 import { RuntimeStartResolveError } from '../src/daemon/runtime-start-resolve.js';
 import type { RuntimeStartResolveDeps } from '../src/daemon/runtime-start-resolve.js';

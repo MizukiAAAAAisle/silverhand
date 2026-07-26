@@ -13,7 +13,6 @@ import {
   RuntimeStartResultSchema,
   RuntimeStopParamsSchema,
   RuntimeStopResultSchema,
-  RuntimeDeliverResultSchema,
   RuntimeDeliverRefusedResultSchema,
   type IntentName,
 } from '../src/protocol.js';

@@ -916,7 +916,6 @@ function RegisteredAppShell(): JSX.Element {
     // one (typically the Mentions channel in a DM) — that's what the
     // user clicked the badge to see. Falls back to the
     // remembered/default channel pick when there's no pointer.
-    const workspace = workspaces.find(w => w.id === id);
     const pointer = unreadCounts?.latest_by_workspace?.[id];
     if (pointer) {
       handleJumpToMessage({

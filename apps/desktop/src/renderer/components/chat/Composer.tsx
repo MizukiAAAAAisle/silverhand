@@ -281,11 +281,6 @@ export function Composer({
 
   const { data: agents = [] } = useAgents();
   const { data: users = [] } = useUsers();
-  const usersById = useMemo(() => {
-    const m = new Map<string, typeof users[number]>();
-    for (const user of users) m.set(user.id, user);
-    return m;
-  }, [users]);
   const conversationMembers = useConversationMembers(conversationId);
   // #task:876 (2026-06-03): the viewer's own row in the mention picker
   // is noise — you can't @-mention yourself meaningfully. Resolve the

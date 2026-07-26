@@ -497,7 +497,6 @@ export function createConversationMessagingApp(
     conversationReads,
     conversationEvents,
     saved,
-    sort,
   } = deps;
 
   app.get(apiPaths.conversationThreads(':id'), c => {

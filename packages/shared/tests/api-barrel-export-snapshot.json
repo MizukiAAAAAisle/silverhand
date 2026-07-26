@@ -301,6 +301,8 @@
   "WorkspaceChannelListItemSchema",
   "WorkspaceDtoSchema",
   "WorkspaceHumanMemberDtoSchema",
+  "WorkspaceLocalPathEntrySchema",
+  "WorkspaceLocalPathsResponseSchema",
   "WorkspaceMemberDtoSchema",
   "WorkspaceMembersResponseSchema",
   "WorkspaceRoleSchema",

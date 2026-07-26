@@ -38,7 +38,6 @@ import type { MessageRepo } from '../repos/message-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import {
   type WorkspaceRepo,
-  agentHomeWorkspaceId,
 } from '../repos/workspace-repo.js';
 import {
   agentServiceErrorBody,

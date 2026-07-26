@@ -17,7 +17,7 @@
  *     subdivide; if we need scoping later, lift the backend logger
  *     into shared and use it instead.
  */
-import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
+import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SILVERHAND_LOG_LEVELS,

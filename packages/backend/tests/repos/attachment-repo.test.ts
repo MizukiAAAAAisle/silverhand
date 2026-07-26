@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { testWorkspacePath } from '../utils/db.js';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import {
   AttachmentRepo,

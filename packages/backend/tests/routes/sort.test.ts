@@ -536,7 +536,7 @@ describe('star/unstar rank handling — home rank preserved (exclusive move), st
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const regularWs = await makeWorkspace(t, 'eng', agentId);
-    const regularWs2 = await makeWorkspace(t, 'eng2', agentId);
+    await makeWorkspace(t, 'eng2', agentId);
 
     // The agent's auto-provisioned DM (agent_home) workspace.
     const before = (await (await http(t).get('/api/workspaces')).json()) as any;

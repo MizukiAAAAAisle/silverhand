@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { testWorkspacePath } from '../utils/db.js';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { Database as Db } from 'better-sqlite3';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';

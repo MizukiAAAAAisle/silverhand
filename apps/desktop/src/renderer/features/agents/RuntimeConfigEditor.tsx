@@ -106,10 +106,12 @@ function fastModeToDraft(
  *  ("runtime change 会清空其他几个值"). When the target equals the initial
  *  runtime, the draft is re-hydrated from the persisted agent so returning
  *  to the original target undoes the tuning reset without losing the user's
- *  starting point. */
+ *  starting point.
+ *
+ *  Takes no current draft on purpose: neither arm reads it — one re-hydrates
+ *  from `agent`, the other blanks every tuning field. */
 export function draftAfterRuntimeChange(
   agent: AgentDto,
-  draft: RuntimeConfigDraft,
   target: RuntimeKind,
 ): RuntimeConfigDraft {
   if (target === agent.runtime) return draftFromAgent(agent);
@@ -117,8 +119,8 @@ export function draftAfterRuntimeChange(
     runtime: target,
     modelChoice: 'unset',
     modelValue: '',
-    reasoning: runtimeSupportsReasoningEffort(target) ? '' : '',
-    fastMode: runtimeSupportsFastMode(target) ? '' : '',
+    reasoning: '',
+    fastMode: '',
   };
 }
 
@@ -642,9 +644,7 @@ function EditForm({
             mode={mode}
             runtimeStateByKind={runtimeStateByKind}
             triggerRef={triggerRef}
-            onChange={next =>
-              onDraft(draftAfterRuntimeChange(agent, draft, next))
-            }
+            onChange={next => onDraft(draftAfterRuntimeChange(agent, next))}
           />
           {sectionHint ? (
             <p className="text-xs text-text-muted">{sectionHint}</p>

@@ -474,7 +474,7 @@ describe('POST /api/attention/observe (#task:1231)', () => {
 
   it('404s thread_root_not_found when the root belongs to another conversation', async () => {
     t = buildTestApp();
-    const { channelId, agentId } = await createChannel(t);
+    const { channelId } = await createChannel(t);
     // A second channel whose root we will (illegally) reference from the first.
     const other = await createChannel(t, 'b');
     const messages = new MessageRepo(t.ctx.db);

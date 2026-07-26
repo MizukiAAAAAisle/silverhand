@@ -56,10 +56,7 @@ import {
   type SessionStoreEnv,
   type WorkspaceRegistryFile,
 } from '@silverhand/host';
-import {
-  resolveComputerSlotPaths,
-  type ComputerSlotPaths,
-} from '@silverhand/shared/app-data-layout';
+import { resolveComputerSlotPaths } from '@silverhand/shared/app-data-layout';
 import { readDataLayoutMarker, writeDataLayoutMarker } from './marker.js';
 
 export class LayoutMigrationError extends Error {
@@ -151,7 +148,7 @@ export function migrateDesktopAppDataLayout(
   if (marker.state === 'v2') {
     // §6.4 case 5 — v2 is authoritative; later legacy leftovers are inert
     // and reported, never re-adopted or deleted.
-    reportInertLegacyLeftovers(legacy, v2, logger);
+    reportInertLegacyLeftovers(legacy, logger);
     if (marker.marker.computer_slot && marker.marker.workspace_layout) {
       return {
         migrated: false,
@@ -997,7 +994,6 @@ function wrapFlatten<T>(fn: () => T): T {
 
 function reportInertLegacyLeftovers(
   legacy: DesktopAppPaths,
-  v2: DesktopAppPaths,
   logger: MigrationLogger,
 ): void {
   const leftovers = [

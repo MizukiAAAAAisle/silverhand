@@ -74,8 +74,7 @@ describe('draftFromAgent', () => {
 
 describe('draftAfterRuntimeChange', () => {
   it('resets tuning to the unset state when the target differs from the agent runtime', () => {
-    const initial = draftFromAgent(baseAgent);
-    const next = draftAfterRuntimeChange(baseAgent, initial, 'claude');
+    const next = draftAfterRuntimeChange(baseAgent, 'claude');
     expect(next).toEqual({
       runtime: 'claude',
       modelChoice: 'unset',
@@ -90,8 +89,7 @@ describe('draftAfterRuntimeChange', () => {
     // the ORIGINAL back — should restore the persisted tuning, not stay
     // blank.
     const initial = draftFromAgent(baseAgent);
-    const blanked = draftAfterRuntimeChange(baseAgent, initial, 'claude');
-    const restored = draftAfterRuntimeChange(baseAgent, blanked, 'codex');
+    const restored = draftAfterRuntimeChange(baseAgent, 'codex');
     expect(restored).toEqual(initial);
   });
 });
@@ -104,11 +102,7 @@ describe('canSaveRuntimeConfig', () => {
   });
 
   it('rejects a draft with unset modelChoice after a runtime switch', () => {
-    const d = draftAfterRuntimeChange(
-      baseAgent,
-      draftFromAgent(baseAgent),
-      'claude',
-    );
+    const d = draftAfterRuntimeChange(baseAgent, 'claude');
     expect(canSaveRuntimeConfig(baseAgent, d)).toBe(false);
   });
 

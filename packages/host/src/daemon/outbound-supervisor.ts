@@ -62,7 +62,7 @@
  */
 import { statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import type { EventFrame, ResponseFrame } from '../protocol.js';
+import type { EventFrame } from '../protocol.js';
 import type {
   HostOutboundAttachFailureReason,
   HostOutboundAttachParams,

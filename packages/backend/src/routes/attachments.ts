@@ -226,7 +226,7 @@ export function createAttachmentsApp(deps: AttachmentsRouteDeps): Hono<AppEnv> {
   app.get(apiPaths.attachment(':id'), async c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'attachment id required' }, 400);
-    const viewerUserId = requireViewerUserId(c);
+    requireViewerUserId(c);
     const principal = getUserPrincipal(c);
     const response = await ctx.attachmentService.serveForViewer(id, row =>
       canViewAttachment(ctx, principal, row),

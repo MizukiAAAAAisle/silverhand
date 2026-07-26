@@ -6,7 +6,6 @@ import { delimiter, join, resolve } from 'node:path';
 import {
   AuthSessionResponseSchema,
   CLIENT_INFO_HEADER,
-  EMBEDDED_BOOTSTRAP_FILENAME,
   EVENT_WS_SESSION_COOKIE,
   HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
   HostClaimOrCreateResponseSchema,
@@ -50,7 +49,6 @@ import { describeLocalHostWsAttachment } from './local-host-ws-attachment.js';
 import {
   enableNodeSystemCa,
   HostClient,
-  HostClientError,
   OUTBOUND_PROTOCOL_VERSION,
   spawnDaemonChild,
   type DaemonHandle,

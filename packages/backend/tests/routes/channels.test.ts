@@ -1490,7 +1490,6 @@ describe('list routes filter by conversation_users (v25 PR-A blocker fix)', () =
       { title: 'Public', member_agent_ids: [aliceId] },
     );
     expect(publicCh.status).toBe(201);
-    const pub = await publicCh.json() as any;
 
     const privateCh = await http(t).post(
       `/api/workspaces/${workspaceId}/channels`,

@@ -4,7 +4,6 @@ import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';

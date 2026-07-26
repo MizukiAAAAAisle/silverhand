@@ -1,4 +1,4 @@
-import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
+import { createWriteStream, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';

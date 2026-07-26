@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import type { AddressInfo } from 'node:net';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
@@ -39,7 +39,6 @@ import {
 import {
   installHostWebSocketServer,
   type HostWsServerController,
-  type HostWsAttachment,
   type HostWsEventSink,
 } from './ws/host-ws-server.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';

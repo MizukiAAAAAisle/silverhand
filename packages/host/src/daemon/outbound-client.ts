@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { WebSocket, type RawData } from 'ws';
 import {
   DAEMON_HOST_CONFIG_FILENAME,
@@ -25,7 +25,6 @@ import {
   OutboundHeartbeatFrameSchema,
   encodeOutboundFrame,
   type OutboundDaemonToServerCommandResponseFrame,
-  type OutboundDaemonToServerEventFrame,
   type OutboundFrame,
   type OutboundHeartbeatFrame,
   type OutboundServerToDaemonCommandFrame,

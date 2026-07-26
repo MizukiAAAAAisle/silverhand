@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
-import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**

@@ -3,7 +3,6 @@ import { QueryClient } from '@tanstack/react-query';
 import type {
   ConversationMessagesDto,
   MessageDto,
-  TaskChangedEvent,
 } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import {

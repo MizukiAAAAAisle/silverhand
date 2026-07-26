@@ -60,7 +60,6 @@ import {
   runDaemon,
   Supervisor,
   writeHostConfigAtomic,
-  type RunningDaemon,
   type SupervisorOptions,
 } from '@silverhand/host/daemon';
 import type { RuntimeKind, ServerConfig } from '@silverhand/shared';

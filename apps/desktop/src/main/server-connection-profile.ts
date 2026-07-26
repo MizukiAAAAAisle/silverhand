@@ -31,7 +31,7 @@
  *     file is a local desktop connection preference.
  */
 import { chmodSync, existsSync, mkdirSync, renameSync, unlinkSync, writeFileSync, openSync, fsyncSync, closeSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   SERVER_CONNECTION_PROFILE_MIN_VERSION,

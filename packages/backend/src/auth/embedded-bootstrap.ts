@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { EMBEDDED_BOOTSTRAP_FILENAME, type ServerConfig } from '@silverhand/shared';
+import { dirname } from 'node:path';
+import type { ServerConfig } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import { hashSessionToken } from './session.js';
 

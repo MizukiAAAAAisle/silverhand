@@ -26,7 +26,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const BACKEND_ROOT = resolve(__dirname, '..');
 const REPO_ROOT = resolve(BACKEND_ROOT, '..', '..');

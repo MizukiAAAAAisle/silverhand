@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { deleteAgent } from '../../src/application/delete-agent.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
@@ -113,12 +113,11 @@ describe('deleteAgent use case', () => {
   it('happy active delete → deleted: purge dispatched, agent row + membership gone', async () => {
     t = buildTestApp();
     const agentId = await makeActiveAgent(t, 'happy');
-    const ws = (await (
-      await http(t).post('/api/workspaces', {
-        name: 'engineering',
-        member_agent_ids: [agentId],
-      })
-    ).json()) as any;
+    const workspaceResponse = await http(t).post('/api/workspaces', {
+      name: 'engineering',
+      member_agent_ids: [agentId],
+    });
+    expect(workspaceResponse.status).toBe(201);
     t.fakeHostWs!.calls = [];
 
     const result = await deleteAgent(depsFor(t), {

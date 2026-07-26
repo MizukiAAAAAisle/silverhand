@@ -27,7 +27,6 @@ import {
   SILVERHAND_AUTH_TOKEN_ENV,
   SILVERHAND_CONVERSATION_ID_ENV,
   SILVERHAND_SERVER_URL_ENV,
-  type WorkspaceKind,
 } from '@silverhand/shared';
 
 import { getDriver as getDefaultDriver, type Driver } from '../../drivers/index.js';
@@ -44,7 +43,6 @@ import {
 } from '../spawn-diagnostics.js';
 import {
   encodeFrame,
-  MAX_FRAME_BYTES,
   type AgentMessageSendParams,
   type AgentMessageSendResult,
   type AgentStaleReceiveParams,

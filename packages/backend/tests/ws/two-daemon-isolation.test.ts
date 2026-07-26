@@ -66,8 +66,6 @@
 import { testWorkspacePath } from '../utils/db.js';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket, type RawData } from 'ws';
 import {

@@ -1,4 +1,4 @@
-import { createServer, type Server as HttpServer } from 'node:http';
+import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { WebSocket, type RawData } from 'ws';
@@ -11,7 +11,7 @@ import {
   type HostWsServerController,
 } from '../../src/ws/host-ws-server.js';
 import { StandaloneOutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
-import { buildTestApp, type TestApp } from '../utils/app.js';
+import { buildTestApp } from '../utils/app.js';
 import {
   runOutboundFrameAdapterContract,
   type FakeDaemonCommand,

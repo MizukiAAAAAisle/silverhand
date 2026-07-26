@@ -44,7 +44,6 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { UserDto } from '@silverhand/shared';
 import type {
   BackendUnreachable,
   SetupRequired,
@@ -94,18 +93,6 @@ const silverhand = {
   setAppearance: vi.fn(),
   revokeHost: vi.fn(),
 };
-
-function userDto(overrides: Partial<UserDto> = {}): UserDto {
-  return {
-    id: 'u-1',
-    name: 'alice',
-    display_name: 'Alice',
-    avatar_url: null,
-    created_at: 0,
-    updated_at: 0,
-    ...overrides,
-  } as UserDto;
-}
 
 async function renderApp(viewer: ViewerState | undefined): Promise<string> {
   // Late-import so the silverhand stub is installed before App.tsx is

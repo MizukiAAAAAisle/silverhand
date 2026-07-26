@@ -22,7 +22,7 @@
  *      (`not_attached` / `config_unreadable` / `parse_failed` /
  *      `invalid_server_url`) reaches the renderer as-is.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { HostWsAttachment } from '@silverhand/backend';
 import type {
   ClassifyServerUrlOptions,

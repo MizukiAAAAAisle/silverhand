@@ -1,15 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
-import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { openTestDb } from '../utils/db.js';
 
 function bootstrapWorkspaceAndAgents() {
   const { db, localHostId } = openTestDb();
-  const workspacesRoot = join(tmpdir(), 'silverhand-workspace-test');
   const workspaces = new WorkspaceRepo(db);
   const agents = new AgentRepo(db);
 

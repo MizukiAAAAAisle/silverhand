@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  chmodSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -32,10 +29,6 @@ import { defaultWorkspaceDataRootDir } from '../../src/daemon/workspace-registry
 const BINDING: RegistryBinding = {
   server_origin: 'https://srv.example',
   host_id: 'host-1',
-};
-const OTHER_BINDING: RegistryBinding = {
-  server_origin: 'https://srv.example',
-  host_id: 'host-2',
 };
 
 function tempDir(): string {

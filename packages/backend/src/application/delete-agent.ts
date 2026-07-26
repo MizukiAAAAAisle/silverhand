@@ -98,7 +98,7 @@ export async function deleteAgent(
   deps: DeleteAgentDeps,
   cmd: DeleteAgentCommand,
 ): Promise<DeleteAgentResult> {
-  const { ctx, agents, workspaces, conversations } = deps;
+  const { ctx, agents } = deps;
   const id = cmd.agentId;
   const principal: UserPrincipal = { kind: 'user', userId: cmd.requesterUserId };
 

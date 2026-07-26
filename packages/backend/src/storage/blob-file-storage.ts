@@ -1,5 +1,5 @@
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, dirname, extname, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, relative, resolve } from 'node:path';
 
 export type StorageKind = 'local' | 's3' | 'oss';
 

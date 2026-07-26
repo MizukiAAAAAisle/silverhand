@@ -102,7 +102,7 @@ import type {
   AgentRunTerminalReason,
   ParsedEvent,
 } from '@silverhand/shared';
-import type { RunStateCache, RuntimePhase } from './run-state-cache.js';
+import type { RuntimePhase } from './run-state-cache.js';
 
 /**
  * Capability snapshot a driver exposes to the coordinator. We do NOT

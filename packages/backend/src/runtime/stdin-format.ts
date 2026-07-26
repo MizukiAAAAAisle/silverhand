@@ -253,9 +253,6 @@ export function formatDeliveryInstruction(
   const hasOnlySystemMessages = messages.every(m => m.from_kind === 'system');
 
   if (hasUserMessage && hasUserMessageForRecipient) {
-    const mentionHint = nonSystemMentionsRecipient
-      ? 'user addressed you by name.\n'
-      : '';
     return (
       `Respond as appropriate — call \`${sendMessageTool}\` with a brief reply, ` +
       `progress update, blocker question, or final summary before stopping. ` +
@@ -273,7 +270,6 @@ export function formatDeliveryInstruction(
   }
 
   if (nonSystemMentionsRecipient) {
-    const mentionHint = 'sender addressed you by name.';
     return (
       `Respond as appropriate — call \`${sendMessageTool}\` before stopping. ` +
       `Complete ALL your work before stopping.`

@@ -23,8 +23,6 @@ import {
   defaultAppRoot,
   legacyWorkspacesRootDir,
   resolveComputerSlotFromComputersRoot,
-  resolveDesktopAppPaths,
-  resolveLegacyStandaloneDaemonPaths,
 } from '@silverhand/shared/app-data-layout';
 import {
   claimPidFile,
@@ -32,8 +30,6 @@ import {
   releasePidFile,
 } from './lifecycle.js';
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
 import type { DaemonHostConfig } from '@silverhand/shared';
 import { IntentDispatcher } from './dispatcher.js';
 import { DaemonServer } from './server.js';

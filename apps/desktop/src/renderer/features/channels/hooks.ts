@@ -591,7 +591,6 @@ export function useThreadRoot(
   channelId: string | null,
   rootMessageId: string | null,
 ) {
-  const qc = useQueryClient();
   const enabled = !!channelId && !!rootMessageId;
   const key = threadRootKey(channelId ?? 'none', rootMessageId ?? 'none');
 
@@ -645,7 +644,6 @@ export function useThreadFollowers(
   channelId: string | null,
   rootMessageId: string | null,
 ) {
-  const qc = useQueryClient();
   const enabled = !!channelId && !!rootMessageId;
   const key = threadFollowersKey(channelId ?? 'none', rootMessageId ?? 'none');
   const query = useQuery<ThreadFollowerStateDto>({

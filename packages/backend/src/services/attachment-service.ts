@@ -5,7 +5,6 @@ import type {
   AttachmentRow,
   AttachmentSnapshot,
   ConversationKind,
-  StorageKind,
 } from '@silverhand/shared';
 import {
   attachmentLabelKind,
@@ -15,7 +14,6 @@ import {
 } from '@silverhand/shared';
 import {
   AttachmentRepo,
-  rowToDto,
   rowToSnapshot,
 } from '../repos/attachment-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -33,8 +31,6 @@ export interface AttachmentServiceOptions {
   attachments: AttachmentRepo;
   conversations: ConversationRepo;
   maxBytes?: number;
-  /** Override for tests so `delete` can be stubbed cleanly. */
-  now?: () => number;
 }
 
 export interface UploadInput {
@@ -94,14 +90,12 @@ export class AttachmentService {
   private readonly storage: BlobFileStorage;
   private readonly attachments: AttachmentRepo;
   private readonly conversations: ConversationRepo;
-  private readonly now: () => number;
 
   constructor(opts: AttachmentServiceOptions) {
     this.storage = opts.storage;
     this.attachments = opts.attachments;
     this.conversations = opts.conversations;
     this.maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
-    this.now = opts.now ?? (() => Date.now());
   }
 
   async upload(input: UploadInput): Promise<AttachmentDto> {

@@ -1,7 +1,6 @@
 import { extractMentions, systemSubtype } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import type {
-  AgentDto,
   ConversationDto,
   DmChannelDto,
   MessageDto,

@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { testWorkspacePath } from '../utils/db.js';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   authPaths,
