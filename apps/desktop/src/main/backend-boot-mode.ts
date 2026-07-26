@@ -18,29 +18,23 @@
  * pure function, every arm of the matrix is unit-tested, the
  * discriminator is typed, and `bootstrap()` only consumes the result.
  *
- * **Scope discipline (Commit 3 only)**:
- *   - This commit adds the decision primitive + env reader + tests.
- *   - This commit wires the primitive into {@link bootstrap} as a
- *     **trip wire**: if the decision says `remote`, bootstrap throws
- *     a typed `RemoteModeNotYetWiredError` so we cannot silently fall
- *     through to embedded (drift) AND cannot accidentally ship a
- *     half-wired remote path to users.
- *   - The actual remote-mode bootstrap branch (skip
- *     `startEmbeddedSilverhandServer`, stand up a `RemoteBackendHandle`
- *     facade, route `requireBackend()` callers through it, gate
- *     `bootstrapEmbeddedUserSession`, etc.) is **Commit 5**.
- *   - Today no UI commits a remote profile (D4.a Commit 2's
- *     `handleProfileSaveWithTest` returns `remote_backend_not_yet_supported`
- *     for non-loopback URLs), so the trip wire is **structurally
- *     unreachable** for current users — it is a forward-compat
- *     regression gate for Commit 5 only.
+ * **Scope**: this module owns the decision + the env reader only.
+ * Acting on it is `bootstrap()`'s job — the real remote-mode branch
+ * (skip `startEmbeddedSilverhandServer`, stand up a
+ * `RemoteBackendHandle` facade, route `requireBackend()` callers
+ * through it, gate `bootstrapEmbeddedUserSession`, drive daemon attach
+ * against the remote URL) has been live since D4.a Commit 5.
  *
- * **Why the trip wire vs. fallback-to-embedded**: silently falling
- * back to embedded when remote was requested would (a) violate the
- * user's explicit configuration choice — Cindy "no `partial_apply_pending`
- * for boot mode" framing, the user's intent is data, not a hint —
- * and (b) hide a regression in the profile pipeline behind a working
- * embedded UI. Throwing is correct: the dev escape hatch is
+ * **Why refusing beats falling back to embedded**: when a profile says
+ * remote but cannot be honored, silently booting embedded would (a)
+ * violate the user's explicit configuration choice — Cindy's "no
+ * `partial_apply_pending` for boot mode" framing, the user's intent is
+ * data, not a hint — and (b) hide a regression in the profile pipeline
+ * behind a working embedded UI. Refusing is correct: the two typed
+ * refusals are {@link ProfileUnusableError} (profile present but the
+ * classifier rejected it) and
+ * {@link RemoteOnlyServerProfileRequiredError} (remote-only package
+ * with no usable remote profile), and the dev escape hatch is
  * `SILVERHAND_FORCE_EMBEDDED=1`, which the decision honors at the
  * top of the matrix and surfaces as `mode: 'embedded', reason:
  * 'forced_by_env'`.
@@ -81,9 +75,7 @@ import {
  *     fallback from a present-but-unacceptable profile.
  *
  *   - `mode: 'remote'` — bootstrap MUST skip embedded and route
- *     through the remote transport. Commit 3 trip-wires this via
- *     {@link RemoteModeNotYetWiredError}; Commit 5 lands the actual
- *     branch.
+ *     through the remote transport (live since D4.a Commit 5).
  *
  *   - `mode: 'profile_invalid'` — a profile is present on disk but
  *     the boot-time classifier refused it (e.g. obfuscated loopback
@@ -209,8 +201,7 @@ export interface DecideBackendBootModeInput {
  *      "user has a saved loopback profile" from "fresh install".
  *   4. Profile URL classifies as `remote` → `remote/serverUrl`.
  *      Bootstrap MUST skip embedded and route through the remote
- *      transport (Commit 5 wires this; Commit 3 trip-wires it via
- *      {@link RemoteModeNotYetWiredError}).
+ *      transport (live since D4.a Commit 5).
  *   5. Profile URL fails classification → `profile_invalid`.
  *      Real-world drift cases this covers: writer ran under
  *      `allowInsecureRemote: true` but that caller-side opt-in is now
@@ -272,34 +263,6 @@ export function decideBackendBootMode(
     serverUrl: classification.url.origin,
     insecure: classification.insecure,
   };
-}
-
-/**
- * Thrown by bootstrap when {@link decideBackendBootMode} returns
- * `mode: 'remote'` in Commit 3 (the trip wire). Carries the
- * decision payload so the caller (and crash log) can see exactly
- * what was attempted.
- *
- * Commit 5 deletes this throw site and replaces it with the actual
- * remote-bootstrap branch; the error class itself can remain as a
- * sentinel for any future "remote-mode prerequisite missing" path
- * (e.g. no host claim yet).
- */
-export class RemoteModeNotYetWiredError extends Error {
-  readonly serverUrl: string;
-  readonly insecure: boolean;
-  constructor(decision: Extract<BackendBootMode, { mode: 'remote' }>) {
-    super(
-      `Remote-mode bootstrap is not yet implemented (D4.a Commit 3 trip wire). ` +
-        `Server connection profile is at '${decision.serverUrl}' ` +
-        `(insecure=${decision.insecure}). ` +
-        `Set SILVERHAND_FORCE_EMBEDDED=1 to boot the embedded backend instead, ` +
-        `or wait for D4.a Commit 5 which lands the remote-mode bootstrap branch.`,
-    );
-    this.name = 'RemoteModeNotYetWiredError';
-    this.serverUrl = decision.serverUrl;
-    this.insecure = decision.insecure;
-  }
 }
 
 /**
@@ -374,10 +337,10 @@ export class RemoteOnlyServerProfileRequiredError extends Error {
  * probed URL to disk.
  *
  * **Original purpose (D4.a Commit 3)**: refuse to persist remote
- * URLs while the boot path was still trip-wired with
- * {@link RemoteModeNotYetWiredError}. Persisting a remote profile
- * under the trip wire would have turned a "click Save in Setup
- * Wizard" into a crash on next launch.
+ * URLs while the boot path still trip-wired remote mode as
+ * unimplemented. Persisting a remote profile under that trip wire
+ * would have turned a "click Save in Setup Wizard" into a crash on
+ * next launch.
  *
  * **Lifted in Commit 5d**: now that the boot path includes a real
  * remote-mode branch (skips embedded backend, builds

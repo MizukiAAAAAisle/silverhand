@@ -15,7 +15,6 @@
  *     classifier shipped) → profile_invalid
  *   - URL canonicalization: serverUrl on remote arm is
  *     `URL(input).origin`, not the raw user input
- *   - RemoteModeNotYetWiredError carries serverUrl + insecure
  *   - ProfileUnusableError carries profileUrl + classifyMessage
  *   - evaluateProfileCommitGuard (5d lift): every probe success
  *     kind allows persistence; the persistence ↔ boot invariant
@@ -32,7 +31,6 @@ import {
   localOutboundSocketPathForStartupPlan,
   planBackendStartup,
   ProfileUnusableError,
-  RemoteModeNotYetWiredError,
   type BackendBootMode,
 } from '../backend-boot-mode.js';
 
@@ -289,32 +287,6 @@ describe('decideBackendBootMode — precedence pins', () => {
       allowInsecureRemote: false,
     });
     expect(decision.mode).toBe('remote');
-  });
-});
-
-describe('RemoteModeNotYetWiredError', () => {
-  it('carries serverUrl and insecure for log lines', () => {
-    const err = new RemoteModeNotYetWiredError({
-      mode: 'remote',
-      serverUrl: 'https://backend.example.test',
-      insecure: false,
-    });
-    expect(err.name).toBe('RemoteModeNotYetWiredError');
-    expect(err.serverUrl).toBe('https://backend.example.test');
-    expect(err.insecure).toBe(false);
-    expect(err.message).toContain('https://backend.example.test');
-    expect(err.message).toContain('SILVERHAND_FORCE_EMBEDDED');
-    expect(err.message).toContain('Commit 5');
-  });
-
-  it('carries the insecure flag verbatim for the dev-flag http remote case', () => {
-    const err = new RemoteModeNotYetWiredError({
-      mode: 'remote',
-      serverUrl: 'http://10.0.0.5:8080',
-      insecure: true,
-    });
-    expect(err.insecure).toBe(true);
-    expect(err.message).toContain('insecure=true');
   });
 });
 
