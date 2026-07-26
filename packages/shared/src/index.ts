@@ -1,3 +1,4 @@
+// Cross-environment barrel: keep Node-only globals/imports behind explicit subpath exports.
 export * from './api/index.js';
 export * from './agent-home-workspace.js';
 export * from './bind-address-scope.js';

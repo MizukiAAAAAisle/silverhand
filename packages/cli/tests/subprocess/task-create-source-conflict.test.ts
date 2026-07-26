@@ -100,7 +100,7 @@ function parseStderrJson(stderr: string): {
   return JSON.parse(line);
 }
 
-describe('silverhand task create — business-failure never prints as success (real subprocess)', () => {
+describe('silverhand task create — business-failure never prints as success (real subprocess)', { timeout: 30_000 }, () => {
   it('maps a 200 source_conflict envelope to exit≠0 + code=conflict + details.existing_task, no success stdout', async () => {
     nextResponse = {
       status: 200,
@@ -128,4 +128,4 @@ describe('silverhand task create — business-failure never prints as success (r
       existing_task: { task_number: 7, status: 'closed', title: 'the winner' },
     });
   });
-}, { timeout: 30_000 });
+});

@@ -12,5 +12,6 @@
       "@/*": ["src/renderer/*"]
     }
   },
-  "include": ["src/renderer", "src/preload/api.d.ts"]
+  "include": ["src/renderer", "src/preload/api.d.ts"],
+  "exclude": ["src/renderer/**/*.test.ts", "src/renderer/**/*.test.tsx"]
 }

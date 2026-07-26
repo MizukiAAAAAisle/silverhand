@@ -1,24 +1,26 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
+import { defineConfig } from 'electron-vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { resolve } from 'node:path';
 
+// Owner: desktop build. The electron-vite 6 beta supplies the supported Vite 8
+// integration; replace the pinned beta when electron-vite 6 stable is released.
 const remoteOnly = process.env.SILVERHAND_DESKTOP_REMOTE_ONLY === '1';
 const allowInsecureRemote =
   process.env.SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE === '1';
 const packagedDefaultServerUrl =
   process.env.SILVERHAND_DESKTOP_DEFAULT_SERVER_URL ?? '';
 
-function readMinifySetting(): false | 'esbuild' {
+function readMinifySetting(): false | 'oxc' {
   const raw = process.env.SILVERHAND_MINIFY;
-  if (raw == null || raw === '') return 'esbuild';
+  if (raw == null || raw === '') return 'oxc';
 
   switch (raw.toLowerCase()) {
     case '1':
     case 'true':
     case 'yes':
     case 'on':
-      return 'esbuild';
+      return 'oxc';
     case '0':
     case 'false':
     case 'no':
@@ -74,10 +76,10 @@ export default defineConfig({
           }
         : {},
     },
-    plugins: [externalizeDepsPlugin({ exclude: workspaceDeps })],
     build: {
+      externalizeDeps: { exclude: workspaceDeps },
       minify,
-      rollupOptions: {
+      rolldownOptions: {
         external: nativeExternalDeps,
         input: { index: resolve(__dirname, 'src/main/index.ts') },
       },
@@ -93,10 +95,10 @@ export default defineConfig({
         packagedDefaultServerUrl,
       ),
     },
-    plugins: [externalizeDepsPlugin({ exclude: workspaceDeps })],
     build: {
+      externalizeDeps: { exclude: workspaceDeps },
       minify,
-      rollupOptions: {
+      rolldownOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },
       },
     },
@@ -119,7 +121,7 @@ export default defineConfig({
     },
     build: {
       minify,
-      rollupOptions: {
+      rolldownOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
         },

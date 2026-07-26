@@ -220,7 +220,7 @@ function parseStderrJson(stderr: string): {
   throw new Error(`no JSON line in stderr:\n${stderr}`);
 }
 
-describe('silverhand message send (stdin-only, real subprocess)', () => {
+describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_000 }, () => {
   it('rejects the legacy --content flag with subkind=flag_removed', async () => {
     const r = await runSend({ argv: ['--content', 'hello'], stdin: 'irrelevant' });
     expect(r.code).toBe(1);
@@ -652,4 +652,4 @@ describe('silverhand message send (stdin-only, real subprocess)', () => {
     expect(body.error.code).toBe('validation_error');
     expect(body.error.message).toContain('force_send');
   }, 20_000);
-}, { timeout: 30_000 });
+});

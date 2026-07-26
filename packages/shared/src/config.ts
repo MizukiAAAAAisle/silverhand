@@ -130,6 +130,8 @@ export const SILVERHAND_DAEMON_SOCKET_ENV = 'SILVERHAND_DAEMON_SOCKET';
 export const SILVERHAND_ALLOW_INSECURE_REMOTE_ENV =
   'SILVERHAND_ALLOW_INSECURE_REMOTE';
 
+type EnvironmentSnapshot = Readonly<Record<string, string | undefined>>;
+
 /**
  * Helper: read the dev-only insecure-remote env flag from a `process.env`
  * snapshot. Returns true iff the env value is exactly `'1'`.
@@ -141,7 +143,7 @@ export const SILVERHAND_ALLOW_INSECURE_REMOTE_ENV =
  * `packages/backend/src/auth/config.ts`.
  */
 export function readAllowInsecureRemoteFlag(
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvironmentSnapshot,
 ): boolean {
   return env[SILVERHAND_ALLOW_INSECURE_REMOTE_ENV] === '1';
 }
@@ -178,7 +180,7 @@ export function readAllowInsecureRemoteFlag(
 export const SILVERHAND_FORCE_EMBEDDED_ENV = 'SILVERHAND_FORCE_EMBEDDED';
 
 export function readForceEmbeddedFlag(
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvironmentSnapshot,
 ): boolean {
   return env[SILVERHAND_FORCE_EMBEDDED_ENV] === '1';
 }

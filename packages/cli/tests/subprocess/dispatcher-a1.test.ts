@@ -75,7 +75,7 @@ function parseStderrJson(stderr: string): { error: { code: string; subkind?: str
   return JSON.parse(line);
 }
 
-describe('dispatcher A1 hard guard (real subprocess)', () => {
+describe('dispatcher A1 hard guard (real subprocess)', { timeout: 20_000 }, () => {
   it('rejects an unexpected positional with subkind=unexpected_arguments', async () => {
     // `task list` accepts no value-bearing flags except --status etc.
     // A bare positional `extra` should fall into args.positional.
@@ -230,4 +230,4 @@ describe('dispatcher A1 hard guard (real subprocess)', () => {
     expect(body.error.message).toContain('silverhand task create --title');
     expect(body.error.message).toContain('--source-message-id');
   });
-}, { timeout: 20_000 });
+});
