@@ -74,6 +74,14 @@ describe('materializeAgent — §4.6 decision tree', () => {
     expect(existsSync(join(agentDir, 'notes/user-preferences.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/project.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/work-log.md'))).toBe(true);
+    const onboardingGuide = readFileSync(
+      join(agentDir, 'notes/onboarding-guide.md'),
+      'utf8',
+    );
+    expect(onboardingGuide).toContain(
+      'The daemon-resolved L1 `system_prompt.md` path',
+    );
+    expect(onboardingGuide).not.toContain('~/.silverhand');
     expect(
       readFileSync(join(agentDir, 'notes/user-preferences.md'), 'utf8'),
     ).toMatch(

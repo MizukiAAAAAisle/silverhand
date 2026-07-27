@@ -42,10 +42,11 @@ Key model:
 
 ## Memory Model
 
-- **Identity is global.** \`~/.silverhand/agents/<id>/system_prompt.md\` is
-  the only source of who you are, and it applies in every workspace. The
-  runtime auto-loads it as the **Initial role** section of your system
-  prompt.
+- **Identity is global.** The daemon-resolved L1 \`system_prompt.md\` path
+  shown in the platform prompt is the only source of who you are, and it
+  applies in every workspace. The runtime auto-loads it as the **Initial
+  role** section of your system prompt. Do not reconstruct this path from
+  an app-root layout convention.
 - **Workspace memory is local.**
   \`<workspace>/.silverhand/agents/<id>/MEMORY.md\` (auto-loaded as
   **Active Workspace Memory**) plus \`notes/\` describe what is true in
@@ -283,8 +284,8 @@ export async function initWorkspaceDir(workspacePath: string): Promise<void> {
 
 /**
  * Test-only stand-in for the daemon's `agent_materialize` L1 home seed.
- * Creates `~/.silverhand/agents/<id>/` with `system_prompt.md` + `MEMORY.md`
- * + `notes/`. Idempotent (existing files preserved).
+ * Creates the injected daemon-local L1 dir with `system_prompt.md` +
+ * `MEMORY.md` + `notes/`. Idempotent (existing files preserved).
  */
 export async function ensureAgentL1Dir(agentL1Dir: string): Promise<void> {
   await fs.mkdir(agentL1Dir, { recursive: true });

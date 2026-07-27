@@ -19,12 +19,19 @@ import {
 //      flags, no retired JSON field names that would mis-route agents.
 
 function buildPlatformPrompt(
-  input: Omit<PlatformPromptInput, 'memoryNotesCatalog'> & {
+  input: Omit<
+    PlatformPromptInput,
+    'memoryNotesCatalog' | 'roleSystemPromptPath'
+  > & {
     memoryNotesCatalog?: MemoryNotesCatalog;
+    roleSystemPromptPath?: string;
   },
 ): string {
   return buildPlatformPromptImpl({
     ...input,
+    roleSystemPromptPath:
+      input.roleSystemPromptPath ??
+      `/host/computers/computer-1/agents/${input.agentId}/system_prompt.md`,
     memoryNotesCatalog: input.memoryNotesCatalog ?? {
       entries: [],
       omittedCount: 0,
@@ -180,10 +187,14 @@ describe('buildPlatformPrompt', () => {
 
   it('renders the active profile path and the L1/L2 split in Active Profile Files', () => {
     const regular = prompt();
-    // L1 path is hard-coded by agent id; L2 path is rendered as a relative
-    // profile dir. The legacy "Your active profile in this context: ..."
-    // header was removed when system_prompt.md moved to L1-only.
-    expect(regular).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
+    // L1 is the daemon-resolved host path; L2 is rendered as a relative
+    // profile dir. Neither is reconstructed from the app-root layout.
+    expect(regular).toContain(
+      '/host/computers/computer-1/agents/agent-1/system_prompt.md',
+    );
+    // Agent-facing prompt prose must never reconstruct any app-root path.
+    // The authoritative absolute value above is the only allowed L1 source.
+    expect(regular).not.toContain('~/.silverhand');
     expect(regular).toContain('./.silverhand/agents/agent-1/MEMORY.md');
     expect(regular).toContain('./.silverhand/agents/agent-1/notes/');
 
@@ -210,8 +221,10 @@ describe('buildPlatformPrompt', () => {
     // root of the L1 directory (which is also the DM workspace path).
     expect(dm).toContain('./MEMORY.md');
     expect(dm).toContain('./notes/');
-    // L1 path stays the same (it's keyed off agent id, not profile dir).
-    expect(dm).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
+    // L1 path stays the same (it comes from daemon resolution, not profile dir).
+    expect(dm).toContain(
+      '/host/computers/computer-1/agents/agent-1/system_prompt.md',
+    );
 
     const messy = buildPlatformPrompt({
       agentId: 'agent-1',
@@ -846,7 +859,9 @@ describe('buildPlatformPrompt — three-file model', () => {
     // ./.silverhand/agents/<id>/system_prompt.md as the role contract path.
     // It must now point at L1, not L2.
     expect(text).not.toContain('./.silverhand/agents/agent-1/system_prompt.md');
-    expect(text).toContain('~/.silverhand/agents/agent-1/system_prompt.md');
+    expect(text).toContain(
+      '/host/computers/computer-1/agents/agent-1/system_prompt.md',
+    );
   });
 
   it('uses a longer fence when injected content contains triple backticks', () => {

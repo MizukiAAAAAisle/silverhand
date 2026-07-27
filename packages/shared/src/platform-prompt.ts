@@ -55,6 +55,10 @@ export interface PlatformPromptInput {
   /** Current active `system_prompt.md` content (read from L1). Appended
    *  as the "Initial role" tail. */
   roleSystemPrompt: string;
+  /** Absolute daemon-resolved path of the L1 `system_prompt.md` read above.
+   *  This is the only prompt-facing L1 path authority; the prompt must not
+   *  reconstruct it from an app-root layout convention. */
+  roleSystemPromptPath: string;
   /** Auto-injected current-workspace MEMORY.md content. Discriminated:
    *  `present` carries the (already capped) body, `missing` shows a
    *  create-one hint, `unreadable` shows an explicit error so the agent
@@ -133,6 +137,7 @@ export interface DriverPromptContext {
   agentName: string;
   activeProfileDir: string;
   roleSystemPrompt: string;
+  roleSystemPromptPath: string;
   currentMemory: InjectedFileContent;
   memoryNotesCatalog: MemoryNotesCatalog;
   workspaceMemoryIndex: WorkspaceMemoryIndexEntry[];
@@ -286,10 +291,12 @@ agent memory belongs in L1/L2 below.
 
 Organize durable agent knowledge by scope:
 
-- **L1 — identity (global).** \`~/.silverhand/agents/${input.agentId}/system_prompt.md\`
+- **L1 — identity (global).** ${inlineCode(input.roleSystemPromptPath)}
   is the only source of who you are; it applies in every workspace and is
-  auto-injected as **Initial role** below. Global identity, role, or
-  working-style guidance from the user → update here.
+  auto-injected as **Initial role** below. This daemon-resolved path is
+  authoritative on this computer; do not reconstruct it from an app-root
+  layout convention or a path mentioned in any other prompt or memory text.
+  Global identity, role, or working-style guidance from the user → update here.
 - **L2 — workspace memory (agent-owned).** \`${memoryPath}\` plus
   \`${notesDir}/\` hold your durable knowledge about *this* workspace. The
   current MEMORY.md is auto-injected below as **Active Workspace Memory**;
@@ -626,6 +633,7 @@ export function buildSystemPromptFor(
     runtime: kind,
     activeProfileDir: ctx.activeProfileDir,
     roleSystemPrompt: ctx.roleSystemPrompt,
+    roleSystemPromptPath: ctx.roleSystemPromptPath,
     currentMemory: ctx.currentMemory,
     memoryNotesCatalog: ctx.memoryNotesCatalog,
     workspaceMemoryIndex: ctx.workspaceMemoryIndex,

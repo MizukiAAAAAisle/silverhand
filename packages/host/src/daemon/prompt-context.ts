@@ -42,10 +42,13 @@ export async function readFileWithCap(
 export async function buildPromptContextFromRuntimeStartOptions(
   options: ResolvedStartOptions,
 ): Promise<DriverPromptContext> {
-  const roleSystemPrompt = await readFile(
-    join(options.agent.home_dir, 'system_prompt.md'),
-    'utf-8',
-  ).catch(() => '');
+  const roleSystemPromptPath = join(
+    options.agent.home_dir,
+    'system_prompt.md',
+  );
+  const roleSystemPrompt = await readFile(roleSystemPromptPath, 'utf-8').catch(
+    () => '',
+  );
 
   const currentMemoryDir = memoryDirFor(options.workspace, options.agent.id);
   const currentMemory = await readFileWithCap(
@@ -59,6 +62,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
     agentName: options.agent.name,
     activeProfileDir: activeProfilePromptDir(options.workspace, options.agent.id),
     roleSystemPrompt,
+    roleSystemPromptPath,
     currentMemory,
     memoryNotesCatalog,
     workspaceMemoryIndex: buildWorkspaceMemoryIndexFromRuntimeStartOptions(

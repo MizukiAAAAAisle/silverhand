@@ -64,10 +64,11 @@ Key model:
 
 ## Memory Model
 
-- **Identity is global.** \`~/.silverhand/agents/<id>/system_prompt.md\` is
-  the only source of who you are, and it applies in every workspace. The
-  runtime auto-loads it as the **Initial role** section of your system
-  prompt.
+- **Identity is global.** The daemon-resolved L1 \`system_prompt.md\` path
+  shown in the platform prompt is the only source of who you are, and it
+  applies in every workspace. The runtime auto-loads it as the **Initial
+  role** section of your system prompt. Do not reconstruct this path from
+  an app-root layout convention.
 - **Workspace memory is local.**
   \`<workspace>/.silverhand/agents/<id>/MEMORY.md\` (auto-loaded as
   **Active Workspace Memory**) plus \`notes/\` describe what is true in
@@ -335,10 +336,10 @@ export function getAgentHomeTemplate(
  * D4.e-3 — the L2 (per-workspace) seed template: the SAME content as the
  * agent-home (L1) template MINUS `system_prompt.md`. `system_prompt.md`
  * is L1-ONLY — it is the agent's global identity, read from
- * `~/.silverhand/agents/<id>/system_prompt.md` at every spawn. Copying it
- * into an L2 dir would create stale per-workspace forks that drift from the
- * canonical L1 identity (the historical bug the L1/L2 split fixes). So
- * L2 carries only `MEMORY.md` + `notes/`.
+ * the daemon-resolved agent home at every spawn. Copying it into an L2 dir
+ * would create stale per-workspace forks that drift from the canonical L1
+ * identity (the historical bug the L1/L2 split fixes). So L2 carries only
+ * `MEMORY.md` + `notes/`.
  *
  * Derived from the L1 template (not a second copy of the strings) so the
  * onboarding content stays single-sourced; the ONLY structural difference
