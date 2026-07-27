@@ -106,7 +106,11 @@ export function TaskDetailDialog({
       }}
     >
       <DialogContent
-        className="flex max-h-[80vh] max-w-lg flex-col gap-0 p-0"
+        // Widest dialog after workspace settings: the body carries prose
+        // (description, edit fields) that reads badly in a 512px column.
+        // Explicit px instead of a Tailwind step because 800 sits between
+        // `max-w-2xl` and `max-w-3xl`.
+        className="flex max-h-[80vh] max-w-[800px] flex-col gap-0 p-0"
         cornerActions={
           showJump ? (
             <button
