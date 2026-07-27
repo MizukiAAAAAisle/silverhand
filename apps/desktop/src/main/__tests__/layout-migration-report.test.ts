@@ -1,14 +1,16 @@
 /**
  * #task:1664 — the report side of the migration-failure breadcrumb.
  *
- * The ONE judgment under test is when the breadcrumb is deleted, because that is
- * the entire delivery state machine:
+ * The ONE judgment under test is the breadcrumb's lifetime, because that is the
+ * entire delivery state machine — and by contract (§5) it is at-most-once:
  *   1. nothing pending → no request at all.
- *   2. 204 accepted → breadcrumb gone, `reported`.
- *   3. 4xx refused (a DELIVERED verdict) → breadcrumb gone, `rejected`:
- *      re-sending bytes the server will never accept is a permanent no-op.
- *   4. 5xx or a transport throw → breadcrumb KEPT, `deferred`: "could not reach"
- *      must never be folded into "the server said no".
+ *   2. 204 accepted → breadcrumb gone, `delivered`.
+ *   3. 4xx / 5xx / a transport throw → breadcrumb ALSO gone, `undelivered`:
+ *      the sample is dropped rather than kept for another start, so there is no
+ *      pending state and no cross-start retry to distinguish "refused" from
+ *      "unreachable" for.
+ *   4. The breadcrumb is consumed BEFORE the network is touched, so a failure
+ *      recorded while the request is in flight survives for the next start.
  *   5. The request carries the bearer and exactly the bytes on disk — the wire
  *      payload and the file are one contract.
  */
@@ -76,7 +78,7 @@ describe('reportLayoutMigrationFailures', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('sends the bearer plus exactly the on-disk payload, then clears it', async () => {
+  it('sends the bearer plus exactly the on-disk payload, then it is gone', async () => {
     recordLayoutMigrationFailure({ appRoot, fact: FACT });
     const onDisk = readLayoutMigrationFailures({ appRoot });
     const { calls, fetchImpl } = fetchReturning(204);
@@ -88,7 +90,7 @@ describe('reportLayoutMigrationFailures', () => {
       fetchImpl,
     });
 
-    expect(outcome).toBe('reported');
+    expect(outcome).toBe('delivered');
     expect(calls).toHaveLength(1);
     expect(calls[0]!.input).toBe(ENDPOINT);
     expect(calls[0]!.init.method).toBe('POST');
@@ -103,33 +105,27 @@ describe('reportLayoutMigrationFailures', () => {
     expect(readLayoutMigrationFailures({ appRoot })).toBeNull();
   });
 
-  it('clears the breadcrumb on a 4xx refusal (a delivered verdict)', async () => {
-    recordLayoutMigrationFailure({ appRoot, fact: FACT });
-    const { fetchImpl } = fetchReturning(400);
-    const outcome = await reportLayoutMigrationFailures({
-      appRoot,
-      endpoint: ENDPOINT,
-      token: 'tok',
-      fetchImpl,
-    });
-    expect(outcome).toBe('rejected');
-    expect(readLayoutMigrationFailures({ appRoot })).toBeNull();
-  });
+  it.each([
+    ['a 4xx refusal', 400],
+    ['a 5xx', 503],
+  ])(
+    'drops the sample on %s — one attempt, no pending state',
+    async (_label, status) => {
+      recordLayoutMigrationFailure({ appRoot, fact: FACT });
+      const { calls, fetchImpl } = fetchReturning(status);
+      const outcome = await reportLayoutMigrationFailures({
+        appRoot,
+        endpoint: ENDPOINT,
+        token: 'tok',
+        fetchImpl,
+      });
+      expect(outcome).toBe('undelivered');
+      expect(calls).toHaveLength(1);
+      expect(readLayoutMigrationFailures({ appRoot })).toBeNull();
+    },
+  );
 
-  it('keeps the breadcrumb on a 5xx', async () => {
-    recordLayoutMigrationFailure({ appRoot, fact: FACT });
-    const { fetchImpl } = fetchReturning(503);
-    const outcome = await reportLayoutMigrationFailures({
-      appRoot,
-      endpoint: ENDPOINT,
-      token: 'tok',
-      fetchImpl,
-    });
-    expect(outcome).toBe('deferred');
-    expect(readLayoutMigrationFailures({ appRoot })?.reports).toHaveLength(1);
-  });
-
-  it('keeps the breadcrumb when the request throws, and never throws itself', async () => {
+  it('drops the sample when the request throws, and never throws itself', async () => {
     recordLayoutMigrationFailure({ appRoot, fact: FACT });
     const warnings: Record<string, unknown>[] = [];
     const outcome = await reportLayoutMigrationFailures({
@@ -146,9 +142,33 @@ describe('reportLayoutMigrationFailures', () => {
         },
       },
     });
-    expect(outcome).toBe('deferred');
-    expect(warnings[0]!.action).toBe('layout_v2_migration_report_deferred');
-    expect(readLayoutMigrationFailures({ appRoot })?.reports).toHaveLength(1);
+    expect(outcome).toBe('undelivered');
+    expect(warnings[0]!.action).toBe('layout_v2_migration_report_undelivered');
+    expect(readLayoutMigrationFailures({ appRoot })).toBeNull();
+  });
+
+  it('keeps a failure recorded while the request is in flight', async () => {
+    recordLayoutMigrationFailure({ appRoot, fact: FACT });
+    const outcome = await reportLayoutMigrationFailures({
+      appRoot,
+      endpoint: ENDPOINT,
+      token: 'tok',
+      fetchImpl: async () => {
+        // The claim already happened, so this write lands on a fresh breadcrumb
+        // that the in-flight report can no longer delete.
+        recordLayoutMigrationFailure({
+          appRoot,
+          fact: { ...FACT, stage: 'quiesce' },
+        });
+        return { status: 204 };
+      },
+    });
+
+    expect(outcome).toBe('delivered');
+    const pending = readLayoutMigrationFailures({ appRoot });
+    expect(pending?.reports).toEqual([
+      { ...FACT, stage: 'quiesce', count: 1 },
+    ]);
   });
 
   it('discards an unparseable breadcrumb instead of sending it', async () => {
@@ -167,5 +187,6 @@ describe('reportLayoutMigrationFailures', () => {
     });
     expect(outcome).toBe('nothing_pending');
     expect(calls).toHaveLength(0);
+    expect(readLayoutMigrationFailures({ appRoot })).toBeNull();
   });
 });

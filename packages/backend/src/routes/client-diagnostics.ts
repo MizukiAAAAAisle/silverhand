@@ -47,10 +47,10 @@ export function createClientDiagnosticsApp(
    * what we refuse to ingest, so echoing them into the log would defeat the
    * closed-payload guarantee.
    *
-   * `400` is a DELIVERED verdict: the client deletes its breadcrumb on it. That
-   * is correct — bytes this server rejects will be rejected identically forever,
-   * so retrying them is a permanent no-op, and a client that keeps them would
-   * carry them across every launch.
+   * The response code does not steer client retention: reporting is at-most-once
+   * by contract, so the client has already consumed its breadcrumb before it
+   * sends and drops the sample on ANY outcome. Nothing here will ever be retried
+   * with the same bytes.
    */
   app.post(apiPaths.clientLayoutMigrationDiagnostics, async c => {
     const viewerUserId = requireViewerUserId(c);

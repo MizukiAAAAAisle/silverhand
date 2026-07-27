@@ -733,8 +733,9 @@ async function storeUserSession(token: string, user: UserDto): Promise<void> {
   // place a pending migration-failure breadcrumb can be reported: before this
   // returns there is no bearer to send it with. Deliberately not awaited — the
   // session is already established and diagnostics must not sit in front of the
-  // window; and deliberately once per launch, because at-most-once delivery is
-  // the whole retry policy (a kept breadcrumb retries on the NEXT start).
+  // window; and deliberately once per launch, because delivery is at-most-once:
+  // the reporter consumes the breadcrumb before it sends, so there is nothing
+  // left for a second attempt to carry.
   void reportPendingLayoutMigrationFailuresOnce(token);
 }
 

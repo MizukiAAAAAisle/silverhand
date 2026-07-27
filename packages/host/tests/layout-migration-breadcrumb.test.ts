@@ -12,7 +12,13 @@
  *   5. Every entry point is fail-open: an unwritable root produces a warn, not a
  *      throw, because the caller is already failing a startup.
  *   6. The file content IS the wire payload — no local-only field.
- *   7. The daemon code table covers every typed daemon migration error
+ *   7. `take` CONSUMES: the breadcrumb is gone when it returns, and a failure
+ *      recorded after the claim survives for the next start (at-most-once
+ *      reporting, no pending state). A claim file left by a start that crashed
+ *      mid-delivery is swept — its bytes are neither read nor sent, and it does
+ *      not keep a failure payload on disk across starts. A sweep that could not
+ *      be performed is logged as a failure, never as "swept".
+ *   8. The daemon code table covers every typed daemon migration error
  *      (compile-time; see the type assertions at the bottom).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -26,16 +32,16 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import {
   parseLayoutMigrationDiagnosticsReport,
   type LayoutMigrationFailureFact,
 } from '@silverhand/shared';
 import { resolveDiagnosticsPaths } from '@silverhand/shared/app-data-layout';
 import {
-  clearLayoutMigrationFailures,
   readLayoutMigrationFailures,
   recordLayoutMigrationFailure,
+  takeLayoutMigrationFailures,
 } from '../src/diagnostics/layout-migration-breadcrumb.js';
 import { FlattenLayoutError } from '../src/daemon/workspace-registry/flatten-layout.js';
 import { SessionMigrationError } from '../src/daemon/workspace-registry/session-migration.js';
@@ -179,13 +185,101 @@ describe('readLayoutMigrationFailures', () => {
   });
 });
 
-describe('clearLayoutMigrationFailures', () => {
-  it('removes the file and is idempotent', () => {
+describe('takeLayoutMigrationFailures', () => {
+  it('returns the report and the breadcrumb is gone afterwards', () => {
     recordLayoutMigrationFailure({ appRoot, fact: DESKTOP_FACT });
-    clearLayoutMigrationFailures({ appRoot });
+    expect(takeLayoutMigrationFailures({ appRoot })).toEqual({
+      reports: [{ ...DESKTOP_FACT, count: 1 }],
+    });
+    // Consumed: the sample's lifetime on disk ended here, not when a server
+    // answered — so nothing can be sent twice and nothing is left pending.
     expect(readLayoutMigrationFailures({ appRoot })).toBeNull();
-    expect(() => clearLayoutMigrationFailures({ appRoot })).not.toThrow();
-    expect(() => clearLayoutMigrationFailures({ appRoot: join(appRoot, 'nope') })).not.toThrow();
+    expect(readdirSync(resolveDiagnosticsPaths(appRoot).root)).toEqual([]);
+  });
+
+  it('returns null when there is nothing pending, and never throws', () => {
+    expect(takeLayoutMigrationFailures({ appRoot })).toBeNull();
+    expect(() =>
+      takeLayoutMigrationFailures({ appRoot: join(appRoot, 'nope') }),
+    ).not.toThrow();
+    expect(takeLayoutMigrationFailures({ appRoot: join(appRoot, 'nope') })).toBeNull();
+  });
+
+  it('lets a failure recorded after the claim survive for the next start', () => {
+    recordLayoutMigrationFailure({ appRoot, fact: DESKTOP_FACT });
+    expect(takeLayoutMigrationFailures({ appRoot })?.reports).toHaveLength(1);
+    recordLayoutMigrationFailure({ appRoot, fact: DAEMON_FACT });
+    expect(takeLayoutMigrationFailures({ appRoot })).toEqual({
+      reports: [{ ...DAEMON_FACT, count: 1 }],
+    });
+  });
+
+  it('sweeps a claim file left by an earlier start without sending its bytes', () => {
+    const logger = collectingLogger();
+    const paths = resolveDiagnosticsPaths(appRoot);
+    mkdirSync(paths.root, { recursive: true });
+    const secret = '/Users/someone/private/notes.txt';
+    // A crash between claim and delivery leaves exactly this, with no main file.
+    writeFileSync(
+      `${paths.layoutMigrationFailures}.claim.424242`,
+      JSON.stringify({ reports: [{ ...DESKTOP_FACT, count: 1, oops: secret }] }),
+    );
+
+    expect(takeLayoutMigrationFailures({ appRoot, logger })).toBeNull();
+    // The stale sample is DROPPED, not resurrected — and it does not linger.
+    expect(readdirSync(paths.root)).toEqual([]);
+    expect(JSON.stringify(logger.warnings)).not.toContain(secret);
+    expect(logger.warnings.map(w => w.fields.action)).toEqual([
+      'layout_v2_migration_breadcrumb_claim_swept',
+    ]);
+  });
+
+  it('sweeps a stale claim and still consumes the current breadcrumb', () => {
+    const paths = resolveDiagnosticsPaths(appRoot);
+    recordLayoutMigrationFailure({ appRoot, fact: DESKTOP_FACT });
+    writeFileSync(`${paths.layoutMigrationFailures}.claim.424242`, '{"reports":[]}');
+
+    expect(takeLayoutMigrationFailures({ appRoot })).toEqual({
+      reports: [{ ...DESKTOP_FACT, count: 1 }],
+    });
+    expect(readdirSync(paths.root)).toEqual([]);
+  });
+
+  it('reports a sweep it could not perform as a failure, not as swept', () => {
+    const logger = collectingLogger();
+    const paths = resolveDiagnosticsPaths(appRoot);
+    mkdirSync(paths.root, { recursive: true });
+    const claimName = `${basename(paths.layoutMigrationFailures)}.claim.424242`;
+    writeFileSync(join(paths.root, claimName), '{"reports":[]}');
+    // A read-only diagnostics dir: the unlink fails with EACCES, so the claim is
+    // still on disk when the call returns — the log must not claim otherwise.
+    chmodSync(paths.root, 0o500);
+    try {
+      expect(takeLayoutMigrationFailures({ appRoot, logger })).toBeNull();
+      expect(readdirSync(paths.root)).toEqual([claimName]);
+    } finally {
+      chmodSync(paths.root, 0o700);
+    }
+    expect(logger.warnings.map(w => w.fields.action)).toEqual([
+      'layout_v2_migration_breadcrumb_claim_sweep_failed',
+    ]);
+  });
+
+  it('discards an unparseable file without surfacing its bytes', () => {
+    const logger = collectingLogger();
+    const path = resolveDiagnosticsPaths(appRoot).layoutMigrationFailures;
+    mkdirSync(resolveDiagnosticsPaths(appRoot).root, { recursive: true });
+    const secret = '/Users/someone/private/notes.txt';
+    writeFileSync(path, JSON.stringify({ reports: [{ oops: secret }] }));
+
+    expect(takeLayoutMigrationFailures({ appRoot, logger })).toBeNull();
+    expect(logger.warnings).toHaveLength(1);
+    expect(logger.warnings[0]!.fields.action).toBe(
+      'layout_v2_migration_breadcrumb_invalid',
+    );
+    expect(JSON.stringify(logger.warnings[0])).not.toContain(secret);
+    // Neither the original nor the claim copy is left behind.
+    expect(readdirSync(resolveDiagnosticsPaths(appRoot).root)).toEqual([]);
   });
 });
 
