@@ -26,6 +26,24 @@ export const QUIT_URL = `${STARTUP_FAILURE_ACTION_ORIGIN}/quit`;
 export const STARTUP_FAILURE_EXIT_CODE = 1;
 export const STARTUP_FAILURE_TITLE = 'Silverhand could not start';
 
+/**
+ * Which build refused to start. Shown because this window is, in
+ * practice, the only thing the user can report back from a failed
+ * launch: `client-info.ts` sends the commit to the backend on a
+ * successful connection, and there is no backend here. The release
+ * version alone is not enough — a fix landed after a build went out
+ * carries the same `version` until the next bump, so a report of
+ * "latest version" cannot be resolved to a tree without the commit.
+ */
+export interface StartupFailureBuild {
+  /** Release version, or null if it could not be resolved this early. */
+  version: string | null;
+  /** Full commit sha, or `dev` for an un-stamped local build. */
+  commit: string;
+  /** The build tree had uncommitted changes at package time. */
+  dirty: boolean;
+}
+
 export interface StartupFailureExitDeps {
   /**
    * Opens the failure window on this document, wires `onAction`, and
@@ -59,6 +77,11 @@ function escapeHtml(value: string): string {
   });
 }
 
+function formatBuild(build: StartupFailureBuild): string {
+  const commit = build.dirty ? `${build.commit} (modified)` : build.commit;
+  return build.version ? `${build.version} · ${commit}` : commit;
+}
+
 /**
  * The whole document: no bundle, no preload, no network — the main shell
  * renderer assumes a backend handle, IPC handlers, and a session, none of
@@ -72,6 +95,7 @@ function escapeHtml(value: string): string {
 export function renderStartupFailureDocument(
   notice: StartupFailureNotice,
   logsDir: string | null,
+  build: StartupFailureBuild | null = null,
 ): string {
   const detail = notice.detail
     ? `<p class="detail">${escapeHtml(notice.detail)}</p>`
@@ -80,6 +104,12 @@ export function renderStartupFailureDocument(
     ? `<section>
         <h2>Logs</h2>
         <p class="path">${escapeHtml(logsDir)}</p>
+      </section>`
+    : '';
+  const buildSection = build
+    ? `<section>
+        <h2>Build</h2>
+        <p class="path">${escapeHtml(formatBuild(build))}</p>
       </section>`
     : '';
   const revealLogs = logsDir
@@ -175,6 +205,7 @@ export function renderStartupFailureDocument(
       ${detail}
     </section>
     ${logs}
+    ${buildSection}
     <div class="actions">
       ${revealLogs}
       <a class="button" href="${QUIT_URL}">Quit</a>
@@ -186,10 +217,12 @@ export function renderStartupFailureDocument(
 export function renderStartupFailureErrorBox(
   notice: StartupFailureNotice,
   logsDir: string | null,
+  build: StartupFailureBuild | null = null,
 ): string {
   const lines = [notice.headline, notice.code];
   if (notice.detail) lines.push(notice.detail);
   if (logsDir) lines.push(`Logs: ${logsDir}`);
+  if (build) lines.push(`Build: ${formatBuild(build)}`);
   return lines.join('\n\n');
 }
 
@@ -208,10 +241,16 @@ export function renderStartupFailureErrorBox(
  * the remaining honest signal.
  */
 export async function presentStartupFailure(
-  input: { notice: StartupFailureNotice; logsDir: string | null },
+  input: {
+    notice: StartupFailureNotice;
+    logsDir: string | null;
+    /** Omitted where build identity cannot be resolved (tests, early boot). */
+    build?: StartupFailureBuild | null;
+  },
   deps: StartupFailureExitDeps,
 ): Promise<void> {
   const { notice, logsDir } = input;
+  const build = input.build ?? null;
   const onAction = (url: string): void => {
     if (url.startsWith(REVEAL_LOGS_URL)) {
       if (logsDir) deps.revealLogs(logsDir);
@@ -221,14 +260,14 @@ export async function presentStartupFailure(
   };
   try {
     await deps.openWindow({
-      html: renderStartupFailureDocument(notice, logsDir),
+      html: renderStartupFailureDocument(notice, logsDir, build),
       onAction,
     });
   } catch {
     try {
       deps.showErrorBox(
         STARTUP_FAILURE_TITLE,
-        renderStartupFailureErrorBox(notice, logsDir),
+        renderStartupFailureErrorBox(notice, logsDir, build),
       );
     } catch {
       // Deliberately swallowed — see the contract above.

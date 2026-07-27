@@ -13,6 +13,7 @@
  * the window down before rethrowing.
  */
 import { app, BrowserWindow, dialog, shell } from 'electron';
+import { BUILD_COMMIT, BUILD_DIRTY } from './build-metadata.js';
 import {
   presentStartupFailure,
   STARTUP_FAILURE_EXIT_CODE,
@@ -34,7 +35,7 @@ const openWindow: StartupFailureExitDeps['openWindow'] = async ({
 }) => {
   const win = new BrowserWindow({
     width: 520,
-    height: 340,
+    height: 380,
     minWidth: 420,
     minHeight: 260,
     title: 'Silverhand',
@@ -91,12 +92,29 @@ export function showStartupFailureWindow(input: {
   notice: StartupFailureNotice;
   logsDir: string | null;
 }): void {
-  void presentStartupFailure(input, {
-    openWindow,
-    showErrorBox: (title, body) => dialog.showErrorBox(title, body),
-    revealLogs: dir => {
-      void shell.openPath(dir);
+  // Resolved here rather than passed in: this is the Electron-facing
+  // adapter, and `app.getVersion()` is the release-version SoT
+  // (`build-metadata.ts` deliberately carries only the commit identity).
+  // Defensive like the logs directory — a failure this early must not
+  // depend on any resolution succeeding to be able to say what happened.
+  let version: string | null = null;
+  try {
+    version = app.getVersion();
+  } catch {
+    version = null;
+  }
+  void presentStartupFailure(
+    {
+      ...input,
+      build: { version, commit: BUILD_COMMIT, dirty: BUILD_DIRTY },
     },
-    exit: code => app.exit(code),
-  });
+    {
+      openWindow,
+      showErrorBox: (title, body) => dialog.showErrorBox(title, body),
+      revealLogs: dir => {
+        void shell.openPath(dir);
+      },
+      exit: code => app.exit(code),
+    },
+  );
 }
