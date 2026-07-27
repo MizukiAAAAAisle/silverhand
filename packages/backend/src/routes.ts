@@ -27,6 +27,7 @@ import { createHostApp } from './routes/hosts.js';
 import { createWorkspacesApp } from './routes/workspaces.js';
 import { createSortApp } from './routes/sort.js';
 import { createFavoritesApp } from './routes/favorites.js';
+import { createClientDiagnosticsApp } from './routes/client-diagnostics.js';
 import { createTasksApp } from './routes/tasks.js';
 import { createNotificationsApp } from './routes/notifications.js';
 import { createPresenceApp } from './routes/presence.js';
@@ -511,6 +512,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
   // Favorites: the viewer's flat global STARRED list (read projection over the
   // sort context's starred_at, UNIONed across every list_key). Read-only.
   app.route('/', createFavoritesApp({ ctx }));
+
+  // Client-side diagnostics intake (#task:1664): failures the server cannot
+  // observe when they happen, reported by the desktop on its next
+  // authenticated start. Log-only, no read side.
+  app.route('/', createClientDiagnosticsApp({ ctx }));
 
   // Workspace membership routes.
   app.route('/', createWorkspaceMembershipApp(membershipDeps));

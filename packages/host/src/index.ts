@@ -42,6 +42,16 @@ export {
   planWorkspaceDataConvergence,
 } from './daemon/workspace-registry/flatten-layout.js';
 export { runWorkspaceDataConvergencePass } from './daemon/workspace-registry/convergence-pass.js';
+// #task:1664 — the local failure-breadcrumb store for layout-v2 migration
+// diagnostics. Written by both failing components, read+cleared by the desktop
+// reporter; host owns local-filesystem authority.
+export {
+  clearLayoutMigrationFailures,
+  readLayoutMigrationFailures,
+  recordLayoutMigrationFailure,
+  shouldReportLayoutMigrationDiagnostics,
+  type LayoutMigrationBreadcrumbLogger,
+} from './diagnostics/layout-migration-breadcrumb.js';
 export {
   CWD_SCOPED_SESSION_RUNTIMES,
   SessionMigrationError,

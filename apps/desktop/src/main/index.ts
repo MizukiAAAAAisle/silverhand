@@ -54,6 +54,7 @@ import {
   type DaemonHandle,
 } from '@silverhand/host';
 import { prepareDesktopDataLayout } from './layout-migration/prepare.js';
+import { reportLayoutMigrationFailures } from './layout-migration/report-failures.js';
 import { describeStartupFailure } from './startup-failure.js';
 import { showStartupFailureWindow } from './startup-failure-window.js';
 import {
@@ -728,6 +729,39 @@ async function storeUserSession(token: string, user: UserDto): Promise<void> {
   userSessionUser = user;
   persistUserSessionToken(token);
   await syncEventWsSessionCookie(token);
+  // #task:1664 — the ONE authenticated-promote point, so it is also the one
+  // place a pending migration-failure breadcrumb can be reported: before this
+  // returns there is no bearer to send it with. Deliberately not awaited — the
+  // session is already established and diagnostics must not sit in front of the
+  // window; and deliberately once per launch, because at-most-once delivery is
+  // the whole retry policy (a kept breadcrumb retries on the NEXT start).
+  void reportPendingLayoutMigrationFailuresOnce(token);
+}
+
+let layoutMigrationReportAttempted = false;
+
+async function reportPendingLayoutMigrationFailuresOnce(
+  token: string,
+): Promise<void> {
+  if (layoutMigrationReportAttempted) return;
+  layoutMigrationReportAttempted = true;
+  try {
+    await reportLayoutMigrationFailures({
+      appRoot: silverhandDir(),
+      endpoint: backendUrl(apiPaths.clientLayoutMigrationDiagnostics),
+      token,
+      fetchImpl: (input, init) => fetchBackendWithNetworkPolicy(fetch, input, init),
+      logger,
+    });
+  } catch (err) {
+    // The reporter itself is fail-open; this catch only covers the wiring
+    // around it (e.g. resolving the backend URL) so a diagnostics attempt can
+    // never surface as an unhandled rejection on a healthy session.
+    logger?.warn(
+      { err, action: 'layout_v2_migration_report_wiring_failed' },
+      'could not attempt the layout-v2 migration diagnostics report',
+    );
+  }
 }
 
 function updateCachedUserSessionFromProfileMutation(

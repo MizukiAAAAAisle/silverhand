@@ -9,6 +9,7 @@ export * from './client-telemetry.js';
 export * from './config.js';
 export * from './connect-command.js';
 export * from './host-diagnostics.js';
+export * from './layout-migration-diagnostics.js';
 export * from './logging.js';
 export * from './mcp-config.js';
 export * from './mime.js';

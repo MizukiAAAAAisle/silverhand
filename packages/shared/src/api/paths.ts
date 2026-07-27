@@ -313,6 +313,14 @@ export const apiPaths = {
    *  user has no avatar set. */
   userAvatar: (id: string) => `/api/users/${id}/avatar`,
 
+  /** #task:1664 — the desktop reports a layout-v2 migration failure that
+   *  happened BEFORE any daemon could connect, on the next authenticated
+   *  start. Body = `LayoutMigrationDiagnosticsReport` (closed enums, release
+   *  versions, saturating counts — no free text, path, or id). User-session
+   *  bearer; observability only (logged, not persisted); 204 on accept.
+   *  Called by Electron main, never the renderer. */
+  clientLayoutMigrationDiagnostics: '/api/client-diagnostics/layout-migration',
+
   // notifications (v1: cross-channel mention CC events)
   notifications: '/api/notifications',
   notificationsUnread: '/api/notifications/unread',

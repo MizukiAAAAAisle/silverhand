@@ -6,7 +6,12 @@ import {
   assembleConnectCommand,
   buildConnectArgv,
 } from '@silverhand/shared';
-import { bindingSlug, managedWorkspaceSlug } from '../src/index.js';
+import {
+  DAEMON_VERSION,
+  bindingSlug,
+  managedWorkspaceSlug,
+  readLayoutMigrationFailures,
+} from '../src/index.js';
 import {
   defaultConnectRuntimePaths,
   discoverStopTarget,
@@ -394,6 +399,21 @@ describe('silverhand-daemon connect command', () => {
       expect(logBody).toContain('"action":"layout_v2_migration_failed"');
       expect(logBody).toContain('"stage":"workspace_data_convergence"');
       expect(logBody).toContain('"hostId":"host-real"');
+      // #task:1664 — the same failure also leaves the app-scoped breadcrumb the
+      // next authenticated desktop start reports. It sits OUTSIDE the slot and
+      // outside every migration coordinate, and carries the MAPPED code only.
+      expect(readLayoutMigrationFailures({ appRoot: stateRoot })).toEqual({
+        reports: [
+          {
+            component: 'daemon',
+            daemon_version: DAEMON_VERSION,
+            stage: 'workspace_data_convergence',
+            code: 'flatten_conflict',
+            layout_version: 2,
+            count: 1,
+          },
+        ],
+      });
       // Fail closed: source registry not retired, no daemon run-state.
       expect(
         existsSync(join(wsData, bindingSlug(binding), 'workspace-registry.json')),

@@ -8,13 +8,21 @@
  * atomic moves; filesystem state is the progress record and the next run
  * resumes or reports the same typed conflict without guessing or merging.
  * The daemon never starts after a failure, so the backend cannot observe it
- * — the `layout_v2_migration_failed` structured line written here (stage +
- * typed code + versions) IS the daemon-local failure evidence. Nothing is
- * reported upstream.
+ * at the time — the `layout_v2_migration_failed` structured line written here
+ * (stage + typed code + versions) is the machine-local failure evidence, and
+ * #task:1664 additionally drops a breadcrumb whose closed payload the NEXT
+ * authenticated start reports once (`recordLayoutMigrationFailure`). Both the
+ * log line and the breadcrumb carry the SAME mapped code — the raw `err.code`
+ * of an arbitrary throw is never used as a value.
  *
  * Lives inside `layout-migration/` on purpose: it is part of the same
  * deletion unit and goes when the migration unit does.
  */
+import {
+  desktopLayoutMigrationCode,
+  type DesktopLayoutMigrationStage,
+} from '@silverhand/shared';
+import { recordLayoutMigrationFailure } from '@silverhand/host';
 import { quiesceLegacyLocalRuntime } from './quiesce.js';
 import { migrateDesktopAppDataLayout, type MigrationLogger } from './engine.js';
 
@@ -37,7 +45,7 @@ export async function prepareDesktopDataLayout(opts: {
 }): Promise<DesktopLayoutOutcome> {
   const quiesce = opts.deps?.quiesce ?? quiesceLegacyLocalRuntime;
   const migrate = opts.deps?.migrate ?? migrateDesktopAppDataLayout;
-  let stage: 'quiesce' | 'engine' = 'quiesce';
+  let stage: DesktopLayoutMigrationStage = 'quiesce';
   try {
     await quiesce(opts.appRoot, opts.logsDir);
     stage = 'engine';
@@ -54,16 +62,30 @@ export async function prepareDesktopDataLayout(opts: {
     // `false` means the complete marker already existed before boot.
     return result.migrated ? 'migrated' : 'already_current';
   } catch (err) {
+    const code = desktopLayoutMigrationCode((err as { code?: unknown }).code);
     opts.logger?.error(
       {
         action: 'layout_v2_migration_failed',
         stage,
-        code: (err as { code?: string }).code ?? 'unknown',
+        code,
         layoutVersion: 2,
         appVersion: opts.appVersion,
       },
       'layout-v2 preparation failed; startup blocked',
     );
+    // Best-effort and never throws: the startup is already failing, and the
+    // breadcrumb must not become a second reason it fails.
+    recordLayoutMigrationFailure({
+      appRoot: opts.appRoot,
+      fact: {
+        component: 'desktop',
+        app_version: opts.appVersion,
+        stage,
+        code,
+        layout_version: 2,
+      },
+      logger: opts.logger,
+    });
     throw err;
   }
 }

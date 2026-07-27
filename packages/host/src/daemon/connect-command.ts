@@ -24,6 +24,7 @@ import {
   CONNECT_ARG_STDERR,
   CONNECT_SUBCOMMAND,
   STOP_SUBCOMMAND,
+  daemonLayoutMigrationCode,
   readAllowInsecureRemoteFlag,
   shellQuoteConnectArg,
   type DaemonHostConfig,
@@ -35,6 +36,9 @@ import {
 } from '@silverhand/shared/app-data-layout';
 import { runDaemon } from './run.js';
 import type { LayoutMigrationOutcome } from '../protocol.js';
+// #task:1664 — sibling import for the same reason as the convergence pass
+// below: never the public barrel.
+import { recordLayoutMigrationFailure } from '../diagnostics/layout-migration-breadcrumb.js';
 // #task:1608 (Cindy R4 P2-4) — sibling imports, never the public barrel.
 import { runWorkspaceDataConvergencePass } from './workspace-registry/convergence-pass.js';
 import { FlattenLayoutError } from './workspace-registry/flatten-layout.js';
@@ -335,7 +339,8 @@ export async function runConnectCommand(
       // #task:1613 — pre-connection failure: the backend is unreachable by
       // construction, so this daemon-local structured line (typed code,
       // versions, hostId) IS the failure evidence. stderr keeps the
-      // operator-facing text; neither is ever reported upstream.
+      // operator-facing text.
+      const code = daemonLayoutMigrationCode(err.code);
       const failureLogger = createDaemonLogger({
         dir: paths.logDir,
         alsoStderr: false,
@@ -345,13 +350,33 @@ export async function runConnectCommand(
         {
           action: 'layout_v2_migration_failed',
           stage: 'workspace_data_convergence',
-          code: err.code,
+          code,
           layoutVersion: 2,
           daemonVersion: DAEMON_VERSION,
           hostId,
         },
         'layout-v2 workspace-data convergence failed; daemon not started',
       );
+      // #task:1664 — drop the closed-payload breadcrumb the next authenticated
+      // desktop start reports. ONLY under the default profile: the breadcrumb
+      // is app-scoped (`<app-root>/diagnostics/`) and the desktop reporter is
+      // the only reader, so under an explicit `--data-root` there is no reader
+      // for a file written next to that root — writing it anyway would leave
+      // bytes nobody ever sends or clears. A remote-only machine's failures
+      // stay in this log line until a daemon-side reporting channel exists.
+      if (useDefaultProfile) {
+        recordLayoutMigrationFailure({
+          appRoot: stateRoot,
+          fact: {
+            component: 'daemon',
+            daemon_version: DAEMON_VERSION,
+            stage: 'workspace_data_convergence',
+            code,
+            layout_version: 2,
+          },
+          logger: failureLogger,
+        });
+      }
       await failureLogger.close();
       process.stderr.write(
         `silverhand-daemon connect: workspace-data migration failed (${err.code}): ${err.message}\n`,

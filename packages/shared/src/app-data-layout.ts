@@ -104,6 +104,34 @@ export function embeddedServerStagingDir(appRoot: string): string {
   return join(appRoot, '.embedded-server-layout-v2.staging');
 }
 
+/** #task:1664 — the layout-migration failure breadcrumb file name, relative to
+ *  `diagnostics/`. */
+export const LAYOUT_MIGRATION_DIAGNOSTICS_FILENAME =
+  'layout-migration-failures.json';
+
+/**
+ * #task:1664 — app-scoped diagnostics coordinates (`<app-root>/diagnostics/**`).
+ *
+ * Top-level and layout-version INDEPENDENT, for the same reason `run/` is: the
+ * only thing written here records a FAILURE of the layout migration, so it must
+ * not sit in any coordinate that migration moves, renames, or stages. Never
+ * migrated. Both writers (the desktop's pre-connection preparation and the
+ * daemon's workspace-data convergence) and the single reporter resolve the file
+ * through here, so there is exactly one path fact.
+ */
+export interface DiagnosticsPaths {
+  root: string;
+  layoutMigrationFailures: string;
+}
+
+export function resolveDiagnosticsPaths(appRoot: string): DiagnosticsPaths {
+  const root = join(appRoot, 'diagnostics');
+  return {
+    root,
+    layoutMigrationFailures: join(root, LAYOUT_MIGRATION_DIAGNOSTICS_FILENAME),
+  };
+}
+
 /** The per-computer profiles root (`<app-root>/computers`). */
 export function computersRootDir(appRoot: string): string {
   return join(appRoot, 'computers');
