@@ -20,6 +20,7 @@ import {
 
 const silent = { info: () => {}, warn: () => {} };
 const BINDING = { server_origin: 'https://srv.example', host_id: 'host-real' };
+const OTHER_BINDING = { server_origin: 'local-embedded', host_id: 'host-real' };
 const PLACEHOLDER = { server_origin: 'local-embedded', host_id: 'local' };
 const WS = 'r6Cb5cuDnS2hAP9l';
 
@@ -58,7 +59,7 @@ describe('runWorkspaceDataConvergencePass', () => {
 
       const r = runWorkspaceDataConvergencePass({
         workspaceDataRoot: root,
-        candidateBindings: [BINDING],
+        currentBinding: BINDING,
         sessionStoreHome: home,
         env: {},
         logger: silent,
@@ -84,7 +85,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       // Idempotent re-run: nothing left to do.
       const again = runWorkspaceDataConvergencePass({
         workspaceDataRoot: root,
-        candidateBindings: [BINDING],
+        currentBinding: BINDING,
         sessionStoreHome: home,
         env: {},
         logger: silent,
@@ -106,7 +107,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(() =>
         runWorkspaceDataConvergencePass({
           workspaceDataRoot: root,
-          candidateBindings: [BINDING],
+          currentBinding: BINDING,
           sessionStoreHome: home,
           env: {},
           logger: silent,
@@ -133,7 +134,7 @@ describe('runWorkspaceDataConvergencePass', () => {
 
       const r = runWorkspaceDataConvergencePass({
         workspaceDataRoot: root,
-        candidateBindings: [BINDING],
+        currentBinding: BINDING,
         sessionStoreHome: home,
         env: {},
         logger: silent,
@@ -154,7 +155,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       seedSlugNamespace(root, { server_origin: 'https://other.example', host_id: 'host-real' }, WS);
       const r = runWorkspaceDataConvergencePass({
         workspaceDataRoot: root,
-        candidateBindings: [BINDING],
+        currentBinding: BINDING,
         sessionStoreHome: root,
         env: {},
         logger: silent,
@@ -183,7 +184,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(() =>
         runWorkspaceDataConvergencePass({
           workspaceDataRoot: root,
-          candidateBindings: [BINDING],
+          currentBinding: BINDING,
           sessionStoreHome: root,
           env: {},
           logger: silent,
@@ -222,7 +223,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(() =>
         runWorkspaceDataConvergencePass({
           workspaceDataRoot: root,
-          candidateBindings: [BINDING],
+          currentBinding: BINDING,
           sessionStoreHome: home,
           env: {},
           logger: silent,
@@ -310,7 +311,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(() =>
         runWorkspaceDataConvergencePass({
           workspaceDataRoot: root,
-          candidateBindings: [BINDING],
+          currentBinding: BINDING,
           sessionStoreHome: root,
           env: {},
           logger: silent,
@@ -320,6 +321,35 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(
         existsSync(join(root, bindingSlug(BINDING), 'workspace-registry.json')),
       ).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('a flat registry from a different binding blocks resume instead of becoming current', () => {
+    const root = mkdtempSync(join(tmpdir(), 'sh-conv-'));
+    try {
+      writeFileSync(
+        join(root, 'workspace-registry.json'),
+        JSON.stringify({
+          schema_version: 1,
+          binding: BINDING,
+          workspaces: {},
+        }),
+      );
+
+      expect(() =>
+        runWorkspaceDataConvergencePass({
+          workspaceDataRoot: root,
+          currentBinding: OTHER_BINDING,
+          sessionStoreHome: root,
+          env: {},
+          logger: silent,
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'flatten_conflict' }));
+      expect(
+        JSON.parse(readFileSync(join(root, 'workspace-registry.json'), 'utf8')),
+      ).toMatchObject({ binding: BINDING });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -345,7 +375,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(() =>
         runWorkspaceDataConvergencePass({
           workspaceDataRoot: root,
-          candidateBindings: [BINDING],
+          currentBinding: BINDING,
           sessionStoreHome: root,
           env: {},
           logger: silent,
@@ -377,7 +407,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(() =>
         runWorkspaceDataConvergencePass({
           workspaceDataRoot: root,
-          candidateBindings: [BINDING],
+          currentBinding: BINDING,
           sessionStoreHome: root,
           env: {},
           logger: silent,
@@ -397,7 +427,7 @@ describe('runWorkspaceDataConvergencePass', () => {
     try {
       const r = runWorkspaceDataConvergencePass({
         workspaceDataRoot: root,
-        candidateBindings: [BINDING],
+        currentBinding: BINDING,
         sessionStoreHome: root,
         env: {},
         logger: silent,

@@ -26,14 +26,13 @@ import {
  * (`<workspace-data>/workspace-registry.json` +
  * `workspaces/<workspace_id>`).
  *
- * Authority discipline (Cindy R4 P0-1): the migration receives the FULL
- * candidate `RegistryBinding`s (never a bare host id), computes each
- * candidate's ONE expected legacy namespace coordinate
- * (`<root>/<bindingSlug(candidate)>`), and strictly verifies the
- * registry header there equals the candidate byte-for-byte. No other
- * directory under workspace-data is ever read: a malformed orphan can
- * neither block nor join the migration, and a same-host/different-origin
- * namespace is never adopted.
+ * Authority discipline (Cindy R4 P0-1): the migration receives the ONE full
+ * current `RegistryBinding` (never a bare host id), computes its expected
+ * legacy namespace coordinate (`<root>/<bindingSlug(currentBinding)>`), and
+ * strictly verifies the registry header there equals the current binding
+ * byte-for-byte. No other directory under workspace-data is ever read: a
+ * malformed orphan can neither block nor join the migration, and a
+ * same-host/different-origin namespace is never adopted.
  *
  * Validation discipline (Cindy R4 P0-2): there is exactly ONE strict
  * plan. It reuses the runtime registry schema (schema_version, full
@@ -55,7 +54,6 @@ import {
 export class FlattenLayoutError extends Error {
   constructor(
     readonly code:
-      | 'flatten_ambiguous'
       | 'flatten_conflict'
       | 'flatten_unreadable'
       | 'flatten_invalid_id'
@@ -147,7 +145,7 @@ export interface ConvergencePlan {
  */
 export function planWorkspaceDataConvergence(opts: {
   workspaceDataRoot: string;
-  candidateBindings: readonly RegistryBinding[];
+  currentBinding: RegistryBinding;
 }): ConvergencePlan {
   const root = opts.workspaceDataRoot;
   const rootState = entryState(root);
@@ -170,69 +168,61 @@ export function planWorkspaceDataConvergence(opts: {
     throw new FlattenLayoutError('flatten_conflict', 'flat registry path is not a regular file');
   }
 
-  // Deduplicate candidates by their slug (the coordinate identity).
-  const candidates = new Map<string, RegistryBinding>();
-  for (const candidate of opts.candidateBindings) {
-    candidates.set(bindingSlug(candidate), candidate);
+  // The current binding's EXPECTED coordinate is the only namespace read.
+  // Same-host historical namespaces are deliberately outside this planner.
+  const slug = bindingSlug(opts.currentBinding);
+  const nsDir = join(root, slug);
+  const nsState = entryState(nsDir);
+  if (nsState === 'unreadable') {
+    throw new FlattenLayoutError('flatten_unreadable', `namespace ${slug} cannot be inspected`);
   }
-
-  // The candidates' EXPECTED coordinates are the only directories read.
-  const sources: Array<{ name: string; binding: RegistryBinding; file: WorkspaceRegistryFile }> = [];
-  for (const [slug, binding] of candidates) {
-    const nsDir = join(root, slug);
-    const nsState = entryState(nsDir);
-    if (nsState === 'absent') continue;
-    if (nsState === 'unreadable') {
-      throw new FlattenLayoutError('flatten_unreadable', `namespace ${slug} cannot be inspected`);
-    }
-    if (nsState !== 'dir') {
-      throw new FlattenLayoutError('flatten_conflict', `namespace ${slug} is not a directory`);
-    }
-    const registryPath = join(nsDir, REGISTRY_FILE_NAME);
-    const registryState = entryState(registryPath);
-    if (registryState === 'absent') continue; // residue dir without a registry: not claimable
-    if (registryState !== 'file') {
-      throw new FlattenLayoutError(
-        'flatten_unreadable',
-        `namespace ${slug} registry cannot be inspected or is not a regular file`,
-      );
-    }
-    const file = readRegistryStrict(registryPath);
-    // Strict provenance: dirname AND full header must both prove the
-    // candidate. A forged header under the expected dirname (or vice
-    // versa) is a conflict, never adopted.
-    if (!bindingsEqual(file.binding, binding)) {
-      throw new FlattenLayoutError(
-        'flatten_conflict',
-        `namespace ${slug} header (${file.binding.server_origin}/${file.binding.host_id}) does not match its coordinate's binding`,
-      );
-    }
-    sources.push({ name: slug, binding, file });
-  }
-  if (sources.length > 1) {
+  if (nsState !== 'absent' && nsState !== 'dir') {
     throw new FlattenLayoutError(
-      'flatten_ambiguous',
-      `multiple candidate namespaces exist (${sources.map(s => s.name).join(', ')}); refusing to pick one`,
+      'flatten_conflict',
+      `namespace ${slug} is not a directory`,
     );
   }
-  const source = sources[0] ?? null;
+  let source: { name: string; binding: RegistryBinding; file: WorkspaceRegistryFile } | null =
+    null;
+  if (nsState === 'dir') {
+    const registryPath = join(nsDir, REGISTRY_FILE_NAME);
+    const registryState = entryState(registryPath);
+    if (registryState !== 'absent') {
+      if (registryState !== 'file') {
+        throw new FlattenLayoutError(
+          'flatten_unreadable',
+          `namespace ${slug} registry cannot be inspected or is not a regular file`,
+        );
+      }
+      const file = readRegistryStrict(registryPath);
+      // Strict provenance: dirname AND full header must both prove the
+      // current binding. A forged header under the expected dirname (or
+      // vice versa) is a conflict, never adopted.
+      if (!bindingsEqual(file.binding, opts.currentBinding)) {
+        throw new FlattenLayoutError(
+          'flatten_conflict',
+          `namespace ${slug} header (${file.binding.server_origin}/${file.binding.host_id}) does not match its coordinate's binding`,
+        );
+      }
+      source = { name: slug, binding: opts.currentBinding, file };
+    }
+  }
 
   if (flatState === 'file') {
     // Resume (or already done): the flat registry is the plan authority
-    // and must itself pass the strict parse AND prove a candidate binding.
+    // and must itself pass the strict parse AND prove the current binding.
     const flat = readRegistryStrict(flatRegistryPath);
-    const candidate = [...candidates.values()].find(c => bindingsEqual(flat.binding, c));
-    if (candidate === undefined) {
+    if (!bindingsEqual(flat.binding, opts.currentBinding)) {
       throw new FlattenLayoutError(
         'flatten_conflict',
-        'flat workspace registry does not belong to any candidate binding; refusing to touch it',
+        'flat workspace registry does not belong to the current binding; refusing to touch it',
       );
     }
     assertPlanEntryInvariants(root, flat, source?.name ?? null);
     const managed = managedEntriesOf(root, flat, source?.name ?? null);
     return {
       status: source !== null ? 'resume' : 'already_flat',
-      binding: candidate,
+      binding: opts.currentBinding,
       namespaceName: source?.name ?? null,
       flatFile: flat,
       managed,

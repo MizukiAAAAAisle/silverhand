@@ -306,11 +306,12 @@ export async function runConnectCommand(
   try {
     const convergence = runWorkspaceDataConvergencePass({
       workspaceDataRoot: paths.workspaceDataRootDir,
-      // The ONE candidate a connect daemon can own: its full runtime
+      // The ONE binding a connect daemon can own: its full runtime
       // binding (Cindy R4 P0-1 — never a bare host id).
-      candidateBindings: [
-        { server_origin: new URL(parsed.options.serverUrl).origin, host_id: hostId },
-      ],
+      currentBinding: {
+        server_origin: new URL(parsed.options.serverUrl).origin,
+        host_id: hostId,
+      },
       sessionStoreHome: homedir(),
       // The same effective env the daemon (and its runtime children)
       // inherit — never a fresh process.env read (Cindy R4 P2-4).

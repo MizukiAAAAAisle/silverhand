@@ -1982,10 +1982,12 @@ async function bootstrap(): Promise<void> {
     // Quiesce any legacy daemon + orphan runtime children, run the eager
     // two-facet migration, then flip the resolver selector to the marker's
     // version. Both desktop modes execute this identically; migration
-    // failures are startup-blocking by design (fail closed, bytes intact),
-    // and `prepareDesktopDataLayout` writes the daemon-local structured
-    // failure evidence before rethrowing (#task:1613). The returned outcome
-    // is advertised by the spawned daemon's ready handshake for the backend
+    // failures are startup-blocking by design; a failure may follow earlier
+    // atomic moves, and the filesystem progress record makes the next run
+    // resume or report the same typed conflict without guessing or merging.
+    // `prepareDesktopDataLayout` writes the daemon-local structured failure
+    // evidence before rethrowing (#task:1613). The returned outcome is
+    // advertised by the spawned daemon's ready handshake for the backend
     // observation log.
     const layoutMigrationOutcome = await prepareDesktopDataLayout({
       appRoot: silverhandDir(),

@@ -27,7 +27,7 @@ import {
  */
 export function runWorkspaceDataConvergencePass(opts: {
   workspaceDataRoot: string;
-  candidateBindings: readonly RegistryBinding[];
+  currentBinding: RegistryBinding;
   sessionStoreHome: string;
   env: SessionStoreEnv;
   logger: MigrationLogger;
@@ -35,7 +35,7 @@ export function runWorkspaceDataConvergencePass(opts: {
   const { workspaceDataRoot } = opts;
   const plan = planWorkspaceDataConvergence({
     workspaceDataRoot,
-    candidateBindings: opts.candidateBindings,
+    currentBinding: opts.currentBinding,
   });
   let renamed = 0;
   if (plan.managed.length > 0) {

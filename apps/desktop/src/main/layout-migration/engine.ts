@@ -35,6 +35,7 @@ import {
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, sep } from 'node:path';
+import { classifyServerUrl } from '@silverhand/shared';
 import {
   embeddedServerStagingDir,
   localComputerStagingDir,
@@ -183,7 +184,7 @@ export function migrateDesktopAppDataLayout(
     if (facts !== null) {
       renamed += runWorkspaceFlattenCatchUp(
         resolveComputerSlotPaths(appRoot, facts.hostId).workspaceData,
-        candidateBindingsFor(facts),
+        currentBindingFor(facts),
         sessionDeps,
         logger,
       );
@@ -282,7 +283,7 @@ export function migrateDesktopAppDataLayout(
     // coordinate-computed. Probed across every place the namespace can
     // physically be mid-crash; a flat registry already present means the
     // session pass completed in the run that started the flatten.
-    const candidates = candidateBindingsFor(bindingFacts!);
+    const currentBinding = currentBindingFor(bindingFacts!);
     const adoptionPlan = planCrossBindingManagedAdoptions({
       workspaceDataRoots: [
         join(localStaging, 'workspace-data'),
@@ -291,7 +292,7 @@ export function migrateDesktopAppDataLayout(
       ],
       legacyRunRoot: legacy.run.root,
       v2WorkspaceData: slot.workspaceData,
-      candidateBindings: candidates,
+      currentBinding,
     });
     const flattenPlan = wrapFlatten(() => {
       for (const root of [
@@ -301,7 +302,7 @@ export function migrateDesktopAppDataLayout(
       ]) {
         const plan = planWorkspaceDataConvergence({
           workspaceDataRoot: root,
-          candidateBindings: candidates,
+          currentBinding,
         });
         if (plan.status !== 'no_namespace') return plan;
       }
@@ -365,7 +366,7 @@ export function migrateDesktopAppDataLayout(
           join(localStaging, 'workspace-data'),
           legacy.run.root,
           slot.workspaceData,
-          candidates,
+          currentBinding,
           logger,
         ),
     });
@@ -381,7 +382,7 @@ export function migrateDesktopAppDataLayout(
     wrapFlatten(() => {
       const plan = planWorkspaceDataConvergence({
         workspaceDataRoot: slot.workspaceData,
-        candidateBindings: candidates,
+        currentBinding,
       });
       executeWorkspaceDataConvergence(plan, {
         workspaceDataRoot: slot.workspaceData,
@@ -419,8 +420,9 @@ export function migrateDesktopAppDataLayout(
  */
 interface BindingConfigFacts {
   hostId: string;
-  /** `new URL(server_url).origin` — required; missing/invalid fails closed. */
-  serverOrigin: string;
+  /** Raw config value retained for the shared loopback/remote discriminator. */
+  serverUrl: string;
+  sourceName: string;
 }
 
 function readBindingConfig(
@@ -452,49 +454,54 @@ function readBindingConfig(
         `binding config at ${basename(path)} carries no usable host_id`,
       );
     }
-    // Cindy R4 addendum: the candidate set derives from the ONE strict
-    // binding config, so a missing or unparseable server_url fails closed
-    // — it must never silently degrade to the embedded-only candidate.
+    // The current binding derives from this ONE strict config, so a missing
+    // server_url fails closed; it must never silently degrade to embedded.
     if (typeof parsed.server_url !== 'string' || parsed.server_url.trim() === '') {
       throw new LayoutMigrationError(
         'layout_registry_rewrite_blocked',
         `binding config at ${basename(path)} carries no usable server_url`,
       );
     }
-    let serverOrigin: string;
-    try {
-      serverOrigin = new URL(parsed.server_url).origin;
-    } catch {
-      throw new LayoutMigrationError(
-        'layout_registry_rewrite_blocked',
-        `binding config at ${basename(path)} carries an unparseable server_url`,
-      );
-    }
     logger.info(
       { action: 'layout_v2_computer_id_resolved', source: basename(path) },
       'target computer id resolved from the binding config',
     );
-    return { hostId, serverOrigin };
+    return { hostId, serverUrl: parsed.server_url, sourceName: basename(path) };
   }
   return null;
 }
 
 /**
- * #task:1608 (Cindy R4 P0-1) — the CLOSED candidate set of full bindings
- * this desktop installation's registries can legitimately carry: the
- * embedded runtime binding, plus the remote-mode desktop binding derived
- * from the config's server_url. The engine cannot tell embedded from
- * remote mode by config alone, so both coordinates are candidates; the
- * plan requires exactly one to physically exist.
+ * Resolve the ONE current registry binding from the same server URL policy
+ * that selects the desktop backend. This deliberately mirrors
+ * `decideBackendBootMode`: as long as loopback profiles boot embedded, a
+ * loopback config belongs to the embedded sentinel and a remote config belongs
+ * to its exact origin. If remote-on-loopback ever becomes valid, this
+ * classifier and the runtime binding resolver must change together.
+ * Historical `local-embedded/<same-host>` namespaces remain available to the
+ * adoption planner as predecessor evidence, but never compete as current
+ * authority.
  */
-function candidateBindingsFor(facts: BindingConfigFacts): RegistryBinding[] {
-  const out: RegistryBinding[] = [
-    { server_origin: 'local-embedded', host_id: facts.hostId },
-  ];
-  if (facts.serverOrigin !== 'local-embedded') {
-    out.push({ server_origin: facts.serverOrigin, host_id: facts.hostId });
+function currentBindingFor(facts: BindingConfigFacts): RegistryBinding {
+  // This classifies coordinate identity, not transport admission. Allowing
+  // insecure remote HTTP here makes it land on its exact remote origin; the
+  // package/env policy may still refuse that URL later during backend boot.
+  const classified = classifyServerUrl(facts.serverUrl, {
+    allowInsecureRemote: true,
+  });
+  if (!classified.ok) {
+    // Production writers persist classifier-normalized URLs. If that
+    // provenance is ever broken (manual edit, corruption, or a new writer),
+    // block the migration instead of guessing a registry coordinate.
+    throw new LayoutMigrationError(
+      'layout_registry_rewrite_blocked',
+      `binding config at ${facts.sourceName} carries a server_url that cannot identify its registry binding: ${classified.message}`,
+    );
   }
-  return out;
+  if (classified.kind === 'loopback') {
+    return { server_origin: 'local-embedded', host_id: facts.hostId };
+  }
+  return { server_origin: classified.url.origin, host_id: facts.hostId };
 }
 
 interface RegistryNamespaceSnapshot {
@@ -616,7 +623,7 @@ function planCrossBindingManagedAdoptions(input: {
   workspaceDataRoots: readonly string[];
   legacyRunRoot: string;
   v2WorkspaceData: string;
-  candidateBindings: readonly RegistryBinding[];
+  currentBinding: RegistryBinding;
 }): CrossBindingAdoptionPlan {
   const snapshots = collectRegistryNamespaceSnapshots(input.workspaceDataRoots);
   const strictSnapshots = new Map<string, StrictRegistryNamespaceSnapshot>();
@@ -629,18 +636,12 @@ function planCrossBindingManagedAdoptions(input: {
     strictSnapshots.set(snapshot.namespace, parsed);
     return parsed;
   };
-  const targets = snapshots
-    .filter(snapshot =>
-      input.candidateBindings.some(candidate => bindingsEqual(snapshot.binding, candidate)),
-    )
-    .map(strictSnapshot);
-  if (targets.length > 1) {
-    throw new LayoutMigrationError(
-      'layout_registry_rewrite_blocked',
-      `multiple current-binding registry namespaces exist (${targets.map(target => target.namespace).join(', ')})`,
-    );
-  }
-  const target = targets[0] ?? null;
+  // One full binding hashes to one deterministic namespace coordinate.
+  // Other same-host namespaces are historical sources, never co-equal
+  // current targets.
+  const targetSnapshot =
+    snapshots.find(snapshot => bindingsEqual(snapshot.binding, input.currentBinding)) ?? null;
+  const target = targetSnapshot === null ? null : strictSnapshot(targetSnapshot);
   if (target === null) {
     return { target: null, adoptions: [], managedSessionSources: [] };
   }
@@ -741,14 +742,14 @@ function adoptCrossBindingManagedWorkspaces(input: {
   stagedWorkspaceData: string;
   legacyRunRoot: string;
   v2WorkspaceData: string;
-  candidateBindings: readonly RegistryBinding[];
+  currentBinding: RegistryBinding;
   logger: MigrationLogger;
 }): void {
   const plan = planCrossBindingManagedAdoptions({
     workspaceDataRoots: [input.stagedWorkspaceData],
     legacyRunRoot: input.legacyRunRoot,
     v2WorkspaceData: input.v2WorkspaceData,
-    candidateBindings: input.candidateBindings,
+    currentBinding: input.currentBinding,
   });
   if (plan.target === null || plan.adoptions.length === 0) return;
 
@@ -884,7 +885,7 @@ function runComputerSlotCatchUp(
     oldWorkspaceData,
     oldWorkspaceData,
     slot.workspaceData,
-    candidateBindingsFor(facts!),
+    currentBindingFor(facts!),
     logger,
   );
   // Per-child idempotent moves (#task:1608 P1-1): each durable child is
@@ -953,7 +954,7 @@ function runComputerSlotCatchUp(
  */
 function runWorkspaceFlattenCatchUp(
   workspaceDataRoot: string,
-  candidateBindings: readonly RegistryBinding[],
+  currentBinding: RegistryBinding,
   sessionDeps: { sessionStoreHome: string; env: SessionStoreEnv; logger: MigrationLogger },
   logger: MigrationLogger,
 ): number {
@@ -961,7 +962,7 @@ function runWorkspaceFlattenCatchUp(
     () =>
       runWorkspaceDataConvergencePass({
         workspaceDataRoot,
-        candidateBindings,
+        currentBinding,
         sessionStoreHome: sessionDeps.sessionStoreHome,
         env: sessionDeps.env,
         logger,
@@ -1417,7 +1418,7 @@ export function rewriteStagedRegistries(
   stagedWorkspaceData: string,
   legacyRunRoot: string,
   v2WorkspaceData: string,
-  candidateBindings: readonly RegistryBinding[],
+  currentBinding: RegistryBinding,
   logger: MigrationLogger,
 ): void {
   const rootState = entryState(stagedWorkspaceData);
@@ -1432,7 +1433,7 @@ export function rewriteStagedRegistries(
     stagedWorkspaceData,
     legacyRunRoot,
     v2WorkspaceData,
-    candidateBindings,
+    currentBinding,
     logger,
   });
   for (const ns of readdirSync(stagedWorkspaceData)) {

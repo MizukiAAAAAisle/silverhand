@@ -4,11 +4,13 @@
  * the eager layout-v2 engine, and derive the migration outcome the
  * spawned daemon advertises on its ready handshake.
  *
- * Failure contract: any throw blocks startup (fail closed, bytes
- * intact). The daemon never starts after a failure, so the backend
- * cannot observe it — the `layout_v2_migration_failed` structured line
- * written here (stage + typed code + versions) IS the daemon-local
- * failure evidence. Nothing is reported upstream.
+ * Failure contract: any throw blocks startup. A failure may follow earlier
+ * atomic moves; filesystem state is the progress record and the next run
+ * resumes or reports the same typed conflict without guessing or merging.
+ * The daemon never starts after a failure, so the backend cannot observe it
+ * — the `layout_v2_migration_failed` structured line written here (stage +
+ * typed code + versions) IS the daemon-local failure evidence. Nothing is
+ * reported upstream.
  *
  * Lives inside `layout-migration/` on purpose: it is part of the same
  * deletion unit and goes when the migration unit does.
