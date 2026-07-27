@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiPaths } from '@silverhand/shared';
+import { LAYOUT_MIGRATION_DIAGNOSTICS_MAX_BYTES, apiPaths } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
@@ -9,10 +9,12 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
  * this route is the ONLY way the fact arrives. Pins:
  *   1. A valid report is accepted with 204 and logged as one line PER entry,
  *      attributed to the principal's user id (never a caller-declared field).
- *   2. An invalid body — unknown key, wrong shape, non-JSON, oversized — is
- *      refused 400 and its bytes are NEVER logged. 400 is a permanent verdict
- *      the client consumes by deleting its breadcrumb.
+ *   2. An invalid body — unknown key, wrong shape, non-JSON — is refused 400 and
+ *      its bytes are NEVER logged. 400 is a permanent verdict the client
+ *      consumes by deleting its breadcrumb.
  *   3. Nothing is persisted: this is observability, not a table.
+ *   4. #task:1665 — an oversized body is refused 413 BEFORE it is buffered,
+ *      whether its size is declared or discovered mid-stream.
  */
 
 interface LogLine {
@@ -123,7 +125,7 @@ describe(`POST ${apiPaths.clientLayoutMigrationDiagnostics}`, () => {
     ).toBe(true);
   });
 
-  it('refuses a non-JSON body, an empty report, and an oversized body', async () => {
+  it('refuses a non-JSON body and an empty report', async () => {
     t = await buildTestApp();
     captureLogs(t);
     const send = (body: string) =>
@@ -135,14 +137,71 @@ describe(`POST ${apiPaths.clientLayoutMigrationDiagnostics}`, () => {
 
     expect((await send('nope')).status).toBe(400);
     expect((await send(JSON.stringify({ reports: [] }))).status).toBe(400);
+  });
+
+  it('rejects an oversized declared body with 413 before it is buffered', async () => {
+    t = await buildTestApp();
+    const lines = captureLogs(t);
+
+    const res = await http(t).post(
+      apiPaths.clientLayoutMigrationDiagnostics,
+      undefined,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          reports: Array.from({ length: 400 }, () => DESKTOP_ENTRY),
+        }),
+      },
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({
+      error: 'request body exceeds the client-diagnostics bound',
+      code: 'content_too_large',
+      max_body_bytes: LAYOUT_MIGRATION_DIAGNOSTICS_MAX_BYTES,
+    });
+    // The pre-parse bound answers before the handler runs, so the parse never
+    // sees these bytes: neither an accepted nor a rejected report is logged.
     expect(
-      (
-        await send(
-          JSON.stringify({
-            reports: Array.from({ length: 400 }, () => DESKTOP_ENTRY),
-          }),
-        )
-      ).status,
-    ).toBe(400);
+      lines.filter(l => String(l.fields.action ?? '').startsWith('layout_migration')),
+    ).toEqual([]);
+  });
+
+  it('rejects an oversized chunked body with no Content-Length', async () => {
+    t = await buildTestApp();
+    captureLogs(t);
+    const payload = Buffer.from(
+      JSON.stringify({
+        reports: Array.from({ length: 4000 }, () => DESKTOP_ENTRY),
+      }),
+      'utf8',
+    );
+    // No Content-Length: the limiter has to count bytes as they arrive and cut
+    // the read off mid-stream. The handler's `c.req.text()` then rejects with a
+    // `BodyLimitError`, which it must rethrow rather than degrade to an empty
+    // body — otherwise this is a 400 invalid_report and the caller is told the
+    // wrong thing about a limit it can actually comply with.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < payload.byteLength; i += 4096) {
+          controller.enqueue(payload.subarray(i, i + 4096));
+        }
+        controller.close();
+      },
+    });
+    const res = await http(t).post(
+      apiPaths.clientLayoutMigrationDiagnostics,
+      undefined,
+      {
+        body: stream,
+        // duplex is required for stream request bodies in Node's fetch.
+        duplex: 'half',
+        headers: { 'content-type': 'application/json' },
+      } as RequestInit,
+    );
+
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as { code?: string }).code).toBe('content_too_large');
   });
 });

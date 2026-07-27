@@ -46,6 +46,7 @@
   "DELETE /api/channels/:id/star",
   "GET /api/favorites",
   "POST /api/client-diagnostics/layout-migration",
+  "POST /api/client-diagnostics/layout-migration",
   "GET /api/workspaces/:id/members",
   "POST /api/workspaces/:id/members",
   "PATCH /api/workspaces/:id/members/users/:userId/role",

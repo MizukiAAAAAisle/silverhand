@@ -18,6 +18,7 @@
 // machine, attributed to the caller's user id by the principal, never by a
 // caller-declared field (invariant 4).
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import {
   LAYOUT_MIGRATION_DIAGNOSTICS_MAX_BYTES,
   apiPaths,
@@ -38,6 +39,32 @@ export function createClientDiagnosticsApp(
   const { ctx } = deps;
 
   /**
+   * Pre-parse bound (#task:1665): reject an oversized body — declared or
+   * chunked — BEFORE it is buffered. The bounded parse below measures the string
+   * it was handed, which means the bytes are already in memory by the time it
+   * can say "too big"; a byte cap inside a parser is a cap on what we ACCEPT,
+   * never on what we BUFFER. This endpoint is reachable by any authenticated
+   * caller over the public API, so the buffering side needs its own bound.
+   *
+   * Both bounds are the SAME constant on purpose: our own client structurally
+   * cannot reach it (a full 12-entry report with 40-char version strings is
+   * ~2.6 KiB), so "over the bound" already means "not our client" — one number
+   * keeps the two checks from ever disagreeing about who is compliant.
+   */
+  const reportBodyLimit = bodyLimit({
+    maxSize: LAYOUT_MIGRATION_DIAGNOSTICS_MAX_BYTES,
+    onError: c =>
+      c.json(
+        {
+          error: 'request body exceeds the client-diagnostics bound',
+          code: 'content_too_large',
+          max_body_bytes: LAYOUT_MIGRATION_DIAGNOSTICS_MAX_BYTES,
+        },
+        413,
+      ),
+  });
+
+  /**
    * Accept a layout-v2 migration failure report.
    *
    * The body is untrusted (#task:1530 precedent): read as TEXT and put through
@@ -52,9 +79,18 @@ export function createClientDiagnosticsApp(
    * sends and drops the sample on ANY outcome. Nothing here will ever be retried
    * with the same bytes.
    */
-  app.post(apiPaths.clientLayoutMigrationDiagnostics, async c => {
+  app.post(apiPaths.clientLayoutMigrationDiagnostics, reportBodyLimit, async c => {
     const viewerUserId = requireViewerUserId(c);
-    const raw = await c.req.text();
+    // `bodyLimit` signals a chunked-body overflow by erroring the wrapped stream
+    // mid-read; rethrow it so the middleware's post-`next()` check turns it into
+    // the 413, instead of degrading it to an empty body → 400 invalid_report.
+    let raw: string;
+    try {
+      raw = await c.req.text();
+    } catch (err) {
+      if (err instanceof Error && err.name === 'BodyLimitError') throw err;
+      raw = '';
+    }
     const parsed = parseLayoutMigrationDiagnosticsReport(raw);
     if (parsed.status !== 'valid') {
       ctx.logger.warn(
