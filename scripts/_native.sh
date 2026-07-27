@@ -60,8 +60,17 @@ _record_active() {
 # and the kernel will SIGKILL the loader at dlopen with "Code Signature
 # Invalid". This is silent and looks identical to an ABI mismatch from
 # the outside — burned an hour debugging the first time.
+#
+# The mkdir is not defensive padding: build/Release/ only exists because
+# pnpm extracted a prebuild into it, so any install that skips or prunes
+# that extraction leaves us with a populated cache and no destination
+# directory. Every other ensure_binding path is guarded by `-f $BINDING`
+# (or lets node-gyp create the tree), which makes this the one place a
+# missing directory can surface — as a `cp: ... No such file or
+# directory` naming the *destination*, which reads like a missing source.
 swap_in() {
   local src="$1"
+  mkdir -p "$(dirname "$BINDING")"
   cp "$src" "$BINDING"
   if [[ "$(uname -s)" == "Darwin" ]]; then
     codesign --sign - --force "$BINDING" >/dev/null 2>&1 || true
