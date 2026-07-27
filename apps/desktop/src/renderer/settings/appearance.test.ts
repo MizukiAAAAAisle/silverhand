@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { applyAppearanceOverrides, APPEARANCE_TOKENS } from './apply';
 import { parseAppearance, parseAppearanceJson } from './parse';
+import { LEGACY_THEME_IDS, THEME_IDS } from './types';
 
 class StyleStub {
   values = new Map<string, string>();
@@ -54,10 +55,29 @@ describe('parseAppearance', () => {
   it('drops non-number sizes instead of coercing strings', () => {
     expect(
       parseAppearance({
-        theme: 'warm-script',
+        theme: 'studio-light',
         fontSize: '16',
       }),
-    ).toEqual({ theme: 'warm-script' });
+    ).toEqual({ theme: 'studio-light' });
+  });
+
+  // Renamed-theme compatibility (#task:1656). A user who had picked the
+  // old id still carries it in localStorage; without the alias step the
+  // unknown id would fail the enum and reset them to the default theme —
+  // a silently lost preference, which no type check can catch. Every
+  // entry in LEGACY_THEME_IDS must land on a live id, and the rest of
+  // the settings blob must survive the rewrite.
+  it('maps every legacy theme id onto a current one', () => {
+    for (const [legacy, current] of Object.entries(LEGACY_THEME_IDS)) {
+      expect(THEME_IDS).toContain(current);
+      expect(parseAppearance({ theme: legacy, fontSize: 16 })).toEqual({
+        theme: current,
+        fontSize: 16,
+      });
+      expect(parseAppearanceJson(JSON.stringify({ theme: legacy }))).toEqual({
+        theme: current,
+      });
+    }
   });
 });
 
@@ -65,7 +85,7 @@ describe('applyAppearanceOverrides', () => {
   it('writes the shared font size into a single appearance token', () => {
     const style = new StyleStub();
     applyAppearanceOverrides(style, {
-      theme: 'warm-script',
+      theme: 'studio-light',
       fontSize: 16,
       prose: { fontFamily: 'Georgia, serif' },
       code: { fontFamily: 'Menlo, monospace' },
@@ -97,8 +117,8 @@ describe('theme markdown token cascade contract', () => {
     new URL('../styles/global.css', import.meta.url),
     'utf8',
   );
-  const warmScriptCss = readFileSync(
-    new URL('../styles/themes/warm-script.css', import.meta.url),
+  const studioLightCss = readFileSync(
+    new URL('../styles/themes/studio-light.css', import.meta.url),
     'utf8',
   );
   const forza6Css = readFileSync(
@@ -125,7 +145,7 @@ describe('theme markdown token cascade contract', () => {
     );
     const forzaIdx = order.indexOf('forza6.css');
     expect(forzaIdx).toBeGreaterThanOrEqual(0);
-    for (const override of ['warm-script.css', 'slack-dark.css']) {
+    for (const override of ['studio-light.css', 'slack-dark.css']) {
       expect(order.indexOf(override)).toBeGreaterThan(forzaIdx);
     }
   });
@@ -135,7 +155,7 @@ describe('theme markdown token cascade contract', () => {
     // block. Match the selector pair structurally so this guard doesn't itself
     // relock the exact newline/spacing formatting.
     expect(forza6Css).toMatch(/:root\s*,\s*\[data-theme=['"]forza6['"]\]/);
-    expect(warmScriptCss).not.toContain(':root');
+    expect(studioLightCss).not.toContain(':root');
     expect(slackDarkCss).not.toContain(':root');
   });
 
@@ -230,7 +250,7 @@ describe('theme markdown token cascade contract', () => {
       '--task-status-closed-border',
       '--task-status-closed-solid',
     ];
-    for (const css of [warmScriptCss, forza6Css, slackDarkCss]) {
+    for (const css of [studioLightCss, forza6Css, slackDarkCss]) {
       for (const token of REQUIRED_TOKENS) {
         expect(css).toContain(`${token}:`);
       }

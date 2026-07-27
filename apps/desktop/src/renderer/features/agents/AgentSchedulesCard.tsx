@@ -278,7 +278,7 @@ function ScheduleItem({
  *  so the tile reads as a deliberate festival landmark rather than a
  *  washed-out background tint — `*-soft` would look dull next to
  *  forza6's brand-saturated chrome. We deliberately avoid `--accent-2`:
- *  warm-script aliases it to `--accent`, which would collapse to the
+ *  the other themes alias it to `--accent`, which would collapse to the
  *  once color and lose discriminability. */
 function KindTile({
   kind,

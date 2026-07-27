@@ -23,7 +23,7 @@
  *
  * No frame is added at the consumer edge on purpose. `CONTROL_INK_BORDER`
  * resolves to `--border-focus`, which is ink only in forza6 (slack-dark maps it
- * to brand blue, warm-script to a 25%-alpha brown) — a frame that disagrees with
+ * to brand blue, studio-light to a 32%-alpha ink) — a frame that disagrees with
  * its own fill is the mistake to avoid. The CTA stays PRIMARY BY FILL everywhere;
  * forza6 adds the ink frame itself, where ink agrees with the ink drop shadow.
  *

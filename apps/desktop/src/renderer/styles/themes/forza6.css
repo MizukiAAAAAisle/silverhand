@@ -130,8 +130,9 @@
      `--accent`, which in forza6 = `--forza6-pink-deep #B3186A` (hot
      wine magenta) — too loud for a structural separator. Override to
      a half-opacity ink so the divider reads as "darker rule line"
-     (matching warm-script's near-black accent, which works because
-     it IS ink). Solid `--forza6-ink` would be too assertive on a
+     (a divider is a utility signal, so it must not spend the accent's
+     hue — studio-light sets its own ink mix for the same reason).
+     Solid `--forza6-ink` would be too assertive on a
      4px-wide track; 0.45 alpha lands as visible but architectural,
      no hue. SplitPane.tsx + VerticalSplitter.tsx consume via
      `bg-[var(--splitter-hover-bg,var(--accent))]` so other themes
@@ -347,7 +348,7 @@
   /* ── Control border width (#task:555 release-testing 2) ──
      forza6 的 hard-cut 语汇在 sidebar / select / focus ring 上都走 2px
      描边；selection toolbar 上的 Cancel / Copy markdown / Save image
-     按钮也吃同节拍。warm-script 不发起这个加粗，留 1px。 */
+     按钮也吃同节拍。另两个主题不发起这个加粗，留 1px。 */
   --control-border-width: 2px;
 
   /* ── Select listbox radius (§3.6.2, PR-9 token promotion) ──
@@ -389,8 +390,8 @@
 
   /* ── forza6 syntax palette (theme-private; PR-7 internal cleanup) ──
      The `.markdown-body .code-block .hljs-*` rules in
-     `forza6-components.css` read these values; warm-script intentionally
-     does NOT define them (its syntax colours come from the
+     `forza6-components.css` read these values; the other themes
+     intentionally do NOT define them (their syntax colours come from the
      `highlight.js/styles/github.css` vendor stylesheet imported by
      `global.css`). Name prefix `--forza6-syntax-*` makes the
      theme-private nature explicit so a future cross-theme syntax
@@ -439,7 +440,7 @@
      poster chip (white ink reads ~8:1 on the slab). `closed` is the
      terminal 5th status (not a separate visibility axis); only the
      task status chip consumes these — NOT channel/other surfaces
-     (Cindy review boundary `Obp1y_YcFPIr8h6Y`). See warm-script.css for
+     (Cindy review boundary `Obp1y_YcFPIr8h6Y`). See studio-light.css for
      the contract-token rationale. */
   --task-status-closed-bg: var(--forza6-indigo-slab);
   --task-status-closed-text: #FFFFFF;

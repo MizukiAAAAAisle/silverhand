@@ -13,9 +13,9 @@ apps/desktop/src/renderer/
 ├── styles/
 │   ├── global.css                  # 入口：@import tailwind + 各主题；@theme inline 暴露 var；非主题化常量（titlebar-height）；全局 element 样式
 │   └── themes/
-│       ├── warm-script.css         # :root + [data-theme='warm-script']（默认主题，避免 FOUC）
-│       ├── forza6.css              # [data-theme='forza6'] token 层
+│       ├── forza6.css              # :root + [data-theme='forza6']（默认主题，避免 FOUC）
 │       ├── forza6-components.css   # forza6 component 特化层
+│       ├── studio-light.css        # [data-theme='studio-light']
 │       └── slack-dark.css          # [data-theme='slack-dark']
 ├── hooks/
 │   └── useAppearance.ts            # 启动时读 config，把 data-theme 设到 <html>
@@ -34,7 +34,7 @@ apps/desktop/src/renderer/
 
 > 例：要做一个叫 `nordic` 的主题。
 
-1. **新建 `styles/themes/nordic.css`** —— 复制一份现有 theme 文件（例如 `warm-script.css`）当骨架，把选择器改成 `[data-theme='nordic']`，把每个 token 的值替换成本主题的色值（保持变量名不变）。**不要漏 token**，对照 §3 表逐一填。
+1. **新建 `styles/themes/nordic.css`** —— 复制一份现有 theme 文件（例如 `studio-light.css`）当骨架，把选择器改成 `[data-theme='nordic']`，把每个 token 的值替换成本主题的色值（保持变量名不变）。**不要漏 token**，对照 §3 表逐一填。
 2. **`styles/global.css` 顶部加一行**：`@import "./themes/nordic.css";`
 3. **`settings/types.ts` 的 `ThemeId` 联合类型加一项**：`... | 'nordic'`
 4. **`settings/sections/AppearanceSection.tsx` 的 `THEMES` 数组加一项**，提供 4 色预览（bg / surface / text / accent）和一句中文 `hint`
@@ -174,7 +174,7 @@ apps/desktop/src/renderer/
 | `--bg-control-primary-hover` | hover bg | 浅色主题往暗走一档；**深色主题往亮走**（高程语言：越上层越亮）。forza6 的海报 hook 会把 hover 填充钉回 resting（hover 只揭起），所以那里这个值只作用于未戴 hook 的按钮 |
 | `--text-on-control-primary` | 配 bg 的字色 | 跟 bg 一起选，≥4.5:1；写字面值或专属 token，别复用 `--text-on-accent` / `--text-on-brand`（它们还服务别的表面）|
 
-**当前值（#task:1623，牛油果绿）**：三主题共享"主操作 = 牛油果绿"这一个语义 —— warm-script 深段 `#55701F` + 白字（纸面太亮，浅段对底只 1.9:1 会糊边），forza6 / slack-dark 浅段 `#9CBF5C` + 墨字（forza6 靠 2px 墨框给边界，slack 靠深底）。中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。
+**当前值**：forza6 / slack-dark 共享"主操作 = 牛油果绿"（#task:1623）—— 浅段 `#9CBF5C` + 墨字（forza6 靠 2px 墨框给边界，slack 靠深底）；中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。**studio-light 例外，CTA 直接吃 `--accent`（深蓝 `#2F5AD0`）**（#task:1656）：绿在那个主题里是 **agent 身份色**，CTA 再吃绿就是一个 hue 两个语义。→ 这个 token 的选值判据是"这个主题里还有哪个 hue 没被别的语义占"，不是"三主题统一"。
 
 **主 CTA 的形状走一个 hook，且它是「一对」**：`primaryAction()` / `primaryCancel()`（`features/common/PrimaryAction.ts`）分别挂 `[data-primary-action='commit'|'cancel']`，consumer 只出 motion + layout，主题在 `[data-theme='...'] [data-primary-action='commit']` 里画 identity（forza6 = 2px 墨框 + 直角 + 硬投影 + hover 揭起）。新增主 CTA 直接消费它，别再造第二份配方。
 
@@ -384,7 +384,7 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 
 ## 5. 写主题文件的骨架
 
-复制一份现有 theme 文件（`warm-script.css` / `slack-dark.css`）按 §3 逐项 refill。
+复制一份现有 theme 文件（`studio-light.css` / `slack-dark.css`）按 §3 逐项 refill。
 
 ---
 
@@ -418,7 +418,7 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 - **一个组件的 mode/variant 分支替换了带 `data-*` hook 的 identity/control 原语** —— 凡主题靠 `data-*` hook 识别并 painting 的原语（channel `#` = `data-conversation-hash`、列表频道图标 = `data-channel-icon`、§3.6.1/§3.6.3 各 frame hook 等），任何 variant 都**必须复用同一段挂 hook 的 primitive**，只能控"是否展示 / 布局"，**不许**在分支里替换成裸 lucide / 新 DOM 形状或新造原语。换掉 primitive ⇒ 主题 selector 匹配不到 ⇒ 在有 sticker 配方的主题画成通用 glyph，且**只在那个主题暴露**（baseline 主题看不出）。这是"同组件不同 mode"最隐蔽的翻车点：同组件只保护共享 markup，管不了某 mode 自己新增/替换的元素。组件侧 header-variant 纪律见 `app-layout.md` §9。
 
 ## 8. 已有参考
-- `apps/desktop/src/renderer/styles/themes/warm-script.css`（默认主题，`:root` baseline）
+- `apps/desktop/src/renderer/styles/themes/studio-light.css`（冷中性 hairline 范式：accent = action/state、绿 = agent 身份、明度阶梯做层级）
 - `apps/desktop/src/renderer/styles/themes/slack-dark.css`（深色主题范式）
 - `apps/desktop/src/renderer/styles/themes/forza6.css` + `forza6-components.css`（loud-festival 范式；§12）
 
@@ -547,7 +547,7 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 
 - `pnpm --filter @silverhand/desktop typecheck`
 - `pnpm --filter @silverhand/desktop test`（跑 appearance.test.ts 的主题结构守卫）
-- 切到 forza6 → 切回 warm-script 的来回测试，无 token 残留
+- 切到 forza6 → 切回 studio-light 的来回测试，无 token 残留
 - 颜色对比度走 WCAG 2.1 AA / AAA
 
 ### 12.7 可复用模式

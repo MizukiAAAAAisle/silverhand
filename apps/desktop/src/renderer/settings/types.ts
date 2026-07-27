@@ -1,5 +1,22 @@
-export const THEME_IDS = ['warm-script', 'forza6', 'slack-dark'] as const;
+export const THEME_IDS = ['studio-light', 'forza6', 'slack-dark'] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
+
+/** Theme ids that shipped under a previous name, mapped to the id that
+ *  replaced them. A user who picked the old theme still has that id in
+ *  `localStorage` (`silverhand:appearance`), so `parseAppearance` rewrites
+ *  it here BEFORE the enum check — without this the unknown id falls
+ *  through `ThemeIdSchema.catch()` and silently resets them to the
+ *  default theme. `useAppearance` persists the parsed value back, so a
+ *  stored legacy id migrates itself on the next mount.
+ *
+ *  Entries are append-only: a shipped id can be renamed, but the old
+ *  name stays readable forever (old localStorage never expires).
+ *
+ *  - `warm-script` → `studio-light` (#task:1656): the third slot kept its
+ *    role (the calm bright workbench) but replaced the warm/book style. */
+export const LEGACY_THEME_IDS: Readonly<Record<string, ThemeId>> = {
+  'warm-script': 'studio-light',
+};
 
 /** Override a theme's default markdown font family. `undefined` means
  *  "inherit from theme". Empty / invalid values are dropped at parse
