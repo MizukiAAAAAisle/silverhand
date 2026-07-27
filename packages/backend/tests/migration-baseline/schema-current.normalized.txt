@@ -9,7 +9,11 @@ index idx_conversation_events_agent: CREATE INDEX idx_conversation_events_agent 
 index idx_conversation_inbox_in_flight_owner: CREATE INDEX idx_conversation_inbox_in_flight_owner ON conversation_inboxes(in_flight_owner, delivered_at, failed_at)
 index idx_conversation_inbox_pending: CREATE INDEX idx_conversation_inbox_pending ON conversation_inboxes(conversation_id, agent_id, delivered_at)
 index idx_conversation_inbox_replay_pending: CREATE INDEX idx_conversation_inbox_replay_pending ON conversation_inboxes(conversation_id, agent_id, delivered_at, failed_at, in_flight_owner, id)
+index idx_conversation_inboxes_message: CREATE INDEX idx_conversation_inboxes_message ON conversation_inboxes(message_id)
 index idx_conversation_reads_conversation: CREATE INDEX idx_conversation_reads_conversation ON conversation_reads(conversation_id)
+index idx_conversation_reads_thread_root: CREATE INDEX idx_conversation_reads_thread_root ON conversation_reads(thread_root_id)
+index idx_conversation_stream_heads_conversation: CREATE INDEX idx_conversation_stream_heads_conversation ON conversation_stream_heads(conversation_id)
+index idx_conversation_stream_heads_thread_root: CREATE INDEX idx_conversation_stream_heads_thread_root ON conversation_stream_heads(thread_root_id)
 index idx_conversation_users_user: CREATE INDEX idx_conversation_users_user ON conversation_users(user_id, joined_at)
 index idx_conversations_archived_at: CREATE INDEX idx_conversations_archived_at ON conversations(workspace_id) WHERE archived_at IS NOT NULL
 index idx_conversations_status: CREATE INDEX idx_conversations_status ON conversations(status)
@@ -23,9 +27,16 @@ index idx_messages_source_message_id: CREATE UNIQUE INDEX idx_messages_source_me
 index idx_messages_task_workspace: CREATE INDEX idx_messages_task_workspace ON messages(task_workspace_id, task_status) WHERE task_workspace_id IS NOT NULL
 index idx_messages_task_workspace_closed_at: CREATE INDEX idx_messages_task_workspace_closed_at ON messages(task_workspace_id, task_closed_at) WHERE task_workspace_id IS NOT NULL AND task_status = 'closed' AND task_closed_at IS NOT NULL
 index idx_messages_thread_root: CREATE INDEX idx_messages_thread_root ON messages(conversation_id, thread_root_id, seq)
+index idx_messages_thread_root_id: CREATE INDEX idx_messages_thread_root_id ON messages(thread_root_id)
 index idx_notifications_conversation_unread: CREATE INDEX idx_notifications_conversation_unread ON notifications(conversation_id, read_at, created_at DESC)
+index idx_notifications_message: CREATE INDEX idx_notifications_message ON notifications(message_id)
 index idx_notifications_source_conversation: CREATE INDEX idx_notifications_source_conversation ON notifications(source_conversation_id, created_at DESC)
+index idx_notifications_source_message: CREATE INDEX idx_notifications_source_message ON notifications(source_message_id)
+index idx_notifications_source_workspace: CREATE INDEX idx_notifications_source_workspace ON notifications(source_workspace_id)
 index idx_notifications_unread: CREATE INDEX idx_notifications_unread ON notifications(user_id, read_at, created_at DESC)
+index idx_notifications_workspace: CREATE INDEX idx_notifications_workspace ON notifications(workspace_id)
+index idx_saved_messages_conversation: CREATE INDEX idx_saved_messages_conversation ON saved_messages(conversation_id)
+index idx_saved_messages_message: CREATE INDEX idx_saved_messages_message ON saved_messages(message_id)
 index idx_saved_messages_user_saved_at: CREATE INDEX idx_saved_messages_user_saved_at ON saved_messages(user_id, saved_at DESC) WHERE user_id IS NOT NULL
 index idx_saved_messages_workspace: CREATE INDEX idx_saved_messages_workspace ON saved_messages(workspace_id, saved_at DESC)
 index idx_schedules_due: CREATE INDEX idx_schedules_due ON schedules(status, next_fire_at)
@@ -33,6 +44,7 @@ index idx_schedules_owner: CREATE INDEX idx_schedules_owner ON schedules(owner_a
 index idx_schedules_target: CREATE INDEX idx_schedules_target ON schedules(target_conversation_id)
 index idx_tasks_conversation: CREATE INDEX idx_tasks_conversation ON tasks(conversation_id)
 index idx_tasks_workspace_status: CREATE INDEX idx_tasks_workspace_status ON tasks(workspace_id, status)
+index idx_thread_followers_conversation: CREATE INDEX idx_thread_followers_conversation ON thread_followers(conversation_id)
 index idx_thread_followers_principal: CREATE INDEX idx_thread_followers_principal ON thread_followers(principal_kind, principal_id)
 index idx_user_sort_entry_lookup: CREATE INDEX idx_user_sort_entry_lookup ON user_sort_entry(user_id, list_key)
 index idx_workspace_members_agent: CREATE INDEX idx_workspace_members_agent ON workspace_members(agent_id)

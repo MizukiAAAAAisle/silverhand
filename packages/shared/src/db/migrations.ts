@@ -824,6 +824,69 @@ export const migrations: Migration[] = [
           AND json_extract(metadata, '$.task_message_id') IS NOT NULL;
     `,
   },
+  {
+    version: 61,
+    name: 'workspace_cascade_child_fk_indexes',
+    // #task:1677 — deleting a workspace is ONE row delete that fans out
+    // through FK actions (CASCADE / SET NULL). For every parent row the
+    // cascade touches, SQLite runs an internal `child_col = ?` lookup on
+    // each referencing child table; a child column with no leftmost-prefix
+    // index makes that lookup a FULL TABLE SCAN, so a small workspace's
+    // delete is amplified by GLOBAL table sizes (measured on production
+    // data: 14.3s for 2 conversations / 156 messages; 9.9ms once indexed —
+    // #task:1674). This migration indexes every child key on the
+    // workspace-delete cascade tree that lacked leftmost coverage; child
+    // keys reachable only via other delete paths (agent/user deletes) are
+    // deliberately NOT included here.
+    //
+    // Per-message amplifiers (scanned once per deleted message):
+    //   - messages.thread_root_id       (self-FK; existing idx starts with
+    //                                    conversation_id — unusable for the
+    //                                    bare `thread_root_id = ?` FK probe)
+    //   - conversation_inboxes.message_id (only 3rd position in the unique)
+    //   - notifications.message_id / source_message_id (SET NULL)
+    //   - saved_messages.message_id     (only 2nd position in the unique)
+    //   - conversation_reads.thread_root_id / conversation_stream_heads.
+    //     thread_root_id (only non-leftmost positions in partial uniques)
+    // Per-conversation amplifiers (scanned once per deleted conversation):
+    //   - conversation_stream_heads.conversation_id (covered ONLY by two
+    //     partial uniques whose predicates a bare FK probe does not imply)
+    //   - thread_followers.conversation_id (only 1st col of PK is
+    //     thread_root_id; conversation_id uncovered)
+    //   - saved_messages.conversation_id
+    // Per-workspace amplifiers (scanned once per deleted workspace):
+    //   - notifications.workspace_id (CASCADE) / source_workspace_id (SET NULL)
+    //
+    // Full (non-partial) indexes throughout: FK enforcement probes are
+    // internal statements — coverage must not depend on partial-index
+    // predicate implication.
+    up: `
+      CREATE INDEX idx_messages_thread_root_id
+        ON messages(thread_root_id);
+      CREATE INDEX idx_conversation_inboxes_message
+        ON conversation_inboxes(message_id);
+      CREATE INDEX idx_notifications_workspace
+        ON notifications(workspace_id);
+      CREATE INDEX idx_notifications_source_workspace
+        ON notifications(source_workspace_id);
+      CREATE INDEX idx_notifications_message
+        ON notifications(message_id);
+      CREATE INDEX idx_notifications_source_message
+        ON notifications(source_message_id);
+      CREATE INDEX idx_saved_messages_conversation
+        ON saved_messages(conversation_id);
+      CREATE INDEX idx_saved_messages_message
+        ON saved_messages(message_id);
+      CREATE INDEX idx_conversation_reads_thread_root
+        ON conversation_reads(thread_root_id);
+      CREATE INDEX idx_conversation_stream_heads_conversation
+        ON conversation_stream_heads(conversation_id);
+      CREATE INDEX idx_conversation_stream_heads_thread_root
+        ON conversation_stream_heads(thread_root_id);
+      CREATE INDEX idx_thread_followers_conversation
+        ON thread_followers(conversation_id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =
