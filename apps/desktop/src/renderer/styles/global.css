@@ -470,9 +470,13 @@ button:disabled { cursor: not-allowed; }
    ARIA `role` Radix sets on Select.Content (`role="listbox"`) and on each
    Select.Item (`role="option"`).
 
-   Selector `[role='listbox']` also catches our custom Composer mention
-   dropdown (Composer.tsx:760 — same shape pattern, also wants forza6 = 0).
-   No other listbox in the codebase today (`grep role='listbox'` confirmed).
+   Selector `[role='listbox']` also catches the Composer mention/channel
+   picker's inner scroll area — but there the VISIBLE frame is the outer
+   `[data-composer-picker]` div (it owns the border + fill + overflow-hidden),
+   so this rule alone rounded an invisible box and the popover stayed square
+   in every theme (shiki dogfood 2026-07-27). That frame consumes
+   `--select-content-radius` itself in Composer.tsx; keep radius on whatever
+   element paints the frame, not on whatever carries the ARIA role.
 
    Same PR-4 boundary preserved: Select listbox only receives RADIUS,
    not the heavy `--floating-border` 2px black frame — that's still

@@ -1158,7 +1158,15 @@ function PickerMenu({
   );
   return (
     <div
-      className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden bg-bg-floating shadow-popover"
+      // Radius belongs on THIS element — the visible frame. The global
+      // `[role='listbox']` radius rule (global.css) lands on the inner
+      // scroll area below, which is invisible: this outer div owns the
+      // border (`data-dropdown-frame`), the fill and `overflow-hidden`,
+      // so a rounded inner list is clipped square by a square frame. The
+      // token is the dropdown one (`--select-content-radius`, forza6 = 0 /
+      // warm + slack = 6px), same as every other `data-dropdown-frame`
+      // popup — NOT the full-menu `--floating-radius`.
+      className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden rounded-[var(--select-content-radius)] bg-bg-floating shadow-popover"
       data-composer-picker=""
       data-dropdown-frame
       onMouseDown={e => e.preventDefault()}
