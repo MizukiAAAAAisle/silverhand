@@ -1,5 +1,5 @@
 /* ================================================================
-   Theme: Studio Light — Cool Neutral Chrome & Iris Accent (#task:1656)
+   Theme: Studio Light — Cool Neutral Chrome & Studio Blue Accent (#task:1656)
    性格：冷中性 chrome + **纯白工作面** + 一个 accent 管 action/state +
    一个独立的绿只管 agent 身份。定位是"安静的亮色工作台"—— 长时间盯着
    干活的那一档。
@@ -21,7 +21,7 @@
    1. **明度阶梯做层级，颜色不参与结构**：托盘 `#DEE3EB` → 侧栏 `#F2F5F9` /
       `#F7F9FC` → chat 纯 `#FFFFFF`，rail 深板岩 `#1B2030`。选中 = 从冷灰
       托盘里浮起来的一张白纸。分隔一律 1px hairline，无纹理、无衬线。
-   2. **两个语义色各管一件事**：Iris `#5B45D9` = action/state（选中左条 /
+   2. **两个语义色各管一件事**：Studio Blue `#2F5AD0` = action/state（选中左条 /
       rail active / unread / mention / in-prose `#task` / in_review / focus /
       主操作）；绿 `#0C7E60` = **agent 身份**（作者名、liveness）。agent 是
       一等公民，身份色不能跟操作色共用 hue，否则「这是状态还是身份」永远读
@@ -29,19 +29,26 @@
    3. **utility 不吃 accent**：hover / focus / 分隔线 / splitter 一律中性墨。
       唯一例外是 composer（brand-anchored 主舞台）的 focus 光。
 
-   accent 为什么是紫罗兰（选 hue 的方法 = 找色环空位，不是挑好看的）：
-   产品的 hue 已被占三段 —— 绿 160°（agent 身份）、琥珀 35°（in progress）、
-   红 5°（destructive），离三段都最远的是 260–270°。另一条硬门槛：同一个
-   accent 要同时够 **白底文字**（6.3:1）、够 **实底 + 白字**（6.3:1）、够
-   **1px 描边**，否则"一个 token 服务整条 action/state"做不到，又会开始长
-   per-surface 补丁。蓝被否掉（shiki:「太大众，太 saas 化」）。
+   accent 为什么是这一支蓝（hue 走了三轮，判据都在这）：
+   - 硬门槛先立：同一个 accent 要同时够 **白底文字**、够 **实底 + 白字**、够
+     **1px 描边**（都 ≥4.5:1），否则"一个 token 服务整条 action/state"做不到，
+     又会开始长 per-surface 补丁。
+   - 第一轮蓝 `#3B6BF0` 被否：「太大众，太 saas 化」（shiki 2026-07-27 13:20）。
+   - 第二轮换紫罗兰 `#5B45D9`（色环空位法：绿 160° = agent 身份、琥珀 35° =
+     in progress、红 5° = destructive，离三段都最远的是 260–270°）。落到包里
+     被否：「紫色太晃眼睛了」（13:51）。
+   - 现在这一支 `#2F5AD0`（≈225°，6.0:1）。**「晃眼睛」的根因不是 hue 而是
+     明度 × chroma**：紫在纯白上同明度会读作"振动"，而第一轮那支电光蓝
+     `#3B6BF0` 只有 4.6:1、chroma 还更高，直接换回去只会更晃。所以回蓝的同时
+     压深一档 —— 深一档也顺手回答了"太 saas"：通用 SaaS 蓝都在高明度电光那
+     一段。**换 accent 时先看明度/chroma，再看 hue**。
 
    代价（明写）：
    - **主操作 CTA 归 accent**，不再是三主题共享的牛油果绿 —— 绿在这个主题里
      是 agent 身份，CTA 吃绿就是一个 hue 两个语义。hue 预算已经花完（accent /
      绿 / 琥珀 / 红），不为 CTA 再开第五个饱和色。
    - 放弃纸质感 / 衬线这类记忆点：这一槽换的就是"安静"，记忆点由 rail 的深
-     板岩 + Iris 承担。
+     板岩 + Studio Blue 承担。
    ================================================================ */
 
 [data-theme='studio-light'] {
@@ -58,7 +65,7 @@
   /* Selectable-option hover preview — the soft fill a row/card gets on
      hover to say "this is pickable" (Proxy runtime cards, task-filter
      dropdown rows). Distinct from `--bg-row-hover` (list scanning) and from
-     `--bg-row-selected` (committed). 走中性冷灰，不染 Iris（utility 不偷
+     `--bg-row-selected` (committed). 走中性冷灰，不染 Studio Blue（utility 不偷
      accent 预算）；forza6 maps it to pale lime. */
   --bg-option-hover: var(--bg-hover);
   --bg-selected: #FFFFFF;
@@ -80,18 +87,18 @@
   --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
   /* Drag handle hover / active tint. **必须显式给**：VerticalSplitter /
      SplitPane 的 fallback 是 `var(--accent)`（那是给"accent 本来就是墨"的
-     主题留的），Iris 落在 4px 宽的分栏条上就是一道紫，读作"看这个分隔线！"
+     主题留的），Studio Blue 落在 4px 宽的分栏条上就是一道蓝，读作"看这个分隔线！"
      —— splitter 是 utility（原则 3）。半透明墨：可见但只是"深一点的规线"。 */
   --splitter-hover-bg: rgba(17, 23, 37, 0.28);
   --titlebar-border: transparent;
 
   /* ── Brand identity ──
-     这个主题的品牌色就是 accent 本体（Iris）：一个 hue 同时当品牌与操作，
-     不像 warm 那样"品牌黄 + 工作金"分两支 —— 因为 Iris 本来就够文字对比度，
+     这个主题的品牌色就是 accent 本体（Studio Blue）：一个 hue 同时当品牌与操作，
+     不像 warm 那样"品牌黄 + 工作金"分两支 —— 因为 Studio Blue 本来就够文字对比度，
      不需要一个"可读版"的替身。`--brand-bar` 保留成独立 token 只为让"小面积
      图形"（rail active tile、选中行左条）有一个可以单独挪的旋钮。 */
-  --brand-primary: #5B45D9;
-  --brand-bar: #5B45D9;
+  --brand-primary: #2F5AD0;
+  --brand-bar: #2F5AD0;
   --text-on-brand: #FFFFFF;
   /* NavRail 是深板岩 chrome：静息字色是冷灰降一档，hover 提到近白。 */
   --text-nav-rail: #98A1B5;
@@ -100,7 +107,7 @@
 
   /* Sidebar row state —
      选中 = **从冷灰托盘里浮起来的一张白纸**（`--bg-row-selected` 提到纯白 +
-     一层极薄阴影 + Iris 左条，见底部 scoped 规则）。hover 只提半档冷灰，扫
+     一层极薄阴影 + Studio Blue 左条，见底部 scoped 规则）。hover 只提半档冷灰，扫
      列表时不闪、不画框（色彩不参与结构）。
      `--sidebar-row-border-width` 留 1px 作水槽：静息/悬停/选中三态都不位移。 */
   --sidebar-row-border-width: 1px;
@@ -150,7 +157,7 @@
      **done 在这里退成中性墨，不吃绿**：绿是 agent 身份（原则 2），一个 hue
      两个语义必双输 —— 而且终态本来就不需要响度。响度曲线因此是
      todo（透明 hairline）< done（薄墨底，settled）< in_progress（琥珀薄底）
-     < in_review（Iris 实底，唯一"要人处理"的一档）。 */
+     < in_review（Studio Blue 实底，唯一"要人处理"的一档）。 */
   --task-status-todo-bg: transparent;
   --task-status-todo-text: var(--text-muted);
   --task-status-todo-border: 1px solid var(--border);
@@ -183,8 +190,8 @@
 
   /* ── Row-state border color (§3.5.1) ──
      侧栏 / control 的 hover / selected 描边。**不指向 `--accent`**（原则 3）：
-     hover / focus / 分隔线是 utility 语义，染成 Iris 会偷走"Iris = 需要注意"
-     的预算，也会让用户分不清"这是状态还是身份"。utility 一律走中性墨水。 */
+     hover / focus / 分隔线是 utility 语义，染成 accent 会偷走"accent = 需要
+     注意"的预算，也会让用户分不清"这是状态还是身份"。utility 一律走中性墨水。 */
   --border-row-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
   --border-row-selected: color-mix(in oklab, var(--text-primary) 26%, transparent);
 
@@ -221,7 +228,7 @@
   --chip-radius: 4px;
   /* Bottom-row chip fill — shared by reaction chips and the thread-reply
      pill so the whole message footer reads as one family. Utility, not a
-     brand moment：中性墨洗；自己的 reaction 用 `--accent-soft`（薄 Iris）
+     brand moment：中性墨洗；自己的 reaction 用 `--accent-soft`（薄 Studio Blue）
      表达"这条是我"，不做颜色反转。 */
   --chip-bg: rgba(17, 23, 37, 0.06);
   --chip-bg-hover: rgba(17, 23, 37, 0.11);
@@ -254,23 +261,23 @@
      **这里吃 accent**，而不是另外三个主题共享的牛油果绿：绿在这个主题里是
      agent 身份（原则 2）。主操作是 action 的原型，跟 accent 同源正好；in_review
      虽然也是 accent 实底，但它是内容流里的小 pill，跟 chrome 上的按钮不在同一
-     视觉栈里争。白字 on #5B45D9 = 6.3:1。 */
-  --bg-control-primary: #5B45D9;
-  --bg-control-primary-hover: #4A34C9;
+     视觉栈里争。白字 on #2F5AD0 = 6.0:1。 */
+  --bg-control-primary: #2F5AD0;
+  --bg-control-primary-hover: #2549B4;
   --text-on-control-primary: #FFFFFF;
 
-  /* ── Accent = Iris（action / state 唯一入口）──
-     `#5B45D9` on `#FFFFFF` = 6.3:1，反过来实底 + 白字也是 6.3:1，所以它同时
+  /* ── Accent = Studio Blue（action / state 唯一入口）──
+     `#2F5AD0` on `#FFFFFF` = 6.0:1，反过来实底 + 白字也是 6.0:1，所以它同时
      覆盖
      ① 文字强调（mention / 链接 / in-prose `#task` chip 字）
      ② 描边与小面积图形（unread badge、选中行左条、rail active tile）
      ③ 实底（in_review chip，白字）
      —— 一个 token 覆盖三种承载，是"不长 per-surface 补丁"的前提。
      `--accent-glow` 是同色低透明度的一圈光，只给 composer focus。 */
-  --accent: #5B45D9;
-  --accent-soft: rgba(91, 69, 217, 0.10);
-  --accent-hover: #4A34C9;
-  --accent-glow: rgba(91, 69, 217, 0.28);
+  --accent: #2F5AD0;
+  --accent-soft: rgba(47, 90, 208, 0.10);
+  --accent-hover: #2549B4;
+  --accent-glow: rgba(47, 90, 208, 0.28);
   /* Search-hit highlighter (#task:1335) — 查找高亮是**临时工具地色**（大块
      铺在正文下面），不与 accent 的小面积记号在同一个视觉栈里共现，所以留在
      荧光笔黄这个通用记忆点上；深墨字，active match 压深底色（无描边）。 */
@@ -281,7 +288,8 @@
   /* ── Semantic ──
      `--success` 共用 agent 身份绿（同一族"还活着 / 成功了"），见上面
      `--text-agent`。warning 是琥珀 35°（in progress 的那一段），error 砖红
-     5°：两段都离 Iris 的 260° 很远，四个饱和色各占一段色环。 */
+     5°：两段都离 accent 的 225° 有 65° 以上，四个饱和色各占一段色环（换到蓝
+     之后离绿比紫罗兰时近了，但 agent 绿是深青绿、accent 是深蓝，仍分得开）。 */
   --success: #0C7E60;
   --success-soft: rgba(12, 126, 96, 0.09);
   --warning: #B46500;
@@ -295,7 +303,7 @@
 
   /* ── Borders ──
      冷墨 hairline，色温跟 `--shadow-base` (17,23,37) 同源。`--border-focus`
-     走**中性墨**而不是 Iris：一般 input 的 focus 是 utility，Iris 留给主舞台
+     走**中性墨**而不是 accent：一般 input 的 focus 是 utility，accent 留给主舞台
      （composer，见底部规则）—— 同一控件的 hover(`--border-control-hover`)
      与 focus 因此同色族，不跳。 */
   --border: rgba(17, 23, 37, 0.11);
@@ -362,11 +370,11 @@
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
   /* 深板岩结构色 = NavRail 的那一块（整个主题只有一种"深"），workspace 方块
-     徽标和它同源。`--text-on-dark-pop` 是 Iris 在深底上的可读版（原色在
-     #1B2030 上只有 ~1.8:1）。 */
+     徽标和它同源。`--text-on-dark-pop` 是 accent 在深底上的可读版（原色在
+     #1B2030 上只有 ~2.7:1）。 */
   --bg-structure-dark: #1B2030;
   --text-on-structure: #F2F5F9;
-  --text-on-dark-pop: #A99BF5;
+  --text-on-dark-pop: #9DB6F7;
 }
 
 /* Workspace `W` identity badge — filled square (#task:1160)：给 workspace
@@ -406,13 +414,13 @@
 
 /* activity feed 把每个 status pill 降到 0.85 透明度；在这种高明度底上那会把
    本已很细的 hairline 洗掉。这个主题的 feed pill 保持满不透明 —— pill 的
-   `-solid` 色相本身分得开（Iris / 琥珀 / 墨 / muted），不需要额外补权重。 */
+   `-solid` 色相本身分得开（Studio Blue / 琥珀 / 墨 / muted），不需要额外补权重。 */
 [data-theme='studio-light'] .system-activity-cluster [data-task-event-status] {
   opacity: 1;
 }
 
 /* ── 选中行 = 从冷灰托盘里浮起来的一张白纸 ───────────────────────────
-   `--bg-row-selected` 已经是纯白（比侧栏亮一档），这里补两件事：一条 Iris
+   `--bg-row-selected` 已经是纯白（比侧栏亮一档），这里补两件事：一条 Studio Blue
    左条（committed 的记号）+ 一层极薄阴影（"浮起"）。四边描边转透明 ——
    1px 宽度只作水槽，选中时内容不位移。
    两个选择器覆盖两种行来源：aside 里的行（PINNED / DM / workspaces）要压过
@@ -426,7 +434,7 @@
 }
 
 /* hover 只提半档冷灰，不画框：hover 与 selected 必须是同一个连续量
-   （提亮 → 纯白 + Iris 条），不能一个是墨框一个是彩条。1px 边框宽度保持透明
+   （提亮 → 纯白 + Studio Blue 条），不能一个是墨框一个是彩条。1px 边框宽度保持透明
    预留，hover 时不位移。 */
 [data-theme='studio-light'] aside[data-sidebar] .sidebar-row-border:not(.text-text-on-selected):hover,
 [data-theme='studio-light'] .sidebar-row-border:not([data-row-selected]):hover {
@@ -434,7 +442,7 @@
 }
 
 /* ── NavRail（深板岩 chrome 上的 accent 高光）─────────────────────────
-   active tile = Iris 实底 + 白字：整屏面积最小、饱和度最高的一块，就是
+   active tile = Studio Blue 实底 + 白字：整屏面积最小、饱和度最高的一块，就是
    accent 出场的地方。hover 只是近白薄洗。两态都不画描边 —— 填充/薄洗已经
    说完了状态。 */
 [data-theme='studio-light'] nav[aria-label='App sections'] button[aria-current='page'] {
@@ -501,7 +509,7 @@
 
 /* composer focus：主舞台输入框的 focus 是这个主题唯一保留 accent 的 focus
    （brand-anchored 主舞台例外；一般 input 走中性墨的 `--border-focus`）。
-   一圈 2px Iris 光，边框不加硬。 */
+   一圈 2px Studio Blue 光，边框不加硬。 */
 [data-theme='studio-light'] [data-composer-shell]:focus-within {
   border-color: color-mix(in oklab, var(--accent) 45%, transparent);
   box-shadow: 0 0 0 2px var(--accent-glow);

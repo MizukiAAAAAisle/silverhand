@@ -174,7 +174,7 @@ apps/desktop/src/renderer/
 | `--bg-control-primary-hover` | hover bg | 浅色主题往暗走一档；**深色主题往亮走**（高程语言：越上层越亮）。forza6 的海报 hook 会把 hover 填充钉回 resting（hover 只揭起），所以那里这个值只作用于未戴 hook 的按钮 |
 | `--text-on-control-primary` | 配 bg 的字色 | 跟 bg 一起选，≥4.5:1；写字面值或专属 token，别复用 `--text-on-accent` / `--text-on-brand`（它们还服务别的表面）|
 
-**当前值**：forza6 / slack-dark 共享"主操作 = 牛油果绿"（#task:1623）—— 浅段 `#9CBF5C` + 墨字（forza6 靠 2px 墨框给边界，slack 靠深底）；中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。**studio-light 例外，CTA 直接吃 `--accent`（Iris）**（#task:1656）：绿在那个主题里是 **agent 身份色**，CTA 再吃绿就是一个 hue 两个语义。→ 这个 token 的选值判据是"这个主题里还有哪个 hue 没被别的语义占"，不是"三主题统一"。
+**当前值**：forza6 / slack-dark 共享"主操作 = 牛油果绿"（#task:1623）—— 浅段 `#9CBF5C` + 墨字（forza6 靠 2px 墨框给边界，slack 靠深底）；中段 olive drab 是死区：白字 3.81 不过、墨字 4.50 贴线。**studio-light 例外，CTA 直接吃 `--accent`（深蓝 `#2F5AD0`）**（#task:1656）：绿在那个主题里是 **agent 身份色**，CTA 再吃绿就是一个 hue 两个语义。→ 这个 token 的选值判据是"这个主题里还有哪个 hue 没被别的语义占"，不是"三主题统一"。
 
 **主 CTA 的形状走一个 hook，且它是「一对」**：`primaryAction()` / `primaryCancel()`（`features/common/PrimaryAction.ts`）分别挂 `[data-primary-action='commit'|'cancel']`，consumer 只出 motion + layout，主题在 `[data-theme='...'] [data-primary-action='commit']` 里画 identity（forza6 = 2px 墨框 + 直角 + 硬投影 + hover 揭起）。新增主 CTA 直接消费它，别再造第二份配方。
 

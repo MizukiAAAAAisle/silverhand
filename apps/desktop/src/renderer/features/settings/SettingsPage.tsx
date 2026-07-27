@@ -74,16 +74,16 @@ const THEME_META: Record<
 > = {
   'studio-light': {
     label: 'Studio Light',
-    // Cool-neutral chrome + pure-white work surface + Iris accent
-    // (#task:1656). The 4 dots preview the theme's whole argument: the
-    // app tray (#DEE3EB, the deepest light layer) → the sidebar carrier
-    // (#F2F5F9) → ink text → Iris. Idle tile border is the tray colour
-    // so the card reads as one cool set instead of borrowing the
-    // viewer's current-theme hairline.
+    // Cool-neutral chrome + pure-white work surface + a deep blue
+    // accent (#task:1656). The 4 dots preview the theme's whole
+    // argument: the app tray (#DEE3EB, the deepest light layer) → the
+    // sidebar carrier (#F2F5F9) → ink text → the accent. Idle tile
+    // border is the tray colour so the card reads as one cool set
+    // instead of borrowing the viewer's current-theme hairline.
     bg: '#F2F5F9',
     surface: '#DEE3EB',
     text: '#111725',
-    accent: '#5B45D9',
+    accent: '#2F5AD0',
     border: 'rgba(17, 23, 37, 0.12)',
   },
   forza6: {
