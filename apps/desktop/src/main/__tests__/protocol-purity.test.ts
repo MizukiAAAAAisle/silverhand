@@ -258,6 +258,22 @@ describe('desktop protocol purity catalogue', () => {
     expect(afterPackScript).toMatch(/SILVERHAND_DESKTOP_REMOTE_ONLY/);
     expect(afterPackScript).toMatch(/package\.remote-only\.generated\.json/);
     expect(afterPackScript).toMatch(/ElectronAsarIntegrity/);
+
+    const versionSmoke = packageScript.indexOf(
+      'verify_packaged_app_version "$PACKAGED_APP_PATH"',
+    );
+    const signatureSmoke = packageScript.indexOf(
+      'verify_packaged_code_signature "$PACKAGED_APP_PATH"',
+    );
+    const artifactHandoff = packageScript.indexOf(
+      'echo "[package] artifacts in apps/desktop/$ARTIFACT_OUTPUT_DIR/"',
+    );
+    expect(versionSmoke).toBeGreaterThan(-1);
+    expect(signatureSmoke).toBeGreaterThan(versionSmoke);
+    expect(artifactHandoff).toBeGreaterThan(signatureSmoke);
+    expect(packageScript).toMatch(
+      /codesign --verify --deep --strict --verbose=2/,
+    );
   });
 
   it('keeps bundled workspace packages out of packaged app runtime dependencies', () => {

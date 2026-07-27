@@ -473,6 +473,21 @@ verify_packaged_app_version() {
   fi
 }
 
+verify_packaged_code_signature() {
+  local app_path="$1"
+  if [[ ! -d "$app_path" ]]; then
+    echo "[package] packaged app missing for code-signature smoke: $app_path" >&2
+    return 1
+  fi
+
+  echo "[package] verifying final packaged app code signature"
+  if ! codesign --verify --deep --strict --verbose=2 "$app_path"; then
+    echo "[package] final packaged app code signature is invalid: $app_path" >&2
+    return 1
+  fi
+  echo "[package] final packaged app code signature is valid"
+}
+
 PACKAGED_APP_NAME="Silverhand.app"
 EXPECTED_DAEMON_BUNDLE="$ROOT_DIR/packages/host/dist/daemon.js"
 EXPECTED_DAEMON_VERSION="0.0.0-dev"
@@ -492,5 +507,10 @@ verify_packaged_app_version "$PACKAGED_APP_PATH" "$CANONICAL_VERSION"
 if [[ "$REMOTE_ONLY" != "1" ]]; then
   verify_packaged_better_sqlite3 "$PACKAGED_APP_PATH" "$ELECTRON_ABI"
 fi
+
+# This must remain the final package smoke. afterPack verifies the signature at
+# signing time; this second gate proves no later builder or smoke step changed a
+# sealed bundle byte before the artifact is handed off.
+verify_packaged_code_signature "$PACKAGED_APP_PATH"
 
 echo "[package] artifacts in apps/desktop/$ARTIFACT_OUTPUT_DIR/"
