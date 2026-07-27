@@ -72,13 +72,19 @@ const THEME_META: Record<
     border: string;
   }
 > = {
-  'warm-script': {
-    label: 'Warm Script',
-    bg: '#F8F6F2',
-    surface: '#F3EFE8',
-    text: '#1F1B14',
-    accent: '#FFD440',
-    border: 'rgba(0, 0, 0, 0.10)',
+  'studio-light': {
+    label: 'Studio Light',
+    // Cool-neutral chrome + pure-white work surface + Iris accent
+    // (#task:1656). The 4 dots preview the theme's whole argument: the
+    // app tray (#DEE3EB, the deepest light layer) → the sidebar carrier
+    // (#F2F5F9) → ink text → Iris. Idle tile border is the tray colour
+    // so the card reads as one cool set instead of borrowing the
+    // viewer's current-theme hairline.
+    bg: '#F2F5F9',
+    surface: '#DEE3EB',
+    text: '#111725',
+    accent: '#5B45D9',
+    border: 'rgba(17, 23, 37, 0.12)',
   },
   forza6: {
     label: 'Forza6',

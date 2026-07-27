@@ -760,7 +760,7 @@ export function Composer({
          *  encloses both rows.
          *
          *  v6.9.7 #task:917 (shiki composer audit C): `rounded-md`
-         *  (6px) is the right default for warm-script / slack-dark
+         *  (6px) is the right default for studio-light / slack-dark
          *  cards, but in forza6's 0-radius poster vocab the composer
          *  read as "almost-square". `data-composer-shell` lets forza6
          *  square it (same one-rule hook pattern as `data-settings-

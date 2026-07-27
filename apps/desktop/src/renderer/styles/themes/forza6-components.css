@@ -853,7 +853,7 @@
        Not a code-island role — a forza6 chrome role.
      - Header strip: indigo slab (`--forza6-indigo-slab`) with
        island-light foreground. Header bg stays forza6-scoped because
-       warm-script's `--bg-island-deep` warm stone would be wrong here,
+       studio-light's cool `--bg-island-deep` would be wrong here,
        and global keeps the header transparent.
      - lime small label for the language tag (this is the `lime/粉
        只做边框或小标题` Cindy asked for).
@@ -1468,7 +1468,7 @@
    `text-text-muted` utilities, so the follow-up rule explicitly lifts
    the muted meta line and channel hash icon back to the selected-row
    foreground. Scrollbar thumb stays the default cool wash; no
-   component-layer churn; warm-script pixel-zero. */
+   component-layer churn; the other themes pixel-zero. */
 [data-theme='forza6'] [data-composer-picker] [role='option'][aria-selected='true'] {
   background-color: var(--brand-primary);
   color: var(--text-on-brand);
@@ -1957,7 +1957,7 @@
    `border-color` overrides the Tailwind `focus-within:border-border-
    focus` resolved value; `--tw-ring-color` overrides the lazily-
    resolved ring colour inside `focus-within:ring-border-focus`. Both
-   stay forza6-scoped — warm-script / slack-dark composers keep their
+   stay forza6-scoped — studio-light / slack-dark composers keep their
    own `--border-focus` painting unchanged. */
 [data-theme='forza6'] [data-composer-shell] {
   border-radius: 0;
@@ -2063,7 +2063,7 @@
 /* Hover is the PEEL ONLY — no ground change (shiki 2026-07-26: "这俩 action
    button 都保持 hover 无背景色"). `CONTROL_SURFACE_BUTTON` ships the canonical
    control-hover PAIR (`--border-control-hover` + `--bg-option-hover`), which is
-   right in warm-script / slack-dark where nothing else moves on hover. Here the
+   right in studio-light / slack-dark where nothing else moves on hover. Here the
    sticker already answers with a growing shadow against a 1px lift, so the pale
    lime block was a second, redundant hover channel on top of it — and the frame
    still recolours, so the affordance doesn't depend on the ground. Held at the
@@ -2086,7 +2086,7 @@
    is the whole family: the page-footer Delete trigger and every dialog
    CTA that actually performs a delete / revoke. Painting it HERE and not
    at the consumer is what lets other themes keep their solid `danger`
-   fill — in warm-script / slack-dark a white outline CTA would rank equal
+   fill — in studio-light / slack-dark a white outline CTA would rank equal
    to its own Cancel peer, while forza6 can invert it because the red
    frame + red shadow out-shout an ink-framed Cancel by hue alone.
 
@@ -2128,7 +2128,7 @@
 }
 [data-theme='forza6'] [data-destructive-action='commit']:hover:not(:disabled) {
   /* Hold the paper: the page-footer trigger's own `hover:bg-error-soft`
-     (correct in warm-script / slack-dark, where the sticker doesn't exist)
+     (correct in studio-light / slack-dark, where the sticker doesn't exist)
      would otherwise put the rejected pastel back under this frame. */
   background-color: var(--bg-floating);
   box-shadow: 2.5px 2.5px 0 var(--error);

@@ -15,11 +15,13 @@ interface VerticalSplitterProps {
  * deep` (`#B3186A`) in forza6 — a hot brand hue used as chrome for
  * a structural separator, which reads as "look at this divider!"
  * when it should fade into the column geometry. The new
- * `--splitter-hover-bg` token lets forza6 swap to a neutral ink
- * (matching warm-script's near-black accent, which read fine
- * because it WAS ink) without touching warm-script / slack-dark
- * (no token set → fallback to `var(--accent)` keeps their tuned
- * colour). Same pattern in SplitPane.tsx's divider.
+ * `--splitter-hover-bg` token lets a theme swap to a neutral ink
+ * without touching the ones whose accent already reads as ink (no
+ * token set → fallback to `var(--accent)`). A theme with a saturated
+ * accent MUST set it: a drag handle is a utility signal, so spending
+ * the accent there both misreads as a status and steals that budget
+ * (studio-light sets it to an ink mix). Same pattern in SplitPane.tsx's
+ * divider.
  */
 export function VerticalSplitter({
   onPointerDown,

@@ -3,6 +3,7 @@ import {
   DEFAULT_APPEARANCE,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
+  LEGACY_THEME_IDS,
   THEME_IDS,
   type AppearanceSettings,
 } from './types';
@@ -30,7 +31,18 @@ const MarkdownTextInputSchema = z
   })
   .strip();
 
-const ThemeIdSchema = z.enum(THEME_IDS).catch(DEFAULT_APPEARANCE.theme);
+/** Theme id, with the renamed-theme compatibility step in front of the
+ *  enum: a stored legacy id (see {@link LEGACY_THEME_IDS}) resolves to its
+ *  successor instead of failing the enum and falling back to the default
+ *  theme, which would silently throw away the user's choice. Anything
+ *  else unknown still degrades to the default. */
+const ThemeIdSchema = z
+  .preprocess(
+    value =>
+      typeof value === 'string' ? LEGACY_THEME_IDS[value] ?? value : value,
+    z.enum(THEME_IDS),
+  )
+  .catch(DEFAULT_APPEARANCE.theme);
 
 const AppearanceSchema = z
   .object({

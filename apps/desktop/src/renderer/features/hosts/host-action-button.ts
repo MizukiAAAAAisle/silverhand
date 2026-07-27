@@ -16,7 +16,7 @@ import { DESTRUCTIVE_TRIGGER } from '@/features/common/DestructiveAction';
  * via the Button primitive), never a framework default. That is the whole
  * reason forza6 can render these as poster stickers (2px ink frame, 0 radius,
  * hard ink drop shadow painted on the `data-host-action` hook in
- * `forza6-components.css`) while warm-script / slack-dark keep their 1px +
+ * `forza6-components.css`) while studio-light / slack-dark keep their 1px +
  * 6px-radius controls from the same markup.
  *
  * Hover consumes the canonical control-hover pair — `--border-control-hover` +

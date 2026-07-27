@@ -50,8 +50,8 @@
 
   /* ── Card frame ──
      8px gap 让 aubergine 暖色从 panel 缝里露出 — 这是 Slack 视觉记忆里
-     的标志性双层 frame（顶 nav aubergine + chat 冷黑）。warm-script 的
-     `--bg-app: #ECE9E2` 是温和米灰；slack-dark 用 deep aubergine 表达
+     的标志性双层 frame（顶 nav aubergine + chat 冷黑）。studio-light 的
+     `--bg-app` 是冷中性灰；slack-dark 用 deep aubergine 表达
      "Slack 的紫红血脉"。 */
   --bg-app: #350D36;
   --frame-padding: 8px;
@@ -180,7 +180,7 @@
 
   /* ── Chrome label ──
      Slack 实际的 sidebar group header (DM / WORKSPACES / DIRECT MESSAGES)
-     是 uppercase + sans + 0.05em tracking — 与 warm-script 完全一致，
+     是 uppercase + sans + 0.05em tracking — 与 studio-light 同路，
      不走 forza6 的 display 字体路线。 */
   --font-chrome-label: var(--font-sans);
   --chrome-label-tracking: 0.05em;
@@ -214,8 +214,7 @@
   --profile-section-radius: var(--card-radius);
 
   /* ── Control + chip radius ──
-     dark 不走 forza6 的 hard-cut，保持 light 默认（warm-script pixel-zero
-     复用）。 */
+     dark 不走 forza6 的 hard-cut，保持 light 默认（与 studio-light 同值）。 */
   --control-radius: 6px;
   --chip-radius: 4px;
   /* Bottom-row chip fill — shared by reaction chips and the thread-reply
@@ -347,8 +346,8 @@
   --duration: 200ms;
 
   /* ── Chat default ──
-     14px 与 forza6 / appearance slider 默认对齐（warm-script 15px 保留
-     +1 遗留差异，待 Q 簇统一扫描时一并改）。 */
+     14px 与 forza6 / studio-light / appearance slider 默认对齐（三主题
+     同一个产品基线，不做 per-theme 漂移）。 */
   --chat-font-size: 14px;
 
   /* ── Compat: forza6-introduced tokens (design-new-theme §3 关键 3) ──
@@ -398,9 +397,10 @@
 }
 
 /* ── slack-dark state-signal language: borderless (fill / veil / glow) ──
-   Dark twin of warm-script — SAME border language, only dark values
-   (shiki 2026-07-03: warm & slack use borders identically, one light one
-   dark). Every STATE signal drops the border/ring and carries itself with a
+   Dark twin of studio-light — SAME border language, only dark values
+   (shiki 2026-07-03: the light hairline theme & slack use borders
+   identically, one light one dark). Every STATE signal drops the
+   border/ring and carries itself with a
    fill/veil or a soft brand glow; resting cards keep their 1px hairline
    (option A). forza6 stays the bordered poster theme, untouched. */
 

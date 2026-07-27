@@ -1030,6 +1030,15 @@ function AuthorLabel({
             event.preventDefault();
             onNavigateAgent(agent.id);
           }}
+          /* `data-message-author` + `data-author-kind` are theme-neutral
+           *  identity hooks: the author name is the one place per message
+           *  group that says "who". Size / weight / the cross-theme default
+           *  colour stay here; a theme that gives agents their own identity
+           *  hue (studio-light paints the agent arm green so `--accent` can
+           *  keep meaning action/state) repaints via the hook instead of
+           *  matching a Tailwind class. */
+          data-message-author
+          data-author-kind="agent"
           className="rounded font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
         >
           {displayLabel}
@@ -1051,6 +1060,8 @@ function AuthorLabel({
             event.preventDefault();
             onNavigateHuman(human.id);
           }}
+          data-message-author
+          data-author-kind="human"
           className="rounded font-medium text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
         >
           {displayLabel}
@@ -1060,6 +1071,8 @@ function AuthorLabel({
   }
   return (
     <span
+      data-message-author
+      data-author-kind={isUser ? 'human' : 'agent'}
       className={
         'font-medium ' + (isUser ? 'text-text-primary' : 'text-accent')
       }

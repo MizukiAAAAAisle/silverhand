@@ -9,11 +9,11 @@
    `DEFAULT_APPEARANCE` (or vice versa) silently leaks the late
    default's tokens into other themes; do both together. */
 @import "./themes/forza6.css";
-@import "./themes/warm-script.css";
+@import "./themes/studio-light.css";
 @import "./themes/slack-dark.css";
 
 /* Forza6-only component-layer specialization. Every selector inside is
-   `[data-theme='forza6']`-scoped; warm-script + slack-dark are pixel-
+   `[data-theme='forza6']`-scoped; studio-light + slack-dark are pixel-
    identical before and after this import. Must come AFTER forza6.css so
    token re-assignments inside it (`--bg-channels-sidebar` deep teal etc.)
    beat the PR-1 light-pink defaults. */
@@ -21,7 +21,7 @@
 
 /* Highlight.js theme for fenced code blocks rendered by rehype-highlight.
    Picked the "github" light theme as a neutral baseline — works under
-   warm-script. If we ship a dark theme later, swap this for github-dark
+   studio-light. If we ship a dark theme later, swap this for github-dark
    based on data-theme. */
 @import "highlight.js/styles/github.css";
 
@@ -120,7 +120,7 @@
    shell the user is about to paste into, so it should read as a terminal
    in every theme, the way a screenshot of a terminal would. The `island`
    family it used before is the opposite contract: it exists so each theme
-   OWNS the code surface (warm stone / teal HUD / ink), which made the
+   OWNS the code surface (cool neutral / teal HUD / ink), which made the
    card look like three different app surfaces and like no terminal.
 
    Kept as tokens rather than hardcoded hexes in the component so a theme
@@ -201,8 +201,8 @@ html, body, #root {
 /* Sidebar/workspace/channel rows reserve border space even when transparent;
    themes can tune the stroke weight without touching component classes.
    `border-radius: var(--row-radius)` lets each theme decide list-row
-   geometry — warm/forza6 keep `0` (chat-surface scan-line vocabulary),
-   slack-dark uses `6px` for Slack-style subtle list rounding. The same
+   geometry — forza6 keeps `0` (chat-surface scan-line vocabulary);
+   studio-light / slack-dark use `6px` for subtle list rounding. The same
    token also drives `[data-panel-card='row']` (schedule cards / agent
    panel records) and is opt-in inline on NavRail buttons /
    SavedListView item / MessageItem hover frame so the whole "row
@@ -307,10 +307,11 @@ button:disabled { cursor: not-allowed; }
      baseline; at larger markdown font sizes chip + pill grow together
      (1.5× the prose size, matching the row's line-height) so neither
      crops its contents and the two stay pixel-aligned.
-     #task:1192: warm-script wanted these shorter at large fonts but the
-     fix must stay in-theme (shiki: theme polish doesn't leak across
-     themes) — warm overrides this token to a 1.3 factor locally (see
-     warm-script.css); the cross-theme default stays 1.5.
+     #task:1192: the third theme slot wanted these shorter at large fonts,
+     and that fix stayed in-theme (shiki: theme polish doesn't leak across
+     themes) — the then-warm theme overrode this token to a 1.3 factor
+     locally. That theme was replaced by studio-light (#task:1656), which
+     keeps the cross-theme 1.5.
      Cindy PR-8 follow-up #3 (msg `VOGiR_K30xhSOswD`). */
   --system-message-control-height: max(18px, calc(var(--appearance-markdown-font-size, var(--system-message-size, 12px)) * 1.5));
   font-family: var(--appearance-prose-font, var(--font-sans));
@@ -440,8 +441,8 @@ button:disabled { cursor: not-allowed; }
    radius. Each theme owns its values. TSX intentionally still carries
    `border border-border rounded-md` Tailwind classes; the rules below
    sit later in CSS source order at equal specificity, so they win and
-   the values come from tokens (forza6 → 2px black + 0 radius; warm
-   themes → 1px subtle + radius-md / radius-sm).
+   the values come from tokens (forza6 → 2px black + 0 radius; the
+   hairline themes → 1px subtle + radius-md / radius-sm).
 
    Tooltip (`data-radix-tooltip-content`) and Select listbox
    (`role='listbox'` — Radix doesn't expose a stable `data-radix-select-content`
@@ -494,7 +495,7 @@ button:disabled { cursor: not-allowed; }
    Tooltips and non-listbox info popovers deliberately do NOT carry the
    attr, so they keep their own treatment (Cindy review: don't fold them
    into Select semantics). Reuses `--floating-border` so the width/colour
-   lives in one place per theme (forza6 → 2px black; warm → 1px subtle),
+   lives in one place per theme (forza6 → 2px black; studio-light → 1px subtle),
    the same border the full menus already use. */
 [data-dropdown-frame] {
   border: var(--floating-border);
@@ -507,8 +508,9 @@ button:disabled { cursor: not-allowed; }
    (`nav[aria-label='App sections'] button`) share a 2-token contract
    for the visible border in hover + selected states. Each theme owns
    its values:
-   - warm-script: both = var(--accent) — pixel-zero vs the original
-     Tailwind `border-accent` / `hover:border-accent` classes.
+   - studio-light: both = a neutral ink mix — hover / focus / selected
+     borders are utility signals, so they must not spend the accent's
+     "needs attention" budget (see studio-light.css §Row-state border).
    - forza6:      both = #0A0A0A poster-sticker near-black — pixel-zero
      vs the removed forza6-components.css per-state overrides.
 
@@ -645,8 +647,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    the base `-text`) is what fixes forza6: there `-text` is on-fill ink
    (the board chip is a saturated fill with ink text), so an ink outline
    made in_review read dark instead of orange; `-solid` homes on the
-   poster `-bg` there and on the saturated `-text` in warm/slack, so one
-   token keeps dot + pill + chip in lockstep. */
+   poster `-bg` there and on the saturated `-text` in the hairline
+   themes, so one token keeps dot + pill + chip in lockstep. */
 .system-activity-cluster [data-task-event-status] {
   background: transparent;
   border: 1px solid currentColor;
@@ -734,7 +736,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    the message bubble. Visual identity (background / border / radius)
    is fully theme-driven through `--bg-inline-code` /
    `--border-inline-code` / `--radius-inline-code` / `--text-inline-code`
-   so warm-script can keep a soft borderless ink-wash chip while
+   so studio-light can keep a soft borderless cool-wash chip while
    forza6 paints a hard lime poster sticker — all via tokens, no
    per-theme override of this rule needed.
 
@@ -801,8 +803,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    shell so the header strip can sit flush with the top edge.
    Background / border / pre text colour all read from the `island`
    token family (`--bg-island` / `--text-island` / `--border-island`)
-   so each theme owns the code-block palette directly — warm-script
-   gets its soft warm stone tint, forza6 gets its deep teal-black
+   so each theme owns the code-block palette directly — studio-light
+   gets its cool neutral tint, forza6 gets its deep teal-black
    HUD aesthetic, no per-theme override of these rules needed. */
 .markdown-body .code-block {
   max-width: 100%;
@@ -1062,19 +1064,19 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
        var(--card-radius))`. The dedicated token lets forza6 hard-cut
        the section to 0 (poster sticker geometry, #task:814) without
        dragging every other `--card-radius` consumer down with it;
-       warm keeps the soft 8px tile by inheriting `--card-radius`.
+       studio-light keeps the soft 8px tile by inheriting `--card-radius`.
 
      [data-panel-pill="*"]              Status / kind / thread /
                                          presence / path chips
-       → `var(--chip-radius)` (forza6 0, warm 4px).
+       → `var(--chip-radius)` (forza6 0, studio-light 4px).
 
      [data-panel-tabs]                  Activity / Schedule FilterTabs
                                          outer frame
-       → `var(--control-radius)` (forza6 0, warm/slack-dark 6px). Inner
-       segment buttons consume `var(--tab-segment-radius)` so each theme
-       can pick: forza6 / warm = `0` (hard wedge inside the bracket);
-       slack-dark = `4px` (active segment reads as "embedded" rather
-       than wedged, hairline-rounded language).
+       → `var(--control-radius)` (forza6 0, studio-light / slack-dark
+       6px). Inner segment buttons consume `var(--tab-segment-radius)` so each theme
+       can pick: forza6 = `0` (hard wedge inside the bracket);
+       studio-light / slack-dark = `4px` (active segment reads as
+       "embedded" rather than wedged, hairline-rounded language).
 
      [data-panel-control]               GhostInput / GhostTextarea /
                                          Select trigger / Select content
@@ -1093,8 +1095,8 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 [data-panel-card='row'],
 [data-panel-card='placeholder'] {
   /* Routed through `--row-radius` (token contract added #task:912 review
-     round 2). warm/forza6 = 0 (chat-surface scan-line vocab); slack-dark
-     = 6px (Slack-style subtle list rounding). */
+     round 2). forza6 = 0 (chat-surface scan-line vocab); studio-light /
+     slack-dark = 6px (subtle list rounding). */
   border-radius: var(--row-radius);
 }
 [data-panel-card='profile-section'] {
@@ -1108,9 +1110,9 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 }
 [data-panel-tabs] button {
   /* Routed through `--tab-segment-radius` (#task:912 review round 3).
-     warm/forza6 keep `0` (hard wedge inside the bracket — poster
-     vocabulary); slack-dark sets `4px` so the active segment reads
-     as "embedded" inside the 6px outer rather than as a square wedge,
+     forza6 keeps `0` (hard wedge inside the bracket — poster
+     vocabulary); the hairline themes set `4px` so the active segment
+     reads as "embedded" inside the 6px outer rather than as a square wedge,
      matching its hairline-rounded language. */
   border-radius: var(--tab-segment-radius);
 }
