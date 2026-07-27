@@ -13,6 +13,7 @@ import {
   isSlugVerifiableCwd,
   normalizeStoreRootOverride,
   runSessionRenamePass,
+  runSessionSlugRepairPass,
   sessionNamespaceFor,
   SessionMigrationError,
 } from '../src/daemon/workspace-registry/session-migration.js';
@@ -21,9 +22,9 @@ const silent = { info: () => {}, warn: () => {} };
 const HOME = '/home/u';
 
 describe('cwdSessionSlug — the claude/qoder cwd → namespace transform', () => {
-  it('matches the live fixture byte-for-byte (every / and . becomes -)', () => {
-    expect(cwdSessionSlug('/Users/shiki/.silverhand/run/c8705d/workspaces/w1')).toBe(
-      '-Users-shiki--silverhand-run-c8705d-workspaces-w1',
+  it('matches live Claude/Qoder probes byte-for-byte (/ . and _ become -)', () => {
+    expect(cwdSessionSlug('/Users/shiki/.silverhand/computers/host_id/workspaces/w_1')).toBe(
+      '-Users-shiki--silverhand-computers-host-id-workspaces-w-1',
     );
   });
 
@@ -71,6 +72,242 @@ describe('sessionNamespaceFor — the frozen inventory', () => {
   });
 });
 
+describe('runSessionSlugRepairPass — released underscore-slug recovery', () => {
+  it('is a strict no-op when no cwd can carry the released typo', () => {
+    expect(
+      runSessionSlugRepairPass(['/root/workspaces/no-underscore'], {
+        sessionStoreHome: HOME,
+        env: { CLAUDE_CONFIG_DIR: 'relative' },
+        logger: silent,
+        probe: () => {
+          throw new Error('must not inspect an unrelated session store');
+        },
+      }),
+    ).toEqual({ renamed: 0 });
+  });
+
+  it('skips before probing when a repair cwd is outside the verified charset', () => {
+    const warnings: Record<string, unknown>[] = [];
+    expect(
+      runSessionSlugRepairPass(['/root/workspaces/user name_w'], {
+        sessionStoreHome: HOME,
+        env: {},
+        logger: {
+          info: () => {},
+          warn: fields => warnings.push(fields),
+        },
+        probe: () => {
+          throw new Error('must not inspect an unverifiable coordinate');
+        },
+      }),
+    ).toEqual({ renamed: 0 });
+    expect(warnings).toEqual([
+      {
+        action: 'runtime_session_namespace_slug_repair_skipped',
+        reason: 'unverifiable_cwd',
+        cwd: '/root/workspaces/user name_w',
+      },
+    ]);
+  });
+
+  it('an unverifiable runtime store does not cancel the other runtime repair', () => {
+    const cwd = '/root/workspaces/w_1';
+    const warnings: Record<string, unknown>[] = [];
+    const renamed: string[] = [];
+    expect(
+      runSessionSlugRepairPass([cwd], {
+        sessionStoreHome: HOME,
+        env: { CLAUDE_CONFIG_DIR: 'relative' },
+        logger: {
+          info: () => {},
+          warn: fields => warnings.push(fields),
+        },
+        probe: path =>
+          path === join(HOME, '.qoder', 'projects', cwd.replace(/[/.]/g, '-'))
+            ? 'dir'
+            : 'absent',
+        rename: (from, to) => renamed.push(`${from}->${to}`),
+      }),
+    ).toEqual({ renamed: 1 });
+    expect(warnings).toEqual([
+      {
+        action: 'runtime_session_namespace_slug_repair_skipped',
+        reason: 'unverifiable_store_root',
+        runtime: 'claude',
+        env_var: 'CLAUDE_CONFIG_DIR',
+      },
+    ]);
+    expect(renamed).toHaveLength(1);
+    expect(renamed[0]).toContain('/.qoder/projects/');
+  });
+
+  it('an unverifiable cwd does not cancel another cwd repair', () => {
+    const badCwd = '/root/workspaces/user name_w';
+    const goodCwd = '/root/workspaces/w_1';
+    const warnings: Record<string, unknown>[] = [];
+    const renamed: string[] = [];
+
+    expect(
+      runSessionSlugRepairPass([badCwd, goodCwd], {
+        sessionStoreHome: HOME,
+        env: {},
+        logger: {
+          info: () => {},
+          warn: fields => warnings.push(fields),
+        },
+        probe: path =>
+          path.endsWith(goodCwd.replace(/[/.]/g, '-')) ? 'dir' : 'absent',
+        rename: (from, to) => renamed.push(`${from}->${to}`),
+      }),
+    ).toEqual({ renamed: 2 });
+    expect(warnings).toEqual([
+      {
+        action: 'runtime_session_namespace_slug_repair_skipped',
+        reason: 'unverifiable_cwd',
+        cwd: badCwd,
+      },
+    ]);
+    expect(renamed).toHaveLength(2);
+  });
+
+  it('atomically repairs the exact first-v2 namespace typo for both runtimes', () => {
+    const home = mkdtempSync(join(tmpdir(), 'sh-sess-repair-'));
+    try {
+      const cwd = '/root/computers/host_id/workspace-data/workspaces/w_1';
+      const buggySlug = cwd.replace(/[/.]/g, '-');
+      for (const store of ['.claude', '.qoder']) {
+        const bucket = join(home, store, 'projects', buggySlug);
+        mkdirSync(bucket, { recursive: true });
+        writeFileSync(join(bucket, 's.jsonl'), store);
+      }
+
+      const result = runSessionSlugRepairPass([cwd], {
+        sessionStoreHome: home,
+        env: {},
+        logger: silent,
+      });
+
+      expect(result.renamed).toBe(2);
+      for (const store of ['.claude', '.qoder']) {
+        expect(
+          readFileSync(join(home, store, 'projects', cwdSessionSlug(cwd), 's.jsonl'), 'utf8'),
+        ).toBe(store);
+        expect(existsSync(join(home, store, 'projects', buggySlug))).toBe(false);
+      }
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('leaves coexistence inert and continues repairing the next coordinate', () => {
+    const home = mkdtempSync(join(tmpdir(), 'sh-sess-repair-'));
+    try {
+      const coexistCwd = '/root/computers/host_id/workspace-data/workspaces/w';
+      const repairCwd = '/root/computers/host_id/workspace-data/workspaces/w_2';
+      const buggySlug = coexistCwd.replace(/[/.]/g, '-');
+      const root = join(home, '.claude', 'projects');
+      mkdirSync(join(root, buggySlug), { recursive: true });
+      mkdirSync(join(root, cwdSessionSlug(coexistCwd)), { recursive: true });
+      mkdirSync(join(root, repairCwd.replace(/[/.]/g, '-')), { recursive: true });
+      const warnings: Record<string, unknown>[] = [];
+
+      expect(
+        runSessionSlugRepairPass([coexistCwd, repairCwd], {
+          sessionStoreHome: home,
+          env: {},
+          logger: {
+            info: () => {},
+            warn: fields => warnings.push(fields),
+          },
+        }),
+      ).toEqual({ renamed: 1 });
+      expect(existsSync(join(root, buggySlug))).toBe(true);
+      expect(existsSync(join(root, cwdSessionSlug(coexistCwd)))).toBe(true);
+      expect(existsSync(join(root, cwdSessionSlug(repairCwd)))).toBe(true);
+      expect(warnings).toEqual([
+        {
+          action: 'runtime_session_namespace_slug_repair_skipped',
+          reason: 'coexist',
+          runtime: 'claude',
+          cwd: coexistCwd,
+        },
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: 'unreadable legacy namespace',
+      legacyState: 'unreadable' as const,
+      currentState: 'absent' as const,
+      reason: 'legacy_unreadable',
+    },
+    {
+      name: 'special legacy namespace',
+      legacyState: 'special' as const,
+      currentState: 'absent' as const,
+      reason: 'legacy_special',
+    },
+    {
+      name: 'unreadable current namespace',
+      legacyState: 'dir' as const,
+      currentState: 'unreadable' as const,
+      reason: 'current_unreadable',
+    },
+    {
+      name: 'special current namespace',
+      legacyState: 'dir' as const,
+      currentState: 'special' as const,
+      reason: 'current_special',
+    },
+    {
+      name: 'rename failure',
+      legacyState: 'dir' as const,
+      currentState: 'absent' as const,
+      reason: 'rename_failed',
+      renameFails: true,
+    },
+  ])('skips $name without widening it into a startup failure', testCase => {
+    const cwd = '/root/computers/host_id/workspace-data/workspaces/w_1';
+    const claudeRoot = join(HOME, '.claude', 'projects');
+    const legacyPath = join(claudeRoot, cwd.replace(/[/.]/g, '-'));
+    const currentPath = join(claudeRoot, cwdSessionSlug(cwd));
+    const warnings: Record<string, unknown>[] = [];
+    let renameCalls = 0;
+
+    expect(
+      runSessionSlugRepairPass([cwd], {
+        sessionStoreHome: HOME,
+        env: {},
+        logger: {
+          info: () => {},
+          warn: fields => warnings.push(fields),
+        },
+        probe: path => {
+          if (path === legacyPath) return testCase.legacyState;
+          if (path === currentPath) return testCase.currentState;
+          return 'absent';
+        },
+        rename: () => {
+          renameCalls += 1;
+          if (testCase.renameFails) throw new Error('rename failed');
+        },
+      }),
+    ).toEqual({ renamed: 0 });
+    expect(renameCalls).toBe(testCase.renameFails ? 1 : 0);
+    expect(warnings).toEqual([
+      {
+        action: 'runtime_session_namespace_slug_repair_skipped',
+        reason: testCase.reason,
+        runtime: 'claude',
+        cwd,
+      },
+    ]);
+  });
+});
+
 describe('defaultNamespaceProbe', () => {
   it('classifies dir/absent/symlink correctly and never follows links', () => {
     const root = mkdtempSync(join(tmpdir(), 'sh-probe-'));
@@ -92,8 +329,8 @@ describe('runSessionRenamePass — fail-closed arms', () => {
   it('renames a sole old bucket atomically; contents survive byte-for-byte', () => {
     const home = mkdtempSync(join(tmpdir(), 'sh-sess-'));
     try {
-      const oldCwd = '/root/run/b/workspaces/w';
-      const newCwd = '/root/computers/local/workspace-data/b/workspaces/w';
+      const oldCwd = '/root/run/b/workspaces/w_old';
+      const newCwd = '/root/computers/host_id/workspace-data/workspaces/w_new';
       for (const store of ['.claude', '.qoder']) {
         const bucket = join(home, store, 'projects', cwdSessionSlug(oldCwd));
         mkdirSync(bucket, { recursive: true });

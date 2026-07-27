@@ -467,6 +467,13 @@ session files, preserving all sessions sharing the workspace without parsing
 third-party transcript formats. It runs for every pair regardless of any
 `cli_session_id` — dormant agents migrate in the same single pass.
 
+Claude and Qoder derive the namespace slug by replacing `/`, `.`, and `_` in
+the absolute cwd with `-`. The first released v2 migrator omitted `_` from
+that transform. The migration unit therefore also recognizes that exact
+released typo for authoritative current cwds and atomically renames it to the
+vendor coordinate. It never scans the vendor store, and typo/current
+coexistence remains a typed conflict rather than a merge.
+
 After the legacy runtime process is quiescent, classify each
 (runtime × pair):
 
@@ -706,6 +713,9 @@ handshake, with no new protocol or migration state:
 - Existing Claude and Qoder sessions in an agent-home workspace survive the
   `agents/<agent_id>` to `computers/<computer_id>/agents/<agent_id>` cwd
   move; the pre-revision dogfood alias catch-up re-renames them once more.
+- A completed v2 marker and an already-flat daemon root still repair the first
+  release's underscore-preserving Claude/Qoder namespace typo; a second pass
+  is a no-op and transcript bytes are unchanged.
 - Codex resumes the same `cli_session_id` after the cwd transition without
   moving or creating a cwd-derived session namespace.
 - Every other runtime supported before cutover has an explicit, evidence-backed

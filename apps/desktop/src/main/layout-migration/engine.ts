@@ -5,9 +5,11 @@
  * The filesystem is the progress record: no per-file state machine. Each
  * facet stages into its deterministic staging root, is validated there,
  * and activates with ONE same-filesystem rename. Crash anywhere resumes
- * deterministically from what is on disk. Everything here fails closed —
+ * deterministically from what is on disk. Ordinary migration fails closed —
  * symlinks/special files, coexistence, EXDEV, and unreadable states block
- * startup rather than merging or copying.
+ * startup rather than merging or copying. The post-migration repair for the
+ * released session-slug typo is deliberately opportunistic and never gates
+ * startup; it leaves unprovable coordinates untouched and warns.
  *
  * Order per run: classify sources → eager session pass (sessions.ts) →
  * facet tree moves → completion marker. The session pass and the tree
@@ -50,6 +52,7 @@ import {
   parseWorkspaceRegistryFileStrict,
   planWorkspaceDataConvergence,
   runSessionRenamePass,
+  runSessionSlugRepairPass,
   runWorkspaceDataConvergencePass,
   SessionMigrationError,
   type RegistryBinding,
@@ -150,14 +153,22 @@ export function migrateDesktopAppDataLayout(
     // §6.4 case 5 — v2 is authoritative; later legacy leftovers are inert
     // and reported, never re-adopted or deleted.
     reportInertLegacyLeftovers(legacy, logger);
+    // #task:1663 — the first shipped v2 slugger preserved `_`, while
+    // Claude/Qoder replace it with `-`. A completed layout marker used to
+    // bypass every session pass, permanently stranding those buckets.
+    // Current v2 filesystem coordinates are the authority for this exact
+    // idempotent repair; vendor stores are never enumerated.
+    let renamed = runSessionSlugRepairPass(
+      currentV2SessionCwds(appRoot, v2, logger),
+      sessionDeps,
+    ).renamed;
     if (marker.marker.computer_slot && marker.marker.workspace_layout) {
       return {
-        migrated: false,
+        migrated: renamed > 0,
         facets: { localComputer: 'already', embeddedServer: 'already' },
-        sessions: 'already',
+        sessions: renamed > 0 ? 'migrated' : 'already',
       };
     }
-    let renamed = 0;
     let catchUpFacts: BindingConfigFacts | null = null;
     if (!marker.marker.computer_slot) {
       // #task:1608 — computer-slot catch-up (the pre-revision dogfood
@@ -1158,6 +1169,63 @@ interface SessionCwdMap {
   newWorkspaceData: string;
 }
 
+function listSessionSourceDirs(root: string): string[] {
+  const state = entryState(root);
+  if (state === 'absent') return [];
+  if (state === 'unreadable') {
+    throw new LayoutMigrationError(
+      'layout_unreadable',
+      `session source ${basename(root)} cannot be inspected`,
+    );
+  }
+  if (state !== 'dir') return [];
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    throw new LayoutMigrationError(
+      'layout_unreadable',
+      `session source ${basename(root)} cannot be read`,
+    );
+  }
+  return names.filter(name => entryState(join(root, name)) === 'dir');
+}
+
+/**
+ * Fully migrated installs no longer enter a cwd-translation pass, so derive
+ * the current agent/workspace cwds directly from the one bound computer slot.
+ * These are inputs to the released-slug repair only; no vendor directory is
+ * scanned and no historical computer slot is adopted. A typed layout read
+ * failure means only that this optional repair lacks proof, so it is warned
+ * and skipped here; the same readers remain fail-closed in ordinary migration.
+ */
+function currentV2SessionCwds(
+  appRoot: string,
+  v2: DesktopAppPaths,
+  logger: MigrationLogger,
+): string[] {
+  try {
+    const facts = readBindingConfig([v2.desktop.computerBinding], logger);
+    if (facts === null) return [];
+    const slot = resolveComputerSlotPaths(appRoot, facts.hostId);
+    const workspacesRoot = join(slot.workspaceData, 'workspaces');
+    return [
+      ...listSessionSourceDirs(slot.agents).map(id => join(slot.agents, id)),
+      ...listSessionSourceDirs(workspacesRoot).map(id => join(workspacesRoot, id)),
+    ];
+  } catch (err) {
+    if (!(err instanceof LayoutMigrationError)) throw err;
+    logger.warn(
+      {
+        action: 'runtime_session_namespace_slug_repair_inputs_unavailable',
+        reason: err.code,
+      },
+      'skipping the released session-slug repair because its current v2 cwd inputs are unavailable',
+    );
+    return [];
+  }
+}
+
 /**
  * Enumerate cwd pairs from the classified authoritative source. IDs and
  * slugs come from directory listings of that source; the old and new cwd
@@ -1172,18 +1240,9 @@ function collectSessionCwdPairs(
   const add = (oldCwd: string, newCwd: string): void => {
     if (!pairs.has(oldCwd)) pairs.set(oldCwd, { oldCwd, newCwd });
   };
-  const listDirs = (root: string): string[] => {
-    const state = entryState(root);
-    if (state === 'absent') return [];
-    if (state === 'unreadable') {
-      throw new LayoutMigrationError('layout_unreadable', `session source ${basename(root)} cannot be inspected`);
-    }
-    if (state !== 'dir') return [];
-    return readdirSync(root).filter(name => entryState(join(root, name)) === 'dir');
-  };
 
   for (const agentsDir of sources.agentsDirs) {
-    for (const agentId of listDirs(agentsDir)) {
+    for (const agentId of listSessionSourceDirs(agentsDir)) {
       add(join(map.oldAgentsRoot, agentId), join(map.newAgentsRoot, agentId));
     }
   }
@@ -1194,15 +1253,15 @@ function collectSessionCwdPairs(
     );
   };
   for (const nsRoot of sources.namespaceRoots) {
-    for (const ns of listDirs(nsRoot)) {
-      for (const slug of listDirs(join(nsRoot, ns, 'workspaces'))) {
+    for (const ns of listSessionSourceDirs(nsRoot)) {
+      for (const slug of listSessionSourceDirs(join(nsRoot, ns, 'workspaces'))) {
         addWorkspace(ns, slug);
       }
     }
   }
   for (const nsDir of sources.runNamespaces ?? []) {
     const ns = basename(nsDir);
-    for (const slug of listDirs(join(nsDir, 'workspaces'))) {
+    for (const slug of listSessionSourceDirs(join(nsDir, 'workspaces'))) {
       addWorkspace(ns, slug);
     }
   }

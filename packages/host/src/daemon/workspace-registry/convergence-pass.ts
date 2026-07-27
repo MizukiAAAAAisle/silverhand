@@ -6,6 +6,7 @@ import {
 import type { RegistryBinding } from './registry.js';
 import {
   runSessionRenamePass,
+  runSessionSlugRepairPass,
   type MigrationLogger,
   type SessionCwdPair,
   type SessionStoreEnv,
@@ -37,13 +38,25 @@ export function runWorkspaceDataConvergencePass(opts: {
     workspaceDataRoot,
     currentBinding: opts.currentBinding,
   });
-  let renamed = 0;
+  const flatWorkspacesRoot = join(workspaceDataRoot, 'workspaces');
+  const currentCwds =
+    plan.flatFile === null
+      ? []
+      : Object.entries(plan.flatFile.workspaces).flatMap(([workspaceId, entry]) => {
+          const cwd = join(flatWorkspacesRoot, workspaceId);
+          return entry.path === cwd ? [cwd] : [];
+        });
+  let renamed = runSessionSlugRepairPass(currentCwds, {
+    sessionStoreHome: opts.sessionStoreHome,
+    env: opts.env,
+    logger: opts.logger,
+  }).renamed;
   if (plan.managed.length > 0) {
     const pairs: SessionCwdPair[] = plan.managed.map(entry => ({
       oldCwd: join(workspaceDataRoot, entry.namespaceName, 'workspaces', entry.legacySlugName),
-      newCwd: join(workspaceDataRoot, 'workspaces', entry.workspaceId),
+      newCwd: join(flatWorkspacesRoot, entry.workspaceId),
     }));
-    renamed = runSessionRenamePass(pairs, {
+    renamed += runSessionRenamePass(pairs, {
       sessionStoreHome: opts.sessionStoreHome,
       env: opts.env,
       logger: opts.logger,

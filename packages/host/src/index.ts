@@ -59,6 +59,7 @@ export {
   isSlugVerifiableCwd,
   normalizeStoreRootOverride,
   runSessionRenamePass,
+  runSessionSlugRepairPass,
   sessionNamespaceFor,
   type NamespaceState,
   type SessionCwdPair,

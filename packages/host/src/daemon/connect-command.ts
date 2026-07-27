@@ -329,11 +329,13 @@ export async function runConnectCommand(
         warn: (_f, m) => process.stderr.write(`silverhand-daemon connect: ${m}\n`),
       },
     });
-    // #task:1613 — the observation token for the backend log: a pass that
-    // actually flattened bytes is `migrated`; already-flat and
-    // nothing-to-converge both mean the layout is already final.
+    // #task:1613/#task:1663 — the observation token for the backend log:
+    // either flattening or a released session-slug repair moved migration
+    // bytes. A pass with no rename is already final.
     layoutMigrationOutcome =
-      convergence.status === 'flattened' ? 'migrated' : 'already_current';
+      convergence.status === 'flattened' || convergence.renamed > 0
+        ? 'migrated'
+        : 'already_current';
   } catch (err) {
     if (err instanceof FlattenLayoutError || err instanceof SessionMigrationError) {
       // #task:1613 — pre-connection failure: the backend is unreachable by

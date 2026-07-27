@@ -244,14 +244,14 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
   {
     file: 'apps/desktop/src/main/layout-migration/engine.ts',
     token: 'app-data dir join',
-    line: "for (const slug of listDirs(join(nsRoot, ns, 'workspaces'))) {",
+    line: "for (const slug of listSessionSourceDirs(join(nsRoot, ns, 'workspaces'))) {",
     reason: 'migration engine: slug enumeration of the classified workspace-data-shaped source (#task:1603)',
     count: 1,
   },
   {
     file: 'apps/desktop/src/main/layout-migration/engine.ts',
     token: 'app-data dir join',
-    line: "for (const slug of listDirs(join(nsDir, 'workspaces'))) {",
+    line: "for (const slug of listSessionSourceDirs(join(nsDir, 'workspaces'))) {",
     reason: 'migration engine: slug enumeration of the provable run-era namespace source (#task:1603)',
     count: 1,
   },
@@ -272,8 +272,15 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
   {
     file: 'packages/host/src/daemon/workspace-registry/convergence-pass.ts',
     token: 'app-data dir join',
-    line: "newCwd: join(workspaceDataRoot, 'workspaces', entry.workspaceId),",
-    reason: 'workspace-data convergence unit: the FLAT raw-id new cwd for the session pair (#task:1608)',
+    line: "const flatWorkspacesRoot = join(workspaceDataRoot, 'workspaces');",
+    reason: 'workspace-data convergence unit: the FLAT managed root used for migration and released-slug repair cwd coordinates (#task:1608/#task:1663)',
+    count: 1,
+  },
+  {
+    file: 'apps/desktop/src/main/layout-migration/engine.ts',
+    token: 'app-data dir join',
+    line: "const workspacesRoot = join(slot.workspaceData, 'workspaces');",
+    reason: 'completed-v2 repair: current slot managed root used only to derive authoritative cwd coordinates (#task:1663)',
     count: 1,
   },
   {

@@ -438,4 +438,57 @@ describe('runWorkspaceDataConvergencePass', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('repairs a released underscore-preserving session namespace on an already-flat root (#task:1663)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'sh_conv_'));
+    const home = mkdtempSync(join(tmpdir(), 'sh-conv-home-'));
+    try {
+      const workspaceId = 'workspace_id';
+      const cwd = join(root, 'workspaces', workspaceId);
+      mkdirSync(cwd, { recursive: true });
+      writeFileSync(
+        join(root, 'workspace-registry.json'),
+        JSON.stringify({
+          schema_version: 1,
+          binding: BINDING,
+          workspaces: {
+            [workspaceId]: { path: cwd, provisioned_at: 1 },
+          },
+        }),
+      );
+      const releasedSlug = cwd.replace(/[/.]/g, '-');
+      const releasedBucket = join(home, '.claude', 'projects', releasedSlug);
+      mkdirSync(releasedBucket, { recursive: true });
+      writeFileSync(join(releasedBucket, 'session-1.jsonl'), '{"session":"preserved"}');
+
+      const result = runWorkspaceDataConvergencePass({
+        workspaceDataRoot: root,
+        currentBinding: BINDING,
+        sessionStoreHome: home,
+        env: {},
+        logger: silent,
+      });
+
+      expect(result).toEqual({ status: 'already_flat', renamed: 1 });
+      expect(
+        readFileSync(
+          join(home, '.claude', 'projects', cwdSessionSlug(cwd), 'session-1.jsonl'),
+          'utf8',
+        ),
+      ).toBe('{"session":"preserved"}');
+      expect(existsSync(releasedBucket)).toBe(false);
+      expect(
+        runWorkspaceDataConvergencePass({
+          workspaceDataRoot: root,
+          currentBinding: BINDING,
+          sessionStoreHome: home,
+          env: {},
+          logger: silent,
+        }),
+      ).toEqual({ status: 'already_flat', renamed: 0 });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

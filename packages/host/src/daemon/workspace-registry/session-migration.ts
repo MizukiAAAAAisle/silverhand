@@ -31,9 +31,19 @@
  *    machine with real sessions BEFORE the migration release ships.
  *    Encoded as no-op pending that audit.
  *
- * The cwd slug replaces every `/` and `.` with `-` (verified against live
- * fixtures). Slugs are only ever COMPUTED from exact known cwds — never
- * parsed back, never matched by prefix or basename.
+ * The cwd slug replaces every `/`, `.`, and `_` with `-` (verified against
+ * live Claude 2.1.220 and Qoder 1.1.5 probes). Slugs are only ever COMPUTED
+ * from exact known cwds — never parsed back, never matched by prefix or
+ * basename.
+ *
+ * The first shipped v2 migrator omitted `_` from this transform. A v2 cwd
+ * containing an underscore was therefore renamed into a namespace neither
+ * runtime would read. The repair pass below recognizes only that exact
+ * historical transform and atomically renames it to the runtime coordinate;
+ * it never scans or merges arbitrary project directories. The buggy source
+ * slug necessarily still contains `_`, while the verified Claude 2.1.220 and
+ * Qoder 1.1.5 transforms never do, so that source cannot be a live
+ * vendor-written coordinate.
  */
 import { lstatSync, renameSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -67,6 +77,11 @@ export interface MigrationLogger {
 export const CWD_SCOPED_SESSION_RUNTIMES = ['claude', 'qoder'] as const;
 
 export function cwdSessionSlug(cwd: string): string {
+  return cwd.replace(/[\/._]/g, '-');
+}
+
+/** The buggy transform shipped by the first layout-v2 package. */
+function legacyV2CwdSessionSlug(cwd: string): string {
   return cwd.replace(/[/.]/g, '-');
 }
 
@@ -116,6 +131,23 @@ function storeRootOverrideFor(
     : (['QODER_CONFIG_DIR', qoderOverrideValue(env)] as const);
 }
 
+function sessionStoreRootFor(
+  kind: (typeof CWD_SCOPED_SESSION_RUNTIMES)[number],
+  sessionStoreHome: string,
+  env: SessionStoreEnv,
+): string {
+  const [, value] = storeRootOverrideFor(kind, env);
+  const override = normalizeStoreRootOverride(value);
+  if (override.kind === 'root') {
+    // Mirror qodercli exactly: its absolute override is resolved,
+    // separator-normalized, and NFC-normalized before use.
+    return kind === 'qoder'
+      ? resolve(override.root).normalize('NFC')
+      : override.root;
+  }
+  return join(sessionStoreHome, kind === 'claude' ? '.claude' : '.qoder');
+}
+
 /** The store CONFIG roots must match what the spawned child will actually
  *  use — the desktop process env is the same env the daemon (and thus the
  *  runtime child) inherits. Exhaustive over RuntimeKind so a future kind
@@ -127,24 +159,13 @@ export function sessionNamespaceFor(
   env: SessionStoreEnv = {},
 ): string | null {
   switch (kind) {
-    case 'claude': {
-      const override = normalizeStoreRootOverride(env.CLAUDE_CONFIG_DIR);
-      const root =
-        override.kind === 'root'
-          ? override.root
-          : join(sessionStoreHome, '.claude');
-      return join(root, 'projects', cwdSessionSlug(cwd));
-    }
-    case 'qoder': {
-      const override = normalizeStoreRootOverride(qoderOverrideValue(env));
-      const root =
-        override.kind === 'root'
-          ? // Mirror qodercli 1.0.48 exactly: for an absolute value this
-            // canonicalizes `.`/`..`/trailing separators and applies NFC.
-            resolve(override.root).normalize('NFC')
-          : join(sessionStoreHome, '.qoder');
-      return join(root, 'projects', cwdSessionSlug(cwd));
-    }
+    case 'claude':
+    case 'qoder':
+      return join(
+        sessionStoreRootFor(kind, sessionStoreHome, env),
+        'projects',
+        cwdSessionSlug(cwd),
+      );
     case 'codex':
       return null; // thread-id resume; not cwd-scoped (verified live)
     case 'opencode':
@@ -162,9 +183,23 @@ export function sessionNamespaceFor(
   }
 }
 
+function legacyV2SessionNamespaceFor(
+  kind: (typeof CWD_SCOPED_SESSION_RUNTIMES)[number],
+  cwd: string,
+  sessionStoreHome: string,
+  env: SessionStoreEnv,
+): string {
+  return join(
+    sessionStoreRootFor(kind, sessionStoreHome, env),
+    'projects',
+    legacyV2CwdSessionSlug(cwd),
+  );
+}
+
 /** Only ENOENT is `absent`; any other lstat failure is `unreadable` and
- *  fails the pass closed — an EACCES/EIO namespace must never be read as
- *  "no sessions". lstat never follows symlinks (§6.4). */
+ *  must never be read as "no sessions". The ordinary migration fails
+ *  closed; the opportunistic released-bug repair skips that one coordinate.
+ *  lstat never follows symlinks (§6.4). */
 export type NamespaceState = 'absent' | 'dir' | 'special' | 'unreadable';
 
 export function defaultNamespaceProbe(path: string): NamespaceState {
@@ -199,6 +234,150 @@ export interface SessionPassResult {
   renamed: number;
 }
 
+type SessionSlugRepairSkipReason =
+  | 'coexist'
+  | 'legacy_unreadable'
+  | 'current_unreadable'
+  | 'legacy_special'
+  | 'current_special'
+  | 'rename_failed';
+
+function warnSessionSlugRepairSkipped(
+  logger: MigrationLogger,
+  runtime: (typeof CWD_SCOPED_SESSION_RUNTIMES)[number],
+  cwd: string,
+  reason: SessionSlugRepairSkipReason,
+): void {
+  logger.warn(
+    {
+      action: 'runtime_session_namespace_slug_repair_skipped',
+      reason,
+      runtime,
+      cwd,
+    },
+    'skipping one released session-slug repair coordinate because it cannot be renamed safely',
+  );
+}
+
+/**
+ * Repair the exact namespace typo produced by the first layout-v2 release.
+ * The caller supplies authoritative cwd coordinates; this function never
+ * enumerates the vendor store. Bad-present + good-absent is the only move
+ * arm. Every other state is left byte-for-byte in place and warned per
+ * runtime × cwd; this opportunity to recover old session history must never
+ * become a startup gate.
+ *
+ * The repair population exists only where the first v2 migrator actually
+ * renamed a pre-v2 namespace. Fresh init has no source namespace; no-namespace
+ * and unflattened paths still enter the ordinary rename pass; connect-only
+ * agent homes were never renamed. That is why completed desktop migration
+ * repairs agents + workspaces, while daemon convergence repairs only
+ * workspaces. Do not broaden this pass to make those entry points symmetric.
+ *
+ * Unlike the ordinary rename pass, this released-bug repair is opportunistic:
+ * an unverifiable coordinate means "cannot prove this repair applies", not
+ * "the active layout is unsafe". Skip the entire repair before touching bytes
+ * and warn. Throwing would brick an otherwise healthy boot behind a startup
+ * failure window that intentionally has no Retry action. The ordinary rename
+ * pass below remains fail-closed because its migration cannot be completed
+ * safely without verifying those same coordinates.
+ */
+export function runSessionSlugRepairPass(
+  cwds: readonly string[],
+  deps: SessionPassDeps,
+): SessionPassResult {
+  const probe = deps.probe ?? defaultNamespaceProbe;
+  const rename = deps.rename ?? renameSync;
+  const result: SessionPassResult = { renamed: 0 };
+  const repairCwds = [...new Set(cwds)].filter(
+    cwd => legacyV2CwdSessionSlug(cwd) !== cwdSessionSlug(cwd),
+  );
+  if (repairCwds.length === 0) return result;
+
+  const verifiableRepairCwds = repairCwds.filter(cwd => {
+    if (isSlugVerifiableCwd(cwd)) return true;
+    deps.logger.warn(
+      {
+        action: 'runtime_session_namespace_slug_repair_skipped',
+        reason: 'unverifiable_cwd',
+        cwd,
+      },
+      'skipping one released session-slug repair coordinate because its cwd is outside the verified slug charset',
+    );
+    return false;
+  });
+  if (verifiableRepairCwds.length === 0) return result;
+
+  for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
+    const [envVar, envValue] = storeRootOverrideFor(kind, deps.env);
+    if (normalizeStoreRootOverride(envValue).kind === 'unverifiable') {
+      deps.logger.warn(
+        {
+          action: 'runtime_session_namespace_slug_repair_skipped',
+          reason: 'unverifiable_store_root',
+          runtime: kind,
+          env_var: envVar,
+        },
+        'skipping the released session-slug repair because the session store root is unverifiable',
+      );
+      continue;
+    }
+
+    for (const cwd of verifiableRepairCwds) {
+      const legacyPath = legacyV2SessionNamespaceFor(
+        kind,
+        cwd,
+        deps.sessionStoreHome,
+        deps.env,
+      );
+      const currentPath = sessionNamespaceFor(
+        kind,
+        cwd,
+        deps.sessionStoreHome,
+        deps.env,
+      )!;
+      if (legacyPath === currentPath) continue;
+
+      const legacyState = probe(legacyPath);
+      if (legacyState === 'absent') continue;
+      if (legacyState === 'unreadable') {
+        warnSessionSlugRepairSkipped(deps.logger, kind, cwd, 'legacy_unreadable');
+        continue;
+      }
+      if (legacyState === 'special') {
+        warnSessionSlugRepairSkipped(deps.logger, kind, cwd, 'legacy_special');
+        continue;
+      }
+
+      const currentState = probe(currentPath);
+      if (currentState === 'unreadable') {
+        warnSessionSlugRepairSkipped(deps.logger, kind, cwd, 'current_unreadable');
+        continue;
+      }
+      if (currentState === 'special') {
+        warnSessionSlugRepairSkipped(deps.logger, kind, cwd, 'current_special');
+        continue;
+      }
+      if (currentState === 'dir') {
+        warnSessionSlugRepairSkipped(deps.logger, kind, cwd, 'coexist');
+        continue;
+      }
+      try {
+        rename(legacyPath, currentPath);
+      } catch {
+        warnSessionSlugRepairSkipped(deps.logger, kind, cwd, 'rename_failed');
+        continue;
+      }
+      result.renamed += 1;
+      deps.logger.info(
+        { action: 'runtime_session_namespace_slug_repaired', runtime: kind },
+        'runtime session namespace moved to the vendor cwd-slug coordinate',
+      );
+    }
+  }
+  return result;
+}
+
 /**
  * Execute the eager handoff for every (runtime × cwd pair):
  *  - old namespace is a dir and the new one is absent → whole-directory
@@ -220,7 +399,10 @@ export function runSessionRenamePass(
 ): SessionPassResult {
   const probe = deps.probe ?? defaultNamespaceProbe;
   const rename = deps.rename ?? renameSync;
-  const result: SessionPassResult = { renamed: 0 };
+  const result = runSessionSlugRepairPass(
+    pairs.flatMap(pair => [pair.oldCwd, pair.newCwd]),
+    deps,
+  );
 
   for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
     const [envVar, envValue] = storeRootOverrideFor(kind, deps.env);

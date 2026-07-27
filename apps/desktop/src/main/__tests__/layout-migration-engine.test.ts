@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -131,6 +132,16 @@ function seedCrossBindingLegacyWorkspace(
 function seedSessionStores(home: string, cwd: string): void {
   for (const store of ['.claude', '.qoder']) {
     const bucket = join(home, store, 'projects', cwdSessionSlug(cwd));
+    mkdirSync(bucket, { recursive: true });
+    writeFileSync(join(bucket, 'session-1.jsonl'), `{"store":"${store}"}`);
+  }
+}
+
+/** The first layout-v2 release preserved `_` in the cwd slug. */
+function seedReleasedV2SessionStores(home: string, cwd: string): void {
+  const releasedSlug = cwd.replace(/[/.]/g, '-');
+  for (const store of ['.claude', '.qoder']) {
+    const bucket = join(home, store, 'projects', releasedSlug);
     mkdirSync(bucket, { recursive: true });
     writeFileSync(join(bucket, 'session-1.jsonl'), `{"store":"${store}"}`);
   }
@@ -1363,6 +1374,150 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       });
       expect(again.migrated).toBe(false);
     } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('repairs released underscore-preserving session namespaces after the full v2 marker was stamped (#task:1663)', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    try {
+      const hostId = 'host_id';
+      const workspaceId = 'workspace_id';
+      const agentId = 'agent_id';
+      const workspaceCwd = join(
+        root,
+        'computers',
+        hostId,
+        'workspace-data',
+        'workspaces',
+        workspaceId,
+      );
+      const agentCwd = join(root, 'computers', hostId, 'agents', agentId);
+      mkdirSync(workspaceCwd, { recursive: true });
+      mkdirSync(agentCwd, { recursive: true });
+      mkdirSync(join(root, 'desktop'), { recursive: true });
+      writeFileSync(
+        join(root, 'desktop', 'computer-binding.json'),
+        JSON.stringify({ host_id: hostId, server_url: 'http://127.0.0.1:1234' }),
+      );
+      writeDataLayoutMarker(join(root, 'desktop', 'data-layout.json'), 1, 2, 3, 4);
+      seedReleasedV2SessionStores(home, workspaceCwd);
+      seedReleasedV2SessionStores(home, agentCwd);
+
+      const result = migrateDesktopAppDataLayout(root, silent, Date.now, {
+        sessionStoreHome: home,
+        env: {},
+      });
+      expect(result).toEqual({
+        migrated: true,
+        facets: { localComputer: 'already', embeddedServer: 'already' },
+        sessions: 'migrated',
+      });
+      for (const cwd of [workspaceCwd, agentCwd]) {
+        const releasedSlug = cwd.replace(/[/.]/g, '-');
+        for (const store of ['.claude', '.qoder']) {
+          expect(
+            readFileSync(
+              join(home, store, 'projects', cwdSessionSlug(cwd), 'session-1.jsonl'),
+              'utf8',
+            ),
+          ).toBe(`{"store":"${store}"}`);
+          expect(existsSync(join(home, store, 'projects', releasedSlug))).toBe(false);
+        }
+      }
+
+      expect(
+        migrateDesktopAppDataLayout(root, silent, Date.now, {
+          sessionStoreHome: home,
+          env: {},
+        }),
+      ).toEqual({
+        migrated: false,
+        facets: { localComputer: 'already', embeddedServer: 'already' },
+        sessions: 'already',
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a completed v2 install stays bootable when repair inputs are unavailable (#task:1663)', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    const warnings: Record<string, unknown>[] = [];
+    try {
+      mkdirSync(join(root, 'desktop'), { recursive: true });
+      writeFileSync(join(root, 'desktop', 'computer-binding.json'), '{not-json');
+      writeDataLayoutMarker(join(root, 'desktop', 'data-layout.json'), 1, 2, 3, 4);
+
+      expect(
+        migrateDesktopAppDataLayout(
+          root,
+          {
+            info: () => {},
+            warn: fields => warnings.push(fields),
+          },
+          Date.now,
+          { sessionStoreHome: home, env: {} },
+        ),
+      ).toEqual({
+        migrated: false,
+        facets: { localComputer: 'already', embeddedServer: 'already' },
+        sessions: 'already',
+      });
+      expect(warnings).toEqual([
+        {
+          action: 'runtime_session_namespace_slug_repair_inputs_unavailable',
+          reason: 'layout_registry_rewrite_blocked',
+        },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a completed v2 install stays bootable when a repair source cannot be listed (#task:1663)', () => {
+    const root = makeRoot();
+    const home = makeHome();
+    const agentsRoot = join(root, 'computers', 'h1', 'agents');
+    const warnings: Record<string, unknown>[] = [];
+    try {
+      mkdirSync(agentsRoot, { recursive: true });
+      chmodSync(agentsRoot, 0o111);
+      mkdirSync(join(root, 'desktop'), { recursive: true });
+      writeFileSync(
+        join(root, 'desktop', 'computer-binding.json'),
+        '{"host_id":"h1","server_url":"http://127.0.0.1:1234"}',
+      );
+      writeDataLayoutMarker(join(root, 'desktop', 'data-layout.json'), 1, 2, 3, 4);
+
+      expect(
+        migrateDesktopAppDataLayout(
+          root,
+          {
+            info: () => {},
+            warn: fields => warnings.push(fields),
+          },
+          Date.now,
+          { sessionStoreHome: home, env: {} },
+        ),
+      ).toEqual({
+        migrated: false,
+        facets: { localComputer: 'already', embeddedServer: 'already' },
+        sessions: 'already',
+      });
+      expect(warnings).toEqual([
+        {
+          action: 'runtime_session_namespace_slug_repair_inputs_unavailable',
+          reason: 'layout_unreadable',
+        },
+      ]);
+    } finally {
+      chmodSync(agentsRoot, 0o700);
       rmSync(root, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
