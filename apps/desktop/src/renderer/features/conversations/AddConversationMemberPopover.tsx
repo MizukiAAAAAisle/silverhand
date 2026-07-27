@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import { Plus, Search } from 'lucide-react';
-import type { AgentDto, MemberDto, UserDto } from '@silverhand/shared';
+import type { AgentDto, MemberDto, UserDto, WorkspaceRole } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
+import { SEARCH_FIELD_FRAME } from '@/features/common/ControlInkBorder';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -26,25 +27,38 @@ export interface AddConversationMemberPopoverProps {
  * The trigger sits flush in the chip row with no resting fill — only a
  * subtle hover background — so it reads as a low-key affordance rather
  * than competing with the avatar chips beside it. Inside, the popover
- * lists every eligible member that is NOT yet in this conversation:
- * workspace agents + humans, and (for workspace admins/owners) both
- * humans and agents from the global directory. Targets outside the
- * workspace are eligible for governance users because the server's
- * add-member use case provisions the workspace membership first under
- * the same admin-level guard — humans via a plain roster insert, agents
- * via the L2-seed / capability-default path. Agents join from ANY
- * computer (#task:1600 — cross-computer membership; a guest member's L2
- * seeds on its own computer), so the global directory is never filtered
- * by host. Members are first-class regardless of kind, so the
- * row treats them uniformly: avatar + display name + `@handle` on a
- * single line, with the avatar component picked by kind.
+ * lists every eligible member that is NOT yet in this conversation.
  *
- * Caller is responsible for hiding this affordance when the
- * conversation shouldn't accept adds (DM channel, closed conversation,
- * non-member viewer). The route enforces the same guards as
- * defense-in-depth, but hiding the trigger keeps the surface
- * intentional: the only way to see the add-member popover is when
- * it should actually work.
+ * Who may write this roster is TWO independent factors on the route
+ * (#task:1683), and the surface mirrors them in the same order:
+ *
+ *  1. the FLOOR — membership of THIS conversation, target-independent. That
+ *     is the caller's `gate.allowMutations`, so by the time this component
+ *     renders the floor is already met; owning an agent is never a way into a
+ *     channel you are not in.
+ *  2. the TARGET — graded by kind, and for an agent by OWNERSHIP:
+ *     - the viewer's OWN agents: any member of this conversation may add
+ *       them, whether or not they are in the workspace yet (a non-member gets
+ *       auto-enrolled, which is its creator's call anyway).
+ *     - someone else's agent, and every human: workspace `admin` governance,
+ *       so those two pools appear for admins/owners only. Governance is the
+ *       ROSTER, not enrollment — a foreign agent that is not in the workspace
+ *       yet is nobody's to bring but its creator's, which is why the admin
+ *       agent pool is workspace members plus the viewer's own.
+ *
+ * Ownership is never re-derived here — it is the pool from
+ * `useAgents({ scope: 'owned' })`, the backend's single authority for "mine".
+ *
+ * Agents join from ANY computer (#task:1600 — cross-computer membership; a
+ * guest member's L2 seeds on its own computer), so no pool is ever filtered
+ * by host. Members are first-class regardless of kind, so the row treats
+ * them uniformly: avatar + display name + `@handle` on a single line, with
+ * the avatar component picked by kind.
+ *
+ * Caller is responsible for the conversation-shaped guards (DM channel,
+ * closed conversation, non-member viewer). The route enforces every guard
+ * again as defense-in-depth, but narrowing the pools keeps the surface
+ * intentional: no row here is one the server would refuse.
  */
 export function AddConversationMemberPopover({
   workspaceId,
@@ -88,13 +102,14 @@ function PopoverBody({
   conversationId,
 }: AddConversationMemberPopoverProps): JSX.Element {
   const memberLists = useWorkspaceMemberLists(workspaceId);
+  // The floor (membership of this conversation) is the caller's gate; what is
+  // left here is the TARGET grading: `admin` opens the people roster and other
+  // people's agents, ownership (`scope: 'owned'` — the backend's single
+  // authority for "mine") opens the viewer's own agents (#task:1683).
   const viewerRole = memberLists.data?.viewerRole ?? null;
-  // Governance users (owner/admin) may pull targets from the global
-  // directory; the server auto-provisions workspace membership on add.
-  // Same gate for humans and agents (agent workspace-add is admin-level).
-  const canPickGlobal = viewerRole === 'owner' || viewerRole === 'admin';
-  const humans = useUsers({ enabled: canPickGlobal });
-  const agents = useAgents({ enabled: canPickGlobal });
+  const canAddOthers = canAddForeignConversationMembers(viewerRole);
+  const humans = useUsers();
+  const ownedAgents = useAgents({ scope: 'owned' });
   const conversationMembers = useConversationMembers(conversationId);
   const addMember = useAddConversationMember(conversationId, workspaceId);
 
@@ -104,14 +119,14 @@ function PopoverBody({
   const wsAgents: AgentDto[] = memberLists.data?.agents ?? [];
   const wsHumans: UserDto[] = memberLists.data?.humans ?? [];
   const pickableHumans = useMemo(() => {
-    if (!canPickGlobal) return wsHumans;
+    if (!canAddOthers) return [];
     const workspaceIds = new Set(wsHumans.map(u => u.id));
     const externalHumans = (humans.data ?? []).filter(u => !workspaceIds.has(u.id));
     return [...wsHumans, ...externalHumans];
-  }, [canPickGlobal, wsHumans, humans.data]);
+  }, [canAddOthers, wsHumans, humans.data]);
   const pickableAgents = useMemo(
-    () => computePickableAgents(canPickGlobal, wsAgents, agents.data ?? []),
-    [canPickGlobal, wsAgents, agents.data],
+    () => computePickableAgents(wsAgents, ownedAgents.data ?? [], viewerRole),
+    [wsAgents, ownedAgents.data, viewerRole],
   );
   const agentAvatars = useAgentAvatarObjectUrls(pickableAgents);
   const humanAvatars = useUserAvatarObjectUrls(pickableHumans);
@@ -160,12 +175,13 @@ function PopoverBody({
 
   const isLoading =
     !memberLists.data
-    || (canPickGlobal && (!humans.data || !agents.data))
+    || (canAddOthers && !humans.data)
+    || !ownedAgents.data
     || conversationMembers.status === 'loading';
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="flex items-center gap-2 rounded-[var(--control-radius)] border border-border-subtle bg-bg-base px-2.5 py-1.5">
+      <label className={SEARCH_FIELD_FRAME}>
         <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden />
         <input
           type="text"
@@ -184,7 +200,9 @@ function PopoverBody({
               ? 'Loading…'
               : query
                 ? 'No matches'
-                : 'Everyone is already in this conversation'}
+                : canAddOthers
+                  ? 'Everyone is already in this conversation'
+                  : 'You have no agents left to add'}
           </li>
         ) : (
           candidates.map(c => {
@@ -275,7 +293,25 @@ function formatError(err: unknown): string {
     const code = parseCode(err.body);
     switch (code) {
       case 'workspace_membership_required':
-        return 'This agent has to join the workspace first.';
+        // A backstop, not a live state: a human caller no longer reaches this
+        // code on this route — a candidate outside the workspace is enrolled by
+        // this very action (shiki's design, reaffirmed 2026-07-28), and a caller
+        // without that authority is refused `agent_not_owned` earlier in
+        // `addConversationMember`. It survives only for a non-human principal
+        // (the CLI), so the line states the rule rather than prescribing the
+        // manual step the product does for you.
+        return 'Only the person who created this agent can bring it into the workspace.';
+      case 'agent_not_owned':
+        // #task:1683 — the picker offers a plain member only their own agents,
+        // so this is a backstop for a stale pool. Two targets land here and the
+        // remedy differs, which is why `admin` is stated CONDITIONALLY (Cindy,
+        // #task:1682 review): a workspace admin governs the roster, but NOT
+        // enrollment — an agent that is not in this workspace yet is refused
+        // `agent_not_owned` for an admin too (`conversation-member.ts` →
+        // `addWorkspaceAgentMember`'s creator gate). Naming admin flatly would
+        // send the user to someone who hits the same 403; the creator is the
+        // one exit that holds in both cases, so it comes first.
+        return "You can only add agents you created. Someone else's needs its creator, or a workspace admin once it is in this workspace.";
       case 'host_attach_pending':
         return 'Its computer is not connected yet.';
       case 'candidate_not_found':
@@ -308,20 +344,49 @@ function parseCode(body: string): string | null {
 }
 
 /**
- * #task:1600 — cross-computer membership contract for the picker: for a
- * governance viewer, EVERY non-member agent from the global directory is
- * pickable regardless of which computer it lives on (guest members are
- * legal; their L2 seeds on their own daemon). Only "already a workspace
- * member" narrows the list — which is why this helper deliberately takes
- * NO host argument. Falsifier-tested in
- * `AddConversationMemberPopover.test.ts`.
+ * Whether this viewer may put someone OTHER than their own agents on this
+ * roster — every human, and agents somebody else created. That half of
+ * `addConversationMember` is still workspace `admin` governance (#task:1683);
+ * the own-agent half needs no role at all, only membership of this
+ * conversation, which the caller has already established.
+ */
+export function canAddForeignConversationMembers(
+  viewerRole: WorkspaceRole | null,
+): boolean {
+  return viewerRole === 'owner' || viewerRole === 'admin';
+}
+
+/**
+ * Pickable agents for this conversation, graded by the target rather than by
+ * the surface (#task:1683):
+ *
+ *  - any member of this conversation may add the agents they CREATED — in the
+ *    workspace already or not, since a non-member gets auto-enrolled and that
+ *    is the creator's call. So the whole `ownedAgents` pool is offered.
+ *  - `admin`/`owner` additionally govern the roster, so every workspace agent
+ *    is offered whoever created it (a pure roster action, nothing enrolled).
+ *
+ * A plain member is therefore NOT offered someone else's agent — the server
+ * answers that with 403 `agent_not_owned`, so it would be a dead row.
+ * Ownership is not re-derived here: it is expressed by the pool this receives,
+ * from `useAgents({ scope: 'owned' })`.
+ *
+ * The membership FLOOR is deliberately absent from this signature — it is
+ * target-independent and belongs to the call site (`gate.allowMutations`), and
+ * folding it in here would let a role or an owned agent look like a way into a
+ * channel the viewer is not in.
+ *
+ * #task:1600 — cross-computer membership: no pool is narrowed by the
+ * workspace's storage computer (guest members are legal; their L2 seeds on
+ * their own daemon), which is why this helper takes NO host argument.
+ * Falsifier-tested in `AddConversationMemberPopover.test.ts`.
  */
 export function computePickableAgents(
-  canPickGlobal: boolean,
   wsAgents: AgentDto[],
-  globalAgents: AgentDto[],
+  ownedAgents: AgentDto[],
+  viewerRole: WorkspaceRole | null,
 ): AgentDto[] {
-  if (!canPickGlobal) return wsAgents;
+  if (!canAddForeignConversationMembers(viewerRole)) return ownedAgents;
   const workspaceIds = new Set(wsAgents.map(a => a.id));
-  return [...wsAgents, ...globalAgents.filter(a => !workspaceIds.has(a.id))];
+  return [...wsAgents, ...ownedAgents.filter(a => !workspaceIds.has(a.id))];
 }

@@ -49,6 +49,19 @@ export interface GovernanceRouteDecl {
   /** Mounted Hono path pattern, verbatim (cross-checked against the
    *  live route table by the coverage test). */
   path: string;
+  /**
+   * The route FLOOR: the minimum role that may reach the handler at all —
+   * NOT the rank every operation on it needs. A composite route grades
+   * further INSIDE the handler by the class of DATA being written
+   * (#task:1683): `POST /api/workspaces/:id/members` admits a plain `member`
+   * for their OWN agent while a human target still needs `admin`. Declaring
+   * such a route `admin` would make this registry — which calls itself the
+   * authority SSOT — state the opposite of the live gate, so the floor is
+   * what is declared and every inner escalation MUST be spelled out in
+   * `note`. `FLOOR_PROBED_ROUTES` in `permissions-registry.test.ts` calls the
+   * real routes to prove each `member` floor is actually reachable, so the
+   * declaration cannot go stale next to a widened gate.
+   */
   minRole: WorkspaceRole;
   roleScope: RoleScope;
   /** Inline justification for non-obvious gradings / inner escalations. */
@@ -70,14 +83,15 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   { method: 'DELETE', path: '/api/workspaces/:id', minRole: 'owner', roleScope: 'workspace' },
   // Create a channel in the workspace.
   { method: 'POST', path: '/api/workspaces/:id/channels', minRole: 'admin', roleScope: 'workspace' },
-  // Member management. Adding either an agent or a human workspace member is
-  // admin-level; human role changes/removal remain owner-only below.
+  // Member management. The agent roster is a COMPOSITE route since #task:1683:
+  // floor `member`, then the required rank follows the target's data class.
+  // Human role changes/removal remain owner-only below.
   {
     method: 'POST',
     path: '/api/workspaces/:id/members',
-    minRole: 'admin',
+    minRole: 'member',
     roleScope: 'workspace',
-    note: 'adds agent or human workspace members; new humans join as member',
+    note: 'adds agent or human workspace members; ESCALATES inside: a human target needs admin, an agent target needs canEnrollAgent (its creator) with NO admin OR-arm — enrollment is creator-only, so owner/admin are refused agent_not_owned for someone else\'s agent (asymmetric with the DELETE route, where admin governs the whole roster); new humans join as member',
   },
   {
     method: 'PATCH',
@@ -86,7 +100,13 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
     roleScope: 'workspace',
     note: 'human role escalation/demotion is owner-only; owner transfer remains unsupported',
   },
-  { method: 'DELETE', path: '/api/workspaces/:id/members/:agentId', minRole: 'admin', roleScope: 'workspace' },
+  {
+    method: 'DELETE',
+    path: '/api/workspaces/:id/members/:agentId',
+    minRole: 'member',
+    roleScope: 'workspace',
+    note: 'removal is the symmetric half of enrollment (#task:1683): FLOOR member, then it ESCALATES by target — admin governs the whole roster, otherwise canEnrollAgent (the agent you created); a plain member gets 403 for an unknown agent id, so the dangling-row cleanup stays admin-only',
+  },
   {
     method: 'DELETE',
     path: '/api/workspaces/:id/members/users/:userId',
@@ -105,32 +125,35 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
   { method: 'PATCH', path: '/api/channels/:id/archive', minRole: 'admin', roleScope: 'workspace' },
   // Channel rename (title edit) — same governance class as archive.
   { method: 'PATCH', path: '/api/channels/:id', minRole: 'admin', roleScope: 'workspace' },
-  // Conversation member add (doc §6.1 names this a governance write).
+  // Conversation member add (§1.1 grades it; §5.1 registers it).
   // roleScope is 'conversation' — the FIRST live use of conversation
   // scope: effective role = override ?? workspace_role, and cut 1 has no
-  // per-conversation override so effective == workspace role today. The
-  // USER principal is gated on conversation visibility + this admin
-  // effective role inside the handler (additive: you cannot govern a
-  // conversation you cannot see). User principals may auto-provision a
-  // missing workspace membership for a human or same-host agent before
-  // adding it to the conversation. The AGENT principal reaches the SAME
-  // handler via the internal route, where the
-  // `manage_conversation_members` capability gate is already enforced
-  // (AGENT_ROUTE_CAPABILITIES.agentAddConversationMember,
-  // status:'enforced') before the request reaches this entry.
+  // per-conversation override so effective == workspace role today.
+  //
+  // Composite since #task:1683, and its floor is NOT expressible as a role at
+  // all: the target-independent floor is MEMBERSHIP of this very conversation
+  // (`canAddConversationMember` = `canViewConversation`), which no role can
+  // substitute for — owning an agent, or holding `admin`, never gets you a
+  // roster write on a channel you are not in. `minRole: 'member'` is therefore
+  // the role-axis LOWER BOUND only; the membership floor and the per-target
+  // escalation are in the note. The AGENT principal reaches the SAME handler
+  // via the internal route, where the `manage_conversation_members` capability
+  // gate is already enforced
+  // (AGENT_ROUTE_CAPABILITIES.agentAddConversationMember, status:'enforced')
+  // before the request reaches this entry.
   {
     method: 'POST',
     path: '/api/conversations/:id/members',
-    minRole: 'admin',
+    minRole: 'member',
     roleScope: 'conversation',
-    note: 'user principal: view + admin effective role, with workspace auto-provision for humans/same-host agents; agent principal gated by enforced manage_conversation_members capability at the internal route (agentAddConversationMember)',
+    note: 'user principal: FLOOR = membership of this conversation (not a role); then ESCALATES by target — a human needs workspace admin; own agent needs only the floor (auto-provisioning workspace membership via canEnrollAgent); someone else\'s agent needs workspace admin AND, if it is not a workspace member yet, is refused agent_not_owned even for an admin (enrollment is creator-only, #task:1681); agent principal gated by enforced manage_conversation_members capability at the internal route (agentAddConversationMember) and can never auto-provision',
   },
   {
     method: 'DELETE',
     path: '/api/conversations/:id/members/agents/:agentId',
-    minRole: 'admin',
+    minRole: 'member',
     roleScope: 'conversation',
-    note: 'user principal: view + (admin effective role OR target agent creator via canEditAgent); removes only the conversation_agents edge',
+    note: 'user principal: FLOOR = conversation visibility, then admin effective role OR target agent creator via canEditAgent; removes only the conversation_agents edge; a caller without the role learns nothing about unknown agent ids (403, not 404)',
   },
 ];
 

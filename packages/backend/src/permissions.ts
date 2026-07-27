@@ -177,8 +177,17 @@ export function workspaceRole(
  * (existence + membership) AND holds at least `minRole`. Pass `'owner'`
  * for existential / human role/removal ops (archive, delete, human-member
  * role changes/removal), `'admin'` for day-to-day governance (channel
- * create/delete, human/agent-member add, agent-member remove, settings
- * incl. rename).
+ * create/delete, human-member add, settings incl. rename).
+ *
+ * On a COMPOSITE route this is the FLOOR, not the whole gate: the agent-roster
+ * routes pass `'member'` and then AND in `canEnrollAgent`, graded by VERB
+ * (#task:1683) — ENROLLING an agent requires ownership with no role OR-arm (not
+ * even `owner`/`admin` enrolls somebody else's agent, #task:1681), while
+ * REMOVING one is `admin` OR ownership so an admin can still clean up the
+ * roster. The required rank follows the class of data being written, so a plain
+ * member may place and retract THEIR OWN agents while the people roster stays
+ * `admin`/`owner`. See `HUMAN_GOVERNANCE_ROUTES` (each entry's `note` states its
+ * escalation) and `docs/graded-permissions-v1.md` §1.1/§1.3.
  */
 export function canGovernWorkspace(
   ctx: BackendContext,
@@ -443,6 +452,58 @@ export function canViewAgentFiles(
   agentId: string,
 ): boolean {
   return canEditAgent(ctx, principal, agentId);
+}
+
+/**
+ * #task:1681 — ENROLLMENT authority: whose decision is it to put an agent into
+ * a workspace. Answer: only the human who created that agent.
+ *
+ * #task:1683 (shiki 2026-07-28) made it the ownership factor for the whole
+ * placement lifecycle, in BOTH directions and on BOTH rosters: bringing your own
+ * agent into a workspace, taking it back out, and adding it to a channel you are
+ * a member of. Each of those composes this with its own roster authority — the
+ * `admin` arm of a removal or a channel add is an OR alongside this predicate,
+ * never a substitute for it (no role enrolls someone else's agent) and never
+ * substituted BY it (owning an agent grants no access to a channel you are not
+ * in).
+ *
+ * Enrollment needs TWO independent factors, and this predicate owns exactly one
+ * of them. The workspace side (`canGovernWorkspace`) says the caller may write
+ * THAT workspace's roster; this says the caller may commit THAT agent to a
+ * roster at all. Neither implies the other, so callers compose both — no role
+ * lets you enroll a teammate's agent, and an agent's creator cannot enroll it
+ * into a workspace they are not in.
+ *
+ * The workspace-side rank is set by the DATA being written, not by the verb
+ * (shiki 2026-07-27): adding a HUMAN is `admin` governance, while adding your
+ * OWN agent needs only `member`. That is what makes the product flow possible —
+ * invitees join as plain `member`, so an admin-only roster write meant "invite
+ * the human, they bring their agents" could never complete without also handing
+ * them authority over the whole people roster.
+ *
+ * Product rule behind it (shiki 2026-07-27): another user's agents must not be
+ * draggable into your workspace. You invite the HUMAN; that human then brings
+ * their own agents. An agent's placement is part of its owner's authority over
+ * it, so the visibility relation that `canViewAgent` grants (co-membership makes
+ * a teammate's agent visible for @-mention / member lists) deliberately does NOT
+ * carry enrollment rights.
+ *
+ * Deliberately NOT an alias of `canEditAgent`: that predicate lets an AGENT
+ * principal act on itself (self-edit endpoints, own files), whereas an agent
+ * may never enroll itself — being placed in a workspace is its owner's call,
+ * not the runtime's. So agent principals are `false` here. System stays
+ * unconditional (migrations / internal hosts), mirroring every other `canX`.
+ */
+export function canEnrollAgent(
+  ctx: BackendContext,
+  principal: Principal,
+  agentId: string,
+): boolean {
+  if (principal.kind === 'system') return true;
+  if (principal.kind === 'agent') return false;
+  const agent = new AgentRepo(ctx.db).get(agentId);
+  if (!agent) return false;
+  return agent.created_by_user_id === principal.userId;
 }
 
 /**

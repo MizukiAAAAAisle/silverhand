@@ -25,9 +25,9 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
  * tests over the open product paths). Flow 3 never had a gate.
  */
 
-function forgeGuestHost(t: TestApp, id: string): string {
+function forgeGuestHost(t: TestApp, id: string, ownerUserId = 'teammate'): string {
   return new HostRepo(t.ctx.db).create(id, 'local', {
-    userId: 'teammate',
+    userId: ownerUserId,
     installationId: `install-${id}`,
     lastSeenAt: Date.now(),
   }).id;
@@ -35,8 +35,18 @@ function forgeGuestHost(t: TestApp, id: string): string {
 
 /** Direct row insert: a real agent whose daemon runs on another computer.
  *  (POST /api/agents would route materialization at the other host; the
- *  control-plane row is all these flows consult.) */
-function forgeGuestAgent(t: TestApp, name: string, hostId: string): string {
+ *  control-plane row is all these flows consult.)
+ *
+ *  `creatorUserId` is the ENROLLMENT authority (#task:1681), independent of the
+ *  host axis these tests are about: cross-computer means another COMPUTER, which
+ *  may be a second computer of the same user or a teammate's. Tests that drive a
+ *  flow as the creator forge the agent under that creator. */
+function forgeGuestAgent(
+  t: TestApp,
+  name: string,
+  hostId: string,
+  creatorUserId = 'teammate',
+): string {
   const id = `guest-${name}-${Date.now()}`;
   const now = Date.now();
   t.ctx.db
@@ -44,7 +54,7 @@ function forgeGuestAgent(t: TestApp, name: string, hostId: string): string {
       `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
        VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
     )
-    .run(id, name, hostId, 'teammate', now, now);
+    .run(id, name, hostId, creatorUserId, now, now);
   return id;
 }
 
@@ -61,10 +71,12 @@ async function createWorkspaceViaRoute(
   t: TestApp,
   name: string,
   memberAgentIds: string[],
+  workspaceHostId?: string,
 ): Promise<{ id: string; workspace_path: string; workspace_host_id: string }> {
   const res = await http(t).post('/api/workspaces', {
     name,
     member_agent_ids: memberAgentIds,
+    ...(workspaceHostId ? { workspace_host_id: workspaceHostId } : {}),
   });
   expect(res.status).toBe(201);
   const body = (await res.json()) as any;
@@ -98,6 +110,9 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const result = await addWorkspaceAgentMember(
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
       {
+        // #task:1681 — the guest agent's CREATOR drives its own enrollment;
+        // the host axis under test is orthogonal to the ownership gate.
+        principal: { kind: 'user', userId: 'teammate' },
         workspace: {
           id: ws.id,
           workspace_path: ws.workspace_path,
@@ -138,6 +153,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const result = await addWorkspaceAgentMember(
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
       {
+        principal: { kind: 'user', userId: t.viewerUserId },
         workspace: {
           id: ws.id,
           workspace_path: ws.workspace_path,
@@ -159,14 +175,23 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
   it('create-with-members: mixed members seed on their OWN daemons — guest pathless, home path never crosses', async () => {
     t = buildTestApp();
     const localId = await makeLocalAgent(t, 'home-member');
-    const guestHost = forgeGuestHost(t, 'host-guest-create');
-    const guestId = forgeGuestAgent(t, 'creator-guest', guestHost);
+    // #task:1681 — the create door now refuses agents the creator did not
+    // create, so the cross-COMPUTER member here is the viewer's OWN agent on a
+    // second owned computer (the axis under test is the host, not the owner;
+    // the cross-USER refusal is pinned in
+    // tests/routes/workspace-agent-enrollment.test.ts). Two owned ready hosts
+    // make placement ambiguous, so the home computer is named explicitly.
+    const homeHostId = t.ctx.coLocatedHostId!;
+    const guestHost = forgeGuestHost(t, 'host-guest-create', t.viewerUserId);
+    const guestId = forgeGuestAgent(t, 'creator-guest', guestHost, t.viewerUserId);
     t.fakeHostWs!.calls.length = 0;
 
-    const ws = await createWorkspaceViaRoute(t, 'mixed-ws', [
-      localId,
-      guestId,
-    ]);
+    const ws = await createWorkspaceViaRoute(
+      t,
+      'mixed-ws',
+      [localId, guestId],
+      homeHostId,
+    );
 
     const provisions = provisionCalls(t);
     // Home computer: exactly ONE provision (the create itself); same-host
@@ -202,8 +227,15 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
   it('create-with-members: a failed GUEST seed leaves ZERO agent memberships (all-or-nothing invariant survives the axis change)', async () => {
     t = buildTestApp();
     const localId = await makeLocalAgent(t, 'home-member-2');
-    const guestHost = forgeGuestHost(t, 'host-guest-fail');
-    const guestId = forgeGuestAgent(t, 'creator-guest-fail', guestHost);
+    // Same #task:1681 reframing as the test above: own agent, second computer.
+    const homeHostId = t.ctx.coLocatedHostId!;
+    const guestHost = forgeGuestHost(t, 'host-guest-fail', t.viewerUserId);
+    const guestId = forgeGuestAgent(
+      t,
+      'creator-guest-fail',
+      guestHost,
+      t.viewerUserId,
+    );
     // Wire failures are THROWN response errors, not ok:false acks.
     t.fakeHostWs!.agentL2SeedAckOverride = params => {
       if (params.agent_id === guestId) {
@@ -219,6 +251,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const res = await http(t).post('/api/workspaces', {
       name: 'mixed-ws-fail',
       member_agent_ids: [localId, guestId],
+      workspace_host_id: homeHostId,
     });
     expect(res.status).toBeGreaterThanOrEqual(500);
 
@@ -257,6 +290,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const established = await addWorkspaceAgentMember(
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces: new WorkspaceRepo(t.ctx.db) },
       {
+        principal: { kind: 'user', userId: t.viewerUserId },
         workspace: {
           id: 'ws-foreign-del',
           workspace_path: '/home/elsewhere/project',

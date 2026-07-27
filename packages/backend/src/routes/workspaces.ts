@@ -37,7 +37,7 @@ import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { SortRepo } from '../repos/sort-repo.js';
-import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
+import { getUserPrincipal } from '../auth/principal.js';
 import { canGovernWorkspace, canViewWorkspace } from '../permissions.js';
 import { timedRouteSpan } from '../observability/route-span.js';
 import { createWorkspace } from '../application/create-workspace.js';
@@ -193,7 +193,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         workspaceHostId: parsed.data.workspace_host_id,
         memberAgentIds: parsed.data.member_agent_ids,
         memberUserIds: parsed.data.member_user_ids,
-        viewerUserId: requireViewerUserId(c),
+        principal: getUserPrincipal(c),
       },
     );
     switch (result.kind) {
@@ -208,6 +208,17 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         );
       case 'nameTaken':
         return c.json({ error: 'workspace name already exists' }, 409);
+      case 'agentNotOwned':
+        // #task:1681 — same rule and same code as the member-add doors.
+        return c.json(
+          {
+            error:
+              'you can only add agents you created — someone else\'s can be brought in only by its creator',
+            code: 'agent_not_owned',
+            agent_ids: result.agentIds,
+          },
+          403,
+        );
       case 'placementError': {
         const mapped = placementErrorResponse(c, result.err);
         if (mapped) return mapped;

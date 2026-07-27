@@ -219,20 +219,31 @@ describe('workspace/conversation routes', () => {
 
   it('accepts workspace create members on another computer (#task:1600 gate lifted)', async () => {
     t = buildTestApp();
-    const teammateHeaders = {
-      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
-    };
-    const teammateAgent = await (
-      await http(t).post(
-        '/api/agents',
-        { name: 'teammate-agent', runtime: 'claude' },
-        { headers: teammateHeaders },
+    // #task:1681 — the member is the creator's OWN agent living on a second
+    // computer they own. Enrollment authority is the agent's creator (a
+    // teammate's agent is refused on every door — see
+    // tests/routes/workspace-agent-enrollment.test.ts); the axis under test
+    // here is the HOST, so the two must not be conflated. Two ready owned
+    // computers make placement ambiguous, hence the explicit home host.
+    const hosts = new HostRepo(t.ctx.db);
+    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
+    const guestHost = hosts.claimOrCreateLocal({
+      userId: t.viewerUserId,
+      installationId: 'second-desktop-create',
+    }).host;
+    const agentId = `cross-computer-create-${Date.now()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
       )
-    ).json() as any;
+      .run(agentId, 'own-agent-elsewhere', guestHost.id, t.viewerUserId, now, now);
 
     const res = await http(t).post('/api/workspaces', {
       name: 'cross-computer-create-ok',
-      member_agent_ids: [teammateAgent.agent.id],
+      workspace_host_id: homeHost.id,
+      member_agent_ids: [agentId],
     });
 
     expect(res.status).toBe(201);
@@ -241,37 +252,44 @@ describe('workspace/conversation routes', () => {
       .prepare<[string, string], { agent_id: string }>(
         'SELECT agent_id FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
       )
-      .get(body.workspace.id, teammateAgent.agent.id);
+      .get(body.workspace.id, agentId);
     expect(memberRow).toBeDefined();
   });
 
   it('accepts addMember when agent and workspace hosts differ (#task:1600 gate lifted)', async () => {
     t = buildTestApp();
-    const teammateHeaders = {
-      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
-    };
-    const teammateAgent = await (
-      await http(t).post(
-        '/api/agents',
-        { name: 'teammate-member', runtime: 'claude' },
-        { headers: teammateHeaders },
+    // Same #task:1681 framing as the create test above: own agent, second
+    // owned computer.
+    const hosts = new HostRepo(t.ctx.db);
+    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
+    const guestHost = hosts.claimOrCreateLocal({
+      userId: t.viewerUserId,
+      installationId: 'second-desktop-add',
+    }).host;
+    const agentId = `cross-computer-add-${Date.now()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
       )
-    ).json() as any;
+      .run(agentId, 'own-agent-elsewhere-add', guestHost.id, t.viewerUserId, now, now);
     const workspace = await (
       await http(t).post('/api/workspaces', {
         name: 'host-mismatch-add',
+        workspace_host_id: homeHost.id,
         member_agent_ids: [],
       })
     ).json() as any;
 
     const res = await http(t).post(
       `/api/workspaces/${workspace.workspace.id}/members`,
-      { agent_id: teammateAgent.agent.id },
+      { agent_id: agentId },
     );
 
     expect(res.status).toBe(201);
     const body = (await res.json()) as any;
-    expect(body.member.agent_id).toBe(teammateAgent.agent.id);
+    expect(body.member.agent_id).toBe(agentId);
   });
 
   it('serves channel message routes and retires public thread message routes', async () => {

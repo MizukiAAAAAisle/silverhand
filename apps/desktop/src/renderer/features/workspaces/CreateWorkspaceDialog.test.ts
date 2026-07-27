@@ -4,6 +4,9 @@
  * must never filter agent candidates and never prune a selection (the old
  * `eligibleAgents` host filter + prune effect were the desktop-side entry
  * gate; they are gone with the backend gates).
+ *
+ * The pool handed to this helper is the viewer's OWN agents — narrowed by
+ * `useAgents({ scope: 'owned' })` at the call site (#task:1681), not here.
  */
 import { describe, expect, it } from 'vitest';
 import type { AgentDto } from '@silverhand/shared';

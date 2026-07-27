@@ -20,11 +20,17 @@ import { api } from '@/lib/api';
  *
  * Membership rules enforced by the route (so the renderer doesn't
  * need to re-check):
- *   - Agent candidates must already be members of this conversation's
- *     workspace (`workspace_membership_required` 422). Human candidates
- *     may be outside the workspace for admin/owner callers; the server
- *     provisions workspace membership as part of the same
- *     permission-protected add action.
+ *   - A candidate that is not in this conversation's workspace yet is
+ *     provisioned as part of the same permission-protected add — one
+ *     action, never "enroll it first" (load-bearing product design,
+ *     shiki; reaffirmed 2026-07-28). Who may trigger that provisioning
+ *     follows the candidate: an agent's is its creator's call, so any
+ *     member of this conversation may bring their OWN agents in
+ *     (#task:1683), while a human's is workspace `admin` governance.
+ *     A candidate nobody present may provision is refused BEFORE any
+ *     row is written — 403 `agent_not_owned` for someone else's agent,
+ *     `workspace_membership_required` 422 for a caller with no
+ *     provisioning authority at all (an agent principal).
  *   - Conversation must be `kind === 'channel'` and not
  *     closed (`conversation_member_add_unsupported` 422 /
  *     `conversation_closed` 409). The trigger button hides on DM
@@ -36,8 +42,9 @@ import { api } from '@/lib/api';
  * On success we invalidate the conversation members cache so the
  * conversation header member strip + any open `useConversationMembers`
  * subscriber refresh. If a workspace id is available, also invalidate
- * workspace members because a human add may have provisioned workspace
- * membership under the hood.
+ * workspace members, because the add may have provisioned workspace
+ * membership under the hood — that is what keeps the auto-enrolled
+ * agent visible in the workspace roster without a reload.
  */
 export function useAddConversationMember(
   conversationId: string | null,

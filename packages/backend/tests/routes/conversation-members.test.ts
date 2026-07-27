@@ -661,12 +661,17 @@ describe('POST /api/conversations/:id/members', () => {
     expect(res.status).toBe(403);
   });
 
-  it('rejects a workspace member (non-admin) human even when they are a channel member (graded-permissions §6.1)', async () => {
-    // The conversation-member-add governance gate requires the admin
-    // effective role for USER principals, on top of conversation
-    // visibility. Demote the (channel-member) viewer to `member`: the
-    // add must 403. Restore to admin: it succeeds. This pins the role
-    // half of the gate independently of the visibility half above.
+  it('rejects a workspace member (non-admin) human adding a HUMAN even when they are a channel member (graded-permissions §6.1)', async () => {
+    // The people half of the conversation-member-add gate requires the admin
+    // effective role for USER principals, on top of conversation visibility.
+    // Demote the (channel-member) viewer to `member`: adding a HUMAN must 403.
+    // Restore to admin: it succeeds. This pins the role half of the gate
+    // independently of the visibility half above.
+    //
+    // The target is a human on purpose. Since #task:1683 a plain channel member
+    // may add their OWN agents, so an agent target created by `local` no longer
+    // isolates the role axis; the agent matrix (own → allowed, foreign → 403
+    // `agent_not_owned`) lives in `agent-self-service-membership.test.ts`.
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
@@ -683,8 +688,8 @@ describe('POST /api/conversations/:id/members', () => {
       .run(reg.workspaceId);
 
     const denied = await http(t).post(membersPath(channelId), {
-      kind: 'agent',
-      agent_id: bob.agentId,
+      kind: 'human',
+      user_id: 'carol',
     });
     expect(denied.status).toBe(403);
 
@@ -692,8 +697,8 @@ describe('POST /api/conversations/:id/members', () => {
       .prepare(`UPDATE workspace_users SET role = 'admin' WHERE workspace_id = ? AND user_id = 'local'`)
       .run(reg.workspaceId);
     const allowed = await http(t).post(membersPath(channelId), {
-      kind: 'agent',
-      agent_id: bob.agentId,
+      kind: 'human',
+      user_id: 'carol',
     });
     expect(allowed.status).toBe(200);
   });

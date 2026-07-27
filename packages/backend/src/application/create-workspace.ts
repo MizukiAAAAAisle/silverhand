@@ -1,5 +1,6 @@
 import { type AgentDto, systemSubtype } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
+import type { UserPrincipal } from '../auth/principal.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -12,6 +13,7 @@ import {
   dispatchWorkspaceProvision,
 } from '../runtime/workspace-data-plane.js';
 import { seedMemberAgentL2 } from './agent-l2-seed.js';
+import { canEnrollAgent } from '../permissions.js';
 import { isWorkspaceNameAvailable } from './name-availability.js';
 
 /**
@@ -65,8 +67,13 @@ export type CreateWorkspaceCommand = {
   workspaceHostId?: string;
   memberAgentIds: string[];
   memberUserIds: string[];
-  /** Route passes `requireViewerUserId(c)`. */
-  viewerUserId: string;
+  /**
+   * The creator. Route passes `getUserPrincipal(c)`; the workspace owner and
+   * every placement decision below read `principal.userId`. ONE field on
+   * purpose — a separate `viewerUserId` alongside a principal would be two
+   * readable identities that could disagree.
+   */
+  principal: UserPrincipal;
 };
 
 export type CreateWorkspaceSuccess = {
@@ -82,6 +89,14 @@ export type CreateWorkspaceSuccess = {
 export type CreateWorkspaceResult =
   | { kind: 'created'; success: CreateWorkspaceSuccess }
   | { kind: 'nameTaken' }
+  /**
+   * #task:1681 — one or more requested initial member agents were not created
+   * by the caller. Creating a workspace is the THIRD door into agent workspace
+   * membership, so it carries the same enrollment authority as the two
+   * member-add doors; without this arm the popover gate would be trivially
+   * bypassable by naming a teammate's agent at create time.
+   */
+  | { kind: 'agentNotOwned'; agentIds: string[] }
   | { kind: 'placementError'; err: unknown }
   | { kind: 'transportFailed'; failure: DataPlaneFailure };
 
@@ -110,8 +125,8 @@ export async function createWorkspace(
   let memberUserIds: string[];
   try {
     workspaceHostId = cmd.workspaceHostId
-      ? ctx.placement.assertOwnedActiveHost(cmd.workspaceHostId, cmd.viewerUserId).id
-      : ctx.placement.resolveOwnedReadyForPlacement(cmd.viewerUserId).id;
+      ? ctx.placement.assertOwnedActiveHost(cmd.workspaceHostId, cmd.principal.userId).id
+      : ctx.placement.resolveOwnedReadyForPlacement(cmd.principal.userId).id;
     memberAgents = cmd.memberAgentIds
       .map(id => agents.get(id))
       .filter((agent): agent is AgentDto => agent !== null);
@@ -122,6 +137,20 @@ export async function createWorkspace(
     // their own daemon), so the lift is a pure gate removal.
   } catch (err) {
     return { kind: 'placementError', err };
+  }
+
+  // Enrollment authority (#task:1681): the SAME rule the member-add doors
+  // enforce — only an agent's creator may place it in a workspace. Rejected
+  // loudly rather than filtered out: a silent drop would leave the creator with
+  // a workspace missing the members they asked for and no way to learn why.
+  // (Unknown ids stay silently filtered above — pre-existing behavior, and
+  // "does not exist" carries no rule the caller could act on.)
+  //
+  // Runs BEFORE the daemon provision + row insert, so a rejection leaves no
+  // workspace, no fs residue, and no membership.
+  const notOwned = memberAgents.filter(agent => !canEnrollAgent(ctx, cmd.principal, agent.id));
+  if (notOwned.length > 0) {
+    return { kind: 'agentNotOwned', agentIds: notOwned.map(agent => agent.id) };
   }
 
   // Provision the workspace fs on the owning daemon BEFORE inserting the row:
@@ -157,8 +186,8 @@ export async function createWorkspace(
   // Graded-permissions (v40): the creator is the workspace OWNER; additional
   // members join as plain `member` (no implicit admin). `setOwnerUserId` stamps
   // the denormalized pointer AND promotes the role in one tx.
-  workspaces.addUserMember(workspace.id, cmd.viewerUserId, 'owner');
-  workspaces.setOwnerUserId(workspace.id, cmd.viewerUserId);
+  workspaces.addUserMember(workspace.id, cmd.principal.userId, 'owner');
+  workspaces.setOwnerUserId(workspace.id, cmd.principal.userId);
   for (const userId of memberUserIds) {
     workspaces.addUserMember(workspace.id, userId);
   }

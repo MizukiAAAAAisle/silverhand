@@ -163,9 +163,19 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     // gated by `host_runtime_disabled` (defer to D4.d). Seeding the
     // cross-computer agent via DB is sufficient and avoids
     // cross-route coupling.
-    const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
-      'teammate',
-    )!;
+    //
+    // #task:1681 — the guest agent is the CREATOR's OWN, on a second computer
+    // they own: enrollment authority is the creator (a teammate's agent is
+    // refused regardless of host, pinned in
+    // tests/routes/workspace-agent-enrollment.test.ts), while the axis under
+    // test here is the HOST. Two ready owned computers make placement
+    // ambiguous, so the home one is named explicitly.
+    const hosts = new HostRepo(t.ctx.db);
+    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
+    const guestHost = hosts.claimOrCreateLocal({
+      userId: t.viewerUserId,
+      installationId: 'second-desktop',
+    }).host;
     const agentId = `cross-host-create-${Date.now()}`;
     const now = Date.now();
     t.ctx.db
@@ -173,10 +183,11 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
         `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
          VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
       )
-      .run(agentId, 'cross-host-create', teammateHost.id, 'teammate', now, now);
+      .run(agentId, 'cross-host-create', guestHost.id, t.viewerUserId, now, now);
 
     const res = await http(t).post('/api/workspaces', {
       name: 'standalone-cross-host-ok',
+      workspace_host_id: homeHost.id,
       member_agent_ids: [agentId],
     });
 
@@ -193,7 +204,7 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     const guestProvisions = t.fakeHostWs!.calls.filter(
       c =>
         c.kind === 'workspace_provision' &&
-        c.hostId === teammateHost.id &&
+        c.hostId === guestHost.id &&
         c.params.workspace_id === body.workspace.id,
     );
     expect(guestProvisions).toHaveLength(1);
@@ -414,9 +425,15 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     t = buildTestApp({ deploymentMode: 'standalone' });
     // Direct DB insert (standalone POST /api/agents is still
     // gated; see comment on the POST workspace cross-host test).
-    const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
-      'teammate',
-    )!;
+    // #task:1681 — own agent on a second owned computer: creator = enrollment
+    // authority, host = the axis under test. Home computer named explicitly
+    // because two ready owned computers are ambiguous for placement.
+    const hosts = new HostRepo(t.ctx.db);
+    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
+    const guestHost = hosts.claimOrCreateLocal({
+      userId: t.viewerUserId,
+      installationId: 'second-desktop',
+    }).host;
     const agentId = `cross-host-add-${Date.now()}`;
     const now = Date.now();
     t.ctx.db
@@ -424,10 +441,11 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
         `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
          VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
       )
-      .run(agentId, 'cross-host-add', teammateHost.id, 'teammate', now, now);
+      .run(agentId, 'cross-host-add', guestHost.id, t.viewerUserId, now, now);
 
     const wsRes = await http(t).post('/api/workspaces', {
       name: 'add-member-cross-host',
+      workspace_host_id: homeHost.id,
       member_agent_ids: [],
     });
     expect(wsRes.status).toBe(201);
@@ -462,7 +480,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     // the guest L2 lives under the guest daemon's managed root.
     const seed = t.fakeHostWs!.calls.find(c => c.kind === 'agent_l2_seed');
     expect(seed).toBeDefined();
-    expect(seed!.hostId).toBe(teammateHost.id);
+    expect(seed!.hostId).toBe(guestHost.id);
     expect(existsSync(expectedL2Dir)).toBe(false);
   });
 

@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { internalPaths } from '@silverhand/shared';
+import {
+  encodeUserPrincipalHeader,
+  internalPaths,
+  X_SILVERHAND_PRINCIPAL_HEADER,
+} from '@silverhand/shared';
 import { createApiRouter } from '../src/routes.js';
 import {
   AGENT_ROUTE_CAPABILITIES,
@@ -8,7 +12,7 @@ import {
   HUMAN_GOVERNANCE_ROUTES,
   NON_GOVERNANCE_MUTATING_ROUTES,
 } from '../src/permissions-registry.js';
-import { buildTestApp, type TestApp } from './utils/app.js';
+import { buildTestApp, http, type TestApp } from './utils/app.js';
 
 const MUTATION_METHODS = new Set(['POST', 'PATCH', 'PUT', 'DELETE']);
 
@@ -69,6 +73,107 @@ describe('permissions registry — drift protection (v40 Layer A)', () => {
       for (const d of NON_GOVERNANCE_MUTATING_ROUTES) {
         expect(d.reason.length, `${d.method} ${d.path} needs a non-empty reason`).toBeGreaterThan(0);
       }
+    });
+
+    /**
+     * `minRole` is a FLOOR, and until #task:1683 nothing checked that the
+     * declared floor was the LIVE floor: the coverage tests above only assert a
+     * route is *listed*. Three composite routes had drifted to a member floor
+     * while still declaring `admin`, i.e. the registry that calls itself the
+     * authority SSOT was asserting the opposite of the gate. These probes bind
+     * the declaration to behaviour in both directions:
+     *
+     *   - every `member`-floor declaration must be exercised here (the set
+     *     comparison fails if one is added without a probe), and
+     *   - each probe drives the REAL route twice: at the floor with the target
+     *     class the floor admits (must not be 403) and from below the floor
+     *     (must be 403). Re-tightening a gate to `admin` without updating the
+     *     declaration now reddens this file.
+     *
+     * What the floor admits is only ever the *floor-legal* target — the
+     * per-target escalations (a human, or someone else's agent) are pinned in
+     * `tests/routes/agent-self-service-membership.test.ts`.
+     */
+    const MEMBER_FLOOR_PROBES = [
+      'POST /api/workspaces/:id/members',
+      'DELETE /api/workspaces/:id/members/:agentId',
+      'POST /api/conversations/:id/members',
+      'DELETE /api/conversations/:id/members/agents/:agentId',
+    ];
+
+    it('probes every route declared with a member floor (no unprobed floor claim)', () => {
+      const declared = HUMAN_GOVERNANCE_ROUTES.filter(d => d.minRole === 'member')
+        .map(d => `${d.method} ${d.path}`)
+        .sort();
+      expect(declared, 'member-floor declarations must all be probed below').toEqual(
+        [...MEMBER_FLOOR_PROBES].sort(),
+      );
+      // A floor that grades further inside MUST say so, or the declaration reads
+      // as "a plain member may do all of this".
+      for (const d of HUMAN_GOVERNANCE_ROUTES.filter(x => x.minRole === 'member')) {
+        expect(d.note ?? '', `${d.method} ${d.path} needs its escalation spelled out`).toMatch(
+          /ESCALATES|FLOOR/,
+        );
+      }
+    });
+
+    it('proves the member floor is live: a plain member places and retracts their OWN agent', async () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const owner = { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate') };
+      const stranger = { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('other') };
+
+      const ws = ((await (
+        await http(t).post('/api/workspaces', { name: 'floor', member_agent_ids: [] }, { headers: owner })
+      ).json()) as any).workspace.id as string;
+      expect(
+        (await http(t).post(`/api/workspaces/${ws}/members`, { kind: 'human', user_id: 'local' }, { headers: owner }))
+          .status,
+      ).toBe(201);
+      const channelId = ((await (
+        await http(t).post(
+          `/api/workspaces/${ws}/channels`,
+          { title: 'floor-room', member_agent_ids: [], member_user_ids: ['local'] },
+          { headers: owner },
+        )
+      ).json()) as any).channel.id as string;
+      const mine = ((await (
+        await http(t).post('/api/agents', { name: 'floor-probe-agent', runtime: 'claude' })
+      ).json()) as any).agent.id as string;
+
+      // Default identity below is `local`: a plain workspace `member` and a
+      // member of `channelId`. Each route is driven at the floor, then from
+      // below it (a workspace non-member) — the floor must actually refuse.
+      const wsMemberAdd = await http(t).post(`/api/workspaces/${ws}/members`, { agent_id: mine });
+      expect(wsMemberAdd.status).toBe(201);
+      expect(
+        (await http(t).post(`/api/workspaces/${ws}/members`, { agent_id: mine }, { headers: stranger }))
+          .status,
+      ).toBe(403);
+
+      const channelAdd = await http(t).post(`/api/conversations/${channelId}/members`, {
+        kind: 'agent',
+        agent_id: mine,
+      });
+      expect(channelAdd.status).toBe(200);
+      expect(
+        (await http(t).post(
+          `/api/conversations/${channelId}/members`,
+          { kind: 'agent', agent_id: mine },
+          { headers: stranger },
+        )).status,
+      ).toBe(403);
+
+      expect(
+        (await http(t).del(`/api/conversations/${channelId}/members/agents/${mine}`, {
+          headers: stranger,
+        })).status,
+      ).toBe(403);
+      expect((await http(t).del(`/api/conversations/${channelId}/members/agents/${mine}`)).status).toBe(200);
+
+      expect(
+        (await http(t).del(`/api/workspaces/${ws}/members/${mine}`, { headers: stranger })).status,
+      ).toBe(403);
+      expect((await http(t).del(`/api/workspaces/${ws}/members/${mine}`)).status).toBe(204);
     });
   });
 

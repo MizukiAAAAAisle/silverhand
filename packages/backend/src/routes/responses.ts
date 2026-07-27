@@ -171,6 +171,29 @@ export function conversationMemberResultResponse(
       return c.json({ error: error.message, code: 'candidate_not_found' }, 404);
     case 'workspace_membership_required':
       return c.json({ error: error.message, code: 'workspace_membership_required' }, 422);
+    case 'agent_not_owned':
+      // #task:1681 — joining this conversation would enroll the agent into the
+      // workspace, which is its creator's call. 403 (not 404) so the surface can
+      // state the rule.
+      // #task:1683 — the same code now also answers a plain channel member who
+      // reached for someone else's agent that is ALREADY in the workspace.
+      //
+      // TWO causes, so the message must be their INTERSECTION (Cindy, #task:1683
+      // review): "only its creator can bring it in" is true of the enrollment
+      // cause but FALSE of the second one — a workspace admin may add an
+      // already-enrolled foreign agent to a channel. What both causes share is
+      // only that this caller did not create this agent, so that is all this
+      // message asserts; which OTHER actor could succeed is a matrix cell and
+      // belongs to the surface, which knows the viewer's role. The narrower
+      // creator-only sentence stays on the two pure-enrollment producers
+      // (workspace add, create-workspace initial members).
+      return c.json(
+        {
+          error: 'you are not authorized to add this agent — you did not create it',
+          code: 'agent_not_owned',
+        },
+        403,
+      );
     case 'workspace_agent_seed_failed':
       return c.json(
         { error: error.failure.message, code: error.failure.code },

@@ -35,7 +35,13 @@ import {
 import type { BackendContext } from '../context.js';
 import type { AppEnv, Principal } from '../auth/principal.js';
 import { getAgentPrincipal, getPrincipal, getUserPrincipal } from '../auth/principal.js';
-import { canGovernWorkspace, canViewConversation, canViewWorkspace, workspaceRole } from '../permissions.js';
+import {
+  canEnrollAgent,
+  canGovernWorkspace,
+  canViewConversation,
+  canViewWorkspace,
+  workspaceRole,
+} from '../permissions.js';
 import { AgentRepo } from '../repos/agent-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
@@ -380,7 +386,22 @@ export function createWorkspaceMembershipApp(
     if (!workspace || workspace.workspace_kind !== 'regular') {
       return c.json({ error: 'workspace not found' }, 404);
     }
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'admin')) {
+    const principal = getUserPrincipal(c);
+    // Roster-write FLOOR: workspace membership. What is required ON TOP of it
+    // depends on WHICH data the write touches, not on the verb — so the role
+    // requirement is per-branch below rather than one constant `admin` here
+    // (shiki 2026-07-27, ruling on Cindy's blocker):
+    //
+    //   - human member  → `admin` (the roster of PEOPLE is admin governance)
+    //   - agent member  → membership ∧ `canEnrollAgent` (your own agent is
+    //                     yours to bring; see the use case). No `admin` OR-arm:
+    //                     enrollment is creator-only (#task:1681), so this is
+    //                     NOT symmetric with the DELETE route below, where
+    //                     `admin` does govern the whole roster.
+    //
+    // The floor still answers a non-member before the body is parsed, so a
+    // stranger cannot probe input validity.
+    if (!canGovernWorkspace(ctx, principal, workspace.id, 'member')) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const body = await c.req.json().catch(() => ({}));
@@ -389,9 +410,14 @@ export function createWorkspaceMembershipApp(
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     if ('kind' in parsed.data && parsed.data.kind === 'human') {
-      // Human add is admin-gated by the entry check above. New humans join as
-      // `member` (addUserMember default); role changes/removal stay owner-only
-      // in their dedicated routes.
+      // Human add stays ADMIN-gated: inviting a person is governance over the
+      // workspace's people roster, and it carries no ownership factor that
+      // could stand in for the role. New humans join as `member`
+      // (addUserMember default); role changes/removal stay owner-only in their
+      // dedicated routes.
+      if (!canGovernWorkspace(ctx, principal, workspace.id, 'admin')) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
       const user = ctx.userService.getDto(parsed.data.user_id);
       if (!user) return c.json({ error: 'user not found' }, 404);
       return c.json(
@@ -403,12 +429,19 @@ export function createWorkspaceMembershipApp(
       );
     }
     // Add an agent member: delegated to AddWorkspaceAgentMemberUseCase. The
-    // route stays thin — parse + admin gate above, then map the typed result.
-    // Placement, daemon L2 seed (ordered before the row), the unit-of-work
-    // transaction, and the capability default-seed policy all live in the use case.
+    // route stays thin — parse + membership floor above, then map the typed
+    // result. Placement, daemon L2 seed (ordered before the row), the
+    // unit-of-work transaction, and the capability default-seed policy all live
+    // in the use case. So does the enrollment gate (#task:1681,
+    // `agent_not_owned`): the workspace role above governs WHOSE roster this
+    // is, while placing a specific agent is its creator's authority. Any member
+    // may bring their OWN agents — that is shiki's delegation flow ("invite the
+    // human, they bring their agents"), which an admin-only roster write made
+    // impossible since invitees join as plain `member`.
     const result = await addWorkspaceAgentMember(
       { ctx, agents, workspaces },
       {
+        principal,
         workspace: {
           id: workspace.id,
           workspace_path: workspace.workspace_path,
@@ -421,6 +454,15 @@ export function createWorkspaceMembershipApp(
     switch (result.error.code) {
       case 'agent_not_found':
         return c.json({ error: 'agent not found' }, 404);
+      case 'agent_not_owned':
+        return c.json(
+          {
+            error:
+              'you can only add agents you created — someone else\'s can be brought in only by its creator',
+            code: 'agent_not_owned',
+          },
+          403,
+        );
       case 'seed_failed':
         return c.json(
           { error: result.error.failure.message, code: result.error.failure.code },
@@ -476,8 +518,33 @@ export function createWorkspaceMembershipApp(
     const workspace = workspaces.get(id);
     if (!workspace || workspace.workspace_kind !== 'regular') return c.body(null, 204);
     const principal = getUserPrincipal(c);
-    if (!canGovernWorkspace(ctx, principal, workspace.id, 'admin')) {
+    // Roster-write FLOOR: workspace membership — same shape as the add route,
+    // and for the same reason: what is required ON TOP of it follows the DATA.
+    if (!canGovernWorkspace(ctx, principal, workspace.id, 'member')) {
       return c.json({ error: 'forbidden' }, 403);
+    }
+    // #task:1683 — removal is the symmetric half of enrollment (shiki
+    // 2026-07-28): whoever may bring their own agent in may take it back out,
+    // otherwise every plain member needs an admin to undo their own action.
+    // `admin` keeps governance over the WHOLE agent roster (including agents it
+    // may not enroll), so this is an OR, not a replacement.
+    const isAdmin = canGovernWorkspace(ctx, principal, workspace.id, 'admin');
+    if (!isAdmin && !canEnrollAgent(ctx, principal, agentId)) {
+      // Also the answer for an unknown agent id from a plain member: ownership
+      // is unprovable, so it fails closed instead of falling through to the
+      // dangling-row cleanup below (which stays admin-only).
+      // The message stays a NEUTRAL FACT: "who could do this instead" is a cell
+      // of the permission matrix (§1.1), and the matrix is stated in one place —
+      // the surface, which knows the viewer's role. A role name here would be a
+      // second copy to keep true (three-way contract with @Norman/@Cindy,
+      // 2026-07-28); the renderer maps the typed `code`, never this text.
+      return c.json(
+        {
+          error: 'you can only remove agents you created',
+          code: 'agent_not_owned',
+        },
+        403,
+      );
     }
     const agent = agents.get(agentId);
     if (!agent) {

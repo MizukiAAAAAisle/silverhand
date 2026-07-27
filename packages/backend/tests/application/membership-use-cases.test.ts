@@ -193,18 +193,30 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     });
   });
 
-  it('returns forbidden for a non-admin user WITHOUT writing a row or emitting an event', async () => {
+  it('returns forbidden for a non-admin user adding a HUMAN, WITHOUT writing a row or emitting an event', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
     const ws = await createRegularWorkspace(t, 'role-gate', [alice, bob]);
     const channelId = await createChannel(t, ws, 'governed', [alice]);
-    // `local` is a channel member but only a workspace `member` — the
-    // governance write requires the admin effective role.
+    // `local` is a channel member but only a workspace `member`. The TARGET is a
+    // human on purpose: since #task:1683 a plain channel member may add their
+    // OWN agents, so an agent target no longer isolates the ROLE axis (`bob`
+    // here was created by `local`). The people roster carries no ownership
+    // factor, so it is the clean probe for "role insufficient".
     t.ctx.db
       .prepare(
         `UPDATE workspace_users SET role = 'member' WHERE workspace_id = ? AND user_id = 'local'`,
       )
+      .run(ws);
+    // This fixture seeds every fixture user into every workspace/conversation, so
+    // clear the target's rows first — otherwise "no row was written" would be
+    // pre-satisfied and prove nothing.
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'carol'`)
+      .run(channelId);
+    t.ctx.db
+      .prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = 'carol'`)
       .run(ws);
     const deps = conversationDeps(t);
     const cap = captureOrderedEvents(t, channelId, ws);
@@ -212,12 +224,13 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     const result = await addConversationMember(deps, {
       conversationId: channelId,
       principal: LOCAL_USER,
-      member: { kind: 'agent', agent_id: bob },
+      member: { kind: 'human', user_id: 'carol' },
     });
     cap.stop();
 
     expect(result).toEqual({ ok: false, error: { code: 'forbidden' } });
-    expect(deps.conversations.getAgent(channelId, bob)).toBeNull();
+    expect(deps.conversations.getUser(channelId, 'carol')).toBeNull();
+    expect(deps.workspaces.isUserMember(ws, 'carol')).toBe(false);
     expect(cap.events).toEqual([]);
   });
 
@@ -620,6 +633,7 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
     const deps = workspaceAgentDeps(t);
 
     const result = await addWorkspaceAgentMember(deps, {
+      principal: LOCAL_USER,
       workspace: workspaceRow(t, ws),
       agentId: bob,
     });
@@ -640,6 +654,7 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
     caps.replaceSet(ws, alice, ['read_messages']);
 
     const result = await addWorkspaceAgentMember(deps, {
+      principal: LOCAL_USER,
       workspace: workspaceRow(t, ws),
       agentId: alice,
     });
@@ -655,6 +670,7 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
     const deps = workspaceAgentDeps(t);
 
     const result = await addWorkspaceAgentMember(deps, {
+      principal: LOCAL_USER,
       workspace: workspaceRow(t, ws),
       agentId: 'nope',
     });
@@ -671,6 +687,7 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
     // The workspace claims another home computer; bob (on the local host)
     // joins as a cross-computer guest — the retired gate used to 409 this.
     const result = await addWorkspaceAgentMember(deps, {
+      principal: LOCAL_USER,
       workspace: {
         ...workspaceRow(t, ws),
         workspace_host_id: 'some-other-host',

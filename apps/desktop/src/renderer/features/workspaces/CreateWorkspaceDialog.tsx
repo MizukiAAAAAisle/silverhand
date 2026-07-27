@@ -52,7 +52,11 @@ export function CreateWorkspaceDialog({
   const [error, setError] = useState<string | null>(null);
   const previousHostIdRef = useRef<string | null | undefined>(undefined);
 
-  const { data: agents = [] } = useAgents();
+  // Only the agents this viewer created: creating a workspace enrolls its
+  // initial `member_agent_ids`, and enrollment is the creator's call
+  // (#task:1681). `?scope=owned` is the single authority for "mine" — the
+  // renderer passes the flag and never re-filters client-side.
+  const { data: agents = [] } = useAgents({ scope: 'owned' });
   const { data: users = [] } = useUsers();
   const viewer = useViewerUser();
   const viewerUserId =
@@ -379,6 +383,12 @@ export function CreateWorkspaceDialog({
 }
 
 const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
+  // #task:1681 — the picker only offers the viewer's own agents, so this is a
+  // backstop for a stale pool (an agent transferred or deleted mid-dialog).
+  // Same wording as the two member pickers: enrollment is creator-only, so the
+  // line names the creator and no role (#task:1682).
+  agent_not_owned:
+    "You can only add agents you created. Someone else's can be brought in only by its creator.",
   local_host_ambiguous: 'Choose which computer should store this workspace.',
   local_host_unbound:
     'No connected computer can store this workspace. Connect one and try again.',
@@ -410,6 +420,11 @@ function friendlyCreateWorkspaceError(err: unknown): string {
  * It never filters agent candidates and never prunes a selection — which is
  * why this helper deliberately takes NO host argument. Members on other
  * computers are legal; their L2 seeds land on their own daemons.
+ *
+ * The pool it receives is already narrowed to the viewer's own agents by
+ * `useAgents({ scope: 'owned' })` (#task:1681): enrollment authority is an
+ * ownership rule the backend owns, so it is a query parameter, not a
+ * client-side predicate duplicated here.
  * Falsifier-tested in `CreateWorkspaceDialog.test.ts`.
  */
 export function computeWorkspaceAgentCandidates(agents: AgentDto[]): AgentDto[] {

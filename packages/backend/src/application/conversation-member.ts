@@ -22,6 +22,7 @@ import type { MembershipService } from '../services/membership-service.js';
 import {
   canAddConversationMember,
   canEditAgent,
+  canEnrollAgent,
   canGovernWorkspace,
   canJoinPublicChannel,
   canViewConversation,
@@ -56,6 +57,18 @@ export type AddConversationMemberError =
   | { code: 'forbidden' }
   | { code: 'candidate_not_found'; message: string }
   | { code: 'workspace_membership_required'; message: string }
+  /**
+   * #task:1681 — the candidate agent would have to be enrolled into the
+   * workspace first, and only its creator may do that. Distinct from
+   * `forbidden` (which is about the CALLER's conversation/workspace role) —
+   * here the caller's roster authority is fine; the agent isn't theirs.
+   *
+   * #task:1683 widened it to the CHANNEL roster too: a plain channel member may
+   * add their own agents, so reaching for someone else's agent is again an
+   * ownership refusal, not a role one — even when that agent is already in the
+   * workspace and no enrollment would happen.
+   */
+  | { code: 'agent_not_owned' }
   | {
       code: 'workspace_agent_seed_failed';
       failure: {
@@ -157,35 +170,77 @@ export async function addConversationMember(
     return { ok: false, error: { code: 'conversation_closed' } };
   }
 
-  // Authorization (spec §3, constraint ①). Human governance: adding a
-  // conversation member is a governance write — require BOTH conversation
-  // visibility AND the admin effective role. Agent/system: the agent route's
-  // `manage_conversation_members` capability gate already runs before the
-  // request enters this use case; here we keep the view-equivalent
-  // membership check.
-  if (input.principal.kind === 'user') {
-    if (
-      !canAddConversationMember(deps.ctx, input.principal, conversation.id)
-      || !canGovernWorkspace(deps.ctx, input.principal, conversation.workspace_id, 'admin')
-    ) {
-      return { ok: false, error: { code: 'forbidden' } };
-    }
-  } else {
-    if (!canAddConversationMember(deps.ctx, input.principal, conversation.id)) {
-      return { ok: false, error: { code: 'forbidden' } };
-    }
+  // Authorization (spec §3, constraint ①), in TWO stages, because the second
+  // one is a property of the TARGET and the target may still be an unresolved
+  // handle here.
+  //
+  // Stage 1 — the FLOOR, target-independent: the caller must be a member of
+  // THIS conversation (`canAddConversationMember` = `canViewConversation`).
+  // This is what keeps a private channel private: no role and no agent of
+  // yours gets you a roster write on a channel you are not in, so
+  // own-agent-add can never be used to gain or spread channel access
+  // (#task:1683). Agent/system: the agent route's
+  // `manage_conversation_members` capability gate already ran before the
+  // request entered this use case; the floor is the same membership check.
+  if (!canAddConversationMember(deps.ctx, input.principal, conversation.id)) {
+    return { ok: false, error: { code: 'forbidden' } };
   }
 
-  const canAutoProvisionWorkspaceMember =
-    input.principal.kind === 'user'
-    && canGovernWorkspace(deps.ctx, input.principal, conversation.workspace_id, 'admin');
+  const isWorkspaceAdmin = canGovernWorkspace(
+    deps.ctx,
+    input.principal,
+    conversation.workspace_id,
+    'admin',
+  );
+  const callerIsHuman = input.principal.kind === 'user';
+
+  // WORKSPACE-side auto-provision (a target that is not in the workspace yet).
+  //
+  // For a HUMAN target this predicate IS the authority: an admin genuinely may
+  // enroll people, so `canAutoProvisionHumanMember` means what it says.
+  //
+  // For an AGENT target there is deliberately NO such predicate here, because
+  // this use case does not hold enrollment authority — `addWorkspaceAgentMember`
+  // does (creator-only, #task:1681: not even an admin enrolls someone else's
+  // agent). What we decide here is only ROUTING: whether to walk the enrollment
+  // path and let it answer with its own typed refusal, or to stop with
+  // `workspace_membership_required` because that path can never run for this
+  // principal at all. Hence the name — an admin gets `true` and may still be
+  // refused with `agent_not_owned` one call later; that is a two-stage refusal,
+  // not a permission. Non-human principals keep the old posture (they never
+  // auto-provision — the target must already be a workspace member).
+  const canAutoProvisionHumanMember = callerIsHuman && isWorkspaceAdmin;
+  const mayAttemptAgentEnrollment = (agentId: string): boolean =>
+    callerIsHuman && (isWorkspaceAdmin || canEnrollAgent(deps.ctx, input.principal, agentId));
 
   const resolved = resolveConversationMemberInput(deps, {
     workspaceId: conversation.workspace_id,
     member: input.member,
-    allowAutoWorkspaceMembership: canAutoProvisionWorkspaceMember,
+    mayAttemptNonWorkspaceCandidate: candidate =>
+      candidate.kind === 'agent'
+        ? mayAttemptAgentEnrollment(candidate.id)
+        : canAutoProvisionHumanMember,
   });
   if (!resolved.ok) return { ok: false, error: resolved.error };
+
+  // Stage 2 — now that the target IS known: for a NON-admin human, the channel
+  // roster write is graded by the target's kind and, for an agent, by its
+  // OWNERSHIP (#task:1683, shiki 2026-07-28). A plain channel member may bring
+  // their OWN agents in; the people roster and other people's agents stay
+  // `admin` governance. The two factors stay independent — this never widens the
+  // membership floor above (owning an agent buys no access to a channel you are
+  // not in), and no role substitutes for ownership. Non-human principals keep
+  // their pre-existing posture (capability gate at the route + the floor).
+  // Runs BEFORE any write, daemon seed or workspace row, so a refusal leaves
+  // nothing behind.
+  if (callerIsHuman && !isWorkspaceAdmin) {
+    if (resolved.member.kind === 'human') {
+      return { ok: false, error: { code: 'forbidden' } };
+    }
+    if (!canEnrollAgent(deps.ctx, input.principal, resolved.member.agent_id)) {
+      return { ok: false, error: { code: 'agent_not_owned' } };
+    }
+  }
 
   const effects: PostCommitEffect[] = [];
 
@@ -196,7 +251,10 @@ export async function addConversationMember(
     }
     const workspaceWasMember = deps.workspaces.isMember(conversation.workspace_id, agent.id);
     if (!workspaceWasMember) {
-      if (!canAutoProvisionWorkspaceMember) {
+      // Not "you are allowed to enroll" — only "the enrollment path can run for
+      // this principal". `addWorkspaceAgentMember` below owns the real gate and
+      // answers `agent_not_owned` for anyone but the creator, admin included.
+      if (!mayAttemptAgentEnrollment(agent.id)) {
         return {
           ok: false,
           error: {
@@ -212,6 +270,7 @@ export async function addConversationMember(
       const workspaceMember = await addWorkspaceAgentMember(
         { ctx: deps.ctx, agents: deps.agents, workspaces: deps.workspaces },
         {
+          principal: input.principal,
           workspace: {
             id: workspace.id,
             workspace_path: workspace.workspace_path,
@@ -227,6 +286,13 @@ export async function addConversationMember(
               ok: false,
               error: { code: 'candidate_not_found', message: 'agent not found' },
             };
+          case 'agent_not_owned':
+            // #task:1681 — this door auto-provisions WORKSPACE membership, so it
+            // is bound by the same enrollment authority as the workspace
+            // member-add route: a workspace admin may not pull a teammate's
+            // agent in. An agent already in the workspace is unaffected (the
+            // gate only runs on the auto-provision branch).
+            return { ok: false, error: { code: 'agent_not_owned' } };
           case 'seed_failed':
             return {
               ok: false,
@@ -262,7 +328,7 @@ export async function addConversationMember(
     return { ok: false, error: { code: 'candidate_not_found', message: 'user not found' } };
   }
   const workspaceWasMember = deps.workspaces.isUserMember(conversation.workspace_id, user.id);
-  if (!workspaceWasMember && !canAutoProvisionWorkspaceMember) {
+  if (!workspaceWasMember && !canAutoProvisionHumanMember) {
     return {
       ok: false,
       error: {
@@ -848,7 +914,7 @@ function resolveConversationMemberInput(
   input: {
     workspaceId: string;
     member: AddConversationMemberInput;
-    allowAutoWorkspaceMembership: boolean;
+    mayAttemptNonWorkspaceCandidate: (candidate: { kind: 'agent' | 'human'; id: string }) => boolean;
   },
 ):
   | { ok: true; member: ResolvedConversationMemberInput }
@@ -886,27 +952,39 @@ function resolveConversationMemberInput(
     return { ok: false, error: { code: 'candidate_not_found', message: 'candidate not found' } };
   }
 
-  const eligibleCandidates = candidates.filter(
+  // Narrowing NARROWS an ambiguous handle; it does NOT answer authorization.
+  // A candidate that is not a workspace member yet stays in the running only when
+  // THIS caller could get as far as the workspace-side write for THAT candidate —
+  // a per-candidate question since #task:1683 (own agent: any channel member;
+  // human or someone else's agent: admin), so it cannot be one boolean for two
+  // data classes. It is deliberately not named "can place": for someone else's
+  // not-yet-enrolled agent an admin passes here and is still refused
+  // `agent_not_owned` by the creator-only enrollment gate (#task:1681).
+  //
+  // When NOTHING survives narrowing we deliberately fall back to the full
+  // candidate set instead of answering here (Cindy, #task:1683 review): otherwise
+  // the same target would get a different typed contract purely from the INPUT
+  // SHAPE — a plain member reaching for someone else's non-workspace agent got
+  // `agent_not_owned` by id but `workspace_membership_required` by handle. The
+  // refusal belongs to the ONE authorization path downstream (target-kind /
+  // ownership grading, then the per-leg workspace-membership check), which is
+  // also what keeps `workspace_membership_required` a single-authority answer:
+  // an agent principal still gets it from its leg, since it can never
+  // auto-provision.
+  const narrowedCandidates = candidates.filter(
     candidate =>
       candidate.workspaceMember
-      || input.allowAutoWorkspaceMembership,
+      || input.mayAttemptNonWorkspaceCandidate({ kind: candidate.kind, id: candidate.id }),
   );
-  if (eligibleCandidates.length === 0) {
-    return {
-      ok: false,
-      error: {
-        code: 'workspace_membership_required',
-        message: 'candidate is not a member of this workspace',
-      },
-    };
-  }
+  const consideredCandidates =
+    narrowedCandidates.length > 0 ? narrowedCandidates : candidates;
 
-  if (eligibleCandidates.length > 1) {
+  if (consideredCandidates.length > 1) {
     return {
       ok: false,
       error: {
         code: 'handle_ambiguous',
-        candidates: eligibleCandidates.map(candidate => ({
+        candidates: consideredCandidates.map(candidate => ({
           kind: candidate.kind,
           id: candidate.id,
           display_name: candidate.display_name,
@@ -916,9 +994,9 @@ function resolveConversationMemberInput(
     };
   }
 
-  const candidate = eligibleCandidates[0];
+  const candidate = consideredCandidates[0];
   if (!candidate) {
-    throw new Error('resolveConversationMemberInput: expected exactly one eligible candidate');
+    throw new Error('resolveConversationMemberInput: expected exactly one candidate');
   }
   return {
     ok: true,

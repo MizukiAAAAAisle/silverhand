@@ -35,7 +35,13 @@ specific conversation.
 | Read workspace / list channels (subject to conv membership) | ✓ | ✓ | ✓ |
 | Post / read in a conversation (subject to `conversation_users`) | ✓ | ✓ | ✓ |
 | Create / delete channel | ✓ | ✓ | ✗ |
-| Add / remove **agent** as a workspace member (`manage_workspace_agents`) | ✓ | ✓ | ✗ |
+| Add / remove **an agent you created** as a workspace member | ✓ | ✓ | ✓ |
+| Add **someone else's agent** as a workspace member (enrollment, §3) | ✗ | ✗ | ✗ |
+| Remove **someone else's agent** from the workspace roster (`manage_workspace_agents`) | ✓ | ✓ | ✗ |
+| Add **your own agent** to a channel **you are a member of** | ✓ | ✓ | ✓ |
+| Add a **human** to a channel | ✓ | ✓ | ✗ |
+| Add **someone else's agent** — already a workspace member — to a channel | ✓ | ✓ | ✗ |
+| Add **someone else's agent** — *not yet* a workspace member — to a channel (it would enroll) | ✗ | ✗ | ✗ |
 | Edit workspace settings — name / description / icon (**includes rename**) | ✓ | ✓ | ✗ |
 | Edit agent **capabilities** in this workspace (§2) | ✓ | ✓ | ✗ |
 | Add **human** member | ✓ | ✓ | ✗ |
@@ -48,6 +54,26 @@ rename, adding humans as workspace members); `owner` = existential + human-role/
 (archive/delete, human role changes/removal, admin grants).
 **Exactly one owner per workspace.** (Rename is `admin`, deliberately not owner-only;
 it is a setting, not existential.)
+
+**Placement authority is two independent factors** (#task:1683, shiki 2026-07-28). The rows above that
+admit a `member` are not a softening of `manage_workspace_agents`: on any roster write the required
+rank follows the **class of data being written**, and it is ANDed with the roster floor, never
+substituted for it.
+
+- Factor 1 — **roster authority**: the workspace role (`canGovernWorkspace`) for the workspace
+  roster; MEMBERSHIP OF THE TARGET CONVERSATION (`canAddConversationMember` = `canViewConversation`)
+  for a channel roster. No role and no agent of yours is a way into a channel you are not in.
+- Factor 2 — **agent ownership**: `canEnrollAgent` (the agent's creator, §3). This factor is graded
+  **per verb, not per route**: `admin` is an OR-arm alongside ownership only on **removal** from the
+  workspace roster (it governs the whole roster and must be able to clean it up). On **enrollment**
+  there is no OR-arm at all — an agent that is not yet a workspace member can be brought in only by
+  its creator, so an `owner`/`admin` reaching for someone else's not-yet-enrolled agent is refused
+  exactly like a `member` is (`agent_not_owned`). Same route, opposite answers by verb.
+- Consequence: a plain `member` can complete the delegation flow end to end (bring their own agents
+  in, place them in their own channels, take them back out) without an admin, and still cannot touch
+  the people roster or anybody else's agents. And no role enrolls on someone's behalf — the way to
+  get a teammate's agent into a workspace is to add the teammate, who brings their own agents.
+
 
 ### 1.2 Storage
 
@@ -69,8 +95,18 @@ canGovernWorkspace(ctx, principal, workspaceId, minRole): boolean   // role >= m
 `canGovernWorkspace` is the sole governance gate; the forbidden old two-valued gate it replaced,
 `canMutateWorkspace` (which returned `kind !== 'agent'`, making every human member admin-equivalent),
 no longer exists. Callers pass the minimum role for the op (`'owner'` for archive, `'admin'` for
-channel/agent member management). System principals pass unconditionally (mirrors every existing
-`canX`).
+channel management and anything touching the people roster). System principals pass unconditionally
+(mirrors every existing `canX`).
+
+On a **composite** route the role passed here is the route FLOOR, and the handler then grades by the
+class of data being written (§1.1, "two independent factors"): the agent-roster routes pass
+`'member'` and AND that with `canEnrollAgent` — unconditionally when the write ENROLLS an agent, and
+with an `admin` OR-arm only when it REMOVES one. `HUMAN_GOVERNANCE_ROUTES`
+declares the floor, never the highest rank the route can demand, and every inner escalation is spelled
+out in that entry's `note` — a declaration that claimed `admin` while the live floor was `member`
+would make the registry state the opposite of the gate it documents. `permissions-registry.test.ts`
+drives the real routes at and below each declared `member` floor, so the declaration cannot drift
+away from behaviour in either direction.
 
 ---
 
@@ -122,11 +158,16 @@ vice-versa.
 `canEditAgent` self-gate, §3, because it is identity-axis, not workspace-action.)
 
 **Naming: two distinct "member management" concepts.** Do not collapse:
-- `manage_workspace_agents` — a **human role** governance op (§1.1): owner/admin adds/removes an agent
-  *as a workspace member*. Gated by `canGovernWorkspace(..., 'admin')`. NOT an agent capability.
+- `manage_workspace_agents` — a **human role** governance op (§1.1): adds/removes an agent *as a
+  workspace member*. Gated by `canGovernWorkspace(..., 'member')` as the floor, then graded by target
+  **and by verb** (#task:1683): **add** requires `canEnrollAgent` (the agent's creator) with no role
+  OR-arm — no `owner`/`admin` enrolls someone else's agent; **remove** is `admin` OR `canEnrollAgent`,
+  so an admin can clean up the whole roster. Ownership and role never substitute for each other in
+  either direction. NOT an agent capability.
 - `manage_conversation_members` — an **agent capability** (this table): an agent adds an *already-
   workspace-member* participant into a specific channel/thread (the `agentAddConversationMember`
-  route). Gated by `canAgentUseCapability`.
+  route). Gated by `canAgentUseCapability`. An agent principal can never auto-provision a workspace
+  membership, so a non-workspace target is `workspace_membership_required` for it.
 These use different helpers on different axes; sharing a name (`manage_members`) would invite wiring
 `canGovernWorkspace` where a capability check belongs, or vice-versa.
 
@@ -275,7 +316,8 @@ declarative registries:
   'none-justified', scope }`. `'none-justified'` requires an inline reason (telemetry / agent-self
   profile).
 - **Human-governance registry** — every public route that mutates workspace/membership/conversation
-  governance → `{ minRole, roleScope: 'workspace' | 'conversation' }`.
+  governance → `{ minRole, roleScope: 'workspace' | 'conversation' }`, where `minRole` is the route
+  **floor** and any per-target escalation is stated in the entry's `note` (§1.3).
   `roleScope: 'workspace'` reads the workspace role (archive/delete, human-member add,
   human-member role/remove, admin grant);
   `roleScope: 'conversation'` reads the effective conversation role (conversation member add). Must
@@ -292,14 +334,29 @@ capability registry, and **every** governance-mutating public route appears in t
 registry, each with a non-empty declaration. A new route with no entry → fail. This is the gate that
 stops regression back to a god-gate on either axis.
 
+**Coverage is not truthfulness.** Listing a route proves only that someone declared it; it says
+nothing about the declared value still matching the gate — and a registry that advertises itself as
+the authority SSOT while stating the opposite of the live gate is worse than no registry, because
+reviewers read it instead of the code (found by Cindy on #task:1683, where three composite routes had
+drifted to a `member` floor while still declaring `admin`). So every `member`-floor declaration is
+additionally **probed against the real route**: driven once at the floor with the target class the
+floor admits (must not be 403) and once from below the floor (must be 403), with the probe set
+asserted equal to the declared set so a new member-floor entry cannot skip its probe.
+
 ### 5.3 Cross-axis orthogonality test (the orthogonality proof)
 
 The matrix plus explicit "one axis doesn't move the other":
 
-1. workspace owner, not agent creator → mutate workspace/members; **cannot** edit agent profile.
-2. agent creator who is an **ordinary workspace member** (not admin/owner) → edit agent; **cannot**
-   archive/delete/rename workspace, manage members, or edit capabilities (those are admin+ per §1.1).
-3. plain member → view/post (subject to membership); no destructive/admin; no agent edit.
+1. workspace owner, not agent creator → mutate workspace/members; **cannot** edit agent profile, and
+   **cannot** enroll someone else's agent — while it CAN remove one from the roster. The role governs
+   the roster; ownership governs enrollment (#task:1683, verb-asymmetric on purpose).
+2. agent creator who is an **ordinary workspace member** (not admin/owner) → edit agent, and place /
+   retract THAT agent on the workspace roster and in channels they belong to; **cannot**
+   archive/delete/rename workspace, add humans, touch someone else's agents, or edit capabilities
+   (those are admin+ per §1.1).
+3. plain member → view/post (subject to membership); no destructive/admin; no agent edit. Owning an
+   agent grants no roster write in a conversation they are not a member of — the conversation floor is
+   membership, and no factor substitutes for it.
 4. agent-capability change → agent gains/loses that capability; **workspace role unchanged**.
    workspace-role change → governance changes; **agent capabilities unchanged**.
 
