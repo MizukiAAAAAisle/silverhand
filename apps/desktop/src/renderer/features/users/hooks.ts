@@ -4,7 +4,12 @@ import { apiPaths, type UsersResponse, type UserDto } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import type { UserNameResolver } from '@/lib/current-user';
 
-const usersKey = ['users'] as const;
+/** Query key of the global human directory. Exported so a mutation that
+ *  changes a human's profile (`features/me/hooks.ts`) can invalidate the
+ *  directory copy of it — `UserDto.display_name` / `avatar_url` are
+ *  denormalized into this list, so writing only `['me']` leaves every
+ *  directory-backed surface showing the old name or avatar. */
+export const usersKey = ['users'] as const;
 const STALE_MS = 30 * 1000;
 const GC_MS = 5 * 60 * 1000;
 

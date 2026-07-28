@@ -300,13 +300,14 @@ export async function startBackend(
     conversations: new ConversationRepo(db),
   });
 
+  const events = new ScopeEventBus(undefined, logger);
   const userService = new UserService({
     db,
     users: new UserRepo(db),
     blobStorage,
+    events,
   });
 
-  const events = new ScopeEventBus(undefined, logger);
   const agentService = new AgentService({
     agents: new AgentRepo(db),
     blobStorage,

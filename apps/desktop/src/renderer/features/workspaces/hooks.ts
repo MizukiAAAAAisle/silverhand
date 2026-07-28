@@ -77,6 +77,14 @@ export const workspaceArchivedChannelsQueryKey = archivedChannelsKey;
 const archivedChannelsIndexKey = (workspaceId: string | null, since: number | null) =>
   ['archived-channels', { workspaceId, since }] as const;
 const membersKey = (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const;
+/** Matcher for "any workspace's member list", for the one caller that has no
+ *  workspace id: the identity-carrier registry reseats every cached roster on a
+ *  profile write (`features/identity/identity-carrier-caches.ts`). A plain
+ *  `['workspaces']` prefix would also drop the channel / archive lists, which
+ *  carry no identity snapshot. */
+export function isWorkspaceMembersQueryKey(key: readonly unknown[]): boolean {
+  return key.length === 3 && key[0] === 'workspaces' && key[2] === 'members';
+}
 const capabilitiesKey = (workspaceId: string, agentId: string) =>
   ['workspaces', workspaceId, 'agents', agentId, 'capabilities'] as const;
 

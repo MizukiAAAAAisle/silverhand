@@ -37,6 +37,13 @@ export function useToggleReaction() {
 export const messageReactorsKey = (messageId: string) =>
   ['message-reactions', messageId] as const;
 
+/** Prefix of every message's reactor-detail key. Exported for the one thing a
+ *  per-message key can't express: a profile write changes the denormalized
+ *  `ReactionReactorDto.display_name` in EVERY cached reactor list, and the
+ *  identity-carrier registry has no message id in hand
+ *  (`features/identity/identity-carrier-caches.ts`). */
+export const messageReactorsKeyPrefix = ['message-reactions'] as const;
+
 /**
  * Lazy reactor detail for the hover tooltip ("who reacted"). Fetched only
  * while a chip is hovered (`enabled`) and kept OFF the message-window DTO

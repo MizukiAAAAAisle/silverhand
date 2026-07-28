@@ -117,7 +117,7 @@ import {
   persistDesktopSessionToken,
 } from './desktop-session-storage.js';
 import {
-  extractViewerUserFromProfileMutation,
+  extractViewerUserFromProxyResponse,
 } from './profile-session-sync.js';
 import {
   decideBackendBootMode,
@@ -765,11 +765,18 @@ async function reportPendingLayoutMigrationFailuresOnce(
   }
 }
 
-function updateCachedUserSessionFromProfileMutation(
+/**
+ * Reseat the cached session user from any proxied response that carries an
+ * authoritative viewer DTO — local profile writes and fresh `GET /api/me`
+ * reads alike. `auth:getState`'s `user` is a session snapshot, not the
+ * profile authority, so this is what keeps it from going stale after an
+ * edit made on this machine OR on another one (#task:1702).
+ */
+function reseatCachedUserSessionFromProxy(
   request: { path: string; method?: string },
   response: BackendProxyResponse,
 ): void {
-  const user = extractViewerUserFromProfileMutation(request, response);
+  const user = extractViewerUserFromProxyResponse(request, response);
   if (!user) return;
   if (userSessionUser && userSessionUser.id !== user.id) {
     logger?.warn(
@@ -779,7 +786,7 @@ function updateCachedUserSessionFromProfileMutation(
         path: request.path,
         method: request.method ?? 'GET',
       },
-      'profile mutation returned a different user; keeping cached auth session user',
+      'viewer profile response returned a different user; keeping cached auth session user',
     );
     return;
   }
@@ -1918,7 +1925,7 @@ async function proxyBackendRequest(
     await clearUserSessionAfterUnauthorized('backend request');
   }
   const response = await marshalBackendResponse(res, input.responseType ?? 'text');
-  updateCachedUserSessionFromProfileMutation(
+  reseatCachedUserSessionFromProxy(
     { path: input.path, method: input.method },
     response,
   );
@@ -1971,7 +1978,7 @@ async function proxyBackendUpload(
     await clearUserSessionAfterUnauthorized('backend upload');
   }
   const response = await marshalBackendResponse(res, 'text');
-  updateCachedUserSessionFromProfileMutation(
+  reseatCachedUserSessionFromProxy(
     { path: input.path, method: 'POST' },
     response,
   );

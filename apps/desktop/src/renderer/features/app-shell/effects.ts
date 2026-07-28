@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useViewerWorkspacesSync } from '@/features/workspaces/hooks';
 import { usePresenceSync } from '@/features/presence/hooks';
 import { useAgentSync } from '@/features/agents/agent-sync';
+import { useUserSync } from '@/features/users/user-sync';
 import { useHostConnectionSync } from '@/features/hosts/host-connection-sync';
 import { useConversationIngestor } from '@/features/realtime/conversation-ingestor';
 import { useViewerUnreadIngestor } from '@/features/realtime/viewer-unread-ingestor';
@@ -31,6 +32,12 @@ export function useAppShellGlobalSync(): void {
   // global `agent_changed` event invalidates the ['agents'] query tree
   // regardless of who made the edit. See #task:1178.
   useAgentSync();
+  // Same contract for the other actor kind: the global `user_changed` event
+  // reseats every cache that carries a human's display name / avatar, and the
+  // viewer's own record additionally gets a fresh `GET /api/me`. This is the
+  // only notice a client gets when a profile is edited on ANOTHER machine.
+  // See #task:1702 / #task:1706.
+  useUserSync();
   // Keep owner-scoped host availability/list/detail caches live on daemon
   // attach/detach and WS replay gaps. The event is an invalidation signal; the
   // authoritative state is still `/api/hosts/:id/status`.

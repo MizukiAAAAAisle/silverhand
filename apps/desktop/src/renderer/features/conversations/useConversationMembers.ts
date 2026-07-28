@@ -79,6 +79,13 @@ const MEMBERS_STALE_MS = 30 * 1000;
 const conversationMembersKey = (id: string) =>
   ['conversation-members', id] as const;
 
+/** Prefix of every conversation's roster key. Exported for the one thing a
+ *  per-conversation key can't express: a profile write that changes a human's
+ *  denormalized identity (`display_name` / `avatar_url`, which the backend
+ *  re-derives from the users table on every read) has to reseat EVERY roster
+ *  this session has cached, not just the visible channel's (#task:1701). */
+export const CONVERSATION_MEMBERS_KEY_PREFIX = ['conversation-members'] as const;
+
 /**
  * Pure mapping from a React Query result into the renderer-facing
  * 4-state shape. Mirrors `mapConversationByIdResult` so the UI never

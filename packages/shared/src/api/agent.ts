@@ -215,13 +215,28 @@ export type UpdateProfileInput = z.infer<typeof UpdateProfileInputSchema>;
 
 /**
  * `agent_changed` — WS event on the **`app`** scope, published by the
- * backend whenever an agent's stored `AgentDto` changes through ANY write
- * path: human `PATCH /api/agents/:id`, human avatar upload/delete, or the
- * agent's own `silverhand profile update` (display_name / description /
- * avatar). Clients invalidate the
- * `['agents']` query prefix (covering the list, the `['agents', id]`
- * detail, and the avatar object-url, which re-fetches on its own because
- * the refetched DTO carries a bumped `avatar_url` `?v=` cache-buster).
+ * backend when an agent's stored `AgentDto` is UPDATED: human
+ * `PATCH /api/agents/:id`, human avatar upload/delete, the agent's own
+ * `silverhand profile update` (display_name / description / avatar), and a
+ * completed runtime transition. Those are the only callers of
+ * `AgentService.publishChanged`, which is the sole publisher.
+ *
+ * Agent CREATION (`createAgentWithHome` in `routes.ts`) writes a stored
+ * `AgentDto` but publishes nothing, so a new agent is not announced to
+ * other clients until they remount. `user_changed` has the same
+ * updates-only producer boundary; whether creation should reuse the two
+ * events is open — see #task:1707. This states today's producers, not a
+ * claim that the gap is intentional.
+ *
+ * Clients treat it as an invalidation signal and reseat every cache that
+ * denormalizes an agent's identity — the agent-kind entries of the
+ * renderer's carrier registry (`features/identity/identity-carrier-caches`),
+ * which is `['agents']` plus DM favorites and the host status / resources
+ * trees, and the both-kind entries shared with `user_changed` (rosters,
+ * workspace members, Activity, reaction detail, the task trees). #task:1704
+ * replaced the earlier `['agents']`-prefix-only consumer. Avatars converge
+ * on their own because a refetched DTO carries a bumped `avatar_url` `?v=`
+ * cache-buster.
  *
  * Payload is intentionally minimal — just the id, no private data — so it
  * is safe on the global `app` scope (mirrors `user_presence`). The backend

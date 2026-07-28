@@ -132,3 +132,48 @@ export const UploadAvatarResponseSchema = z.object({
   avatar_url: z.string(),
 });
 export type UploadAvatarResponse = z.infer<typeof UploadAvatarResponseSchema>;
+
+/**
+ * `user_changed` — WS event on the **`app`** scope, the human counterpart
+ * of `agent_changed` (same shape, same scope, same "id only" payload), so
+ * the two isomorphic actors propagate a profile edit the same way.
+ *
+ * Coverage is the PROFILE write paths, and only those: `PATCH /api/me`
+ * (display_name) and avatar upload / clear, i.e. every `UserService`
+ * method that mutates a stored `UserDto` after the row exists. `name` is
+ * immutable after registration, so it never triggers this.
+ *
+ * Publisher coverage is therefore updates only: user CREATION
+ * (`/auth/signup`, embedded bootstrap, `UserService.register`) writes a
+ * stored `UserDto` but publishes nothing, so a human who appears on one
+ * machine is not announced to the others until that client remounts.
+ * `agent_changed` has the same updates-only producer boundary. Whether
+ * creation should reuse these two events is open — see #task:1707. This is
+ * a description of today's producers, not a claim that the gap is
+ * intentional; on the consumer side the renderer's subject-kind carrier
+ * registry already routes "the directory grew" and "an entry changed"
+ * through one invalidation path.
+ *
+ * Clients treat it as an INVALIDATION SIGNAL ONLY and re-read the existing
+ * authorities — the global human directory (`GET /api/users`), the
+ * conversation rosters that denormalize `display_name` / `avatar_url`, and
+ * `GET /api/me` when `user_id` is the viewer's own id. The payload is never
+ * a second copy of the profile: it carries no profile fields at all, so
+ * there is nothing for a client to patch from. A refetched DTO carries the
+ * bumped `avatar_url` `?v=<updated_at>` cache-buster, which is what makes
+ * an avatar REPLACEMENT (same URL path, new bytes) converge.
+ *
+ * Scope safety: `app` reaches every authenticated viewer, which is exactly
+ * the audience of the reads it invalidates — `GET /api/users` returns the
+ * full human directory to any registered viewer and any viewer may fetch
+ * any user's avatar (no hidden-profile concept in V1). Publishing a bare
+ * user id there discloses nothing the directory does not already list.
+ * That equality is the whole justification: if the human directory ever
+ * becomes workspace-scoped or profile visibility becomes graded, this
+ * publish turns over-broad and must narrow to the workspace / viewer
+ * scopes at the same time.
+ */
+export const UserChangedEventSchema = z.object({
+  user_id: z.string(),
+});
+export type UserChangedEvent = z.infer<typeof UserChangedEventSchema>;

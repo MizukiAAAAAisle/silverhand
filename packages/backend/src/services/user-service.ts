@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import type { UserRow } from '@silverhand/shared';
 import { apiPaths, validateAvatarFile } from '@silverhand/shared';
 import type { BlobFileStorage } from '../storage/blob-file-storage.js';
+import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import type { UserRepo } from '../repos/user-repo.js';
 
 /**
@@ -32,6 +33,7 @@ export interface UserServiceOptions {
   db: Db;
   users: UserRepo;
   blobStorage: BlobFileStorage;
+  events: ScopeEventBus;
 }
 
 export interface UploadAvatarInput {
@@ -44,11 +46,33 @@ export class UserService {
   private readonly db: Db;
   private readonly users: UserRepo;
   private readonly blobStorage: BlobFileStorage;
+  private readonly events: ScopeEventBus;
 
   constructor(opts: UserServiceOptions) {
     this.db = opts.db;
     this.users = opts.users;
     this.blobStorage = opts.blobStorage;
+    this.events = opts.events;
+  }
+
+  /**
+   * The single seam that broadcasts a user-DTO change to all clients —
+   * the mirror image of `AgentService.publishChanged`, because human and
+   * agent are isomorphic actors and their profile edits must propagate
+   * through the same mechanism. Every profile write path in this service
+   * funnels through here, so no route hand-copies a publish.
+   *
+   * `app` scope + minimal `{user_id}` payload: no profile data on the wire
+   * (the client re-reads the authority), and the audience equals the
+   * audience of the ungated human directory it invalidates. Contract and
+   * its falsifier live on `UserChangedEventSchema` in @silverhand/shared.
+   *
+   * Called only after a write has actually changed the row: a no-op
+   * update (same display_name) or a clear on a user with no avatar
+   * publishes nothing, and a rejected write throws before reaching here.
+   */
+  private publishChanged(id: string): void {
+    this.events.publishToScope('app', 'user_changed', { user_id: id });
   }
 
   /** Read the row + resolved avatar URL. The renderer never reaches
@@ -189,6 +213,9 @@ export class UserService {
    * `display_name` — the user's `name` is set once at registration and
    * is not editable through any service / route surface.
    *
+   * Publishes one `user_changed` when the row actually changed; a patch
+   * that resolves to no field change returns the existing DTO silently.
+   *
    * Throws `invalid_input` on whitespace-only `display_name`, and
    * `user_not_found` (404) when the row no longer exists.
    */
@@ -220,6 +247,7 @@ export class UserService {
         `user ${id} does not exist`,
       );
     }
+    this.publishChanged(id);
     return rowToDto(updated);
   }
 
@@ -288,11 +316,12 @@ export class UserService {
         });
     }
 
+    this.publishChanged(id);
     return rowToDto(updated);
   }
 
   /** Remove the avatar (DB + blob). Idempotent — calling on a user
-   *  that has no avatar is a no-op. */
+   *  that has no avatar is a no-op (and publishes nothing). */
   async clearAvatar(id: string): Promise<UserDto> {
     const existing = this.users.get(id);
     if (!existing) {
@@ -309,6 +338,7 @@ export class UserService {
     void this.blobStorage
       .delete({ storage: this.blobStorage.kind, storageKey: previousKey })
       .catch(() => {});
+    this.publishChanged(id);
     return rowToDto(updated);
   }
 

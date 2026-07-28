@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { AgentChangedEventSchema, type ServerFrame } from '@silverhand/shared';
+import { invalidateIdentityCarrierCaches } from '@/features/identity/identity-carrier-caches';
 import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
 
 /**
- * What an incoming WS frame means for the `['agents']` query cache:
+ * What an incoming WS frame means for the agent-identity caches:
  *  - `invalidate` — either an app-scope `agent_changed` event (valid
  *    payload) OR an app-scope `snapshot_required` (the server told us this
  *    scope's increments are discontinuous: epoch mismatch / replay gap).
@@ -49,22 +50,24 @@ export function decideAgentSyncAction(frame: ServerFrame): AgentSyncAction | nul
 }
 
 /**
- * Subscribe to the global `app` scope and invalidate the agent query tree
- * whenever the backend publishes `agent_changed` (or a `snapshot_required`
- * recovery — see {@link decideAgentSyncAction}). **Mount ONCE in the app
- * shell** (next to {@link usePresenceSync}) — it must outlive any single
- * view so an agent edited from anywhere (this client's UI, another window,
- * or an agent's own `silverhand profile update`) refreshes everywhere.
+ * Subscribe to the global `app` scope and reseat every cache that carries an
+ * agent's identity whenever the backend publishes `agent_changed` (or a
+ * `snapshot_required` recovery — see {@link decideAgentSyncAction}). **Mount
+ * ONCE in the app shell** (next to {@link usePresenceSync}) — it must outlive
+ * any single view so an agent edited from anywhere (this client's UI, another
+ * window, or an agent's own `silverhand profile update`) refreshes everywhere.
  *
- * One prefix invalidation of `['agents']` covers all three concerns:
- *  - the global list (`['agents']`) — name / runtime / avatar columns;
- *  - the per-agent detail subtree (`['agents', id, ...]`);
- *  - the avatar itself, for free — the object-url effect keys on
- *    `avatar_url`, which carries the `?v=updated_at` cache-buster
- *    (avatar-hooks.ts), so a refetched DTO yields a new URL → new blob.
+ * The `['agents']` prefix covers the directory and every per-agent subtree —
+ * avatars included, since the object-url effect keys on the `?v=updated_at`
+ * cache-buster (avatar-hooks.ts). But the backend also denormalizes
+ * `display_name` / `avatar_url` into read models keyed by conversation,
+ * workspace, host and message, which no prefix derived from `agent_id` can
+ * reach; those live in the shared identity-carrier registry and are reseated
+ * here under the `agent` subject kind. #task:1702's user-profile consumer calls
+ * the same seam with `human`, so neither axis refetches the other's caches.
  *
- * Inactive queries are only marked stale (no refetch until mounted), so
- * the broad prefix is cheap. Renderer mutation `onSuccess` keeps its local
+ * Inactive queries are only marked stale (no refetch until mounted), so the
+ * broad prefixes are cheap. Renderer mutation `onSuccess` keeps its local
  * fast-path but is no longer the sole propagation mechanism.
  *
  * Note: a combined edit (text + avatar in one request) publishes two
@@ -77,7 +80,7 @@ export function useAgentSync(): void {
     const sub = subscribeWsScope('app');
     const unsub = onWsFrame(frame => {
       if (!decideAgentSyncAction(frame)) return;
-      void qc.invalidateQueries({ queryKey: ['agents'] });
+      invalidateIdentityCarrierCaches(qc, 'agent');
     });
     return () => {
       sub.unsubscribe();

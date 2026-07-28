@@ -405,6 +405,9 @@ export const SearchResultDtoSchema = z.discriminatedUnion('type', [
     workspace: SearchWorkspaceRefSchema,
     conversation: SearchConversationRefSchema,
     message: MessageDtoSchema,
+    /** The author agent's immutable `@handle` (`agents.name`), or `null` for
+     *  user messages — same field as `SavedMessageDto.agent_name`, same
+     *  reason it needs no identity invalidation (#task:1705). */
     agent_name: z.string().nullable(),
   }),
 ]);
@@ -436,7 +439,14 @@ export const SavedMessageDtoSchema = z.object({
   conversation_id: z.string(),
   conversation_title: z.string(),
   channel_id: z.string(),
-  /** Display name of the message author at save time. `null` for user messages. */
+  /**
+   * The author agent's immutable `@handle` (`agents.name`), or `null` for
+   * user messages. NOT a display-name snapshot: `name` is decided at agent
+   * creation and never editable, so a later profile rename does not change
+   * this value and there is no "historical vs current name" question to
+   * settle. It is therefore exempt from live identity invalidation — the
+   * mutable carriers are `display_name` / `avatar_url` (#task:1705).
+   */
   agent_name: z.string().nullable(),
   saved_at: z.number(),
 });

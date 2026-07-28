@@ -52,6 +52,12 @@ export const backendInfoKey = ['backend-info'] as const;
  *  the whole host list. */
 export const hostStatusKey = (hostId: string) =>
   ['host-status', hostId] as const;
+/** Prefixes of the two per-host caches that embed agent identity
+ *  (`AgentOnHostDto.display_name` / `HostAgentResource.display_name`).
+ *  Exported for the identity-carrier registry, which reseats every cached
+ *  computer's copy on an `agent_changed` and has no host id in hand
+ *  (`features/identity/identity-carrier-caches.ts`). */
+export const hostStatusKeyPrefix = ['host-status'] as const;
 export const hostProxyConfigKey = (hostId: string) =>
   ['host-proxy-config', hostId] as const;
 /** #task:1618 — per-computer PERSISTENT-OWNERSHIP query key (`/resources`).
@@ -62,6 +68,8 @@ export const hostProxyConfigKey = (hostId: string) =>
  *  creation leave the availability cache untouched (wrong). */
 export const hostResourcesKey = (hostId: string) =>
   ['host-resources', hostId] as const;
+/** @see hostStatusKeyPrefix */
+export const hostResourcesKeyPrefix = ['host-resources'] as const;
 /** Per-host runtime-detection catalog query key. Each computer's installed
  *  runtimes are host-local truth (the daemon resolves them on that machine),
  *  so the catalog is cached per host and never shared across computers. */

@@ -209,7 +209,9 @@ export function ChannelMembersDialog({
         .filter((m): m is Extract<MemberDto, { kind: 'human' }> => m.kind === 'human')
         // Prefer the member DTO's denormalized avatar; fall back to the users
         // directory the same way the header strip does, so one human is never
-        // a letter here and a photo there.
+        // a placeholder here and a photo there. Both caches are invalidated on
+        // a profile write (#task:1701) — either one going stale would resurrect
+        // a removed avatar.
         .map(m => ({
           id: m.user_id,
           avatar_url: m.avatar_url ?? usersById.get(m.user_id)?.avatar_url ?? null,

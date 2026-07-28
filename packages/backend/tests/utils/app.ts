@@ -1034,12 +1034,13 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     attachments: new AttachmentRepo(db),
     conversations: new ConversationRepo(db),
   });
+  const events = new ScopeEventBus();
   const userService = new UserService({
     db,
     users: new UserRepo(db),
     blobStorage,
+    events,
   });
-  const events = new ScopeEventBus();
   const agentService = new AgentService({
     agents: new AgentRepo(db),
     blobStorage,

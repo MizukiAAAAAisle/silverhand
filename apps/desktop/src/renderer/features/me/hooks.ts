@@ -23,6 +23,8 @@ import {
   getAvatarBlobUrl,
   loadAvatarBlobUrl,
 } from '@/lib/avatar-blob-cache';
+import { CONVERSATION_MEMBERS_KEY_PREFIX } from '@/features/conversations/useConversationMembers';
+import { usersKey } from '@/features/users/hooks';
 
 /**
  * Multi-human audit 2026-06-03 #task:857 P0.7 (review-fold by Cindy
@@ -101,9 +103,66 @@ export interface BackendUnreachable {
 
 export type ViewerState = UserDto | SetupRequired | BackendUnreachable;
 
-function cacheViewer(qc: QueryClient, dto: UserDto): void {
+/**
+ * Seat a fresh viewer dto everywhere the renderer keeps a copy of it.
+ *
+ * `['me']` is the viewer's own record, but it is NOT the only cache that
+ * carries the viewer's `display_name` / `avatar_url`: the backend denormalizes
+ * both into the global user directory (`['users']`) and into every
+ * conversation roster (`['conversation-members', id]`, derived from the users
+ * table on each read — see `membership-service.listMembers`). Writing only
+ * `['me']` is what made a removed avatar linger in the channel members modal
+ * and the header member strip: their DTOs still carried the old
+ * `${path}?v=${updated_at}` url, and the session avatar-blob cache happily
+ * served the bytes for it (#task:1701, shiki dogfood).
+ *
+ * Invalidate rather than patch: the identity fields are derived server-side
+ * (the `?v=` cache-buster is a function of `updated_at`), so re-reading is the
+ * only way to stay honest — hand-patching cached rosters would fork that
+ * derivation into the renderer. Both keys are cheap directory reads and the
+ * rosters not currently mounted just refetch on next mount.
+ *
+ * Exported for `viewer-identity-cache.test.ts`: "a viewer profile write
+ * reseats every denormalized copy" is the contract every mutation below
+ * delegates here for, so the test pins it once at the shared seam instead of
+ * per-mutation.
+ */
+export function cacheViewer(qc: QueryClient, dto: UserDto): void {
   setCurrentUserId(dto.id, dto.display_name);
   qc.setQueryData(meKey, dto);
+  void qc.invalidateQueries({ queryKey: usersKey });
+  void qc.invalidateQueries({ queryKey: CONVERSATION_MEMBERS_KEY_PREFIX });
+}
+
+/**
+ * Re-read the viewer's own record from the BACKEND and reseat every copy of it.
+ *
+ * The one identity cache that {@link invalidateIdentityCarrierCaches} cannot
+ * converge: `['me']` is IPC-backed (`getAuthState()`), and main answers from the
+ * in-memory session snapshot it took when the token was validated — so
+ * invalidating the key just replays the same stale dto. Only a real
+ * `GET /api/me` is authoritative, and going through the backend proxy reseats
+ * main's snapshot on the way through (`main/profile-session-sync.ts`), which is
+ * what keeps the NEXT `auth:getState` honest too.
+ *
+ * Local profile writes already reseat both sides via {@link cacheViewer} +
+ * that proxy arm (#task:1701). This exists for the remote case: another machine
+ * edited this viewer's profile and the `user_changed` frame is the only notice
+ * this client gets (#task:1702).
+ *
+ * A failed re-read is deliberately silent — the previous snapshot stays, and
+ * the next signal (or a remount) retries. Losing a name refresh is not worth
+ * surfacing an error over a background sync.
+ */
+export async function reseatViewerFromBackend(qc: QueryClient): Promise<void> {
+  try {
+    const body = await api<MeResponse>(apiPaths.me);
+    if (isRegistrationRequired(body)) return;
+    setCurrentUserId(body.id, body.display_name);
+    qc.setQueryData(meKey, body);
+  } catch {
+    // Offline / server down / token rejected — leave the cached viewer alone.
+  }
 }
 
 /** Type guard for the setup-required auth state. */
