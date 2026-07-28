@@ -33,6 +33,11 @@ interface UserAvatarProps {
  * even without an uploaded image. When the user has uploaded an
  * avatar (resolved object URL passed in), we render those bytes
  * full-bleed inside the same square silhouette as agent avatars.
+ *
+ * Both branches carry `data-avatar-ground` (painted in global.css), so
+ * the fallback occupies the same visible square as an uploaded image
+ * instead of reading as a floating glyph — an agent fallback is always a
+ * filled square (its runtime tint), and a person's must be too.
  */
 export function UserAvatar({
   size = AVATAR_PX_DEFAULT,
@@ -44,8 +49,9 @@ export function UserAvatar({
   if (avatarObjectUrl) {
     return (
       <span
+        data-avatar-ground
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden bg-bg-muted rounded-none align-middle',
+          'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
           className,
         )}
         style={{ width: size, height: size }}
@@ -61,11 +67,15 @@ export function UserAvatar({
     );
   }
 
-  const inner = Math.round(size * 0.55);
+  // Same `size × 0.6` glyph ratio as AgentAvatar's runtime marks, so a
+  // human fallback and an agent fallback carry the same visual mass in a
+  // mixed list.
+  const inner = Math.round(size * 0.6);
   return (
     <span
+      data-avatar-ground
       className={cn(
-        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none bg-bg-elevated text-text-muted align-middle',
+        'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none text-text-muted align-middle',
         className,
       )}
       style={{ width: size, height: size }}

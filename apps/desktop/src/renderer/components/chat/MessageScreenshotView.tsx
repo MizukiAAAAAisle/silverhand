@@ -326,7 +326,8 @@ function ScreenshotAvatar({
     if (isViewer && viewerAvatarObjectUrl) {
       return (
         <span
-          className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated"
+          data-avatar-ground
+          className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar"
           aria-hidden
         >
           {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
@@ -341,7 +342,8 @@ function ScreenshotAvatar({
     }
     return (
       <span
-        className="inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted"
+        data-avatar-ground
+        className="inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
         aria-hidden
       >
         <User className="size-4" />
@@ -361,7 +363,8 @@ function ScreenshotAvatar({
   }
   return (
     <span
-      className="inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted"
+      data-avatar-ground
+      className="inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
       aria-hidden
     >
       <User className="size-4" />

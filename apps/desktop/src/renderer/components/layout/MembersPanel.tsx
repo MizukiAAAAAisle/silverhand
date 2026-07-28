@@ -19,6 +19,7 @@ import { useUsers } from '@/features/users/hooks';
 import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { Button } from '@/components/ui/button';
 import { CURRENT_USER_SUBTITLE } from '@/lib/current-user';
@@ -241,9 +242,11 @@ export function MembersPanel({
  * `html { font-size: 14px }` (global.css), so Tailwind's `size-4`
  * (`1rem`) would compute to 14px, not 16px. AgentAvatar uses an inline
  * `style={{ width: size, height: size }}` for the same reason — literal
- * pixels are theme- and root-font-size-independent. Mirror that here,
- * including the inline-flex wrapper structure so AGENTS / HUMANS rows
- * are pixel-identical regardless of avatar fallback.
+ * pixels are theme- and root-font-size-independent. `UserAvatar` takes
+ * the same px `size`, which is why this row can just use it (#task:1699;
+ * the local copy this replaced had drifted onto `bg-bg-row-hover`, a
+ * class `@theme` never generated, so the fallback square had no ground
+ * at all).
  */
 function HumanRowIcon({
   avatarObjectUrl,
@@ -253,18 +256,6 @@ function HumanRowIcon({
   alt: string;
 }): JSX.Element {
   return (
-    <span
-      className="inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none bg-bg-row-hover"
-      style={{ width: 16, height: 16 }}
-    >
-      {avatarObjectUrl ? (
-        <img src={avatarObjectUrl} alt={alt} className="h-full w-full object-cover" />
-      ) : (
-        // Inner glyph at 10px (≈ 16 × 0.6) — same `size × 0.6` ratio as
-        // AgentAvatar's runtime icons, so the visual mass and baseline
-        // match across AGENTS / HUMANS rows.
-        <User style={{ width: 10, height: 10 }} />
-      )}
-    </span>
+    <UserAvatar size={AVATAR_PX.xs} avatarObjectUrl={avatarObjectUrl} alt={alt} />
   );
 }

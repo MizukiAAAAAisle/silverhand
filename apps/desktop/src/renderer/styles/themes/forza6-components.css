@@ -391,14 +391,16 @@
    shiki pared this back in four passes (2026-07-27: the white ground, then
    the hover ground, then the hover border, then the resting border). What
    survives is the minimum that makes it a block: a square of
-   `--bg-elevated`, square because the JSX takes `--control-radius: 0` here.
-   The reasoning behind each cut, in case someone is tempted to add a layer
-   back:
-     - ground is `--bg-elevated`, not `--bg-floating`: white on the header's
-       `--bg-chat` is barely a block at all, and elevated is what a member
-       chip's ground actually reads as here (the agent chip's white is hidden
-       under its avatar image; the human fallback and the `+N` chip both sit
-       on elevated), so the row shares one visible ground.
+   `--bg-avatar-ground`, square because the JSX takes `--control-radius: 0`
+   here. The reasoning behind each cut, in case someone is tempted to add a
+   layer back:
+     - ground is the strip's avatar ground, not `--bg-floating`: white on the
+       header's `--bg-chat` is barely a block at all, and the neighbouring
+       member chips are exactly this fill (the agent chip's white is hidden
+       under its avatar image; the human fallback and the `+N` chip both take
+       `--bg-avatar-ground`, global.css #task:1699), so the row shares one
+       visible ground. It used to spell that ground `--bg-elevated`, which was
+       the same colour until the avatar squares moved to an ink wash.
      - no border: this `+` is a utility affordance sitting next to identity
        chips. The fill already separates it from the header; a hairline on top
        is a second chrome layer buying nothing, and a bordered box competes
@@ -416,10 +418,10 @@
    Focus is untouched and stays the JSX's `focus-visible:ring-2` — with no
    resting border, that ring is the only focus signal this control has. */
 [data-theme='forza6'] [data-member-chip='add'] {
-  background-color: var(--bg-elevated);
+  background-color: var(--bg-avatar-ground);
 }
 [data-theme='forza6'] [data-member-chip='add']:hover:not(:disabled) {
-  background-color: var(--bg-elevated);
+  background-color: var(--bg-avatar-ground);
 }
 
 /* ── #v5.3 — Display caps on chrome titles ──────────────────────────

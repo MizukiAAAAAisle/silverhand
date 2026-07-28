@@ -134,7 +134,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
                 ariaLabel={hasAvatar ? 'Change avatar' : 'Add avatar'}
                 className="border border-border-subtle"
               >
-                <span className="grid size-full place-items-center bg-bg-row-hover">
+                <span data-avatar-ground className="grid size-full place-items-center">
                   {avatarObjectUrl ? (
                     // eslint-disable-next-line jsx-a11y/img-redundant-alt
                     <img
@@ -168,7 +168,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
               ) : null}
             </div>
           ) : (
-            <span className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle bg-bg-row-hover">
+            <span data-avatar-ground className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle">
               {avatarObjectUrl ? (
                 // eslint-disable-next-line jsx-a11y/img-redundant-alt
                 <img

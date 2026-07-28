@@ -1131,6 +1131,38 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-radius: var(--control-radius);
 }
 
+/* ── Avatar ground (#task:1699) ───────────────────────────────────────
+   Every avatar square — uploaded image or fallback glyph/initial — sits on
+   this one fill, so a person without an uploaded image still reads as the
+   same regular square as their neighbours (shiki 2026-07-28: the bare
+   fallback glyph "缺少了这种规则形状").
+
+   Why an ink wash and not a `--bg-*` container token: the avatar lands on
+   every ground in the app — sidebar carriers, chat, white popovers, dialogs,
+   and inside the chat header's member chips, which forza6 deliberately
+   grounds on `--bg-elevated` itself. Any fixed surface token is therefore
+   invisible somewhere (the old `--bg-elevated` fill vanished on forza6's
+   pale-lime sidebars; the `bg-bg-row-hover` / `bg-bg-muted` classes some
+   call sites carried were never generated at all — neither token is mapped
+   in `@theme inline` above). A translucent ink is one step off WHATEVER is
+   behind it, and it follows the theme automatically: `--text-primary` is
+   near-black in the light themes and near-white in slack-dark, and
+   forza6-components re-declares it inside its dark regions, so the wash
+   inverts there without a per-surface rule.
+
+   Utility-neutral on purpose: this is the container, not the identity —
+   the person's identity is the image (or, later, their initial). A theme
+   that wants its own avatar ground (forza6 could go for its ink-bordered
+   sticker frame) redeclares `--bg-avatar-ground` in its own file; the token
+   is also what the neighbouring `+` / `+N` chips consume, so a strip mixing
+   avatars and affordances keeps ONE visible ground. */
+:root {
+  --bg-avatar-ground: color-mix(in oklab, var(--text-primary) 12%, transparent);
+}
+[data-avatar-ground] {
+  background-color: var(--bg-avatar-ground);
+}
+
 /* Kanban column drop target (#task:784). The drag-over wash can't be a
    Tailwind utility on the column: forza6-components.css gives
    `[data-tasks-column]` a (0,2,0) background/border that outweighs any

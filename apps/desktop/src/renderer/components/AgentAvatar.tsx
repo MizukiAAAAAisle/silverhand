@@ -81,8 +81,9 @@ export function AgentAvatar({
   if (avatarObjectUrl) {
     return (
       <span
+        data-avatar-ground
         className={cn(
-          'inline-flex shrink-0 items-center justify-center overflow-hidden bg-bg-muted rounded-none align-middle',
+          'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle',
           className,
         )}
         style={{ width: size, height: size }}

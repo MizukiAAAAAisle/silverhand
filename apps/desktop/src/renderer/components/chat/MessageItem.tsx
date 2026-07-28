@@ -540,7 +540,7 @@ export function MessageItem({
                 renderReplierAvatar(r, 14, `${r.kind}:${r.id}`),
               )}
               {enrichedReply.replier_total > enrichedReply.repliers.length ? (
-                <span className="flex size-[14px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
+                <span data-avatar-ground className="flex size-[14px] shrink-0 items-center justify-center rounded-none text-[9px] font-medium text-text-muted">
                   +{enrichedReply.replier_total - enrichedReply.repliers.length}
                 </span>
               ) : null}
@@ -921,7 +921,8 @@ function Avatar({
               event.preventDefault();
               onNavigateHuman(human.id);
             }}
-            className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+            data-avatar-ground
+            className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
           >
             {humanAvatarObjectUrl ? (
               /* eslint-disable-next-line jsx-a11y/img-redundant-alt */
@@ -942,7 +943,8 @@ function Avatar({
     // span carries both the size and the mt-0.5 offset directly.
     return (
       <span
-        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted"
+        data-avatar-ground
+        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
         aria-hidden
       >
         <User className="size-4" />
@@ -979,7 +981,8 @@ function Avatar({
   }
   return (
     <span
-      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar bg-bg-elevated text-text-muted"
+      data-avatar-ground
+      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
       aria-hidden
     >
       <User className="size-4" />

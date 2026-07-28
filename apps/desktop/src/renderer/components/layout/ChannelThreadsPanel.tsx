@@ -227,7 +227,7 @@ function ThreadRow({
                   </span>
                 ))}
                 {overflow > 0 ? (
-                  <span className="flex size-[18px] shrink-0 items-center justify-center rounded-none bg-bg-muted text-[9px] font-medium text-text-muted">
+                  <span data-avatar-ground className="flex size-[18px] shrink-0 items-center justify-center rounded-none text-[9px] font-medium text-text-muted">
                     +{overflow}
                   </span>
                 ) : null}

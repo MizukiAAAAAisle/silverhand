@@ -145,7 +145,7 @@ export function HumanInfoPopover({
         >
           <div className="flex items-start gap-3">
             {avatarObjectUrl ? (
-              <span className="inline-block size-9 shrink-0 overflow-hidden rounded-none bg-bg-elevated">
+              <span data-avatar-ground className="inline-block size-9 shrink-0 overflow-hidden rounded-none">
                 {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
                 <img
                   src={avatarObjectUrl}
@@ -155,7 +155,8 @@ export function HumanInfoPopover({
               </span>
             ) : (
               <span
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-sm font-medium text-text-muted"
+                data-avatar-ground
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-none text-sm font-medium text-text-muted"
                 aria-hidden
               >
                 {label.length > 0 ? initial : <UserIcon className="size-4" />}
