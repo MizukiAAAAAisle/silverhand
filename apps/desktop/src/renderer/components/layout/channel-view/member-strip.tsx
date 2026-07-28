@@ -6,6 +6,7 @@ import type {
   MemberDto,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
+import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
@@ -166,9 +167,9 @@ export function MemberStrip({
 /**
  * Human chip — same footprint as the agent chip (24px square). Renders
  * the human's actual avatar when the parent has resolved one and falls back to
- * the display-name initial when no avatar is available yet. Hover popover
- * mirrors `HumanMention`'s content so inline `@handle` mentions and header
- * chips read the same.
+ * `UserAvatar`'s neutral person square when no avatar is available yet. Hover
+ * popover mirrors `HumanMention`'s content so inline `@handle` mentions and
+ * header chips read the same.
  */
 function HumanMemberChip({
   human,
@@ -177,8 +178,6 @@ function HumanMemberChip({
   human: HumanMemberDto;
   avatarObjectUrl: string | null;
 }): JSX.Element {
-  const label = human.display_name?.trim() || human.name;
-  const initial = label.charAt(0).toUpperCase();
   const presence = usePresenceById().get(human.user_id);
   const dot = presenceDotStatus(presence?.presence);
   return (
@@ -203,7 +202,7 @@ function HumanMemberChip({
         // img already fills the box exactly via object-cover, so nothing needs
         // clipping. Mirrors the agent chip above.
         data-avatar-ground
-        className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle p-0 text-xs font-medium text-text-muted transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+        className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle p-0 transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
       >
         {avatarObjectUrl ? (
           // eslint-disable-next-line jsx-a11y/img-redundant-alt
@@ -214,7 +213,13 @@ function HumanMemberChip({
             draggable={false}
           />
         ) : (
-          <span aria-hidden>{initial}</span>
+          // Neutral person glyph, never the display-name initial: a letter is a
+          // second identity system next to the images and glyphs every other
+          // avatar in the app uses, and it is not even identifying — everyone
+          // whose name starts with the same letter gets the same chip
+          // (#task:1700). `UserAvatar` owns the recipe (ground + glyph ratio),
+          // so the fallback here can't drift from the members list.
+          <UserAvatar size={AVATAR_PX.sm} />
         )}
         <span
           className={

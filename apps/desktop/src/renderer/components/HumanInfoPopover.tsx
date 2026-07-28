@@ -121,7 +121,6 @@ export function HumanInfoPopover({
       : {};
 
   const label = human.display_name?.trim() || human.name;
-  const initial = label.charAt(0).toUpperCase();
 
   return (
     <Popover.Root {...rootProps}>
@@ -154,12 +153,16 @@ export function HumanInfoPopover({
                 />
               </span>
             ) : (
+              // Same neutral square as the chip that opens this card — no
+              // display-name initial (#task:1700): a letter identifies nobody
+              // and reads as a different avatar system from the uploaded
+              // images next to it.
               <span
                 data-avatar-ground
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-none text-sm font-medium text-text-muted"
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-none text-text-muted"
                 aria-hidden
               >
-                {label.length > 0 ? initial : <UserIcon className="size-4" />}
+                <UserIcon className="size-5" />
               </span>
             )}
             <div className="min-w-0 flex-1">
