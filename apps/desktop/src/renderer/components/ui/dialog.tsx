@@ -15,9 +15,39 @@ export const DialogPortal = DialogPrimitive.Portal;
  *  `absolute` slot and the inter-button gap. In forza6 the shared
  *  `data-sticker-close` / peer markers turn this into the poster-sticker skin
  *  via the per-theme component CSS. A consumer's twin carries its OWN marker so
- *  the theme rule reaches it too. */
+ *  the theme rule reaches it too.
+ *
+ *  Rest / hover is a COLOUR step (`--text-muted` → `--text-primary`), not an
+ *  opacity step: `opacity-70` on top of an already-muted ink dilutes the same
+ *  glyph twice, and a 16px multi-stroke glyph at 70% reads as smudged rather
+ *  than as quiet (shiki 2026-07-28 on the members modal's stop/restart:
+ *  "看着糊"). forza6 had to cancel it with `opacity: 1` to keep its sticker
+ *  stamp legible, which is the same finding from the other side. `opacity` is
+ *  left to `disabled:` alone, where fading the WHOLE control is the point. */
 export const dialogCornerButtonClass =
-  'cursor-pointer rounded-[var(--control-radius)] p-1 text-text-muted opacity-70 transition-opacity hover:bg-bg-hover hover:opacity-100 focus:outline-none';
+  'cursor-pointer rounded-[var(--control-radius)] p-1 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus:outline-none';
+
+/**
+ * A corner-cluster action — the close ✕'s twin. Use this instead of hand-rolling
+ * `dialogCornerButtonClass`: the button carries the `data-dialog-corner-action`
+ * theme marker itself, so a peer can no longer ship as a flat ghost next to a
+ * bold poster sticker (shiki 2026-07-28 on the members modal's stop/restart
+ * pair — the marker was the one thing a consumer had to remember, and didn't).
+ * The consumer still owns behaviour and glyph; identity comes from the theme.
+ */
+export const DialogCornerButton = forwardRef<
+  HTMLButtonElement,
+  ComponentPropsWithoutRef<'button'>
+>(({ className, ...props }, ref) => (
+  <button
+    ref={ref}
+    type="button"
+    data-dialog-corner-action
+    className={cn(dialogCornerButtonClass, className)}
+    {...props}
+  />
+));
+DialogCornerButton.displayName = 'DialogCornerButton';
 
 export const DialogOverlay = forwardRef<
   ElementRef<typeof DialogPrimitive.Overlay>,
@@ -43,8 +73,17 @@ export const DialogContent = forwardRef<
      *  peers of the close; the cluster owns position and the inter-button gap,
      *  so a consumer never guesses `right-*` or per-theme box sizes. */
     cornerActions?: React.ReactNode;
+    /** Vertical band the corner cluster sits on.
+     *  - `title` (default): centred on the FIRST LINE of a default-padded
+     *    (`p-6`) `DialogHeader`, so the cluster reads as part of the title row
+     *    instead of floating 12px above it (shiki 2026-07-28: 标题和右边的按钮
+     *    不居中). The band is a fixed 24px with `items-center`, so per-theme box
+     *    growth (forza6's bordered stickers) stays centred on that same line.
+     *  - `top`: hugs the content's top-right corner — for a dialog that owns its
+     *    own padding (`p-0`) and whose first band is not a `p-6` title line. */
+    cornerBand?: 'title' | 'top';
   }
->(({ className, children, cornerActions, ...props }, ref) => (
+>(({ className, children, cornerActions, cornerBand = 'title', ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
@@ -59,10 +98,17 @@ export const DialogContent = forwardRef<
     >
       {children}
       {/* Top-right corner action cluster: optional peer actions, then the close
-          ✕. `items-center` co-aligns glyphs regardless of per-theme box size
-          (forza6 borders the stickers → taller boxes), and `gap-1.5` spaces
-          them — so twins never need pixel/right-* math per theme. */}
-      <div className="absolute right-3 top-3 flex items-center gap-1.5">
+          ✕. A fixed 24px band + `items-center` co-aligns glyphs regardless of
+          per-theme box size (forza6 borders the stickers → taller boxes, which
+          now overflow the band symmetrically instead of pushing their centres
+          down), and `gap-1.5` spaces them — so twins never need pixel/right-*
+          math per theme. */}
+      <div
+        className={cn(
+          'absolute right-3 flex h-6 items-center gap-1.5',
+          cornerBand === 'title' ? 'top-6' : 'top-3',
+        )}
+      >
         {cornerActions}
         <DialogPrimitive.Close data-sticker-close className={dialogCornerButtonClass}>
           <X className="size-4" />

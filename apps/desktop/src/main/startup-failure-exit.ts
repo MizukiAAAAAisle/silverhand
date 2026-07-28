@@ -140,10 +140,18 @@ export function renderStartupFailureDocument(
         }
       }
       * { box-sizing: border-box; }
+      /* Text smoothing is restated here on purpose: this window is a document
+         of its own (a data: URL), so it inherits nothing from the renderer's
+         global.css, and without it the very first window a user ever sees
+         renders its type differently from every window after it (shiki
+         2026-07-28). On body, not on a universal selector — the pair is an
+         inherited property, so every descendant picks it up from here. */
       body {
         margin: 0;
         padding: 20px 22px 18px;
         font: 13px/1.5 -apple-system, BlinkMacSystemFont, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
         color: var(--fg);
         background: var(--bg);
         display: flex;

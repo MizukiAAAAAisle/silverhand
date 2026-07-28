@@ -1258,6 +1258,95 @@ describe('GET /api/workspaces/:id/channels (active vs archived split)', () => {
     const body = await res.json() as any;
     expect(body).toEqual({ channels: [] });
   });
+
+  /**
+   * The archived list carries the SAME viewer-scoped `is_member` the active list
+   * does (#task:1691). Before this, membership existed only inside the query's
+   * filter, so a consumer of the two tables had to remember that one of them
+   * "happens to be membership-filtered" — and a test could satisfy the contract
+   * with a row shape the route never produces.
+   *
+   * `seedAllFixtureMemberships: false` because the permissive fixture triggers
+   * would make the viewer a member of everything, which is exactly the fact
+   * under test.
+   */
+  it('archived list carries a per-viewer is_member, and a non-member row is ABSENT rather than false', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const OWNER = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const wsId = ((await (await http(t).post(
+      '/api/workspaces',
+      { name: 'archived-carrier', member_agent_ids: [] },
+      { headers: OWNER },
+    )).json()) as any).workspace.id as string;
+    expect(
+      (await http(t).post(
+        `/api/workspaces/${wsId}/members`,
+        { kind: 'human', user_id: 'local' },
+        { headers: OWNER },
+      )).status,
+    ).toBe(201);
+
+    const makeChannel = async (title: string, memberUserIds: string[]) =>
+      ((await (await http(t!).post(
+        `/api/workspaces/${wsId}/channels`,
+        {
+          title,
+          member_agent_ids: [],
+          member_user_ids: memberUserIds,
+          visibility: 'private',
+        },
+        { headers: OWNER },
+      )).json()) as any).channel.id as string;
+    // `mine` has the viewer; `theirs` is a private channel they are not in.
+    const mine = await makeChannel('mine', ['local']);
+    const theirs = await makeChannel('theirs', []);
+    for (const id of [mine, theirs]) {
+      expect(
+        (await http(t).patch(`/api/channels/${id}/archive`, { archived: true }, { headers: OWNER }))
+          .status,
+      ).toBe(200);
+    }
+
+    // The viewer (`local`, the default identity of `http(t)`).
+    const body = await (
+      await http(t).get(`/api/workspaces/${wsId}/channels/archived`)
+    ).json() as any;
+    expect(body.channels.map((c: any) => c.id)).toEqual([mine]);
+    // The carrier is present and true — not `undefined`, which a consumer must
+    // treat as "unknown", and not `false`, which would claim the viewer can see
+    // a channel they are not in.
+    expect(body.channels.map((c: any) => c.is_member)).toEqual([true]);
+
+    // The owner sees BOTH of their own archived channels, each carrying the
+    // fact computed for THEM: the field is per-viewer, not per-row-global.
+    const asOwner = await (
+      await http(t).get(`/api/workspaces/${wsId}/channels/archived`, { headers: OWNER })
+    ).json() as any;
+    expect(asOwner.channels.map((c: any) => c.id).sort()).toEqual([mine, theirs].sort());
+    expect(asOwner.channels.every((c: any) => c.is_member === true)).toBe(true);
+  });
+
+  it('archived DM list carries is_member too (the endpoint has one shape for both workspace kinds)', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const dmChannelId = new ConversationRepo(t.ctx.db).listDmChannels()[0]?.id as string;
+    expect(dmChannelId).toBeTruthy();
+    expect(
+      (await http(t).patch(`/api/channels/${dmChannelId}/archive`, { archived: true })).status,
+    ).toBe(200);
+
+    const home = ((await (await http(t).get('/api/workspaces')).json()) as any).workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === aliceId,
+    );
+    const body = await (
+      await http(t).get(`/api/workspaces/${home.id}/channels/archived`)
+    ).json() as any;
+    expect(body.channels.map((c: any) => [c.id, c.kind, c.is_member])).toEqual([
+      [dmChannelId, 'dm_channel', true],
+    ]);
+  });
 });
 
 describe('GET /api/archived-channels (cross-workspace aggregate)', () => {

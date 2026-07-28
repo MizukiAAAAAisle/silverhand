@@ -352,13 +352,22 @@ export function createConversationReadApp(
    * GET /api/conversations/:id/ref
    *
    * Identity + routing metadata for any conversation (channel /
-   * dm_channel / thread) by id. Designed to back cross-workspace
+   * dm_channel) by id. Designed to back cross-workspace
    * secondary-pane resolution and the `#conv:<id>` sigil renderer (PR-3).
    *
-   * Permission: `canViewConversation` — strict conversation membership.
-   * The route is user-facing only (no `/internal` twin), so agent
-   * principals never reach it. Do NOT generalise to agents without a
-   * dedicated ACL helper.
+   * Permission: `canReadConversation` — the SAME public-aware read gate as
+   * channel detail + message history, deliberately not the stricter
+   * `canViewConversation`. A ref is the identity of a conversation the
+   * caller may already read: gating it more narrowly than the read it
+   * serves made every `#conv:` chip and `?side` pane answer
+   * "unauthorized" for an active public channel whose full history the
+   * main pane happily renders. Net widening is exactly "active + public +
+   * same workspace + not a channel member" — private, ARCHIVED public,
+   * non-workspace and non-participant `dm_channel` all stay 403 (see
+   * `isPublicChannelBranch`). The route is user-facing only (no
+   * `/internal` twin), so agent principals never reach it — and the
+   * public branch is user-only anyway. Do NOT generalise to agents
+   * without a dedicated ACL helper.
    *
    * Response intentionally excludes messages and per-user unread
    * state — those go through the existing window/cursor endpoints.
@@ -370,7 +379,7 @@ export function createConversationReadApp(
     if (!id) return c.json({ error: 'conversation id required' }, 400);
     const conversation = conversations.get(id);
     if (!conversation) return c.json({ error: 'conversation not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), conversation.id)) {
+    if (!canReadConversation(ctx, getUserPrincipal(c), conversation.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const workspace = workspaces.get(conversation.workspace_id);

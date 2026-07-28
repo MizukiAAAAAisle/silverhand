@@ -193,6 +193,12 @@ function ConversationPopoverBody({
  * resolve. Visible state is "decided" — `isContentReady=true` — so
  * the user gets a clear "unavailable" message instead of a forever-
  * skeleton. Cindy review of commit 3.
+ *
+ * The `unauthorized` line names no LEVEL. A 403 from `/ref` is not evidence of
+ * a missing workspace, and once the gate is public-aware (#task:1692) most of
+ * what remains is same-workspace: a private channel, an archived public one, a
+ * DM the viewer isn't in. Telling a workspace member they lack workspace access
+ * is a false statement about the one thing they can check.
  */
 function UnresolvedConversationPopoverBody({
   id,
@@ -203,7 +209,7 @@ function UnresolvedConversationPopoverBody({
 }): JSX.Element {
   const message =
     reason === 'unauthorized'
-      ? "You don't have access to this conversation in its workspace."
+      ? "You don't have access to this conversation."
       : reason === 'not_found'
         ? 'Conversation not found — it may have been deleted.'
         : 'Conversation metadata not available.';

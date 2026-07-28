@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import {
   useQuery,
   useQueryClient,
@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-query';
 import {
   apiPaths,
+  type ConversationMembersReadResponse,
   type ConversationMembersResponse,
   type MemberDto,
 } from '@silverhand/shared';
@@ -24,6 +25,52 @@ export interface ConversationMembersResult {
   status: ConversationMembersStatus;
   /** Present iff `status === 'resolved'`. Empty array is a valid resolution. */
   members: MemberDto[];
+}
+
+/** What {@link useConversationMembers} returns: the roster plus this viewer's
+ *  per-member removability. The roster shape stays its own type because the
+ *  4-state mapping is roster-only — removability rides the READ envelope and is
+ *  never derived from an error state. */
+export interface ConversationMembersView extends ConversationMembersResult {
+  removability: MemberRemovability;
+}
+
+/** This viewer's per-member removability, keyed by {@link memberDtoKey}
+ *  (`kind:primary_key`). Absent key ⇒ NOT removable: the carrier is advisory
+ *  display data (the DELETE routes stay authoritative), so it fail-closes and a
+ *  surface that hides the action can never invent one. */
+export type MemberRemovability = ReadonlyMap<string, boolean>;
+
+const NO_REMOVABILITY: MemberRemovability = new Map();
+
+/** Identity of a member across the two arrays of the members envelope:
+ *  `members` (MemberDto) and `member_removability` (kind + primary key). Look
+ *  removability up by this key, NEVER by index — an optimistically filtered
+ *  `members` cache holds a shorter array than its carrier (#task:1688). */
+export function memberDtoKey(member: MemberDto): string {
+  return member.kind === 'agent'
+    ? `agent:${member.agent_id}`
+    : `human:${member.user_id}`;
+}
+
+export function canRemoveMember(
+  removability: MemberRemovability,
+  member: MemberDto,
+): boolean {
+  return removability.get(memberDtoKey(member)) === true;
+}
+
+function buildRemovability(
+  data: ConversationMembersReadResponse | undefined,
+): MemberRemovability {
+  // A response without the carrier (older backend) resolves to an empty map →
+  // every row fail-closes to "not removable".
+  if (!data?.member_removability) return NO_REMOVABILITY;
+  const m = new Map<string, boolean>();
+  for (const entry of data.member_removability) {
+    m.set(`${entry.kind}:${entry.id}`, entry.can_remove);
+  }
+  return m;
 }
 
 const MEMBERS_GC_MS = 5 * 60 * 1000;
@@ -87,15 +134,15 @@ export function mapConversationMembersResult(
  */
 export function useConversationMembers(
   id: string | null,
-): ConversationMembersResult {
+): ConversationMembersView {
   const qc = useQueryClient();
-  const query = useQuery<ConversationMembersResponse, Error>({
+  const query = useQuery<ConversationMembersReadResponse, Error>({
     queryKey: id ? conversationMembersKey(id) : ['conversation-members', 'none'],
     enabled: !!id,
     staleTime: MEMBERS_STALE_MS,
     gcTime: MEMBERS_GC_MS,
     queryFn: () =>
-      api<ConversationMembersResponse>(apiPaths.conversationMembers(id!)),
+      api<ConversationMembersReadResponse>(apiPaths.conversationMembers(id!)),
     // Don't auto-retry 403/404 — terminal for this hook.
     retry: (failureCount, err) => {
       if (err instanceof ApiError) {
@@ -130,5 +177,14 @@ export function useConversationMembers(
     };
   }, [id, qc]);
 
-  return mapConversationMembersResult(id, query);
+  const roster = mapConversationMembersResult(id, query);
+  // Memoized on the cached response so the map identity is stable across
+  // renders (consumers key memos off it).
+  const removability = useMemo(() => buildRemovability(query.data), [query.data]);
+  return {
+    ...roster,
+    // Only a resolved roster carries removability; an errored/loading read
+    // fail-closes every row.
+    removability: roster.status === 'resolved' ? removability : NO_REMOVABILITY,
+  };
 }

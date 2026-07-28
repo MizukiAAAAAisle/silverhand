@@ -33,6 +33,12 @@ export class EventWsConnection {
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
   private readonly subscriptions = new Map<string, () => void>();
+  /**
+   * Last observed delivery-authorization verdict per subscribed scope, so
+   * {@link authorizedForDelivery} logs each transition once instead of once per
+   * frame. Absent = "assumed allowed" (the subscribe gate just passed).
+   */
+  private readonly deliveryAuthorized = new Map<string, boolean>();
   private viewerUserId: string;
   private pingTimer: NodeJS.Timeout | null = null;
   private pongTimer: NodeJS.Timeout | null = null;
@@ -117,6 +123,7 @@ export class EventWsConnection {
 
     if (!this.subscriptions.has(scope.scope)) {
       const unsubscribe = this.ctx.events.subscribeScope(scope.scope, event => {
+        if (!this.authorizedForDelivery(scope)) return;
         this.send(scopedEventToFrame(event));
       });
       this.subscriptions.set(scope.scope, unsubscribe);
@@ -150,6 +157,7 @@ export class EventWsConnection {
     if (!unsubscribe) return;
     unsubscribe();
     this.subscriptions.delete(scope.scope);
+    this.deliveryAuthorized.delete(scope.scope);
     this.ctx.logger.info(
       {
         category: 'event_ws.unsubscribe',
@@ -276,6 +284,54 @@ export class EventWsConnection {
     return scope;
   }
 
+  /**
+   * Re-decide, for THIS frame, whether the viewer may still receive this scope
+   * (#task:1690).
+   *
+   * Authorization is a current fact about the viewer and the resource; a
+   * subscription is only the client's declared interest. Collapsing the two —
+   * "allowed at subscribe time" as a credential the connection keeps — meant a
+   * viewer who lost access (removed from a channel by someone else, a channel
+   * flipped private, a workspace membership revoked) kept receiving live frames
+   * until they happened to reconnect, i.e. the perimeter depended on client
+   * good will. So every delivery re-runs the SAME `canSubscribeScope` the
+   * subscribe/resume paths run — one policy, not a second copy that can drift,
+   * and the existing per-scope semantics carry over unchanged (a public channel's
+   * content stream survives losing membership because `canReadConversation`
+   * still passes; its member-only side plane does not).
+   *
+   * Deliberately NOT a revoke: the subscription entry stays, so regaining access
+   * resumes delivery on the next frame with no client round-trip. The cost is a
+   * predicate evaluation per frame per subscription (a handful of indexed reads,
+   * against a JSON serialize + socket write we are already paying); the benefit
+   * is that no future mutation has to remember to revoke anything — omission
+   * fails closed here, whereas a revoke list fails open.
+   *
+   * A withheld frame is silent by design: `seq` continues to advance on the bus,
+   * so a client that regains access and resumes gets `snapshot_required` /
+   * replay through the normal recovery path rather than a bespoke signal.
+   * Transitions are logged once each way, not per frame.
+   */
+  private authorizedForDelivery(scope: ParsedWsScope): boolean {
+    const allowed = canSubscribeScope(this.ctx, this.viewerUserId, scope);
+    if (allowed !== (this.deliveryAuthorized.get(scope.scope) ?? true)) {
+      this.deliveryAuthorized.set(scope.scope, allowed);
+      this.ctx.logger.info(
+        {
+          category: 'event_ws.delivery_authorization_changed',
+          viewerUserId: this.viewerUserId,
+          scope: scope.scope,
+          conversationId: conversationIdFromScope(scope.scope),
+          allowed,
+        },
+        allowed
+          ? 'event ws delivery re-authorized'
+          : 'event ws delivery withheld: viewer no longer allowed to subscribe',
+      );
+    }
+    return allowed;
+  }
+
   private resolveKnownScope(rawScope: unknown): ParsedWsScope | null {
     if (typeof rawScope !== 'string') {
       this.sendError('invalid_frame', 'scope must be a string');
@@ -352,6 +408,7 @@ export class EventWsConnection {
       unsubscribe();
     }
     this.subscriptions.clear();
+    this.deliveryAuthorized.clear();
   }
 
   private clearPongTimer(): void {

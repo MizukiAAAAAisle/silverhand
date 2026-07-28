@@ -160,28 +160,50 @@ export class ConversationRepo {
     });
   }
 
-  listArchivedChannelsForWorkspace(
+  /** Archived regular channels for a workspace, as per-viewer list items
+   *  (`WorkspaceChannelListItem`, `kind='channel'`) — the archived twin of
+   *  {@link listActiveChannelsForViewer}, so BOTH tables a user's sidebar reads
+   *  carry the same authoritative `is_member` and a consumer never has to
+   *  remember that "this one happens to be membership-filtered" (#task:1691).
+   *
+   *  Unlike the active projection there is no discovery union here: an archived
+   *  channel is frozen, so the set is exactly the viewer's memberships and
+   *  `is_member` is `true` on every row today. That is precisely why the carrier
+   *  is COMPUTED and then filtered ON — one `EXISTS`, written once, is both the
+   *  set's definition and the row's fact. Widening the set later (say, archived
+   *  public channels become browsable) drops the outer filter and immediately
+   *  yields real `is_member: false` rows, instead of leaving a constant `true`
+   *  that silently starts lying.
+   *
+   *  `viewerUserId` is REQUIRED: membership is a per-viewer fact, so there is no
+   *  viewer-less form (the archived-channels route reads a `getUserPrincipal`,
+   *  which throws for a non-user, and agents list channels through the internal
+   *  agent route). */
+  listArchivedChannelsForViewer(
     workspaceId: string,
-    opts: { forUserId?: string } = {},
-  ): ChannelConversationDto[] {
-    const args: Array<string> = [workspaceId];
-    let userJoin = '';
-    if (opts.forUserId !== undefined) {
-      userJoin = `AND EXISTS (
-        SELECT 1 FROM conversation_users cu
-         WHERE cu.conversation_id = conversations.id AND cu.user_id = ?
-      )`;
-      args.push(opts.forUserId);
-    }
+    viewerUserId: string,
+  ): WorkspaceChannelListItem[] {
     const rows = this.db
-      .prepare<typeof args, ConversationRow>(
-        `SELECT * FROM conversations
-         WHERE workspace_id = ? AND kind = 'channel' AND archived_at IS NOT NULL
-           ${userJoin}
+      .prepare<[string, string], ConversationRow & { is_member: number }>(
+        `SELECT * FROM (
+           SELECT conversations.*,
+                  EXISTS (
+                    SELECT 1 FROM conversation_users cu
+                     WHERE cu.conversation_id = conversations.id
+                       AND cu.user_id = ?
+                  ) AS is_member
+             FROM conversations
+            WHERE workspace_id = ? AND kind = 'channel'
+              AND archived_at IS NOT NULL
+         )
+         WHERE is_member
          ORDER BY archived_at DESC, created_at ASC`,
       )
-      .all(...args);
-    return rows.map(rowToChannel);
+      .all(viewerUserId, workspaceId);
+    return rows.map(row => {
+      const { is_member, ...conversation } = row;
+      return { ...rowToChannel(conversation), is_member: is_member === 1 };
+    });
   }
 
   /** All `kind='channel'` conversations for a workspace regardless of
@@ -299,7 +321,7 @@ export class ConversationRepo {
   // active list and surface in the DM-scoped Archived view — they are
   // never merged into the regular channel lists. Active/all keep the
   // Onboarding-first ordering; archived sorts most-recently-archived first
-  // (mirrors `listArchivedChannelsForWorkspace`).
+  // (mirrors `listArchivedChannelsForViewer`).
   /** Active (non-archived) DM channels for a workspace, as per-viewer list
    *  items (`WorkspaceChannelListItem`, `kind='dm_channel'`). The DM list is
    *  STRICTLY membership-filtered by `viewerUserId`, so every returned item is
@@ -317,11 +339,24 @@ export class ConversationRepo {
     }).map(dm => ({ ...dm, is_member: true }));
   }
 
-  listArchivedDmChannelsForWorkspace(
+  /** Archived DM channels for a workspace, as per-viewer list items — the
+   *  archived twin of {@link listActiveDmChannelsForViewer} and the DM arm of
+   *  the same archived-channels endpoint, so that endpoint's contract is uniform
+   *  across both workspace kinds (#task:1691).
+   *
+   *  Same reasoning as the active DM projection: the underlying query is
+   *  STRICTLY membership-filtered, so `is_member` is `true` unconditionally. The
+   *  stamp is valid ONLY because this method passes `viewerUserId` as
+   *  `forUserId` — the filter and the stamp are two halves of one statement, and
+   *  a viewer-less call would make the stamp a lie. */
+  listArchivedDmChannelsForViewer(
     workspaceId: string,
-    opts: { forUserId?: string } = {},
-  ): DmChannelDto[] {
-    return this.queryDmChannelsForWorkspace(workspaceId, { ...opts, archived: true });
+    viewerUserId: string,
+  ): WorkspaceChannelListItem[] {
+    return this.queryDmChannelsForWorkspace(workspaceId, {
+      forUserId: viewerUserId,
+      archived: true,
+    }).map(dm => ({ ...dm, is_member: true }));
   }
 
   /** All DM channels regardless of archive state — used where a caller

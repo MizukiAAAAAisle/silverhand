@@ -7,12 +7,27 @@ export const CONTROL_INK_BORDER =
   'border-[length:var(--control-border-width)] border-border-focus';
 
 /**
+ * The transition tuple the control family's hover states need, WITHOUT the
+ * lift. Split out so a surface that must not move (an inline row confirm —
+ * shiki 2026-07-28) drops the motion by not composing it, rather than by
+ * fighting `hover:-translate-y-px` with a second translate utility whose
+ * winner depends on Tailwind's emit order.
+ */
+export const CONTROL_HOVER_TRANSITION =
+  'transition-[color,background-color,border-color,transform]';
+
+/**
  * 1px hover lift motion + the transition tuple it needs. Colour
  * neutralization on hover is a per-variant concern that stays at the
  * consumer edge — this constant does not touch fill or text.
  */
-export const CONTROL_HOVER_LIFT =
-  'transition-[color,background-color,border-color,transform] hover:-translate-y-px';
+export const CONTROL_HOVER_LIFT = `${CONTROL_HOVER_TRANSITION} hover:-translate-y-px`;
+
+/** The hover colour pair of the neutral surface, shared by its lifting and
+ *  still variants: the canonical control-hover tokens, never `--bg-row-hover`
+ *  (forza6 paints that magenta). */
+const CONTROL_SURFACE_HOVER =
+  'hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)]';
 
 /**
  * The neutral framed SURFACE of the poster-control family: token frame, the
@@ -25,7 +40,12 @@ export const CONTROL_HOVER_LIFT =
  * Consumers add layout (`w-full`, `gap-2`) and, when it is a Cancel, the
  * `destructiveCancel()` hook that lets a theme finish the sticker.
  */
-export const CONTROL_SURFACE_BUTTON = `${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)]`;
+export const CONTROL_SURFACE_BUTTON = `${CONTROL_INK_BORDER} ${CONTROL_HOVER_LIFT} ${CONTROL_SURFACE_HOVER}`;
+
+/** {@link CONTROL_SURFACE_BUTTON} without the lift — same frame, same hover
+ *  colours, no motion. For a confirm that sits INSIDE a list row, where a
+ *  button that rises pulls the eye off the row it belongs to. */
+export const CONTROL_SURFACE_BUTTON_STILL = `${CONTROL_INK_BORDER} ${CONTROL_HOVER_TRANSITION} ${CONTROL_SURFACE_HOVER}`;
 
 /**
  * The framed SEARCH FIELD of the member pickers: token geometry, an ink

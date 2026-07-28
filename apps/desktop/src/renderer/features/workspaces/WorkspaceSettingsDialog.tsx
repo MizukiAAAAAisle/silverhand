@@ -25,7 +25,7 @@ type PermissionTab = 'agents' | 'human';
 
 const PERMISSION_TABS: { id: PermissionTab; label: string }[] = [
   { id: 'agents', label: 'Agents' },
-  { id: 'human', label: 'Human' },
+  { id: 'human', label: 'Humans' },
 ];
 
 interface WorkspaceSettingsDialogProps {

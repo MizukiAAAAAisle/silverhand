@@ -93,6 +93,7 @@ import {
 import {
   formatStartAgentError,
   formatRemoveAgentError,
+  formatRemoveHumanError,
 } from '@/features/channels/message-errors';
 
 // ─── Barrel re-exports: preserve the pre-#1292 public import surface ──────────
@@ -1220,6 +1221,55 @@ export function useRemoveAgentFromChannel(channelId: string | null) {
     },
     onError: err => {
       toast.error(formatRemoveAgentError(err));
+    },
+  });
+}
+
+/**
+ * Remove ANOTHER human from this channel (#task:1687 UI / #task:1688 route) —
+ * `DELETE /api/conversations/:id/members/users/:userId`. The third-party
+ * counterpart of self-leave (`POST /channels/:id/leave`), which stays its own
+ * verb with its own gating; this hook is never used for the viewer's own row.
+ *
+ * Permission (workspace admin ∧ the target does not outrank the caller ∧ the
+ * channel's exit guards evaluated for the TARGET) is enforced server-side. The
+ * members modal hides the control per the `member_removability` carrier, so a
+ * rejection here means the carrier went stale — surfaced as a toast, same as the
+ * agent path.
+ */
+export function useRemoveHumanFromChannel(channelId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      if (!channelId) throw new Error('no channel selected');
+      await api(apiPaths.conversationHumanMember(channelId, userId), {
+        method: 'DELETE',
+      });
+    },
+    onSuccess: (_res, userId) => {
+      if (!channelId) return;
+      // Drop the row from the roster cache the modal / member strip read, so the
+      // list settles before the invalidate refetch lands. The stale
+      // `member_removability` entry for the removed user is harmless: lookups
+      // are keyed by `(kind, id)`, never by index.
+      qc.setQueryData<ConversationMembersResponse>(
+        ['conversation-members', channelId],
+        prev =>
+          prev
+            ? {
+                ...prev,
+                members: prev.members.filter(
+                  m => !(m.kind === 'human' && m.user_id === userId),
+                ),
+              }
+            : prev,
+      );
+      void qc.invalidateQueries({
+        queryKey: ['conversation-members', channelId],
+      });
+    },
+    onError: err => {
+      toast.error(formatRemoveHumanError(err));
     },
   });
 }

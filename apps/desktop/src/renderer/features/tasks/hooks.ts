@@ -2,6 +2,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type QueryClient,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import type {
@@ -40,6 +41,61 @@ export const tasksKey = (f: TaskFilter) =>
     f.conversation_id ?? '*',
     f.status ?? 'all',
   ] as const;
+
+/**
+ * Settle every task projection of ONE channel the viewer lost (#task:1689).
+ * Three key families, two shapes:
+ *
+ *   - `['tasks', ws, conv, status]` list variants are PATCHED (rows filtered by
+ *     `channel_id`): `TaskStore.list`'s user arm joins `EXISTS
+ *     conversation_users`, so a refetch returns the list minus those rows — the
+ *     patch reproduces that shape without re-windowing the survivors.
+ *   - `['task-detail', id]` and `['task-by-number', ws, n]` are single-object
+ *     caches for a task the viewer can no longer read; a refetch fails rather
+ *     than returning a trimmed body, so the query is REMOVED, not patched.
+ *
+ * PRESENT-ONLY / idempotent throughout: unloaded or non-matching caches are
+ * untouched, so an unrelated channel loss never disturbs an open task board.
+ */
+export function removeChannelFromTasks(qc: QueryClient, channelId: string): void {
+  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
+    const prev = qc.getQueryData<TaskSummaryDto[]>(q.queryKey);
+    if (!prev) continue;
+    const next = prev.filter(t => t.channel_id !== channelId);
+    if (next.length === prev.length) continue;
+    qc.setQueryData<TaskSummaryDto[]>(q.queryKey, next);
+  }
+  for (const root of [['task-detail'], ['task-by-number']] as const) {
+    for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
+      const data = qc.getQueryData<TaskSummaryDto | TaskDetailDto | null>(q.queryKey);
+      if (!data || data.channel_id !== channelId) continue;
+      qc.removeQueries({ queryKey: q.queryKey, exact: true });
+    }
+  }
+}
+
+/** Which channels of ONE workspace the task caches still hold rows for
+ *  (#task:1689). Read off `workspace_id` + `channel_id` on the row: the global
+ *  task board's variant (`['tasks','*','*',…]`) spans every workspace, so the
+ *  key alone cannot answer it. */
+export function tasksHeldChannelIds(
+  qc: QueryClient,
+  workspaceId: string,
+): string[] {
+  const ids = new Set<string>();
+  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
+    for (const t of qc.getQueryData<TaskSummaryDto[]>(q.queryKey) ?? []) {
+      if (t.workspace_id === workspaceId) ids.add(t.channel_id);
+    }
+  }
+  for (const root of [['task-detail'], ['task-by-number']] as const) {
+    for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
+      const data = qc.getQueryData<TaskSummaryDto | TaskDetailDto | null>(q.queryKey);
+      if (data && data.workspace_id === workspaceId) ids.add(data.channel_id);
+    }
+  }
+  return [...ids];
+}
 
 export interface UseTasksOptions {
   enabled?: boolean;

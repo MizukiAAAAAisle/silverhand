@@ -2,14 +2,14 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
-  apiPaths,
-  type ConversationRef,
   type MarkNotificationsReadInput,
   type NotificationDto,
   type UnreadUpdatedBadgePayload,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
+import { conversationRefQueryOptions } from '@/features/conversations/conversation-ref-query';
+import { recordChannelWorkspace } from '@/features/channels/channel-workspace-index';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 
 const unreadKey = ['notifications', 'unread'] as const;
@@ -369,6 +369,21 @@ export async function resolveNotificationJumpTarget(
   return null;
 }
 
+/**
+ * Resolve a `(workspaceId, conversationId)` pair from a notification into a jump
+ * target.
+ *
+ * SAME-GROUP CONTRACT (#task:1689). The two coordinates MUST come from the same
+ * group of the same DTO: either `(workspace_id, conversation_id)` — the viewer's
+ * own side — or `(source_workspace_id, source_conversation_id)` — the source
+ * side. Backend never crosses them (all three notification insert sites pass the
+ * workspace of the conversation they are inserting for), and this function
+ * records the pair as an immutable channel → workspace binding, so a caller that
+ * mixed one group's workspace with the other's conversation would write a WRONG
+ * identity fact. `null` is skipped, never synthesized: `workspace_id` is nullable
+ * in the DTO, and guessing a workspace is the one thing the attribution index
+ * must never do.
+ */
 async function resolveTargetFromConversationId(
   qc: ReturnType<typeof useQueryClient>,
   workspaceId: string | null,
@@ -376,6 +391,12 @@ async function resolveTargetFromConversationId(
   messageId: string,
   threadRootId: string | null,
 ): Promise<MessageJumpTarget> {
+  // Attribution write-through: the notification itself is a carrier — it states
+  // the workspace of the conversation it points at. Recording here (not only in
+  // the ref fetcher below) is what closes the reply-cluster branch, which
+  // returns without ever fetching a ref while still navigating the viewer into a
+  // channel whose caches the removal contract has to be able to attribute.
+  if (workspaceId) recordChannelWorkspace(conversationId, workspaceId);
   // New reply-cluster: the notification already carries the cluster root,
   // and `conversation_id` is the parent channel (cluster replies live in
   // the channel). Anchor straight to the message — no ref fetch, and never
@@ -388,14 +409,12 @@ async function resolveTargetFromConversationId(
       messageId,
     };
   }
-  // Cached against the same key `useConversationById` uses, so a
-  // recently-resolved cross-workspace `?side` ref is reused for free.
+  // THE shared conversation-ref read point — same key and same fetcher as
+  // `useConversationById`, so a recently-resolved cross-workspace `?side` ref is
+  // reused for free AND the attribution write-through happens exactly once,
+  // wherever the fetch originates.
   const data = await qc
-    .fetchQuery<{ ref: ConversationRef }>({
-      queryKey: ['conversation-ref', conversationId],
-      queryFn: () => api<{ ref: ConversationRef }>(apiPaths.conversationRef(conversationId)),
-      staleTime: 30_000,
-    })
+    .fetchQuery(conversationRefQueryOptions(conversationId))
     .catch(() => null);
   if (!data) {
     // Fetch failed — fall back to treating the id as a top-level

@@ -155,6 +155,21 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
     roleScope: 'conversation',
     note: 'user principal: FLOOR = conversation visibility, then admin effective role OR target agent creator via canEditAgent; removes only the conversation_agents edge; a caller without the role learns nothing about unknown agent ids (403, not 404)',
   },
+  // Channel-scoped HUMAN removal (#task:1688) — the third-party counterpart of
+  // the self-leave route. `admin`, unlike the WORKSPACE human-removal route
+  // (`DELETE /api/workspaces/:id/members/users/:userId`, owner-only): grading
+  // follows the data written, and this writes ONE conversation edge (no
+  // workspace_users row, no user row, no role), which is the same day-to-day
+  // channel governance already graded admin. Two guards keep the grade from
+  // becoming a god-gate: the caller must be able to SEE the conversation, and
+  // governance is not transitive upward (an admin cannot remove the owner).
+  {
+    method: 'DELETE',
+    path: '/api/conversations/:id/members/users/:userId',
+    minRole: 'admin',
+    roleScope: 'conversation',
+    note: 'user principal: FLOOR = membership of this conversation (canViewConversation, not a role), then workspace admin AND the target must not outrank the caller (admin removing the owner is 403 target_outranks_actor) AND the target must pass the shared exit guards (archived channel, private-channel owner, last human of a private channel → 409); removing YOURSELF is refused (422 self_target) — POST /api/channels/:id/leave is that verb; a target with no membership row is an idempotent 200',
+  },
 ];
 
 export interface NonGovernanceRouteDecl {
@@ -193,7 +208,7 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
   {
     method: 'POST',
     path: '/api/channels/:id/leave',
-    reason: 'self-leave a channel — member-only self-service (removes only the caller), eligibility guarded by evaluateChannelLeaveEligibility, not workspace governance',
+    reason: 'self-leave a channel — member-only self-service (removes only the caller), eligibility guarded by evaluateChannelMemberExitEligibility (the same predicate third-party removal uses for its target), not workspace governance',
   },
   {
     method: 'PUT',

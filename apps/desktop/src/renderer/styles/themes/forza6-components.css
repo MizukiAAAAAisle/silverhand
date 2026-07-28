@@ -1119,8 +1119,7 @@
    paper body + 2px ink border + 0 radius + hard ink drop shadow that
    grows on the hover lift. The hook paints identity only — each consumer
    keeps its own size / position (`p-1` / `size-6/7/8` / absolute corner).
-   The glyph drops to full ink so it reads as the sticker's stamp, and
-   `opacity:1` overrides the dialog control's resting `opacity-70`. Focus is
+   The glyph drops to full ink so it reads as the sticker's stamp. Focus is
    an `outline` (not box-shadow) so it never collides with the drop
    shadow. Other themes keep the JSX icon-button defaults.
 
@@ -1129,23 +1128,50 @@
    family, and DialogContent seats both in one `items-center` flex corner
    cluster — so spacing/centering come from the cluster, NOT per-theme box math
    (the 2px border grows both boxes symmetrically and `items-center` keeps their
-   glyphs co-linear). No positional override. */
-[data-theme='forza6'] :is([data-sticker-close], [data-task-view-jump]) {
+   glyphs co-linear). No positional override.
+
+   `data-dialog-corner-action` is the GENERIC arm of the same family: the
+   `DialogCornerButton` primitive stamps it on every corner peer, so a new peer
+   inherits the sticker instead of depending on its author remembering a marker
+   (shiki 2026-07-28: the members modal's stop/restart pair carried the shared
+   class but no marker, and read as two flat glyphs beside a bold sticker ✕). */
+[data-theme='forza6']
+  :is([data-sticker-close], [data-task-view-jump], [data-dialog-corner-action]) {
   background-color: var(--bg-floating);
   border: 2px solid var(--forza6-ink);
   border-radius: 0;
   color: var(--forza6-ink);
-  opacity: 1;
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
   transition: transform 150ms var(--ease, ease), box-shadow 150ms ease;
 }
-[data-theme='forza6'] :is([data-sticker-close], [data-task-view-jump]):hover:not(:disabled) {
+[data-theme='forza6']
+  :is(
+    [data-sticker-close],
+    [data-task-view-jump],
+    [data-dialog-corner-action]
+  ):hover:not(:disabled) {
   background-color: var(--bg-floating);
   color: var(--forza6-ink);
   transform: translateY(-1px);
   box-shadow: 2.5px 2.5px 0 var(--forza6-ink);
 }
-[data-theme='forza6'] :is([data-sticker-close], [data-task-view-jump]):focus-visible {
+/* A settling bulk action stays a sticker but reads inert. Stated here as the
+   family's own floor, so a corner peer whose consumer forgot a
+   `disabled:opacity-*` class still can't look live while it is inert. */
+[data-theme='forza6']
+  :is(
+    [data-sticker-close],
+    [data-task-view-jump],
+    [data-dialog-corner-action]
+  ):disabled {
+  opacity: 0.4;
+}
+[data-theme='forza6']
+  :is(
+    [data-sticker-close],
+    [data-task-view-jump],
+    [data-dialog-corner-action]
+  ):focus-visible {
   outline: 2px solid var(--border-focus);
   outline-offset: 2px;
 }

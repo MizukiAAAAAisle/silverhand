@@ -71,6 +71,7 @@
   "POST /api/channels/:id/join",
   "POST /api/channels/:id/leave",
   "DELETE /api/conversations/:id/members/agents/:agentId",
+  "DELETE /api/conversations/:id/members/users/:userId",
   "GET /api/conversations/:id/threads",
   "GET /api/conversations/:id/unread",
   "GET /api/channels/:id/agents",

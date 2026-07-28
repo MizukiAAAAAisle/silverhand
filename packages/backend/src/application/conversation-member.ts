@@ -5,7 +5,7 @@ import {
   type ChannelLikeDto,
   type ConversationKind,
   type ConversationVisibility,
-  type UserDto,
+  type MemberRemovabilityDto,
   type WorkspaceRoleDto,
   systemSubtype,
 } from '@silverhand/shared';
@@ -26,6 +26,9 @@ import {
   canGovernWorkspace,
   canJoinPublicChannel,
   canViewConversation,
+  userWorkspaceRole,
+  workspaceRole,
+  workspaceRoleOutranks,
 } from '../permissions.js';
 import { addWorkspaceAgentMember } from './add-workspace-agent-member.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
@@ -565,36 +568,42 @@ export type LeaveChannelResult =
     };
 
 /**
- * The SINGLE leave-eligibility rule, shared by the {@link leaveChannel} write
- * path (authoritative) and the channel-detail carrier (advisory display). It is
- * a pure predicate over the viewer + channel row — returns `can_leave` plus the
- * stable {@link ChannelLeaveBlockedReason} when blocked. Because both the
- * carrier and the write call THIS, the disabled-Leave hint the modal shows can
- * never disagree with what the POST enforces (advisory ≠ correctness, but same
- * source — docs/architecture-principles.md §12.1#5).
+ * The SINGLE exit-eligibility rule for a human's `conversation_users` edge,
+ * shared by every path that can end that membership: the {@link leaveChannel}
+ * write (authoritative), the channel-detail `can_leave` carrier (advisory
+ * display), and — since #task:1688 — third-party removal
+ * ({@link evaluateChannelHumanMemberRemoval}) plus its per-member carrier.
+ * Evaluated for the TARGET member (`userId`), which for self-leave is the
+ * caller: whether the edge may end does not depend on who asked, so the rule
+ * cannot fork into a "leave" copy and a "remove" copy. It is a pure predicate
+ * over the member + channel row — returns `can_leave` plus the stable
+ * {@link ChannelLeaveBlockedReason} when blocked (advisory ≠ correctness, but
+ * same source — docs/architecture-principles.md §12.1#5).
  *
  * Ordered so the most specific block wins:
- *  1. `not_member` — leave is member-only; a non-member's only channel mutation
- *     is Join (idempotency must not outrank the permission model).
+ *  1. `not_member` — there is no edge to end. For self-leave that is a 403
+ *     (leave is member-only; idempotency must not outrank the permission
+ *     model); for third-party removal the caller maps it to an idempotent
+ *     no-op. The REASON is one fact; what it means for a verb is the caller's.
  *  2. `channel_archived` — v1 freezes archived channels; restore before leaving
  *     (an archived channel is deliberately NOT folded into the public 0-human
  *     exception).
  *  3. `channel_owner` — the workspace OWNER of a PRIVATE channel anchors the
- *     owner-bound governance chain; leaving would make the channel invisible to
- *     them (private + non-member) and sever the chain from the resource even
- *     with other humans present. Authoritative `workspace_users.role='owner'`
- *     (`canGovernWorkspace(..,'owner')`) — the model has NO per-channel creator,
- *     so this never guesses from row order / first member. Public channels are
- *     exempt (owner re-browses + re-joins freely).
- *  4. `last_human_member` — leaving as the last HUMAN of a PRIVATE channel would
- *     strand it (no human, incl. admins, can see or re-join a private channel).
- *     `conversation_users` IS the human-membership table, so its row count is
- *     the human count. Active PUBLIC channels are exempt (0 humans stays
- *     discoverable + joinable).
+ *     owner-bound governance chain; ending that edge would make the channel
+ *     invisible to them (private + non-member) and sever the chain from the
+ *     resource even with other humans present. Authoritative
+ *     `workspace_users.role='owner'` (`userWorkspaceRole`) — the model has NO
+ *     per-channel creator, so this never guesses from row order / first member.
+ *     Public channels are exempt (owner re-browses + re-joins freely).
+ *  4. `last_human_member` — ending the last HUMAN edge of a PRIVATE channel
+ *     would strand it (no human, incl. admins, can see or re-join a private
+ *     channel). `conversation_users` IS the human-membership table, so its row
+ *     count is the human count. Active PUBLIC channels are exempt (0 humans
+ *     stays discoverable + joinable).
  */
-export function evaluateChannelLeaveEligibility(
+export function evaluateChannelMemberExitEligibility(
   deps: { ctx: BackendContext; conversations: ConversationRepo },
-  principal: UserPrincipal,
+  userId: string,
   conversation: {
     id: string;
     kind: ConversationKind;
@@ -606,23 +615,23 @@ export function evaluateChannelLeaveEligibility(
   if (conversation.kind !== 'channel') {
     return { can_leave: false, reason: 'not_member' };
   }
-  if (deps.conversations.getUser(conversation.id, principal.userId) === null) {
+  if (deps.conversations.getUser(conversation.id, userId) === null) {
     return { can_leave: false, reason: 'not_member' };
   }
   if (conversation.archived_at !== null) {
     return { can_leave: false, reason: 'channel_archived' };
   }
   // Owner-bound governance guard (private only): the workspace owner anchors
-  // the governance chain. Leaving a PRIVATE channel would make it invisible to
-  // them (private + non-member = no view / no re-join), severing the chain from
-  // the resource even when other humans remain. Authoritative owner relation
-  // (`workspace_users.role='owner'`) via canGovernWorkspace — never a
+  // the governance chain. Losing membership of a PRIVATE channel would make it
+  // invisible to them (private + non-member = no view / no re-join), severing
+  // the chain from the resource even when other humans remain. Authoritative
+  // owner relation (`workspace_users.role='owner'`) — never a
   // first-member/display-name guess (no per-channel creator is modeled).
   // Checked ABOVE last_human_member so the owner-specific reason wins when both
   // apply. Public channels are exempt (owner can re-browse + re-join).
   if (
     conversation.visibility === 'private'
-    && canGovernWorkspace(deps.ctx, principal, conversation.workspace_id, 'owner')
+    && userWorkspaceRole(deps.ctx, conversation.workspace_id, userId) === 'owner'
   ) {
     return { can_leave: false, reason: 'channel_owner' };
   }
@@ -639,8 +648,8 @@ export function evaluateChannelLeaveEligibility(
  * Self-leave a channel — the symmetric counterpart of {@link joinPublicChannel}.
  * A human member removes THEMSELVES; the route takes no body, so there is no
  * target on the wire to forge. Eligibility runs through the shared
- * {@link evaluateChannelLeaveEligibility} so the block reasons match the
- * detail-carrier hint exactly.
+ * {@link evaluateChannelMemberExitEligibility} (evaluated for the caller, who IS
+ * the target here) so the block reasons match the detail-carrier hint exactly.
  *
  * Teardown deletes ONLY the `conversation_users` edge — the read cursors and
  * attention preference are intentionally KEPT (the seed contract advances the
@@ -655,9 +664,17 @@ export function evaluateChannelLeaveEligibility(
  * `conversation_members_changed` (roster) + `workspace_channels_changed`
  * (discovery/list) — and NO new event type, NO `viewer_workspaces_changed`
  * (workspace membership is unchanged), NO system message (v1 silent, mirroring
- * self-join). The renderer's single viewer-local cleanup handler keys off these
- * to re-derive the leaver's projections and route away if they were viewing a
- * now-invisible private channel.
+ * self-join). Which of the two a viewer still receives after their own edge is
+ * gone differs, and a renderer-side visibility-loss cleanup should key off the
+ * durable one: live delivery obeys the CURRENT `canSubscribeScope`
+ * (#task:1690), so `conversation-side:<id>` stops reaching an ex-member from the
+ * next frame on — including this very `conversation_members_changed`.
+ * `workspace_channels_changed` rides the workspace scope, which membership loss
+ * here does not touch, so it is the signal that still arrives. As of #task:1688
+ * the same loss also reaches a client that did NOT initiate it
+ * (`removeConversationHumanMember`), so a mutation-local `onSuccess` is no longer
+ * the whole story; what the renderer covers is a renderer question, not a claim
+ * this file can make.
  */
 export async function leaveChannel(
   deps: LeaveChannelDeps,
@@ -667,9 +684,9 @@ export async function leaveChannel(
   if (!conversation || conversation.kind !== 'channel') {
     return { ok: false, error: { code: 'channel_not_found' } };
   }
-  const eligibility = evaluateChannelLeaveEligibility(
+  const eligibility = evaluateChannelMemberExitEligibility(
     { ctx: deps.ctx, conversations: deps.conversations },
-    input.principal,
+    input.principal.userId,
     conversation,
   );
   if (!eligibility.can_leave) {
@@ -734,7 +751,11 @@ export function buildChannelDetailResponse(
   principal: UserPrincipal,
   channel: ChannelLikeDto,
 ): ChannelDetailResponse {
-  const leave = evaluateChannelLeaveEligibility({ ctx, conversations }, principal, channel);
+  const leave = evaluateChannelMemberExitEligibility(
+    { ctx, conversations },
+    principal.userId,
+    channel,
+  );
   return {
     channel,
     is_member: conversations.getUser(channel.id, principal.userId) !== null,
@@ -788,6 +809,32 @@ export type RemoveConversationMemberResult =
         | { code: 'candidate_not_found' };
     };
 
+/**
+ * "May this principal remove THAT agent from this channel" — the ownership half
+ * of the agent-removal gate, extracted (#task:1688) so the authoritative write
+ * ({@link removeConversationMember}) and the advisory per-member carrier
+ * ({@link buildConversationMemberRemovability}) read ONE predicate instead of
+ * two copies that could disagree. The conversation-visibility FLOOR
+ * (`canViewConversation`) stays at the call sites: it is a separate factor, and
+ * the write path must evaluate it BEFORE looking the agent up (anti-enumeration
+ * ordering, #957).
+ *
+ * `admin` OR the agent's creator — removal is graded per verb (#task:1683): an
+ * admin governs the roster and must be able to clean it up, while ENROLLMENT has
+ * no admin OR-arm at all.
+ */
+export function mayRemoveConversationAgent(
+  ctx: BackendContext,
+  principal: Principal,
+  workspaceId: string,
+  agentId: string,
+): boolean {
+  return (
+    canGovernWorkspace(ctx, principal, workspaceId, 'admin')
+    || canEditAgent(ctx, principal, agentId)
+  );
+}
+
 export async function removeConversationMember(
   deps: RemoveConversationMemberDeps,
   input: { conversationId: string; agentId: string; principal: Principal },
@@ -821,8 +868,12 @@ export async function removeConversationMember(
     };
   }
   if (
-    !canRemoveByWorkspaceRole
-    && !canEditAgent(deps.ctx, input.principal, agent.id)
+    !mayRemoveConversationAgent(
+      deps.ctx,
+      input.principal,
+      conversation.workspace_id,
+      agent.id,
+    )
   ) {
     return { ok: false, error: { code: 'forbidden' } };
   }
@@ -893,6 +944,283 @@ export function publishMemberRemoved(
       workspace_id: conversation.workspace_id,
       channel_id: conversation.id,
     },
+  );
+}
+
+// ── removeConversationHumanMember (#task:1688) ──
+//
+// Remove ANOTHER human from a channel. The third-party counterpart of
+// `leaveChannel`, and the human counterpart of `removeConversationMember`.
+//
+// Two independent factors, same shape as agent placement (#task:1681/#1683):
+// roster AUTHORITY over this workspace (`admin`) ∧ the TARGET being an eligible
+// exit. The target factor is not a second copy of the leave rules — it IS
+// `evaluateChannelMemberExitEligibility`, so "the workspace owner of a private
+// channel cannot be stranded outside it" holds no matter who asks.
+//
+// `admin`, not `owner`: this ends ONE conversation edge — workspace membership,
+// the user row, and the target's role are untouched — which is the same
+// day-to-day channel governance already graded `admin` (create / rename /
+// archive / add a human). The WORKSPACE human roster stays owner-only because
+// it is existential and carries role control (docs/graded-permissions-v1.md
+// §1.1). One extra guard makes the grading non-transitive: an `admin` may not
+// remove someone who OUTRANKS them, so admin-removes-owner is 403 even though
+// both are "governance".
+
+export type RemoveConversationHumanMemberDeps = {
+  ctx: BackendContext;
+  agents: AgentRepo;
+  users: UserRepo;
+  conversations: ConversationRepo;
+  messages: MessageRepo;
+  membership: MembershipService;
+};
+
+/**
+ * Why a third-party human removal is refused. `not_member` is NOT here: an
+ * absent edge is the post-state the caller asked for, so the use case reports
+ * success (idempotent no-op) rather than a refusal — the same choice the agent
+ * path makes.
+ *  - `unsupported`        — the target conversation is not a top-level channel.
+ *  - `conversation_closed`— closed conversations take no roster writes.
+ *  - `forbidden`          — the caller fails the visibility FLOOR or the `admin`
+ *                           authority factor. One code for both: which one it
+ *                           was is exactly the fact a non-member must not learn.
+ *  - `self_target`        — removing yourself is `POST /channels/:id/leave`, a
+ *                           different verb with different gating (any member may
+ *                           leave; nobody needs `admin` to). Refusing here keeps
+ *                           one owner per behavior instead of letting the
+ *                           removal route grow a self branch.
+ *  - `target_outranks_actor` — the rank guard above.
+ *  - `channel_archived` / `channel_owner` / `last_human_member` — the shared
+ *                           exit guards, evaluated for the TARGET.
+ */
+export type RemoveConversationHumanMemberRefusal =
+  | 'unsupported'
+  | 'conversation_closed'
+  | 'forbidden'
+  | 'self_target'
+  | 'target_outranks_actor'
+  | Exclude<ChannelLeaveBlockedReason, 'not_member'>;
+
+export type RemoveConversationHumanMemberResult =
+  | { ok: true; members: ReturnType<MembershipService['listMembers']> }
+  | {
+      ok: false;
+      error:
+        | { code: 'conversation_not_found' }
+        | { code: RemoveConversationHumanMemberRefusal };
+    };
+
+/**
+ * The complete third-party human-removal gate, as a pure predicate so the
+ * authoritative write ({@link removeConversationHumanMember}) and the advisory
+ * per-member carrier ({@link buildConversationMemberRemovability}) cannot
+ * disagree — the carrier's whole purpose is to let a surface HIDE an action
+ * instead of rendering it disabled, which is only safe while it evaluates the
+ * same rule.
+ *
+ * Ordered so no refusal leaks a fact the caller may not observe:
+ *  1. `canViewConversation` — the FLOOR, and it comes FIRST because this
+ *     predicate is reached straight from a public route with a caller-supplied
+ *     id. Nothing about the conversation may be answered above it: kind and
+ *     `closed_at` are as private as the target rows below, so ordering shape
+ *     first would let any workspace member sort unknown ids into DM (422) /
+ *     closed (409) / invisible channel (403) buckets (anti-enumeration, #957;
+ *     the leak this order originally had, caught in review of #task:1688);
+ *  2. shape (`unsupported`, `conversation_closed`) — properties the caller has
+ *     now proven they can observe;
+ *  3. `self_target` — before the authority check, so a plain member asking about
+ *     their OWN row gets the accurate "use Leave" answer instead of a
+ *     misleading "you lack admin";
+ *  4. `admin` authority, then the rank guard;
+ *  5. the shared exit eligibility for the target.
+ *
+ * `outcome: 'noop'` is returned for a target with no edge: the caller may treat
+ * it as success without re-deriving "was there anything to remove".
+ */
+export function evaluateChannelHumanMemberRemoval(
+  deps: { ctx: BackendContext; conversations: ConversationRepo },
+  principal: Principal,
+  conversation: {
+    id: string;
+    kind: ConversationKind;
+    workspace_id: string;
+    visibility: ConversationVisibility;
+    archived_at: number | null;
+    closed_at: number | null;
+  },
+  targetUserId: string,
+):
+  | { outcome: 'allowed' }
+  | { outcome: 'noop' }
+  | { outcome: 'refused'; code: RemoveConversationHumanMemberRefusal } {
+  if (!canViewConversation(deps.ctx, principal, conversation.id)) {
+    return { outcome: 'refused', code: 'forbidden' };
+  }
+  if (conversation.kind !== 'channel') {
+    return { outcome: 'refused', code: 'unsupported' };
+  }
+  if (conversation.closed_at !== null) {
+    return { outcome: 'refused', code: 'conversation_closed' };
+  }
+  if (principal.kind === 'user' && principal.userId === targetUserId) {
+    return { outcome: 'refused', code: 'self_target' };
+  }
+  if (!canGovernWorkspace(deps.ctx, principal, conversation.workspace_id, 'admin')) {
+    return { outcome: 'refused', code: 'forbidden' };
+  }
+  // Rank guard: governance is not transitive upward. An `admin` who could evict
+  // the `owner` from a channel would be able to strip the owner-anchored
+  // governance chain of its resource — the same harm the `channel_owner` exit
+  // guard prevents, reached from the other side. Compared by AUTHORITATIVE role
+  // rows on both sides (`workspaceRole` for the actor, `userWorkspaceRole` for
+  // the target); a target with no role row ranks below everyone, so this never
+  // blocks removing a plain member.
+  if (
+    workspaceRoleOutranks(
+      userWorkspaceRole(deps.ctx, conversation.workspace_id, targetUserId),
+      workspaceRole(deps.ctx, principal, conversation.workspace_id),
+    )
+  ) {
+    return { outcome: 'refused', code: 'target_outranks_actor' };
+  }
+  const exit = evaluateChannelMemberExitEligibility(deps, targetUserId, conversation);
+  if (exit.can_leave) return { outcome: 'allowed' };
+  if (exit.reason === 'not_member') return { outcome: 'noop' };
+  // reason is non-null and no longer 'not_member' here.
+  return {
+    outcome: 'refused',
+    code: exit.reason as Exclude<ChannelLeaveBlockedReason, 'not_member'>,
+  };
+}
+
+/**
+ * Remove another human's `conversation_users` edge.
+ *
+ * Deliberately narrower than the workspace-level human removal
+ * (`removeWorkspaceHumanMember`, routes/membership.ts): NOTHING outside this one
+ * conversation changes — no `workspace_users` row, no user row, no other
+ * channel, no `viewer_workspaces_changed`. Teardown drops only the edge; read
+ * cursors and the attention preference are kept for exactly the reasons
+ * {@link leaveChannel} documents, and every membership-scoped projection
+ * INNER-joins `conversation_users`, so the removed human falls out of all of
+ * them from that one delete.
+ *
+ * Unlike the agent path there is no runtime to stop first — a human has no
+ * process — so the pre-commit best-effort `stop` has no counterpart here.
+ *
+ * Unlike self-leave (silent in v1) this DOES write a
+ * `conversation_member_removed` system message: someone else ended the
+ * membership, so the remaining members need the audit row, and the actor/member
+ * snapshots are the ones the agent-removal path already renders.
+ */
+export async function removeConversationHumanMember(
+  deps: RemoveConversationHumanMemberDeps,
+  input: { conversationId: string; userId: string; principal: Principal },
+): Promise<RemoveConversationHumanMemberResult> {
+  const conversation = deps.conversations.get(input.conversationId);
+  if (!conversation) return { ok: false, error: { code: 'conversation_not_found' } };
+
+  const decision = evaluateChannelHumanMemberRemoval(
+    { ctx: deps.ctx, conversations: deps.conversations },
+    input.principal,
+    conversation,
+    input.userId,
+  );
+  if (decision.outcome === 'refused') {
+    return { ok: false, error: { code: decision.code } };
+  }
+  if (decision.outcome === 'noop') {
+    return { ok: true, members: deps.membership.listMembers(conversation.id) };
+  }
+
+  const target = deps.users.get(input.userId);
+  if (!target) {
+    // `conversation_users.user_id` REFERENCES users(id) ON DELETE CASCADE, so an
+    // edge without its user row cannot exist. Not a branch to handle — an
+    // impossible state to report (same treatment as a conversation pointing at a
+    // missing workspace).
+    throw new Error(
+      `conversation ${conversation.id} has a member row for missing user ${input.userId}`,
+    );
+  }
+  const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
+  const member = conversationMemberAddedHumanSnapshot(target);
+  const message = deps.ctx.db.transaction(() => {
+    deps.conversations.removeUser(conversation.id, input.userId);
+    return deps.messages.insertForConversation({
+      conversationId: conversation.id,
+      fromKind: 'system',
+      content: conversationMemberRemovedContent({ actor, member }),
+      metadata: conversationMemberRemovedMetadata({ actor, member }),
+    });
+  })();
+
+  await runPostCommitEffects(
+    [() => publishMemberRemoved(deps.ctx, deps.conversations, conversation, message)],
+    deps.ctx.logger,
+  );
+  return { ok: true, members: deps.membership.listMembers(conversation.id) };
+}
+
+/**
+ * The VIEWER-SCOPED `member_removability` carrier for
+ * `GET /api/conversations/:id/members` — one entry per roster row, in the roster
+ * order, keyed by `(kind, id)` because a client cache may hold a filtered
+ * `members` array against an unfiltered carrier (see `MemberRemovabilityDto`).
+ *
+ * Computed per ROW, never as one "am I an admin" boolean: the two arms answer
+ * different questions (an agent's creator may remove that agent while having no
+ * governance role at all; an admin may remove three humans but not the workspace
+ * owner and not the last human of a private channel), so a single flag would be
+ * wrong in both directions. Each arm calls the SAME predicate as its write path
+ * ({@link mayRemoveConversationAgent} / {@link evaluateChannelHumanMemberRemoval}).
+ *
+ * Advisory display only (§12.1#5): the DELETE routes re-evaluate and stay
+ * authoritative. `false` for the viewer's own row — self-exit is Leave, a
+ * different verb — and `false` for every row when the caller cannot see the
+ * conversation, which the route has already refused before reaching here.
+ */
+export function buildConversationMemberRemovability(
+  deps: { ctx: BackendContext; conversations: ConversationRepo },
+  principal: Principal,
+  conversation: {
+    id: string;
+    kind: ConversationKind;
+    workspace_id: string;
+    visibility: ConversationVisibility;
+    archived_at: number | null;
+    closed_at: number | null;
+  },
+  members: ReturnType<MembershipService['listMembers']>,
+): MemberRemovabilityDto[] {
+  return members.map(member =>
+    member.kind === 'agent'
+      ? {
+          kind: 'agent' as const,
+          id: member.agent_id,
+          can_remove:
+            conversation.kind === 'channel'
+            && conversation.closed_at === null
+            && mayRemoveConversationAgent(
+              deps.ctx,
+              principal,
+              conversation.workspace_id,
+              member.agent_id,
+            ),
+        }
+      : {
+          kind: 'human' as const,
+          id: member.user_id,
+          can_remove:
+            evaluateChannelHumanMemberRemoval(
+              deps,
+              principal,
+              conversation,
+              member.user_id,
+            ).outcome === 'allowed',
+        },
   );
 }
 
@@ -1066,7 +1394,11 @@ export function conversationMemberAddedAgentSnapshot(agent: {
 }
 
 export function conversationMemberAddedHumanSnapshot(
-  user: UserDto,
+  // Structural, like {@link conversationMemberAddedAgentSnapshot}: the snapshot
+  // reads three identity fields, so a caller holding a `UserRow` (repo read) is
+  // as valid as one holding a `UserDto` (resolved DTO) — the helper has no reason
+  // to demand the wider shape.
+  user: { id: string; name: string; display_name?: string | null },
 ): ConversationMemberAddedMemberSnapshot {
   return {
     kind: 'human',

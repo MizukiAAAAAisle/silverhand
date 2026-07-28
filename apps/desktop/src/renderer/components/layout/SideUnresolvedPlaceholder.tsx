@@ -28,8 +28,13 @@ const STATUS_COPY: Record<
   },
   unauthorized: {
     header: 'No access',
-    body: "You don't have access to the workspace this conversation belongs to.",
-    hint: 'Ask a workspace member for access, or close the reference.',
+    // No LEVEL is named: a 403 from `/ref` is not evidence of a missing
+    // workspace. With a public-aware gate (#task:1692) most of what still
+    // refuses is same-workspace — a private channel, an archived public one, a
+    // DM the viewer isn't in — so "you don't have access to the workspace"
+    // would be a false statement about the one thing the viewer can verify.
+    body: "You don't have access to this conversation.",
+    hint: 'It may be private, archived, or in another workspace.',
   },
   not_found: {
     header: 'Conversation not found',

@@ -20,14 +20,39 @@ export interface AddConversationMemberPopoverProps {
   conversationId: string;
 }
 
+/** The picker's own props: the two ids plus how it is opened. The PICKER is the
+ *  reusable part — its per-candidate grading (see below) must never be
+ *  re-derived by a second surface — while the trigger is the surface's own
+ *  affordance. */
+interface AddConversationMemberPopoverOptions
+  extends AddConversationMemberPopoverProps {
+  /** Replaces the default `+` chip. The node is the Radix trigger itself
+   *  (`asChild`), so the consumer owns its glyph, label and box — the members
+   *  modal opens the SAME picker from a full-width "Add member" row at its
+   *  bottom (shiki 2026-07-28) rather than shipping a second candidate list. */
+  trigger?: React.ReactNode;
+  /** Which trigger edge the panel aligns to. `end` suits the header chip row
+   *  (the `+` is the row's last item); `center` is what the members modal uses,
+   *  where the trigger spans the modal's content width inside symmetric padding
+   *  — a centred panel of the modal's own width then sits flush with the modal
+   *  (shiki 2026-07-28), without this file or the caller restating the dialog's
+   *  padding. */
+  align?: 'start' | 'center' | 'end';
+}
+
 /**
- * `+` button trailing the conversation-header member strip + the
- * Radix popover that anchors a member picker to it.
+ * The conversation member picker, plus the trigger that opens it — by default
+ * the `+` chip trailing the conversation-header member strip.
  *
- * The trigger sits flush in the chip row with no resting fill — only a
+ * The default trigger sits flush in the chip row with no resting fill — only a
  * subtle hover background — so it reads as a low-key affordance rather
- * than competing with the avatar chips beside it. Inside, the popover
- * lists every eligible member that is NOT yet in this conversation.
+ * than competing with the avatar chips beside it. A consumer may pass its own
+ * `trigger` (the members modal's bottom "Add member" row): the picker is the
+ * part that must not be duplicated, because a second candidate list would mean
+ * a second answer to "who may I add".
+ *
+ * Inside, the popover lists every eligible member that is NOT yet in this
+ * conversation.
  *
  * Who may write this roster is TWO independent factors on the route
  * (#task:1683), and the surface mirrors them in the same order:
@@ -63,27 +88,34 @@ export interface AddConversationMemberPopoverProps {
 export function AddConversationMemberPopover({
   workspaceId,
   conversationId,
-}: AddConversationMemberPopoverProps): JSX.Element {
+  trigger,
+  align = 'end',
+}: AddConversationMemberPopoverOptions): JSX.Element {
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <button
-          type="button"
-          aria-label="Add member to this conversation"
-          title="Add member"
-          data-member-chip="add"
-          className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-        >
-          <Plus className="size-3.5" />
-        </button>
+        {trigger ?? (
+          <button
+            type="button"
+            aria-label="Add member to this conversation"
+            title="Add member"
+            data-member-chip="add"
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        )}
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          align="end"
+          align={align}
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          className="z-50 w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
+          // 360px — the members modal's width, and ONE width for both triggers:
+          // the panel is the same list either way, so making it narrower from
+          // the header `+` would be a difference with nothing behind it.
+          className="z-50 w-[360px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
         >
           <PopoverBody
             workspaceId={workspaceId}
@@ -233,11 +265,17 @@ function PopoverBody({
                       alt={displayName}
                     />
                   )}
+                  {/* Same name budget as the members-modal row: the handle is
+                      capped and `shrink-0`, so an overlong display name
+                      truncates first instead of squeezing the handle away. */}
                   <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                    <span className="truncate text-sm font-medium text-text-primary">
+                    <span
+                      className="truncate text-sm font-medium text-text-primary"
+                      title={displayName}
+                    >
                       {displayName}
                     </span>
-                    <span className="truncate font-mono text-[11px] text-text-muted">
+                    <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-text-muted">
                       @{handle}
                     </span>
                   </span>

@@ -171,6 +171,43 @@ export function workspaceRole(
 }
 
 /**
+ * The governance role of a user BY ID — the TARGET-scoped counterpart of
+ * {@link workspaceRole}, which answers only "what is the CALLER's role".
+ * Needed wherever a rule is about the person being acted ON rather than the
+ * actor: the owner-anchor guard on a private channel, and the actor↔target rank
+ * comparison that stops an `admin` from evicting the workspace `owner`
+ * (#task:1688).
+ *
+ * Same authority as `workspaceRole` (`workspace_users.role`, never the
+ * denormalized `workspaces.owner_user_id` pointer) and `null` for a user with no
+ * row there. A role row IS workspace membership, so `role === 'owner'` here is
+ * exactly what `canGovernWorkspace(.., 'owner')` answers for that user's own
+ * principal — this variant just does not need a forged principal to ask.
+ */
+export function userWorkspaceRole(
+  ctx: BackendContext,
+  workspaceId: string,
+  userId: string,
+): WorkspaceRole | null {
+  if (!workspaceExists(ctx, workspaceId)) return null;
+  return workspaceRepo(ctx).getUserRole(workspaceId, userId);
+}
+
+/** Rank comparison on the human role axis (`owner` ⊇ `admin` ⊇ `member`), for
+ *  the actor↔target questions the `minRole` floors cannot express. A missing
+ *  role ranks below every real one. */
+export function workspaceRoleOutranks(
+  higher: WorkspaceRole | null,
+  lower: WorkspaceRole | null,
+): boolean {
+  return roleRankOrNegative(higher) > roleRankOrNegative(lower);
+}
+
+function roleRankOrNegative(role: WorkspaceRole | null): number {
+  return role === null ? -1 : ROLE_RANK[role];
+}
+
+/**
  * Replaces the old two-valued `canMutateWorkspace`/`canManageMembers`
  * (which granted every human member admin-equivalent power). A
  * governance op is allowed when the principal can view the workspace
@@ -288,9 +325,11 @@ export function canViewConversation(
  * The PUBLIC-aware READ gate. Distinct from
  * `canViewConversation`, which stays the strict membership/interaction gate
  * (post, react, save, follow, read-state, observe, member ops). This predicate
- * governs the PUBLIC pure-read surface only: channel detail, message history,
- * thread read, and the attachment BYTES of an attachment referenced by a
- * persisted message in this channel (in-message preview). It is the ONLY place
+ * governs the PUBLIC pure-read surface only: channel detail, conversation ref
+ * (`GET /api/conversations/:id/ref` — identity + routing metadata, no messages
+ * / unread / roster), message history, thread read, and the attachment BYTES of
+ * an attachment referenced by a persisted message in this channel (in-message
+ * preview). It is the ONLY place
  * the public widening lives — so every write/interaction path that keeps
  * calling `canViewConversation` remains fail-closed by default (a public
  * non-member cannot reach it). The Attachments PANEL list

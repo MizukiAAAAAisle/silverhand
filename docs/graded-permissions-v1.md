@@ -40,6 +40,8 @@ specific conversation.
 | Remove **someone else's agent** from the workspace roster (`manage_workspace_agents`) | ✓ | ✓ | ✗ |
 | Add **your own agent** to a channel **you are a member of** | ✓ | ✓ | ✓ |
 | Add a **human** to a channel | ✓ | ✓ | ✗ |
+| Remove **another human** from a channel — `conversation_users` only (#task:1688) | ✓ | ✓ | ✗ |
+| Leave a channel **yourself** (subject to the exit guards below, no role needed) | ✓ | ✓ | ✓ |
 | Add **someone else's agent** — already a workspace member — to a channel | ✓ | ✓ | ✗ |
 | Add **someone else's agent** — *not yet* a workspace member — to a channel (it would enroll) | ✗ | ✗ | ✗ |
 | Edit workspace settings — name / description / icon (**includes rename**) | ✓ | ✓ | ✗ |
@@ -74,6 +76,35 @@ substituted for it.
   the people roster or anybody else's agents. And no role enrolls on someone's behalf — the way to
   get a teammate's agent into a workspace is to add the teammate, who brings their own agents.
 
+**Removing a human is graded by WHICH roster it writes** (#task:1688). The workspace human roster is
+`owner`-only (existential, and it carries role control); a CHANNEL's human roster is `admin`, the same
+day-to-day governance as creating, renaming, archiving that channel or adding a human to it. Nothing
+outside the one `conversation_users` edge changes — the `workspace_users` row, the user row, the
+target's role, and every other channel stay as they were.
+
+Two guards keep the channel grade from becoming a god-gate, and one rule keeps the verbs apart:
+
+- **Floor**: the caller must be a member of that channel (`canViewConversation`). Governance is not a
+  way into a channel you are not in — the same floor the channel-add route has. It is checked FIRST,
+  above the conversation's own shape: `kind` and `closed_at` are as private as the roster rows, so
+  answering them earlier would sort unknown ids into DM / closed / invisible-channel buckets. An
+  outsider gets ONE 403 for all three (a nonexistent id keeps the route-wide 404 convention).
+- **Rank**: governance is not transitive upward. An `admin` may not remove a member who OUTRANKS them
+  (authoritative roles on both sides — `workspaceRole` for the actor, `userWorkspaceRole` for the
+  target), so admin-removes-`owner` is refused (`target_outranks_actor`).
+- **Self is a different verb**: removing yourself is `POST /api/channels/:id/leave` (member-only
+  self-service, no role); asking the removal route to remove you is refused (`self_target`). Both
+  paths evaluate ONE exit-eligibility predicate for the member whose edge would end
+  (`evaluateChannelMemberExitEligibility`): archived channel, the workspace owner of a private
+  channel, and the last human of a private channel are blocked no matter who asked. A target with no
+  membership row is an idempotent success, not a refusal.
+
+Two consequences of the floor + rank guards: `channel_owner` and `last_human_member` are structurally
+unreachable through third-party removal today (the caller would have to be the owner removing
+themselves, or a non-member of a private channel). They stay in the shared predicate because they are
+the SAME rule self-leave enforces, and each becomes reachable the moment its invariant changes
+(co-owners; admins gaining non-member visibility).
+
 
 ### 1.2 Storage
 
@@ -90,7 +121,15 @@ The human governance gate is role-graded:
 ```
 workspaceRole(ctx, principal, workspaceId): 'owner' | 'admin' | 'member' | null
 canGovernWorkspace(ctx, principal, workspaceId, minRole): boolean   // role >= minRole
+userWorkspaceRole(ctx, workspaceId, userId): 'owner' | 'admin' | 'member' | null
+workspaceRoleOutranks(higher, lower): boolean                      // strict rank compare
 ```
+
+`userWorkspaceRole` is the TARGET-scoped counterpart of `workspaceRole` — same authority
+(`workspace_users.role`), asked about the person being acted ON rather than the caller. It exists for
+the two rules that are properties of the target: the private-channel owner-anchor guard and the
+actor↔target rank comparison (`workspaceRoleOutranks`, #task:1688). Neither takes a principal, so
+neither can be fed a forged identity.
 
 `canGovernWorkspace` is the sole governance gate; the forbidden old two-valued gate it replaced,
 `canMutateWorkspace` (which returned `kind !== 'agent'`, making every human member admin-equivalent),

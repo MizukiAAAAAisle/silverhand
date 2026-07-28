@@ -6,11 +6,9 @@ import type {
   MemberDto,
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
 import { HumanInfoPopover } from '@/components/HumanInfoPopover';
-import { HoverPopover } from '@/components/chat/HoverPopover';
 import { useAgents } from '@/features/agents/hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsersById } from '@/features/users/hooks';
@@ -25,19 +23,22 @@ import { useConversationMembers } from '@/features/conversations/useConversation
 // ── Member strip ────────────────────────────────────────────────────────
 
 /** Maximum number of chips rendered inline; overflow collapses into a
- *  `+N` chip whose hover popover lists the remaining members. Header
- *  height must not jitter as channels grow membership, so this cap
- *  exists even though current channels rarely exceed it. */
+ *  `+N` chip that opens the members modal. Header height must not jitter as
+ *  channels grow membership, so this cap exists even though current channels
+ *  rarely exceed it. */
 const MEMBER_STRIP_VISIBLE_CAP = 8;
 
 export function MemberStrip({
   channelId,
   conversationAgents,
   agentAvatarUrls,
+  onOpenMembers,
 }: {
   channelId: string;
   conversationAgents: ConversationAgentDto[];
   agentAvatarUrls: Map<string, string | null>;
+  /** Open the channel members modal — the `+N` chip's action (#task:1687). */
+  onOpenMembers: () => void;
 }): JSX.Element | null {
   const { data: agents = [] } = useAgents();
   const agentById = useMemo(() => {
@@ -155,8 +156,7 @@ export function MemberStrip({
         <MemberOverflowChip
           overflow={overflow}
           totalVisible={visibleMembers.length}
-          agentAvatarUrls={agentAvatarUrls}
-          humanAvatarUrls={humanMemberAvatarUrls}
+          onOpenMembers={onOpenMembers}
         />
       ) : null}
     </div>
@@ -227,100 +227,43 @@ function HumanMemberChip({
 }
 
 /**
- * `+N` overflow chip. Hover opens a popover listing the collapsed
- * members so the cap doesn't hide the room. Click is a no-op (v1):
- * the design rejects navigation from chips, and a dedicated members
- * panel/route is out of scope here.
- *
- * Each row carries the member's avatar (`AVATAR_PX.sm` — the member/candidate
- * row tier) because a collapsed member must be recognizable the same way an
- * inline chip is: the strip's contract is "who is in this room", and a name-only
- * list drops the identity primitive the chips taught (shiki, 2026-07-26). Rows
- * are inert — no nested hover popover inside a hover-driven host.
- *
- * The `+N more` count sits at the BOTTOM as a footnote: the members are the
- * content, and a heading above them made the popover read as a titled panel
- * rather than a continuation of the chip that opened it (shiki, 2026-07-26).
+ * `+N` overflow chip. Clicking it opens the channel members modal, which is
+ * now the one place that lists the whole roster (#task:1687) — the hover
+ * popover that used to preview the collapsed members is gone: it duplicated a
+ * list the modal owns, and a hover-only preview could not carry the row actions
+ * (remove / leave) the modal does. Individual chips keep their hover identity
+ * cards.
  */
 function MemberOverflowChip({
   overflow,
   totalVisible,
-  agentAvatarUrls,
-  humanAvatarUrls,
+  onOpenMembers,
 }: {
   overflow: MemberDto[];
   totalVisible: number;
-  agentAvatarUrls: Map<string, string | null>;
-  humanAvatarUrls: Map<string, string | null>;
+  onOpenMembers: () => void;
 }): JSX.Element {
-  const trigger = (
+  return (
     <button
       type="button"
+      onClick={onOpenMembers}
       aria-label={`+${overflow.length} more members`}
+      title="Members"
       data-member-chip="overflow"
+      data-member-total={totalVisible}
       className="inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-elevated p-0 text-[10px] font-semibold text-text-muted transition-transform hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
     >
       +{overflow.length}
     </button>
   );
-  return (
-    <HoverPopover
-      trigger={trigger}
-      isContentReady
-      openDelayMs={80}
-      content={
-        <div
-          className="flex flex-col gap-2"
-          data-member-overflow-list
-          data-member-total={totalVisible}
-        >
-          {overflow.map(m => {
-            const id = m.kind === 'agent' ? m.agent_id : m.user_id;
-            const label = m.display_name?.trim() || m.name;
-            return (
-              <div
-                key={`${m.kind}:${id}`}
-                className="flex items-center gap-2"
-                data-member-overflow-row
-                data-member-id={id}
-                data-member-kind={m.kind}
-              >
-                {m.kind === 'agent' ? (
-                  // `runtime` rides on the member DTO itself, so a collapsed
-                  // agent renders its brand mark without waiting on (or
-                  // depending on) the agents directory.
-                  <AgentAvatar
-                    runtime={m.runtime}
-                    size={AVATAR_PX.sm}
-                    avatarObjectUrl={agentAvatarUrls.get(m.agent_id) ?? null}
-                    alt={label}
-                  />
-                ) : (
-                  <UserAvatar
-                    size={AVATAR_PX.sm}
-                    avatarObjectUrl={humanAvatarUrls.get(m.user_id) ?? null}
-                    alt={label}
-                  />
-                )}
-                <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
-                  {label}
-                </span>
-                <span className="max-w-[45%] shrink-0 truncate font-mono text-xs text-text-muted">
-                  @{m.name}
-                </span>
-              </div>
-            );
-          })}
-          <div className="border-t border-border-subtle pt-2 text-[11px] uppercase tracking-wider text-text-muted">
-            +{overflow.length} more
-          </div>
-        </div>
-      }
-    />
-  );
 }
 
-const STATUS_DOT: Record<ConversationAgentDto['status'], string> = {
+/** Presence/run-state dot ground, keyed by the agent run status (humans map
+ *  their presence onto the same two of these via `presenceDotStatus`). Exported
+ *  because the members modal expresses the SAME state on the SAME dot — one
+ *  recipe, two surfaces; the modal dropped its status column precisely because
+ *  this dot already says it (shiki, #task:1687). */
+export const STATUS_DOT: Record<ConversationAgentDto['status'], string> = {
   active: 'bg-success',
   starting: 'bg-warning',
   crashed: 'bg-error',

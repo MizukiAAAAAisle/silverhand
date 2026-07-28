@@ -1,6 +1,10 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { apiPaths, type ConversationRef } from '@silverhand/shared';
-import { ApiError, api } from '@/lib/api';
+import { type ConversationRef } from '@silverhand/shared';
+import { ApiError } from '@/lib/api';
+import {
+  conversationRefQueryOptions,
+  type ConversationRefResponse,
+} from './conversation-ref-query';
 
 export type ConversationByIdStatus =
   | 'loading'
@@ -14,15 +18,10 @@ export interface ConversationByIdResult {
   ref: ConversationRef | null;
 }
 
-interface ConversationRefResponse {
-  ref: ConversationRef;
-}
-
-const REF_GC_MS = 5 * 60 * 1000;
-const REF_STALE_MS = 30 * 1000;
-
-const conversationRefKey = (id: string) =>
-  ['conversation-ref', id] as const;
+/** The id passed to the shared read point while the hook is disabled. Kept
+ *  inside the factory (rather than a hand-written key) so this module never
+ *  restates the conversation-ref key shape. */
+const NO_ID = 'none';
 
 /**
  * Pure mapping from a React Query result for the conversation-ref
@@ -76,11 +75,8 @@ export function useConversationById(
   id: string | null,
 ): ConversationByIdResult {
   const query = useQuery<ConversationRefResponse, Error>({
-    queryKey: id ? conversationRefKey(id) : ['conversation-ref', 'none'],
+    ...conversationRefQueryOptions(id ?? NO_ID),
     enabled: !!id,
-    staleTime: REF_STALE_MS,
-    gcTime: REF_GC_MS,
-    queryFn: () => api<ConversationRefResponse>(apiPaths.conversationRef(id!)),
     // Don't auto-retry 403/404 — they are terminal states for this hook.
     retry: (failureCount, err) => {
       if (err instanceof ApiError) {

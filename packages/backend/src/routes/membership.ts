@@ -10,6 +10,8 @@
 //   - POST   /api/conversations/:id/members           (createConversationMembershipApp)
 //   - DELETE /api/conversations/:id/members/agents/:agentId
 //                                                     (createConversationMembershipApp)
+//   - DELETE /api/conversations/:id/members/users/:userId
+//                                                     (createConversationMembershipApp)
 //   - POST   /internal …/agents/:aid/members          (createInternalMembershipApp)
 //
 // The context spans `/api/workspaces`, `/api/conversations`, and the internal
@@ -27,6 +29,7 @@ import {
   AddConversationMemberInputSchema,
   AddConversationMemberByHandleInputSchema,
   type AgentCapability,
+  type ConversationMembersReadResponse,
   type WorkspaceHumanMemberDto,
   type WorkspaceRoleDto,
   type UserDto,
@@ -53,6 +56,7 @@ import { addWorkspaceAgentMember } from '../application/add-workspace-agent-memb
 import {
   addConversationMember,
   buildChannelDetailResponse,
+  buildConversationMemberRemovability,
   conversationMemberAddedActorSnapshot,
   conversationMemberAddedAgentSnapshot,
   conversationMemberAddedHumanSnapshot,
@@ -63,6 +67,7 @@ import {
   joinPublicChannel,
   leaveChannel,
   publishMemberRemoved,
+  removeConversationHumanMember,
   removeConversationMember,
 } from '../application/conversation-member.js';
 import { type PostCommitEffect, runPostCommitEffects } from '../application/post-commit.js';
@@ -357,6 +362,12 @@ async function removeWorkspaceHumanMember(
  * per-conversation removed messages + `workspace_users` in one transaction,
  * then publishes conversation/member-list updates plus `removed` to the viewer
  * scope post-commit. 204.
+ *
+ * Not to be confused with the same-suffix CONVERSATION route
+ * (`/api/conversations/:id/members/users/:userId`, #task:1688): that one is
+ * `admin`-gated and ends a single channel edge. The grading differs because the
+ * data differs — this route is existential for the workspace and carries role
+ * control; that one is day-to-day channel governance.
  */
 export function createWorkspaceMembershipApp(
   deps: MembershipRouteDeps,
@@ -645,16 +656,33 @@ export function createConversationMembershipApp(
     membership,
   } = deps;
 
+  // The members READ envelope: the roster PLUS this viewer's per-member
+  // removability. The carrier is viewer-scoped, so it lives on the response and
+  // never on `MemberDto` (§12.1#5); it exists so a surface can HIDE an action
+  // rather than render it disabled — one human arm depends on a fact the client
+  // cannot see (the target's workspace role) and on the three exit guards, which
+  // a client-side re-derivation would drift from. Advisory only: the DELETE
+  // routes re-evaluate the same predicates and stay authoritative.
   app.get(apiPaths.conversationMembers(':id'), c => {
     const id = c.req.param('id');
     if (!id) return c.json({ error: 'conversation id required' }, 400);
     const conversation = conversations.get(id);
     if (!conversation) return c.json({ error: 'conversation not found' }, 404);
-    if (!canViewConversation(ctx, getUserPrincipal(c), conversation.id)) {
+    const principal = getUserPrincipal(c);
+    if (!canViewConversation(ctx, principal, conversation.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     const members = membership.listMembers(conversation.id);
-    return c.json({ members });
+    const response: ConversationMembersReadResponse = {
+      members,
+      member_removability: buildConversationMemberRemovability(
+        { ctx, conversations },
+        principal,
+        conversation,
+        members,
+      ),
+    };
+    return c.json(response);
   });
 
   app.post(apiPaths.conversationMembers(':id'), async c => {
@@ -801,6 +829,94 @@ export function createConversationMembershipApp(
       default: {
         const _exhaustive: never = result.error;
         return _exhaustive;
+      }
+    }
+  });
+
+  // Remove ANOTHER human from a channel — the third-party counterpart of
+  // `POST /channels/:id/leave`. Composite gate (visibility FLOOR ∧ workspace
+  // `admin` ∧ the target does not outrank the caller ∧ the shared exit guards
+  // evaluated for the TARGET) lives in the use case; the handler only maps typed
+  // refusals. Removing YOURSELF is refused here on purpose (422) — Leave is that
+  // verb, with its own gating. Workspace membership, the user row, and the
+  // target's role are untouched; only the conversation edge goes.
+  app.delete(apiPaths.conversationHumanMember(':id', ':userId'), async c => {
+    const id = c.req.param('id');
+    const userId = c.req.param('userId');
+    if (!id || !userId) {
+      return c.json({ error: 'conversation id and user id required' }, 400);
+    }
+    const result = await removeConversationHumanMember({
+      ctx,
+      agents,
+      users,
+      conversations,
+      messages,
+      membership,
+    }, {
+      conversationId: id,
+      principal: getUserPrincipal(c),
+      userId,
+    });
+    if (result.ok) return c.json({ members: result.members });
+    switch (result.error.code) {
+      case 'conversation_not_found':
+        return c.json({ error: 'conversation not found' }, 404);
+      case 'unsupported':
+        return c.json(
+          {
+            error: 'human members can only be removed from channels',
+            code: 'conversation_member_remove_unsupported',
+          },
+          422,
+        );
+      case 'conversation_closed':
+        return c.json({ error: 'conversation is closed', code: 'conversation_closed' }, 409);
+      case 'forbidden':
+        return c.json({ error: 'forbidden' }, 403);
+      case 'self_target':
+        return c.json(
+          {
+            error: 'leaving a channel yourself is a different request',
+            code: 'self_target',
+          },
+          422,
+        );
+      case 'target_outranks_actor':
+        return c.json(
+          {
+            error: 'this member holds a higher workspace role than you',
+            code: 'target_outranks_actor',
+          },
+          403,
+        );
+      case 'channel_archived':
+        return c.json(
+          {
+            error: 'cannot change members of an archived channel',
+            code: 'channel_archived',
+          },
+          409,
+        );
+      case 'channel_owner':
+        return c.json(
+          {
+            error: 'this member is the owner of a private channel',
+            code: 'channel_owner',
+          },
+          409,
+        );
+      case 'last_human_member':
+        return c.json(
+          {
+            error: 'this member is the last member of a private channel',
+            code: 'last_human_member',
+          },
+          409,
+        );
+      default: {
+        const _exhaustiveHuman: never = result.error;
+        return _exhaustiveHuman;
       }
     }
   });

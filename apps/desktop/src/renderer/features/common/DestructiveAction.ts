@@ -1,6 +1,8 @@
 import {
+  CONTROL_HOVER_TRANSITION,
   CONTROL_HOVER_LIFT,
   CONTROL_SURFACE_BUTTON,
+  CONTROL_SURFACE_BUTTON_STILL,
 } from './ControlInkBorder';
 
 /**
@@ -37,6 +39,22 @@ import {
  */
 const DESTRUCTIVE_COMMIT_CLASS = `${CONTROL_HOVER_LIFT} hover:opacity-100`;
 
+/** {@link DESTRUCTIVE_COMMIT_CLASS} with the lift dropped — see
+ *  {@link DestructiveMotion}. Hover still answers: the colour change here, and
+ *  in forza6 the sticker's shadow still grows. */
+const DESTRUCTIVE_COMMIT_CLASS_STILL = `${CONTROL_HOVER_TRANSITION} hover:opacity-100`;
+
+/**
+ * Whether the pair lifts on hover. `still` is for a confirm rendered INSIDE the
+ * row it acts on (the members modal's inline Leave / Remove — shiki 2026-07-28:
+ * "这俩 button 去掉。所有主题"): at that scale, and nested in a row that already
+ * lights up on hover, a rising button reads as a third moving thing rather than
+ * as feedback. It is an option on the shared hook, not a class the consumer
+ * layers on, because opting out by adding `hover:translate-y-0` would leave two
+ * translate utilities whose winner depends on Tailwind's emit order.
+ */
+export type DestructiveMotion = { motion?: 'lift' | 'still' };
+
 /**
  * The RED-ON-PAPER half of the destructive rank: token frame in `--error`, red
  * label, red-tint hover ground. Layer it onto `variant="outline"` +
@@ -64,15 +82,18 @@ export const DESTRUCTIVE_TRIGGER =
  * would get no sticker. Layout (width, gap) stays with the consumer — the theme
  * rule paints identity only.
  */
-export function destructiveAction(className?: string): {
+export function destructiveAction(
+  className?: string,
+  { motion = 'lift' }: DestructiveMotion = {},
+): {
   'data-destructive-action': 'commit';
   className: string;
 } {
+  const recipe =
+    motion === 'still' ? DESTRUCTIVE_COMMIT_CLASS_STILL : DESTRUCTIVE_COMMIT_CLASS;
   return {
     'data-destructive-action': 'commit',
-    className: className
-      ? `${DESTRUCTIVE_COMMIT_CLASS} ${className}`
-      : DESTRUCTIVE_COMMIT_CLASS,
+    className: className ? `${recipe} ${className}` : recipe,
   };
 }
 
@@ -85,14 +106,17 @@ export function destructiveAction(className?: string): {
  * frame — leaves the dialog looking half-designed. Use `variant="outline"` with
  * it; `ghost` has no paper of its own for the frame to sit on.
  */
-export function destructiveCancel(className?: string): {
+export function destructiveCancel(
+  className?: string,
+  { motion = 'lift' }: DestructiveMotion = {},
+): {
   'data-destructive-action': 'cancel';
   className: string;
 } {
+  const recipe =
+    motion === 'still' ? CONTROL_SURFACE_BUTTON_STILL : CONTROL_SURFACE_BUTTON;
   return {
     'data-destructive-action': 'cancel',
-    className: className
-      ? `${CONTROL_SURFACE_BUTTON} ${className}`
-      : CONTROL_SURFACE_BUTTON,
+    className: className ? `${recipe} ${className}` : recipe,
   };
 }

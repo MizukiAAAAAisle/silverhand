@@ -146,6 +146,48 @@ export function removeWorkspaceFromActivity(
 }
 
 /**
+ * The conversation-scoped sibling of {@link removeWorkspaceFromActivity}
+ * (#task:1689): drop every Activity item anchored in ONE conversation the viewer
+ * lost. A third party removing the viewer from a channel is the same CLASS of
+ * fact as losing a workspace — the items keep pointing at a channel whose
+ * membership ended, so they linger as ghosts (and keep the #task:1408 rail dot
+ * falsely lit) until some unrelated refetch. Same discipline as the workspace
+ * arm: consume the id, filter in place (no refetch — the list is global, so a
+ * whole-list refetch would re-score and reorder every SURVIVOR for a pure
+ * membership drop), PRESENT-ONLY and idempotent.
+ *
+ * A thread item carries its PARENT channel's `conversation_id` (thread-ness
+ * rides `thread_root_id`), so one match drops the channel's mainline and thread
+ * items together.
+ */
+export function removeConversationFromActivity(
+  qc: QueryClient,
+  conversationId: string,
+): void {
+  const prev = qc.getQueryData<ListActivityDto>(activityKey());
+  if (!prev) return; // list not loaded → no-op
+  const items = prev.items.filter(it => it.conversation_id !== conversationId);
+  if (items.length === prev.items.length) return; // no matching item → no write
+  qc.setQueryData<ListActivityDto>(activityKey(), { ...prev, items });
+}
+
+/** Which channels of ONE workspace the Activity list still holds items for
+ *  (#task:1689). Every item carries `workspace_id` + `conversation_id`, so the
+ *  attribution is read off the payload, never inferred from the key (the list is
+ *  global). Feeds the foreign-workspace convergence path: only a channel the
+ *  viewer actually holds state for is worth an authoritative re-read. */
+export function activityHeldChannelIds(
+  qc: QueryClient,
+  workspaceId: string,
+): string[] {
+  const data = qc.getQueryData<ListActivityDto>(activityKey());
+  if (!data) return [];
+  return data.items
+    .filter(it => it.workspace_id === workspaceId)
+    .map(it => it.conversation_id);
+}
+
+/**
  * The viewer's GLOBAL Activity list (`GET /api/activity` with NO `workspace_id`,
  * #task:1227 §9.2). v1 UI scope = global (the user's single attention inbox
  * across all workspaces). The server returns it fully

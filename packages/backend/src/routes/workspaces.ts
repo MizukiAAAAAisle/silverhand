@@ -428,8 +428,14 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
     if (!canViewWorkspace(ctx, principal, workspace.id)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const forUserId =
-      principal.kind === 'user' ? principal.userId : undefined;
+    // Both arms return `WorkspaceChannelListItem`, i.e. every row carries an
+    // authoritative per-viewer `is_member` exactly like the ACTIVE list above
+    // (#task:1691). The membership fact used to live only inside the query's
+    // filter, which left consumers asserting "this table is membership-filtered"
+    // from memory; now the two tables a sidebar reads have one shape.
+    // `getUserPrincipal` guarantees a user principal, so there is no viewer-less
+    // arm to project.
+    const viewerUserId = principal.userId;
     // agent_home / DM workspaces have their own archived collection
     // (archived DMs + the threads under them). It is kept SEPARATE from
     // the regular channel Archived view — same response shape, never
@@ -440,9 +446,10 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         'workspace.dm_channel.list_archived',
         { workspaceId: workspace.id },
         () =>
-          conversations.listArchivedDmChannelsForWorkspace(workspace.id, {
-            forUserId,
-          }),
+          conversations.listArchivedDmChannelsForViewer(
+            workspace.id,
+            viewerUserId,
+          ),
         result => ({ channelCount: result.length }),
       );
       return c.json({ channels: dmChannels });
@@ -452,9 +459,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       'workspace.channels.list_archived',
       { workspaceId: workspace.id },
       () =>
-        conversations.listArchivedChannelsForWorkspace(workspace.id, {
-          forUserId,
-        }),
+        conversations.listArchivedChannelsForViewer(workspace.id, viewerUserId),
       result => ({ channelCount: result.length }),
     );
     return c.json({ channels });

@@ -9,7 +9,10 @@ import type { SavedMessageDto } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 
-const savedKey = ['saved'] as const;
+/** Prefix key of every Saved list variant. The per-variant key appends the
+ *  filter object (`['saved', { workspaceId, since }]`), so a channel-scoped
+ *  cleanup must walk ALL loaded variants, not one canonical key (#task:1689). */
+export const savedKey = ['saved'] as const;
 const savedInvalidationTimers = new WeakMap<
   QueryClient,
   ReturnType<typeof setTimeout>
@@ -23,6 +26,48 @@ function invalidateSavedDebounced(qc: QueryClient): void {
     void qc.invalidateQueries({ queryKey: savedKey });
   }, 100);
   savedInvalidationTimers.set(qc, timer);
+}
+
+/**
+ * Drop every Saved row attributed to ONE channel, across EVERY loaded filter
+ * variant (#task:1689). The Saved read is membership-filtered server-side, so a
+ * refetch after the viewer loses a channel returns the list WITHOUT those rows —
+ * this patch reproduces exactly that shape instead of refetching, because a
+ * refetch would also re-window the `saved_at DESC LIMIT` set and reflow rows the
+ * viewer can still see.
+ *
+ * Attribution is `channel_id`: for a saved THREAD reply `conversation_id` is the
+ * thread, while `channel_id` is always the parent channel — so `channel_id` is
+ * the only field that answers "does this row belong to the lost channel".
+ * PRESENT-ONLY / idempotent: an unloaded variant or a variant with no matching
+ * row writes nothing.
+ */
+export function removeChannelFromSaved(qc: QueryClient, channelId: string): void {
+  for (const q of qc.getQueryCache().findAll({ queryKey: savedKey })) {
+    const prev = qc.getQueryData<SavedMessageDto[]>(q.queryKey);
+    if (!prev) continue;
+    const next = prev.filter(row => row.channel_id !== channelId);
+    if (next.length === prev.length) continue;
+    qc.setQueryData<SavedMessageDto[]>(q.queryKey, next);
+  }
+}
+
+/** Which channels of ONE workspace the Saved list still holds rows for
+ *  (#task:1689). Read off the row (`workspace_id` + `channel_id`), not the key:
+ *  the unfiltered variant holds every workspace at once. */
+export function savedHeldChannelIds(
+  qc: QueryClient,
+  workspaceId: string,
+): string[] {
+  const ids = new Set<string>();
+  for (const q of qc.getQueryCache().findAll({ queryKey: savedKey })) {
+    const data = qc.getQueryData<SavedMessageDto[]>(q.queryKey);
+    if (!data) continue;
+    for (const row of data) {
+      if (row.workspace_id === workspaceId) ids.add(row.channel_id);
+    }
+  }
+  return [...ids];
 }
 
 /**

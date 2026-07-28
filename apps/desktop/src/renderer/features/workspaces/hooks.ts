@@ -28,6 +28,10 @@ import type {
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { favoritesKey } from '@/features/favorites/hooks';
+import {
+  recordChannelWorkspace,
+  recordChannelWorkspaceRows,
+} from '@/features/channels/channel-workspace-index';
 import { handleViewerWorkspaceRemoved } from './viewer-removal-contract';
 import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
 import { localWorkspacePathsKey } from './local-paths';
@@ -61,6 +65,15 @@ const channelsKey = (workspaceId: string) => ['workspaces', workspaceId, 'channe
 const channelDetailKey = (channelId: string) => ['channel-detail', channelId] as const;
 const archivedChannelsKey = (workspaceId: string) =>
   ['workspaces', workspaceId, 'channels', 'archived'] as const;
+
+/** The two authoritative channel tables of one workspace, exported for the
+ *  §12 removal contract (#task:1689): it must ask React Query whether each list
+ *  has actually converged (`status` alone stays `success` through a background
+ *  refetch), and it must invalidate them for a workspace the viewer is not
+ *  currently looking at. Same keys the hooks below use — one definition, so the
+ *  contract cannot read a different cache than the sidebar renders. */
+export const workspaceChannelsQueryKey = channelsKey;
+export const workspaceArchivedChannelsQueryKey = archivedChannelsKey;
 const archivedChannelsIndexKey = (workspaceId: string | null, since: number | null) =>
   ['archived-channels', { workspaceId, since }] as const;
 const membersKey = (workspaceId: string) => ['workspaces', workspaceId, 'members'] as const;
@@ -479,6 +492,9 @@ async function fetchWorkspaceChannels(workspaceId: string): Promise<ChannelListP
     channels: ChannelListItem[];
     viewer_sort: ViewerSortStateDto;
   }>(apiPaths.workspaceChannels(workspaceId));
+  // Write-through of the immutable channel → workspace binding (#task:1689): this
+  // listing IS the statement that these channels belong to this workspace.
+  recordChannelWorkspaceRows(res.channels, workspaceId);
   return {
     items: sortConversationList(res.channels),
     viewerSort: res.viewer_sort,
@@ -532,7 +548,14 @@ export function useChannelDetail(channelId: string | null, enabled = true) {
   return useQuery<ChannelDetailResponse>({
     queryKey: channelId ? channelDetailKey(channelId) : ['channel-detail', 'none'],
     enabled: !!channelId && enabled,
-    queryFn: () => api<ChannelDetailResponse>(apiPaths.conversationChannel(channelId!)),
+    queryFn: async () => {
+      const res = await api<ChannelDetailResponse>(apiPaths.conversationChannel(channelId!));
+      // The deep-link path is often the ONLY place this client learns a channel's
+      // workspace, and it is exactly the path that leaves channel-keyed caches
+      // behind (#task:1689).
+      recordChannelWorkspace(res.channel.id, res.channel.workspace_id);
+      return res;
+    },
   });
 }
 
@@ -638,13 +661,38 @@ export function useArchivedChannelsForWorkspace(
       ? archivedChannelsKey(workspaceId)
       : ['workspaces', 'none', 'channels', 'archived'],
     enabled: !!workspaceId && archivedChannelsEnabledForKind(workspaceKind),
-    queryFn: async () => {
-      const res = await api<{
-        channels: ChannelLikeDto[];
-      }>(apiPaths.workspaceArchivedChannels(workspaceId!));
-      return sortConversationList(res.channels);
-    },
+    queryFn: () => fetchWorkspaceArchivedChannels(workspaceId!),
   });
+}
+
+/** Archived twin of {@link fetchWorkspaceChannels}. Since #task:1691 the route
+ *  returns `WorkspaceChannelListItem` rows — the SAME shape as the active list,
+ *  each carrying the viewer-scoped `is_member` — so a consumer never has to know
+ *  which of the two tables a row came from to read membership off it. */
+async function fetchWorkspaceArchivedChannels(
+  workspaceId: string,
+): Promise<ChannelListItem[]> {
+  const res = await api<{ channels: ChannelListItem[] }>(
+    apiPaths.workspaceArchivedChannels(workspaceId),
+  );
+  recordChannelWorkspaceRows(res.channels, workspaceId);
+  return sortConversationList(res.channels);
+}
+
+/** Authoritative read of BOTH channel tables of one workspace, bypassing the
+ *  mounted queries (#task:1689). The §12 removal contract needs this for a
+ *  NON-SELECTED workspace: neither list is mounted there, so invalidation alone
+ *  fetches nothing and the domain fact would wait for navigation. Endpoint
+ *  knowledge stays in this feature; the contract consumes rows. */
+export async function fetchWorkspaceChannelTables(workspaceId: string): Promise<{
+  active: ChannelListItem[];
+  archived: ChannelListItem[];
+}> {
+  const [active, archived] = await Promise.all([
+    fetchWorkspaceChannels(workspaceId),
+    fetchWorkspaceArchivedChannels(workspaceId),
+  ]);
+  return { active: active.items, archived };
 }
 
 /** Active channels (+ threads) for every supplied workspace, fetched in
@@ -909,6 +957,12 @@ export function useArchivedChannelsIndex({
       const res = await api<{ channels: ArchivedChannelListItemDto[] }>(
         suffix ? `${apiPaths.archivedChannels}?${suffix}` : apiPaths.archivedChannels,
       );
+      // Attribution write-through (#task:1689): this cross-workspace index is the
+      // one carrier for an archived channel of a workspace whose own lists were
+      // never mounted, and each row states its workspace.
+      for (const row of res.channels) {
+        recordChannelWorkspace(row.channel.id, row.workspace.id);
+      }
       return res.channels;
     },
   });

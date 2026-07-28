@@ -11,8 +11,6 @@ import {
   Maximize2,
   Minimize2,
   Paperclip,
-  Power,
-  RefreshCw,
   Search,
   Settings,
   X,
@@ -48,6 +46,8 @@ import { lastCommittedSeq } from '@/features/channels/pending-message';
 import { nextTailReadMark, type TailReadMark } from '@/lib/channel-read';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { MemberStrip } from './channel-view/member-strip';
+import { MembersButton } from './channel-view/members-button';
+import { ChannelMembersDialog } from './channel-view/members-dialog';
 import { MessageList } from './channel-view/message-list';
 import { InlineFindBar } from './InlineFindBar';
 import {
@@ -374,16 +374,18 @@ function ActiveChannelView({
   // `kind === 'channel'`).
   const isRegularChannel = conversation.kind === 'channel';
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
   // The visibility/leave capability carriers (`can_update_visibility`,
   // `can_leave`, `leave_blocked_reason`) live only on the channel-detail
   // envelope, and a member never fetches detail on the hot path. Fetch it only
-  // while the settings modal is open for a regular channel; a member hot path
-  // fires zero extra network until the gear is opened, and the modal
-  // fail-closes (control hidden / Leave disabled) until it resolves.
-  const settingsDetailEnabled = settingsOpen && isRegularChannel;
+  // while a surface that consumes them is open (the settings modal, or the
+  // members modal — whose own row carries Leave) for a regular channel; a member
+  // hot path fires zero extra network until one is opened, and both fail-close
+  // (control hidden / Leave disabled) until it resolves.
+  const channelDetailEnabled = (settingsOpen || membersOpen) && isRegularChannel;
   const { data: channelDetail } = useChannelDetail(
-    settingsDetailEnabled ? conversation.id : null,
-    settingsDetailEnabled,
+    channelDetailEnabled ? conversation.id : null,
+    channelDetailEnabled,
   );
   const detailChannel = channelDetail?.channel;
   const channelVisibility =
@@ -423,14 +425,13 @@ function ActiveChannelView({
     !canManageAllChannelAgents ||
     startAgent.isPending ||
     stopAgent.isPending;
-  const restartTitle =
-    agentIds.length === 0
-      ? 'No agents to restart'
-      : 'Restart Channel agents';
-  const stopTitle =
-    agentIds.length === 0
-      ? 'No agents to stop'
-      : 'Stop Channel agents';
+  // The bulk pair (#task:1687) lives in the members modal and is shown by
+  // PERMISSION only — never by running state, which changes under the user and
+  // would make the modal's title cluster jitter. Its two persistent
+  // impossibilities (a closed channel, a channel with no agents) hide it too:
+  // there is nothing to act on, so an icon there would be a dead affordance.
+  const showBulkAgentActions =
+    canManageAllChannelAgents && !closed && agentIds.length > 0;
   const restartAgents = useCallback(async () => {
     if (agentActionDisabled) return;
     for (const agent of channelAgents) {
@@ -457,6 +458,7 @@ function ActiveChannelView({
       channelId={conversation.id}
       conversationAgents={channelAgents}
       agentAvatarUrls={agentAvatarUrls}
+      onOpenMembers={() => setMembersOpen(true)}
     />
   ) : null;
 
@@ -726,29 +728,16 @@ function ActiveChannelView({
               <Paperclip className="size-3.5" />
             </button>
           ) : null}
-          {canManageAllChannelAgents ? (
-            <>
-              <button
-                type="button"
-                onClick={() => void restartAgents()}
-                disabled={agentActionDisabled}
-                aria-label={restartTitle}
-                title={restartTitle}
-                className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
-              >
-                <RefreshCw className="size-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => void stopAgents()}
-                disabled={agentActionDisabled}
-                aria-label={stopTitle}
-                title={stopTitle}
-                className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-35"
-              >
-                <Power className="size-3.5" />
-              </button>
-            </>
+          {gate.allowMemberEffects ? (
+            // Carries the member count (shiki 2026-07-28). The number is
+            // derived inside from the roster read model the strip already
+            // holds — no count endpoint, no second state — which is also why
+            // the read lives in the component and not here: it must not mount
+            // for a viewer this gate excludes.
+            <MembersButton
+              channelId={conversation.id}
+              onOpen={() => setMembersOpen(true)}
+            />
           ) : null}
           {canRenameChannel || canToggleArchive ? (
             <button
@@ -841,6 +830,39 @@ function ActiveChannelView({
           }
           canLeave={canLeaveChannel}
           leaveBlockedReason={leaveBlockedReason}
+        />
+      ) : null}
+
+      {gate.allowMemberEffects ? (
+        <ChannelMembersDialog
+          open={membersOpen}
+          onOpenChange={setMembersOpen}
+          channelId={conversation.id}
+          conversationAgents={channelAgents}
+          agentAvatarUrls={agentAvatarUrls}
+          onRestartAllAgents={
+            showBulkAgentActions ? () => void restartAgents() : undefined
+          }
+          onStopAllAgents={
+            showBulkAgentActions ? () => void stopAgents() : undefined
+          }
+          bulkAgentPending={startAgent.isPending || stopAgent.isPending}
+          onLeave={
+            isRegularChannel && onLeaveChannel && gate.allowMutations
+              ? () => onLeaveChannel(conversation.id)
+              : undefined
+          }
+          canLeave={canLeaveChannel}
+          leaveBlockedReason={leaveBlockedReason}
+          visibility={channelVisibility}
+          // Same floor as the header `+`: a member of a non-closed regular
+          // channel may open the picker. Who is actually addable stays the
+          // picker's per-candidate answer.
+          addMemberWorkspaceId={
+            canAddMember(conversation, closed) && gate.allowMutations
+              ? conversation.workspace_id
+              : undefined
+          }
         />
       ) : null}
 

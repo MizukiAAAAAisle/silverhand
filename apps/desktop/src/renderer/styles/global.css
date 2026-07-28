@@ -166,6 +166,13 @@ html, body, #root {
   font-family: var(--font-sans);
   font-size: 16px;
   line-height: 1.5;
+  /* Text smoothing for the WHOLE app from here. Both properties are
+     inherited, so every descendant — and every `::before` / `::after`, which
+     inherits from its originating element — already renders with grayscale
+     antialiasing; a `*, ::before, ::after` rule would repeat this on every
+     node and change nothing (shiki asked 2026-07-28). What does NOT reach
+     here is a document that never loads this file: the startup-failure window
+     restates the pair in `main/startup-failure-exit.ts`. */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

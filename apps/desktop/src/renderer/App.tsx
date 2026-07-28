@@ -89,6 +89,10 @@ import {
   useMessageUnreadSummary,
 } from '@/features/channels/hooks';
 import { isMemberChannel, mountsMemberOnlyPanel } from '@/features/channels/membership';
+import {
+  useForeignWorkspaceChannelRemovalSync,
+  useViewerChannelRemovalSync,
+} from '@/features/channels/useViewerChannelRemovalSync';
 import { useChannelMembership } from '@/features/channels/use-channel-membership';
 import { useActivity } from '@/features/attention/hooks';
 import {
@@ -369,7 +373,7 @@ function RegisteredAppShell(): JSX.Element {
       ),
     [workspaces],
   );
-  const { data: activeChannels = [] as ChannelListItem[], isLoading: activeChannelsLoading } = useChannelsForWorkspace(
+  const { data: activeChannels = [] as ChannelListItem[], isLoading: activeChannelsLoading, status: activeChannelsStatus, fetchStatus: activeChannelsFetchStatus } = useChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
   );
@@ -397,7 +401,7 @@ function RegisteredAppShell(): JSX.Element {
     }
     return m;
   }, [channelSort]);
-  const { data: archivedChannels = [] as ChannelListItem[] } = useArchivedChannelsForWorkspace(
+  const { data: archivedChannels = [] as ChannelListItem[], status: archivedChannelsStatus, fetchStatus: archivedChannelsFetchStatus } = useArchivedChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
   );
@@ -423,6 +427,61 @@ function RegisteredAppShell(): JSX.Element {
     () => activeChannels.filter(isMemberChannel),
     [activeChannels],
   );
+  // Move the primary pane off a channel it can no longer point at — shared by
+  // self-leave of a PRIVATE channel and by a third-party removal that took the
+  // channel out of discovery (#task:1689). `memberActiveChannels` may or may not
+  // still contain the departed id (the leave path runs before the list refetch,
+  // the removal path after); `pickFallbackAfterArchive` handles both.
+  const departPrimaryPane = useCallback(
+    (channelId: string) => {
+      if (channelId !== selectedChannelId) return;
+      const wid = selectedWorkspaceId;
+      if (!wid) return;
+      const fallbackId = pickFallbackAfterArchive(memberActiveChannels, channelId);
+      if (fallbackId) {
+        nav.toChannel(wid, fallbackId);
+        return;
+      }
+      // No active top-level channel remains → clear to the workspace empty
+      // state, excluding the departed channel from the auto-select effect until
+      // the list refetch drops it (same two guards as archive).
+      recentlyRemovedPrimaryRef.current = { workspaceId: wid, channelId };
+      lastChannelByWorkspace.delete(wid);
+      persistLastChannel();
+      nav.toWorkspace(wid);
+    },
+    [
+      selectedChannelId,
+      selectedWorkspaceId,
+      memberActiveChannels,
+      nav.toChannel,
+      nav.toWorkspace,
+    ],
+  );
+  // §12 convergence for "a third party removed me from this channel": the
+  // authoritative list refetch is the observation, and every viewer-local
+  // projection of the lost channel is settled through the removal contract.
+  // Settled is per list and includes `fetchStatus` — `status` alone stays
+  // 'success' through a background refetch, which is exactly the split-brain
+  // tick where a channel moving between the two tables is momentarily in
+  // neither (#task:1689).
+  useViewerChannelRemovalSync({
+    workspaceId: selectedWorkspaceId,
+    active: activeChannels,
+    archived: archivedChannels,
+    activeSettled:
+      activeChannelsStatus === 'success' && activeChannelsFetchStatus === 'idle',
+    archivedSettled:
+      archivedChannelsStatus === 'success' && archivedChannelsFetchStatus === 'idle',
+    onVisibilityLoss: departPrimaryPane,
+  });
+  // The same fact in a workspace the viewer is NOT looking at: cache-only
+  // convergence so a global badge / Activity row / task row never survives on a
+  // channel the viewer lost, waiting for them to navigate there (#task:1689).
+  useForeignWorkspaceChannelRemovalSync({
+    workspaceIds: visibleWorkspaceIds,
+    selectedWorkspaceId,
+  });
   const starWorkspace = useStarWorkspace();
   const starChannel = useStarChannel(selectedWorkspaceId ?? null);
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
@@ -1247,33 +1306,13 @@ function RegisteredAppShell(): JSX.Element {
       const res = await leaveChannel.mutateAsync(channelId);
       const isPrivate =
         res.channel.kind === 'channel' && res.channel.visibility === 'private';
-      if (!isPrivate || channelId !== selectedChannelId) return;
-      const wid = selectedWorkspaceId;
-      if (!wid) return;
-      // `memberActiveChannels` still includes the just-left channel (the list
-      // invalidation hasn't refetched yet) — the neighbor-aware picker needs it
-      // to find its siblings. Same fallback ladder as archive.
-      const fallbackId = pickFallbackAfterArchive(memberActiveChannels, channelId);
-      if (fallbackId) {
-        nav.toChannel(wid, fallbackId);
-        return;
-      }
-      // No active top-level channel remains → clear to the workspace empty
-      // state, excluding the just-left channel from the auto-select effect until
-      // the list refetch drops it (same two guards as archive).
-      recentlyRemovedPrimaryRef.current = { workspaceId: wid, channelId };
-      lastChannelByWorkspace.delete(wid);
-      persistLastChannel();
-      nav.toWorkspace(wid);
+      if (!isPrivate) return;
+      // Same ladder a third-party removal uses (`departPrimaryPane`): next/prev
+      // neighbor, else clear to the workspace empty state. It no-ops when the
+      // left channel isn't the primary selection.
+      departPrimaryPane(channelId);
     },
-    [
-      leaveChannel,
-      selectedChannelId,
-      selectedWorkspaceId,
-      memberActiveChannels,
-      nav.toChannel,
-      nav.toWorkspace,
-    ],
+    [leaveChannel, departPrimaryPane],
   );
 
   // Memoize the descriptor objects so ChannelView's `conversation` prop keeps a

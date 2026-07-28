@@ -53,11 +53,21 @@ fail-closed for a public non-member by default.
 ### 2.2 `canReadConversation` — the ONLY public read widening
 
 `canViewConversation(...) OR isPublicChannelBranch(...)`. Grants **pure reads
-only** to a public non-member: channel detail, message history, thread read, and
-the attachment **bytes** of an attachment referenced by a persisted message in
-the channel (in-message preview). The Attachments **panel list**
+only** to a public non-member: channel detail, conversation **ref** (identity +
+routing metadata — `GET /api/conversations/:id/ref`, backing the `#conv:<id>`
+chip and the `?side` pane), message history, thread read, and the attachment
+**bytes** of an attachment referenced by a persisted message in the channel
+(in-message preview). The Attachments **panel list**
 (`GET /api/channels/:id/attachments`) stays membership-only. This is the single
 place the public widening lives.
+
+A ref is deliberately on this gate rather than the stricter one: it is the
+*identity of a conversation the caller may already read*, so gating it more
+narrowly than the read it introduces made every chip and side pane answer
+"unauthorized" for a channel whose full history the main pane renders. The ref
+payload carries no messages, no per-viewer unread and no roster, and its net
+widening (`active` ∧ `public` ∧ same workspace ∧ non-member) is exactly the set
+the discovery-union list already hands the same viewer (§4).
 
 Bytes-vs-affordance: once the backend serves the bytes of an in-message
 attachment to a public non-member, export cannot be *technically* prevented (the

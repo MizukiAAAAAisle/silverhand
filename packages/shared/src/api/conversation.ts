@@ -152,12 +152,50 @@ export const MemberDtoSchema = z.discriminatedUnion('kind', [
 ]);
 export type MemberDto = z.infer<typeof MemberDtoSchema>;
 
-/** Response shape for `GET /api/conversations/:id/members`. */
+/** Per-member, VIEWER-SCOPED removability (#task:1688). Lives on the members
+ *  READ envelope, never on `MemberDto` — a member's identity is the same for
+ *  every reader, while "may I remove this one" is a property of the reader
+ *  (same rule as `is_member` / `can_leave` on the channel-detail envelope,
+ *  docs/architecture-principles.md §12.1#5).
+ *
+ *  It exists so a surface can HIDE the action instead of rendering it disabled:
+ *  the human arm depends on a fact the client cannot see (the target's
+ *  workspace role) plus three eligibility guards (archived channel, the private
+ *  channel's workspace owner, the last human of a private channel) that a
+ *  client-side re-derivation would drift from. Advisory display only — the
+ *  DELETE routes stay authoritative.
+ *
+ *  `id` is the member's primary key (`agent_id` for agents, `user_id` for
+ *  humans), so `(kind, id)` identifies exactly one `MemberDto`. Clients must
+ *  LOOK UP by `(kind, id)`, not by index: an optimistically edited client cache
+ *  may hold a filtered `members` array against an unfiltered carrier. */
+export const MemberRemovabilityDtoSchema = z.object({
+  kind: z.enum(['agent', 'human']),
+  id: z.string(),
+  can_remove: z.boolean(),
+});
+export type MemberRemovabilityDto = z.infer<typeof MemberRemovabilityDtoSchema>;
+
+/** The plain member-roster envelope returned by the member WRITE routes (add /
+ *  remove, human + internal-agent surfaces): the fresh roster, no viewer-scoped
+ *  carriers. */
 export const ConversationMembersResponseSchema = z.object({
   members: z.array(MemberDtoSchema),
 });
 export type ConversationMembersResponse = z.infer<
   typeof ConversationMembersResponseSchema
+>;
+
+/** Response shape for `GET /api/conversations/:id/members` — the roster plus
+ *  this viewer's per-member removability (one entry per member). A superset of
+ *  {@link ConversationMembersResponseSchema}, so a caller that only needs the
+ *  roster can keep reading it as one. */
+export const ConversationMembersReadResponseSchema =
+  ConversationMembersResponseSchema.extend({
+    member_removability: z.array(MemberRemovabilityDtoSchema),
+  });
+export type ConversationMembersReadResponse = z.infer<
+  typeof ConversationMembersReadResponseSchema
 >;
 
 const ConversationMemberHandleSchema = z
@@ -294,33 +332,46 @@ export const ChannelDetailResponseSchema = z.object({
 });
 export type ChannelDetailResponse = z.infer<typeof ChannelDetailResponseSchema>;
 
-/** Item in the workspace channel list (`GET /api/workspaces/:id/channels`). It
- *  is a channel-like identity (`channel` OR `dm_channel`) PLUS the route-computed,
- *  per-viewer `is_member` — the SAME viewer-scoped bit the channel-detail
- *  envelope carries (see `ChannelDetailResponseSchema` and the note on
- *  `ConversationDtoSchema.visibility`). `is_member` stays a projection field;
- *  the identity DTOs are never widened. EVERY active item a user receives from
- *  this endpoint carries `is_member`: a regular channel computes it (joined vs
+/** Item in a workspace channel list — BOTH `GET /api/workspaces/:id/channels`
+ *  and its archived twin `GET /api/workspaces/:id/channels/archived`
+ *  (#task:1691). It is a channel-like identity (`channel` OR `dm_channel`) PLUS
+ *  the route-computed, per-viewer `is_member` — the SAME viewer-scoped bit the
+ *  channel-detail envelope carries (see `ChannelDetailResponseSchema` and the
+ *  note on `ConversationDtoSchema.visibility`). `is_member` stays a projection
+ *  field; the identity DTOs are never widened. EVERY item a user receives from
+ *  either endpoint carries `is_member`: a regular channel computes it (joined vs
  *  browse-only public), a `dm_channel` is always `true` (the DM list is strictly
  *  membership-filtered). A missing field means an older/unaware payload → the
  *  gate treats it as unknown and fetches detail; it never assumes membership.
+ *  A consumer therefore never has to know WHICH of the two lists a row came
+ *  from to read membership off it — that was the split-brain this shape closes.
  *
- *  DISCOVERY UNION (regular workspaces, user principal): the list is channels
- *  the viewer has joined (any visibility → `is_member: true`) PLUS active PUBLIC
- *  channels the viewer has not joined (`is_member: false`, the browse-and-Join
- *  surface). Private channels the viewer is not a member of never appear.
+ *  The two lists differ in their SET, not in their row shape:
+ *  - ACTIVE — DISCOVERY UNION (regular workspaces, user principal): channels
+ *    the viewer has joined (any visibility → `is_member: true`) PLUS active
+ *    PUBLIC channels the viewer has not joined (`is_member: false`, the
+ *    browse-and-Join surface). Private channels the viewer is not a member of
+ *    never appear.
+ *  - ARCHIVED — strictly membership-filtered: an archived channel the viewer is
+ *    not a member of is ABSENT, not present with `is_member: false` (archive is
+ *    not a discovery surface; the global recovery index is
+ *    `ArchivedChannelListItemDtoSchema`). Every archived row is consequently
+ *    `is_member: true` today — but it is COMPUTED per row from the same
+ *    membership `EXISTS` that defines the set, so widening the set later yields
+ *    real `false` rows instead of a silently-constant `true`.
  *
- *  ⚠️ NOT a backward-compatible additive change at the SET level. The FIELD is
- *  additive, but the returned SET widens from member-only to a discovery union,
- *  so an unaware consumer would treat a browse-only public channel as an
- *  ordinary joined channel (auto-open / restore / persist it, list it in
- *  member-scoped aggregations). EVERY consumer of this list must classify items
- *  by `is_member` (member-only paths — restore/default/fallback, task/aggregate
- *  filters — must exclude `is_member: false`). The backend union and the
- *  renderer consumer-split therefore ship in the SAME release; this list must
- *  not be published to an un-migrated renderer. The flat shape only buys a
+ *  ⚠️ The ACTIVE list is NOT a backward-compatible additive change at the SET
+ *  level. The FIELD is additive, but that list's SET widens from member-only to
+ *  a discovery union, so an unaware consumer would treat a browse-only public
+ *  channel as an ordinary joined channel (auto-open / restore / persist it, list
+ *  it in member-scoped aggregations). EVERY consumer of the active list must
+ *  classify items by `is_member` (member-only paths — restore/default/fallback,
+ *  task/aggregate filters — must exclude `is_member: false`). The backend union
+ *  and the renderer consumer-split therefore ship in the SAME release; that list
+ *  must not be published to an un-migrated renderer. The flat shape only buys a
  *  single-field gate read — it does NOT remove the consumer-migration
- *  requirement. */
+ *  requirement. The archived list carries no such warning: its set did not
+ *  change, only the carrier was added. */
 export const WorkspaceChannelListItemSchema = z.discriminatedUnion('kind', [
   ChannelConversationDtoSchema.extend({ is_member: z.boolean() }),
   DmChannelDtoSchema.extend({ is_member: z.boolean() }),

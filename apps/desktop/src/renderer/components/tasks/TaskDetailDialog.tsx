@@ -111,6 +111,10 @@ export function TaskDetailDialog({
         // Explicit px instead of a Tailwind step because 800 sits between
         // `max-w-2xl` and `max-w-3xl`.
         className="flex max-h-[80vh] max-w-[800px] flex-col gap-0 p-0"
+        // This dialog owns its padding (`p-0` + a bordered header at `px-5
+        // py-4`), so the cluster keeps hugging the corner: its band is the
+        // metadata row, not a `p-6` title line.
+        cornerBand="top"
         cornerActions={
           showJump ? (
             <button

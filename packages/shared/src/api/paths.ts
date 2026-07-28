@@ -204,11 +204,15 @@ export const apiPaths = {
   conversationChannelAgents: (id: string) => `/api/channels/${id}/agents`,
 
   /** Identity + routing metadata for ANY conversation by id (channel /
-   *  dm_channel / thread). Backs cross-workspace secondary-pane
+   *  dm_channel). Backs cross-workspace secondary-pane
    *  resolution and the `#conv:<id>` sigil renderer. Returns
    *  `ConversationRefResponse`; does NOT include messages or per-user
-   *  unread state. Permission: workspace member of the target
-   *  conversation's workspace. */
+   *  unread state. Permission: `canReadConversation` — the same
+   *  public-aware read gate as channel detail + message history, i.e. a
+   *  conversation member OR a workspace member browsing an ACTIVE PUBLIC
+   *  channel. Workspace membership alone is NOT enough: a private channel
+   *  / archived public channel / non-participant `dm_channel` in the
+   *  viewer's own workspace all stay 403. */
   conversationRef: (id: string) => `/api/conversations/${id}/ref`,
   /** Per-channel reply-cluster ("Threads") discovery list (#task:1074).
    *  Takes a conversation id but only resolves channel / dm_channel; a
@@ -270,6 +274,14 @@ export const apiPaths = {
    *  the agent row stay intact. */
   conversationAgentMember: (id: string, agentId: string) =>
     `/api/conversations/${id}/members/agents/${agentId}`,
+  /** Remove ANOTHER human from a channel (#task:1688). The third-party
+   *  counterpart of `channelLeave`: same eligibility guards evaluated for the
+   *  TARGET, plus workspace governance (`admin`) on the caller. Removing
+   *  YOURSELF is not this route — `channelLeave` is, and it deliberately emits
+   *  no system message. Workspace membership and the user row stay intact;
+   *  only the conversation edge is removed. */
+  conversationHumanMember: (id: string, userId: string) =>
+    `/api/conversations/${id}/members/users/${userId}`,
 
   // attachments — upload via channel context, download by id.
   // Each upload creates an independent blob (no de-dup).

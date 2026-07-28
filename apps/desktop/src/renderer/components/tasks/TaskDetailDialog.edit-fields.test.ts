@@ -156,8 +156,16 @@ describe('TaskDetailDialog inline editor — blur-save, per-field, single-line t
       ),
       'utf8',
     );
-    expect(forza).toContain(
-      ':is([data-sticker-close], [data-task-view-jump])',
-    );
+    // Matched on the selector family rather than one literal string: the family
+    // has since grown a generic `data-dialog-corner-action` arm (and wraps over
+    // several lines), and what must hold is co-membership, not the exact text.
+    const families = forza
+      .replace(/\s+/g, ' ')
+      .match(/:is\([^)]*\)/g)
+      ?.filter(sel => sel.includes('[data-sticker-close]'));
+    expect(families?.length).toBeGreaterThan(0);
+    for (const family of families ?? []) {
+      expect(family).toContain('[data-task-view-jump]');
+    }
   });
 });
