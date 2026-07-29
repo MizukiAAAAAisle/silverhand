@@ -1109,21 +1109,42 @@ function RegisteredAppShell(): JSX.Element {
   const drawerVisible = drawerHostable && tasksDrawerOpen;
   const sectionVisible = appSection === 'tasks';
 
-  // `?task=<id>` routes to ONE of two surfaces, never both. In a channel chat
-  // (and with the task drawer down) it is an overlay SIDE PANE beside the
-  // conversation (#task:1721) — the task can be read/edited without covering the
-  // messages it was referenced from. Every other position (a board / drawer card,
-  // or a cold deep-link outside chat) keeps the app-level modal: there is no
-  // conversation there for a pane to anchor to. The split is on the SAME `?task`
-  // pointer, so the pane id and the modal id are exclusive by construction and
-  // the task can't double-render.
-  const taskPaneEligible =
-    appSection === 'chat' &&
-    view === 'channel' &&
-    selectedChannelId !== null &&
-    !drawerVisible;
-  const taskPaneId = taskPaneEligible ? taskDetailId : null;
-  const taskModalId = taskPaneEligible ? null : taskDetailId;
+  // `?task=<id>` routes to ONE of two surfaces, never both: an overlay SIDE PANE
+  // beside a conversation (#task:1721) or the app-level MODAL. The choice is made
+  // ONCE, from the ENTRANCE that opened the pointer, then FROZEN for that
+  // pointer's life — it must NOT be re-derived from live context. Opening the
+  // tasks drawer over a task pane used to flip the SAME `?task` from pane to modal
+  // (the discriminant read `drawerVisible`), tearing the mounted pane down and
+  // popping a modal — one action ("peek at the drawer") silently changed another
+  // piece of state's container, layer, and edit lifecycle (shiki + Cindy
+  // 2026-07-29). Now the drawer is a pure overlay: toggling it leaves the pane the
+  // same instance in the same state; close it and the untouched pane is right
+  // where it was.
+  //
+  // Decision at open time: a channel-chat entrance with the drawer DOWN (a chat
+  // `#task` chip) → pane; every other entrance (a drawer / board card, a cold
+  // deep-link, Activity) → modal — there is no anchored conversation for a pane.
+  // Re-decided only when the pointer's TASK ID changes (a different task opened),
+  // never when the drawer or section toggles under a live pointer. `selectedChannelId`
+  // is route-derived, so a pane host always has a channel to mount in; the pointer
+  // is dropped by any navigation that leaves the channel, which resets the host.
+  const [taskHost, setTaskHost] = useState<'pane' | 'modal' | null>(null);
+  const taskHostPointerRef = useRef<string | null>(null);
+  if (taskDetailId !== taskHostPointerRef.current) {
+    taskHostPointerRef.current = taskDetailId;
+    if (taskDetailId === null) {
+      if (taskHost !== null) setTaskHost(null);
+    } else {
+      const paneEntrance =
+        appSection === 'chat' &&
+        view === 'channel' &&
+        selectedChannelId !== null &&
+        !drawerVisible;
+      setTaskHost(paneEntrance ? 'pane' : 'modal');
+    }
+  }
+  const taskPaneId = taskHost === 'pane' ? taskDetailId : null;
+  const taskModalId = taskHost === 'modal' ? taskDetailId : null;
 
   // The task pane's single request-close owner, shared by its header ✕ and the
   // ⌘W rung so the "editing → don't tear it down" contract lives in ONE place
@@ -1133,9 +1154,9 @@ function RegisteredAppShell(): JSX.Element {
   // field, firing its save, and a failed save keeps the draft + inline error
   // rather than being unmounted mid-flight. The pane reports its editing state
   // into a ref (not state): the gate is read at click/keypress time and must
-  // never re-render App. Leaving the task context entirely (channel switch,
-  // another overlay, the drawer) is a separate, unadjudicated question and is
-  // deliberately NOT handled here.
+  // never re-render App. Leaving the task context by a channel switch is a
+  // separate, unadjudicated question and is deliberately NOT handled here; the
+  // drawer is no longer such a path — it overlays the pane without unmounting it.
   const taskPaneEditingRef = useRef(false);
   const setTaskPaneEditing = useCallback((editing: boolean) => {
     taskPaneEditingRef.current = editing;
@@ -1675,9 +1696,10 @@ function RegisteredAppShell(): JSX.Element {
     // `?thread` / `?threads`, so it renders ahead of the side/thread/threads
     // chain and closing it reveals whatever conversation pane was underneath (the
     // URL is the restore stack). Not a conversation, so it doesn't feed
-    // `secondaryDescriptor` / notification suppression. Only reachable here when
-    // `taskPaneEligible` held (in-channel chat, drawer down); every other entry
-    // kept the modal.
+    // `secondaryDescriptor` / notification suppression. Rendered whenever this
+    // pointer's frozen host is `pane`, regardless of the drawer: the drawer
+    // overlays this pane rather than replacing it, so it stays mounted (same
+    // instance, same scroll/edit state) beneath a drawer that comes and goes.
     secondaryView = (
       <TaskDetailPanel
         key={`task-${taskPaneId}`}
@@ -2363,7 +2385,7 @@ function RegisteredAppShell(): JSX.Element {
           defaultConversationId={selectedChannelId}
           revealTaskId={drawerVisible ? reveal.taskId : null}
           onRevealConsumed={clearReveal}
-          detailOpen={taskDetailId !== null}
+          detailOpen={taskModalId !== null}
           onOpenTask={handleOpenTask}
         />
       ) : null}
