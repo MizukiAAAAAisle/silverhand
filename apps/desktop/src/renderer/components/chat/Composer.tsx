@@ -27,6 +27,7 @@ import {
   useWorkspaceMemberLists,
   type ChannelListItem,
   type WorkspaceHumanMember,
+  type WorkspaceMemberLists,
 } from '@/features/workspaces/hooks';
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
@@ -324,10 +325,12 @@ export function Composer({
       ? viewerQuery.data.id
       : null;
   // Membership sets used to split the mention picker into "In this
-  // channel" vs "Other channels" groups (#task:876). Empty sets while
-  // conversationMembers is still loading collapse the picker to the
-  // "Other channels" section by default; once it resolves the viewer
-  // sees the proper split.
+  // channel" vs "Other channels" groups (#task:876). While the roster is
+  // unresolved these stay empty — but that is "membership UNKNOWN", not
+  // "confirmed nobody in this channel", so the picker must not emit a
+  // (mis-grouped) candidate list yet; `selectMentionCandidates` gates on
+  // `rosterResolved` below (#task:1720 review).
+  const rosterResolved = conversationMembers.status === 'resolved';
   const { agentMemberIds, humanMemberIds } = useMemo(() => {
     const a = new Set<string>();
     const h = new Set<string>();
@@ -339,25 +342,15 @@ export function Composer({
     }
     return { agentMemberIds: a, humanMemberIds: h };
   }, [conversationMembers.status, conversationMembers.members]);
-  // Human mention candidates = this workspace's human members, minus the
-  // viewer. Membership against THIS conversation is folded in by the
-  // picker's grouping pass downstream, not pre-filtered out — the picker
-  // still shows members not in this channel so the mention-cc DM path
-  // stays discoverable (see #task:864 / mention_cc fix series), now bounded
-  // to the workspace instead of the global user directory (#task:1720).
-  const mentionHumans = useMemo<HumanMentionCandidate[]>(() => {
-    const out: HumanMentionCandidate[] = [];
-    for (const human of workspaceHumans) {
-      if (viewerId && human.id === viewerId) continue;
-      out.push({
-        id: human.id,
-        name: human.name,
-        display_name: human.display_name,
-        avatar_url: human.avatar_url ?? null,
-      });
-    }
-    return out;
-  }, [workspaceHumans, viewerId]);
+  // Human candidates for avatar PREFETCH: this workspace's human members
+  // minus the viewer. This mirrors the picker's own candidate transform
+  // (`buildMentionHumans`) so the avatars are warm before a row renders;
+  // avatar prefetch is not gated on roster resolution — only the visible
+  // candidate list is (see `selectMentionCandidates`).
+  const mentionHumans = useMemo<HumanMentionCandidate[]>(
+    () => buildMentionHumans(workspaceHumans, viewerId),
+    [workspaceHumans, viewerId],
+  );
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
   // `#` autocomplete uses the same workspace resolved above — channel
@@ -377,21 +370,23 @@ export function Composer({
   const { items, hiddenCount } = useMemo<PickerResult>(() => {
     if (!trigger) return { items: [], hiddenCount: 0 };
     if (trigger.kind === '@') {
-      return filterMentionPeople(
-        agents,
-        mentionHumans,
+      return selectMentionCandidates(
+        memberLists.data,
+        rosterResolved,
         agentMemberIds,
         humanMemberIds,
+        viewerId,
         trigger.query,
       );
     }
     return filterChannels(workspaceChannels, trigger.query);
   }, [
     trigger,
-    agents,
-    mentionHumans,
+    memberLists.data,
+    rosterResolved,
     agentMemberIds,
     humanMemberIds,
+    viewerId,
     workspaceChannels,
   ]);
 
@@ -1064,6 +1059,29 @@ export interface PickerResult {
 }
 
 /**
+ * Map this workspace's human members into mention candidates, dropping
+ * the viewer's own row (you can't @-mention yourself meaningfully —
+ * #task:876). Pure so the picker's candidate boundary is testable
+ * without the DOM (#task:1720).
+ */
+export function buildMentionHumans(
+  humans: WorkspaceHumanMember[],
+  viewerId: string | null,
+): HumanMentionCandidate[] {
+  const out: HumanMentionCandidate[] = [];
+  for (const human of humans) {
+    if (viewerId && human.id === viewerId) continue;
+    out.push({
+      id: human.id,
+      name: human.name,
+      display_name: human.display_name,
+      avatar_url: human.avatar_url ?? null,
+    });
+  }
+  return out;
+}
+
+/**
  * Filter and group the mention picker candidate set.
  *
  * Candidate boundary (#task:1720): `agents` / `humans` are already
@@ -1131,6 +1149,43 @@ export function filterMentionPeople(
     items,
     hiddenCount: inItems.length + outItems.length - items.length,
   };
+}
+
+/**
+ * Resolve the `@` mention picker's candidate set from the workspace
+ * member lists + this conversation's roster. Fails CLOSED to no
+ * candidates until BOTH have resolved (#task:1720 review):
+ *
+ * - No `memberLists` → the workspace hasn't resolved (or `workspaceId`
+ *   is still null). Falling back to a global user/agent directory here
+ *   would briefly leak candidates from OUTSIDE this workspace.
+ * - `!rosterResolved` → conversation membership is UNKNOWN, not
+ *   "confirmed nobody". Emitting now would file in-channel members under
+ *   "Other channels", then jump them into "In this channel" the instant
+ *   the roster arrives.
+ *
+ * Once ready it drops the viewer, then defers ordering/grouping to
+ * `filterMentionPeople` — the caller's `agentMemberIds` / `humanMemberIds`
+ * decide the In-this-channel / Other-channels split. Pure (no hooks/DOM)
+ * so the candidate boundary and both fail-closed windows are testable.
+ */
+export function selectMentionCandidates(
+  memberLists: WorkspaceMemberLists | null | undefined,
+  rosterResolved: boolean,
+  agentMemberIds: ReadonlySet<string>,
+  humanMemberIds: ReadonlySet<string>,
+  viewerId: string | null,
+  query: string,
+): PickerResult {
+  if (!memberLists || !rosterResolved) return { items: [], hiddenCount: 0 };
+  const humans = buildMentionHumans(memberLists.humans, viewerId);
+  return filterMentionPeople(
+    memberLists.agents,
+    humans,
+    agentMemberIds,
+    humanMemberIds,
+    query,
+  );
 }
 
 /**

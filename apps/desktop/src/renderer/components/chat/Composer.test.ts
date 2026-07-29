@@ -1,10 +1,18 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
+import type {
+  AgentDto,
+  ChannelConversationDto,
+  WorkspaceHumanMemberDto,
+} from '@silverhand/shared';
 import {
+  buildMentionHumans,
   detectTrigger,
   filterChannels,
   filterMentionPeople,
   formatPickInsertion,
+  selectMentionCandidates,
   type HumanMentionCandidate,
 } from './Composer';
 
@@ -72,6 +80,24 @@ function human(
     avatar_url: null,
     ...overrides,
   };
+}
+
+function wsHuman(
+  overrides: Partial<WorkspaceHumanMemberDto> = {},
+): WorkspaceHumanMemberDto {
+  return {
+    id: 'u-1',
+    name: 'shiki',
+    display_name: 'Shiki',
+    avatar_url: null,
+    created_at: 0,
+    updated_at: 0,
+    workspace_id: 'w-1',
+    user_id: 'u-1',
+    joined_at: 0,
+    role: 'member',
+    ...overrides,
+  } as WorkspaceHumanMemberDto;
 }
 
 describe('formatPickInsertion', () => {
@@ -404,3 +430,118 @@ describe('detectTrigger', () => {
   });
 });
 
+describe('buildMentionHumans', () => {
+  it('drops the viewer and maps members to mention candidates', () => {
+    const out = buildMentionHumans(
+      [
+        wsHuman({ id: 'u-me', name: 'me', display_name: 'Me' }),
+        wsHuman({ id: 'u-2', name: 'other', display_name: 'Other' }),
+      ],
+      'u-me',
+    );
+    expect(out).toEqual([
+      { id: 'u-2', name: 'other', display_name: 'Other', avatar_url: null },
+    ]);
+  });
+
+  it('keeps everyone when there is no viewer id', () => {
+    const out = buildMentionHumans([wsHuman({ id: 'u-1' })], null);
+    expect(out.map(h => h.id)).toEqual(['u-1']);
+  });
+});
+
+describe('selectMentionCandidates', () => {
+  const members = {
+    agents: [agent({ id: 'a-1', name: 'alice', display_name: 'Alice' })],
+    humans: [wsHuman({ id: 'u-1', name: 'shiki', display_name: 'Shiki' })],
+    viewerRole: null,
+  };
+
+  it('fails closed to empty when the workspace member lists have not resolved', () => {
+    // No member-list data = workspace unresolved (or workspaceId still
+    // null). Must NOT fall back to a global directory (#task:1720): both
+    // undefined and null yield an empty picker.
+    expect(
+      selectMentionCandidates(undefined, true, new Set(), new Set(), null, ''),
+    ).toEqual({ items: [], hiddenCount: 0 });
+    expect(
+      selectMentionCandidates(null, true, new Set(), new Set(), null, ''),
+    ).toEqual({ items: [], hiddenCount: 0 });
+  });
+
+  it('fails closed to empty while the conversation roster is unresolved', () => {
+    // Empty member-id sets with an unresolved roster mean membership is
+    // UNKNOWN, not "nobody in this channel" — emitting now would file
+    // in-channel members under "Other channels" and jump them into "In
+    // this channel" the instant the roster arrives (#task:1720 review).
+    expect(
+      selectMentionCandidates(members, false, new Set(), new Set(), null, ''),
+    ).toEqual({ items: [], hiddenCount: 0 });
+  });
+
+  it('once both are resolved, drops the viewer and groups by the roster', () => {
+    const memberLists = {
+      agents: [
+        agent({ id: 'a-in', name: 'inagent', display_name: 'InAgent' }),
+        agent({ id: 'a-out', name: 'outagent', display_name: 'OutAgent' }),
+      ],
+      humans: [
+        wsHuman({ id: 'u-me', name: 'me', display_name: 'Me' }),
+        wsHuman({ id: 'u-in', name: 'inhuman', display_name: 'InHuman' }),
+        wsHuman({ id: 'u-out', name: 'outhuman', display_name: 'OutHuman' }),
+      ],
+      viewerRole: null,
+    };
+    const { items } = selectMentionCandidates(
+      memberLists,
+      true,
+      new Set(['a-in']),
+      new Set(['u-in']),
+      'u-me',
+      '',
+    );
+    expect(
+      items.map(item => ({
+        kind: item.kind,
+        id:
+          item.kind === 'agent'
+            ? item.agent.id
+            : item.kind === 'human'
+              ? item.human.id
+              : 'n/a',
+        inConversation: item.kind === 'channel' ? null : item.inConversation,
+      })),
+    ).toEqual([
+      { kind: 'human', id: 'u-in', inConversation: true },
+      { kind: 'agent', id: 'a-in', inConversation: true },
+      { kind: 'human', id: 'u-out', inConversation: false },
+      { kind: 'agent', id: 'a-out', inConversation: false },
+    ]);
+    // The viewer never surfaces in either group.
+    expect(items.some(i => i.kind === 'human' && i.human.id === 'u-me')).toBe(
+      false,
+    );
+  });
+});
+
+describe('mention source wiring (falsifier for the workspace-scoped boundary)', () => {
+  // selectMentionCandidates / filterMentionPeople accept any arrays, so
+  // reverting the composer to the global useUsers()/useAgents() directories
+  // would leave every pure test above green. This fence pins the ONE wiring
+  // fact that makes the candidate boundary real: the composer feeds the `@`
+  // picker from the workspace-scoped member lists, never the global
+  // directories (#task:1720). Source-text, not a DOM/structure assertion.
+  const src = readFileSync(
+    fileURLToPath(new URL('./Composer.tsx', import.meta.url)),
+    'utf8',
+  );
+
+  it('sources @ candidates from useWorkspaceMemberLists(workspaceId)', () => {
+    expect(src).toContain('useWorkspaceMemberLists(workspaceId)');
+  });
+
+  it('never reads the global user / agent directories', () => {
+    expect(src).not.toContain('useUsers');
+    expect(src).not.toContain('useAgents');
+  });
+});
