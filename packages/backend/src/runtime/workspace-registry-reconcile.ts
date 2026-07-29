@@ -77,6 +77,17 @@ type GenerationState =
       resolve: () => void;
       reject: (err: WorkspaceRegistryReconcilePendingError) => void;
       settled: boolean;
+      /**
+       * #task:1719 (Cindy P1-1, lost-wakeup): a post-attach `ready`
+       * that lands while THIS run is still in flight must not be
+       * swallowed by the single-flight join — the in-flight run may
+       * already be doomed (it raced the binding). The ready arrival
+       * sets this flag; a FAILED settle with the flag up immediately
+       * re-kicks exactly one fresh run for the same generation. Only
+       * ready arrivals set it — barrier joins never do (their contract
+       * is retry-on-demand).
+       */
+      rerunRequested: boolean;
     }
   /** Ghost sweep completed for this generation. */
   | { kind: 'reconciled'; connectionId: string }
@@ -109,6 +120,19 @@ export class WorkspaceRegistryReconciler {
    */
   onHostReady(hostId: string): void {
     if (this.closed) return;
+    const existing = this.states.get(hostId);
+    const current = this.adapter()?.connectionIdForHost(hostId) ?? null;
+    if (
+      existing?.kind === 'running' &&
+      current !== null &&
+      existing.connectionId === current
+    ) {
+      // Same-generation run already in flight: record that a genuine
+      // readiness signal arrived DURING it, so a failed settle re-kicks
+      // instead of degrading to provision-lazy (lost-wakeup guard).
+      existing.rerunRequested = true;
+      return;
+    }
     this.ensureRunForCurrentGeneration(hostId);
   }
 
@@ -225,6 +249,7 @@ export class WorkspaceRegistryReconciler {
       resolve: resolveFn,
       reject: rejectFn,
       settled: false,
+      rerunRequested: false,
     };
     this.states.set(hostId, state);
     void this.runReconcile(hostId, state, gate.adapter);
@@ -284,6 +309,17 @@ export class WorkspaceRegistryReconciler {
       if (!state.settled) {
         state.settled = true;
         state.reject(new WorkspaceRegistryReconcilePendingError(hostId));
+      }
+      // Lost-wakeup guard (Cindy P1-1): a ready that arrived mid-run is a
+      // constructive "the binding is real now" signal — honor it with
+      // exactly ONE fresh run for the still-live generation. No timers,
+      // no backoff: reruns are driven solely by ready arrivals.
+      if (
+        state.rerunRequested &&
+        !this.closed &&
+        (this.adapter()?.connectionIdForHost(hostId) ?? null) === connectionId
+      ) {
+        this.ensureRunForCurrentGeneration(hostId);
       }
     };
 

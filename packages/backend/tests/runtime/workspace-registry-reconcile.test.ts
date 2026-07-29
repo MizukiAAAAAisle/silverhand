@@ -405,3 +405,103 @@ describe('WorkspaceRegistryReconciler', () => {
     ).toEqual([]);
   });
 });
+
+describe('lost-wakeup guard (#task:1719 Cindy P1-1)', () => {
+  it('a ready arriving DURING a doomed run re-kicks after the failure: second pull fires automatically and reconciles the SAME generation', async () => {
+    const firstPull = deferred<never>();
+    let pulls = 0;
+    const adapter = new FakeReconcileAdapter();
+    adapter.handlers.workspace_registry_ids = () => {
+      pulls += 1;
+      if (pulls === 1) return firstPull.promise; // held: the accept-time race
+      return Promise.resolve({ ok: true, workspace_ids: [] });
+    };
+    adapter.connections.set('host-a', 'conn-1');
+    const { reconciler } = buildReconciler(adapter);
+
+    // 1. accept-time ready: run #1 starts, pull held in flight.
+    reconciler.onHostReady('host-a');
+    expect(pulls).toBe(1);
+
+    // 2. post-attach ready lands while run #1 is still running — the
+    //    single-flight join must RECORD it, not swallow it.
+    reconciler.onHostReady('host-a');
+    expect(pulls).toBe(1); // no concurrent second run
+
+    // 3. run #1 now fails (the pre-attach outcome).
+    firstPull.reject(timeoutError('host-a'));
+    await waitFor(() => pulls === 2); // the recorded ready re-kicks exactly once
+
+    // 4. run #2 succeeds for the SAME generation; the barrier resolves.
+    await reconciler.barrier('host-a');
+    const idsCalls = adapter.calls.filter(
+      c => c.kind === 'workspace_registry_ids',
+    );
+    expect(idsCalls).toHaveLength(2);
+    expect(new Set(idsCalls.map(c => c.expectedConnectionId))).toEqual(
+      new Set(['conn-1']),
+    );
+    reconciler.close();
+  });
+
+  it('a barrier JOIN during a doomed run does NOT re-kick by itself (retry stays on-demand)', async () => {
+    const firstPull = deferred<never>();
+    let pulls = 0;
+    const adapter = new FakeReconcileAdapter();
+    adapter.handlers.workspace_registry_ids = () => {
+      pulls += 1;
+      if (pulls === 1) return firstPull.promise;
+      return Promise.resolve({ ok: true, workspace_ids: [] });
+    };
+    adapter.connections.set('host-a', 'conn-1');
+    const { reconciler } = buildReconciler(adapter);
+
+    reconciler.onHostReady('host-a');
+    const joined = reconciler.barrier('host-a').catch(err => err);
+    firstPull.reject(timeoutError('host-a'));
+    const outcome = await joined;
+    expect(outcome).toBeInstanceOf(WorkspaceRegistryReconcilePendingError);
+
+    // No ready arrived mid-run → no automatic rerun; the state stays
+    // failed until the NEXT barrier/ready re-kicks on demand.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(pulls).toBe(1);
+    reconciler.close();
+  });
+
+  it('a rerun is not fired into a REPLACED generation', async () => {
+    const firstPull = deferred<never>();
+    let pulls = 0;
+    const adapter = new FakeReconcileAdapter();
+    adapter.handlers.workspace_registry_ids = () => {
+      pulls += 1;
+      if (pulls === 1) return firstPull.promise;
+      return Promise.resolve({ ok: true, workspace_ids: [] });
+    };
+    adapter.connections.set('host-a', 'conn-1');
+    const { reconciler } = buildReconciler(adapter);
+
+    reconciler.onHostReady('host-a'); // run #1 on conn-1, held
+    reconciler.onHostReady('host-a'); // rerun recorded for conn-1
+
+    // Generation flips BEFORE the failure settles: the recorded rerun
+    // belongs to conn-1 and must not fire into conn-2 (conn-2's own
+    // ready drives its own run).
+    adapter.connections.set('host-a', 'conn-2');
+    firstPull.reject(timeoutError('host-a'));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(pulls).toBe(1);
+    reconciler.close();
+  });
+});
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error('waitFor timed out');
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}

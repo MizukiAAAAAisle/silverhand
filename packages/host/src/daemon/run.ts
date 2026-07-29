@@ -850,6 +850,27 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     hostOutboundAttachHandler: async params => {
       const result = await outboundSupervisor.attach(params);
       freezeComputerContext();
+      // #task:1719 dogfood finding — the connection-scoped `ready` is
+      // emitted at socket accept, which on an embedded boot precedes
+      // this attach by milliseconds; the backend's ready-triggered
+      // workspace-registry reconcile then raced the binding and failed
+      // `registry_unavailable` for the whole generation (eager ghost
+      // sweep silently degraded to provision-lazy). Re-announce `ready`
+      // once the control-plane binding is REAL so the reconcile trigger
+      // is causal, not a timing bet. Consumers are idempotent for an
+      // unchanged daemon generation: same pid/started_at skips the
+      // re-hydrate, the eager status seed no-ops on an existing seed,
+      // and the reconciler re-kicks exactly the absent/failed state.
+      // Scope (Cindy P1-2): ONLY the embedded local outbound surface —
+      // the race exists solely there (accept-time ready precedes attach).
+      // The standalone outbound WS declares its own ready on ws.open
+      // AFTER its binding exists; pushing a second ready through the
+      // wide broadcaster would hit a CONNECTING ws (guaranteed
+      // event_disconnected warn) or send a redundant ready to a remote
+      // backend.
+      if (result.attached) {
+        localOutboundServer?.broadcast(readyEvent());
+      }
       return result;
     },
     hostOutboundDetachHandler: async () => {
