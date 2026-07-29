@@ -1125,13 +1125,35 @@ function RegisteredAppShell(): JSX.Element {
   const taskPaneId = taskPaneEligible ? taskDetailId : null;
   const taskModalId = taskPaneEligible ? null : taskDetailId;
 
+  // The task pane's single request-close owner, shared by its header ✕ and the
+  // ⌘W rung so the "editing → don't tear it down" contract lives in ONE place
+  // instead of being guarded on one path and forgotten on the other (Cindy
+  // review, #task:1721). It mirrors the modal's close gate: while an inline
+  // field editor is open the close is refused — the ✕ click still blurs the
+  // field, firing its save, and a failed save keeps the draft + inline error
+  // rather than being unmounted mid-flight. The pane reports its editing state
+  // into a ref (not state): the gate is read at click/keypress time and must
+  // never re-render App. Leaving the task context entirely (channel switch,
+  // another overlay, the drawer) is a separate, unadjudicated question and is
+  // deliberately NOT handled here.
+  const taskPaneEditingRef = useRef(false);
+  const setTaskPaneEditing = useCallback((editing: boolean) => {
+    taskPaneEditingRef.current = editing;
+  }, []);
+  const requestCloseTaskPane = useCallback(() => {
+    if (taskPaneEditingRef.current) return;
+    nav.closeTask();
+  }, [nav]);
+
   // ⌘W ladder. Called here (not with the other early hooks) because it needs
   // `taskPaneId` to know whether the task shows as the peelable side pane or the
   // self-dismissing modal. Route + nav are read through a ref inside, so the
-  // relocation only affects hook order, not freshness.
+  // relocation only affects hook order, not freshness. `closeTask` is the
+  // guarded owner above (not raw `nav.closeTask`), so ⌘W honours the same
+  // editing gate as the ✕ — the two explicit closes go through one owner.
   useContextualCloseResponder(
     { ...route, filesListOpen: filesListMounted, threadsListOpen: threadsListMounted },
-    nav,
+    { ...nav, closeTask: requestCloseTaskPane },
     taskPaneId !== null,
   );
 
@@ -1629,8 +1651,8 @@ function RegisteredAppShell(): JSX.Element {
     );
   } else if (filesListMounted && selectedChannelId && selectedWorkspaceId) {
     // Channel Attachments panel (`?files=1`). An OVERLAY utility pane, so it
-    // sits just below the agent panel in precedence (agent > files > side >
-    // thread > threads) and ahead of the conversation panes: opening it
+    // sits just below the agent panel in precedence (agent > files > task >
+    // side > thread > threads) and ahead of the conversation panes: opening it
     // preserves `?thread` / `?threads` in the URL (cleared only `?side` /
     // `?agent`), so closing it reveals whatever conversation pane was
     // underneath — the URL is the restore stack (same model as `?agent`,
@@ -1660,7 +1682,8 @@ function RegisteredAppShell(): JSX.Element {
       <TaskDetailPanel
         key={`task-${taskPaneId}`}
         taskId={taskPaneId}
-        onClose={nav.closeTask}
+        onClose={requestCloseTaskPane}
+        onEditingChange={setTaskPaneEditing}
       />
     );
   } else if (secondaryDescriptor) {

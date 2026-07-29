@@ -26,6 +26,10 @@ export interface TaskDetailPanelProps {
    *  `?task=<id>` being present. */
   taskId: string;
   onClose: () => void;
+  /** Report whether an inline field editor is open (an UNSETTLED edit). The host
+   *  reads this to gate its single request-close owner: a ✕ / ⌘W while editing
+   *  must not unmount the pane before the blur-save settles (#task:1721). */
+  onEditingChange: (editing: boolean) => void;
 }
 
 /**
@@ -50,7 +54,7 @@ export interface TaskDetailPanelProps {
  * paints its states in plain markup — a side pane has no Radix Dialog to satisfy
  * with a `DialogTitle`/`DialogDescription`.
  */
-export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps): JSX.Element {
+export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetailPanelProps): JSX.Element {
   const detailQuery = useTaskDetail(taskId, { enabled: true });
   const failure = detailQuery.isError
     ? classifyTaskDetailFailure(detailQuery.error)
@@ -71,6 +75,14 @@ export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps): JSX.
   useEffect(() => {
     setEditingField(null);
   }, [taskId]);
+  // Mirror the unsettled-edit signal up to the host's request-close owner. A
+  // ref read at click/keypress time, so `null → non-null` doesn't re-render App;
+  // the cleanup clears it on unmount so a torn-down pane never leaves the gate
+  // stuck closed.
+  useEffect(() => {
+    onEditingChange(editingField !== null);
+  }, [editingField, onEditingChange]);
+  useEffect(() => () => onEditingChange(false), [onEditingChange]);
 
   return (
     // `.task-pane` names the container query the metadata grid reads; it also

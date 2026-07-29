@@ -131,7 +131,7 @@ export interface RouteState {
    *  `?threads`, so closing it (deleting `?files`) reveals whatever
    *  conversation pane was underneath — the URL itself is the restore
    *  stack, no memory needed (same model as `?agent`, #task:1433). The
-   *  render layer honours priority `agent > files > side > thread >
+   *  render layer honours priority `agent > files > task > side > thread >
    *  threads`. `?side` is cleared on open because a secondary CONVERSATION
    *  feeds notification suppression and must not stay "visible" while
    *  covered. It is NOT a conversation — a channel-scoped index resolved
@@ -633,7 +633,9 @@ export function buildSideOpenUrl(
  *    the thread removes the secondary pane).
  *  - `rootMessageId !== null` → open `thread` (a `replace` pane): set
  *    `?thread=<id>` and clear every other secondary pane + `?fullscreen`.
- *  - Other query params (`task`, …) are preserved verbatim.
+ *  - Unrelated query params (anything outside the secondary family, e.g.
+ *    `?utm_source`) are preserved verbatim; the other secondary panes
+ *    (`?task`, …) are same-family and cleared by the rule above.
  */
 export function withThreadQuery(
   pathname: string,
@@ -672,7 +674,9 @@ export function buildThreadOpenUrl(
  *    list removes the secondary pane).
  *  - `open === true` → open `threads` (a `replace` pane): set `?threads=1` and
  *    clear every other secondary pane + `?fullscreen`.
- *  - Other query params (`task`, …) are preserved verbatim.
+ *  - Unrelated query params (anything outside the secondary family, e.g.
+ *    `?utm_source`) are preserved verbatim; the other secondary panes
+ *    (`?task`, …) are same-family and cleared by the rule above.
  */
 export function withThreadsQuery(
   pathname: string,
@@ -704,7 +708,9 @@ export function withThreadsQuery(
  *    secondary CONVERSATION still feeds `useSecondaryPaneModel`'s
  *    visible/focused set → notification/read bugs); the other overlays are
  *    cleared because the right pane holds one overlay at a time.
- *  - Other query params (`task`, …) are preserved verbatim.
+ *  - Unrelated query params (anything outside the secondary family, e.g.
+ *    `?utm_source`) are preserved verbatim; the other secondary panes
+ *    (`?task`, …) are same-family and cleared by the rule above.
  */
 export function withFilesQuery(
   pathname: string,
@@ -736,7 +742,9 @@ export function withFilesQuery(
  *    restores whatever was open. `?side` is cleared for correctness (a covered
  *    secondary CONVERSATION still feeds `useSecondaryPaneModel`'s
  *    visible/focused set → notification/read bugs).
- *  - Other query params (`task`, …) are preserved verbatim.
+ *  - Unrelated query params (anything outside the secondary family, e.g.
+ *    `?utm_source`) are preserved verbatim; the other secondary panes
+ *    (`?task`, …) are same-family and cleared by the rule above.
  */
 export function withAgentQuery(
   pathname: string,

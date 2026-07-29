@@ -130,7 +130,7 @@ type CloseTarget =
  *  if it appears here. */
 export interface ContextualCloseState {
   /** Agent side-panel (`?agent`). The topmost overlay — the render layer draws
-   *  it above every other pane (`agent > files > side > thread > threads`), so
+   *  it above every other pane (`agent > files > task > side > thread > threads`), so
    *  ⌘W peels it first; closing it reveals whatever pane it covered. */
   agentPanelId: string | null;
   filesListOpen: boolean;
