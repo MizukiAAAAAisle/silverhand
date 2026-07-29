@@ -1061,27 +1061,41 @@ function RegisteredAppShell(): JSX.Element {
     }
   };
 
-  // Open a task's detail modal. Every entrance funnels here — an inline
-  // `#task:<n>` chip (via `TaskRefContextProvider`), a Tasks-board card, a
-  // drawer card — and they all hand over the RESOLVED `tasks.id`, so no
-  // workspace axis travels with the click: `?task=<task_id>` is the whole
-  // coordinate and the modal reads it wherever the user currently stands
-  // (#task:1715).
-  const handleOpenTask = useCallback(
-    (taskId: string) => {
+  // Open a task's detail. `taskId` says WHICH task; the HOST — pane vs modal —
+  // says FROM WHERE it was opened, and the two are ORTHOGONAL (shiki + Cindy
+  // 2026-07-29). The entrance chooses the host EXPLICITLY — never inferred from
+  // live UI or from whether the id changed: a conversation `#task` chip opens the
+  // overlay side pane beside the messages it was referenced from (#task:1721); a
+  // drawer / board card opens the app-level modal. `taskHost` records that choice,
+  // so re-opening the SAME task from a different entrance (e.g. a drawer card over
+  // an existing pane) still switches surface even though `?task` is unchanged —
+  // and toggling the drawer, which writes NO host, can never move a task between
+  // surfaces. Every entrance hands over the RESOLVED `tasks.id`; `?task=<task_id>`
+  // is the whole coordinate, no workspace axis travels with the click (#task:1715).
+  const [taskHost, setTaskHost] = useState<{
+    id: string;
+    host: 'pane' | 'modal';
+  } | null>(null);
+  const openTask = useCallback(
+    (taskId: string, host: 'pane' | 'modal') => {
+      setTaskHost({ id: taskId, host });
       nav.openTask(taskId);
     },
     [nav.openTask],
   );
-  // Ref-stable twin for `React.memo`'d section consumers: `nav.openTask` is
-  // rebuilt on every navigation (it closes over the current pathname/search),
-  // so the plain handler's identity changes with the route — enough to
-  // re-render the Tasks board's ~1356 cards during the urgent pass of a section
-  // switch. Same pattern, same reason as `handleJumpToMessageStable` below.
-  const openTaskRef = useRef(handleOpenTask);
-  openTaskRef.current = handleOpenTask;
-  const handleOpenTaskStable = useCallback(
-    (taskId: string) => openTaskRef.current(taskId),
+  // Ref-stable per-entrance openers. `nav.openTask` is rebuilt on every
+  // navigation (it closes over the current pathname/search), so `openTask`'s
+  // identity changes with the route; the ref keeps these two wrappers constant so
+  // they don't re-render memoized consumers (the Tasks board's ~1356 cards, the
+  // chat message list). Same pattern/reason as `handleJumpToMessageStable` below.
+  const openTaskRef = useRef(openTask);
+  openTaskRef.current = openTask;
+  const openTaskInPane = useCallback(
+    (taskId: string) => openTaskRef.current(taskId, 'pane'),
+    [],
+  );
+  const openTaskInModal = useCallback(
+    (taskId: string) => openTaskRef.current(taskId, 'modal'),
     [],
   );
   // ── The ONE visible task surface ────────────────────────────────────────
@@ -1109,42 +1123,39 @@ function RegisteredAppShell(): JSX.Element {
   const drawerVisible = drawerHostable && tasksDrawerOpen;
   const sectionVisible = appSection === 'tasks';
 
-  // `?task=<id>` routes to ONE of two surfaces, never both: an overlay SIDE PANE
-  // beside a conversation (#task:1721) or the app-level MODAL. The choice is made
-  // ONCE, from the ENTRANCE that opened the pointer, then FROZEN for that
-  // pointer's life — it must NOT be re-derived from live context. Opening the
-  // tasks drawer over a task pane used to flip the SAME `?task` from pane to modal
-  // (the discriminant read `drawerVisible`), tearing the mounted pane down and
-  // popping a modal — one action ("peek at the drawer") silently changed another
-  // piece of state's container, layer, and edit lifecycle (shiki + Cindy
-  // 2026-07-29). Now the drawer is a pure overlay: toggling it leaves the pane the
-  // same instance in the same state; close it and the untouched pane is right
-  // where it was.
-  //
-  // Decision at open time: a channel-chat entrance with the drawer DOWN (a chat
-  // `#task` chip) → pane; every other entrance (a drawer / board card, a cold
-  // deep-link, Activity) → modal — there is no anchored conversation for a pane.
-  // Re-decided only when the pointer's TASK ID changes (a different task opened),
-  // never when the drawer or section toggles under a live pointer. `selectedChannelId`
-  // is route-derived, so a pane host always has a channel to mount in; the pointer
-  // is dropped by any navigation that leaves the channel, which resets the host.
-  const [taskHost, setTaskHost] = useState<'pane' | 'modal' | null>(null);
-  const taskHostPointerRef = useRef<string | null>(null);
-  if (taskDetailId !== taskHostPointerRef.current) {
-    taskHostPointerRef.current = taskDetailId;
+  // Resolve which surface shows `?task=<id>`. The recorded host wins whenever it
+  // matches the live pointer (an opener set it — the explicit entrance). A pointer
+  // with NO recorded host is a cold deep-link / URL restore: classify it ONCE by
+  // the URL's own surface — a channel-chat URL anchors a pane, anywhere else a
+  // modal. That classification reads only the URL surface, NEVER `drawerVisible`:
+  // a transient overlay must not choose a task's container, and the drawer's own
+  // open/close writes no host at all. The effect below freezes the first cold
+  // classification into `taskHost`, so it is computed once and never re-derived as
+  // the page shifts under a live pointer (that id-change/live-UI inference was the
+  // BLOCKER Cindy caught: it made a drawer card on the SAME task a no-op, leaving
+  // the pane instead of opening the modal).
+  const coldTaskHost: 'pane' | 'modal' =
+    appSection === 'chat' && view === 'channel' && selectedChannelId !== null
+      ? 'pane'
+      : 'modal';
+  const resolvedTaskHost: 'pane' | 'modal' | null =
+    taskDetailId === null
+      ? null
+      : taskHost && taskHost.id === taskDetailId
+        ? taskHost.host
+        : coldTaskHost;
+  useEffect(() => {
     if (taskDetailId === null) {
+      // Pointer gone — drop any recorded host so a reopen re-classifies fresh.
       if (taskHost !== null) setTaskHost(null);
-    } else {
-      const paneEntrance =
-        appSection === 'chat' &&
-        view === 'channel' &&
-        selectedChannelId !== null &&
-        !drawerVisible;
-      setTaskHost(paneEntrance ? 'pane' : 'modal');
+    } else if (!taskHost || taskHost.id !== taskDetailId) {
+      // Cold-load only: no opener recorded a host for this pointer. Freeze the
+      // URL-surface classification so subsequent renders read it, not `coldTaskHost`.
+      setTaskHost({ id: taskDetailId, host: coldTaskHost });
     }
-  }
-  const taskPaneId = taskHost === 'pane' ? taskDetailId : null;
-  const taskModalId = taskHost === 'modal' ? taskDetailId : null;
+  }, [taskDetailId, taskHost, coldTaskHost]);
+  const taskPaneId = resolvedTaskHost === 'pane' ? taskDetailId : null;
+  const taskModalId = resolvedTaskHost === 'modal' ? taskDetailId : null;
 
   // The task pane's single request-close owner, shared by its header ✕ and the
   // ⌘W rung so the "editing → don't tear it down" contract lives in ONE place
@@ -1632,7 +1643,7 @@ function RegisteredAppShell(): JSX.Element {
       conversationRefsById={conversationRefsById}
       onOpenConversationRef={nav.openSide}
       onOpenChannelRef={handleOpenChannelByName}
-      onOpenTask={handleOpenTask}
+      onOpenTask={openTaskInPane}
       onJumpToMessage={handleJumpToMessage}
       onOpenAdvancedSearch={handleOpenAdvancedSearch}
     />
@@ -1745,7 +1756,7 @@ function RegisteredAppShell(): JSX.Element {
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={nav.openSide}
           onOpenChannelRef={handleOpenChannelByName}
-          onOpenTask={handleOpenTask}
+          onOpenTask={openTaskInPane}
           // No thread open from the secondary pane: a reply cluster shares
           // its parent channel's context, so opening a thread only makes
           // sense from the primary channel pane. Undefined hides the reply
@@ -1798,7 +1809,7 @@ function RegisteredAppShell(): JSX.Element {
         conversationRefsById={conversationRefsById}
         onOpenConversationRef={nav.openSide}
         onOpenChannelRef={handleOpenChannelByName}
-        onOpenTask={handleOpenTask}
+        onOpenTask={openTaskInPane}
         jumpMessageId={threadJumpMessageId}
         jumpPhase={threadJumpPhase}
         onJumped={handleJumped}
@@ -1925,7 +1936,7 @@ function RegisteredAppShell(): JSX.Element {
               * after a rail click elsewhere, and a board on its way out must
               * not deliver — nor be a second surface holding the one-shot. */}
             <TasksSection
-              onOpenTask={handleOpenTaskStable}
+              onOpenTask={openTaskInModal}
               revealTaskId={sectionVisible ? reveal.taskId : null}
               onRevealConsumed={clearReveal}
             />
@@ -2386,7 +2397,7 @@ function RegisteredAppShell(): JSX.Element {
           revealTaskId={drawerVisible ? reveal.taskId : null}
           onRevealConsumed={clearReveal}
           detailOpen={taskModalId !== null}
-          onOpenTask={handleOpenTask}
+          onOpenTask={openTaskInModal}
         />
       ) : null}
       {/* Task detail modal — the NON-pane half of the `?task` split (#task:1721):
