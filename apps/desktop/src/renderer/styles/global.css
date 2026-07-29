@@ -664,11 +664,13 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border: none;
 }
 .system-activity-cluster [data-task-ref]:hover {
-  /* Match the standalone resolved chip's hover (`hover:bg-accent
-     hover:text-text-on-accent`) — fill with full accent, flip text to
-     `--text-on-accent` so the chip stays legible on the saturated
-     background. Lighter alternatives (`--bg-hover`, `--accent-soft`)
-     read as either gray or barely-visible against the chat canvas. */
+  /* This is a distinct, denser surface: fill with full accent and flip
+     text to `--text-on-accent` so the chip stays legible on the saturated
+     cluster ground. Lighter alternatives (`--bg-hover`, `--accent-soft`)
+     read as gray or barely-visible here. NOTE the standalone prose chip no
+     longer fills on hover — it's a borderless accent link with a hover
+     underline now (#task:1725) — but that link treatment is too quiet for
+     this surface, so the cluster deliberately keeps the fill. */
   background: var(--accent);
   color: var(--text-on-accent);
 }
@@ -828,6 +830,23 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 [data-channel-ref-state],
 [data-conversation-ref] {
   font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
+}
+
+/* Resolved task-ref = borderless accent link, shared across every theme
+   (#task:1725). The chip carries no fill / no border (Tailwind `text-accent`
+   only, in TaskRef.tsx); on hover it UNDERLINES the label to read as the
+   hyperlink it is. A filled slab interrupts running prose regardless of hue,
+   and hover-filling a flat link is a colour reversal that flickers in the
+   line — an underline is a structural signal that leaves the bg untouched.
+   Underline the inner label span, not the inline-flex chip: text-decoration
+   on the flex box won't paint over the icon flex-item. Scoped to
+   `.markdown-body` so the system-activity-cluster keeps its own hover-fill
+   (a distinct surface — see `.system-activity-cluster [data-task-ref]`).
+   Each theme supplies its own `--accent`; no per-theme override needed. */
+.markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
+  text-decoration: underline;
+  text-underline-offset: 0.5px;
+  text-decoration-thickness: 2px;
 }
 
 /* Code blocks — `pre` is wrapped by CodeBlock for the header chrome

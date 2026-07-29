@@ -348,14 +348,18 @@
   font-family: var(--appearance-prose-font, var(--font-sans));
 }
 
+/* task-ref link form (borderless accent link + hover underline) is now the
+   shared base in global.css (#task:1725) — every theme gets it via its own
+   `--accent`, no per-theme colour/fill override. forza6 keeps only the
+   prose-font TYPEFACE above. */
+
 /* ── Markdown inline code ─────────────────────────────────────────
-   Promoted to the token contract in PR-3 (#task:344). The lime
-   sticker recipe (acid-lime bg + 1px near-black border + 0 radius +
-   near-black text) now lives entirely in forza6.css via
-   `--bg-inline-code` / `--border-inline-code` / `--radius-inline-code`
-   / `--text-inline-code`, consumed by the single
+   Promoted to the token contract in PR-3 (#task:344). The recipe lives
+   entirely in forza6.css via `--bg-inline-code` / `--border-inline-code`
+   / `--radius-inline-code` / `--text-inline-code`, consumed by the single
    `.markdown-body :not(pre) > code` rule in global.css. No forza6-
-   scoped override here anymore. */
+   scoped override here anymore. (#task:1725 quieted it from the old
+   acid-lime poster sticker to a faint neutral wash + no border.) */
 
 /* ── #v5.3 — Member-strip black HUD readout (REMOVED in v5.4) ────────
    v5.3 wrapped `[data-member-strip]` in a black pill with a "CREW"

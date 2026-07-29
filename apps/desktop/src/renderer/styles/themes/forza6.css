@@ -216,23 +216,21 @@
   --text-muted: #5A6B67;
   --text-inverse: #F7F8F6;
   --text-island: #E8F1EF;
-  /* `--text-inline-code` — near-black, paired with the lime poster
-     chip background defined just below. Was deep teal `#095C56` in
-     PR-1/v2-v4 when the chip was still warm-style `color-mix(...)`.
-     PR-2 v5 promoted the chip to a lime poster sticker; PR-3 token
-     promotion (#task:344) moves that chip into `--bg-inline-code` /
-     `--border-inline-code` / `--radius-inline-code`, and `text-inline-code`
-     follows it to near-black so the chip text reads ~13.8:1 AAA on lime. */
+  /* `--text-inline-code` — near-black ink. The chip is now a quiet
+     neutral wash (below), so the code text reads as ordinary body-weight
+     mono, distinguished from prose by the wash + mono face, not by a
+     colour pop. Ink on the 5%-black wash over cool-white clears ~18:1. */
   --text-inline-code: var(--forza6-ink);
 
-  /* Inline-code chip — lime poster sticker (per shiki `z7QboHr4aDIoAHQX`):
-     full acid-lime background + 1px near-black border + 0 radius so the
-     chip stands clearly against the cool-white chat surface (lime alone
-     vs white is only 1.42:1; the black outline carries the visual
-     separation). Promoted from the previous `[data-theme='forza6']
-     .markdown-body :not(pre) > code` override block in forza6-components.css. */
-  --bg-inline-code: var(--forza6-lime);
-  --border-inline-code: 1px solid var(--forza6-ink);
+  /* Inline-code chip — quiet neutral wash (shiki #task:1725: the acid-lime
+     poster sticker was 太吸睛, drowning the surrounding prose). Dropped from
+     the full-lime + ink-border poster to a faint neutral wash with no
+     border, so inline code sits as calm emphasis in the message stream
+     instead of shouting. Lime stays the identity of selection + fenced-code
+     keywords; it no longer rides inline code. `--radius-inline-code: 0`
+     kept for the hard-cut poster vocabulary. */
+  --bg-inline-code: oklab(0 0 0 / 0.05);
+  --border-inline-code: none;
   --radius-inline-code: 0;
 
   /* Task status badge — 4 statuses × {bg, text, border} = 12 tokens.

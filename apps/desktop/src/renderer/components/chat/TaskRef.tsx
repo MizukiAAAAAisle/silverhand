@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ClipboardCheck } from 'lucide-react';
+import { CheckSquare } from 'lucide-react';
 import { useTaskByNumber } from '@/features/tasks/useTaskByNumber';
 import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
 import { useUpdateTaskStatus } from '@/features/tasks/hooks';
@@ -43,18 +43,18 @@ export function TaskRefStaticChip({
       className={
         'inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium' +
         (task
-          ? ' bg-accent-soft text-accent'
+          ? ' text-accent'
           : ' bg-bg-elevated text-text-muted')
       }
       title={`Task ${label}`}
       data-task-ref={String(taskNumber)}
       data-task-ref-state={task ? 'static-resolved' : 'static'}
     >
-      <ClipboardCheck className="size-3 shrink-0 self-center" />
+      <CheckSquare className="size-3 shrink-0 self-center" />
       {task ? (
         <span className="truncate">
           <span className="font-mono">#{task.task_number}</span>
-          {' · '}
+          {' '}
           {task.title}
         </span>
       ) : (
@@ -81,8 +81,13 @@ export function TaskRefStaticChip({
  *  - Resolved + missing → inert (the task was deleted or doesn't
  *    exist in this workspace). Surfacing a broken chip would be
  *    worse than a silent demote.
- *  - Resolved + present → clickable chip, label `#<n> · title`,
- *    icon `ClipboardCheck`. Click hands off to `onOpenTask` from
+ *  - Resolved + present → clickable borderless accent link, label
+ *    `#<n> title`, icon `CheckSquare` (matches the task board / nav-rail
+ *    task glyph; number and title read as one link, no `·` separator).
+ *    The link form is the shared base across all themes — flat accent
+ *    text at rest, hover underlines the label — each theme just paints
+ *    it in its own `--accent` (#task:1725). Click hands off to
+ *    `onOpenTask` from
  *    context with the RESOLVED task id (not the `#<n>` the chip
  *    shows), which is wired to write `?task=<task_id>` and open the
  *    task's detail modal (#task:1715). The chip is only interactive in
@@ -130,7 +135,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref={String(taskNumber)}
         data-task-ref-state="no-context"
       >
-        <ClipboardCheck className="size-3 shrink-0 self-center" />
+        <CheckSquare className="size-3 shrink-0 self-center" />
         {/* Whole label is ASCII (`#task:NNN`) → mono everywhere on the
             inert/loading/missing chips. See forza6 font split spec. */}
         <span className="truncate font-mono">{inertLabel}</span>
@@ -153,7 +158,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref={String(taskNumber)}
         data-task-ref-state="loading"
       >
-        <ClipboardCheck className="size-3 shrink-0 self-center" />
+        <CheckSquare className="size-3 shrink-0 self-center" />
         <span className="truncate font-mono">{inertLabel}</span>
       </span>
     );
@@ -176,7 +181,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref={String(taskNumber)}
         data-task-ref-state="missing"
       >
-        <ClipboardCheck className="size-3 shrink-0 self-center" />
+        <CheckSquare className="size-3 shrink-0 self-center" />
         <span className="truncate font-mono">{inertLabel}</span>
       </span>
     );
@@ -190,10 +195,10 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // forza6 font split spec (msg vWYNLYq_Wtw6P4rj).
   const chipContent = (
     <>
-      <ClipboardCheck className="size-3 shrink-0 self-center" />
+      <CheckSquare className="size-3 shrink-0 self-center" />
       <span className="truncate">
         <span className="font-mono">#{task.task_number}</span>
-        {' · '}
+        {' '}
         {task.title}
       </span>
     </>
@@ -213,11 +218,19 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     </span>
   );
 
+  // Borderless accent link — the shared base for every theme. Rest is flat
+  // accent text (no fill / no border); hover underlines the label span (see
+  // `.markdown-body [data-task-ref-state='resolved']:hover > span` in
+  // global.css — text-decoration on this inline-flex box won't paint over the
+  // icon child). A filled block reads as a slab in running prose regardless of
+  // hue; a link reads as what it is (#task:1725). Each theme just supplies its
+  // own `--accent`. focus-visible ring kept — the sole focus signal now that
+  // the chip is borderless.
   const interactiveChip = (
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent hover:text-text-on-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
