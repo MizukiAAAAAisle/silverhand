@@ -5,12 +5,15 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
-import type {
-  TaskChangedEvent,
-  TaskDetailDto,
-  TaskEditResult,
-  TaskStatus,
-  TaskSummaryDto,
+import {
+  type CreatedTaskIdentity,
+  type HumanCreateTaskInput,
+  type HumanCreateTaskResult,
+  type TaskChangedEvent,
+  type TaskDetailDto,
+  type TaskEditResult,
+  type TaskStatus,
+  type TaskSummaryDto,
 } from '@silverhand/shared';
 import { api, ApiError, toPathSegment } from '@/lib/api';
 import {
@@ -374,6 +377,41 @@ export function useEditTask() {
       qc.setQueryData(taskDetailKey(task.id), task);
       void qc.invalidateQueries({ queryKey: ['tasks'] });
       void qc.invalidateQueries({ queryKey: ['task-by-number'] });
+    },
+  });
+}
+
+// ── Create (human panel direct-create) ─────────────────────────────
+
+/**
+ * `POST /api/tasks` — create a task straight from a task surface, naming the
+ * target channel (#task:1723). Shares the agent create's semantics server-side
+ * (one `taskService.createTasks` txn) and, like it, the ACK returns ONLY the
+ * identity the transaction produced — `{ id, task_number, title }`, never a
+ * post-commit detail re-read (which could report a committed write as a failure
+ * and drive a duplicate on this sourceless, non-idempotent create; #task:1724).
+ * The identity ACK only CONFIRMS the create — the surface does not navigate to
+ * the new task; on success the dialog closes and the `['tasks']` invalidation
+ * below refreshes the board/drawer in place (shiki 2026-07-30).
+ *
+ * Only `['tasks']` is invalidated: the new row belongs on every board list, and
+ * there is no prior detail / by-number projection of a task that did not exist a
+ * moment ago. Typed domain rejections arrive as an `ApiError` carrying the
+ * `{ success:false, code }` envelope — `createTaskErrorMessage` (in
+ * `createTaskError.ts`) turns the `code` discriminant into copy for the dialog.
+ */
+export function useCreateTask() {
+  const qc = useQueryClient();
+  return useMutation<CreatedTaskIdentity, Error, HumanCreateTaskInput>({
+    mutationFn: async (input): Promise<CreatedTaskIdentity> => {
+      const res = await api<Extract<HumanCreateTaskResult, { success: true }>>(
+        '/api/tasks',
+        { method: 'POST', body: JSON.stringify(input) },
+      );
+      return res.task;
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['tasks'] });
     },
   });
 }

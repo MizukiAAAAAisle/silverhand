@@ -277,6 +277,25 @@ export function TaskFilterBar({
  *  (#task:1437 / #task:1438). */
 const TRIGGER_GLYPH_PX = 14;
 
+/**
+ * Box recipe for a control that must line up in height with the filter chips
+ * (`FilterTrigger`) on a task toolbar row — the New task CTA that sits right
+ * after the filters (shiki: 高度和前面 filter button 保持一致). Mirrors the
+ * trigger's box EXACTLY — `px-2 py-1 text-[11px]` plus a border-box border of
+ * `--control-border-width` — instead of a fixed height, because the filter's
+ * own height is content-driven and grows with the per-theme border (1px default
+ * / 2px forza6). Spread this over the CTA's own fill/identity: only the OUTER
+ * box is shared.
+ *
+ * The border is `transparent` here on purpose — the CTA has no consumer-edge
+ * frame (its identity is the fill; forza6 repaints this same border into the
+ * poster ink frame via `[data-primary-action]`). But it still RESERVES the
+ * border width, so a borderless fill can't come out 1–2px shorter than the
+ * bordered filters beside it in any theme.
+ */
+export const FILTER_ROW_TRIGGER_BOX =
+  'h-auto px-2 py-1 text-[11px] border-[length:var(--control-border-width)] border-transparent';
+
 const FilterTrigger = forwardRef<
   HTMLButtonElement,
   ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -362,7 +381,7 @@ function FilterPanel({
   );
 }
 
-function OptionRow({
+export function OptionRow({
   selected,
   neutral = false,
   active = false,

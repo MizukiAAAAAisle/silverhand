@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { rovingKeyAction } from './taskFilterKeyboard';
+import { rovingKeyAction, isImeComposing } from './taskFilterKeyboard';
+
+describe('isImeComposing', () => {
+  // ONE predicate, read by both the roving reducer's call site AND the create
+  // picker's form-submit Enter guard, so the two composition checks can't drift.
+  it('is true for the modern isComposing flag', () => {
+    expect(isImeComposing({ isComposing: true })).toBe(true);
+  });
+
+  it('is true for the legacy keyCode 229 even when isComposing is false', () => {
+    // The divergence Cindy caught: a `keyCode===229` Enter with `isComposing:false`
+    // MUST read as composing at BOTH sites — the reducer bypasses it (no row
+    // select) and the picker guard must therefore NOT preventDefault it, or the
+    // candidate commit is stolen from the IME.
+    expect(isImeComposing({ isComposing: false, keyCode: 229 })).toBe(true);
+  });
+
+  it('is false for an ordinary keystroke (no composition)', () => {
+    expect(isImeComposing({ isComposing: false, keyCode: 13 })).toBe(false);
+    expect(isImeComposing({})).toBe(false);
+  });
+});
 
 describe('rovingKeyAction', () => {
   it('moves down with wrap-around', () => {
@@ -40,5 +61,26 @@ describe('rovingKeyAction', () => {
   it('is inert on an empty list (no rows to move to or select)', () => {
     expect(rovingKeyAction('ArrowDown', 0, 0, false)).toBeNull();
     expect(rovingKeyAction('Enter', 0, 0, false)).toBeNull();
+  });
+
+  it('yields every key to the IME while a composition is in flight', () => {
+    // CJK candidate selection reuses Enter (commit) and the arrows (walk the
+    // candidate window). During composition the list MUST stay inert so the
+    // helper never steals — or `preventDefault`s — a keystroke the input method
+    // owns. This holds regardless of focus (text field or listbox).
+    expect(rovingKeyAction('Enter', 2, 5, true, true)).toBeNull();
+    expect(rovingKeyAction('ArrowDown', 0, 5, true, true)).toBeNull();
+    expect(rovingKeyAction('ArrowUp', 1, 5, true, true)).toBeNull();
+    expect(rovingKeyAction('Enter', 2, 5, false, true)).toBeNull();
+  });
+
+  it('resumes list navigation once composition ends', () => {
+    // The same keys drive the list again on the next keydown after
+    // `compositionend` (composing back to false) — no lingering suppression.
+    expect(rovingKeyAction('Enter', 2, 5, true, false)).toEqual({ type: 'select' });
+    expect(rovingKeyAction('ArrowDown', 0, 5, true, false)).toEqual({
+      type: 'move',
+      index: 1,
+    });
   });
 });

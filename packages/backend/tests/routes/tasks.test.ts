@@ -71,6 +71,166 @@ describe('Tasks (PR-T1)', () => {
     expect(all.tasks.map((x: any) => x.title)).toEqual(['add logout', 'fix login']);
   });
 
+  // Count conversation messages by author kind — the falsifier for the
+  // "one `task_create` system event, zero fabricated user message" invariant
+  // and for "zero write" on a rejected create. Deltas, so onboarding seeds
+  // never leak into the assertion.
+  const countByKind = (conversationId: string, kind: string): number =>
+    (
+      t!.ctx.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND from_kind = ?`,
+        )
+        .get(conversationId, kind) as { n: number }
+    ).n;
+
+  it('human POST /api/tasks returns only the created identity and never fabricates a user message', async () => {
+    t = buildTestApp();
+    const { conversationId, workspaceId } = await setup(t);
+    const h = http(t);
+
+    const userBefore = countByKind(conversationId, 'user');
+    const sysBefore = countByKind(conversationId, 'system');
+
+    const res = await h.post('/api/tasks', {
+      title: 'panel-created task',
+      body: 'from the task panel',
+      conversation_id: conversationId,
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as any;
+    expect(created.success).toBe(true);
+    // SUCCESS is the thin identity the create txn authoritatively produced —
+    // the SAME shape agent create returns, NOT a post-commit detail re-read.
+    expect(Object.keys(created.task).sort()).toEqual(['id', 'task_number', 'title']);
+    expect(created.task.title).toBe('panel-created task');
+    expect(typeof created.task.id).toBe('string');
+    expect(typeof created.task.task_number).toBe('number');
+
+    // Product contract: the create emits exactly one `task_create` SYSTEM event
+    // and zero user-authored message (it is not a user post).
+    expect(countByKind(conversationId, 'user') - userBefore).toBe(0);
+    expect(countByKind(conversationId, 'system') - sysBefore).toBe(1);
+
+    // The panel opens the modal by id; full detail comes from the normal read
+    // path. Assert the sourceless / unassigned / user-attributed facts there.
+    const detail = (
+      (await (await http(t).get(`/api/tasks/${created.task.id}`)).json()) as any
+    ).task;
+    expect(detail.content).toBe('from the task panel');
+    expect(detail.status).toBe('todo');
+    expect(detail.assignee).toBeNull();
+    expect(detail.workspace_id).toBe(workspaceId);
+    expect(detail.channel_id).toBe(conversationId);
+    expect(detail.source_message_id).toBeNull();
+    expect(detail.nav.kind).toBe('created_event');
+    expect(detail.creator.type).toBe('user');
+    expect(detail.creator.id).toBe(t!.viewerUserId);
+
+    // Shows up on the human board via the SAME list read as agent-created tasks.
+    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(listed.tasks.map((x: any) => x.title)).toContain('panel-created task');
+  });
+
+  it('human POST /api/tasks accepts an omitted body (detail content defaults to empty)', async () => {
+    t = buildTestApp();
+    const { conversationId } = await setup(t);
+    const res = await http(t).post('/api/tasks', {
+      title: 'no body',
+      conversation_id: conversationId,
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as any;
+    const detail = (
+      (await (await http(t).get(`/api/tasks/${created.task.id}`)).json()) as any
+    ).task;
+    expect(detail.content).toBe('');
+  });
+
+  it('human POST /api/tasks rejects a blank title or a missing conversation_id (400)', async () => {
+    t = buildTestApp();
+    const { conversationId } = await setup(t);
+    const blankTitle = await http(t).post('/api/tasks', {
+      title: '   ',
+      conversation_id: conversationId,
+    });
+    expect(blankTitle.status).toBe(400);
+    const noConversation = await http(t).post('/api/tasks', { title: 'ok' });
+    expect(noConversation.status).toBe(400);
+  });
+
+  it('human POST /api/tasks is fail-closed and leaks no existence: known-non-member == unknown id', async () => {
+    t = buildTestApp();
+    const { conversationId } = await setup(t);
+
+    // A REAL, existing conversation the viewer is no longer a member of.
+    t.ctx.db
+      .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+      .run(conversationId, t.viewerUserId);
+
+    const nonMember = await http(t).post('/api/tasks', {
+      title: 'x',
+      conversation_id: conversationId,
+    });
+    const unknown = await http(t).post('/api/tasks', {
+      title: 'x',
+      conversation_id: 'conversation-does-not-exist',
+    });
+
+    // Both 403 with the identical code — a caller cannot distinguish "exists but
+    // you're not a member" from "does not exist".
+    expect(nonMember.status).toBe(403);
+    expect(unknown.status).toBe(403);
+    const nm = (await nonMember.json()) as any;
+    const uk = (await unknown.json()) as any;
+    expect(nm).toEqual({ success: false, code: 'not_conversation_member' });
+    expect(uk).toEqual({ success: false, code: 'not_conversation_member' });
+  });
+
+  it('human POST /api/tasks typed-rejects a closed conversation with zero write', async () => {
+    t = buildTestApp();
+    const { conversationId } = await setup(t);
+    const sysBefore = countByKind(conversationId, 'system');
+    t.ctx.db
+      .prepare(`UPDATE conversations SET closed_at = ? WHERE id = ?`)
+      .run(Date.now(), conversationId);
+
+    const res = await http(t).post('/api/tasks', {
+      title: 'closed attempt',
+      conversation_id: conversationId,
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as any).toEqual({ success: false, code: 'conversation_closed' });
+    // Zero task, zero event.
+    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(listed.tasks.some((x: any) => x.title === 'closed attempt')).toBe(false);
+    expect(countByKind(conversationId, 'system') - sysBefore).toBe(0);
+  });
+
+  it('human POST /api/tasks typed-rejects an ARCHIVED conversation with zero write (shared invariant, not human-only)', async () => {
+    t = buildTestApp();
+    const { conversationId } = await setup(t);
+    const sysBefore = countByKind(conversationId, 'system');
+    t.ctx.db
+      .prepare(`UPDATE conversations SET archived_at = ? WHERE id = ?`)
+      .run(Date.now(), conversationId);
+
+    const res = await http(t).post('/api/tasks', {
+      title: 'archived attempt',
+      conversation_id: conversationId,
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()) as any).toEqual({
+      success: false,
+      code: 'conversation_archived',
+    });
+    // Zero task, zero event — the reject happens in the shared service, so the
+    // same invariant holds for the agent create path.
+    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(listed.tasks.some((x: any) => x.title === 'archived attempt')).toBe(false);
+    expect(countByKind(conversationId, 'system') - sysBefore).toBe(0);
+  });
+
   it('claim_tasks wins the race once + second claimer fails', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);

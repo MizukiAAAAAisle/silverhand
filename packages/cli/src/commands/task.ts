@@ -342,6 +342,13 @@ function createFailureToCliError(result: { error: string; existing_task?: unknow
         retriable: false,
         details: { error: result.error },
       });
+    case 'conversation_archived':
+      return new CliError({
+        code: 'conflict',
+        message: 'task create failed: the conversation is archived',
+        retriable: false,
+        details: { error: result.error },
+      });
     default:
       // source_conversation_mismatch and any future op error: an input problem.
       return new CliError({

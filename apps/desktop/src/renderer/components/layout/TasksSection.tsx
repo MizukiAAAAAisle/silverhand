@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Plus,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
@@ -28,7 +29,16 @@ import {
   TASK_STATUS_ICON,
 } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
-import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
+import {
+  TaskFilterBar,
+  FILTER_ROW_TRIGGER_BOX,
+} from '@/components/tasks/TaskFilterBar';
+import {
+  CreateTaskDialog,
+  useCreateTaskSubmit,
+} from '@/components/tasks/CreateTaskDialog';
+import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -69,6 +79,7 @@ export const TasksSection = memo(function TasksSection({
   onRevealConsumed,
 }: TasksSectionProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
+  const [createOpen, setCreateOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
   // Workspace + channel options + scope ids come from the SAME hook the
   // drawer uses (#task:1165) so the two surfaces' dropdowns can't drift — DM +
@@ -150,6 +161,18 @@ export const TasksSection = memo(function TasksSection({
     ? channelOptions.find(o => o.id === filters.channelId)?.label
     : null;
 
+  // A task must name a channel; seed the create picker from the current channel
+  // FILTER only when it resolves to a real member-channel option (a thread-scoped
+  // or ALL filter has no channel to pre-select — the actor picks one). On success
+  // the dialog closes and the list refreshes in place; the new task is NOT opened
+  // in a detail modal (shiki 2026-07-30).
+  const createDefaultChannelId = channelOptions.some(
+    o => o.id === filters.channelId,
+  )
+    ? filters.channelId
+    : null;
+  const submitCreate = useCreateTaskSubmit();
+
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-base"
@@ -179,7 +202,7 @@ export const TasksSection = memo(function TasksSection({
         </span>
       </header>
 
-      <div className="shrink-0 border-b border-border-subtle px-4 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
         <TaskFilterBar
           filters={filters}
           onChange={setFilters}
@@ -191,6 +214,18 @@ export const TasksSection = memo(function TasksSection({
           creatorOptions={creatorOptions}
           hasUnassigned={hasUnassigned}
         />
+        {/* Create entrance sits right AFTER the filter (shiki): the toolbar's one
+          * primary action, so it earns the filled + poster treatment among the
+          * muted filter chips. `FILTER_ROW_TRIGGER_BOX` matches its height to the
+          * neighbouring filter chips in every theme (shiki). */}
+        <Button
+          type="button"
+          onClick={() => setCreateOpen(true)}
+          {...primaryAction(`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`)}
+        >
+          <Plus className="size-3.5" />
+          New task
+        </Button>
       </div>
 
       {/* Five-column kanban. Flex (not grid) so columns size to content
@@ -217,6 +252,14 @@ export const TasksSection = memo(function TasksSection({
           />
         ))}
       </div>
+
+      <CreateTaskDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        channelOptions={channelOptions}
+        defaultChannelId={createDefaultChannelId}
+        onSubmit={submitCreate}
+      />
     </main>
   );
 });

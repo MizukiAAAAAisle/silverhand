@@ -341,6 +341,10 @@ export const apiPaths = {
   // tasks — human-facing list + mutation endpoints. Per
   // docs/tasks-design.md. Path key = task id (`tasks.id`); a task is a
   // first-class aggregate, not a message (v60).
+  // Method-distinguished collection route: GET = board list;
+  // POST = human panel direct-create (`HumanCreateTaskInput`, sourceless,
+  // membership + open fail-closed). Both delegate to the one actor-agnostic
+  // `taskService` — the human create shares the agent CLI's create semantics.
   tasks: '/api/tasks',
   taskClaim: (taskId: string) => `/api/tasks/${taskId}/claim`,
   taskUnclaim: (taskId: string) => `/api/tasks/${taskId}/unclaim`,

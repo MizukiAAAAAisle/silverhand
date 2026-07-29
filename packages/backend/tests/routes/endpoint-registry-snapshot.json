@@ -128,6 +128,7 @@
   "GET /api/notifications/unread",
   "POST /api/notifications/read",
   "GET /api/tasks",
+  "POST /api/tasks",
   "POST /api/tasks/:taskId/claim",
   "POST /api/tasks/:taskId/unclaim",
   "POST /api/tasks/:taskId/status",

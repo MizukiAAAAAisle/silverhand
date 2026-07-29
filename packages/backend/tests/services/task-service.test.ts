@@ -297,6 +297,43 @@ describe('TaskService.createTasks', () => {
     }
   });
 
+  it('conversation archived → conversation_archived (agent path; shared write invariant)', async () => {
+    const t = bootstrap();
+    try {
+      const countTasks = () =>
+        (
+          t.db
+            .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE conversation_id = ?`)
+            .get(t.channel.id) as { n: number }
+        ).n;
+      const countSys = () =>
+        (
+          t.db
+            .prepare(`SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND from_kind = 'system'`)
+            .get(t.channel.id) as { n: number }
+        ).n;
+      const tasksBefore = countTasks();
+      const sysBefore = countSys();
+      t.db.prepare(`UPDATE conversations SET archived_at = ? WHERE id = ?`)
+        .run(Date.now(), t.channel.id);
+      const result = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        tasks: [{ title: 'x' }],
+      });
+      expect(result).toEqual({ error: 'conversation_archived' });
+      // Zero task, zero event: the reject is in the shared service, so the
+      // agent create path never lands a row or `task_create` event in an
+      // archived conversation — same as the ordinary message write path. Count
+      // BOTH the tasks table and the system event: a system-message delta alone
+      // would miss a future branch that inserts the row before returning.
+      expect(countTasks() - tasksBefore).toBe(0);
+      expect(countSys() - sysBefore).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('conversation missing → conversation_not_found', async () => {
     const t = bootstrap();
     try {

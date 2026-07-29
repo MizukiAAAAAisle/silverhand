@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronRight,
   Clock,
+  Plus,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -38,7 +39,16 @@ import {
   TASK_STATUS_ICON,
 } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
-import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
+import {
+  TaskFilterBar,
+  FILTER_ROW_TRIGGER_BOX,
+} from '@/components/tasks/TaskFilterBar';
+import {
+  CreateTaskDialog,
+  useCreateTaskSubmit,
+} from '@/components/tasks/CreateTaskDialog';
+import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
@@ -274,19 +284,28 @@ export function WorkspaceTasksDrawer({
     [onOpenChange],
   );
 
-  // Close on Escape — but defer to an open detail modal, which owns Escape
-  // while it is up (Radix closes the modal; the drawer stays open). One
-  // Escape closes one layer, top-down.
+  // Create-task dialog open state. Declared above the Escape effect because
+  // that handler must defer to it: the dialog is a Radix modal that owns Escape
+  // while up, so the drawer's document listener stands down for it exactly as it
+  // does for the detail modal.
+  const [createOpen, setCreateOpen] = useState(false);
+
+  // Close on Escape — but defer to any modal layered on top (the detail modal
+  // or the create dialog), which owns Escape while it is up (Radix closes it;
+  // the drawer stays open). One Escape closes one layer, top-down.
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && drawerShouldCloseOnEscape(detailOpen)) {
+      if (
+        e.key === 'Escape' &&
+        drawerShouldCloseOnEscape(detailOpen || createOpen)
+      ) {
         closeDrawer();
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [open, closeDrawer, detailOpen]);
+  }, [open, closeDrawer, detailOpen, createOpen]);
 
   // Workspace + channel options + scope ids come from the SAME hook the global
   // Tasks pane uses (#task:1165), so both surfaces' dropdowns list the
@@ -337,6 +356,20 @@ export function WorkspaceTasksDrawer({
   const handleCardClick = (t: TaskSummaryDto): void => {
     onOpenTask?.(t.id);
   };
+
+  // Create entrance. Seed the picker from the current channel FILTER only when
+  // it resolves to a real member-channel option — the drawer opens focused on
+  // its entry channel, so that is usually the default, but an ALL / thread
+  // filter leaves it unseeded (the actor picks one). On success the dialog
+  // closes and the list refreshes in place; the new task is NOT opened in a
+  // detail modal (shiki 2026-07-30). (`createOpen` state lives above the Escape
+  // effect, which must defer to the dialog.)
+  const submitCreate = useCreateTaskSubmit();
+  const createDefaultChannelId = channelOptions.some(
+    o => o.id === filters.channelId,
+  )
+    ? filters.channelId
+    : null;
 
   // Focus trap: keep focus inside drawer while open.
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -449,7 +482,7 @@ export function WorkspaceTasksDrawer({
           </div>
 
           {/* Unified filter bar — replaces the old conversation chip strip */}
-          <div className="shrink-0 border-b border-border-subtle px-4 py-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
             <TaskFilterBar
               filters={filters}
               onChange={setFilters}
@@ -461,6 +494,18 @@ export function WorkspaceTasksDrawer({
               creatorOptions={creatorOptions}
               hasUnassigned={hasUnassigned}
             />
+            {/* Create entrance sits right AFTER the filter (shiki): the toolbar's
+              * one primary action, so it earns the filled + poster treatment
+              * among the muted filter chips. `FILTER_ROW_TRIGGER_BOX` matches its
+              * height to the neighbouring filter chips in every theme (shiki). */}
+            <Button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              {...primaryAction(`shrink-0 gap-1.5 ${FILTER_ROW_TRIGGER_BOX}`)}
+            >
+              <Plus className="size-3.5" />
+              New task
+            </Button>
           </div>
 
           {/* Kanban board — flex row of five status columns. Each column
@@ -490,6 +535,14 @@ export function WorkspaceTasksDrawer({
           </div>
         </div>
       </div>
+
+      <CreateTaskDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        channelOptions={channelOptions}
+        defaultChannelId={createDefaultChannelId}
+        onSubmit={submitCreate}
+      />
     </>
   );
 }

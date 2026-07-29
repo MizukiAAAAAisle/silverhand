@@ -227,6 +227,7 @@ export type CreateTasksInput = z.infer<typeof CreateTasksInputSchema>;
 export const CreateTasksOpErrorSchema = z.enum([
   'conversation_not_found',
   'conversation_closed',
+  'conversation_archived',
   'not_conversation_member',
   'agent_not_found',
   'reply_target_not_found',
@@ -243,15 +244,20 @@ export const CreateTasksOpErrorSchema = z.enum([
 ]);
 export type CreateTasksOpError = z.infer<typeof CreateTasksOpErrorSchema>;
 
+/** The identity a create transaction authoritatively produces per task — the
+ *  only fields guaranteed by the write itself, with no read-model projection.
+ *  Both the agent batch result and the human panel create return exactly this,
+ *  so a create ACK never depends on a post-commit re-read (which could report a
+ *  committed write as a failure and drive a duplicate retry). */
+export const CreatedTaskIdentitySchema = z.object({
+  id: z.string(),
+  task_number: z.number(),
+  title: z.string(),
+});
+export type CreatedTaskIdentity = z.infer<typeof CreatedTaskIdentitySchema>;
+
 export const CreateTasksSuccessSchema = z.object({
-  tasks: z.array(
-    z.object({
-      /** The created task's identity (`tasks.id`). */
-      id: z.string(),
-      task_number: z.number(),
-      title: z.string(),
-    }),
-  ),
+  tasks: z.array(CreatedTaskIdentitySchema),
 });
 export const CreateTasksFailureSchema = z.object({
   error: CreateTasksOpErrorSchema,
@@ -270,6 +276,60 @@ export const CreateTasksResultSchema = z.union([
   CreateTasksFailureSchema,
 ]);
 export type CreateTasksResult = z.infer<typeof CreateTasksResultSchema>;
+
+// ── Human UI — POST /api/tasks (panel direct-create) ─────────────────────
+// The human task panel creates a task directly, naming the target channel.
+// It shares the SAME create semantics as the agent CLI (one
+// `taskService.createTasks` — task row + `task_create` system event +
+// `created_event_message_id` backfill in one txn); only the actor-policy edges
+// differ (no `create_tasks` capability — that is an agent concept; no `claim` —
+// a user actor's claim is ignored, humans create unassigned; no
+// `source_message_id` — a panel create is sourceless, so its `nav` resolves to
+// the created-event anchor). `conversation_id` is the EXPLICIT target (supplied
+// by the writable-channel selector) — never derived from an ambient "current
+// channel"; the server authorizes membership + open state fail-closed.
+export const HumanCreateTaskInputSchema = z.object({
+  title: TaskTitleSchema,
+  body: TaskBodySchema.optional(),
+  conversation_id: z.string().min(1),
+});
+export type HumanCreateTaskInput = z.infer<typeof HumanCreateTaskInputSchema>;
+
+/** The typed failures a sourceless human create can surface, as a discriminated
+ *  `{ success:false, code }` envelope the renderer classifies on `code` alone
+ *  (never a reason string). The route's `canPostToConversation` gate collapses
+ *  non-membership AND an unknown target into the SAME `not_conversation_member`
+ *  (so existence never leaks) BEFORE the service runs; a member creating in a
+ *  CLOSED or ARCHIVED conversation still reaches the service and gets the
+ *  distinct `conversation_closed` / `conversation_archived`. `conversation_not_found`
+ *  is retained for service completeness but is unreachable via the gated route.
+ *  The agent-only `source_*` / `agent_not_found` codes cannot occur here. */
+export const HumanCreateTaskErrorCodeSchema = z.enum([
+  'conversation_not_found',
+  'conversation_closed',
+  'conversation_archived',
+  'not_conversation_member',
+]);
+export type HumanCreateTaskErrorCode = z.infer<
+  typeof HumanCreateTaskErrorCodeSchema
+>;
+
+/** SUCCESS returns ONLY the identity the create transaction authoritatively
+ *  produced (`id` / `task_number` / `title`) — the SAME shape the agent batch
+ *  create returns. The panel opens the task modal by `id` and reads the full
+ *  detail through the normal `GET /api/tasks/:id` path; the create ACK is never
+ *  coupled to a post-commit projection read, so a committed write can never be
+ *  reported as a failure (which would drive a duplicate retry on this sourceless,
+ *  non-idempotent create). */
+export const HumanCreateTaskResultSchema = z.union([
+  z.object({ success: z.literal(true), task: CreatedTaskIdentitySchema }),
+  z.object({
+    success: z.literal(false),
+    code: HumanCreateTaskErrorCodeSchema,
+    reason: z.string().optional(),
+  }),
+]);
+export type HumanCreateTaskResult = z.infer<typeof HumanCreateTaskResultSchema>;
 
 // POST /internal/agent/:aid/tasks/claim — claim_tasks MCP tool
 export const ClaimTasksInputSchema = z

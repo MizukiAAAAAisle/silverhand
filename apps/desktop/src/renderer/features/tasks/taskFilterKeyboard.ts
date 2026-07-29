@@ -27,17 +27,43 @@ export type RovingAction =
   | null;
 
 /**
+ * True while an IME composition owns the keystroke — both the modern
+ * `isComposing` flag (Chromium/Electron) and the legacy `keyCode === 229` some
+ * input methods still emit for a composition keydown. Exported so a consumer's
+ * OWN key handling (e.g. the create picker's form-submit Enter guard) reads the
+ * SAME predicate as the roving helper: the two composition checks must not
+ * drift, or a call site could `preventDefault` a keystroke the reducer bypasses
+ * (or vice versa) and steal a candidate commit from the IME.
+ */
+export function isImeComposing(e: {
+  isComposing?: boolean;
+  keyCode?: number;
+}): boolean {
+  return Boolean(e.isComposing) || e.keyCode === 229;
+}
+
+/**
  * Pure reducer for one keydown — extracted so the wrap/clamp/text-field rules
  * are unit-testable without a DOM. `inTextField` is true when focus sits in the
  * combobox's search input, where Home/End must stay text-cursor navigation
  * (the arrows still drive the list, since a single-line input ignores them).
+ *
+ * `composing` is true while an IME composition is in flight (e.g. a CJK input
+ * method is mid-candidate). Every key then belongs to the input method — the
+ * Enter that commits a candidate, and the arrows that move through the candidate
+ * window — so the list MUST stay inert: no move, no select, and (at the call
+ * site) no `preventDefault`, or the keystroke is stolen from the IME. List
+ * navigation resumes on the next ordinary keydown after `compositionend`, when
+ * `composing` reads false again.
  */
 export function rovingKeyAction(
   key: string,
   current: number,
   count: number,
   inTextField: boolean,
+  composing = false,
 ): RovingAction {
+  if (composing) return null;
   if (count <= 0) return null;
   switch (key) {
     case 'ArrowDown':
@@ -111,7 +137,8 @@ export function useRovingList({
       const target = e.target as HTMLElement | null;
       const inTextField =
         target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA';
-      const action = rovingKeyAction(e.key, activeIndex, count, inTextField);
+      const composing = isImeComposing(e.nativeEvent);
+      const action = rovingKeyAction(e.key, activeIndex, count, inTextField, composing);
       if (!action) return;
       e.preventDefault();
       if (action.type === 'move') setActiveIndex(action.index);

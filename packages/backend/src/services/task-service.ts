@@ -149,11 +149,27 @@ export class TaskService {
     const conversation = this.conversations.get(input.conversationId);
     if (!conversation) return { error: 'conversation_not_found' };
     if (conversation.closed_at !== null) return { error: 'conversation_closed' };
+    // Same write-invariant the ordinary message path enforces
+    // (conversation-message-service): a task create writes a `task_create`
+    // system event into the conversation, so an ARCHIVED (read-only) target is
+    // refused for BOTH actors here — not in a human-only route layer — or the
+    // agent path would keep landing rows + events in an archived conversation.
+    if (conversation.archived_at !== null) return { error: 'conversation_archived' };
     if (input.actor.kind === 'agent') {
       if (!this.agents.get(input.actor.agentId)) {
         return { error: 'agent_not_found' };
       }
       if (!this.conversations.getAgent(input.conversationId, input.actor.agentId)) {
+        return { error: 'not_conversation_member' };
+      }
+    } else {
+      // Human actor: the SAME conversation-membership floor the agent branch
+      // enforces (defense-in-depth behind the route's `canPostToConversation`
+      // gate). Creating a task writes a `task_create` system event into the
+      // conversation, so it follows the post/membership boundary — a non-member,
+      // INCLUDING a public-channel viewer, is refused fail-closed rather than
+      // relying on the route alone. Symmetric branch, not a parallel flow.
+      if (!userCanAccessConversation(this.db, input.actor.userId, input.conversationId)) {
         return { error: 'not_conversation_member' };
       }
     }
