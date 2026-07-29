@@ -19,7 +19,12 @@ import type {
   WorkspaceProvisionResult,
   WorkspacePathIndexParams,
   WorkspacePathIndexResult,
+  WorkspaceUnbindParams,
+  WorkspaceUnbindResult,
+  WorkspaceRegistryIdsParams,
+  WorkspaceRegistryIdsResult,
 } from '@silverhand/host';
+import { WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1 } from '@silverhand/host';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -120,6 +125,52 @@ export function resolveOutboundForHost(
     };
   }
   return { kind: 'ok', adapter, connectionId };
+}
+
+/**
+ * #task:1719 — capability-gated resolve for the `workspace_unbind` /
+ * `workspace_registry_ids` intent family. An old daemon strict-rejects an
+ * unknown command kind and CLOSES the connection (`closeProtocolError`), so
+ * the backend must never dispatch either command ungated. This helper
+ * therefore re-reads the CURRENT generation attachment and requires BOTH:
+ *
+ *  - `workspace.registry_reconcile.v1` among the capabilities THAT
+ *    generation advertised in its ready frame, and
+ *  - `attachment.connectionId === connectionId` (the id pinned by
+ *    `resolveOutboundForHost`) — a reattach between resolve and gate means
+ *    the capabilities read would describe a DIFFERENT daemon binary, so the
+ *    check fails closed as `host_attach_pending` instead of trusting it.
+ *
+ * `no_capability` is a distinct outcome (not a failure): the caller skips
+ * with a structured log and sends ZERO new traffic to that daemon — it
+ * converges via the first ready-generation reconcile after upgrade.
+ */
+export function resolveRegistryReconcileOutbound(
+  adapter: OutboundFrameAdapter | null,
+  hostId: string,
+):
+  | { kind: 'ok'; adapter: OutboundFrameAdapter; connectionId: string }
+  | { kind: 'no_capability'; connectionId: string }
+  | DataPlaneFailure {
+  const outbound = resolveOutboundForHost(adapter, hostId);
+  if (outbound.kind === 'failed') return outbound;
+  const attachment = outbound.adapter.getAttachment(hostId);
+  if (!attachment || attachment.connectionId !== outbound.connectionId) {
+    return {
+      kind: 'failed',
+      code: 'host_attach_pending',
+      message:
+        'host attachment was replaced between resolve and capability gate',
+      status: 503,
+      retriable: true,
+    };
+  }
+  if (
+    !attachment.capabilities.includes(WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1)
+  ) {
+    return { kind: 'no_capability', connectionId: outbound.connectionId };
+  }
+  return outbound;
 }
 
 /**
@@ -255,6 +306,67 @@ export async function dispatchWorkspacePathIndex(
     const result = await adapter.sendCommand(
       hostId,
       'workspace_path_index',
+      params,
+      {
+        timeoutMs: INDEX_TIMEOUT_MS,
+        expectedConnectionId: connectionId,
+      },
+    );
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * #task:1719 — dispatch `workspace_unbind` to a daemon: remove the registry
+ * mappings for backend-deleted workspace ids so they stop participating in
+ * path-overlap validation as ghosts. Mapping removal ONLY — the daemon never
+ * touches directories or file contents (zero implicit deletion, #1594).
+ * Idempotent on the daemon side (never-bound / already-unbound ids come back
+ * in `absent` as success), so best-effort re-dispatch is always safe.
+ */
+export async function dispatchWorkspaceUnbind(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: WorkspaceUnbindParams,
+): Promise<DataPlaneOutcome<WorkspaceUnbindResult>> {
+  try {
+    const result = await adapter.sendCommand(
+      hostId,
+      'workspace_unbind',
+      params,
+      {
+        timeoutMs: INDEX_TIMEOUT_MS,
+        expectedConnectionId: connectionId,
+      },
+    );
+    return { kind: 'ok', result };
+  } catch (err) {
+    return mapDataPlaneError(err);
+  }
+}
+
+/**
+ * #task:1719 — dispatch `workspace_registry_ids` to a daemon: the
+ * ready-generation reconcile PULL. Returns every workspace id the daemon's
+ * registry currently binds (ids ONLY — paths never cross the wire) so the
+ * reconciler can diff against the DB's legal set and unbind the ghosts.
+ * Callers MUST gate on {@link resolveRegistryReconcileOutbound} first — an
+ * old daemon would strict-reject the unknown command and drop the
+ * connection.
+ */
+export async function dispatchWorkspaceRegistryIds(
+  adapter: OutboundFrameAdapter,
+  hostId: string,
+  connectionId: string,
+  params: WorkspaceRegistryIdsParams,
+): Promise<DataPlaneOutcome<WorkspaceRegistryIdsResult>> {
+  try {
+    const result = await adapter.sendCommand(
+      hostId,
+      'workspace_registry_ids',
       params,
       {
         timeoutMs: INDEX_TIMEOUT_MS,

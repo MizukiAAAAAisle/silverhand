@@ -6,6 +6,10 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { StoredFileRef } from '../storage/blob-file-storage.js';
 import type { BlobSweepOutcome } from '../services/attachment-service.js';
 import { canGovernWorkspace } from '../permissions.js';
+import {
+  dispatchWorkspaceUnbind,
+  resolveRegistryReconcileOutbound,
+} from '../runtime/workspace-data-plane.js';
 
 /**
  * DeleteWorkspace use case (#task:983 — P13a spec).
@@ -74,15 +78,20 @@ export async function deleteWorkspace(
   // (every member agent's host must equal `workspace_host_id`) is gone — a
   // workspace's members may legitimately live on other computers. Runtime
   // stops below already route per agent (`runtimeHost.stop` resolves each
-  // agent's own host), and the delete removes no daemon-side files: guest
-  // computers' local roots stay behind as LOCALLY-RETAINED orphans awaiting
-  // a future explicit local cleanup on that computer (#1594: zero implicit
-  // deletion; after the cascade the membership rows are gone, so no current
-  // purge path can even enumerate them).
+  // agent's own host), and the delete removes no daemon-side directories or
+  // file contents: home AND guest computers' local roots stay behind (#1594:
+  // zero implicit deletion of user data). What IS torn down now is the
+  // registry IDENTITY BINDING (#task:1719): after the row delete, each
+  // captured host gets a best-effort `workspace_unbind` so its
+  // workspace-registry.json mapping stops participating in path-overlap
+  // validation as a ghost. Unreachable hosts keep their orphan entries
+  // awaiting explicit cleanup — the dispatch never blocks or reverses the
+  // delete.
   stopWorkspaceRuntime(deps, plan);
   await sweepWorkspaceAttachments(deps, plan);
   deleteWorkspaceRow(deps, workspace.id);
   publishWorkspaceRemoved(deps, plan);
+  await unbindWorkspaceBindings(deps, plan);
   return { kind: 'deleted' };
 }
 
@@ -111,6 +120,15 @@ export interface WorkspaceTeardownPlan {
    * a silent no-op.
    */
   runtimeStops: { conversationId: string; agentId: string; hostId: string }[];
+  /**
+   * #task:1719 — the distinct hosts whose daemon registries may hold a binding
+   * for this workspace: the home computer (`workspace_host_id`) plus every
+   * member agent's computer (guest hosts provision local roots for
+   * cross-computer members, #task:1600). CAPTURED, not looked up at unbind
+   * time — after the cascade the workspace row and the membership rows are
+   * gone, so a post-delete query could enumerate nothing.
+   */
+  unbindHostIds: string[];
   /** Storage objects to remove, captured while the rows still exist. */
   blobRefs: StoredFileRef[];
   viewerUserIds: string[];
@@ -142,10 +160,34 @@ export function collectWorkspaceTeardownPlan(
         : [];
     }),
   );
+  // #task:1719 — capture the distinct registry-binding hosts BEFORE any
+  // deletion (same capture-not-hint invariant as every field above). Guest
+  // daemons provision their local roots at WORKSPACE membership
+  // establishment (#1594/#1600), not at conversation membership, so the
+  // authoritative guest set is `workspace_members` — an agent member with no
+  // conversation in this workspace still holds a binding. The runtime-stop
+  // hosts are unioned in as a belt (they are always a subset in a consistent
+  // DB). `workspaces.get` still answers here because the row is not deleted
+  // yet.
+  const workspaceRow = workspaces.get(workspaceId);
+  const memberAgentHostIds = workspaces
+    .listMemberAgents(workspaceId)
+    .flatMap(agentId => {
+      const agent = deps.agents.get(agentId);
+      return agent ? [agent.host_id] : [];
+    });
+  const unbindHostIds = [
+    ...new Set([
+      ...(workspaceRow ? [workspaceRow.workspace_host_id] : []),
+      ...memberAgentHostIds,
+      ...runtimeStops.map(stop => stop.hostId),
+    ]),
+  ];
   return {
     workspaceId,
     conversationIds,
     runtimeStops,
+    unbindHostIds,
     blobRefs: ctx.attachmentService.collectChannelBlobRefs(sweepChannelIds),
     viewerUserIds: workspaces.listUserMemberIds(workspaceId),
   };
@@ -239,4 +281,116 @@ export function publishWorkspaceRemoved(
       workspace_id: plan.workspaceId,
     });
   }
+}
+
+/**
+ * #task:1719 — best-effort `workspace_unbind` fan-out to every captured host,
+ * AFTER the row delete: remove each daemon's workspace-registry.json mapping
+ * so the deleted id stops participating in path-overlap validation as a
+ * ghost. Mapping removal ONLY — the daemon never touches directories or file
+ * contents (#1594: zero implicit deletion of user data).
+ *
+ * Capability gate (P0-2): each dispatch first passes
+ * `resolveRegistryReconcileOutbound` — current-generation attachment must
+ * advertise `workspace.registry_reconcile.v1` AND still carry the pinned
+ * connectionId. A host without the capability gets ZERO new traffic (an old
+ * daemon strict-rejects the unknown command and drops the connection); it is
+ * skipped with a structured `workspace_unbind_skipped_no_capability` log and
+ * converges via the first ready-generation reconcile after upgrade.
+ *
+ * Concurrency (P1-1): the hosts are dispatched CONCURRENTLY (`Promise.all`,
+ * each branch with its own catch), so the total added latency of this
+ * fan-out is bounded by ONE dispatch timeout — not N sequential timeouts
+ * when several captured daemons are unreachable.
+ *
+ * NEVER throws and never blocks the deleted result: an offline host (resolve
+ * failed) or a failed dispatch is logged and skipped — that daemon keeps its
+ * orphan entry awaiting the next ready-generation reconcile, and the unbind
+ * is idempotent daemon-side, so any later re-dispatch is safe.
+ *
+ * `skipHostId`: the delete-computer cascade passes the host being deleted —
+ * its whole registry is going away with the computer, so only OTHER hosts'
+ * guest entries matter there.
+ */
+export async function unbindWorkspaceBindings(
+  deps: DeleteWorkspaceDeps,
+  plan: WorkspaceTeardownPlan,
+  opts?: { skipHostId?: string },
+): Promise<void> {
+  const { ctx } = deps;
+  const adapter = ctx.outboundFrameAdapter?.() ?? null;
+  const targets = plan.unbindHostIds.filter(
+    hostId => opts?.skipHostId === undefined || hostId !== opts.skipHostId,
+  );
+  await Promise.all(
+    targets.map(async hostId => {
+      try {
+        const outbound = resolveRegistryReconcileOutbound(adapter, hostId);
+        if (outbound.kind === 'no_capability') {
+          ctx.logger.info(
+            {
+              event: 'workspace_unbind_skipped_no_capability',
+              host_id: hostId,
+              connection_id: outbound.connectionId,
+              workspace_id: plan.workspaceId,
+            },
+            'delete workspace: daemon lacks workspace.registry_reconcile.v1; unbind withheld (converges on first post-upgrade reconcile)',
+          );
+          return;
+        }
+        if (outbound.kind === 'failed') {
+          ctx.logger.warn(
+            {
+              event: 'workspace_unbind_failed',
+              host_id: hostId,
+              workspace_id: plan.workspaceId,
+              code: outbound.code,
+            },
+            'delete workspace: host offline, registry entry stays orphaned (continuing)',
+          );
+          return;
+        }
+        const dispatched = await dispatchWorkspaceUnbind(
+          outbound.adapter,
+          hostId,
+          outbound.connectionId,
+          { workspace_ids: [plan.workspaceId] },
+        );
+        if (dispatched.kind === 'failed') {
+          ctx.logger.warn(
+            {
+              event: 'workspace_unbind_failed',
+              host_id: hostId,
+              workspace_id: plan.workspaceId,
+              code: dispatched.code,
+            },
+            'delete workspace: registry unbind failed, entry stays orphaned (continuing)',
+          );
+          return;
+        }
+        ctx.logger.info(
+          {
+            event: 'workspace_unbind',
+            host_id: hostId,
+            workspace_id: plan.workspaceId,
+            removed: dispatched.result.removed,
+            absent: dispatched.result.absent,
+          },
+          'delete workspace: daemon registry binding unbound',
+        );
+      } catch (err) {
+        // Per-host containment: one host's unexpected throw must never
+        // truncate the other branches or surface into the delete result.
+        ctx.logger.warn(
+          {
+            event: 'workspace_unbind_failed',
+            host_id: hostId,
+            workspace_id: plan.workspaceId,
+            err,
+          },
+          'delete workspace: registry unbind threw, entry stays orphaned (continuing)',
+        );
+      }
+    }),
+  );
 }

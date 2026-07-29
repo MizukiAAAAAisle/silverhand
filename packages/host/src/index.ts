@@ -89,6 +89,11 @@ export {
   HelloResultSchema,
   HOST_PROTOCOL_VERSION,
   KNOWN_CAPABILITIES_V1,
+  // #task:1719 — capability gating the workspace_unbind +
+  // workspace_registry_ids intent family, plus the unbind batch bound the
+  // backend chunks by.
+  WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1,
+  WORKSPACE_UNBIND_MAX_BATCH,
   layoutMigrationCapability,
   layoutMigrationOutcomeFromCapabilities,
   type LayoutMigrationOutcome,
@@ -175,6 +180,12 @@ export {
   type WorkspacePathIndexResult,
   type WorkspacePathIndexEntry,
   type WorkspacePathIndexErrorCode,
+  type WorkspaceUnbindParams,
+  type WorkspaceUnbindResult,
+  type WorkspaceUnbindErrorCode,
+  type WorkspaceRegistryIdsParams,
+  type WorkspaceRegistryIdsResult,
+  type WorkspaceRegistryIdsErrorCode,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceIndexEntry,

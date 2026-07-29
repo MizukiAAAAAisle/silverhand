@@ -77,6 +77,10 @@ import {
   type WorkspaceProvisionResult,
   type WorkspacePathIndexParams,
   type WorkspacePathIndexResult,
+  type WorkspaceUnbindParams,
+  type WorkspaceUnbindResult,
+  type WorkspaceRegistryIdsParams,
+  type WorkspaceRegistryIdsResult,
 } from '../protocol.js';
 import { detectRuntimeCatalog } from '../runtimes.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
@@ -193,6 +197,14 @@ export interface DispatcherOptions {
   workspacePathIndexHandler?: (
     params: WorkspacePathIndexParams,
   ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult>;
+  /** #task:1719 — registry-mapping removal for backend-deleted workspaces. */
+  workspaceUnbindHandler?: (
+    params: WorkspaceUnbindParams,
+  ) => WorkspaceUnbindResult | Promise<WorkspaceUnbindResult>;
+  /** #task:1719 — ready-generation reconcile pull (ids ONLY, never paths). */
+  workspaceRegistryIdsHandler?: (
+    params: WorkspaceRegistryIdsParams,
+  ) => WorkspaceRegistryIdsResult | Promise<WorkspaceRegistryIdsResult>;
   /**
    * D4.e-1 — handler for `agent_workspace_index` (route-time `agent_dir`
    * resolver). Production wiring: `indexAgentWorkspaces`. Typed errors
@@ -309,6 +321,16 @@ export class IntentDispatcher {
         params: WorkspacePathIndexParams,
       ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult>)
     | undefined;
+  private readonly workspaceUnbindHandler:
+    | ((
+        params: WorkspaceUnbindParams,
+      ) => WorkspaceUnbindResult | Promise<WorkspaceUnbindResult>)
+    | undefined;
+  private readonly workspaceRegistryIdsHandler:
+    | ((
+        params: WorkspaceRegistryIdsParams,
+      ) => WorkspaceRegistryIdsResult | Promise<WorkspaceRegistryIdsResult>)
+    | undefined;
   private readonly agentWorkspaceIndexHandler:
     | ((
         params: AgentWorkspaceIndexParams,
@@ -374,6 +396,8 @@ export class IntentDispatcher {
     this.agentMaterializeHandler = opts.agentMaterializeHandler;
     this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
     this.workspacePathIndexHandler = opts.workspacePathIndexHandler;
+    this.workspaceUnbindHandler = opts.workspaceUnbindHandler;
+    this.workspaceRegistryIdsHandler = opts.workspaceRegistryIdsHandler;
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
     this.agentWorkspaceTreeHandler = opts.agentWorkspaceTreeHandler;
     this.agentWorkspaceFileReadHandler = opts.agentWorkspaceFileReadHandler;
@@ -851,6 +875,18 @@ export class IntentDispatcher {
         return this.requireWorkspacePathIndexHandler()(
           params as WorkspacePathIndexParams,
         );
+      case 'workspace_unbind':
+        // #task:1719 — registry-mapping removal for backend-deleted
+        // workspaces. Mapping only; never touches directories.
+        return this.requireWorkspaceUnbindHandler()(
+          params as WorkspaceUnbindParams,
+        );
+      case 'workspace_registry_ids':
+        // #task:1719 — ready-generation reconcile pull. Read-only; ids
+        // only, never paths.
+        return this.requireWorkspaceRegistryIdsHandler()(
+          params as WorkspaceRegistryIdsParams,
+        );
       case 'agent_workspace_index':
         // D4.e-1 — route-time agent_dir resolver. Slot wired to
         // `indexAgentWorkspaces`.
@@ -1017,6 +1053,28 @@ export class IntentDispatcher {
       );
     }
     return this.workspacePathIndexHandler;
+  }
+
+  private requireWorkspaceUnbindHandler(): (
+    params: WorkspaceUnbindParams,
+  ) => WorkspaceUnbindResult | Promise<WorkspaceUnbindResult> {
+    if (!this.workspaceUnbindHandler) {
+      throw new Error(
+        'workspace_unbind intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.workspaceUnbindHandler;
+  }
+
+  private requireWorkspaceRegistryIdsHandler(): (
+    params: WorkspaceRegistryIdsParams,
+  ) => WorkspaceRegistryIdsResult | Promise<WorkspaceRegistryIdsResult> {
+    if (!this.workspaceRegistryIdsHandler) {
+      throw new Error(
+        'workspace_registry_ids intent reached dispatcher with no handler wired',
+      );
+    }
+    return this.workspaceRegistryIdsHandler;
   }
 
   private requireAgentWorkspaceIndexHandler(): (

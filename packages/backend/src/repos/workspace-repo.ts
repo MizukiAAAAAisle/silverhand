@@ -418,6 +418,27 @@ export class WorkspaceRepo {
       .map(r => r.agent_id);
   }
 
+  /**
+   * #task:1719 — every workspace id with at least ONE member agent living on
+   * `hostId` (`workspace_members` ⋈ `agents`). This is the authoritative
+   * GUEST-legality source for the registry reconciler: guest daemons
+   * provision their local realization at WORKSPACE membership establishment
+   * (#1594/#1600), not at conversation membership, so an id absent from both
+   * this set and the host's home set (`workspace_host_id`) is a ghost on
+   * that daemon.
+   */
+  listIdsWithMemberAgentOnHost(hostId: string): string[] {
+    return this.db
+      .prepare<[string], { workspace_id: string }>(
+        `SELECT DISTINCT wm.workspace_id
+           FROM workspace_members wm
+           JOIN agents a ON a.id = wm.agent_id
+          WHERE a.host_id = ?`,
+      )
+      .all(hostId)
+      .map(r => r.workspace_id);
+  }
+
   listMembers(workspaceId: string): AgentDto[] {
     return this.db
       .prepare<[string], AgentRow>(

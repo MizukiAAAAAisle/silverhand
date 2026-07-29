@@ -39,6 +39,7 @@ import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { HostStatusReadModel } from '../../src/runtime/host-status-read-model.js';
+import { WorkspaceRegistryReconciler } from '../../src/runtime/workspace-registry-reconcile.js';
 import { createApiRouter } from '../../src/routes.js';
 import { createInternalRouter } from '../../src/routes/internal-agent.js';
 import type {
@@ -75,8 +76,10 @@ import { makeTempSilverhandDir, openTestDb } from './db.js';
 import { RuntimeHostPlacementResolver } from '../../src/runtime/host-placement.js';
 import {
   HostWsCommandResponseError,
+  type HostWsAttachment,
   type HostWsServerController,
 } from '../../src/ws/host-ws-server.js';
+import { KNOWN_CAPABILITIES_V1 } from '@silverhand/host';
 import type {
   OutboundServerCommandKind,
   OutboundServerCommandParams,
@@ -266,6 +269,13 @@ export class FakeHostWsServerController implements HostWsServerController {
   }> = [];
   /** Inject an error from `sendCommand` (any kind). */
   sendCommandError: Error | null = null;
+  /** #task:1719 — when set, `sendCommandError` throws ONLY for these
+   *  command kinds. The required provision barrier means the reconcile
+   *  pull (`workspace_registry_ids`) now precedes every provision; a
+   *  blanket error would fail the barrier first and mask the arm a
+   *  test actually wants to exercise. `null` keeps the historical
+   *  throw-for-everything behavior. */
+  sendCommandErrorKinds: string[] | null = null;
   hostRuntimeCatalogAckOverride:
     | (() => OutboundServerCommandResult<'host_runtime_catalog'>)
     | null = null;
@@ -294,6 +304,31 @@ export class FakeHostWsServerController implements HostWsServerController {
     | ((
         params: OutboundServerCommandParams<'workspace_path_index'>,
       ) => OutboundServerCommandResult<'workspace_path_index'>)
+    | null = null;
+  /**
+   * #task:1719 — override the `workspace_unbind` ack. Default mirrors the
+   * daemon: delete the id from the fake in-memory registry map (mapping ONLY
+   * — no fs mutation), reporting `removed` vs `absent` (idempotent success).
+   * Tests swap this to surface typed errors (`registry_unavailable`).
+   */
+  workspaceUnbindAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'workspace_unbind'>,
+      ) => OutboundServerCommandResult<'workspace_unbind'>)
+    | null = null;
+  /**
+   * #task:1719 — override the `workspace_registry_ids` ack. Default mirrors
+   * the daemon reconcile pull: the ids currently bound in the fake in-memory
+   * registry (`boundWorkspacePaths` keys — ids ONLY, never paths). Tests
+   * swap this to report ghosts or to surface typed errors / transport
+   * failures for the reconciler paths.
+   */
+  workspaceRegistryIdsAckOverride:
+    | ((
+        params: OutboundServerCommandParams<'workspace_registry_ids'>,
+      ) =>
+        | OutboundServerCommandResult<'workspace_registry_ids'>
+        | Promise<OutboundServerCommandResult<'workspace_registry_ids'>>)
     | null = null;
   /**
    * D4.e-1 3b — override the `agent_workspace_index` ack. Tests that want to
@@ -425,8 +460,26 @@ export class FakeHostWsServerController implements HostWsServerController {
   }
   /** Test hook to simulate a detached host (resolveOutboundForHost → 503). */
   connectionIdForHostOverride: ((hostId: string) => string | null) | null = null;
-  getAttachment(): null {
-    return null;
+  /**
+   * #task:1719 — capabilities the fake attachment advertises. Defaults to
+   * the full daemon set (mirrors `createDaemonHelloResult`), so the
+   * capability-gated `workspace_unbind` / `workspace_registry_ids` family
+   * keeps dispatching in legacy tests. A test simulating an OLD daemon
+   * strips the token:
+   *   `fake.attachmentCapabilities = fake.attachmentCapabilities.filter(
+   *      c => c !== 'workspace.registry_reconcile.v1')`.
+   */
+  attachmentCapabilities: string[] = [...KNOWN_CAPABILITIES_V1];
+  getAttachment(hostId: string): HostWsAttachment | null {
+    const connectionId = this.connectionIdForHost(hostId);
+    if (connectionId === null) return null;
+    return {
+      hostId,
+      connectionId,
+      attachedAt: 0,
+      hostname: 'fake-host',
+      capabilities: this.attachmentCapabilities,
+    };
   }
   getAdmissionFailure(): null {
     return null;
@@ -441,7 +494,13 @@ export class FakeHostWsServerController implements HostWsServerController {
       kind,
       params: params as Record<string, unknown>,
     });
-    if (this.sendCommandError) throw this.sendCommandError;
+    if (
+      this.sendCommandError &&
+      (this.sendCommandErrorKinds === null ||
+        this.sendCommandErrorKinds.includes(kind))
+    ) {
+      throw this.sendCommandError;
+    }
     if (kind === 'host_runtime_catalog') {
       if (this.hostRuntimeCatalogAckOverride) {
         return this.hostRuntimeCatalogAckOverride() as OutboundServerCommandResult<K>;
@@ -597,6 +656,45 @@ export class FakeHostWsServerController implements HostWsServerController {
         ok: true as const,
         entries,
         unresolved,
+      } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'workspace_unbind') {
+      const p = params as OutboundServerCommandParams<'workspace_unbind'>;
+      if (this.workspaceUnbindAckOverride) {
+        return this.workspaceUnbindAckOverride(
+          p,
+        ) as OutboundServerCommandResult<K>;
+      }
+      // #task:1719 — mirror the daemon: remove ONLY the registry mapping
+      // (the shared embedded test fs is never touched — #1594). Absent ids
+      // (never bound / already unbound) are idempotent SUCCESS in `absent`.
+      const removed: string[] = [];
+      const absent: string[] = [];
+      for (const workspaceId of p.workspace_ids) {
+        if (this.boundWorkspacePaths.delete(workspaceId)) {
+          removed.push(workspaceId);
+        } else {
+          absent.push(workspaceId);
+        }
+      }
+      return {
+        ok: true as const,
+        removed,
+        absent,
+      } as OutboundServerCommandResult<K>;
+    }
+    if (kind === 'workspace_registry_ids') {
+      const p = params as OutboundServerCommandParams<'workspace_registry_ids'>;
+      if (this.workspaceRegistryIdsAckOverride) {
+        return (await this.workspaceRegistryIdsAckOverride(
+          p,
+        )) as OutboundServerCommandResult<K>;
+      }
+      // #task:1719 — mirror the daemon reconcile pull: every id currently
+      // bound in the fake in-memory registry, ids ONLY (never paths).
+      return {
+        ok: true as const,
+        workspace_ids: [...this.boundWorkspacePaths.keys()],
       } as OutboundServerCommandResult<K>;
     }
     if (kind === 'agent_workspace_tree') {
@@ -1111,6 +1209,13 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     // steer the materialize path, preserving pre-D5.a semantics.
     outboundFrameAdapter: hostWsControllerFactory,
     runtimeHost: fake,
+    // #task:1719 (Cindy round-2 P1) — the provision barrier is a REQUIRED
+    // port: the harness provides a REAL reconciler over the fake transport
+    // (declared just below; the closure runs post-construction). Tests
+    // exercise barrier failure by making the fake's workspace_registry_ids
+    // arm fail — never by omitting the port.
+    workspaceProvisionBarrier: hostId =>
+      workspaceRegistryReconciler.barrier(hostId),
   };
   // #task:1588 — the /status route reads through the ctx-level read model
   // (memory-only; gate #4). Route tests seed it explicitly via
@@ -1121,6 +1226,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeView: hostId => ctx.hostRuntimeView?.(hostId) ?? null,
   });
   ctx.hostStatusReadModel = () => hostStatusReadModel;
+  const workspaceRegistryReconciler = new WorkspaceRegistryReconciler({
+    db,
+    adapter: () => ctx.outboundFrameAdapter?.() ?? null,
+    logger: silentLogger,
+  });
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
@@ -1220,6 +1330,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     legacyServerAuthToken,
     viewerUserId,
     cleanup: () => {
+      workspaceRegistryReconciler.close();
       hostStatusReadModel.close();
       ctx.scheduleService.stop();
       ctx.idleReaperService.stop();

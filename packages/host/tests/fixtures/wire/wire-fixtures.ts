@@ -397,6 +397,30 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'workspace_path_index' },
   },
   {
+    name: 'request/workspace_unbind-batch',
+    description:
+      '#task:1719: registry-mapping removal for backend-deleted workspaces, batched per host. The daemon removes ONLY the workspace-registry.json mapping — never any directory or file contents (#1594).',
+    frame: enc({
+      id: 'req-workspace-unbind-1',
+      intent: 'workspace_unbind',
+      params: {
+        workspace_ids: ['ws_8K2nQ', 'ws_gone_already'],
+      },
+    }),
+    kind: { kind: 'request', intent: 'workspace_unbind' },
+  },
+  {
+    name: 'request/workspace_registry_ids',
+    description:
+      '#task:1719: ready-generation reconcile pull — empty strict params; the daemon answers with the ids currently bound in its registry (ids ONLY, never paths). Capability-gated on workspace.registry_reconcile.v1.',
+    frame: enc({
+      id: 'req-workspace-registry-ids-1',
+      intent: 'workspace_registry_ids',
+      params: {},
+    }),
+    kind: { kind: 'request', intent: 'workspace_registry_ids' },
+  },
+  {
     name: 'request/agent_workspace_index-mixed',
     description:
       'D4.e-1: route-time agent_dir resolver. Backend sends only {agent_id, workspace_ids} (already ACL/DB-authorized) — no path, no kind. The daemon resolves each agent_dir host-side (agent-home → L1 dir; regular → registry), so the backend never assembles a path from workspace_path.',
@@ -1335,6 +1359,33 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     kind: { kind: 'response_success', intent: 'workspace_path_index' },
   },
   {
+    name: 'response/workspace_unbind-mixed',
+    description:
+      '#task:1719: idempotent unbind verdict. `removed` mappings existed and are gone; `absent` ids were never bound / already unbound — SUCCESS, not error, so best-effort re-dispatch is always safe.',
+    frame: enc({
+      id: 'req-workspace-unbind-1',
+      result: {
+        ok: true,
+        removed: ['ws_8K2nQ'],
+        absent: ['ws_gone_already'],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'workspace_unbind' },
+  },
+  {
+    name: 'response/workspace_registry_ids-ids-only',
+    description:
+      '#task:1719: reconcile pull answer — every id bound under the current control-plane binding, ids ONLY (paths never cross the wire). An absent/empty registry is the same shape with an empty array.',
+    frame: enc({
+      id: 'req-workspace-registry-ids-1',
+      result: {
+        ok: true,
+        workspace_ids: ['ws_8K2nQ', 'ws_ghost_1'],
+      },
+    }),
+    kind: { kind: 'response_success', intent: 'workspace_registry_ids' },
+  },
+  {
     name: 'response/agent_workspace_index-mixed',
     description:
       'D4.e-1: daemon stamped each agent_dir host-side. agent-home resolves to the L1 dir; the provisioned regular workspace resolves under the managed root; the never-provisioned id comes back in unresolved (read fail-closed — the backend MUST NOT fall back to a workspace_path-derived path).',
@@ -1818,6 +1869,71 @@ const WORKSPACE_PATH_INDEX_ERROR_FIXTURES: WireFixture[] = [
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'workspace_path_index' },
+  },
+];
+
+// #task:1719 workspace_unbind typed errors. Note: an absent (never bound /
+// already unbound) id is NOT an error — it comes back in `result.absent`
+// (idempotent success). The only typed errors are whole-call failures.
+const WORKSPACE_UNBIND_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/workspace_unbind-error-registry_unavailable',
+    description:
+      '#task:1719: foreign/corrupt daemon registry fails the whole unbind closed — never guess about someone else\'s file.',
+    frame: enc({
+      id: 'req-workspace-unbind-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry file is bound to another control plane',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_unbind' },
+  },
+  {
+    name: 'response/workspace_unbind-error-internal_error',
+    description:
+      '#task:1719: unexpected local registry failure stays typed.',
+    frame: enc({
+      id: 'req-workspace-unbind-1',
+      error: {
+        code: 'internal_error',
+        message: 'unexpected workspace unbind failure',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_unbind' },
+  },
+];
+
+// #task:1719 workspace_registry_ids typed errors. An absent/empty registry is
+// NOT an error (result with `workspace_ids: []`); the only typed errors are
+// whole-call failures — reporting `[]` for a foreign/corrupt file would make
+// the backend treat every real binding as a ghost.
+const WORKSPACE_REGISTRY_IDS_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/workspace_registry_ids-error-registry_unavailable',
+    description:
+      '#task:1719: foreign/corrupt daemon registry fails the reconcile pull closed — never report an empty set for someone else\'s file.',
+    frame: enc({
+      id: 'req-workspace-registry-ids-1',
+      error: {
+        code: 'registry_unavailable',
+        message: 'registry file is bound to another control plane',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_registry_ids' },
+  },
+  {
+    name: 'response/workspace_registry_ids-error-internal_error',
+    description:
+      '#task:1719: unexpected local registry failure stays typed.',
+    frame: enc({
+      id: 'req-workspace-registry-ids-1',
+      error: {
+        code: 'internal_error',
+        message: 'unexpected workspace registry read failure',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'workspace_registry_ids' },
   },
 ];
 
@@ -2317,6 +2433,8 @@ const MCP_PROBE_ERROR_FIXTURES: WireFixture[] = [
 RESPONSES_ERROR_TYPED.push(
   ...WORKSPACE_PROVISION_ERROR_FIXTURES,
   ...WORKSPACE_PATH_INDEX_ERROR_FIXTURES,
+  ...WORKSPACE_UNBIND_ERROR_FIXTURES,
+  ...WORKSPACE_REGISTRY_IDS_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_TREE_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES,

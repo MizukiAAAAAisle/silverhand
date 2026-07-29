@@ -6,7 +6,10 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
-import { HostWsCommandResponseError } from '../../src/ws/host-ws-server.js';
+import {
+  HostWsCommandResponseError,
+  HostWsCommandTransportError,
+} from '../../src/ws/host-ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
@@ -140,6 +143,57 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     // Membership row landed.
     expect(workspaces.listMembers(ws.id).some(m => m.id === guestId)).toBe(
       true,
+    );
+  });
+
+  it('#task:1719 (Cindy round-2 P1): guest realization awaits the reconcile barrier — reconcile failure returns retryable registry_unavailable, ZERO provision, ZERO membership row', async () => {
+    t = buildTestApp();
+    const ws = await createWorkspaceViaRoute(t, 'home-ws-barrier', []);
+    const guestHost = forgeGuestHost(t, 'host-guest-barrier');
+    const guestId = forgeGuestAgent(t, 'barrier-adder', guestHost);
+    t.fakeHostWs!.calls.length = 0;
+
+    // Fail the reconcile PULL on the guest daemon: the barrier for that
+    // generation rejects, so guest realization must stop BEFORE any
+    // workspace_provision and BEFORE any membership row.
+    t.fakeHostWs!.workspaceRegistryIdsAckOverride = () => {
+      throw new HostWsCommandTransportError(
+        'transport_timeout',
+        'reconcile pull timed out',
+        { hostId: guestHost },
+      );
+    };
+
+    const workspaces = new WorkspaceRepo(t.ctx.db);
+    const result = await addWorkspaceAgentMember(
+      { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
+      {
+        principal: { kind: 'user', userId: 'teammate' },
+        workspace: {
+          id: ws.id,
+          workspace_path: ws.workspace_path,
+          workspace_host_id: ws.workspace_host_id,
+        },
+        agentId: guestId,
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('seed_failed');
+      if (result.error.code === 'seed_failed') {
+        expect(result.error.failure.code).toBe('registry_unavailable');
+        expect(result.error.failure.status).toBe(503);
+        expect(result.error.failure.retriable).toBe(true);
+      }
+    }
+    // ZERO provision reached the daemon; the only guest-bound traffic was
+    // the failed reconcile pull itself.
+    expect(provisionCalls(t)).toHaveLength(0);
+    expect(seedCalls(t)).toHaveLength(0);
+    // ZERO membership row — fail closed, retry later converges.
+    expect(workspaces.listMembers(ws.id).some(m => m.id === guestId)).toBe(
+      false,
     );
   });
 

@@ -251,4 +251,234 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       .get(ws.workspace.id);
     expect(wsRow).toBeUndefined();
   });
+
+  // ── #task:1719 — workspace_unbind fan-out after the row delete ──────
+  //
+  // The delete removes NO daemon-side directories (#1594), but it must
+  // best-effort remove each relevant daemon's registry IDENTITY BINDING so
+  // the deleted id stops participating in path-overlap validation as a
+  // ghost. Home computer + every member agent's computer; offline hosts and
+  // dispatch failures are logged and never block the 204.
+
+  it('dispatches workspace_unbind to the home host AND each guest member host with the deleted workspace id (#task:1719)', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'unbind-fanout', member_agent_ids: [] })
+    ).json()) as any;
+    const wsId = ws.workspace.id as string;
+    const channelId = ws.onboarding_channel_id as string;
+    const homeHostId = ws.workspace.workspace_host_id as string;
+
+    // Seed a GUEST computer + an agent living on it that is a member of a
+    // conversation in the workspace (cross-computer membership, #task:1600):
+    // its daemon may hold a guest registry binding for this workspace.
+    const guestHostId = `guest-host-${Date.now()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(`INSERT INTO hosts (id, name, kind, created_at) VALUES (?, ?, 'remote', ?)`)
+      .run(guestHostId, guestHostId, now);
+    const guestAgentId = `guest-agent-${Date.now()}`;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, 'local', ?, ?)`,
+      )
+      .run(guestAgentId, 'guest-agent', guestHostId, now, now);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
+         VALUES (?, ?, 'idle', ?)`,
+      )
+      .run(channelId, guestAgentId, now);
+
+    const infoSpy = vi.spyOn(t.ctx.logger, 'info');
+    const res = await http(t).del(`/api/workspaces/${wsId}`);
+    expect(res.status).toBe(204);
+
+    const unbindCalls = t.fakeHostWs!.calls.filter(
+      call => call.kind === 'workspace_unbind',
+    );
+    // Distinct hosts: home + guest, each with the single deleted id.
+    expect(unbindCalls.map(call => call.hostId).sort()).toEqual(
+      [homeHostId, guestHostId].sort(),
+    );
+    for (const call of unbindCalls) {
+      expect(call.params).toEqual({ workspace_ids: [wsId] });
+    }
+    // Success is logged with removed/absent (structured, observable residue).
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'workspace_unbind',
+        host_id: homeHostId,
+        workspace_id: wsId,
+        // POST /api/workspaces provisioned the home bind in the fake
+        // registry, so the home unbind actually removes it.
+        removed: [wsId],
+        absent: [],
+      }),
+      'delete workspace: daemon registry binding unbound',
+    );
+  });
+
+  it('an offline host (outbound resolve fails) is logged and skipped — deletion still returns 204 (#task:1719)', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'unbind-offline', member_agent_ids: [] })
+    ).json()) as any;
+    const wsId = ws.workspace.id as string;
+    const homeHostId = ws.workspace.workspace_host_id as string;
+
+    // Simulate the home daemon detached AFTER creation: resolveOutboundForHost
+    // fails with host_attach_pending, and the unbind must degrade to a warn.
+    t.fakeHostWs!.connectionIdForHostOverride = () => null;
+    const warnSpy = vi.spyOn(t.ctx.logger, 'warn');
+
+    const res = await http(t).del(`/api/workspaces/${wsId}`);
+    expect(res.status).toBe(204);
+
+    // Nothing dispatched (no connection), but the residue is observable.
+    expect(
+      t.fakeHostWs!.calls.filter(call => call.kind === 'workspace_unbind'),
+    ).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'workspace_unbind_failed',
+        host_id: homeHostId,
+        workspace_id: wsId,
+        code: 'host_attach_pending',
+      }),
+      'delete workspace: host offline, registry entry stays orphaned (continuing)',
+    );
+    // The delete itself is never blocked or reversed.
+    const wsRow = t.ctx.db
+      .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
+      .get(wsId);
+    expect(wsRow).toBeUndefined();
+  });
+
+  it('a failed workspace_unbind dispatch is logged, never thrown — deletion still returns 204 (#task:1719)', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'unbind-dispatch-fail', member_agent_ids: [] })
+    ).json()) as any;
+    const wsId = ws.workspace.id as string;
+    const homeHostId = ws.workspace.workspace_host_id as string;
+
+    // Make the dispatch itself fail (daemon errored mid-command). Set AFTER
+    // creation so workspace_provision already succeeded.
+    t.fakeHostWs!.sendCommandError = new Error('daemon exploded');
+    const warnSpy = vi.spyOn(t.ctx.logger, 'warn');
+
+    const res = await http(t).del(`/api/workspaces/${wsId}`);
+    expect(res.status).toBe(204);
+
+    // The command was attempted against the home host...
+    expect(
+      t.fakeHostWs!.calls.filter(call => call.kind === 'workspace_unbind'),
+    ).toContainEqual({
+      hostId: homeHostId,
+      kind: 'workspace_unbind',
+      params: { workspace_ids: [wsId] },
+    });
+    // ...and the failure surfaced as a structured warn, not a 5xx.
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'workspace_unbind_failed',
+        host_id: homeHostId,
+        workspace_id: wsId,
+        code: 'daemon_internal_error',
+      }),
+      'delete workspace: registry unbind failed, entry stays orphaned (continuing)',
+    );
+    const wsRow = t.ctx.db
+      .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
+      .get(wsId);
+    expect(wsRow).toBeUndefined();
+  });
+
+  it('a workspace_members-only member (NO conversation membership) still puts its host in the unbind fan-out — workspace_members is the authoritative guest source, not runtimeStops (#task:1719)', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'unbind-members-only', member_agent_ids: [] })
+    ).json()) as any;
+    const wsId = ws.workspace.id as string;
+    const homeHostId = ws.workspace.workspace_host_id as string;
+
+    // Seed a GUEST computer + an agent living on it that is a WORKSPACE
+    // member but joins NO conversation in the workspace. Its daemon
+    // provisioned a local realization at membership establishment
+    // (#1594/#1600), so its registry binding must still be torn down —
+    // a runtimeStops-derived capture would silently miss it.
+    const guestHostId = `members-only-host-${Date.now()}`;
+    const now = Date.now();
+    t.ctx.db
+      .prepare(`INSERT INTO hosts (id, name, kind, created_at) VALUES (?, ?, 'remote', ?)`)
+      .run(guestHostId, guestHostId, now);
+    const guestAgentId = `members-only-agent-${Date.now()}`;
+    t.ctx.db
+      .prepare(
+        `INSERT INTO agents (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, 'claude', ?, 'local', ?, ?)`,
+      )
+      .run(guestAgentId, 'members-only-agent', guestHostId, now, now);
+    t.ctx.db
+      .prepare(
+        `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
+      )
+      .run(wsId, guestAgentId, now);
+
+    const res = await http(t).del(`/api/workspaces/${wsId}`);
+    expect(res.status).toBe(204);
+
+    const unbindCalls = t.fakeHostWs!.calls.filter(
+      call => call.kind === 'workspace_unbind',
+    );
+    expect(unbindCalls.map(call => call.hostId).sort()).toEqual(
+      [homeHostId, guestHostId].sort(),
+    );
+    for (const call of unbindCalls) {
+      expect(call.params).toEqual({ workspace_ids: [wsId] });
+    }
+  });
+
+  it('P0-2: a daemon WITHOUT workspace.registry_reconcile.v1 gets ZERO unbind traffic — skipped with a structured log, deletion still 204 (#task:1719)', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'unbind-no-capability', member_agent_ids: [] })
+    ).json()) as any;
+    const wsId = ws.workspace.id as string;
+    const homeHostId = ws.workspace.workspace_host_id as string;
+
+    // Simulate an OLD daemon generation: connected, but its ready frame did
+    // not advertise the reconcile capability. Dispatching workspace_unbind
+    // at it would make it strict-reject the unknown command and DROP the
+    // connection — the gate must withhold the command entirely.
+    t.fakeHostWs!.attachmentCapabilities =
+      t.fakeHostWs!.attachmentCapabilities.filter(
+        c => c !== 'workspace.registry_reconcile.v1',
+      );
+    const infoSpy = vi.spyOn(t.ctx.logger, 'info');
+
+    const res = await http(t).del(`/api/workspaces/${wsId}`);
+    expect(res.status).toBe(204);
+
+    // Zero new traffic to that daemon.
+    expect(
+      t.fakeHostWs!.calls.filter(call => call.kind === 'workspace_unbind'),
+    ).toEqual([]);
+    // The withheld cleanup is observable, not silent.
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'workspace_unbind_skipped_no_capability',
+        host_id: homeHostId,
+        workspace_id: wsId,
+      }),
+      'delete workspace: daemon lacks workspace.registry_reconcile.v1; unbind withheld (converges on first post-upgrade reconcile)',
+    );
+    const wsRow = t.ctx.db
+      .prepare<[string], { id: string }>('SELECT id FROM workspaces WHERE id = ?')
+      .get(wsId);
+    expect(wsRow).toBeUndefined();
+  });
 });

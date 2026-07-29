@@ -12,6 +12,7 @@ import {
   resolveOutboundForHost,
   dispatchWorkspaceProvision,
 } from '../runtime/workspace-data-plane.js';
+import { WorkspaceRegistryReconcilePendingError } from '../runtime/workspace-registry-reconcile.js';
 import { seedMemberAgentL2 } from './agent-l2-seed.js';
 import { canEnrollAgent } from '../permissions.js';
 import { isWorkspaceNameAvailable } from './name-availability.js';
@@ -163,6 +164,32 @@ export async function createWorkspace(
   if (outbound.kind === 'failed') return { kind: 'transportFailed', failure: outbound };
 
   const workspaceId = workspaces.newWorkspaceId();
+  // #task:1719 — provision barrier: this generation's registry reconcile
+  // (ghost-entry sweep) must complete before path-overlap validation on the
+  // daemon can be trusted for a NEW bind. Same accessor style as
+  // `ctx.outboundFrameAdapter`; absent (route harness) → no barrier. A
+  // pending/failed reconcile maps to the SAME retryable-unavailability arm
+  // as a daemon-offline resolve (503-class `transportFailed`, retriable) —
+  // never a "computer offline" verdict, never a relaxation of overlap
+  // validation.
+  try {
+    await ctx.workspaceProvisionBarrier(workspaceHostId);
+  } catch (err) {
+    if (err instanceof WorkspaceRegistryReconcilePendingError) {
+      return {
+        kind: 'transportFailed',
+        failure: {
+          kind: 'failed',
+          code: 'registry_unavailable',
+          message:
+            'workspace registry reconcile is pending on the owning computer; retry shortly',
+          status: 503,
+          retriable: true,
+        },
+      };
+    }
+    throw err;
+  }
   const provision = await dispatchWorkspaceProvision(
     outbound.adapter,
     workspaceHostId,

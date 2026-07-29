@@ -21,6 +21,16 @@ export {
   type IndexWorkspacePathsDeps,
 } from './path-index-handler.js';
 export {
+  WorkspaceUnbindError,
+  unbindWorkspaces,
+  type UnbindWorkspacesDeps,
+} from './unbind-handler.js';
+export {
+  WorkspaceRegistryIdsError,
+  listWorkspaceRegistryIds,
+  type ListWorkspaceRegistryIdsDeps,
+} from './registry-ids-handler.js';
+export {
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
   type IndexAgentWorkspacesDeps,

@@ -81,6 +81,12 @@ import {
   WorkspacePathIndexErrorCodeSchema,
   WorkspacePathIndexParamsSchema,
   WorkspacePathIndexResultSchema,
+  WorkspaceUnbindErrorCodeSchema,
+  WorkspaceUnbindParamsSchema,
+  WorkspaceUnbindResultSchema,
+  WorkspaceRegistryIdsErrorCodeSchema,
+  WorkspaceRegistryIdsParamsSchema,
+  WorkspaceRegistryIdsResultSchema,
 } from './protocol.js';
 
 // D4.d D2: agent_materialize schemas live in `protocol.ts` so the
@@ -109,6 +115,12 @@ export {
   WorkspacePathIndexParamsSchema,
   WorkspacePathIndexResultSchema,
   WorkspacePathIndexErrorCodeSchema,
+  WorkspaceUnbindParamsSchema,
+  WorkspaceUnbindResultSchema,
+  WorkspaceUnbindErrorCodeSchema,
+  WorkspaceRegistryIdsParamsSchema,
+  WorkspaceRegistryIdsResultSchema,
+  WorkspaceRegistryIdsErrorCodeSchema,
   AgentWorkspaceIndexParamsSchema,
   AgentWorkspaceIndexResultSchema,
   AgentWorkspaceIndexErrorCodeSchema,
@@ -136,6 +148,12 @@ export {
   type WorkspacePathIndexParams,
   type WorkspacePathIndexResult,
   type WorkspacePathIndexErrorCode,
+  type WorkspaceUnbindParams,
+  type WorkspaceUnbindResult,
+  type WorkspaceUnbindErrorCode,
+  type WorkspaceRegistryIdsParams,
+  type WorkspaceRegistryIdsResult,
+  type WorkspaceRegistryIdsErrorCode,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceIndexErrorCode,
@@ -320,6 +338,32 @@ export const WorkspacePathIndexWireErrorSchema = z
   .strict();
 export type WorkspacePathIndexWireError = z.infer<
   typeof WorkspacePathIndexWireErrorSchema
+>;
+
+export const WorkspaceUnbindWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      WorkspaceUnbindErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type WorkspaceUnbindWireError = z.infer<
+  typeof WorkspaceUnbindWireErrorSchema
+>;
+
+export const WorkspaceRegistryIdsWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      WorkspaceRegistryIdsErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+export type WorkspaceRegistryIdsWireError = z.infer<
+  typeof WorkspaceRegistryIdsWireErrorSchema
 >;
 
 export const AgentWorkspaceIndexWireErrorSchema = z
@@ -517,6 +561,22 @@ export const outboundServerCommandSchemas = {
     params: WorkspacePathIndexParamsSchema,
     result: WorkspacePathIndexResultSchema,
     error: WorkspacePathIndexWireErrorSchema,
+  },
+  // #task:1719 — registry-mapping removal for backend-deleted workspaces.
+  workspace_unbind: {
+    params: WorkspaceUnbindParamsSchema,
+    result: WorkspaceUnbindResultSchema,
+    error: WorkspaceUnbindWireErrorSchema,
+  },
+  // #task:1719 — ready-generation reconcile pull (ids ONLY, never paths).
+  // Both #1719 commands are capability-gated on
+  // `workspace.registry_reconcile.v1`: the backend never dispatches either
+  // to a daemon that did not advertise the token (an old daemon would
+  // strict-reject the unknown kind and drop the connection).
+  workspace_registry_ids: {
+    params: WorkspaceRegistryIdsParamsSchema,
+    result: WorkspaceRegistryIdsResultSchema,
+    error: WorkspaceRegistryIdsWireErrorSchema,
   },
   agent_workspace_index: {
     params: AgentWorkspaceIndexParamsSchema,

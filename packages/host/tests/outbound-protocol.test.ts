@@ -61,6 +61,8 @@ describe('outbound protocol — command catalogue', () => {
       'runtime_stop_all',
       'workspace_path_index',
       'workspace_provision',
+      'workspace_registry_ids',
+      'workspace_unbind',
     ]);
 
     expect(OUTBOUND_SERVER_COMMAND_KINDS).not.toContain('hello' as never);

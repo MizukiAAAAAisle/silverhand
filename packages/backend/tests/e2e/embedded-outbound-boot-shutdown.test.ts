@@ -169,6 +169,15 @@ class FakeOutboundDaemon {
         seeded: true,
         l2_present: true,
       });
+    } else if (cmd.kind === 'workspace_registry_ids') {
+      // #task:1719 — the ready frame advertises KNOWN_CAPABILITIES_V1
+      // (incl. workspace.registry_reconcile.v1), so the backend's
+      // ready-generation reconcile pulls the registry ids right after
+      // attach; answer schema-valid (empty registry) or the adapter's
+      // protocol-violation teardown drops this socket.
+      this.respondResult(cmd, { ok: true, workspace_ids: [] });
+    } else if (cmd.kind === 'workspace_unbind') {
+      this.respondResult(cmd, { ok: true, removed: [], absent: [] });
     } else if (cmd.kind === 'host_status') {
       // #task:1588 slice 2 — the fanout eager-seeds the host-status read
       // model on `ready`; answer with a schema-valid snapshot so the

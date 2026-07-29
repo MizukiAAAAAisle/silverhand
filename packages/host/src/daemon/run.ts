@@ -66,6 +66,10 @@ import {
   provisionWorkspace,
   WorkspacePathIndexError,
   indexWorkspacePaths,
+  WorkspaceUnbindError,
+  unbindWorkspaces,
+  WorkspaceRegistryIdsError,
+  listWorkspaceRegistryIds,
   AgentWorkspaceIndexError,
   indexAgentWorkspaces,
   AgentL2SeedError,
@@ -931,6 +935,39 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
           m => new WorkspacePathIndexError('registry_unavailable', m),
         ),
       });
+    },
+    // #task:1719 — workspace_unbind: registry-mapping removal for
+    // backend-deleted workspaces. Mapping only — never touches any
+    // directory or file contents (zero implicit deletion, #1594).
+    workspaceUnbindHandler: async params => {
+      const ctx = computerContext;
+      if (ctx == null) {
+        throw new WorkspaceUnbindError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = buildRegistryAs(
+        ctx,
+        m => new WorkspaceUnbindError('registry_unavailable', m),
+      );
+      return unbindWorkspaces(params, { registry });
+    },
+    // #task:1719 — workspace_registry_ids: ready-generation reconcile pull.
+    // Read-only ids-of-current-binding snapshot (ids ONLY, never paths).
+    workspaceRegistryIdsHandler: async params => {
+      const ctx = computerContext;
+      if (ctx == null) {
+        throw new WorkspaceRegistryIdsError(
+          'registry_unavailable',
+          'daemon not attached to a control plane; cannot resolve workspace registry binding',
+        );
+      }
+      const registry = buildRegistryAs(
+        ctx,
+        m => new WorkspaceRegistryIdsError('registry_unavailable', m),
+      );
+      return listWorkspaceRegistryIds(params, { registry });
     },
     // D4.e-1 — agent_workspace_index: route-time `agent_dir` resolver.
     // agent-home dirs resolve from the daemon's homedir (test override via

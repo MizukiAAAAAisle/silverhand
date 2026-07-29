@@ -34,6 +34,7 @@ import {
   publishWorkspaceRemoved,
   stopWorkspaceRuntime,
   sweepWorkspaceAttachments,
+  unbindWorkspaceBindings,
   type DeleteWorkspaceDeps,
   type WorkspaceTeardownPlan,
 } from './delete-workspace.js';
@@ -336,6 +337,13 @@ export async function deleteComputer(
     blobsAttempted += swept.attempted;
     blobsFailed += swept.failed;
     publishWorkspaceRemoved(workspaceDeps, workspacePlan);
+    // #task:1719 — best-effort registry unbind on OTHER hosts' daemons (guest
+    // entries from cross-computer members). The host being deleted is skipped:
+    // its whole registry leaves with the computer, and its daemon is exactly
+    // the unreachable one this route exists for.
+    await unbindWorkspaceBindings(workspaceDeps, workspacePlan, {
+      skipHostId: cmd.hostId,
+    });
   }
   let purgeAttempts = 0;
   let purgeFailures = 0;

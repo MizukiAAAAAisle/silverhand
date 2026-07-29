@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -412,6 +412,102 @@ describe('WorkspaceRegistry — remove (compensation, P1-1)', () => {
   it('is a no-op for an unknown id', () => {
     const reg = makeRegistry(STANDALONE);
     expect(reg.remove('ws_missing', REQUESTED)).toBe(false);
+  });
+});
+
+describe('WorkspaceRegistry — unbindMany (server-driven teardown, #task:1719)', () => {
+  it('removes existing entries by id (no path guard), reports the rest absent, and re-allows removed ids', () => {
+    const reg = makeRegistry(STANDALONE);
+    reg.provision('ws_1', '/Users/someone/projects/my-workspace');
+    reg.provision('ws_2');
+    expect(reg.unbindMany(['ws_1', 'ws_never_bound', 'ws_1'])).toEqual({
+      removed: ['ws_1'],
+      absent: ['ws_never_bound'],
+    });
+    expect(reg.has('ws_1')).toBe(false);
+    // Untargeted binding survives; duplicate input ids are reported once.
+    expect(reg.has('ws_2')).toBe(true);
+    // After unbind the id is free to bind again (fresh workspace, same id).
+    expect(reg.provision('ws_1').created).toBe(true);
+  });
+
+  it('is idempotent: a re-dispatched batch is pure absent, not an error', () => {
+    const reg = makeRegistry(STANDALONE);
+    reg.provision('ws_1');
+    expect(reg.unbindMany(['ws_1'])).toEqual({ removed: ['ws_1'], absent: [] });
+    expect(reg.unbindMany(['ws_1'])).toEqual({ removed: [], absent: ['ws_1'] });
+  });
+
+  it('an absent-only batch does NOT rewrite the registry file (persist skipped, P1-2)', () => {
+    const reg = makeRegistry(STANDALONE);
+    reg.provision('ws_1');
+    const file = reg.registryFilePath();
+    // Pin the mtime far in the past: any persist (temp + rename) would
+    // stamp a fresh mtime, so an unchanged stamp proves no write happened.
+    const past = new Date('2000-01-01T00:00:00Z');
+    utimesSync(file, past, past);
+    const before = statSync(file).mtimeMs;
+    expect(reg.unbindMany(['ws_never_bound', 'ws_also_never'])).toEqual({
+      removed: [],
+      absent: ['ws_never_bound', 'ws_also_never'],
+    });
+    expect(statSync(file).mtimeMs).toBe(before);
+    expect(reg.has('ws_1')).toBe(true);
+  });
+
+  it('a mixed batch persists (removed set applied atomically alongside absent verdicts)', () => {
+    const reg = makeRegistry(STANDALONE);
+    reg.provision('ws_1');
+    reg.provision('ws_2');
+    const file = reg.registryFilePath();
+    const past = new Date('2000-01-01T00:00:00Z');
+    utimesSync(file, past, past);
+    const before = statSync(file).mtimeMs;
+    expect(reg.unbindMany(['ws_1', 'ws_ghost', 'ws_2'])).toEqual({
+      removed: ['ws_1', 'ws_2'],
+      absent: ['ws_ghost'],
+    });
+    // The one persist actually landed…
+    expect(statSync(file).mtimeMs).not.toBe(before);
+    // …and the reloaded file reflects the whole batch at once.
+    const reopened = makeRegistry(STANDALONE);
+    expect(reopened.has('ws_1')).toBe(false);
+    expect(reopened.has('ws_2')).toBe(false);
+  });
+
+  it('fails closed on a foreign registry (WorkspaceRegistryError propagates, file untouched)', () => {
+    const embedded = makeRegistry(EMBEDDED);
+    embedded.provision('ws_1');
+    const file = JSON.parse(readFileSync(embedded.registryFilePath(), 'utf-8'));
+    file.binding = { server_origin: 'https://evil.example.com', host_id: 'other' };
+    const foreignBytes = JSON.stringify(file);
+    writeFileSync(embedded.registryFilePath(), foreignBytes);
+
+    const reopened = makeRegistry(EMBEDDED);
+    try {
+      reopened.unbindMany(['ws_1']);
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(WorkspaceRegistryError);
+      expect((err as WorkspaceRegistryError).code).toBe('registry_foreign');
+    }
+    // Never clobbers someone else's registry.
+    expect(readFileSync(reopened.registryFilePath(), 'utf-8')).toBe(foreignBytes);
+  });
+
+  it('NEVER touches the workspace directory on disk (mapping removal only, #1594)', () => {
+    const reg = makeRegistry(STANDALONE);
+    const { path } = reg.provision('ws_1');
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, 'user-data.txt'), 'precious bytes');
+
+    expect(reg.unbindMany(['ws_1'])).toEqual({ removed: ['ws_1'], absent: [] });
+    expect(reg.has('ws_1')).toBe(false);
+    // The directory and its contents survive the unbind untouched.
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(join(path, 'user-data.txt'), 'utf-8')).toBe(
+      'precious bytes',
+    );
   });
 });
 

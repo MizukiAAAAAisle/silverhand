@@ -5,6 +5,7 @@ import {
   resolveOutboundForHost,
   type DataPlaneFailure,
 } from '../runtime/workspace-data-plane.js';
+import { WorkspaceRegistryReconcilePendingError } from '../runtime/workspace-registry-reconcile.js';
 
 /**
  * D4.e-3 — seed a member agent's L2 (per-workspace) memory on the AGENT's
@@ -45,6 +46,27 @@ export async function seedMemberAgentL2(
   );
   if (outbound.kind === 'failed') return outbound;
   if (opts.guestRealization) {
+    // #task:1719 — provision barrier: the guest daemon's ready-generation
+    // registry reconcile (ghost-entry sweep) must complete before its
+    // path-overlap validation can be trusted for a NEW bind. A
+    // pending/failed reconcile returns the same retryable-unavailability
+    // {@link DataPlaneFailure} shape as a daemon-offline resolve (503,
+    // retriable) — the member-add caller already surfaces that arm.
+    try {
+      await ctx.workspaceProvisionBarrier(hostId);
+    } catch (err) {
+      if (err instanceof WorkspaceRegistryReconcilePendingError) {
+        return {
+          kind: 'failed',
+          code: 'registry_unavailable',
+          message:
+            'workspace registry reconcile is pending on the member agent\'s computer; retry shortly',
+          status: 503,
+          retriable: true,
+        };
+      }
+      throw err;
+    }
     const provision = await dispatchWorkspaceProvision(
       outbound.adapter,
       hostId,

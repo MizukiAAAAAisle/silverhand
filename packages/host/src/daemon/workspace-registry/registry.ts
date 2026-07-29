@@ -453,6 +453,49 @@ export class WorkspaceRegistry {
     return true;
   }
 
+  /**
+   * #task:1719 — remove workspace registry entries BY ID, deliberately and
+   * unconditionally, as ONE batch: one load, one removed/absent partition,
+   * ONE atomic persist. When nothing was removed (`removed` empty) the file
+   * is NOT rewritten at all — an absent-only call is a pure read. Duplicate
+   * input ids are reported once. This is the server-driven teardown
+   * primitive: when the backend deletes a workspace row (or reconciles a
+   * ready generation), it dispatches `workspace_unbind` so the mapping stops
+   * participating in path-overlap validation as a ghost.
+   *
+   * NOT the same operation as `remove(workspaceId, expectedPath)` above:
+   * `remove` is provision-COMPENSATION with a path guard (roll back a
+   * half-done bind only if the mapping still points where we put it);
+   * `unbindMany` is a deliberate by-id removal ordered by the control
+   * plane — no path guard, because the server's delete of the workspace row
+   * is the authority, whatever local path the id ended up bound to.
+   *
+   * Mapping removal ONLY: never touches the workspace directory or any file
+   * contents (zero implicit deletion of user data, #1594). Foreign/corrupt
+   * registry still fails the whole call closed (`WorkspaceRegistryError`
+   * propagates) — never a partial mutation.
+   */
+  unbindMany(workspaceIds: string[]): { removed: string[]; absent: string[] } {
+    const file = this.loadOrInit();
+    const removed: string[] = [];
+    const absent: string[] = [];
+    const seen = new Set<string>();
+    for (const workspaceId of workspaceIds) {
+      if (seen.has(workspaceId)) continue;
+      seen.add(workspaceId);
+      if (file.workspaces[workspaceId]) {
+        delete file.workspaces[workspaceId];
+        removed.push(workspaceId);
+      } else {
+        absent.push(workspaceId);
+      }
+    }
+    if (removed.length > 0) {
+      this.persist(file);
+    }
+    return { removed, absent };
+  }
+
   /** Throw `path_conflict` if `path` overlaps any OTHER workspace's root. */
   private assertNoOverlap(
     file: RegistryFile,

@@ -187,6 +187,15 @@ export const HOST_PROTOCOL_VERSION = 9;
 // enum and would strict-reject such a value, so the backend must withhold
 // non-baseline tokens from it. Bump to `.v2` only if the token's *contract*
 // changes; adding a new effort VALUE does not.
+
+/**
+ * #task:1719 — named export of the registry-reconcile capability token so the
+ * backend gate (`workspace_unbind` / `workspace_registry_ids` dispatch) and
+ * the daemon advertisement share ONE literal instead of a re-typed string.
+ */
+export const WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1 =
+  'workspace.registry_reconcile.v1' as const;
+
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
   'runtime.codex',
@@ -203,6 +212,14 @@ export const KNOWN_CAPABILITIES_V1 = [
   // token so a new CLI against an old daemon fails with a clear message
   // instead of `unknown_intent`.
   'agent.stale_receive.v1',
+  // #task:1719 — covers the workspace_unbind + workspace_registry_ids
+  // intent family (registry identity teardown + ready-generation
+  // reconcile pull). The backend MUST withhold BOTH commands from a
+  // daemon that did not advertise this token: an old daemon
+  // strict-rejects an unknown command kind and closes the connection
+  // (`closeProtocolError` in outbound-client.ts), so an ungated dispatch
+  // would DISCONNECT every not-yet-upgraded computer.
+  WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1,
 ] as const;
 export type KnownCapabilityV1 = typeof KNOWN_CAPABILITIES_V1[number];
 
@@ -2043,6 +2060,114 @@ const WorkspacePathIndexIpcErrorSchema = z
   })
   .strict();
 
+// ── #task:1719 — workspace_unbind ───────────────────────────────────
+//
+// Registry-mapping removal for backend-deleted workspaces. When the backend
+// deletes a workspace row, the daemons' `workspace-registry.json` entries for
+// that id become ghosts that wrongly participate in path-overlap validation.
+// The backend dispatches this intent to every relevant host; the daemon
+// removes ONLY the registry mapping — it NEVER touches any directory or file
+// contents (zero implicit deletion of user data, #1594). Idempotent: an id
+// that was never bound / already unbound is SUCCESS, reported in `absent`.
+
+/**
+ * #task:1719 — upper bound for one `workspace_unbind` batch. The schema
+ * rejects a larger array (fail loud, not truncate); a backend holding more
+ * ids (e.g. a reconcile ghost sweep) chunks by this constant. Non-empty is
+ * also enforced: an empty unbind is a caller bug, not an idempotent no-op.
+ */
+export const WORKSPACE_UNBIND_MAX_BATCH = 200;
+
+export const WorkspaceUnbindParamsSchema = z
+  .object({
+    workspace_ids: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(WORKSPACE_UNBIND_MAX_BATCH),
+  })
+  .strict();
+export type WorkspaceUnbindParams = z.infer<
+  typeof WorkspaceUnbindParamsSchema
+>;
+
+export const WorkspaceUnbindResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /** Ids whose registry mapping existed and was removed. */
+    removed: z.array(z.string().min(1)),
+    /** Ids never bound / already unbound — idempotent success, not error. */
+    absent: z.array(z.string().min(1)),
+  })
+  .strict();
+export type WorkspaceUnbindResult = z.infer<
+  typeof WorkspaceUnbindResultSchema
+>;
+
+export const WorkspaceUnbindErrorCodeSchema = z.enum([
+  'registry_unavailable',
+  'internal_error',
+]);
+export type WorkspaceUnbindErrorCode = z.infer<
+  typeof WorkspaceUnbindErrorCodeSchema
+>;
+
+const WorkspaceUnbindIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      WorkspaceUnbindErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
+// ── #task:1719 — workspace_registry_ids ────────────────────────────
+//
+// The ready-generation reconcile PULL: the backend asks the daemon which
+// workspace ids its registry currently binds, diffs them against the DB's
+// legal set for that host, and unbinds the ghosts. IDS ONLY — paths never
+// cross the wire (I1: the daemon is the sole path authority, and the
+// backend has no use for them). Read-only on the daemon side.
+
+export const WorkspaceRegistryIdsParamsSchema = z.object({}).strict();
+export type WorkspaceRegistryIdsParams = z.infer<
+  typeof WorkspaceRegistryIdsParamsSchema
+>;
+
+export const WorkspaceRegistryIdsResultSchema = z
+  .object({
+    ok: z.literal(true),
+    /**
+     * Every workspace id currently bound in this daemon's registry under
+     * its current control-plane binding. An absent/empty registry file is
+     * SUCCESS with `[]` — "nothing bound" is a normal state, not an error.
+     */
+    workspace_ids: z.array(z.string().min(1)),
+  })
+  .strict();
+export type WorkspaceRegistryIdsResult = z.infer<
+  typeof WorkspaceRegistryIdsResultSchema
+>;
+
+export const WorkspaceRegistryIdsErrorCodeSchema = z.enum([
+  /** Foreign/corrupt daemon registry — fail closed (whole call). */
+  'registry_unavailable',
+  'internal_error',
+]);
+export type WorkspaceRegistryIdsErrorCode = z.infer<
+  typeof WorkspaceRegistryIdsErrorCodeSchema
+>;
+
+const WorkspaceRegistryIdsIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      WorkspaceRegistryIdsErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
 export const AgentWorkspaceIndexParamsSchema = z
   .object({
     agent_id: z.string().min(1),
@@ -2664,6 +2789,19 @@ export const intentSchemas = {
     params: WorkspacePathIndexParamsSchema,
     result: WorkspacePathIndexResultSchema,
     error: WorkspacePathIndexIpcErrorSchema,
+  },
+  // #task:1719 — registry-mapping removal for backend-deleted workspaces.
+  workspace_unbind: {
+    params: WorkspaceUnbindParamsSchema,
+    result: WorkspaceUnbindResultSchema,
+    error: WorkspaceUnbindIpcErrorSchema,
+  },
+  // #task:1719 — ready-generation reconcile pull: ids currently bound in
+  // this daemon's registry (ids ONLY, never paths).
+  workspace_registry_ids: {
+    params: WorkspaceRegistryIdsParamsSchema,
+    result: WorkspaceRegistryIdsResultSchema,
+    error: WorkspaceRegistryIdsIpcErrorSchema,
   },
   agent_workspace_index: {
     params: AgentWorkspaceIndexParamsSchema,

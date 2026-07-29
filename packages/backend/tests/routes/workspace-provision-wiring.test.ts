@@ -23,6 +23,7 @@ import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
 } from '../../src/ws/host-ws-server.js';
+import { WorkspaceRegistryReconciler } from '../../src/runtime/workspace-registry-reconcile.js';
 
 describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () => {
   let t: TestApp | null = null;
@@ -97,6 +98,7 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
 
   it('typed daemon failure (invalid_path) → 400 and NO row inserted', async () => {
     t = buildTestApp();
+    t.fakeHostWs!.sendCommandErrorKinds = ['workspace_provision'];
     t.fakeHostWs!.sendCommandError = new HostWsCommandResponseError(
       'invalid_path' as never,
       'requested path must be absolute',
@@ -120,6 +122,7 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
 
   it('transport timeout → 504 daemon_timeout (retriable), NO row inserted', async () => {
     t = buildTestApp();
+    t.fakeHostWs!.sendCommandErrorKinds = ['workspace_provision'];
     t.fakeHostWs!.sendCommandError = new HostWsCommandTransportError(
       'transport_timeout',
       'timed out',
@@ -282,5 +285,87 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
       )
       .get(body.workspace.id, agentId) as { n: number };
     expect(member.n).toBe(1);
+  });
+});
+
+// ── #task:1719 — provision barrier (ready-generation reconcile gate) ──
+//
+// The create saga awaits `ctx.workspaceProvisionBarrier(host)` (REQUIRED port)
+// BEFORE dispatching `workspace_provision`. A failed/pending reconcile maps
+// to the SAME retryable 503-class `transportFailed` arm the daemon-offline
+// path uses (code `registry_unavailable`, retriable) — no new HTTP wiring.
+describe('#task:1719 — workspace-create awaits the registry reconcile barrier', () => {
+  let t: TestApp | null = null;
+  let reconciler: WorkspaceRegistryReconciler | null = null;
+  afterEach(() => {
+    reconciler?.close();
+    reconciler = null;
+    t?.cleanup();
+    t = null;
+  });
+
+  function wireReconciler(app: TestApp): WorkspaceRegistryReconciler {
+    // #task:1719 (Cindy round-2 P1) — the port is REQUIRED on ctx; this
+    // helper swaps in a test-owned reconciler instance so the test can
+    // close it deterministically. It replaces (never removes) the barrier.
+    const built = new WorkspaceRegistryReconciler({
+      db: app.ctx.db,
+      adapter: () => app.ctx.outboundFrameAdapter?.() ?? null,
+      logger: app.ctx.logger,
+    });
+    app.ctx.workspaceProvisionBarrier = hostId => built.barrier(hostId);
+    return built;
+  }
+
+  it('reconcile failure → 503 registry_unavailable (retryable arm), NO provision dispatched, NO row inserted', async () => {
+    t = buildTestApp();
+    reconciler = wireReconciler(t);
+    // The reconcile PULL times out on this daemon generation → the barrier
+    // rejects with the typed pending error.
+    t.fakeHostWs!.workspaceRegistryIdsAckOverride = () => {
+      throw new HostWsCommandTransportError(
+        'transport_timeout',
+        'daemon did not answer the reconcile pull',
+        { hostId: 'local' },
+      );
+    };
+    const before = t.ctx.db
+      .prepare('SELECT COUNT(*) as n FROM workspaces')
+      .get() as { n: number };
+
+    const res = await http(t).post('/api/workspaces', {
+      name: 'barrier-blocked',
+      member_agent_ids: [],
+    });
+    expect(res.status).toBe(503);
+    expect(((await res.json()) as any).code).toBe('registry_unavailable');
+
+    // Fail-closed: the provision never raced the pending reconcile and no
+    // orphan row exists.
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
+    ).toEqual([]);
+    const after = t.ctx.db
+      .prepare('SELECT COUNT(*) as n FROM workspaces')
+      .get() as { n: number };
+    expect(after.n).toBe(before.n);
+  });
+
+  it('reconcile success → provision proceeds (201) after the generation reconciled', async () => {
+    t = buildTestApp();
+    reconciler = wireReconciler(t);
+
+    const res = await http(t).post('/api/workspaces', {
+      name: 'barrier-passed',
+      member_agent_ids: [],
+    });
+    expect(res.status).toBe(201);
+
+    // The barrier ran THIS generation's reconcile pull before provisioning.
+    const kinds = t.fakeHostWs!.calls.map(c => c.kind);
+    expect(kinds.indexOf('workspace_registry_ids')).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf('workspace_registry_ids')).toBeLessThan(
+      kinds.indexOf('workspace_provision'),
+    );
   });
 });
