@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useState } from 'react';
-import { CheckSquare, Loader2, Pencil, X } from 'lucide-react';
+import { CheckSquare, Loader2, Pencil } from 'lucide-react';
 import type { TaskDetailDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { MiniIconButton } from '@/components/tasks/MiniIconButton';
+import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
 import { Markdown } from '@/components/chat/Markdown';
 import {
   FAILURE_COPY,
@@ -94,16 +95,21 @@ export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetail
       className="task-pane flex h-full w-full flex-col bg-bg-floating"
       aria-label="Task detail"
     >
-      <header className="flex h-12 flex-none items-center gap-2 border-b border-border-subtle px-3">
+      {/* The shared side-panel header, same primitive the agent / thread /
+          attachments panes use — so the close ✕ is the ONE `data-sticker-close`
+          affordance forza6 stamps as a poster sticker (a hand-rolled
+          `MiniIconButton` here would stay a flat glyph while every other pane's
+          ✕ earned the sticker), and the `h-12` height contract can't drift. */}
+      <SidePanelHeader onClose={onClose}>
         <CheckSquare className="size-4 shrink-0 text-text-muted" aria-hidden />
         {/* Number, not title (shiki mockup v2): the title lives in the body. It
             only resolves with the read, so the header shows a neutral label
-            until then rather than an empty slot. */}
+            until then rather than an empty slot. Leading identity glyph stays a
+            plain icon — forza6 stickers action buttons, not leading glyphs. */}
         <span className="flex-1 font-mono text-xs text-text-secondary">
           {painted ? `#${painted.task_number}` : 'Task'}
         </span>
-        <MiniIconButton icon={X} label="Close" onClick={onClose} />
-      </header>
+      </SidePanelHeader>
       <PaneContent
         view={view}
         editingField={editingField}
