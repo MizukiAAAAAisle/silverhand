@@ -292,8 +292,9 @@ function PaneBody({
 
       {/* Metadata — width-adaptive columns via the `.task-pane-meta` container
           query. Label + value are FLAT grid children so a wide pane can pack two
-          pairs per row. */}
-      <div className="task-pane-meta items-start border-y border-border-subtle py-3">
+          pairs per row. No box treatment: the parent's `gap-4` rhythm spaces it
+          from title and description, so it reads flush instead of fenced. */}
+      <div className="task-pane-meta items-start">
         {rows.map((row) => (
           <Fragment key={row.key}>
             <span className="chrome-label text-[10px] font-medium leading-4 text-text-muted">
