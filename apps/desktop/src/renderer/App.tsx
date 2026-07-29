@@ -41,8 +41,15 @@ import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDial
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
 import { useLocalWorkspacePaths } from '@/features/workspaces/local-paths';
+import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
+import {
+  EMPTY_REVEAL_SLOT,
+  nextRevealSlot,
+  openRevealSlot,
+  type RevealSlot,
+} from '@/features/tasks/revealTask';
 import { SettingsPage } from '@/features/settings/SettingsPage';
 import { AgentView } from '@/features/agents/AgentView';
 import { HumanView } from '@/features/me/HumanView';
@@ -243,7 +250,7 @@ function RegisteredAppShell(): JSX.Element {
     threadRootId,
     threadsListOpen,
     filesListOpen,
-    focusedTaskNumber,
+    taskDetailId,
     fullscreen: routeFullscreen,
     agentId: selectedAgentId,
     userId: selectedUserId,
@@ -258,7 +265,20 @@ function RegisteredAppShell(): JSX.Element {
   const [newComputerOpen, setNewComputerOpen] = useState(false);
   const [createChannelOpen, setCreateChannelOpen] = useState(false);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
+  // The Chat/Activity task drawer's MEMORY bit — "the user wants this panel
+  // open", not "the panel is on screen". Visibility is derived from it below
+  // (`drawerVisible`): the drawer belongs to Chat/Activity, so switching to
+  // another rail section hides it and coming back restores it, without a
+  // navigation side effect writing this bit behind the user's back.
   const [tasksDrawerOpen, setTasksDrawerOpen] = useState(false);
+  // "View in Tasks" reveal intent — which task to scroll to and pulse once,
+  // deliberately NOT in the URL (#task:1715): the highlight is a 1.4s
+  // self-expiring pulse, so a URL param would outlive the thing it describes and
+  // re-fire on reload. It carries no owner: at most one task surface is on screen
+  // (`drawerVisible` / `sectionVisible`), so the id goes to that one and the
+  // other is handed null. The surface reports back through `onRevealConsumed` and
+  // this clears; it is a ONE-SHOT intent, not state.
+  const [reveal, setReveal] = useState<RevealSlot>(EMPTY_REVEAL_SLOT);
   // #task:808 slice 4 — selected host in the Computers section. In-memory
   // (no URL persistence in v1; no other surface deep-links to a specific
   // host). Auto-defaults to the local host once the host list lands so
@@ -1044,23 +1064,75 @@ function RegisteredAppShell(): JSX.Element {
     }
   };
 
-  // Open the workspace tasks drawer focused on a specific task. Wired
-  // to inline `#task:<n>` chips via `TaskRefContextProvider` inside
-  // ChannelView. The chip's workspace is the message's workspace —
-  // when that differs from the primary-selected workspace (cross-
-  // workspace `?side` panes), we navigate to the foreign workspace's
-  // top-level path with `?task=<n>` attached so the drawer opens
-  // against the right task list.
+  // Open a task's detail modal. Every entrance funnels here — an inline
+  // `#task:<n>` chip (via `TaskRefContextProvider`), a Tasks-board card, a
+  // drawer card — and they all hand over the RESOLVED `tasks.id`, so no
+  // workspace axis travels with the click: `?task=<task_id>` is the whole
+  // coordinate and the modal reads it wherever the user currently stands
+  // (#task:1715).
   const handleOpenTask = useCallback(
-    (taskNumber: number, workspaceId: string) => {
-      if (selectedWorkspaceId === workspaceId) {
-        nav.openTask(taskNumber);
-      } else {
-        nav.go(`${routes.chatWorkspace(workspaceId)}?task=${taskNumber}`);
-      }
+    (taskId: string) => {
+      nav.openTask(taskId);
     },
-    [selectedWorkspaceId, nav.go, nav.openTask],
+    [nav.openTask],
   );
+  // Ref-stable twin for `React.memo`'d section consumers: `nav.openTask` is
+  // rebuilt on every navigation (it closes over the current pathname/search),
+  // so the plain handler's identity changes with the route — enough to
+  // re-render the Tasks board's ~1356 cards during the urgent pass of a section
+  // switch. Same pattern, same reason as `handleJumpToMessageStable` below.
+  const openTaskRef = useRef(handleOpenTask);
+  openTaskRef.current = handleOpenTask;
+  const handleOpenTaskStable = useCallback(
+    (taskId: string) => openTaskRef.current(taskId),
+    [],
+  );
+  // ── The ONE visible task surface ────────────────────────────────────────
+  //
+  // The task drawer belongs to Chat/Activity (it opens from that titlebar and is
+  // scoped to the channel context), and `/tasks` is an independent rail section.
+  // They are therefore two values of ONE discriminant, not two peers to arbitrate:
+  // at most one is on screen in any commit, and a reveal needs no owner (shiki).
+  //
+  // `drawerHostable` is the single definition of "this position can host the
+  // drawer" — the titlebar's Tasks button, the drawer's own visibility, the reveal
+  // one-shot's hosting and the reveal's navigation branch all read it, so they
+  // cannot drift. Visibility is DERIVED from it, deliberately not "navigate, then
+  // an effect closes the drawer": the effect version leaves one commit where
+  // `/tasks` is current AND the drawer still counts as a delivery surface, i.e. a
+  // reveal delivered into a board that is closing (Alice).
+  //
+  // `tasksDrawerOpen` stays the user's MEMORY bit: leaving Chat hides the drawer,
+  // coming back restores it. Writing `false` on leave would be a side effect with
+  // no single owner (rail click, chip reveal and jump-to-message all navigate) and
+  // would silently discard a panel state the user set.
+  const drawerHostable =
+    selectedWorkspace !== null &&
+    ((appSection === 'chat' && view === 'channel') || appSection === 'activity');
+  const drawerVisible = drawerHostable && tasksDrawerOpen;
+  const sectionVisible = appSection === 'tasks';
+
+  // Ref-stable for the same `React.memo` reason: the `/tasks` board is a reveal
+  // TARGET as well as a source (#task:1715), and an inline arrow here would
+  // invalidate its props on every App re-render. One clear for both surfaces is
+  // safe because only the visible one is ever handed the id, so only it can report
+  // back.
+  const clearReveal = useCallback(() => setReveal(EMPTY_REVEAL_SLOT), []);
+
+  // Void a standing reveal once the surface that hosted it is gone — the drawer
+  // closed (or Chat was left, or its workspace host disappeared), or the user left
+  // `/tasks`. Left standing, the intent latches the affordance: the next reveal of
+  // the same id is not an arrival, so nothing re-widens, re-reads, or re-pulses
+  // (Cindy BLOCKER 11). This is App's job because App holds the one-shot; the
+  // delivering hook only knows whether IT can deliver.
+  //
+  // Visibility reads the URGENT `appSection`, not `deferredSection`: the deferred
+  // value lags a rail click by a frame, and a lag must not read as "the surface
+  // went away". `nextRevealSlot` handles the opposite lag — an intent that predates
+  // the board it is navigating to — by voiding only on a hosted→gone transition.
+  useEffect(() => {
+    setReveal(prev => nextRevealSlot(prev, drawerVisible || sectionVisible));
+  }, [drawerVisible, sectionVisible]);
 
   // Open a `#<channel_name>` chip click. The chip's resolution scope is
   // the message's workspace (so cross-workspace `?side` panes can still
@@ -1082,17 +1154,17 @@ function RegisteredAppShell(): JSX.Element {
     [agentPanelId, nav.go, nav.toChannel],
   );
 
-  // Auto-open the tasks drawer when `?task=<n>` lands in the URL. The
-  // drawer's own scroll/highlight effect reacts to `focusedTaskNumber`;
-  // we just need to make it visible. `?task` clears once the highlight
-  // has been delivered (drawer fires `onClearFocus` → `nav.closeTask`).
-  useEffect(() => {
-    if (focusedTaskNumber !== null && !tasksDrawerOpen) {
-      setTasksDrawerOpen(true);
-    }
-  }, [focusedTaskNumber, tasksDrawerOpen]);
-
-  const handleJumpToMessage = (params: MessageJumpTarget): void => {
+  /**
+   * Jump to a message, RETURNING whether it actually navigated.
+   *
+   * The boolean is a contract, not a convenience: a caller that also owns a URL
+   * pointer (the task detail modal's `?task=`) must not both navigate and strip
+   * the pointer — that is two navigations for one action, and the second one is
+   * built off the pre-navigation location, so it can undo the first (Cindy
+   * BLOCKER 3). Exactly two exits do not navigate: an inline channel find on the
+   * already-open channel, and an unresolvable workspace.
+   */
+  const handleJumpToMessage = (params: MessageJumpTarget): boolean => {
     requestJump(params);
     // Inline channel find (#task:1335): a main-stream ensure-visible on the
     // ALREADY-open channel. `requestJump` above primes + scroll-locates; running
@@ -1101,9 +1173,9 @@ function RegisteredAppShell(): JSX.Element {
     // find bar lives in it), so no nav is needed. Fail-closed on `!threadRootId`
     // so the flag can ONLY skip nav for a main-channel target — a thread target
     // that mistakenly carries it still runs `withThreadQuery` below (Cindy).
-    if (params.preserveSidePanel && !params.threadRootId) return;
+    if (params.preserveSidePanel && !params.threadRootId) return false;
     const wid = resolveNavWorkspaceId(params.workspaceId, params.channelId);
-    if (!wid) return;
+    if (!wid) return false;
     // Section-aware base path: an Activity-list jump stays in `/activity/...`
     // (the channel/thread panes are the SAME components, just under the
     // activity route so the workspace axis + titlebar switch with the
@@ -1127,17 +1199,18 @@ function RegisteredAppShell(): JSX.Element {
     } else {
       nav.go(channelPath(wid, params.channelId));
     }
+    return true;
   };
 
-  // Stable identity for TasksSection's onJump so `React.memo(TasksSection)`
-  // can bail out when App re-renders for unrelated reasons. Load-bearing on
-  // the deferred-section path (#task:1168): while LEAVING Tasks, the urgent
-  // pass still reads `deferredSection === 'tasks'`, so TasksSection stays
-  // mounted for one commit — and this agent-heavy app fires frequent
-  // SSE-driven App re-renders, each of which would otherwise re-render all
-  // ~1356 cards at high priority and repeatedly restart the low-priority
-  // switch-to-chat transition (Alice CDP: 3.5s on-screen freeze). A
-  // ref-backed callback gives a stable identity without the stale-closure
+  // Stable identity for the jump handler handed to a long-list section
+  // (ActivityView), so this agent-heavy app's frequent SSE-driven App
+  // re-renders don't invalidate every row's props on the way down. Introduced
+  // for the deferred-section path (#task:1168), where an unstable handler
+  // re-rendered ~1356 Tasks cards at high priority and repeatedly restarted the
+  // low-priority switch-to-chat transition (Alice CDP: 3.5s on-screen freeze);
+  // the Tasks board no longer takes a jump handler at all (#task:1715 moved
+  // that action into the detail modal), but the same hazard applies to Activity.
+  // A ref-backed callback gives a stable identity without the stale-closure
   // risk of useCallback-wrapping the big handler below. Mirrors the stable
   // refs ChannelView relies on for the same reason (L1068).
   const jumpToMessageRef = useRef(handleJumpToMessage);
@@ -1686,11 +1759,9 @@ function RegisteredAppShell(): JSX.Element {
           // full ChannelView). `selectedWorkspace` is null on bare `/activity`
           // (workspace derives from the selected channel), so `appSection ===
           // 'activity'` alone already means "a channel is selected" (#task:1394).
-          selectedWorkspace &&
-          ((appSection === 'chat' && view === 'channel') ||
-            appSection === 'activity')
-            ? () => setTasksDrawerOpen(true)
-            : undefined
+          // Same `drawerHostable` the drawer's visibility reads, so the button
+          // cannot offer a drawer that would not be shown.
+          drawerHostable ? () => setTasksDrawerOpen(true) : undefined
         }
         taskCount={workspaceActiveTaskCount}
         workspaceSidebarVisible={workspaceSidebarVisible}
@@ -1765,7 +1836,15 @@ function RegisteredAppShell(): JSX.Element {
         )}
         {deferredSection === 'tasks' && (
           <SectionLayer visible={appSection !== 'chat'}>
-            <TasksSection onJump={handleJumpToMessageStable} />
+            {/* The reveal id reaches this board only while `/tasks` IS the
+              * current section: `deferredSection` keeps it mounted for a frame
+              * after a rail click elsewhere, and a board on its way out must
+              * not deliver — nor be a second surface holding the one-shot. */}
+            <TasksSection
+              onOpenTask={handleOpenTaskStable}
+              revealTaskId={sectionVisible ? reveal.taskId : null}
+              onRevealConsumed={clearReveal}
+            />
           </SectionLayer>
         )}
         {deferredSection === 'members' && (
@@ -2215,16 +2294,77 @@ function RegisteredAppShell(): JSX.Element {
       />
       {selectedWorkspace ? (
         <WorkspaceTasksDrawer
-          open={tasksDrawerOpen}
+          open={drawerVisible}
           onOpenChange={setTasksDrawerOpen}
           workspaceId={selectedWorkspace.id}
           workspaceName={selectedWorkspace.name}
           defaultConversationId={selectedChannelId}
-          focusedTaskNumber={focusedTaskNumber}
-          onClearFocus={nav.closeTask}
-          onJumpToMessage={params => handleJumpToMessage(params)}
+          revealTaskId={drawerVisible ? reveal.taskId : null}
+          onRevealConsumed={clearReveal}
+          detailOpen={taskDetailId !== null}
+          onOpenTask={handleOpenTask}
         />
       ) : null}
+      {/* ONE task detail modal for the whole app (#task:1715). It is driven
+        * solely by `?task=<task_id>`, so a chat chip, a board card, a drawer
+        * card, and a cold deep-link all land in the same instance — and no
+        * surface keeps a private copy that could disagree with the URL. */}
+      <TaskDetailDialog
+        taskId={taskDetailId}
+        onOpenChange={next => {
+          if (!next) nav.closeTask();
+        }}
+        onJump={target => {
+          const navigated = handleJumpToMessage(target);
+          // Reading the source message and browsing the board are different
+          // destinations: jumping into chat closes the drawer it may have been
+          // opened from, so the message isn't left behind an overlay.
+          setTasksDrawerOpen(false);
+          // ONE navigation owner per action: the jump above already replaced the
+          // location, and a fresh channel path carries no query — `?task` is
+          // gone with it. Clearing the pointer separately would be a second
+          // navigation built off the PRE-jump location, which can undo the
+          // first. So it is only needed on the exits that navigated nothing
+          // (inline find on the open channel, unresolvable workspace), where the
+          // modal would otherwise stay open over a view it never moved.
+          if (!navigated) nav.closeTask();
+        }}
+        onReveal={taskId => {
+          // Reveal targets the task surface THAT ALREADY EXISTS here, and every
+          // branch performs exactly one navigation (Cindy / Alice BLOCKER 1).
+          // Both boards are cross-workspace (`useTasks({})`), so nothing here
+          // needs the task's own workspace — and moving the user from workspace A
+          // to B because a task lives in B is a location change they didn't ask
+          // for.
+          //
+          // No owner travels with the intent: at most one task surface is on
+          // screen, so the branches below are a NAVIGATION decision (which board
+          // to bring up), not an attribution. Outside a position that can host the
+          // drawer there is no drawer to open, so the reveal goes to the rail
+          // board — `drawerHostable` is the same predicate the titlebar's own Tasks
+          // button and the drawer's visibility read.
+          setReveal(openRevealSlot(taskId));
+          if (drawerHostable) {
+            // Already open in the `drawerVisible` case; this is the "bring it up"
+            // one. Dropping the pointer closes the modal over the board.
+            setTasksDrawerOpen(true);
+            nav.closeTask();
+            return;
+          }
+          if (sectionVisible) {
+            // The `/tasks` board is already the global All board and is already
+            // on screen: dropping the pointer (which closes the modal over it) is
+            // the whole navigation.
+            nav.closeTask();
+            return;
+          }
+          // No drawer host in this section and no board on screen. `toTasks()`
+          // builds a fresh path with no query, so it lands on the global board
+          // AND drops `?task` in the same navigation; `TasksSection` delivers the
+          // reveal there.
+          nav.toTasks();
+        }}
+      />
       <Toaster position="bottom-right" richColors />
 
       {/* #task:1462 — single app-status banner slot. Mounted INSIDE the

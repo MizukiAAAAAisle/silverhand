@@ -2220,3 +2220,15 @@
    and two copies of one recipe drift. Its Cancel peer keeps `neutral` (framed
    surface + shared hover), and a destructive commit still takes
    `[data-destructive-action]`. */
+
+/* ── Task detail metadata column ──
+   The detail modal's right column is separated by a hairline in the other two
+   themes (`border-border-subtle`), which in forza6 is `rgba(15,31,29,.10)` and
+   would read as a smudge next to the modal's own 2px ink frame and hard shadow.
+   A 2px ink edge instead, joining the poster-sticker family (NavRail's right
+   border above uses the same recipe). The consumer only declares the DOM role
+   (`data-task-meta-panel`); the paint lives here, so the other themes keep the
+   hairline without knowing this rule exists. */
+[data-theme='forza6'] [data-task-meta-panel] {
+  border-left: 2px solid var(--forza6-ink);
+}

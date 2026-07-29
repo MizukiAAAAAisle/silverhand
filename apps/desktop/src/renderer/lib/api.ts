@@ -50,6 +50,35 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Encode one untrusted value as exactly ONE path segment, or `null` if it
+ * cannot be one.
+ *
+ * Every id the renderer interpolates into a request path can arrive from a URL
+ * the user pasted (`?task=<id>`), so `/api/tasks/${id}` is a path-traversal
+ * site: main resolves it with `new URL(path, backendUrl)` (`main/index.ts`),
+ * which applies WHATWG normalization — `..` climbs a segment, `.` collapses,
+ * `/` and `?` open a new segment or a query. `encodeURIComponent` alone is NOT
+ * enough: it leaves `.` and `..` untouched, and WHATWG also reads their
+ * percent-encoded spellings (`%2e%2e`) as dot segments.
+ *
+ * The gate is deliberately a shape check, not a format check: replicating the
+ * backend's id grammar (`randomBytes(12).toString('base64url')`) here would
+ * create a second authority for what an id is, which then drifts. What matters
+ * is only that the value stays inside one segment (Cindy / Alice review).
+ *
+ * Sufficiency: `encodeURIComponent` escapes `%` itself, so its output holds only
+ * unreserved characters and escapes we wrote — a pasted `%2E%2E` comes back as
+ * `%252E%252E`, which is inert. The only outputs a URL parser can still read as
+ * a dot segment are therefore the literals `.` and `..`, plus the empty string,
+ * which would drop the segment entirely.
+ */
+export function toPathSegment(raw: string): string | null {
+  const encoded = encodeURIComponent(raw);
+  if (encoded === '' || encoded === '.' || encoded === '..') return null;
+  return encoded;
+}
+
 async function getInfo(forceRefresh = false): Promise<BackendInfo> {
   if (cachedInfo && !forceRefresh) return cachedInfo;
   const info = await window.silverhand.getBackendInfo();

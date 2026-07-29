@@ -1,4 +1,5 @@
 import type { TaskDetailDto } from '@silverhand/shared';
+import { ApiError } from '@/lib/api';
 
 /** React Query key for a single task's on-demand detail read, keyed by the
  *  task identity (`tasks.id`). Lives here (a pure module) so both the hooks
@@ -40,6 +41,149 @@ export function resolveTaskJumpTarget(
     threadRootId: detail.nav.ref.thread_root_id,
     messageId: detail.nav.ref.message_id,
   };
+}
+
+/**
+ * Why a task-detail read failed, as the modal presents it. Three tiers, because
+ * the recovery differs and the URL pointer (`?task=<task_id>`) must survive two
+ * of them (#task:1715):
+ *
+ *   - `not_found` — authoritative 404 (deleted, or the viewer can't read that
+ *     conversation; the route answers 404 for both). TERMINAL: no retry can fix
+ *     it. The modal still stays open with an explanation and an explicit Close —
+ *     silently stripping a pointer the user just clicked leaves them with no
+ *     account of what happened (the `?side` placeholder settled this).
+ *   - `unreachable` — the request never reached the backend
+ *     (`ApiError.kind === 'backend_unreachable'`). The global `AppStatusBanner`
+ *     already owns that signal AND its Retry, so the modal only explains itself
+ *     and adds no second, narrower retry button.
+ *   - `transient` — any other HTTP failure (5xx, malformed reply). The query
+ *     client is `retry: 1` + `refetchOnWindowFocus: false`, so nothing re-reads
+ *     this on its own: the modal MUST carry its own Retry or the pointer is
+ *     stuck until the user navigates (Cindy review).
+ */
+export type TaskDetailFailure = 'not_found' | 'unreachable' | 'transient';
+
+export function classifyTaskDetailFailure(error: unknown): TaskDetailFailure {
+  if (error instanceof ApiError) {
+    if (error.kind === 'backend_unreachable') return 'unreachable';
+    if (error.status === 404) return 'not_found';
+  }
+  return 'transient';
+}
+
+/**
+ * The query's own `retry` policy, overriding the client-wide `retry: 1`.
+ *
+ * A 404 here is AUTHORITATIVE and terminal — the task is gone, or this viewer
+ * can't read its conversation. Inheriting the global single retry spends a
+ * second round trip that cannot change the answer and delays the terminal state
+ * by a full request, which is exactly what a stale pointer (an old deep-link, a
+ * chip for a deleted task) hits (Cindy review). Every other tier keeps the
+ * client-wide behaviour: one automatic retry, then the panel's own Retry.
+ */
+export function shouldRetryTaskDetail(
+  failureCount: number,
+  error: unknown,
+): boolean {
+  if (classifyTaskDetailFailure(error) === 'not_found') return false;
+  return failureCount < 1;
+}
+
+/**
+ * What the detail modal renders, as ONE exhaustive discriminant.
+ *
+ * Failure classification and "is there a body to paint" are two INDEPENDENT
+ * axes, and both are real: TanStack keeps the previous `data` when a background
+ * refetch fails (`query.js` spreads the old state into the `error` action), so
+ * `isError && data !== undefined` is a normal state for an open modal whose
+ * exact-key refresh just failed. Branching on the body first — `detail ? body :
+ * panel` — silently swallows the failure axis: a 5xx refresh kept painting a
+ * body with no reachable Retry, and a 404 kept painting authority the server has
+ * just disowned (Cindy BLOCKER 4).
+ *
+ * So the two axes are resolved TOGETHER, here, and the renderer becomes a
+ * `switch` over the result. `data` never decides the TIER (that is the failure's
+ * job) — it only decides the SHAPE within a tier:
+ *
+ *   - `not_found`         — failure wins outright: the stale body is not painted
+ *                           even when we still hold one. Terminal; the corner ✕
+ *                           is the only exit and the URL pointer survives.
+ *   - `transient_*`       — a Retry is reachable whether or not a body is shown.
+ *   - `unreachable_*`     — with a body: keep reading it, and let the ONE
+ *                           app-status banner own the connection signal (a
+ *                           second copy of it here would be a second surface
+ *                           claiming the same fact, and a second Retry owner).
+ *                           Without one: still a non-success state — a spinner
+ *                           that will never resolve is a lie.
+ *   - `loading`           — a distinct kind, so "permanent loading" is not
+ *                           expressible for any failure tier.
+ */
+export type TaskDetailView =
+  | { kind: 'loading' }
+  | { kind: 'body'; detail: TaskDetailDto }
+  /** transient failure over a cached body — body + inline Retry. */
+  | { kind: 'body_with_retry'; detail: TaskDetailDto }
+  /** unreachable over a cached body — body as-is; the banner owns the signal. */
+  | { kind: 'body_stale'; detail: TaskDetailDto }
+  | { kind: 'not_found' }
+  | { kind: 'transient_empty' }
+  | { kind: 'unreachable_empty' };
+
+export function resolveTaskDetailView(args: {
+  failure: TaskDetailFailure | null;
+  detail: TaskDetailDto | undefined;
+}): TaskDetailView {
+  const { failure, detail } = args;
+  switch (failure) {
+    case null:
+      return detail ? { kind: 'body', detail } : { kind: 'loading' };
+    case 'not_found':
+      return { kind: 'not_found' };
+    case 'transient':
+      return detail
+        ? { kind: 'body_with_retry', detail }
+        : { kind: 'transient_empty' };
+    case 'unreachable':
+      return detail
+        ? { kind: 'body_stale', detail }
+        : { kind: 'unreachable_empty' };
+  }
+}
+
+/**
+ * A realtime frame as the task-detail projection sees it. `useTaskDetail` is the
+ * SOLE owner of `['task-detail', id]` (#task:1715), and ownership is decided by
+ * the frame's SCOPE, not by which hook happens to be mounted: this projection
+ * only listens on the viewer's private scope (`viewer:<userId>`), while the
+ * conversation ingestor works `conversation:<id>` frames. A conversation-scope
+ * frame therefore reaches `viewerScope: false` and refreshes nothing — if it
+ * did, we would be back to two writers invalidating one key, and a duplicate
+ * `invalidateQueries` on a query that already has data CANCELS the in-flight
+ * refetch and restarts it (`cancelRefetch` defaults to true).
+ */
+export type TaskDetailFrame =
+  | { type: 'snapshot_required'; viewerScope: boolean }
+  | { type: 'event'; viewerScope: boolean; kind: string; taskId: string | null }
+  /** Any other frame type — heartbeats, acks, unrelated envelopes. */
+  | { type: 'other' };
+
+export function shouldRefreshTaskDetail(
+  frame: TaskDetailFrame,
+  openTaskId: string,
+): boolean {
+  switch (frame.type) {
+    case 'snapshot_required':
+      // Gap recovery: we may have missed this task's change while
+      // disconnected, so re-read rather than trust what is cached.
+      return frame.viewerScope;
+    case 'event':
+      if (!frame.viewerScope) return false;
+      if (frame.kind !== 'task_changed') return false;
+      return frame.taskId === openTaskId;
+    case 'other':
+      return false;
+  }
 }
 
 /**

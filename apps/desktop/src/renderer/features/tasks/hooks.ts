@@ -12,14 +12,19 @@ import type {
   TaskStatus,
   TaskSummaryDto,
 } from '@silverhand/shared';
-import { api } from '@/lib/api';
+import { api, ApiError, toPathSegment } from '@/lib/api';
 import {
   isCurrentViewerScope,
   onWsFrame,
   subscribeViewerScope,
 } from '@/lib/ws-client';
 import { applyTaskChangedToTaskByNumberCache } from './useTaskByNumber';
-import { taskDetailKey } from './taskDetail';
+import {
+  shouldRefreshTaskDetail,
+  shouldRetryTaskDetail,
+  taskDetailKey,
+  type TaskDetailFrame,
+} from './taskDetail';
 
 /**
  * Tasks live in /api/tasks (per docs/tasks-design.md). The list is
@@ -130,7 +135,6 @@ export function useTasks(filter: TaskFilter, opts?: UseTasksOptions) {
         if (isCurrentViewerScope(frame.scope)) {
           void qc.invalidateQueries({ queryKey: ['task-by-number'] });
           void qc.invalidateQueries({ queryKey: ['tasks'] });
-          void qc.invalidateQueries({ queryKey: ['task-detail'] });
         }
         return;
       }
@@ -141,13 +145,11 @@ export function useTasks(filter: TaskFilter, opts?: UseTasksOptions) {
       const payload = frame.payload as TaskChangedEvent;
       applyTaskChangedToTaskByNumberCache(qc, payload);
       void qc.invalidateQueries({ queryKey: ['tasks'] });
-      // An open detail modal edits/reads a separate `['task-detail', taskId]`
-      // projection — refresh it too so a remote edit doesn't leave the
-      // open body stale (title/status already fan out above).
-      void qc.invalidateQueries({
-        queryKey: taskDetailKey(payload.task_id),
-        exact: true,
-      });
+      // `['task-detail', id]` is deliberately NOT refreshed here: the detail
+      // modal is now an app-level surface that opens straight from `?task=`
+      // with no board behind it (#task:1715), so a listener that needs a
+      // mounted board could not keep it fresh. `useTaskDetail` owns that
+      // projection's realtime edge itself — ONE owner per projection.
     });
     return () => {
       sub.unsubscribe();
@@ -182,8 +184,71 @@ export function useUpdateTaskStatus() {
       if (!res.success) throw new Error(res.reason ?? 'update failed');
       return res;
     },
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       void qc.invalidateQueries({ queryKey: ['tasks'] });
+      // The board list is NOT the only projection of a status: the open detail
+      // modal reads `['task-detail', id]` and inline `#task:n` sigils read
+      // `['task-by-number']`. Without these two a LOCAL status change only
+      // showed up once the WS `task_changed` echo arrived — and that listener
+      // lives inside `useTasks()`, so it needs a mounted board to fire at all.
+      void qc.invalidateQueries({
+        queryKey: taskDetailKey(vars.taskId),
+        exact: true,
+      });
+      void qc.invalidateQueries({ queryKey: ['task-by-number'] });
+    },
+  });
+}
+
+/**
+ * Assign / re-assign / clear a task's assignee — `agentId: null` clears.
+ * `POST /api/tasks/:taskId/claim` `{agent_id}` for a named agent,
+ * `POST /api/tasks/:taskId/unclaim` for the clear. Backs the detail modal's
+ * Assignee row.
+ *
+ * ONE hook for both because it is ONE product action ("who owns this"), and both
+ * arms need the identical three-projection invalidation and the same error exit;
+ * two hooks would let those drift.
+ *
+ * The renderer never predicts what the write does to the STATUS, and never
+ * implies one: in the management UI Assignee and Status are two ORTHOGONAL fields
+ * (shiki 2026-07-29, backend contract in #task:1712) — an assignment write
+ * changes ownership only, while workflow coupling (claim → `in_progress`,
+ * unclaim → `todo`) lives on an agent's own CLI verbs. Either way the surface
+ * re-reads and shows what the server settled on — invalidate, never patch.
+ *
+ * `done` / `closed` refuse BOTH arms (409): assignment on a terminal task is
+ * frozen server-side, which is why the surface offers the control only on a
+ * non-terminal one. The 409 stays the authority — the read-only gate is
+ * experience, not correctness.
+ */
+export function useAssignTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (args: { taskId: string; agentId: string | null }) => {
+      const res = await api<{ success: boolean; reason?: string }>(
+        args.agentId === null
+          ? `/api/tasks/${args.taskId}/unclaim`
+          : `/api/tasks/${args.taskId}/claim`,
+        {
+          method: 'POST',
+          ...(args.agentId === null
+            ? {}
+            : { body: JSON.stringify({ agent_id: args.agentId }) }),
+        },
+      );
+      if (!res.success) throw new Error(res.reason ?? 'assign failed');
+      return res;
+    },
+    onSuccess: (_res, vars) => {
+      // Same three projections as a status write — the board list is never the
+      // only place a task's assignee is shown.
+      void qc.invalidateQueries({ queryKey: ['tasks'] });
+      void qc.invalidateQueries({
+        queryKey: taskDetailKey(vars.taskId),
+        exact: true,
+      });
+      void qc.invalidateQueries({ queryKey: ['task-by-number'] });
     },
   });
 }
@@ -196,19 +261,81 @@ export function useUpdateTaskStatus() {
  * edit-provenance byline, and viewer-resolved `nav` all come from
  * here, fetched on demand when a card is opened. `enabled` gates the
  * fetch so a closed modal issues no request.
+ *
+ * This hook is also the SOLE realtime owner of the `['task-detail', id]`
+ * projection (#task:1715). It used to ride the listener inside `useTasks`, which
+ * only worked while a board was mounted — the modal now opens straight from
+ * `?task=<task_id>` (a chat chip, a cold deep-link) with no board behind it, so
+ * that arrangement lost both remote `task_changed` refresh and
+ * `snapshot_required` gap recovery exactly when the modal was the only task
+ * surface on screen. Owning the edge here also means one projection has one
+ * owner: no second invalidation of the same key racing this one (a duplicate
+ * `invalidateQueries` on a query that already has data CANCELS the in-flight
+ * refetch and restarts it — `cancelRefetch` defaults to true — so a second
+ * writer is a wasted round trip, not a free dedup).
+ *
+ * Viewer scope is the right carrier: the server fans `task_changed` out to every
+ * human member of the task's conversation, and a human's detail read gate IS
+ * conversation membership — so anything the modal is allowed to show, the viewer
+ * scope delivers.
  */
 export function useTaskDetail(
   taskId: string | null | undefined,
   opts?: { enabled?: boolean },
 ) {
+  const qc = useQueryClient();
   const gate = opts?.enabled ?? true;
+  const enabled = gate && typeof taskId === 'string' && taskId.length > 0;
+
+  useEffect(() => {
+    if (!enabled || typeof taskId !== 'string') return;
+    const sub = subscribeViewerScope();
+    const unsub = onWsFrame(frame => {
+      // The decision itself is `shouldRefreshTaskDetail` (a pure, exhaustive
+      // contract): this listener only projects the wire frame onto it, so the
+      // scope/kind/id rules are testable without a React tree.
+      const projected: TaskDetailFrame =
+        frame.type === 'snapshot_required'
+          ? {
+              type: 'snapshot_required',
+              viewerScope: isCurrentViewerScope(frame.scope),
+            }
+          : frame.type === 'event'
+            ? {
+                type: 'event',
+                viewerScope: isCurrentViewerScope(frame.scope),
+                kind: frame.kind,
+                taskId: (frame.payload as TaskChangedEvent)?.task_id ?? null,
+              }
+            : { type: 'other' };
+      if (!shouldRefreshTaskDetail(projected, taskId)) return;
+      void qc.invalidateQueries({ queryKey: taskDetailKey(taskId), exact: true });
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [enabled, qc, taskId]);
+
   return useQuery({
     queryKey: taskDetailKey(taskId),
     queryFn: async (): Promise<TaskDetailDto> => {
-      const res = await api<{ task: TaskDetailDto }>(`/api/tasks/${taskId}`);
+      // `taskId` reaches here from `?task=<id>` — a URL the user can paste or
+      // hand-edit — so it is untrusted input interpolated into a request path.
+      // A value that cannot be one path segment is answered LOCALLY as the same
+      // authoritative 404 a deleted task gets: it names no readable task, and
+      // sending it would let `..` climb out of `/api/tasks/` in main's
+      // `new URL(path, base)` (Cindy / Alice review).
+      const segment = toPathSegment(taskId as string);
+      if (segment === null) {
+        throw new ApiError(404, 'Not Found', 'malformed task pointer');
+      }
+      const res = await api<{ task: TaskDetailDto }>(`/api/tasks/${segment}`);
       return res.task;
     },
-    enabled: gate && typeof taskId === 'string' && taskId.length > 0,
+    // 404 is terminal — see `shouldRetryTaskDetail`.
+    retry: shouldRetryTaskDetail,
+    enabled,
   });
 }
 

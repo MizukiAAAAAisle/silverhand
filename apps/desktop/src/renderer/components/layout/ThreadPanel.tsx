@@ -90,10 +90,11 @@ interface ThreadPanelProps {
   /** `(workspaceId, channelId)` — App-level handler; the panel pre-binds
    *  it to this thread's workspace before handing it to the renderer. */
   onOpenChannelRef?: (workspaceId: string, channelId: string) => void;
-  /** `(taskNumber, workspaceId)` — App-level handler; wrapped into a
+  /** `(taskId)` — App-level handler; wrapped into a
    *  `TaskRefContextProvider` scoped to this thread's workspace so inline
-   *  `#task:<n>` chips resolve + open. */
-  onOpenTask?: (taskNumber: number, workspaceId: string) => void;
+   *  `#task:<n>` chips resolve against it, then hand up the resolved id
+   *  (which is workspace-free) to open the detail modal. */
+  onOpenTask?: (taskId: string) => void;
   /** A reply inside this cluster to scroll-locate + flash. Set by App when
    *  a jump (task/saved/search/notification) targets a message whose
    *  `thread_root_id === rootMessageId`. App gates this to this cluster, so
@@ -303,12 +304,7 @@ export function ThreadPanel({
     [onOpenChannelRef, workspaceId],
   );
   const taskRefContext = useMemo(
-    () => ({
-      workspaceId,
-      onOpenTask: onOpenTask
-        ? (taskNumber: number) => onOpenTask(taskNumber, workspaceId)
-        : undefined,
-    }),
+    () => ({ workspaceId, onOpenTask }),
     [workspaceId, onOpenTask],
   );
 

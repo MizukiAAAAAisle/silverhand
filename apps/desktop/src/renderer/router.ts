@@ -141,11 +141,19 @@ export interface RouteState {
    *  uses `?files` (matching `?threads=1`) rather than the product-facing
    *  word "Attachments" for symmetry; the panel title is "Attachments". */
    filesListOpen: boolean;
-  /** Tasks-drawer focus pointer (`?task=<task_number>`). When set, the
-   *  drawer opens to "all" filter and scrolls/highlights the row. The
-   *  number is workspace-scoped — resolution uses the workspace of the
-   *  message the sigil appears in (see `TaskRefContext`). PR-4. */
-  focusedTaskNumber: number | null;
+  /** Open task-detail pointer (`?task=<task_id>`). When set, the app-level
+   *  detail modal is open on that task (#task:1715).
+   *
+   *  The value is a task ID, not the `#<n>` the user reads in chat: a
+   *  task_number is only unique inside a workspace, so it would need a
+   *  second workspace axis to resolve — and the route's own workspace can't
+   *  supply it (the tasks drawer is a cross-workspace aggregate, so a card
+   *  it shows may belong to another workspace). One id is the whole
+   *  coordinate: `GET /api/tasks/:taskId` gates a human read on
+   *  conversation access alone, with no workspace term. Same shape as
+   *  `?side=<conversation_id>` / `?agent=<agent_id>`; `task_number` stays a
+   *  display name. */
+  taskDetailId: string | null;
   /** Raw `?fullscreen=1` flag. Applies to whichever pane is secondary
    *  by the side > thread > threads-list priority. */
   fullscreen: boolean;
@@ -227,15 +235,12 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   const agentPanelId =
     rawAgentPanel && rawAgentPanel.length > 0 ? rawAgentPanel : null;
   const rawTask = searchParams.get('task');
-  // Defensive: positive-integer-string only — no leading zeros, no
-  // decimals, no trailing garbage. `parseInt` would silently accept
-  // `12abc` as 12 and `1.5` as 1, both of which point at a row the
-  // user did not ask for. The strict regex matches the contract that
-  // `?task=<n>` came from `nav.openTask(n)` writing
-  // `String(taskNumber)` against an integer task_number, with a hand-
-  // typed/foreign URL falling through to null.
-  const focusedTaskNumber =
-    rawTask !== null && /^[1-9]\d*$/.test(rawTask) ? Number(rawTask) : null;
+  // Opaque id, treated exactly like `?side` / `?agent`: non-empty or null.
+  // An unresolvable value is NOT filtered out here — the modal host resolves
+  // it and renders a "Task not found" terminal state, because silently
+  // dropping a pointer the user clicked leaves them with no explanation
+  // (the `?side` placeholder settled this).
+  const taskDetailId = rawTask !== null && rawTask.length > 0 ? rawTask : null;
 
   // Advanced-search prefill query (`?q=`); empty treated as unset.
   const rawSearchQuery = searchParams.get('q');
@@ -267,7 +272,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
     threadRootId,
     threadsListOpen,
     filesListOpen,
-    focusedTaskNumber,
+    taskDetailId,
     fullscreen,
     agentId: mAgent?.params.agentId ?? null,
     userId: mUser?.params.userId ?? null,
@@ -456,34 +461,32 @@ export function buildChannelPathPreservingAgent(
  * hook can stay tiny and tests can assert URL shape without React.
  *
  * Rules:
- *  - `taskNumber == null` → strip `?task`. Other params (`side`,
+ *  - `taskId == null` → strip `?task`. Other params (`side`,
  *    `fullscreen`, …) are preserved verbatim.
- *  - `taskNumber !== null` → set `?task=<n>`. Validation (positive
- *    integer, exists in workspace) lives in `parseRouteState` and the
- *    drawer's focus effect; this writer is dumb on purpose.
+ *  - `taskId !== null` → set `?task=<task_id>`. Whether the id resolves is
+ *    the modal host's business (it renders a not-found state); this writer
+ *    is dumb on purpose.
  */
 export function withTaskQuery(
   pathname: string,
   search: string,
-  taskNumber: number | null,
+  taskId: string | null,
 ): string {
   const params = new URLSearchParams(search);
-  if (taskNumber == null) {
+  if (taskId == null) {
     params.delete('task');
   } else {
-    params.set('task', String(taskNumber));
+    params.set('task', taskId);
   }
   const next = params.toString();
   return next ? `${pathname}?${next}` : pathname;
 }
 
 /**
- * Build the URL written by `openTask(taskNumber)`. Sets `?task=<n>` on
+ * Build the URL written by `openTask(taskId)`. Sets `?task=<task_id>` on
  * the current location, preserving any base path and other query params
- * (`side`, `fullscreen`). The drawer reads `focusedTaskNumber` from the
- * resulting RouteState and uses it to (a) override its conversation
- * filter to "all" so the row is reachable and (b) scroll-and-highlight
- * the target row.
+ * (`side`, `fullscreen`). The app-level host reads `taskDetailId` from the
+ * resulting RouteState and opens the detail modal on that task.
  *
  * Mirrors `buildSideOpenUrl` in spirit — purely additive on the URL,
  * with closing handled by `withTaskQuery(..., null)`.
@@ -491,9 +494,9 @@ export function withTaskQuery(
 export function buildTaskOpenUrl(
   pathname: string,
   search: string,
-  taskNumber: number,
+  taskId: string,
 ): string {
-  return withTaskQuery(pathname, search, taskNumber);
+  return withTaskQuery(pathname, search, taskId);
 }
 
 /**
@@ -763,14 +766,14 @@ export function useNav(): {
   /** Toggle the channel Attachments panel — drives the header Paperclip
    *  icon's click-to-toggle behaviour, mirroring `toggleThreadsList`. */
   toggleFilesList: () => void;
-  /** Focus a task in the workspace tasks drawer by writing `?task=<n>`.
-   *  The drawer auto-opens, switches to "all" filter, scrolls the row
-   *  into view, and applies a brief highlight. `replace` so re-clicking
-   *  task chips doesn't pile history entries. */
-  openTask: (taskNumber: number) => void;
-  /** Clear the focused-task pointer (`?task`). Drawer can stay open via
-   *  its own React state — closing the URL focus is independent of
-   *  open/close. */
+  /** Open a task's detail modal by writing `?task=<task_id>` (#task:1715).
+   *  Every entrance (chat chip, Tasks pane card, drawer card) goes through
+   *  this one writer, so there is a single modal state. `replace` so
+   *  re-clicking task chips doesn't pile history entries. */
+  openTask: (taskId: string) => void;
+  /** Close the detail modal by clearing `?task`. The tasks drawer keeps its
+   *  own open state, so this is independent of the drawer being open —
+   *  closing a modal opened from a drawer card returns to the drawer. */
   closeTask: () => void;
   /** Open agent `agentId` as the chat-section right-pane panel
    *  (`?agent=<id>`, #task:1189) so a channel + the agent's Activity show
@@ -844,11 +847,11 @@ export function useNav(): {
     navigate(next, { replace: true });
   }, [navigate, location.pathname, location.search]);
   const openTask = useCallback(
-    (taskNumber: number) => {
+    (taskId: string) => {
       const next = buildTaskOpenUrl(
         location.pathname,
         location.search,
-        taskNumber,
+        taskId,
       );
       navigate(next, { replace: true });
     },

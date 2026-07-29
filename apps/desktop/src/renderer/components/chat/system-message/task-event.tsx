@@ -28,7 +28,9 @@ import { type RendererProps, useUserResolver } from './shared';
  *    the dot reflects the task's CURRENT status like create/claim, no
  *    `→ pill`); `<dot> <actor> moved <chip> → <status pill>` for status
  *    transitions. PR-9 unified actor position to the front across the
- *    subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`).
+ *    subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`). The claim/unclaim
+ *    VERB branches on `actor.kind`: an agent claims/unclaims (workflow),
+ *    a human assigns/unassigns (ownership) — see `TaskEventBody`.
  *  - Partial legacy metadata (pre-PR-2 rows: subtype + task_number +
  *    task_status only): degraded row keeps the dot + chip + verb (or
  *    `→ pill` for status), drops the actor pill / inline title — we
@@ -102,6 +104,37 @@ function TaskEventBody({
         <TaskRef taskNumber={meta.task_number} />
         <span className="text-text-muted" aria-hidden>→</span>
         <TaskStatusPill status={meta.task_status} />
+      </>
+    );
+  }
+  // `task_claim` / `task_unclaim` mean two different things depending on WHO
+  // acted (`docs/tasks-design.md` §4.4, wire contract in
+  // `TaskSystemMetadataSchema`): an AGENT is taking or releasing the job
+  // (claimed / unclaimed — a workflow verb), while a HUMAN is writing ownership
+  // from the board (assigned / unassigned — status is untouched). Saying "@shiki
+  // claimed #task" for an assignment to someone else states the wrong fact.
+  // A human assign also names the new owner, since that is the whole content of
+  // the write.
+  const humanOwnershipWrite =
+    meta.actor.kind === 'user' &&
+    (subtype === 'task_claim' || subtype === 'task_unclaim');
+  if (humanOwnershipWrite) {
+    const assignee = meta.task_assignee;
+    return (
+      <>
+        <span className="font-medium text-text-primary">{actorLabel}</span>
+        <span className="text-text-muted">
+          {subtype === 'task_claim' ? 'assigned' : 'unassigned'}
+        </span>
+        <TaskRef taskNumber={meta.task_number} />
+        {subtype === 'task_claim' && assignee ? (
+          <>
+            <span className="text-text-muted" aria-hidden>→</span>
+            <span className="font-medium text-text-primary">
+              @{assignee.name}
+            </span>
+          </>
+        ) : null}
       </>
     );
   }

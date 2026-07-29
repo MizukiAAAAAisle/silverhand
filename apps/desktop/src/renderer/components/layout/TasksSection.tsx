@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import {
   CheckSquare,
   ChevronDown,
@@ -10,6 +10,7 @@ import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
+import { useRevealTaskRow } from '@/features/tasks/useRevealTaskRow';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
   applyTaskFilters,
@@ -28,7 +29,6 @@ import {
 } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
 import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
-import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -40,26 +40,35 @@ import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
  * Channel/assignee/creator filtering sits in the TaskFilterBar below the
  * header — no separate sidebar, which gives the kanban the full width.
  *
- * Click a card → onJump scrolls back into chat at the source message
- * (App.tsx wires this through handleJumpToMessage).
+ * Click a card → `onOpenTask` opens that task's detail modal (App writes
+ * `?task=<task_id>`); the modal itself carries "View in conversation", which is
+ * what scrolls back into chat at the source message (#task:1715). The handler
+ * arrives as a prop rather than from `useNav()` here on purpose: `useNav`
+ * subscribes its caller to the location, which would re-render all ~1356 cards
+ * on every section switch — exactly the urgent-pass freeze `React.memo` +
+ * App's ref-stable handler exist to prevent (#task:1168).
+ *
+ * This board is also a reveal TARGET, not just a source: "View in Tasks" from the
+ * modal lands here when `/tasks` is the route, and this section is already the
+ * global All board (`useTasks({})` + `DEFAULT_TASK_FILTERS`), so the target card
+ * is on screen with no navigation and no filter widening — only a scroll and a
+ * pulse (#task:1715, Alice). Every reveal prop must stay ref-stable for the same
+ * `React.memo` reason as `onOpenTask`.
  */
 export interface TasksSectionProps {
-  onJump: (params: {
-    workspaceId?: string;
-    channelId: string;
-    threadRootId?: string | null;
-    messageId: string;
-  }) => void;
+  onOpenTask: (taskId: string) => void;
+  /** Standing reveal intent, or `null`. */
+  revealTaskId?: string | null;
+  /** Called once when the intent reaches a terminal outcome. */
+  onRevealConsumed?: () => void;
 }
 
 export const TasksSection = memo(function TasksSection({
-  onJump,
+  onOpenTask,
+  revealTaskId = null,
+  onRevealConsumed,
 }: TasksSectionProps): JSX.Element {
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
-  // Card click opens the detail modal (read full body / edit) rather than
-  // jumping straight to the source message; "View in conversation" inside
-  // the modal is the explicit jump.
-  const [detailTask, setDetailTask] = useState<TaskSummaryDto | null>(null);
   const updateStatus = useUpdateTaskStatus();
   // Workspace + channel options + scope ids come from the SAME hook the
   // drawer uses (#task:1165) so the two surfaces' dropdowns can't drift — DM +
@@ -72,7 +81,13 @@ export const TasksSection = memo(function TasksSection({
   // sliced client-side (no pagination, dto carries the fields) — see
   // features/tasks/taskFilters.ts. Live refresh rides the viewer scope
   // (see `useTasks`).
-  const { data: allTasks = [] } = useTasks({});
+  const {
+    data: allTasks = [],
+    isFetching,
+    dataUpdatedAt,
+    errorUpdateCount,
+    refetch,
+  } = useTasks({});
 
   const tasks = useMemo(
     () =>
@@ -85,6 +100,37 @@ export const TasksSection = memo(function TasksSection({
       ),
     [allTasks, filters],
   );
+
+  // ── Reveal: this board is a delivery TARGET, not only a source ──────
+  //
+  // "This board's baseline is All" is NOT "this board's view is always All": the
+  // user filters it, and the reveal's own path produces the case — filter by
+  // Assignee, open a card, reassign it inside the modal, then "View in Tasks".
+  // The task leaves the current filter, so the row is gone from the DOM while
+  // `allTasks` still holds it (Cindy BLOCKER 10). So the target is judged on the
+  // RENDERED list, and widening is this surface's own obligation, handed to the
+  // shared hook as a required argument.
+  const ensureRevealRenderable = useCallback(() => {
+    setFilters(DEFAULT_TASK_FILTERS);
+  }, []);
+  const revealTarget = useMemo(() => {
+    if (revealTaskId === null) return null;
+    const found = tasks.find(t => t.id === revealTaskId);
+    return found ? { status: found.status } : null;
+  }, [tasks, revealTaskId]);
+  const boardRef = useRef<HTMLDivElement>(null);
+  const { highlightedTaskId } = useRevealTaskRow({
+    revealTaskId,
+    active: true,
+    rootRef: boardRef,
+    target: revealTarget,
+    ensureRenderable: ensureRevealRenderable,
+    isFetching,
+    dataUpdatedAt,
+    errorUpdateCount,
+    refetch,
+    onConsumed: onRevealConsumed,
+  });
 
   const totalActive = useMemo(
     () => tasks.filter(t => t.status !== 'done' && t.status !== 'closed').length,
@@ -151,6 +197,7 @@ export const TasksSection = memo(function TasksSection({
         * height while capped at `max-h-full`; `items-start` keeps short
         * columns hugging the top. Closed is the terminal 5th column. */}
       <div
+        ref={boardRef}
         data-tasks-board
         className="flex min-h-0 flex-1 items-start gap-3 overflow-hidden p-4"
       >
@@ -162,21 +209,14 @@ export const TasksSection = memo(function TasksSection({
             icon={col.icon}
             iconClass={col.iconClass}
             tasks={grouped[col.status]}
-            onCardClick={t => setDetailTask(t)}
+            highlightedTaskId={highlightedTaskId}
+            onCardClick={t => onOpenTask(t.id)}
             onStatusChange={(taskId, next) =>
               updateStatus.mutate({ taskId, status: next })
             }
           />
         ))}
       </div>
-
-      <TaskDetailDialog
-        task={detailTask}
-        onOpenChange={open => {
-          if (!open) setDetailTask(null);
-        }}
-        onJump={onJump}
-      />
     </main>
   );
 });
@@ -253,6 +293,7 @@ function KanbanColumn({
   icon: Icon,
   iconClass,
   tasks,
+  highlightedTaskId,
   onCardClick,
   onStatusChange,
 }: {
@@ -261,6 +302,7 @@ function KanbanColumn({
   icon: LucideIcon;
   iconClass: string;
   tasks: TaskSummaryDto[];
+  highlightedTaskId: string | null;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (taskId: string, next: TaskStatus) => void;
 }): JSX.Element {
@@ -359,6 +401,7 @@ function KanbanColumn({
                 <li key={t.id}>
                   <TaskCard
                     task={t}
+                    highlighted={highlightedTaskId === t.id}
                     onClick={() => onCardClick(t)}
                     onStatusChange={next => onStatusChange(t.id, next)}
                   />
@@ -376,10 +419,12 @@ function KanbanColumn({
 
 function TaskCard({
   task,
+  highlighted,
   onClick,
   onStatusChange,
 }: {
   task: TaskSummaryDto;
+  highlighted: boolean;
   onClick: () => void;
   onStatusChange: (next: TaskStatus) => void;
 }): JSX.Element {
@@ -389,6 +434,7 @@ function TaskCard({
     <TaskCardContextMenu status={task.status} onStatusChange={onStatusChange}>
       <div
         data-task-number={task.task_number}
+        data-task-id={task.id}
         draggable
         onDragStart={e => {
           writeTaskDrag(e.dataTransfer, { taskId: task.id, from: task.status });
@@ -396,7 +442,10 @@ function TaskCard({
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          'group relative min-w-0 cursor-grab rounded-md border border-border-subtle bg-bg-base transition-colors hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
+          'group relative min-w-0 cursor-grab rounded-md border border-border-subtle bg-bg-base transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
+          // Brief ring pulse when this card is a reveal target — same recipe as
+          // the drawer's card so one reveal reads identically on both boards.
+          highlighted && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-base',
           dragging && 'opacity-50',
         )}
       >

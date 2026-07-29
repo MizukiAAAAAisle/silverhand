@@ -38,10 +38,27 @@ describe('TaskDetailDialog inline editor — blur-save, per-field, single-line t
     'utf8',
   );
 
+  /** Source slice of ONE component, so an editor-scoped ban can't be tripped
+   *  (or satisfied) by an unrelated component in the same file. */
+  function sliceFunctionBody(declaration: string): string {
+    const start = source.indexOf(declaration);
+    if (start === -1) {
+      throw new Error(`could not find "${declaration}" — was it renamed?`);
+    }
+    const rest = source.slice(start + declaration.length);
+    const nextDecl = rest.search(/\n(?:export )?function /);
+    return nextDecl === -1 ? rest : rest.slice(0, nextDecl);
+  }
+
   it('saves on blur (no Save/Cancel buttons)', () => {
     expect(source).toContain('onBlur={() => void commit()}');
-    // The buttonless editor drops the Button component entirely.
-    expect(source).not.toContain("from '@/components/ui/button'");
+    // Blur IS the commit and Escape IS the cancel, so the editor carries no
+    // button of any kind. Scoped to the editor's own body rather than the file:
+    // the modal now also hosts the unresolved-read panel, whose transient-tier
+    // Retry is a legitimate `Button` (#task:1715).
+    const editor = sliceFunctionBody('function InlineFieldEditor(');
+    expect(editor).not.toContain('<Button');
+    expect(editor).not.toContain('MiniIconButton');
   });
 
   it('a content save sends ONLY body; a title save sends ONLY title, both verbatim', () => {
@@ -84,7 +101,9 @@ describe('TaskDetailDialog inline editor — blur-save, per-field, single-line t
     // hidden (its `showJump` gate requires `editingField === null`) so it can't
     // navigate away mid-edit either.
     expect(source).toContain('if (!next && editingField !== null) return;');
-    expect(source).toContain('editingField === null && !navUnavailable');
+    expect(source).toContain(
+      'const actionsVisible = open && painted !== null && editingField === null;',
+    );
   });
 
   it('dedups an in-flight write, latches a successful save, and lets Escape beat the blur', () => {
@@ -123,9 +142,16 @@ describe('TaskDetailDialog inline editor — blur-save, per-field, single-line t
     );
   });
 
-  it('offers a field pencil ONLY while nothing is being edited (no cross-field switch)', () => {
-    const gated = source.split('canEdit && editingField === null').length - 1;
+  it('offers a field pencil ONLY while the dialog-local write slot is free', () => {
+    // The gate widened from "no field is being edited" to the whole local write
+    // slot (`busy` = an editor open OR a status/assignee write in flight), so a
+    // pencil can't start a definition edit that would race a metadata write —
+    // `useEditTask` writes the detail cache wholesale and could land last.
+    const gated = source.split('{!busy ? (').length - 1;
     expect(gated).toBe(2); // title pencil + content pencil
+    expect(source).toContain(
+      'const busy = editingField !== null || metaPending;',
+    );
   });
 
   it('renders the View jump as the close ✕ twin in the corner cluster (not the metadata row)', () => {

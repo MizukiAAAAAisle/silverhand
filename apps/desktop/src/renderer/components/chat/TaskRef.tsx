@@ -83,9 +83,12 @@ export function TaskRefStaticChip({
  *    worse than a silent demote.
  *  - Resolved + present → clickable chip, label `#<n> · title`,
  *    icon `ClipboardCheck`. Click hands off to `onOpenTask` from
- *    context, which is wired to write `?task=<n>` and open the
- *    Tasks drawer focused on that row. Hover ≥500ms surfaces a
- *    popover with status / assignee / conversation context.
+ *    context with the RESOLVED task id (not the `#<n>` the chip
+ *    shows), which is wired to write `?task=<task_id>` and open the
+ *    task's detail modal (#task:1715). The chip is only interactive in
+ *    this state, so the id is always in hand at click time. Hover
+ *    ≥500ms surfaces a popover with status / assignee / conversation
+ *    context.
  */
 export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element {
   const ctx = useTaskRefContext();
@@ -221,13 +224,13 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
       onClick={event => {
         event.preventDefault();
         event.stopPropagation();
-        onOpenTask?.(taskNumber);
+        onOpenTask?.(task.id);
       }}
       onKeyDown={event => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         event.stopPropagation();
-        onOpenTask?.(taskNumber);
+        onOpenTask?.(task.id);
       }}
     >
       {chipContent}

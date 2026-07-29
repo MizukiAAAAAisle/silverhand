@@ -19,6 +19,7 @@ import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
+import { useRevealTaskRow } from '@/features/tasks/useRevealTaskRow';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
   applyTaskFilters,
@@ -38,7 +39,6 @@ import {
 } from '@/components/tasks/TaskStatusBadge';
 import { TaskDropPlaceholder } from '@/components/tasks/TaskDropPlaceholder';
 import { TaskFilterBar } from '@/components/tasks/TaskFilterBar';
-import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 
 /**
  * Workspace-wide tasks panel — a floating right-side drawer that overlays
@@ -56,23 +56,25 @@ export interface WorkspaceTasksDrawerProps {
   workspaceName: string | null;
   /** Initially-selected conversation for the filter. null → all conversations. */
   defaultConversationId: string | null;
-  /** Workspace-scoped task number to focus. When set (sourced from
-   *  `?task=<n>` URL state), the drawer overrides the conversation
-   *  filter to "all" so the target row is reachable, scrolls it into
-   *  view, and applies a brief highlight. Cleared by `onClearFocus` so
-   *  the URL writer (`closeTask`) and the drawer state stay in sync. */
-  focusedTaskNumber?: number | null;
-  /** Called after the drawer has scrolled-and-highlighted the focused
-   *  row. Wired to `nav.closeTask` so the URL drops `?task=<n>` once the
-   *  visual focus has been delivered, preventing a stale highlight on
-   *  next open. */
-  onClearFocus?: () => void;
-  onJumpToMessage?: (params: {
-    workspaceId?: string;
-    channelId: string;
-    threadRootId?: string | null;
-    messageId: string;
-  }) => void;
+  /** ONE-SHOT reveal intent: a task id to scroll to and flash. Held in App
+   *  memory, never in the URL (#task:1715) — a 1.4s pulse is an effect that
+   *  self-expires, not a location worth being addressable. The drawer widens both
+   *  filters to All so the row is guaranteed to be in the tree (the target may
+   *  live in another workspace/channel), scrolls it into view and highlights it.
+   *  Set by the detail modal's "View in Tasks". */
+  revealTaskId?: string | null;
+  /** Consumes the reveal intent above. Called on EVERY terminal outcome —
+   *  delivered, or unreachable (no such task in the list, no drawer node, no row
+   *  in the DOM) — and never while still waiting for the list, so the intent can
+   *  never latch on a task the drawer will not act on again. */
+  onRevealConsumed?: () => void;
+  /** Whether the app-level task detail modal is open on top of the drawer. Only
+   *  Escape layering depends on it: Radix owns Escape while the modal is up, so
+   *  the drawer's own document listener must defer. */
+  detailOpen?: boolean;
+  /** Opens a task's detail modal (writes `?task=<task_id>`). Card clicks go
+   *  through App so ONE modal instance serves every surface. */
+  onOpenTask?: (taskId: string) => void;
 }
 
 const STORAGE_KEY = 'silverhand.layout.tasks-drawer-width';
@@ -211,9 +213,10 @@ export function WorkspaceTasksDrawer({
   workspaceId,
   workspaceName,
   defaultConversationId,
-  focusedTaskNumber = null,
-  onClearFocus,
-  onJumpToMessage,
+  revealTaskId = null,
+  onRevealConsumed,
+  detailOpen = false,
+  onOpenTask,
 }: WorkspaceTasksDrawerProps): JSX.Element {
   const drawerShellRef = useRef<HTMLDivElement>(null);
   const { width: drawerWidth, startResize } = useDrawerWidth(drawerShellRef);
@@ -237,26 +240,30 @@ export function WorkspaceTasksDrawer({
     [workspaceId, defaultConversationId],
   );
   const [filters, setFilters] = useState<TaskFilters>(baselineFilters);
-  // Card click opens the detail modal (over the drawer) rather than jumping
-  // straight to the source message; declared here (above the Escape effect)
-  // so that handler can defer to an open modal.
-  const [detailTask, setDetailTask] = useState<TaskSummaryDto | null>(null);
-  // Re-sync every time the drawer opens. When a `?task=<n>` focus is in
-  // flight, widen BOTH workspace and channel → All so the focused row is
-  // in the rendered tree (the target task may live in another
-  // workspace/channel that the anchored baseline would filter out, and
-  // the scroll-and-highlight effect below couldn't then find
-  // `[data-task-number]`). Closed tasks are always in the tree now (a
-  // status column, not a hidden visibility tier), so no visibility
-  // widening is needed. The user can still re-select afterward.
+  // Baseline re-sync: the drawer's own entry context, re-applied on the OPEN
+  // transition and whenever the baseline identity changes. It does NOT consult
+  // the reveal intent — a filter state that depends on whether a transient
+  // one-shot has been consumed yet reintroduces exactly the ordering bug the
+  // two effects below are split to avoid (Cindy BLOCKER 2).
   useEffect(() => {
     if (!open) return;
-    if (focusedTaskNumber !== null) {
-      setFilters({ ...DEFAULT_TASK_FILTERS, channelId: null });
-    } else {
-      setFilters(baselineFilters);
-    }
-  }, [open, baselineFilters, focusedTaskNumber]);
+    setFilters(baselineFilters);
+  }, [open, baselineFilters]);
+
+  // Make a reveal target renderable: the row may live in another
+  // workspace/channel that the anchored baseline filters out, and a row that is
+  // filtered out has no `[data-task-id]` to scroll to. Closed tasks are always in
+  // the tree (a status column, not a hidden tier), so no visibility widening is
+  // needed. Once widened the view stays widened and the user can re-select.
+  //
+  // Called by `useRevealTaskRow` once per intent, BEFORE it trusts the rendered
+  // set — so this reacts to the intent's arrival and never to whether the intent
+  // has been consumed yet (Cindy BLOCKER 2). It runs after the baseline effect
+  // above in the same commit (effects run in declaration order), so on a reveal
+  // that opens the drawer the widening is the last write.
+  const ensureRevealRenderable = useCallback(() => {
+    setFilters({ ...DEFAULT_TASK_FILTERS });
+  }, []);
 
   const closeDrawer = useCallback(
     (event?: React.SyntheticEvent): void => {
@@ -273,13 +280,13 @@ export function WorkspaceTasksDrawer({
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape' && drawerShouldCloseOnEscape(detailTask !== null)) {
+      if (e.key === 'Escape' && drawerShouldCloseOnEscape(detailOpen)) {
         closeDrawer();
       }
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [open, closeDrawer, detailTask]);
+  }, [open, closeDrawer, detailOpen]);
 
   // Workspace + channel options + scope ids come from the SAME hook the global
   // Tasks pane uses (#task:1165), so both surfaces' dropdowns list the
@@ -297,7 +304,14 @@ export function WorkspaceTasksDrawer({
   // the API's single `conversation_id` filter can't express — see #214).
   // Shares React Query cache with the pane's identical `useTasks({})` call;
   // live refresh rides the viewer scope (see `useTasks`).
-  const { data: allTasks = [], isLoading } = useTasks({});
+  const {
+    data: allTasks = [],
+    isLoading,
+    isFetching,
+    dataUpdatedAt,
+    errorUpdateCount,
+    refetch,
+  } = useTasks({});
 
   const tasks = useMemo(
     () =>
@@ -318,83 +332,42 @@ export function WorkspaceTasksDrawer({
 
   const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
-  // "View in conversation" inside the modal is the explicit jump (and closes
-  // the drawer with it); a plain card click only opens the detail modal.
+  // A plain card click opens the detail modal (`?task=<id>`, hosted by App);
+  // jumping to the conversation is the modal's own explicit action.
   const handleCardClick = (t: TaskSummaryDto): void => {
-    setDetailTask(t);
+    onOpenTask?.(t.id);
   };
 
   // Focus trap: keep focus inside drawer while open.
   const drawerRef = useRef<HTMLDivElement>(null);
 
-  // Resolve the `?task=<n>` focus (workspace-scoped) to a UNIQUE task. Now
-  // that the drawer holds cross-workspace data, a bare task_number can
-  // collide across workspaces — so we disambiguate by (workspaceId,
-  // task_number) and key the scroll + highlight on the resulting task
-  // id, which is globally unique. (#task:1165)
-  const focusedTaskId = useMemo(() => {
-    if (focusedTaskNumber == null) return null;
-    const match = allTasks.find(
-      t => t.workspace_id === workspaceId && t.task_number === focusedTaskNumber,
-    );
-    return match?.id ?? null;
-  }, [allTasks, workspaceId, focusedTaskNumber]);
+  // Is the reveal target in the collection this drawer RENDERS? Judged on the
+  // post-filter list on purpose: `allTasks` is the cross-workspace directory
+  // behind the board, and a target it holds but the current filters exclude has
+  // no row in the DOM — letting the directory answer this is how a reveal pulses
+  // nothing and consumes itself (Cindy BLOCKER 10). The status comes along
+  // because a collapsed column has to be opened before the row exists.
+  const revealTarget = useMemo(() => {
+    if (revealTaskId === null) return null;
+    const found = tasks.find(t => t.id === revealTaskId);
+    return found ? { status: found.status } : null;
+  }, [tasks, revealTaskId]);
 
-  // Visual highlight for the focused-task row, keyed by task id (unique
-  // across workspaces). Distinct from `focusedTaskNumber` (the URL-driven
-  // *intent* — "scroll me here"): once delivered we clear the URL pointer
-  // via `onClearFocus` but keep the highlight on for ~1.4s so a quick
-  // second click on the same chip still produces a perceptible flash.
-  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(
-    null,
-  );
-  // Scroll-and-highlight on focused-task arrival. We wait one
-  // animation frame so the filter override committed in the effect
-  // above has a chance to flush — the matching row may have just
-  // appeared in the DOM. Once we find the element we scroll it into
-  // view and immediately call `onClearFocus` so the URL drops the
-  // pointer; the highlight outlives the URL state via
-  // `highlightedTaskId` to keep visual feedback uncoupled from
-  // navigation.
-  useEffect(() => {
-    if (!open) return;
-    if (focusedTaskNumber == null) return;
-    if (isLoading) return; // tasks list not ready yet — wait for fetch
-    if (focusedTaskId == null) {
-      // The number didn't resolve to a task in this workspace — drop the
-      // URL pointer so we don't keep retrying a phantom focus.
-      onClearFocus?.();
-      return;
-    }
-    let cancelled = false;
-    const handle = requestAnimationFrame(() => {
-      if (cancelled) return;
-      const root = drawerRef.current;
-      if (!root) return;
-      const el = root.querySelector<HTMLElement>(
-        `[data-task-id="${focusedTaskId}"]`,
-      );
-      if (el) {
-        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        setHighlightedTaskId(focusedTaskId);
-      }
-      onClearFocus?.();
-    });
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(handle);
-    };
-  }, [open, focusedTaskNumber, focusedTaskId, isLoading, onClearFocus]);
-
-  // Auto-clear the highlight ring after a short pulse so the row
-  // settles back into the column visually. Independent of the URL —
-  // re-clicking the same chip refreshes `focusedTaskNumber` (no-op if
-  // unchanged), so the effect above re-arms the highlight.
-  useEffect(() => {
-    if (highlightedTaskId == null) return;
-    const t = setTimeout(() => setHighlightedTaskId(null), 1400);
-    return () => clearTimeout(t);
-  }, [highlightedTaskId]);
+  // Scroll + pulse + one-shot consumption, shared with the `/tasks` board so the
+  // "absence is only terminal with positive evidence" rule and the pulse's
+  // re-arming exist once (see `useRevealTaskRow`).
+  const { highlightedTaskId } = useRevealTaskRow({
+    revealTaskId,
+    active: open,
+    rootRef: drawerRef,
+    target: revealTarget,
+    ensureRenderable: ensureRevealRenderable,
+    isFetching,
+    dataUpdatedAt,
+    errorUpdateCount,
+    refetch,
+    onConsumed: onRevealConsumed,
+  });
 
   return (
     <>
@@ -517,19 +490,6 @@ export function WorkspaceTasksDrawer({
           </div>
         </div>
       </div>
-
-      <TaskDetailDialog
-        task={detailTask}
-        onOpenChange={open => {
-          if (!open) setDetailTask(null);
-        }}
-        onJump={target => {
-          onJumpToMessage?.(target);
-          // Navigating away from a task closes the drawer too, matching the
-          // pre-modal card-jump behavior.
-          onOpenChange(false);
-        }}
-      />
     </>
   );
 }

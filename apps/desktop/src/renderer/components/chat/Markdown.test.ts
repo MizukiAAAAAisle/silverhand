@@ -80,7 +80,7 @@ function renderWithHumans(
 function renderWithTaskCtx(
   content: string,
   workspaceId: string | null,
-  onOpenTask?: (n: number) => void,
+  onOpenTask?: (taskId: string) => void,
 ): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return renderToStaticMarkup(
@@ -722,7 +722,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
 
   function renderTaskEvent(
     msg: import('@silverhand/shared').MessageDto,
-    onOpenTask?: (n: number) => void,
+    onOpenTask?: (taskId: string) => void,
     seededTasks: TaskSummaryDto[] = [],
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -1380,7 +1380,7 @@ describe('Markdown bare task refs (#task:1430)', () => {
     content: string,
     workspaceId: string | null,
     seeded: TaskSummaryDto[] = [],
-    onOpenTask?: (n: number) => void,
+    onOpenTask?: (taskId: string) => void,
   ): string {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     for (const t of seeded) {

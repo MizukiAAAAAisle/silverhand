@@ -175,12 +175,11 @@ interface ChannelViewProps {
    *  resolution scope is this conversation's workspace, so the caller
    *  binds the workspace id and we hand it the resolved channel id. */
   onOpenChannelRef?: (workspaceId: string, channelId: string) => void;
-  /** Click handler for inline `#task:<n>` chips. Receives both the
-   *  numeric task and the workspace it should resolve against — that's
-   *  always the conversation's workspace, since task numbers are
-   *  workspace-scoped. App.tsx switches the selected workspace when
-   *  needed (cross-workspace `?side` panes) and writes `?task=<n>`. */
-  onOpenTask?: (taskNumber: number, workspaceId: string) => void;
+  /** Click handler for inline `#task:<n>` chips. Receives the RESOLVED
+   *  task id — the chip resolves `#<n>` against this conversation's
+   *  workspace itself, so no workspace axis travels with the click.
+   *  App.tsx writes `?task=<task_id>`, which opens the detail modal. */
+  onOpenTask?: (taskId: string) => void;
   /** In-conversation header find (#task:1335). When provided, the header shows
    *  a search-toggle icon that opens the inline find bar below it. The callback
    *  navigates to a prev/next match in THIS channel via App's shared jump/prime
@@ -513,15 +512,10 @@ function ActiveChannelView({
   // `#task:<n>` chips inside this pane resolve their numeric reference
   // against `conversation.workspace_id` — the message's workspace, not
   // the primary-selected workspace. Cross-workspace `?side` panes
-  // therefore look up tasks in the foreign workspace transparently.
+  // therefore look up tasks in the foreign workspace transparently, and
+  // the click hands up the resolved id, which needs no workspace.
   const taskRefContext = useMemo(
-    () => ({
-      workspaceId: conversation.workspace_id,
-      onOpenTask: onOpenTask
-        ? (taskNumber: number) =>
-            onOpenTask(taskNumber, conversation.workspace_id)
-        : undefined,
-    }),
+    () => ({ workspaceId: conversation.workspace_id, onOpenTask }),
     [conversation.workspace_id, onOpenTask],
   );
   const handleOpenChannelRef = useCallback(

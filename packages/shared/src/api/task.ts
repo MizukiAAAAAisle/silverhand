@@ -406,9 +406,14 @@ export type HumanUpdateTaskStatusInput = z.infer<
   typeof HumanUpdateTaskStatusInputSchema
 >;
 
-// Human UI — POST /api/tasks/:taskId/claim (optional target agent)
+// Human UI — POST /api/tasks/:taskId/claim (assign to a target agent).
+// `agent_id` is REQUIRED: assignment and un-assignment are two writes with two
+// meanings, and clearing the assignee is `POST /unclaim` — the single entry for
+// that. An omitted `agent_id` used to fall through to "clear the assignee",
+// which additionally advanced a `todo` task to `in_progress` (an unassigned
+// task marked in progress); one meaning does not get two write paths.
 export const HumanClaimTaskInputSchema = z.object({
-  agent_id: z.string().optional(),
+  agent_id: z.string().min(1),
 });
 export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
 

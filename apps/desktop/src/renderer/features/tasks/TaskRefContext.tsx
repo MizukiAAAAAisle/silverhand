@@ -9,8 +9,8 @@ import { createContext, useContext, type ReactNode } from 'react';
  * the workspace + open handler everywhere bloats the API surface.
  *
  * Consumers (the inline `TaskRef` chip) read `workspaceId` to scope
- * their `useTaskByNumber` lookup, and `onOpenTask` to dispatch the
- * Tasks-drawer focus when the chip is clicked.
+ * their `useTaskByNumber` lookup, and `onOpenTask` to open the task's
+ * detail modal when the chip is clicked.
  *
  * Missing context → `TaskRef` renders inert text. That's deliberate:
  * Saved/Search list views render messages outside any conversation
@@ -20,9 +20,12 @@ export interface TaskRefContextValue {
   /** Workspace whose task numbers should resolve. Null disables
    *  resolution for the subtree (chips render inert). */
   workspaceId: string | null;
-  /** Click handler — typically writes `?task=<n>` and opens the
-   *  Tasks drawer focused on the target row. */
-  onOpenTask?: (taskNumber: number) => void;
+  /** Click handler — writes `?task=<task_id>`, which opens the task's
+   *  detail modal (#task:1715). Takes the RESOLVED task id, so no
+   *  workspace axis travels with it: a task id is globally unique and
+   *  the human read gate is conversation access alone. `workspaceId`
+   *  above is only for resolving the chip's `#<n>` to that id. */
+  onOpenTask?: (taskId: string) => void;
 }
 
 const TaskRefContext = createContext<TaskRefContextValue | null>(null);

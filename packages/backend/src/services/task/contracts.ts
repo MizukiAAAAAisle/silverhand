@@ -56,7 +56,9 @@ export type ClaimTaskInput =
   | {
       actor: UserActor;
       by: UserTaskRef;
-      assignee?: { agentId: string };
+      /** Required for a user actor: `claim` assigns. Clearing the assignee is
+       *  `unclaimTask` — one meaning, one write path. */
+      assignee: { agentId: string };
     }
   | {
       actor: AgentActor;

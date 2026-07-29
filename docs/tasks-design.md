@@ -49,10 +49,11 @@ task 就是 message 的一个投影,promote 只是补齐元数据。channel 级 
 | **done** | — | — | — | — | ✔ |
 | **closed** | ✔ | ✔ | ✔ | ✔ | — |
 
-**claim 不在这张表里。** `todo → in_progress` 只由 **claim 命令**产生——它是独立动词(原子占位 +
-自赋 assignee),`task status` **不能**走这条边(故 `VALID_TRANSITIONS.todo === ['closed']`)。把
+**claim 不在这张表里。** `todo → in_progress` 只由 **agent 的 claim 命令**产生——它是独立动词(原子
+占位 + 自赋 assignee),`task status` **不能**走这条边(故 `VALID_TRANSITIONS.todo === ['closed']`)。把
 claim 的状态副作用和 status transition graph 混进同一张 enforcement 表会让"合法转换"失真:这张表
-只描述 `task status`,claim / unclaim 是另一组动词。
+只描述 `task status`,claim / unclaim 是另一组动词。**human 的指派不在此列**——它是纯归属写,不推进
+状态(§4.4)。
 
 语义:
 - **`in_review` = 交给 human 校验**——agent **不自行**推到 `done`;human 在 task 视图 approve
@@ -69,7 +70,7 @@ claim 的状态副作用和 status transition graph 混进同一张 enforcement 
 | 主体 | `update_status`(`updateStatusAgent`)| `unclaim`(`unclaimAgent`)|
 |------|------|------|
 | **当前 assignee**(`task_assignee_agent_id === self`)| ✔ | ✔ |
-| **creator-self-stale**:自己创建、且**当前 unassigned**(`assignee IS NULL` 且 `from_kind='agent'` 且 creator 是 self)| ✔ —— 推进/收拾自己遗留的无主 task | ✘ `not_assignee`(unclaim 严格要求 assignee=self,无主 task 无从 unclaim)|
+| **creator-self-stale**:自己创建、且**当前无主**(**两个 assignee 列都为 null**,见 §4.5;且 `from_kind='agent'` 且 creator 是 self)| ✔ —— 推进/收拾自己遗留的无主 task | ✘ `not_assignee`(unclaim 严格要求 assignee=self,无主 task 无从 unclaim)|
 | 其它 non-assignee agent | ✘ `not_assignee` | ✘ `not_assignee` |
 | **Human** | ✔(不受 assignee-only 约束,§4.3)| ✔ |
 
@@ -110,6 +111,51 @@ Agent 在 session A 里 `list_tasks` 看到 session B 的 `#5`,若尝试 claim,b
 human 是"上帝视角"——`in_review → done` 是本设计的核心**审批入口**;强制 unclaim 一个卡死的
 task 是合理运维。Agent 的 assignee-only 限制是防 agent 之间互相踩,不是防 human。这是
 Human/Agent 同构模型下"同一操作、不同权限面"的一个实例,不是给 human 开的特例分支。
+
+### 4.4 归属写与生命周期写是两件事(human 入口的精确合同)
+
+human 的"指派 / 改派 / 清空 assignee"是**纯归属写**:只动 assignee,`status` 与 `closed_at` 一律不碰;
+human 改 status 也只动 status,不要求有 assignee。**两个字段正交**,各只有一条写路径:
+
+| 动作 | 端点 | 写什么 | 拒绝条件 |
+|---|---|---|---|
+| 指派 / 改派 | `POST /api/tasks/:taskId/claim` `{agent_id}`(**必填**)| assignee | `done` / `closed`(`task_done` / `task_closed`);assignee 非该 task conversation 成员 |
+| 清空 assignee | `POST /api/tasks/:taskId/unclaim` | assignee 置空 | `done` / `closed`(同上) |
+| 改状态 | `POST /api/tasks/:taskId/status` `{status}` | status(+ `closed_at`)| 与当前同态(`already_at_status`)|
+
+四条判据:
+
+- **不许隐式改生命周期。** modal 侧栏把 Assignee 与 Status 画成两行独立控件:用户点 Assignee 却看到
+  Status 自己变,模型就是假的。`in_review` 悄悄掉回 `todo` 会从 human 的审批队列里消失,`done` 上更是
+  直接把任务重开。无主的 `in_progress` / `in_review` 不是死状态——`assignSelf` 只要求
+  **两个 assignee 列都为 null** 且 `status NOT IN ('done','closed')`(见 §4.5),别的 agent 照样能接。
+- **也不许反向加半条不变量。** 不规定"`in_progress` 必须有 assignee":那要一次裁清 in_review/done/
+  closed、any→any、历史脏数据与所有入口,是另一次完整状态机改造,不在 UI 里偷偷加。
+- **终态的归属是冻结的,而且必须服务端拒绝。** human claim 与 agent unclaim 本来就拒
+  `done`/`closed`,human 清空补齐这一格后规则是同一条:改派前先把状态挪出终态。UI 侧的只读
+  gate 是体验,不是闸门——渲染与点击之间 task 可能被远端改成 `done`。
+- **agent 的 `claim` / `unclaim` 不是同一组动作。** agent 自接 = 占位 + 开工(`todo` 会被顶成
+  `in_progress`;无主的 `in_progress` / `in_review` 保持原状态),agent 自释放 = 放弃 + 归还任务池
+  (清 assignee **并**回 `todo`,§6 的"agent 离开 channel 自动 unclaim 回 todo"是同一含义)。它们是
+  **工作流动词**,联动状态是本意;human 的是**管理动词**,只动归属。
+  因此 store 层是三个具名写:`assignSelf`(agent 自接,带状态推进)、`releaseToTodo`(agent 自释放)、
+  `setAssignee`(human 归属写,`null` 即清空)。同名不同义的写不共用一条 SQL。
+
+### 4.5 "无主"永远是两列都为 null(assignee 只有一个,列有两个)
+
+`tasks` 有 `assignee_agent_id` 与 `assignee_user_id` 两列,schema CHECK 保证**最多一列非空**,DTO 只
+暴露一个 `assignee`。live 代码只写 agent 列(human 归属写还会把 user 列清空),但 `assignee_user_id`
+非空的行是**合法持久事实**——从旧模型迁移过来的。因此任何"这个 task 无主吗"的判据必须查**两列**:
+
+- `assignSelf` 的 WHERE 两列都要求 null。否则 agent claim 会往一条 user-assigned 行上再写一个 agent
+  assignee,直接撞 CHECK,以裸 SQLite 异常(500)冒出来,而不是 typed 失败。
+- claim 落空后的分类(`readAssignment`)也读两列:任一非空 ⇒ `already_claimed`。只看 agent 列会把
+  "被 human assignee 占着"报成 `task_done`——一句假话。reason 不必泄露/发明 agent id,generic
+  "already assigned" 即可。
+- `updateStatusAgent` 的 creator-self-stale 回退同理:它只服务**真正无主**的 task,不能因为 creator
+  恰好是自己就越过一个 human assignee。
+
+一句话:**"assignee 只有一个"是领域事实,"列有两个"是存储事实**;凡把后者当前者的地方都是 bug。
 
 ---
 

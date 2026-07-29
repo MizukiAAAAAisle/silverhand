@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api, apiUpload, fetchAttachmentBytes } from './api';
+import {
+  ApiError,
+  api,
+  apiUpload,
+  fetchAttachmentBytes,
+  toPathSegment,
+} from './api';
 
 const silverhand = {
   getBackendInfo: vi.fn(),
@@ -327,5 +333,38 @@ describe('fetchAttachmentBytes — no-blob-URL contract for open/save paths', ()
     await expect(fetchAttachmentBytes('missing')).rejects.toBeInstanceOf(
       ApiError,
     );
+  });
+});
+
+// A request path is built from ids that can arrive out of a URL the user pasted,
+// so "stays inside one path segment" is a security contract, not tidiness: main
+// resolves the path with `new URL(path, backendUrl)`, which applies WHATWG
+// normalization. The check is a SHAPE check on purpose — the renderer does not
+// re-implement the backend's id grammar.
+describe('toPathSegment', () => {
+  it('passes an ordinary id through', () => {
+    expect(toPathSegment('kQ7v_2bXaZ0mAbCd')).toBe('kQ7v_2bXaZ0mAbCd');
+  });
+
+  it('escapes separators so they cannot open a segment or a query', () => {
+    expect(toPathSegment('a/b')).toBe('a%2Fb');
+    expect(toPathSegment('a?b=1')).toBe('a%3Fb%3D1');
+    expect(toPathSegment('a#b')).toBe('a%23b');
+  });
+
+  it('rejects the segments that normalization would erase or escape', () => {
+    // `encodeURIComponent` leaves both of these untouched, so encoding alone is
+    // a false fix: `/api/tasks/..` resolves to `/api/`.
+    expect(toPathSegment('.')).toBeNull();
+    expect(toPathSegment('..')).toBeNull();
+    // Empty would drop the segment entirely, collapsing onto the collection.
+    expect(toPathSegment('')).toBeNull();
+  });
+
+  it('renders percent-encoded dot segments inert instead of trusting them', () => {
+    // WHATWG reads `%2e%2e` as a dot segment too — but `%` is itself escaped, so
+    // the pasted spelling can never reach the parser as one.
+    expect(toPathSegment('%2E%2E')).toBe('%252E%252E');
+    expect(toPathSegment('..%2F..')).toBe('..%252F..');
   });
 });

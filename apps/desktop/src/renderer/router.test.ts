@@ -245,78 +245,63 @@ describe('buildChannelPathPreservingSide — view-in-channel keeps side overlay'
   });
 });
 
-describe('parseRouteState — ?task=<n> focused-task pointer (PR-4 commit 2)', () => {
-  // The drawer reads `focusedTaskNumber` to scroll-and-highlight the
-  // target row. Validation lives here so the drawer stays dumb: it only
-  // ever sees a positive integer or null. Anything else (NaN, zero,
-  // negative, alphanumeric, empty) coerces to null so we never try to
-  // focus a row that can't exist.
-  it('parses a positive integer from ?task=<n>', () => {
-    const r = parseRouteState('/chat/w/w-1/c/c-a', '?task=42');
-    expect(r.focusedTaskNumber).toBe(42);
+describe('parseRouteState — ?task=<task_id> detail pointer (#task:1715)', () => {
+  // `?task` carries the task IDENTITY, not its per-workspace number: the
+  // detail modal is an app-level surface reachable from any workspace, so an
+  // id is the whole coordinate while a number would need a second axis.
+  // Consequence for parsing: the value is OPAQUE. There is nothing to
+  // validate beyond "present and non-empty" — an unresolvable id is the
+  // modal's not-found state, not a pointer the router may silently discard.
+  it('carries the id from ?task=<task_id> verbatim', () => {
+    const r = parseRouteState('/chat/w/w-1/c/c-a', '?task=t-abc123');
+    expect(r.taskDetailId).toBe('t-abc123');
   });
 
-  it('coerces non-numeric / zero / negative / empty to null', () => {
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=').focusedTaskNumber).toBeNull();
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=abc').focusedTaskNumber).toBeNull();
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=0').focusedTaskNumber).toBeNull();
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=-3').focusedTaskNumber).toBeNull();
+  it('keeps an id the viewer cannot resolve — the modal explains it', () => {
+    // Dropping it here would strip the pointer the user just clicked and
+    // leave them with no account of what happened.
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=deleted-task').taskDetailId)
+      .toBe('deleted-task');
   });
 
-  it('rejects mixed-suffix / decimal / leading-zero forms (Cindy review of 80f544e)', () => {
-    // `parseInt` would silently turn `12abc` into 12 and `1.5` into 1,
-    // both pointing at a row the user did not ask for. Strict
-    // `/^[1-9]\d*$/` validation refuses anything that isn't a clean
-    // positive-integer string. `01` rejects so URLs round-trip
-    // unambiguously with the `String(taskNumber)` writer.
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=12abc').focusedTaskNumber)
-      .toBeNull();
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=1.5').focusedTaskNumber)
-      .toBeNull();
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=01').focusedTaskNumber)
-      .toBeNull();
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=  7  ').focusedTaskNumber)
-      .toBeNull();
-  });
-
-  it('omits ?task entirely → null', () => {
-    expect(parseRouteState('/chat/w/w-1/c/c-a', '').focusedTaskNumber).toBeNull();
+  it('treats an empty value and an absent param alike → null', () => {
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '?task=').taskDetailId).toBeNull();
+    expect(parseRouteState('/chat/w/w-1/c/c-a', '').taskDetailId).toBeNull();
   });
 
   it('coexists with ?side and ?fullscreen — independent dimensions', () => {
-    // Drawer focus and side overlay are orthogonal URL dimensions; both
-    // must survive parsing. The drawer auto-opens via App.tsx based on
-    // `focusedTaskNumber`, the side pane via `sideConversationId`.
+    // The detail modal, the side overlay, and fullscreen are orthogonal URL
+    // dimensions; all three must survive parsing.
     const r = parseRouteState(
       '/chat/w/w-1/c/c-a',
-      '?side=c-other&task=7&fullscreen=1',
+      '?side=c-other&task=t-7&fullscreen=1',
     );
-    expect(r.focusedTaskNumber).toBe(7);
+    expect(r.taskDetailId).toBe('t-7');
     expect(r.sideConversationId).toBe('c-other');
     expect(r.fullscreen).toBe(true);
   });
 });
 
 describe('withTaskQuery — URL writer for openTask / closeTask', () => {
-  it('writes ?task=<n> on a bare path', () => {
-    expect(withTaskQuery('/chat/w/w-1/c/c-a', '', 5)).toBe(
-      '/chat/w/w-1/c/c-a?task=5',
+  it('writes ?task=<task_id> on a bare path', () => {
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '', 't-5')).toBe(
+      '/chat/w/w-1/c/c-a?task=t-5',
     );
   });
 
   it('overwrites an existing ?task', () => {
-    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=3', 9)).toBe(
-      '/chat/w/w-1/c/c-a?task=9',
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=t-3', 't-9')).toBe(
+      '/chat/w/w-1/c/c-a?task=t-9',
     );
   });
 
   it('strips ?task on close, leaving other params intact', () => {
-    // closeTask must drop only `?task` — `?side`, `?fullscreen`, and
-    // any unrelated params keep their state. The drawer's open/closed
+    // closeTask must drop only `?task` — `?side`, `?fullscreen`, and any
+    // unrelated params keep their state. The tasks drawer's open/closed
     // status is React state, decoupled from this URL pointer.
     const out = withTaskQuery(
       '/chat/w/w-1/c/c-a',
-      '?side=c-other&task=12&fullscreen=1',
+      '?side=c-other&task=t-12&fullscreen=1',
       null,
     );
     expect(out).toContain('side=c-other');
@@ -325,54 +310,50 @@ describe('withTaskQuery — URL writer for openTask / closeTask', () => {
   });
 
   it('returns the bare path when no params remain after close', () => {
-    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=7', null)).toBe(
+    expect(withTaskQuery('/chat/w/w-1/c/c-a', '?task=t-7', null)).toBe(
       '/chat/w/w-1/c/c-a',
     );
   });
 
   it('preserves unrelated query params on open', () => {
-    const out = withTaskQuery(
-      '/chat/w/w-1/c/c-a',
-      '?utm_source=test',
-      4,
-    );
+    const out = withTaskQuery('/chat/w/w-1/c/c-a', '?utm_source=test', 't-4');
     expect(out).toContain('utm_source=test');
-    expect(out).toContain('task=4');
+    expect(out).toContain('task=t-4');
   });
 });
 
 describe('buildTaskOpenUrl — openTask URL writer', () => {
   // Mirrors `buildSideOpenUrl` for sigil clicks: additive write of
-  // `?task=<n>` with everything else preserved. Unlike `openSide` we
-  // do NOT strip `?fullscreen` — focusing a task in the drawer is
-  // independent of whichever pane is fullscreen, and stripping it
-  // would yank the user out of a fullscreen view they were reading.
+  // `?task=<task_id>` with everything else preserved. Unlike `openSide` we
+  // do NOT strip `?fullscreen` — opening a task's detail is independent of
+  // whichever pane is fullscreen, and stripping it would yank the user out
+  // of a fullscreen view they were reading.
 
-  it('writes ?task=<n> on a bare path', () => {
-    expect(buildTaskOpenUrl('/chat/w/w-1/c/c-a', '', 7)).toBe(
-      '/chat/w/w-1/c/c-a?task=7',
+  it('writes ?task=<task_id> on a bare path', () => {
+    expect(buildTaskOpenUrl('/chat/w/w-1/c/c-a', '', 't-7')).toBe(
+      '/chat/w/w-1/c/c-a?task=t-7',
     );
   });
 
-  it('preserves ?side and ?fullscreen — drawer focus is orthogonal', () => {
+  it('preserves ?side and ?fullscreen — the modal is orthogonal', () => {
     const out = buildTaskOpenUrl(
       '/chat/w/w-1/c/c-a',
       '?side=c-other&fullscreen=1',
-      11,
+      't-11',
     );
     expect(out).toContain('side=c-other');
     expect(out).toContain('fullscreen=1');
-    expect(out).toContain('task=11');
+    expect(out).toContain('task=t-11');
   });
 
   it('overwrites a stale ?task', () => {
     const out = buildTaskOpenUrl(
       '/chat/w/w-1/c/c-a',
-      '?task=3&utm_source=test',
-      8,
+      '?task=t-3&utm_source=test',
+      't-8',
     );
-    expect(out).toContain('task=8');
-    expect(out).not.toContain('task=3');
+    expect(out).toContain('task=t-8');
+    expect(out).not.toContain('task=t-3');
     expect(out).toContain('utm_source=test');
   });
 });

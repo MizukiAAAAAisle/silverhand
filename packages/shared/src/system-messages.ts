@@ -58,9 +58,12 @@ export const SYSTEM_SUBTYPES = [
 export type SystemSubtype = typeof SYSTEM_SUBTYPES[number];
 
 /** Task mutation kinds — drives `taskSystemSubtype(kind)` → `task_${kind}`.
- *  `edit` is a definition change (title/content), distinct from the workflow
- *  transitions (claim/unclaim/status): its event exists so an agent building to
- *  the task's spec learns the definition changed and re-reads `task detail`. */
+ *  `edit` is a definition change (title/content), distinct from the mutations
+ *  that touch the task's workflow or ownership (claim/unclaim/status): its event
+ *  exists so an agent building to the task's spec learns the definition changed
+ *  and re-reads `task detail`. Note `claim`/`unclaim` can move the workflow only
+ *  for an agent actor — the same kinds are pure ownership writes when a human
+ *  performs them (see `TaskSystemMetadataSchema`). */
 export const TASK_MUTATION_KINDS = ['create', 'claim', 'unclaim', 'status', 'edit'] as const;
 export type TaskMutationKind = typeof TASK_MUTATION_KINDS[number];
 
@@ -237,14 +240,29 @@ export function readConversationMemberChangeMetadata(
 
 /**
  * Metadata shape for `task_create` / `task_claim` / `task_unclaim` /
- * `task_status` / `task_edit` system messages. The `task_status` field is the
- * status snapshot AFTER this mutation — the event TYPE is `subtype`. Examples:
+ * `task_status` / `task_edit` system messages. Two rules hold for EVERY event:
+ * `subtype` names the ACTION, and `task_status` is the status snapshot AFTER
+ * the mutation. **No branch lets you derive the prior status from `subtype`** —
+ * the same subtype means different things per `actor.kind`, and even the agent's
+ * workflow verbs accept several prior states:
  *
  *  - `subtype = task_create`: genesis event; `task_status = 'todo'`.
- *  - `subtype = task_claim`: prior state was `todo` (claim's domain);
- *    `task_status = 'in_progress'` (the post-state).
- *  - `subtype = task_unclaim`: prior state was `in_progress`;
- *    `task_status = 'todo'` (the post-state).
+ *  - `subtype = task_claim`, `actor.kind = 'agent'`: the agent's self-claim, a
+ *    workflow verb. It accepts any unassigned non-terminal task: a `todo` task
+ *    is bumped to `in_progress`, while `in_progress` / `in_review` are left as
+ *    they are. So `task_status = 'in_progress'` is the common case, not the
+ *    contract — read the field, don't assume the prior was `todo`.
+ *  - `subtype = task_claim`, `actor.kind = 'user'`: a human assign / reassign.
+ *    This is an OWNERSHIP write: `task_assignee` is the new owner and
+ *    `task_status` is the UNCHANGED current status (any non-terminal value).
+ *    Not a transition.
+ *  - `subtype = task_unclaim`, `actor.kind = 'agent'`: the agent's self-release,
+ *    a workflow verb — it returns the task to the pool, so
+ *    `task_status = 'todo'` and `task_assignee = null`. The prior status was any
+ *    non-terminal state the agent was assigned to; it is NOT carried.
+ *  - `subtype = task_unclaim`, `actor.kind = 'user'`: a human unassign — an
+ *    OWNERSHIP write. `task_assignee = null` and `task_status` is the UNCHANGED
+ *    current status.
  *  - `subtype = task_status`: arbitrary transition; the prior state is
  *    NOT in metadata — needs back-reference to the previous task system
  *    message if a future view wants to render a `before → after` diff.
@@ -253,6 +271,11 @@ export function readConversationMemberChangeMetadata(
  *    transition. The metadata deliberately carries NO body/content — a reader
  *    (or a woken assignee) pulls the current definition via `task detail`.
  *    Fired ONLY on a real canonical change; a same-value save emits nothing.
+ *
+ * The human/agent split above is the wire face of `docs/tasks-design.md §4.4`:
+ * a human's assign / unassign touches ownership only; only the agent's own
+ * claim / unclaim may move the workflow at all. Legacy events predating the
+ * actor field have no `actor.kind` to branch on — degrade, don't guess.
  *
  * `task_id` (v60+) is the canonical task-aggregate id for per-task event
  * lookup. The legacy `task_message_id` (pre-v60 events) held the old
@@ -264,8 +287,8 @@ export function readConversationMemberChangeMetadata(
 export const TaskSystemMetadataSchema = z.object({
   subtype: z.enum(TASK_SUBTYPES),
   task_number: z.number(),
-  /** Status snapshot AFTER this mutation. The event type is `subtype`,
-   *  not this field — see schema docstring for prior-state semantics. */
+  /** Status snapshot AFTER this mutation. The event type is `subtype`, not this
+   *  field, and no subtype implies a prior status — see the schema docstring. */
   task_status: TaskStatusSchema,
   /** The task identity (`tasks.id`) this event belongs to — the canonical key
    *  for opening the task from its system event. New producers always write it.

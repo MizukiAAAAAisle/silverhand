@@ -460,10 +460,40 @@ describe('TaskService.claimTask — agent actor', () => {
       t.cleanup();
     }
   });
+  it('agent claim on a migrated user-assigned row → already_claimed, no write, no broadcast', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.bob.id, 'x');
+      const id = taskId(created);
+      // A user assignee only exists on migrated rows, but it is a legal
+      // persisted fact: the row HAS an owner. Claiming must fail typed, not
+      // write a second assignee onto the row (schema CHECK → raw SQLite error).
+      t.db.prepare(`UPDATE tasks SET assignee_user_id = 'local' WHERE id = ?`).run(id);
+
+      const seen: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => seen.push(e.kind));
+      try {
+        const r = await t.service.claimTask({
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+        });
+        expect(r.success).toBe(false);
+        expect(r.code).toBe('already_claimed');
+      } finally {
+        unsub();
+      }
+      const fresh = refetch(t, id);
+      expect(fresh?.assignee?.type).toBe('user');
+      expect(fresh?.status).toBe('todo');
+      expect(seen).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
 });
 
 describe('TaskService.claimTask — user actor', () => {
-  it('user claim with agentId on todo task → status=in_progress, assignee set', async () => {
+  it('user claim with agentId on todo task → assignee set, status STAYS todo', async () => {
     const t = bootstrap();
     try {
       const created = await createTask(t, t.alice.id, 'x');
@@ -475,26 +505,58 @@ describe('TaskService.claimTask — user actor', () => {
       });
       expect(r.success).toBe(true);
       const fresh = refetch(t, id);
-      expect(fresh?.status).toBe('in_progress');
+      // Assignee and Status are orthogonal on the human board: assigning is an
+      // ownership write, it does not start the work.
+      expect(fresh?.status).toBe('todo');
       expect(fresh?.assignee?.id).toBe(t.bob.id);
     } finally {
       t.cleanup();
     }
   });
 
-  it('user claim WITHOUT agentId on todo task → status lifts to in_progress, assignee=null', async () => {
+  it('user claim replaces a legacy user assignee (never two assignees on a row)', async () => {
     const t = bootstrap();
     try {
       const created = await createTask(t, t.alice.id, 'x');
       const id = taskId(created);
+      // Migrated rows are the only source of a user assignee; the schema CHECK
+      // allows at most one, so the assignment write has to clear the other col.
+      t.db
+        .prepare(`UPDATE tasks SET assignee_user_id = 'local' WHERE id = ?`)
+        .run(id);
+
       const r = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
         by: { taskId: id },
+        assignee: { agentId: t.bob.id },
       });
       expect(r.success).toBe(true);
       const fresh = refetch(t, id);
-      expect(fresh?.status).toBe('in_progress');
-      expect(fresh?.assignee).toBe(null);
+      expect(fresh?.assignee?.type).toBe('agent');
+      expect(fresh?.assignee?.id).toBe(t.bob.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('user claim on a `done` task → task_done (assignment is frozen in terminal states)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
+      await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        status: 'done',
+      });
+      const r = await t.service.claimTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        assignee: { agentId: t.bob.id },
+      });
+      expect(r.success).toBe(false);
+      expect(r.code).toBe('task_done');
+      expect(refetch(t, id)?.assignee).toBe(null);
     } finally {
       t.cleanup();
     }
@@ -634,31 +696,106 @@ describe('TaskService.unclaimTask', () => {
     }
   });
 
-  it('user unclaim forces status=todo regardless of prior status', async () => {
+  it('user unclaim clears the assignee and leaves a non-terminal status untouched', async () => {
+    for (const status of ['todo', 'in_progress', 'in_review'] as const) {
+      const t = bootstrap();
+      try {
+        const created = await createTask(t, t.alice.id, 'x');
+        const id = taskId(created);
+        // Agent claim assigns and lifts todo → in_progress; the human status
+        // override then parks the task in the status under test (the assignee
+        // survives a status write).
+        await t.service.claimTask({
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+        });
+        if (status !== 'in_progress') {
+          await t.service.updateStatus({
+            actor: { kind: 'user', userId: 'local' },
+            by: { taskId: id },
+            status,
+          });
+        }
+        expect(refetch(t, id)?.assignee?.id).toBe(t.alice.id);
+
+        const r = await t.service.unclaimTask({
+          actor: { kind: 'user', userId: 'local' },
+          by: { taskId: id },
+        });
+        expect(r).toEqual({ success: true });
+        const fresh = refetch(t, id);
+        expect(fresh?.assignee).toBe(null);
+        expect(fresh?.status).toBe(status);
+        expect(fresh?.closed_at).toBe(null);
+      } finally {
+        t.cleanup();
+      }
+    }
+  });
+
+  it('user unclaim clears a user assignee too (one DTO field, one write)', async () => {
     const t = bootstrap();
     try {
       const created = await createTask(t, t.alice.id, 'x');
       const id = taskId(created);
-      await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { taskNumber: 1 },
-      });
-      // promote to in_review
-      await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        by: { taskNumber: 1 },
-        status: 'in_review',
-      });
+      // Only migrated rows carry a user assignee — no live write path sets it,
+      // but the DTO still surfaces it as `assignee`, so clearing must reach it.
+      t.db
+        .prepare(
+          `UPDATE tasks SET assignee_agent_id = NULL, assignee_user_id = 'local' WHERE id = ?`,
+        )
+        .run(id);
+      expect(refetch(t, id)?.assignee?.type).toBe('user');
+
       const r = await t.service.unclaimTask({
         actor: { kind: 'user', userId: 'local' },
         by: { taskId: id },
       });
-      expect(r.success).toBe(true);
-      const fresh = refetch(t, id);
-      expect(fresh?.status).toBe('todo');
-      expect(fresh?.assignee).toBe(null);
+      expect(r).toEqual({ success: true });
+      expect(refetch(t, id)?.assignee).toBe(null);
     } finally {
       t.cleanup();
+    }
+  });
+
+  it('user unclaim on a terminal task is refused: no write, no broadcast', async () => {
+    for (const [status, code] of [
+      ['done', 'task_done'],
+      ['closed', 'task_closed'],
+    ] as const) {
+      const t = bootstrap();
+      try {
+        const created = await createTask(t, t.alice.id, 'x');
+        const id = taskId(created);
+        await t.service.claimTask({
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+        });
+        await t.service.updateStatus({
+          actor: { kind: 'user', userId: 'local' },
+          by: { taskId: id },
+          status,
+        });
+        const before = refetch(t, id);
+
+        const seen: string[] = [];
+        const unsub = t.events.subscribe(t.channel.id, e => seen.push(e.kind));
+        const r = await t.service.unclaimTask({
+          actor: { kind: 'user', userId: 'local' },
+          by: { taskId: id },
+        });
+        unsub();
+
+        expect(r.success).toBe(false);
+        expect(r.code).toBe(code);
+        expect(seen).toEqual([]);
+        const after = refetch(t, id);
+        expect(after?.assignee?.id).toBe(t.alice.id);
+        expect(after?.status).toBe(status);
+        expect(after?.closed_at).toBe(before?.closed_at ?? null);
+      } finally {
+        t.cleanup();
+      }
     }
   });
 });
@@ -979,6 +1116,7 @@ describe('TaskService.list / getTaskDetail', () => {
       const claim = await t.service.claimTask({
         actor: { kind: 'user', userId: 'local' },
         by: { taskId: hiddenId },
+        assignee: { agentId: t.bob.id },
       });
       expect(claim.success).toBe(false);
       expect(claim.code).toBe('task_not_found');
@@ -1468,6 +1606,76 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
     }
   });
 
+  it('task_claim by an agent on an in_review task reports in_review (no fixed lifecycle pair)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.bob.id, 'task-claim-in-review-meta');
+      const id = taskId(created);
+      // `assignSelf` only bumps a `todo` task; an unassigned `in_review` task is
+      // claimable and keeps its status. So the wire fact must be read from
+      // `task_status`, never derived from the `task_claim` subtype.
+      await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        status: 'in_progress',
+      });
+      await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        status: 'in_review',
+      });
+
+      const r = await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      expect(r.success).toBe(true);
+
+      const rows = fetchSystemMetadata(t, 'task_claim');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta!.task_status).toBe('in_review');
+      expect(meta!.task_assignee!.id).toBe(t.alice.id);
+      expect(meta!.actor.kind).toBe('agent');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('task_unclaim by a user reports the UNCHANGED status (assignment-only write)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.bob.id, 'task-unassign-meta');
+      const id = taskId(created);
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        status: 'in_review',
+      });
+
+      await t.service.unclaimTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+      });
+
+      const rows = fetchSystemMetadata(t, 'task_unclaim');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta).not.toBeNull();
+      // The wire fact agents read must match the row: clearing the assignee
+      // does not rewind the workflow, so this is `in_review`, not `todo`.
+      expect(meta!.task_status).toBe('in_review');
+      expect(meta!.task_assignee).toBeNull();
+      expect(meta!.actor.kind).toBe('user');
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('task claim/status system messages inherit the task thread stream', async () => {
     const t = bootstrap();
     try {
@@ -1827,6 +2035,13 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         by: { taskId: id },
         assignee: { agentId: t.alice.id },
       });
+      // Assignment is ownership only, so the human also moves the lifecycle —
+      // two orthogonal writes (§4.4).
+      await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        status: 'in_progress',
+      });
       // alice advances → assignee path
       const r = await t.service.updateStatus({
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
@@ -1834,6 +2049,43 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         status: 'in_review',
       });
       expect(r.success).toBe(true);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('updateStatus: creator-self fallback does NOT reach past a migrated user assignee', async () => {
+    const t = bootstrap();
+    try {
+      // alice creates the task, so the creator-self branch would otherwise
+      // apply — but the row carries a (migrated) user assignee, i.e. it has an
+      // owner. "Unassigned" means BOTH assignee columns null (§4.5).
+      const created = await createTask(t, t.alice.id, 'creator stale but user-owned');
+      const id = taskId(created);
+      t.db
+        .prepare(
+          `UPDATE tasks SET assignee_agent_id = NULL, assignee_user_id = 'local',
+                            status = 'in_progress' WHERE id = ?`,
+        )
+        .run(id);
+
+      const seen: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => seen.push(e.kind));
+      try {
+        const r = await t.service.updateStatus({
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+          status: 'done',
+        });
+        expect(r.success).toBe(false);
+        expect(r.code).toBe('not_assignee');
+      } finally {
+        unsub();
+      }
+      const fresh = refetch(t, id);
+      expect(fresh?.status).toBe('in_progress');
+      expect(fresh?.assignee?.type).toBe('user');
+      expect(seen).toEqual([]);
     } finally {
       t.cleanup();
     }

@@ -328,7 +328,8 @@ export class TaskService {
         (input as Extract<ClaimTaskInput, { actor: AgentActor }>).workspaceSelector,
       );
     }
-    return this.claimTaskUser(input.actor, input.by as UserTaskRef, input.assignee);
+    const userInput = input as Extract<ClaimTaskInput, { actor: UserActor }>;
+    return this.claimTaskUser(userInput.actor, userInput.by, userInput.assignee);
   }
 
   private async claimTaskAgent(
@@ -393,16 +394,23 @@ export class TaskService {
       const changes = this.store.assignSelf(row.id, actor.agentId);
       if (changes === 0) {
         const cur = this.store.readAssignment(row.id);
-        const code: ClaimErrorCode = cur?.assignee_agent_id
+        // Either assignee column makes the task taken. A user assignee only
+        // exists on migrated rows, and its identity is not this agent's
+        // business — report the generic "already assigned" fact.
+        const takenByAgent = cur?.assignee_agent_id ?? null;
+        const taken = Boolean(takenByAgent) || Boolean(cur?.assignee_user_id);
+        const code: ClaimErrorCode = taken
           ? 'already_claimed'
           : cur?.status === 'closed'
             ? 'task_closed'
             : 'task_done';
         return { failure: failClaim({
           code,
-          reason: cur?.assignee_agent_id
-            ? `already claimed by ${cur.assignee_agent_id}`
-            : `task is ${cur?.status ?? 'unknown'}`,
+          reason: takenByAgent
+            ? `already claimed by ${takenByAgent}`
+            : taken
+              ? 'task is already assigned'
+              : `task is ${cur?.status ?? 'unknown'}`,
           taskNumber: row.task_number,
         }) };
       }
@@ -454,7 +462,7 @@ export class TaskService {
   private async claimTaskUser(
     actor: UserActor,
     by: UserTaskRef,
-    assignee: { agentId: string } | undefined,
+    assignee: { agentId: string },
   ): Promise<ClaimResultEntry> {
     type UserClaimTxOut =
       | { failure: ClaimResultEntry }
@@ -472,22 +480,19 @@ export class TaskService {
           taskNumber: row.task_number,
         }) };
       }
-      if (assignee) {
-        if (!this.agents.get(assignee.agentId)) {
-          return { failure: failClaim({
-            code: 'assignee_not_conversation_member',
-            reason: 'agent not found',
-          }) };
-        }
-        if (!this.conversations.getAgent(row.conversation_id, assignee.agentId)) {
-          return { failure: failClaim({
-            code: 'assignee_not_conversation_member',
-            reason: "agent is not a member of this task's conversation",
-          }) };
-        }
+      if (!this.agents.get(assignee.agentId)) {
+        return { failure: failClaim({
+          code: 'assignee_not_conversation_member',
+          reason: 'agent not found',
+        }) };
       }
-      this.store.setAssignee(row.id, assignee?.agentId ?? null);
-      const nextStatus: TaskStatus = row.status === 'todo' ? 'in_progress' : row.status;
+      if (!this.conversations.getAgent(row.conversation_id, assignee.agentId)) {
+        return { failure: failClaim({
+          code: 'assignee_not_conversation_member',
+          reason: "agent is not a member of this task's conversation",
+        }) };
+      }
+      this.store.setAssignee(row.id, assignee.agentId);
       return {
         success: true,
         conversationId: row.conversation_id,
@@ -496,8 +501,10 @@ export class TaskService {
           taskId: row.id,
           taskNumber: row.task_number,
           title: row.title,
-          status: nextStatus,
-          assignee: assignee ? this.assigneeDtoForAgent(assignee.agentId) : null,
+          // Assignment-only write: the human board edits Assignee and Status as
+          // two orthogonal fields, so assigning never advances the workflow.
+          status: row.status,
+          assignee: this.assigneeDtoForAgent(assignee.agentId),
           closedAt: row.closed_at,
           sourceMessageId: row.source_message_id,
           threadRootId: row.thread_root_id,
@@ -509,10 +516,12 @@ export class TaskService {
 
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
-      const sysMessage = assignee
-        ? `task #${txOut.args.taskNumber} assigned to @${this.agentName(assignee.agentId)} (by user)`
-        : `task #${txOut.args.taskNumber} unassigned (by user)`;
-      await this.broadcastFresh(conversation, txOut.args, actor, sysMessage);
+      await this.broadcastFresh(
+        conversation,
+        txOut.args,
+        actor,
+        `task #${txOut.args.taskNumber} assigned to @${this.agentName(assignee.agentId)} (by user)`,
+      );
     }
 
     return { success: true, task_number: txOut.args.taskNumber, id: txOut.args.taskId };
@@ -579,7 +588,7 @@ export class TaskService {
           reason: row.status === 'closed' ? 'task is closed' : 'task is done',
         } };
       }
-      this.store.unassign(row.id);
+      this.store.releaseToTodo(row.id);
       return {
         success: true,
         ownerConversationId: row.conversation_id,
@@ -634,10 +643,20 @@ export class TaskService {
       if (!row || !userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
-      if (row.status === 'closed') {
-        return { failure: { success: false, code: 'task_closed', reason: 'task is closed' } };
+      // A terminal task's assignment is frozen for every actor: human `claim`
+      // and agent `unclaim` already refuse `done`/`closed`, and the renderer's
+      // read-only gate cannot be the guard (the task can reach `done` remotely
+      // between render and click). Move the status out of terminal first.
+      if (row.status === 'done' || row.status === 'closed') {
+        return { failure: {
+          success: false,
+          code: row.status === 'closed' ? 'task_closed' : 'task_done',
+          reason: row.status === 'closed' ? 'task is closed' : 'task is done',
+        } };
       }
-      this.store.unassign(row.id);
+      // Assignment-only write: `status` / `closed_at` are deliberately left
+      // untouched, so the event payload echoes the row as it stands.
+      this.store.setAssignee(row.id, null);
       return {
         success: true,
         conversationId: row.conversation_id,
@@ -646,9 +665,9 @@ export class TaskService {
           taskId: row.id,
           taskNumber: row.task_number,
           title: row.title,
-          status: 'todo',
+          status: row.status,
           assignee: null,
-          closedAt: null,
+          closedAt: row.closed_at,
           sourceMessageId: row.source_message_id,
           threadRootId: row.thread_root_id,
         },
@@ -660,7 +679,7 @@ export class TaskService {
     const conversation = this.conversations.get(txOut.conversationId);
     if (conversation) {
       await this.broadcastFresh(conversation, txOut.args, actor,
-        `task #${txOut.args.taskNumber} unclaimed (by user)`);
+        `task #${txOut.args.taskNumber} unassigned (by user)`);
     }
 
     return { success: true };
@@ -719,13 +738,17 @@ export class TaskService {
       if (!row) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
-      // Permission: assignee==self OR (assignee==null AND creator==self AND
+      // Permission: assignee==self OR (unassigned AND creator==self AND
       // creator is an agent). The creator-self branch lets an agent
       // complete/advance its own stale unassigned task without re-claiming; it
       // never matches human-created rows (Cindy `S-RgXd_GWAHu4f0E`).
+      // "Unassigned" is BOTH assignee columns null — a migrated row holding an
+      // `assignee_user_id` has an owner, and the fallback must not reach past a
+      // human assignee just because the creator happens to be this agent.
       const isAssigneeSelf = row.assignee_agent_id === actor.agentId;
       const isCreatorSelfStale =
         row.assignee_agent_id === null &&
+        row.assignee_user_id === null &&
         row.creator_kind === 'agent' &&
         row.creator_agent_id === actor.agentId;
       if (!isAssigneeSelf && !isCreatorSelfStale) {

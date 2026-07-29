@@ -65,7 +65,6 @@ import {
 import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
-import { taskDetailKey } from '@/features/tasks/taskDetail';
 import {
   dispositionSettle,
   ingestMessageProjections,
@@ -508,20 +507,22 @@ function ingestTaskChanged(
   channelId: string,
   task: TaskChangedEvent,
 ): boolean {
-  // The task-by-number DETAIL cache is a SEPARATE projection (task hover/detail
-  // by number), not the message-stream content the resume floor tracks. It is
-  // fired outside the row-patch seam, membership-gated by its OWN cache (no-op /
-  // no bootstrap when absent), and NEVER counted in `applied` — authoritative-on-
-  // open, same class as the reaction reactors-list refresh (#task:1270). Firing
-  // it unconditionally (not behind the mainline gate) drops an incidental
-  // coupling: task detail must update even when the mainline isn't open.
+  // The task-by-number cache is a SEPARATE projection (the inline `#task:<n>`
+  // chip + its hover card), not the message-stream content the resume floor
+  // tracks. It is an ABSOLUTE by-id cache write — no request — fired outside
+  // the row-patch seam, membership-gated by its OWN cache (no-op / no bootstrap
+  // when absent), and NEVER counted in `applied`. Firing it unconditionally (not
+  // behind the mainline gate) drops an incidental coupling: a chip must update
+  // even when the mainline isn't open.
   applyTaskChangedToTaskByNumberCache(qc, task);
-  // Same authoritative-on-open class: an open task detail modal reads a
-  // separate `['task-detail', task_id]` projection. Invalidate it so a
-  // remote edit refreshes the open body; no-op when that cache is
-  // absent (nothing open). Body stays out of the thin event — detail
-  // refetches, matching the existing contract.
-  void qc.invalidateQueries({ queryKey: taskDetailKey(task.task_id), exact: true });
+  // The `['task-detail', task_id]` projection is NOT touched here. Its realtime
+  // owner is `useTaskDetail` (viewer scope), which covers every conversation the
+  // viewer belongs to — a human's detail read gate is conversation membership,
+  // so the viewer frame reaches anything the modal may show, including a task
+  // whose channel has no mounted stream (#task:1715). One projection, one owner:
+  // a second `invalidateQueries` on the same key does not merge — with data
+  // already cached it CANCELS the in-flight refetch and restarts it — so keeping
+  // a copy here would turn every remote edit into a wasted round trip.
   // The inline task chip lives on the SOURCE message (the one the task was
   // created from) — a first-class task is no longer a message row of its own.
   // A source-less task therefore has NO message-stream row to patch: its only

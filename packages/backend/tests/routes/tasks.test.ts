@@ -305,7 +305,7 @@ describe('Tasks (PR-T1)', () => {
     expect(recipients.has(agentIds.bob!)).toBe(true);
   });
 
-  it('human POST /api/tasks/:taskId/claim with no agent_id lifts todo→in_progress, leaves assignee null', async () => {
+  it('human POST /api/tasks/:taskId/claim requires agent_id and assigns WITHOUT touching status', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -318,17 +318,22 @@ describe('Tasks (PR-T1)', () => {
     ).json()) as any;
     const taskId = created.tasks[0].id;
 
+    // `claim` assigns; it is no longer a second way to clear the assignee.
+    const missing = await http(t).post(`/api/tasks/${taskId}/claim`, {});
+    expect(missing.status).toBe(400);
+
     const claim = (await (
-      await http(t).post(`/api/tasks/${taskId}/claim`, {})
+      await http(t).post(`/api/tasks/${taskId}/claim`, { agent_id: agentIds.bob })
     ).json()) as any;
     expect(claim.success).toBe(true);
 
     const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks[0].status).toBe('in_progress');
-    expect(listed.tasks[0].assignee).toBeNull();
+    // Ownership write only — the task is still waiting to be started.
+    expect(listed.tasks[0].status).toBe('todo');
+    expect(listed.tasks[0].assignee?.id).toBe(agentIds.bob);
   });
 
-  it('human POST /api/tasks/:taskId/unclaim forces status=todo even from in_review', async () => {
+  it('human POST /api/tasks/:taskId/unclaim clears the assignee and keeps in_review', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -355,8 +360,36 @@ describe('Tasks (PR-T1)', () => {
     expect(unclaim.success).toBe(true);
 
     const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks[0].status).toBe('todo');
+    expect(listed.tasks[0].status).toBe('in_review');
     expect(listed.tasks[0].assignee).toBeNull();
+  });
+
+  it('human POST /api/tasks/:taskId/unclaim on a done task → 409 task_done, task untouched', async () => {
+    t = buildTestApp();
+    const { sessionId, agentIds } = await setup(t);
+    const h = http(t);
+
+    const created = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'finished' }] },
+      )
+    ).json()) as any;
+    const taskId = created.tasks[0].id;
+    await h.post(
+      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
+      { task_numbers: [1] },
+    );
+    await http(t).post(`/api/tasks/${taskId}/status`, { status: 'done' });
+
+    const res = await http(t).post(`/api/tasks/${taskId}/unclaim`);
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as any;
+    expect(body.code).toBe('task_done');
+
+    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
+    expect(listed.tasks[0].status).toBe('done');
+    expect(listed.tasks[0].assignee?.id).toBe(agentIds.alice);
   });
 
   // Characterization for the P10 internal-agent factory move (#task:981):

@@ -59,11 +59,14 @@ export function createTasksApp(deps: TasksRouteDeps): Hono<AppEnv> {
     const result = await ctx.taskService.claimTask({
       actor: getUserPrincipal(c),
       by: { taskId: c.req.param('taskId') },
-      assignee: parsed.data.agent_id ? { agentId: parsed.data.agent_id } : undefined,
+      assignee: { agentId: parsed.data.agent_id },
     });
     return c.json(result, result.success ? 200 : 409);
   });
 
+  // Clear the assignee. Assignment-only: the task's status and close timestamp
+  // are untouched, and a `done`/`closed` task is refused (409) rather than
+  // silently reopened.
   app.post('/api/tasks/:taskId/unclaim', async c => {
     const result = await ctx.taskService.unclaimTask({
       actor: getUserPrincipal(c),

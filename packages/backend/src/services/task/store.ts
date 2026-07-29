@@ -504,8 +504,12 @@ export class TaskStore {
   // ── Mutation writes (run inside the caller's transaction) ──────────
 
   /** Atomic self-claim: assign the agent + advance a `todo` task to
-   *  `in_progress`, but ONLY while unassigned and not terminal. Returns the
-   *  number of rows changed (0 = lost the race / already claimed / terminal). */
+   *  `in_progress`, but ONLY while unassigned and not terminal. "Unassigned"
+   *  means BOTH assignee columns are null — a migrated row can legally hold an
+   *  `assignee_user_id`, and writing an agent over it would leave two assignees
+   *  on the row (a schema CHECK violation surfacing as a raw SQLite error).
+   *  Returns the number of rows changed (0 = lost the race / already assigned to
+   *  someone / terminal). */
   assignSelf(taskId: string, agentId: string): number {
     const res = prepareObserved(
         this.db,
@@ -515,43 +519,58 @@ export class TaskStore {
              status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END
          WHERE id = ?
            AND assignee_agent_id IS NULL
+           AND assignee_user_id IS NULL
            AND status NOT IN ('done', 'closed')`,
       )
       .run(agentId, taskId);
     return res.changes;
   }
 
-  /** Current assignment snapshot — the claim-miss re-read. */
-  readAssignment(taskId: string): { assignee_agent_id: string | null; status: TaskStatus } | null {
-    const row = prepareObserved<[string], { assignee_agent_id: string | null; status: TaskStatus }>(
+  /** Current assignment snapshot — the claim-miss re-read. Reads BOTH assignee
+   *  columns because either one makes the task "taken": classifying a
+   *  user-assigned row by the agent column alone reports the miss as
+   *  `task_done`, a fact that is simply false. */
+  readAssignment(taskId: string): {
+    assignee_agent_id: string | null;
+    assignee_user_id: string | null;
+    status: TaskStatus;
+  } | null {
+    const row = prepareObserved<
+      [string],
+      { assignee_agent_id: string | null; assignee_user_id: string | null; status: TaskStatus }
+    >(
         this.db,
         'tasks.read_assignment',
-        `SELECT assignee_agent_id, status FROM tasks WHERE id = ?`,
+        `SELECT assignee_agent_id, assignee_user_id, status FROM tasks WHERE id = ?`,
       )
       .get(taskId);
     return row ?? null;
   }
 
-  /** Human assign/unassign: set an arbitrary assignee (or null) + advance a
-   *  `todo` task to `in_progress`. Not conditional — the human path validated
-   *  eligibility already. */
+  /** Human assignment write — ownership ONLY. `agentId === null` clears the
+   *  assignee. `status` / `closed_at` are never touched: "this is (no longer)
+   *  @X's" is not "this work restarted / reopened", so an `in_review` task
+   *  keeps its place in the human approval queue. Both assignee columns are
+   *  written every time — the row must never carry two assignees (the schema
+   *  CHECK), and the DTO exposes a single `assignee`, so a migrated
+   *  user-assigned row has to be overridden / cleared as well. */
   setAssignee(taskId: string, agentId: string | null): void {
     prepareObserved(
         this.db,
         'tasks.set_assignee',
-        `UPDATE tasks
-         SET assignee_agent_id = ?,
-             status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END
-         WHERE id = ?`,
+        `UPDATE tasks SET assignee_agent_id = ?, assignee_user_id = NULL WHERE id = ?`,
       )
       .run(agentId, taskId);
   }
 
-  /** Unclaim: clear the assignee, reset to `todo`, clear any closed timestamp. */
-  unassign(taskId: string): void {
+  /** Agent self-release: drop the assignee AND return the task to the pool
+   *  (`todo`, no close timestamp) — the agent is declaring it stopped working,
+   *  so the workflow rewinds with the assignment. The human board's
+   *  assignment writes go through `setAssignee`, which never does this. */
+  releaseToTodo(taskId: string): void {
     prepareObserved(
         this.db,
-        'tasks.unassign',
+        'tasks.release_to_todo',
         `UPDATE tasks SET assignee_agent_id = NULL, status = 'todo', closed_at = NULL WHERE id = ?`,
       )
       .run(taskId);

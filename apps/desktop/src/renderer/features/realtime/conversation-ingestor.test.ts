@@ -23,6 +23,7 @@ import {
 import { clusterMessagesKey, messagesKey, threadRootKey } from '@/features/channels/hooks';
 import { messageReactorsKey } from '@/features/channels/reaction-hooks';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
+import { taskDetailKey } from '@/features/tasks/taskDetail';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import {
   channelAttachmentsKey,
@@ -1732,6 +1733,46 @@ describe('message-row patch handlers — route through the seam, never hand-pick
       for (const sym of FORBIDDEN) expect(body).not.toContain(sym);
     });
   }
+});
+
+// #task:1715 — `['task-detail', id]` has exactly ONE realtime owner, and it is
+// NOT this ingestor. The open modal's own `useTaskDetail` listener is the writer;
+// it attributes by frame SCOPE (`viewer:<userId>`), so a conversation-scope frame
+// must leave this key completely alone. A second writer is not a harmless extra
+// refresh: `invalidateQueries` defaults to `cancelRefetch: true`, so it cancels
+// and restarts the owner's in-flight refetch on every frame.
+describe('task-detail cache is untouched by conversation-scope frames (#task:1715)', () => {
+  it('neither rewrites nor invalidates the open modal detail entry', () => {
+    const qc = new QueryClient();
+    const seeded = { id: 'task-7', title: 'as painted' };
+    qc.setQueryData(taskDetailKey('task-7'), seeded);
+
+    // Same task, live status change, arriving on the conversation stream.
+    ingestConversationFrame(qc, taskChangedFrame('c1', 'src-1', 6));
+
+    expect(qc.getQueryData(taskDetailKey('task-7'))).toBe(seeded);
+    // The falsifier for the cancel+restart regression: a copied-in
+    // `invalidateQueries` leaves no data trace at all, only this flag.
+    expect(qc.getQueryState(taskDetailKey('task-7'))?.isInvalidated).toBe(false);
+  });
+
+  it('never names the detail key at all (fence against re-adding a second owner)', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('./conversation-ingestor.ts', import.meta.url)),
+      'utf8',
+    );
+    // Comment lines are dropped: the ingestor DOCUMENTS that it leaves
+    // `['task-detail', …]` alone, and that sentence must not read as a violation.
+    const code = source
+      .split('\n')
+      .filter(line => {
+        const t = line.trimStart();
+        return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*');
+      })
+      .join('\n');
+    expect(code).not.toContain('taskDetailKey');
+    expect(code).not.toContain('task-detail');
+  });
 });
 
 function taskChangedFrame(

@@ -1,11 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import dayjs from 'dayjs';
-import { Clock, ExternalLink, Loader2, Pencil, type LucideIcon } from 'lucide-react';
-import {
-  TASK_CONTENT_MAX_LEN,
-  type TaskDetailDto,
-  type TaskSummaryDto,
-} from '@silverhand/shared';
+import { CheckSquare, ExternalLink, Loader2, Pencil } from 'lucide-react';
+import { TASK_CONTENT_MAX_LEN, type TaskDetailDto } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -13,13 +8,25 @@ import {
   DialogHeader,
   DialogTitle,
   dialogCornerButtonClass,
+  DialogCornerButton,
 } from '@/components/ui/dialog';
+import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/input';
-import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge';
+import { MiniIconButton } from '@/components/tasks/MiniIconButton';
+import { TaskDetailMetaPanel } from '@/components/tasks/TaskDetailMetaPanel';
 import { Markdown } from '@/components/chat/Markdown';
-import { useEditTask, useTaskDetail } from '@/features/tasks/hooks';
 import {
+  useAssignTask,
+  useEditTask,
+  useTaskDetail,
+  useUpdateTaskStatus,
+} from '@/features/tasks/hooks';
+import {
+  classifyTaskDetailFailure,
+  resolveTaskDetailView,
   resolveTaskJumpTarget,
+  type TaskDetailFailure,
+  type TaskDetailView,
   type TaskJumpTarget,
 } from '@/features/tasks/taskDetail';
 import { cn } from '@/lib/cn';
@@ -32,22 +39,50 @@ export type { TaskJumpTarget } from '@/features/tasks/taskDetail';
 type EditingField = 'title' | 'content' | null;
 
 export interface TaskDetailDialogProps {
-  /** The clicked card's summary, or null when the modal is closed. Its
-   *  `id` (the task identity) is the detail fetch key; navigation comes
-   *  entirely from the viewer-resolved `nav` on the fetched detail. */
-  task: TaskSummaryDto | null;
+  /** Task identity to show, or null when the modal is closed. An ID, not a
+   *  summary DTO: every entrance (chat chip, board card, cold `?task=<id>`
+   *  deep-link) can supply one, so the modal has a SINGLE data source
+   *  (#task:1715) instead of painting from a possibly-stale card while the
+   *  authoritative read is in flight. */
+  taskId: string | null;
   onOpenChange: (open: boolean) => void;
-  /** "View in conversation". The surface wires this to its own jump
-   *  handler (the drawer additionally closes itself). The dialog closes
-   *  itself after invoking it. */
+  /** "View in conversation". The surface wires this to its own jump handler; the
+   *  dialog does NOT close itself — whoever navigates owns the pointer's fate
+   *  (App closes it only when no navigation happened). */
   onJump: (target: TaskJumpTarget) => void;
+  /** "View in Tasks" — reveal this task's card on whichever task board is on
+   *  screen. Takes the task id ONLY: both boards are cross-workspace
+   *  (`useTasks({})`), so a task id resolves against all of them and the reveal
+   *  needs no workspace of its own. Omitted → the affordance is absent. Same
+   *  ownership rule as `onJump`: the dialog does not close itself. */
+  onReveal?: (taskId: string) => void;
 }
 
 /**
- * Task detail modal. Opened by clicking a task card on either board surface
- * (NavRail `TasksSection` + `WorkspaceTasksDrawer`) instead of jumping
- * straight to the source message. Reads the full body + edit-provenance
- * byline on demand.
+ * Task detail modal — the ONE surface for reading a single task, opened by
+ * `?task=<task_id>` in the URL (#task:1715): a task card on either board
+ * surface, an inline `#task:<n>` chip in chat, or a cold deep-link all write
+ * that one pointer, so there is a single modal instance at app level with a
+ * single state. Reads the full body + edit-provenance byline on demand.
+ *
+ * Because a chip click no longer opens the tasks board first, the modal may be
+ * the only task surface on screen — hence "View in Tasks" beside "View in
+ * conversation": two destinations, one verb, so the corner cluster reads as one
+ * family. Neither closes the modal from here: the surface that navigates decides
+ * what happens to the `?task` pointer, so there is exactly ONE owner per action
+ * (Cindy BLOCKER 3) instead of a close racing a route change.
+ *
+ * WHAT IS RENDERED is one exhaustive decision, `resolveTaskDetailView` — failure
+ * tier and "is there a body to paint" are independent axes and both are real
+ * (a background refresh can fail while the previous body is still cached). The
+ * `switch` below is total over that union, so no branch order can swallow a tier.
+ *
+ * A read that doesn't resolve gets a COMPACT single-column shell, not the wide
+ * two-column one: the wide shape exists to seat a description beside a metadata
+ * column, and neither exists yet. The URL pointer is never stripped on failure —
+ * the user clicked that reference, so it stays addressable until they close it
+ * (same principle as `SideUnresolvedPlaceholder`; the corner ✕ is the explicit
+ * close, so the panel adds no second Close button).
  *
  * Editing is IN PLACE and PER FIELD: a pencil beside the title / description
  * turns just that region into an inline editor (no second modal, no global
@@ -62,32 +97,41 @@ export interface TaskDetailDialogProps {
  * task-created event; hidden entirely when nav is `unavailable`).
  */
 export function TaskDetailDialog({
-  task,
+  taskId,
   onOpenChange,
   onJump,
+  onReveal,
 }: TaskDetailDialogProps): JSX.Element {
-  const open = task !== null;
-  const detailQuery = useTaskDetail(task?.id, { enabled: open });
-  const detail = detailQuery.data;
+  const open = taskId !== null;
+  const detailQuery = useTaskDetail(taskId, { enabled: open });
+  const failure = detailQuery.isError
+    ? classifyTaskDetailFailure(detailQuery.error)
+    : null;
+  const view = resolveTaskDetailView({ failure, detail: detailQuery.data });
+  // The body this view paints, if any. `not_found` deliberately paints none even
+  // when a stale one is still cached — the server has just disowned it.
+  const painted =
+    view.kind === 'body' || view.kind === 'body_with_retry' || view.kind === 'body_stale'
+      ? view.detail
+      : null;
 
   const [editingField, setEditingField] = useState<EditingField>(null);
   // Snap back to read mode whenever the modal opens onto a different task
   // (or closes) so a stale inline draft never bleeds across tasks. Note this
-  // keys on `task.id`, NOT the live detail — a task_changed refetch of the
-  // SAME task must not reset an open editor and wipe the unsubmitted draft.
+  // keys on the ID, NOT the live detail — a task_changed refetch of the SAME
+  // task must not reset an open editor and wipe the unsubmitted draft.
   useEffect(() => {
     setEditingField(null);
-  }, [task?.id]);
+  }, [taskId]);
 
-  // "View in conversation" — the close ✕'s twin in the corner cluster. Navigate
-  // via the viewer-resolved `nav` discriminant: source → source message,
-  // no-source → task-created event. Hidden when nav is `unavailable` OR the
-  // detail hasn't resolved yet (disabled in that gap so timing never changes the
-  // target), AND hidden while a field is being edited (a click would blur-save
-  // then navigate away, unmounting the editor and losing the draft on failure).
-  const jumpTarget = detail ? resolveTaskJumpTarget(detail) : null;
-  const navUnavailable = Boolean(detail) && !jumpTarget;
-  const showJump = open && editingField === null && !navUnavailable;
+  // Corner actions only exist once there is a body to act on: before that there
+  // is no `nav` discriminant to branch on, and a disabled placeholder button
+  // would promise a destination we can't name yet. Both are also hidden while a
+  // field is being edited — a click would blur-save and then navigate away,
+  // unmounting the editor and losing the draft if the write failed.
+  const jumpTarget = painted ? resolveTaskJumpTarget(painted) : null;
+  const actionsVisible = open && painted !== null && editingField === null;
+  const resolved = painted !== null;
 
   return (
     <Dialog
@@ -108,118 +152,273 @@ export function TaskDetailDialog({
       <DialogContent
         // Widest dialog after workspace settings: the body carries prose
         // (description, edit fields) that reads badly in a 512px column.
-        // Explicit px instead of a Tailwind step because 800 sits between
+        // Explicit px instead of a Tailwind step because this sits between
         // `max-w-2xl` and `max-w-3xl`.
-        className="flex max-h-[80vh] max-w-[800px] flex-col gap-0 p-0"
+        //
+        // 900, not 800 (shiki 2026-07-29 "正文的地方也变小了"): the 240px
+        // metadata column is a real tax on the reading column — at 800 the main
+        // column was 520px, so the description had ~494px, down from ~734px
+        // pre-sidebar. Every px added here goes to the prose (the sidebar is
+        // fixed), and 900 keeps the modal at ~70% of the default 1280 window.
+        // Restoring the FULL pre-sidebar width is deliberately not the goal:
+        // 734px is ~103ch at the default prose size, well past readable.
+        //
+        // HEIGHT is a band, not one cap (shiki 2026-07-29). Floor 300px: the
+        // sidebar's rows used to be the only floor, so a short task's modal
+        // height moved with how many optional rows (Edited / Closed) happened to
+        // exist — the same task read as two different shapes. Ceiling 70vh
+        // instead of 80vh: 80 on a tall window produced a column of mostly empty
+        // space under a short description. One value is fixed and the other
+        // viewport-relative on purpose — the floor is a shape guarantee, the
+        // ceiling is "leave the window visible around me". They only cross below
+        // a ~430px-tall window, where the app has no usable layout anyway.
+        //
+        // Not-yet-resolved states drop BOTH: no prose, no metadata column, so
+        // the wide band would frame a sentence in a mostly-empty 900×300 box.
+        className={
+          resolved
+            ? 'flex max-h-[70vh] min-h-[300px] max-w-[900px] flex-col gap-0 p-0'
+            : 'flex max-w-[420px] flex-col gap-0 p-0'
+        }
         // This dialog owns its padding (`p-0` + a bordered header at `px-5
         // py-4`), so the cluster keeps hugging the corner: its band is the
         // metadata row, not a `p-6` title line.
         cornerBand="top"
         cornerActions={
-          showJump ? (
-            <button
-              type="button"
-              data-task-view-jump
-              title="View in conversation"
-              aria-label="View in conversation"
-              disabled={!jumpTarget}
-              onClick={() => {
-                if (!jumpTarget) return;
-                onJump(jumpTarget);
-                onOpenChange(false);
-              }}
-              className={cn(
-                dialogCornerButtonClass,
-                'disabled:pointer-events-none disabled:opacity-40',
-              )}
-            >
-              <ExternalLink className="size-4" aria-hidden />
-            </button>
+          actionsVisible ? (
+            // Ordered by DISTANCE from where the reader already is (shiki
+            // 2026-07-29): the task's own board first — still inside the task
+            // context this modal belongs to — then the conversation it came from,
+            // which leaves that context, then ✕. So one scan left→right steps
+            // steadily further away instead of alternating.
+            <>
+              {onReveal && taskId ? (
+                // `DialogCornerButton`, not a hand-rolled peer: the primitive
+                // stamps the corner-cluster theme marker, so this button can't
+                // ship as a flat ghost beside the sticker ✕ in forza6.
+                <DialogCornerButton
+                  data-task-view-board
+                  title="View in Tasks"
+                  aria-label="View in Tasks"
+                  onClick={() => onReveal(taskId)}
+                >
+                  <CheckSquare className="size-4" aria-hidden />
+                </DialogCornerButton>
+              ) : null}
+              {jumpTarget ? (
+                <button
+                  type="button"
+                  data-task-view-jump
+                  title="View in conversation"
+                  aria-label="View in conversation"
+                  onClick={() => onJump(jumpTarget)}
+                  className={dialogCornerButtonClass}
+                >
+                  <ExternalLink className="size-4" aria-hidden />
+                </button>
+              ) : null}
+            </>
           ) : null
         }
       >
-        {task ? (
-          <TaskDetailBody
-            task={task}
-            detail={detail}
-            loading={detailQuery.isLoading}
-            failed={detailQuery.isError}
-            editingField={editingField}
-            onEditField={setEditingField}
-            onStopEditing={() => setEditingField(null)}
-          />
-        ) : null}
+        <TaskDetailContent
+          view={view}
+          editingField={editingField}
+          onEditField={setEditingField}
+          onStopEditing={() => setEditingField(null)}
+          onRetry={() => void detailQuery.refetch()}
+        />
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Total `switch` over the resolved view — the only place that decides what the
+ * modal shows. Adding a state to `TaskDetailView` breaks this exhaustively
+ * instead of falling into whichever branch happens to come first.
+ */
+function TaskDetailContent({
+  view,
+  editingField,
+  onEditField,
+  onStopEditing,
+  onRetry,
+}: {
+  view: TaskDetailView;
+  editingField: EditingField;
+  onEditField: (field: Exclude<EditingField, null>) => void;
+  onStopEditing: () => void;
+  onRetry: () => void;
+}): JSX.Element | null {
+  switch (view.kind) {
+    case 'loading':
+      return <TaskDetailStatePanel failure={null} />;
+    case 'not_found':
+      return <TaskDetailStatePanel failure="not_found" />;
+    case 'unreachable_empty':
+      return <TaskDetailStatePanel failure="unreachable" />;
+    case 'transient_empty':
+      return <TaskDetailStatePanel failure="transient" onRetry={onRetry} />;
+    case 'body':
+    // `body_stale` is the SAME body: the connection is down, so the last read
+    // is the best available truth and the one app-status banner already says
+    // the connection is down. A second copy of that notice here would be a
+    // second surface claiming one fact (Alice, #task:1462).
+    case 'body_stale':
+      return (
+        <TaskDetailBody
+          detail={view.detail}
+          editingField={editingField}
+          onEditField={onEditField}
+          onStopEditing={onStopEditing}
+        />
+      );
+    case 'body_with_retry':
+      return (
+        <>
+          {/* The refresh failed over a body we still hold. Nothing re-reads it
+              on its own (`retry: 1`, no focus refetch), so the Retry has to be
+              reachable here — but it stays a single muted line: the body below
+              is still readable, this is a footnote about its freshness. */}
+          <div className="flex items-center gap-3 border-b border-border-subtle px-5 py-2 text-xs text-text-muted">
+            <span>Showing the last loaded version — the refresh failed.</span>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Retry
+            </button>
+          </div>
+          <TaskDetailBody
+            detail={view.detail}
+            editingField={editingField}
+            onEditField={onEditField}
+            onStopEditing={onStopEditing}
+          />
+        </>
+      );
+  }
+}
+
+// ── Unresolved states (loading + the three failure tiers) ──────────
+
+const FAILURE_COPY: Record<TaskDetailFailure, { header: string; body: string }> = {
+  not_found: {
+    header: 'Task not found',
+    // Both causes answer 404 and the viewer can't tell them apart, so the copy
+    // names both rather than asserting the one we can't verify.
+    body: 'This task was deleted, or it belongs to a conversation you can’t read.',
+  },
+  unreachable: {
+    header: 'Can’t reach the server',
+    // No Retry here: the app-status banner already owns this signal and its
+    // retry. A second, narrower retry button would be a competing control for
+    // the same recovery.
+    body: 'The task can’t be loaded while the connection is down.',
+  },
+  transient: {
+    header: 'Couldn’t load this task',
+    body: 'The request failed.',
+  },
+};
+
+function TaskDetailStatePanel({
+  failure,
+  onRetry,
+}: {
+  /** null → still loading. */
+  failure: TaskDetailFailure | null;
+  /** Only the transient tier gets one; the others have no local recovery. */
+  onRetry?: () => void;
+}): JSX.Element {
+  if (failure === null) {
+    return (
+      <div className="px-5 py-6">
+        <DialogTitle className="sr-only">Task detail</DialogTitle>
+        <DialogDescription className="sr-only">Loading task</DialogDescription>
+        <div className="flex items-center gap-2 text-sm text-text-muted">
+          <Loader2 className="size-4 animate-spin" aria-hidden />
+          Loading…
+        </div>
+      </div>
+    );
+  }
+  const copy = FAILURE_COPY[failure];
+  return (
+    <div className="flex flex-col gap-1.5 px-5 py-6 pr-12">
+      <DialogTitle className="text-sm font-semibold leading-snug text-text-primary">
+        {copy.header}
+      </DialogTitle>
+      <DialogDescription className="text-sm text-text-muted">
+        {copy.body}
+      </DialogDescription>
+      {/* Retry ONLY for the transient tier: the query client is `retry: 1` with
+          no focus refetch, so nothing else re-reads this — without a button the
+          pointer is stuck. `not_found` is terminal and `unreachable` recovers
+          through the app-status banner. */}
+      {failure === 'transient' && onRetry ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-2 self-start"
+          onClick={onRetry}
+        >
+          Retry
+        </Button>
+      ) : null}
+    </div>
   );
 }
 
 // ── Body ───────────────────────────────────────────────────────────
 
 function TaskDetailBody({
-  task,
   detail,
-  loading,
-  failed,
   editingField,
   onEditField,
   onStopEditing,
 }: {
-  task: TaskSummaryDto;
-  detail: TaskDetailDto | undefined;
-  loading: boolean;
-  failed: boolean;
+  /** The AUTHORITATIVE read. The body only mounts once it resolves, so there is
+   *  no "paint the card's summary while the real values arrive" window — that
+   *  window used to need a per-field merge, and a per-field `??` silently
+   *  resurrects a stale value the moment the authoritative one becomes null. */
+  detail: TaskDetailDto;
   editingField: EditingField;
   onEditField: (field: Exclude<EditingField, null>) => void;
   onStopEditing: () => void;
 }): JSX.Element {
-  const title = detail?.title ?? task.title;
-  const status = detail?.status ?? task.status;
-  const canEdit = Boolean(detail);
 
-  // Byline reflects the last DEFINITION edit only (status/claim don't move it)
-  // and renders only when the task has actually been edited. Absolute time to
-  // the minute (a past edit never changes, so no ticking clock is needed).
-  const editor = detail?.last_editor ?? null;
-  const editedAt = detail?.last_edited_at ?? null;
+  // The metadata sidebar's two writes live HERE, with the title/content editor,
+  // because the three of them share ONE dialog-local write slot: while any of
+  // them is open or in flight the others go inert. Without that, clicking Status
+  // during a title edit fires the blur-save AND a status write in the same
+  // interaction, and `useEditTask`'s whole-object cache write can land last and
+  // clobber the newer status (Cindy review, shiki 2026-07-29 "ui 上可以加状态来阻
+  // 塞用户"). Local slot only — no lock, no revision, no multi-writer protocol.
+  const updateStatus = useUpdateTaskStatus();
+  const assign = useAssignTask();
+  const metaPending = updateStatus.isPending || assign.isPending;
+  const busy = editingField !== null || metaPending;
 
   return (
     <>
-      <DialogHeader className="gap-2 border-b border-border-subtle px-5 py-4">
-        {/* Task-metadata row: number · status · edit provenance. The byline
-            lives HERE (not under the title) because it reflects the last
-            DEFINITION edit of the task — title OR content — so hanging it under
-            the title mislabels it as a title-only timestamp. This row shares
-            the corner cluster's top band, so `pr-20` reserves the cluster width
-            (View + close ✕) HERE — correct, unlike padding the whole header,
-            which would starve every title line. The byline truncates rather
-            than sliding under the icons. */}
-        <div className="flex items-center gap-2 pr-20">
-          <span className="shrink-0 font-mono text-[11px] text-text-muted">
-            #{task.task_number}
-          </span>
-          <TaskStatusBadge status={status} className="shrink-0" />
-          {editor && editedAt ? (
-            <span className="flex min-w-0 items-center gap-2 text-[11px] text-text-muted">
-              <span className="truncate">Edited by {editor.name}</span>
-              <span className="flex shrink-0 items-center gap-1">
-                <Clock className="size-3" aria-hidden />
-                <time dateTime={new Date(editedAt).toISOString()}>
-                  {dayjs(editedAt).format('YYYY-MM-DD HH:mm')}
-                </time>
-              </span>
-            </span>
-          ) : null}
-        </div>
-
-        {/* Title (+ its edit pencil) takes the FULL header width — reserving a
-            right padding for the out-of-flow corner cluster (View + close ✕)
-            wasted a dead strip down EVERY line, since the icons only occupy the
-            top band. Instead a small top margin drops the title just below the
-            icons so the trailing pencil breathes clear of them, without
-            narrowing the title. */}
-        <div className="mt-1.5">
-          {editingField === 'title' && detail ? (
+      <DialogHeader className="border-b border-border-subtle px-5 py-4">
+        {/* Header is the TITLE line only — number, status and the edit byline
+            moved into the metadata sidebar, where they sit beside the rest of
+            the task's facts instead of stacking chrome above the title.
+            `pr-28` reserves the corner cluster, which shares this top band:
+            three 28px sticker boxes (forza6 adds a 2px border to the 24px
+            `p-1`+`size-4` box) with `gap-1.5` and `right-3` reach 108px from
+            the dialog's right edge, and the header's own `px-5` only accounts
+            for 20 of those — so anything under 88px lets the title's edit
+            pencil slide under the buttons (shiki 2026-07-29 "编辑 icon 和右侧
+            三个 action button 有一些重叠"). 112px keeps a margin as the cluster
+            grows. */}
+        <div className="pr-28">
+          {editingField === 'title' ? (
             <>
               {/* Radix needs a DialogTitle for a11y even while the visible title
                   is swapped for the inline editor. */}
@@ -235,9 +434,9 @@ function TaskDetailBody({
           ) : (
             <div className="flex items-start gap-2">
               <DialogTitle className="flex-1 text-base leading-snug [overflow-wrap:anywhere]">
-                {title}
+                {detail.title}
               </DialogTitle>
-              {canEdit && editingField === null ? (
+              {!busy ? (
                 <MiniIconButton
                   icon={Pencil}
                   label="Edit title"
@@ -251,41 +450,63 @@ function TaskDetailBody({
         <DialogDescription className="sr-only">Task detail</DialogDescription>
       </DialogHeader>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-        {loading ? (
-          <div className="flex items-center gap-2 text-sm text-text-muted">
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-            Loading…
-          </div>
-        ) : failed ? (
-          <p className="text-sm text-error">Couldn’t load this task.</p>
-        ) : editingField === 'content' && detail ? (
-          <InlineFieldEditor
-            taskId={detail.id}
-            field="content"
-            initial={detail.content}
-            onDone={onStopEditing}
-            onCancel={onStopEditing}
-          />
-        ) : (
-          <div className="flex items-start gap-2">
-            <div className="min-w-0 flex-1">
-              {detail && detail.content.trim() ? (
-                <Markdown content={detail.content} />
-              ) : (
-                <p className="text-sm italic text-text-muted">No description.</p>
-              )}
+      {/* Two columns, each scrolling on its own: a long description scrolls
+          without dragging the metadata out of view, while the metadata stays
+          put. Load / failure states never reach here — they get their own
+          compact shell, so this column is always real content. */}
+      <div className="flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
+          {editingField === 'content' ? (
+            <InlineFieldEditor
+              taskId={detail.id}
+              field="content"
+              initial={detail.content}
+              onDone={onStopEditing}
+              onCancel={onStopEditing}
+            />
+          ) : (
+            <div className="flex items-start gap-2">
+              {/* Reading measure, in `ch` so it tracks the user's own prose size
+                  (`--appearance-markdown-font-size`) instead of a fixed px.
+                  76ch ≈ the widened column minus the pencil, so the extra width
+                  from 800→900 lands in the text rather than as trailing slack —
+                  while still stopping short of the ~103ch the single-column
+                  modal used to run at. */}
+              <div className="min-w-0 max-w-[76ch] flex-1">
+                {detail.content.trim() ? (
+                  <Markdown content={detail.content} />
+                ) : (
+                  <p className="text-sm italic text-text-muted">No description.</p>
+                )}
+              </div>
+              {!busy ? (
+                <MiniIconButton
+                  icon={Pencil}
+                  label="Edit description"
+                  className="mt-0.5"
+                  onClick={() => onEditField('content')}
+                />
+              ) : null}
             </div>
-            {canEdit && editingField === null ? (
-              <MiniIconButton
-                icon={Pencil}
-                label="Edit description"
-                className="mt-0.5"
-                onClick={() => onEditField('content')}
-              />
-            ) : null}
-          </div>
-        )}
+          )}
+        </div>
+
+        <TaskDetailMetaPanel
+          view={detail}
+          busy={busy}
+          statusPending={updateStatus.isPending}
+          statusFailed={updateStatus.isError}
+          onStatusChange={status => {
+            updateStatus.reset();
+            updateStatus.mutate({ taskId: detail.id, status });
+          }}
+          assignPending={assign.isPending}
+          assignFailed={assign.isError}
+          onAssign={agentId => {
+            assign.reset();
+            assign.mutate({ taskId: detail.id, agentId });
+          }}
+        />
       </div>
     </>
   );
@@ -450,42 +671,5 @@ function InlineFieldEditor({
       />
       {errorMsg ? <p className="text-xs text-error">{errorMsg}</p> : null}
     </div>
-  );
-}
-
-// ── Compact icon button ────────────────────────────────────────────
-
-/** Small flat icon-only control (18px) for the per-field edit pencils — a
- *  light inline affordance: no fill, just deepens from muted → primary ink on
- *  hover. (The header "View in conversation" jump is NOT one of these — it's the
- *  close ✕'s twin, styled via `dialogCornerButtonClass`.) Always carries a
- *  tooltip + accessible name (`<button>` exposes aria-label). */
-function MiniIconButton({
-  icon: Icon,
-  label,
-  onClick,
-  disabled,
-  className,
-}: {
-  icon: LucideIcon;
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  className?: string;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        'inline-flex size-[18px] shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:pointer-events-none disabled:opacity-40',
-        className,
-      )}
-    >
-      <Icon className="size-3.5" aria-hidden />
-    </button>
   );
 }

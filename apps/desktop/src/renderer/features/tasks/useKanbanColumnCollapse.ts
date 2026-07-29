@@ -55,6 +55,24 @@ export function toggleColumnCollapse(status: TaskStatus): void {
   for (const notify of listeners) notify();
 }
 
+/**
+ * Force one column open — idempotent, and a no-op (no notify, no new snapshot)
+ * when it is already open.
+ *
+ * Reveal needs this, not `toggle`: Closed is collapsed by default, so revealing
+ * a closed task renders no row for it and the scroll+pulse lands on nothing —
+ * the affordance silently does nothing. `toggle` cannot express "make sure it is
+ * open" (it would close an already-open column), and the no-op arm matters
+ * because every mounted board re-renders on notify.
+ */
+export function expandColumn(status: TaskStatus): void {
+  if (!collapsed.has(status)) return;
+  const next = new Set(collapsed);
+  next.delete(status);
+  collapsed = next;
+  for (const notify of listeners) notify();
+}
+
 export interface KanbanColumnCollapse {
   isCollapsed: (status: TaskStatus) => boolean;
   toggle: (status: TaskStatus) => void;
