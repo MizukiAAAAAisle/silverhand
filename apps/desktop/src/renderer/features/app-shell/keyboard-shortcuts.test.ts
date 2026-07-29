@@ -71,6 +71,7 @@ describe('resolveContextualClose — the ⌘W ladder', () => {
   const NOTHING_OPEN: ContextualCloseState = {
     agentPanelId: null,
     filesListOpen: false,
+    taskPaneOpen: false,
     sideConversationId: null,
     threadRootId: null,
     threadsListOpen: false,
@@ -83,24 +84,39 @@ describe('resolveContextualClose — the ⌘W ladder', () => {
         ...NOTHING_OPEN,
         agentPanelId: 'a1',
         filesListOpen: true,
+        taskPaneOpen: true,
         threadRootId: 'root1',
         activityChannelOpen: true,
       }),
     ).toEqual({ outcome: 'closed-panel', target: 'agent' });
   });
 
-  it('layer 2: ?files peels above the secondary pane (agent already closed)', () => {
+  it('layer 2: ?files peels above the task pane and secondary pane', () => {
     expect(
       resolveContextualClose({
         ...NOTHING_OPEN,
         filesListOpen: true,
+        taskPaneOpen: true,
         threadRootId: 'root1',
         sideConversationId: 'c1',
       }),
     ).toEqual({ outcome: 'closed-panel', target: 'files' });
   });
 
-  it('layer 3: secondary pane resolves side > thread > threads (render-layer priority)', () => {
+  it('layer 3: the ?task pane peels above side/thread/threads (files already closed)', () => {
+    // task overlays thread/threads (it preserves them as the restore stack), so
+    // ⌘W peels the task pane before the conversation pane beneath it.
+    expect(
+      resolveContextualClose({
+        ...NOTHING_OPEN,
+        taskPaneOpen: true,
+        threadRootId: 'root1',
+        threadsListOpen: true,
+      }),
+    ).toEqual({ outcome: 'closed-panel', target: 'task' });
+  });
+
+  it('layer 4: secondary pane resolves side > thread > threads (render-layer priority)', () => {
     // All three set (malformed URL) → side wins, matching layoutMemoryFromRoute.
     expect(
       resolveContextualClose({
@@ -124,7 +140,7 @@ describe('resolveContextualClose — the ⌘W ladder', () => {
     ).toEqual({ outcome: 'closed-panel', target: 'threads' });
   });
 
-  it('layer 4: an Activity channel detail is peeled only after every overlay above it', () => {
+  it('layer 5: an Activity channel detail is peeled only after every overlay above it', () => {
     // thread sits above the activity channel → peel the thread first
     expect(
       resolveContextualClose({
@@ -139,7 +155,7 @@ describe('resolveContextualClose — the ⌘W ladder', () => {
     ).toEqual({ outcome: 'closed-panel', target: 'activity-channel' });
   });
 
-  it('layer 5: nothing to peel → background the app (macOS Hide)', () => {
+  it('layer 6: nothing to peel → background the app (macOS Hide)', () => {
     // Also covers the Chat main channel: it never sets activityChannelOpen, so
     // when only it remains ⌘W falls through to backgrounding, not a close.
     expect(resolveContextualClose(NOTHING_OPEN)).toEqual({

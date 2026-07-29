@@ -295,17 +295,18 @@ describe('withTaskQuery — URL writer for openTask / closeTask', () => {
     );
   });
 
-  it('strips ?task on close, leaving other params intact', () => {
-    // closeTask must drop only `?task` — `?side`, `?fullscreen`, and any
-    // unrelated params keep their state. The tasks drawer's open/closed
-    // status is React state, decoupled from this URL pointer.
+  it('strips ?task AND ?fullscreen on close, revealing the restore stack', () => {
+    // closeTask drops `?task` and `?fullscreen` (task is an overlay pane, so
+    // it clears fullscreen on close like every other pane). A preserved
+    // `?thread` resurfaces as the restore stack; `?side` cannot coexist with a
+    // task overlay (it was cleared on open), so it is not part of this case.
     const out = withTaskQuery(
       '/chat/w/w-1/c/c-a',
-      '?side=c-other&task=t-12&fullscreen=1',
+      '?thread=m-1&task=t-12&fullscreen=1',
       null,
     );
-    expect(out).toContain('side=c-other');
-    expect(out).toContain('fullscreen=1');
+    expect(out).toContain('thread=m-1');
+    expect(out).not.toContain('fullscreen=1');
     expect(out).not.toContain('task=');
   });
 
@@ -323,11 +324,9 @@ describe('withTaskQuery — URL writer for openTask / closeTask', () => {
 });
 
 describe('buildTaskOpenUrl — openTask URL writer', () => {
-  // Mirrors `buildSideOpenUrl` for sigil clicks: additive write of
-  // `?task=<task_id>` with everything else preserved. Unlike `openSide` we
-  // do NOT strip `?fullscreen` — opening a task's detail is independent of
-  // whichever pane is fullscreen, and stripping it would yank the user out
-  // of a fullscreen view they were reading.
+  // `task` is an OVERLAY pane: opening it clears `?side` (correctness) + the
+  // other overlays + `?fullscreen`, but preserves `?thread` / `?threads` as
+  // the restore stack (matrix asserts this below).
 
   it('writes ?task=<task_id> on a bare path', () => {
     expect(buildTaskOpenUrl('/chat/w/w-1/c/c-a', '', 't-7')).toBe(
@@ -335,14 +334,15 @@ describe('buildTaskOpenUrl — openTask URL writer', () => {
     );
   });
 
-  it('preserves ?side and ?fullscreen — the modal is orthogonal', () => {
+  it('clears ?side and ?fullscreen, preserving ?thread as the restore stack', () => {
     const out = buildTaskOpenUrl(
       '/chat/w/w-1/c/c-a',
-      '?side=c-other&fullscreen=1',
+      '?side=c-other&thread=m-1&fullscreen=1',
       't-11',
     );
-    expect(out).toContain('side=c-other');
-    expect(out).toContain('fullscreen=1');
+    expect(out).not.toContain('side=c-other');
+    expect(out).not.toContain('fullscreen=1');
+    expect(out).toContain('thread=m-1');
     expect(out).toContain('task=t-11');
   });
 
@@ -406,10 +406,17 @@ describe('withThreadQuery — URL writer for openThread / closeThread', () => {
     expect(closed).not.toContain('fullscreen');
   });
 
-  it('preserves unrelated params (e.g. ?task) when opening', () => {
-    const out = withThreadQuery('/chat/w/w-1/c/c-a', '?task=7', 'm-1');
+  it('preserves unrelated params but clears the task overlay when opening', () => {
+    // thread is a `replace` pane → opening it clears every other secondary
+    // pane, including the `task` overlay. Truly unrelated params survive.
+    const out = withThreadQuery(
+      '/chat/w/w-1/c/c-a',
+      '?task=7&utm_source=test',
+      'm-1',
+    );
     expect(out).toContain('thread=m-1');
-    expect(out).toContain('task=7');
+    expect(out).toContain('utm_source=test');
+    expect(out).not.toContain('task=7');
   });
 });
 
@@ -472,10 +479,16 @@ describe('withThreadsQuery — URL writer for openThreadsList / closeThreadsList
     expect(closed).not.toContain('fullscreen');
   });
 
-  it('preserves unrelated params (e.g. ?task) when opening', () => {
-    const out = withThreadsQuery('/chat/w/w-1/c/c-a', '?task=7', true);
+  it('preserves unrelated params but clears the task overlay when opening', () => {
+    // threads is a `replace` pane → opening it clears the `task` overlay.
+    const out = withThreadsQuery(
+      '/chat/w/w-1/c/c-a',
+      '?task=7&utm_source=test',
+      true,
+    );
     expect(out).toContain('threads=1');
-    expect(out).toContain('task=7');
+    expect(out).toContain('utm_source=test');
+    expect(out).not.toContain('task=7');
   });
 });
 
@@ -570,10 +583,17 @@ describe('withFilesQuery — URL writer for openFilesList / closeFilesList', () 
     expect(closed).not.toContain('fullscreen');
   });
 
-  it('preserves unrelated params (e.g. ?task) when opening', () => {
-    const out = withFilesQuery('/chat/w/w-1/c/c-a', '?task=7', true);
+  it('preserves unrelated params but clears the task overlay when opening', () => {
+    // files and task are both overlays → opening files clears the task
+    // overlay (one overlay on top at a time). Unrelated params survive.
+    const out = withFilesQuery(
+      '/chat/w/w-1/c/c-a',
+      '?task=7&utm_source=test',
+      true,
+    );
     expect(out).toContain('files=1');
-    expect(out).toContain('task=7');
+    expect(out).toContain('utm_source=test');
+    expect(out).not.toContain('task=7');
   });
 
   it('returns the bare path when the resulting query is empty', () => {
@@ -609,33 +629,24 @@ describe('opening side/thread/threads closes the ?files overlay', () => {
   });
 });
 
-describe('?agent + ?files overlay stack (agent > files precedence)', () => {
-  // Both are overlays. Opening agent over Files keeps ?files so closing
-  // agent reveals Files again (thread+files+agent → close agent = files →
-  // close files = thread). Opening Files over agent clears ?agent (files
-  // becomes the single visible overlay).
-  it('withAgentQuery (open) preserves ?files=1 — closing agent reveals Files', () => {
+describe('?agent + ?files — symmetric overlay mutual exclusion', () => {
+  // Both are overlays; the right pane holds one overlay at a time. Opening
+  // either clears the other (symmetric — no direction preserves the peer),
+  // while both preserve the covered `?thread` / `?threads` restore stack.
+  it('withAgentQuery (open) clears ?files, preserving the thread restore stack', () => {
     const out = withAgentQuery('/chat/w/w-1/c/c-a', '?thread=m-1&files=1', 'a-9');
     expect(out).toContain('agent=a-9');
-    expect(out).toContain('files=1');
+    expect(out).not.toContain('files=1');
     expect(out).toContain('thread=m-1');
-    // Close agent → files + thread survive.
+    // Close agent → thread survives (files was already swept on open).
     const afterAgentClose = withAgentQuery(
       '/chat/w/w-1/c/c-a',
       out.split('?')[1] ?? '',
       null,
     );
     expect(afterAgentClose).not.toContain('agent');
-    expect(afterAgentClose).toContain('files=1');
+    expect(afterAgentClose).not.toContain('files');
     expect(afterAgentClose).toContain('thread=m-1');
-    // Close files → thread survives.
-    const afterFilesClose = withFilesQuery(
-      '/chat/w/w-1/c/c-a',
-      afterAgentClose.split('?')[1] ?? '',
-      false,
-    );
-    expect(afterFilesClose).not.toContain('files');
-    expect(afterFilesClose).toContain('thread=m-1');
   });
 
   it('withFilesQuery (open) clears ?agent — Files is the single visible overlay', () => {
@@ -643,6 +654,42 @@ describe('?agent + ?files overlay stack (agent > files precedence)', () => {
     expect(out).toContain('files=1');
     expect(out).not.toContain('agent');
   });
+});
+
+describe('overlay open — clears ?side (correctness) + keeps thread/threads (restore stack)', () => {
+  // Two orthogonal invariants locked as a matrix (converged three-way with
+  // @Cindy / @Alice, #task:1721). For EVERY overlay pane, opening it over a URL
+  // that carries both `?side` and a `?thread` / `?threads` restore pane must:
+  //   (a) CLEAR `?side` — a covered secondary conversation still feeds
+  //       `useSecondaryPaneModel`'s visible/focused set (notification
+  //       suppression + read-advance); leaving it set while invisible is data
+  //       corruption. This is the hard gate on the registry's `side.
+  //       survivesOverlay: false`; do not delete it.
+  //   (b) PRESERVE `?thread` / `?threads` — the URL is the restore stack, so
+  //       closing the overlay brings the covered thread pane back.
+  // Both assertions run in a single transform; either alone leaves a back door.
+  const overlays: Array<{
+    name: string;
+    open: (search: string) => string;
+  }> = [
+    { name: 'task', open: (s) => buildTaskOpenUrl('/chat/w/w-1/c/c-a', s, 't-1') },
+    { name: 'agent', open: (s) => buildAgentPanelOpenUrl('/chat/w/w-1/c/c-a', s, 'a-1') },
+    { name: 'files', open: (s) => withFilesQuery('/chat/w/w-1/c/c-a', s, true) },
+  ];
+
+  for (const overlay of overlays) {
+    it(`open ${overlay.name} over ?side + ?thread → side cleared, thread kept`, () => {
+      const out = overlay.open('?side=c-other&thread=m-1');
+      expect(out).not.toContain('side=c-other');
+      expect(out).toContain('thread=m-1');
+    });
+
+    it(`open ${overlay.name} over ?side + ?threads → side cleared, threads kept`, () => {
+      const out = overlay.open('?side=c-other&threads=1');
+      expect(out).not.toContain('side=c-other');
+      expect(out).toContain('threads=1');
+    });
+  }
 });
 
 describe('buildSideOpenUrl — clears ?thread (side/thread mutual exclusion)', () => {
@@ -728,10 +775,16 @@ describe('withAgentQuery / buildAgentPanelOpenUrl — open / close the agent pan
   });
 
 
-  it('preserves unrelated params (e.g. ?task) when opening', () => {
-    const out = buildAgentPanelOpenUrl('/chat/w/w-1/c/c-a', '?task=7', 'a-9');
+  it('preserves unrelated params but clears the task overlay when opening', () => {
+    // agent and task are both overlays → opening agent clears the task overlay.
+    const out = buildAgentPanelOpenUrl(
+      '/chat/w/w-1/c/c-a',
+      '?task=7&utm_source=test',
+      'a-9',
+    );
     expect(out).toContain('agent=a-9');
-    expect(out).toContain('task=7');
+    expect(out).toContain('utm_source=test');
+    expect(out).not.toContain('task=7');
   });
 
   it('clears ?agent (and ?fullscreen) when closing', () => {

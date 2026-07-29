@@ -1,0 +1,314 @@
+import { Fragment, useEffect, useState } from 'react';
+import { CheckSquare, Loader2, Pencil, X } from 'lucide-react';
+import type { TaskDetailDto } from '@silverhand/shared';
+import { Button } from '@/components/ui/button';
+import { MiniIconButton } from '@/components/tasks/MiniIconButton';
+import { Markdown } from '@/components/chat/Markdown';
+import {
+  FAILURE_COPY,
+  InlineFieldEditor,
+  useTaskMetaRows,
+  useTaskWriteSlot,
+  type EditingField,
+} from '@/components/tasks/taskDetailShared';
+import { useTaskDetail } from '@/features/tasks/hooks';
+import {
+  classifyTaskDetailFailure,
+  resolveTaskDetailView,
+  type TaskDetailFailure,
+  type TaskDetailView,
+} from '@/features/tasks/taskDetail';
+
+export interface TaskDetailPanelProps {
+  /** Task identity to show. Never a summary DTO — the pane reads the
+   *  authoritative detail itself (#task:1715), so a chip's stale card can't
+   *  paint it. Non-null: the branch that renders this pane already gated on
+   *  `?task=<id>` being present. */
+  taskId: string;
+  onClose: () => void;
+}
+
+/**
+ * The conversation-anchored task detail — the OVERLAY SIDE PANE half of the
+ * task-detail split (#task:1721). Opened by `?task=<id>` while the reader is in
+ * a channel chat, it sits beside the conversation instead of covering it, so a
+ * task can be read and edited without leaving the message it was referenced
+ * from. Every OTHER entry (board card, drawer card, cold deep-link) keeps the
+ * app-level `TaskDetailDialog` modal — the two share ALL their substance
+ * (`taskDetailShared`), differing only in chrome and metadata layout, so they
+ * can never drift on how a task reads, edits, or fails.
+ *
+ * The header carries ONLY the task number + close (shiki 2026-07-29 mockup v2):
+ * the title lives in the body with its own edit pencil, so the header doesn't
+ * repeat it. Metadata reflows to the PANE's own width — one column when narrow,
+ * two when wide — via a container query (`.task-pane` / `.task-pane-meta`), not
+ * the viewport, so a dragged-narrow pane stacks and a dragged-wide one saves
+ * vertical height.
+ *
+ * WHAT IS RENDERED is the same exhaustive `resolveTaskDetailView` decision the
+ * modal uses; the `switch` below is total over that union. Unlike the modal it
+ * paints its states in plain markup — a side pane has no Radix Dialog to satisfy
+ * with a `DialogTitle`/`DialogDescription`.
+ */
+export function TaskDetailPanel({ taskId, onClose }: TaskDetailPanelProps): JSX.Element {
+  const detailQuery = useTaskDetail(taskId, { enabled: true });
+  const failure = detailQuery.isError
+    ? classifyTaskDetailFailure(detailQuery.error)
+    : null;
+  const view = resolveTaskDetailView({ failure, detail: detailQuery.data });
+  // The body this view paints, if any. `not_found` deliberately paints none even
+  // when a stale one is still cached — the server has just disowned it.
+  const painted =
+    view.kind === 'body' || view.kind === 'body_with_retry' || view.kind === 'body_stale'
+      ? view.detail
+      : null;
+
+  const [editingField, setEditingField] = useState<EditingField>(null);
+  // Snap back to read mode whenever the pane opens onto a different task (or
+  // closes) so a stale inline draft never bleeds across tasks. Keys on the ID,
+  // NOT the live detail — a task_changed refetch of the SAME task must not reset
+  // an open editor and wipe the unsubmitted draft.
+  useEffect(() => {
+    setEditingField(null);
+  }, [taskId]);
+
+  return (
+    // `.task-pane` names the container query the metadata grid reads; it also
+    // owns the pane's own ground, since it isn't seated inside a Dialog.
+    <div
+      className="task-pane flex h-full flex-col bg-bg-floating"
+      aria-label="Task detail"
+    >
+      <header className="flex h-12 flex-none items-center gap-2 border-b border-border-subtle px-3">
+        <CheckSquare className="size-4 shrink-0 text-text-muted" aria-hidden />
+        {/* Number, not title (shiki mockup v2): the title lives in the body. It
+            only resolves with the read, so the header shows a neutral label
+            until then rather than an empty slot. */}
+        <span className="flex-1 font-mono text-xs text-text-secondary">
+          {painted ? `#${painted.task_number}` : 'Task'}
+        </span>
+        <MiniIconButton icon={X} label="Close" onClick={onClose} />
+      </header>
+      <PaneContent
+        view={view}
+        editingField={editingField}
+        onEditField={setEditingField}
+        onStopEditing={() => setEditingField(null)}
+        onRetry={() => void detailQuery.refetch()}
+      />
+    </div>
+  );
+}
+
+/**
+ * Total `switch` over the resolved view — the only place that decides what the
+ * pane shows. Adding a state to `TaskDetailView` breaks this exhaustively
+ * instead of falling into whichever branch happens to come first.
+ */
+function PaneContent({
+  view,
+  editingField,
+  onEditField,
+  onStopEditing,
+  onRetry,
+}: {
+  view: TaskDetailView;
+  editingField: EditingField;
+  onEditField: (field: Exclude<EditingField, null>) => void;
+  onStopEditing: () => void;
+  onRetry: () => void;
+}): JSX.Element | null {
+  switch (view.kind) {
+    case 'loading':
+      return <PaneStatePanel failure={null} />;
+    case 'not_found':
+      return <PaneStatePanel failure="not_found" />;
+    case 'unreachable_empty':
+      return <PaneStatePanel failure="unreachable" />;
+    case 'transient_empty':
+      return <PaneStatePanel failure="transient" onRetry={onRetry} />;
+    case 'body':
+    // `body_stale` is the SAME body: the connection is down, so the last read is
+    // the best available truth and the one app-status banner already says the
+    // connection is down. A second copy of that notice here would be a second
+    // surface claiming one fact.
+    case 'body_stale':
+      return (
+        <PaneBody
+          detail={view.detail}
+          editingField={editingField}
+          onEditField={onEditField}
+          onStopEditing={onStopEditing}
+        />
+      );
+    case 'body_with_retry':
+      return (
+        <div className="flex min-h-0 flex-1 flex-col">
+          {/* The refresh failed over a body we still hold. Nothing re-reads it on
+              its own (`retry: 1`, no focus refetch), so the Retry has to be
+              reachable here — but it stays a single muted line: the body below is
+              still readable, this is a footnote about its freshness. */}
+          <div className="flex flex-none items-center gap-3 border-b border-border-subtle px-[18px] py-2 text-xs text-text-muted">
+            <span>Showing the last loaded version — the refresh failed.</span>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Retry
+            </button>
+          </div>
+          <PaneBody
+            detail={view.detail}
+            editingField={editingField}
+            onEditField={onEditField}
+            onStopEditing={onStopEditing}
+          />
+        </div>
+      );
+  }
+}
+
+/** Loading + the three failure tiers, in plain markup (no Radix Dialog to
+ *  satisfy). Copy is the shared `FAILURE_COPY`, so the two surfaces word a
+ *  failure identically. */
+function PaneStatePanel({
+  failure,
+  onRetry,
+}: {
+  /** null → still loading. */
+  failure: TaskDetailFailure | null;
+  /** Only the transient tier gets one; the others have no local recovery. */
+  onRetry?: () => void;
+}): JSX.Element {
+  if (failure === null) {
+    return (
+      <div className="flex items-center gap-2 px-[18px] py-6 text-sm text-text-muted">
+        <Loader2 className="size-4 animate-spin" aria-hidden />
+        Loading…
+      </div>
+    );
+  }
+  const copy = FAILURE_COPY[failure];
+  return (
+    <div className="flex flex-col gap-1.5 px-[18px] py-6">
+      <p className="text-sm font-semibold leading-snug text-text-primary">
+        {copy.header}
+      </p>
+      <p className="text-sm text-text-muted">{copy.body}</p>
+      {/* Retry ONLY for the transient tier: the query client is `retry: 1` with
+          no focus refetch, so nothing else re-reads this. `not_found` is terminal
+          and `unreachable` recovers through the app-status banner. */}
+      {failure === 'transient' && onRetry ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-2 self-start"
+          onClick={onRetry}
+        >
+          Retry
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function PaneBody({
+  detail,
+  editingField,
+  onEditField,
+  onStopEditing,
+}: {
+  /** The AUTHORITATIVE read — the body only mounts once it resolves, so there is
+   *  no "paint the card's summary while the real values arrive" window. */
+  detail: TaskDetailDto;
+  editingField: EditingField;
+  onEditField: (field: Exclude<EditingField, null>) => void;
+  onStopEditing: () => void;
+}): JSX.Element {
+  // Title/content, status and assignee share ONE local write slot: while any is
+  // open or in flight the others go inert (see `useTaskWriteSlot`).
+  const slot = useTaskWriteSlot(detail.id, editingField);
+  const { busy } = slot;
+  // Same field SSOT the modal sidebar renders — minus the Task# row, which this
+  // surface's header already carries (chrome choice, not a field-set fork).
+  const rows = useTaskMetaRows({ view: detail, ...slot }).filter(
+    (row) => row.key !== 'task',
+  );
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-[18px] py-4">
+      {editingField === 'title' ? (
+        <InlineFieldEditor
+          taskId={detail.id}
+          field="title"
+          initial={detail.title}
+          onDone={onStopEditing}
+          onCancel={onStopEditing}
+        />
+      ) : (
+        <div className="flex items-start gap-2">
+          <h1 className="flex-1 text-base font-semibold leading-snug text-text-primary [overflow-wrap:anywhere]">
+            {detail.title}
+          </h1>
+          {!busy ? (
+            <MiniIconButton
+              icon={Pencil}
+              label="Edit title"
+              className="mt-0.5"
+              onClick={() => onEditField('title')}
+            />
+          ) : null}
+        </div>
+      )}
+
+      {/* Metadata — width-adaptive columns via the `.task-pane-meta` container
+          query. Label + value are FLAT grid children so a wide pane can pack two
+          pairs per row. */}
+      <div className="task-pane-meta items-start border-y border-border-subtle py-3">
+        {rows.map((row) => (
+          <Fragment key={row.key}>
+            <span className="chrome-label text-[10px] font-medium leading-4 text-text-muted">
+              {row.label}
+            </span>
+            <div className="min-w-0 text-xs leading-4 text-text-primary">
+              {row.value}
+              {row.error ? (
+                <p className="mt-0.5 text-[11px] text-error">{row.error}</p>
+              ) : null}
+            </div>
+          </Fragment>
+        ))}
+      </div>
+
+      <section className="flex min-w-0 flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <h2 className="chrome-label text-[10px] font-medium text-text-muted">
+            Description
+          </h2>
+          {!busy && editingField !== 'content' ? (
+            <MiniIconButton
+              icon={Pencil}
+              label="Edit description"
+              onClick={() => onEditField('content')}
+            />
+          ) : null}
+        </div>
+        {editingField === 'content' ? (
+          <InlineFieldEditor
+            taskId={detail.id}
+            field="content"
+            initial={detail.content}
+            onDone={onStopEditing}
+            onCancel={onStopEditing}
+          />
+        ) : detail.content.trim() ? (
+          <Markdown content={detail.content} />
+        ) : (
+          <p className="text-sm italic text-text-muted">No description.</p>
+        )}
+      </section>
+    </div>
+  );
+}

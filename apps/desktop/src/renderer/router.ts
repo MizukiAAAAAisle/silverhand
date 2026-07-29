@@ -380,15 +380,113 @@ export function buildChannelLayoutUrl(
 }
 
 /**
+ * Behavior registry for the right-pane "secondary family" — the SINGLE source
+ * of truth for how opening one pane treats the panes beneath it. `PaneKind`
+ * and the opener's clear-list both derive from this one object, so adding a
+ * pane forces a behavior declaration in exactly one place; the runtime set and
+ * the type can't drift apart.
+ *
+ * `mode` is an intrinsic property of the pane KIND, never a caller argument —
+ * so the illegal "open `side` as an overlay" combination has no API surface at
+ * all (it's unconstructable, not merely gated).
+ *
+ *  - `mode: 'replace'` — conversation-context panes (`side`/`thread`/`threads`).
+ *    Opening one writes itself and clears EVERY other secondary param (+
+ *    `fullscreen`): one conversation context at a time, no restore stack.
+ *  - `mode: 'overlay'` — utility/inspector panes (`agent`/`files`/`task`).
+ *    Opening one writes itself, drops `fullscreen`, clears `?side` and the
+ *    OTHER overlays, but PRESERVES every pane flagged `survivesOverlay` as the
+ *    URL restore stack — closing brings the covered pane back with no in-memory
+ *    state.
+ *
+ * `survivesOverlay` is a second axis because `mode` alone underdetermines the
+ * restore stack: `side` is `replace` yet must NOT survive being covered. The
+ * two `false` values are NOT the same kind of `false` — do not "unify" them:
+ *  - `side: false` is a HARD CORRECTNESS invariant, never flippable to `true`.
+ *    A hidden `?side` still feeds `useSecondaryPaneModel`'s visible/focused set
+ *    (driving notification suppression + read-advance), so leaving it set while
+ *    invisible is data corruption. The runtime matrix test locks this — it is a
+ *    gate, not a style choice; do not remove it.
+ *  - `agent`/`files`/`task` `false` is a SOFT TOPOLOGY choice — "one overlay on
+ *    top at a time." These panes are visually neutral (no visible/focused
+ *    side-effect), so this could flip to `true` later (e.g. if an agent panel
+ *    is allowed to coexist with another overlay) without hurting correctness.
+ *  - `thread`/`threads` `true`: pure render panes with no visibility
+ *    side-effect, so an overlay preserves them as the restore stack.
+ */
+const SECONDARY_PANES = {
+  // `replace` conversation-context panes.
+  //   side: covered-but-in-URL is data corruption → false is a HARD invariant.
+  side: { mode: 'replace', survivesOverlay: false },
+  //   thread/threads: pure render, safe to keep under an overlay (restore stack).
+  thread: { mode: 'replace', survivesOverlay: true },
+  threads: { mode: 'replace', survivesOverlay: true },
+  // `overlay` utility/inspector panes. survivesOverlay:false here is a SOFT
+  // topology choice ("one overlay at a time"), flippable without correctness risk.
+  agent: { mode: 'overlay', survivesOverlay: false },
+  files: { mode: 'overlay', survivesOverlay: false },
+  task: { mode: 'overlay', survivesOverlay: false },
+} as const satisfies Record<
+  string,
+  { mode: 'overlay' | 'replace'; survivesOverlay: boolean }
+>;
+
+/** Every secondary-pane query param, derived from the registry. */
+export type SecondaryPane = keyof typeof SECONDARY_PANES;
+
+const SECONDARY_PANE_KEYS = Object.keys(SECONDARY_PANES) as SecondaryPane[];
+
+/**
+ * Write an "open pane" transform onto `params` in place. `mode` is looked up
+ * from {@link SECONDARY_PANES}, never passed, so `side` can never take overlay
+ * semantics. An overlay open preserves the `survivesOverlay` panes (the URL
+ * restore stack) and clears everything else; a replace open clears every other
+ * secondary param. `fullscreen` is always dropped — a freshly opened pane
+ * shows at its normal width.
+ */
+function writeSecondaryPaneOpen(
+  params: URLSearchParams,
+  pane: SecondaryPane,
+  value: string,
+): void {
+  params.set(pane, value);
+  params.delete('fullscreen');
+  const overlay = SECONDARY_PANES[pane].mode === 'overlay';
+  for (const other of SECONDARY_PANE_KEYS) {
+    if (other === pane) continue;
+    if (overlay && SECONDARY_PANES[other].survivesOverlay) continue;
+    params.delete(other);
+  }
+}
+
+/**
+ * Write a "close pane" transform onto `params` in place. Only the pane's own
+ * param + `fullscreen` are removed; whatever the URL still carries below (the
+ * restore stack an overlay preserved) surfaces on the next render — no memory.
+ */
+function writeSecondaryPaneClose(
+  params: URLSearchParams,
+  pane: SecondaryPane,
+): void {
+  params.delete(pane);
+  params.delete('fullscreen');
+}
+
+function serializeQuery(pathname: string, params: URLSearchParams): string {
+  const next = params.toString();
+  return next ? `${pathname}?${next}` : pathname;
+}
+
+/**
  * Build a URL with `?side` written or cleared. Pure helper so the nav
  * hook can stay tiny and tests can assert URL shape without React.
  *
  * Rules:
- *  - `id == null`     → strip `?side` AND `?fullscreen` (closing side
- *                       removes both).
- *  - `id !== null`    → set `?side=<id>`, leave other params untouched.
- *  - Non-relevant query params (anything other than `side` / `fullscreen`)
- *    are preserved verbatim.
+ *  - `id == null`  → strip `?side` AND `?fullscreen` (closing side removes
+ *    both).
+ *  - `id !== null` → open `side` (a `replace` pane): set `?side=<id>` and clear
+ *    every other secondary pane + `fullscreen`. Unrelated query params (not in
+ *    the secondary family) are preserved verbatim.
  */
 export function withSideQuery(
   pathname: string,
@@ -397,13 +495,11 @@ export function withSideQuery(
 ): string {
   const params = new URLSearchParams(search);
   if (id == null) {
-    params.delete('side');
-    params.delete('fullscreen');
+    writeSecondaryPaneClose(params, 'side');
   } else {
-    params.set('side', id);
+    writeSecondaryPaneOpen(params, 'side', id);
   }
-  const next = params.toString();
-  return next ? `${pathname}?${next}` : pathname;
+  return serializeQuery(pathname, params);
 }
 
 /**
@@ -460,12 +556,19 @@ export function buildChannelPathPreservingAgent(
  * Build a URL with `?task` written or cleared. Pure helper so the nav
  * hook can stay tiny and tests can assert URL shape without React.
  *
+ * `task` is an OVERLAY pane (utility/inspector): the in-conversation task
+ * detail floats over the conversation without replacing the thread beneath it.
+ *
  * Rules:
- *  - `taskId == null` → strip `?task`. Other params (`side`,
- *    `fullscreen`, …) are preserved verbatim.
- *  - `taskId !== null` → set `?task=<task_id>`. Whether the id resolves is
- *    the modal host's business (it renders a not-found state); this writer
- *    is dumb on purpose.
+ *  - `taskId == null` → strip `?task` AND `?fullscreen`. Any `?thread` /
+ *    `?threads` PRESERVED when the pane opened survive, so the covered thread
+ *    pane comes back — the URL is the restore stack, no memory.
+ *  - `taskId !== null` → open `task`: set `?task=<task_id>`; strip `?side`, the
+ *    other overlays (`?agent` / `?files`) and `?fullscreen`, but PRESERVE
+ *    `?thread` / `?threads`. `?side` is cleared for correctness — a covered
+ *    secondary conversation still feeds `useSecondaryPaneModel`'s
+ *    visible/focused set. Whether the id resolves is the host's business (it
+ *    renders a not-found state); this writer is dumb about resolution.
  */
 export function withTaskQuery(
   pathname: string,
@@ -474,22 +577,21 @@ export function withTaskQuery(
 ): string {
   const params = new URLSearchParams(search);
   if (taskId == null) {
-    params.delete('task');
+    writeSecondaryPaneClose(params, 'task');
   } else {
-    params.set('task', taskId);
+    writeSecondaryPaneOpen(params, 'task', taskId);
   }
-  const next = params.toString();
-  return next ? `${pathname}?${next}` : pathname;
+  return serializeQuery(pathname, params);
 }
 
 /**
- * Build the URL written by `openTask(taskId)`. Sets `?task=<task_id>` on
- * the current location, preserving any base path and other query params
- * (`side`, `fullscreen`). The app-level host reads `taskDetailId` from the
- * resulting RouteState and opens the detail modal on that task.
+ * Build the URL written by `openTask(taskId)`. Opens the `task` overlay on the
+ * current location, preserving the base path and the `?thread` / `?threads`
+ * restore stack. The app-level host reads `taskDetailId` from the resulting
+ * RouteState and shows the detail pane (in a conversation) or modal (drawer /
+ * board) on that task.
  *
- * Mirrors `buildSideOpenUrl` in spirit — purely additive on the URL,
- * with closing handled by `withTaskQuery(..., null)`.
+ * Thin wrapper over {@link withTaskQuery}; closing is `withTaskQuery(…, null)`.
  */
 export function buildTaskOpenUrl(
   pathname: string,
@@ -500,16 +602,14 @@ export function buildTaskOpenUrl(
 }
 
 /**
- * Build the URL written by `openSide(conversationId)`. Sets `?side=<id>`
- * AND strips `?fullscreen=1` — sigil clicks promise "side pane, doesn't
- * replace your main view" (see platform-prompt's "Referencing
- * conversations in chat"). If we let openSide inherit a previous
- * fullscreen flag, `shouldSecondaryFullscreen` would render ONLY the
- * side, hiding the channel the user was reading. PR-4 review finding
- * by @Cindy.
- *
- * Other params on the URL are preserved so closeSide falls back to
- * whatever was below.
+ * Build the URL written by `openSide(conversationId)`. Opens the `side`
+ * conversation pane (a `replace` pane): it clears every other secondary pane
+ * and `?fullscreen`. Sigil clicks promise "side pane, doesn't replace your
+ * main view" (see platform-prompt's "Referencing conversations in chat"); if
+ * openSide inherited a stale `?fullscreen=1`, `shouldSecondaryFullscreen` would
+ * render ONLY the side, hiding the channel the user was reading (PR-4 review
+ * finding by @Cindy). Unrelated query params are preserved so closeSide falls
+ * back to whatever was below.
  */
 export function buildSideOpenUrl(
   pathname: string,
@@ -517,22 +617,8 @@ export function buildSideOpenUrl(
   conversationId: string,
 ): string {
   const params = new URLSearchParams(search);
-  params.set('side', conversationId);
-  params.delete('fullscreen');
-  // Side and thread are mutually exclusive secondary panes — opening the
-  // side overlay closes any open thread. No-op when `?thread` is absent,
-  // so existing side-pane URLs are unaffected.
-  params.delete('thread');
-  // Same exclusion for the channel Threads-list pane (#task:1073).
-  params.delete('threads');
-  // …and the channel Attachments panel — fourth axis in the
-  // same secondary family, single-slot.
-  params.delete('files');
-  // …and the agent side-panel pane (#task:1189) — the right pane holds one
-  // secondary at a time.
-  params.delete('agent');
-  const qs = params.toString();
-  return qs ? `${pathname}?${qs}` : pathname;
+  writeSecondaryPaneOpen(params, 'side', conversationId);
+  return serializeQuery(pathname, params);
 }
 
 /**
@@ -545,9 +631,8 @@ export function buildSideOpenUrl(
  * Rules:
  *  - `rootMessageId == null` → strip `?thread` AND `?fullscreen` (closing
  *    the thread removes the secondary pane).
- *  - `rootMessageId !== null` → set `?thread=<id>`, strip `?side` and
- *    `?fullscreen` (the thread is a fresh secondary pane, mutually
- *    exclusive with the side overlay).
+ *  - `rootMessageId !== null` → open `thread` (a `replace` pane): set
+ *    `?thread=<id>` and clear every other secondary pane + `?fullscreen`.
  *  - Other query params (`task`, …) are preserved verbatim.
  */
 export function withThreadQuery(
@@ -557,18 +642,11 @@ export function withThreadQuery(
 ): string {
   const params = new URLSearchParams(search);
   if (rootMessageId == null) {
-    params.delete('thread');
-    params.delete('fullscreen');
+    writeSecondaryPaneClose(params, 'thread');
   } else {
-    params.set('thread', rootMessageId);
-    params.delete('side');
-    params.delete('threads');
-    params.delete('files');
-    params.delete('agent');
-    params.delete('fullscreen');
+    writeSecondaryPaneOpen(params, 'thread', rootMessageId);
   }
-  const next = params.toString();
-  return next ? `${pathname}?${next}` : pathname;
+  return serializeQuery(pathname, params);
 }
 
 /**
@@ -592,9 +670,8 @@ export function buildThreadOpenUrl(
  * Rules:
  *  - `open === false` → strip `?threads` AND `?fullscreen` (closing the
  *    list removes the secondary pane).
- *  - `open === true` → set `?threads=1`, strip `?side`, `?thread` and
- *    `?fullscreen` (the list is a fresh secondary pane, mutually exclusive
- *    with the side overlay and a single thread).
+ *  - `open === true` → open `threads` (a `replace` pane): set `?threads=1` and
+ *    clear every other secondary pane + `?fullscreen`.
  *  - Other query params (`task`, …) are preserved verbatim.
  */
 export function withThreadsQuery(
@@ -604,36 +681,28 @@ export function withThreadsQuery(
 ): string {
   const params = new URLSearchParams(search);
   if (!open) {
-    params.delete('threads');
-    params.delete('fullscreen');
+    writeSecondaryPaneClose(params, 'threads');
   } else {
-    params.set('threads', '1');
-    params.delete('side');
-    params.delete('thread');
-    params.delete('files');
-    params.delete('agent');
-    params.delete('fullscreen');
+    writeSecondaryPaneOpen(params, 'threads', '1');
   }
-  const next = params.toString();
-  return next ? `${pathname}?${next}` : pathname;
+  return serializeQuery(pathname, params);
 }
 
 /**
  * Build a URL with `?files` written or cleared. The Attachments panel is an
- * OVERLAY (mirrors `withAgentQuery`, #task:1433), not a mutually-exclusive
- * secondary-family peer.
+ * OVERLAY (`mode: 'overlay'` in {@link SECONDARY_PANES}), not a
+ * mutually-exclusive conversation-context peer.
  *
  * Rules:
  *  - `open === false` → strip `?files` AND `?fullscreen`. Any `?thread` /
  *    `?threads` that were PRESERVED when the panel opened survive, so the
- *    previously-open conversation pane comes back — the URL is the restore
- *    stack, no memory needed.
- *  - `open === true` → set `?files=1`; strip `?side`, `?agent` and
- *    `?fullscreen`, but PRESERVE `?thread` / `?threads`. `?side` is the
- *    exception (like `?agent`): a secondary CONVERSATION feeds
- *    `useSecondaryPaneModel`'s visible/focused set (which drives
- *    notification suppression), so leaving it set while visually covered
- *    would silence toasts for a pane the user can't see. `?agent` is
+ *    covered conversation pane comes back — the URL is the restore stack, no
+ *    memory needed.
+ *  - `open === true` → open `files`: set `?files=1`; strip `?side` and the
+ *    other overlays (`?agent` / `?task`) + `?fullscreen`, but PRESERVE
+ *    `?thread` / `?threads`. `?side` is cleared for correctness (a covered
+ *    secondary CONVERSATION still feeds `useSecondaryPaneModel`'s
+ *    visible/focused set → notification/read bugs); the other overlays are
  *    cleared because the right pane holds one overlay at a time.
  *  - Other query params (`task`, …) are preserved verbatim.
  */
@@ -644,36 +713,29 @@ export function withFilesQuery(
 ): string {
   const params = new URLSearchParams(search);
   if (!open) {
-    params.delete('files');
-    params.delete('fullscreen');
+    writeSecondaryPaneClose(params, 'files');
   } else {
-    params.set('files', '1');
-    params.delete('side');
-    params.delete('agent');
-    params.delete('fullscreen');
+    writeSecondaryPaneOpen(params, 'files', '1');
   }
-  const next = params.toString();
-  return next ? `${pathname}?${next}` : pathname;
+  return serializeQuery(pathname, params);
 }
 
 
 /**
- * Build a URL with `?agent` written or cleared (#task:1189). Mirrors
- * `withSideQuery` for the agent side-panel pane.
+ * Build a URL with `?agent` written or cleared (#task:1189). An OVERLAY pane
+ * (`mode: 'overlay'` in {@link SECONDARY_PANES}).
  *
  * Rules:
  *  - `agentId == null` → strip `?agent` AND `?fullscreen` (closing the panel
- *    removes the secondary pane). Any `?thread` / `?threads` that were
- *    PRESERVED when the panel opened survive, so the previously-open thread
- *    pane comes back (#task:1433).
- *  - `agentId !== null` → set `?agent=<id>`. The panel is an OVERLAY: App's
- *    secondary-pane precedence renders it ahead of the thread / threads-list
- *    pane, but their query params are PRESERVED so closing the panel restores
- *    whatever was open. `?side` is the exception — a secondary CONVERSATION
- *    feeds `useSecondaryPaneModel`'s visible/focused set (which drives
- *    notification suppression), so leaving it set while it's visually covered
- *    would silence toasts for a pane the user can't see; clear it instead.
- *    `?fullscreen` is dropped so the panel opens at its normal width.
+ *    removes the secondary pane). Any `?thread` / `?threads` PRESERVED when the
+ *    panel opened survive, so the covered thread pane comes back (#task:1433).
+ *  - `agentId !== null` → open `agent`: set `?agent=<id>`; strip `?side` and
+ *    the other overlays (`?files` / `?task`) + `?fullscreen`, but PRESERVE
+ *    `?thread` / `?threads`. App's secondary-pane precedence renders the panel
+ *    ahead of the thread / threads-list pane; those params survive so closing
+ *    restores whatever was open. `?side` is cleared for correctness (a covered
+ *    secondary CONVERSATION still feeds `useSecondaryPaneModel`'s
+ *    visible/focused set → notification/read bugs).
  *  - Other query params (`task`, …) are preserved verbatim.
  */
 export function withAgentQuery(
@@ -683,15 +745,11 @@ export function withAgentQuery(
 ): string {
   const params = new URLSearchParams(search);
   if (agentId == null) {
-    params.delete('agent');
-    params.delete('fullscreen');
+    writeSecondaryPaneClose(params, 'agent');
   } else {
-    params.set('agent', agentId);
-    params.delete('side');
-    params.delete('fullscreen');
+    writeSecondaryPaneOpen(params, 'agent', agentId);
   }
-  const next = params.toString();
-  return next ? `${pathname}?${next}` : pathname;
+  return serializeQuery(pathname, params);
 }
 
 /**
@@ -757,23 +815,27 @@ export function useNav(): {
    *  behaviour (#task:1126 follow-up). */
   toggleThreadsList: () => void;
   /** Open the channel Attachments panel in the right pane (`?files=1`).
-   *  Clears `?side`/`?thread`/`?threads`/`?agent`/`?fullscreen`
-   *  — fourth secondary-family axis, single-slot. */
+   *  An OVERLAY: clears `?side` (correctness) + the other overlays
+   *  (`?agent`/`?task`) + `?fullscreen`, but PRESERVES `?thread`/`?threads`
+   *  as the restore stack. */
   openFilesList: () => void;
   /** Close the channel Attachments panel. Strips `?files` (and any residual
-   *  `?fullscreen` — the panel has no fullscreen affordance). */
+   *  `?fullscreen`); the preserved `?thread`/`?threads` resurfaces. */
   closeFilesList: () => void;
   /** Toggle the channel Attachments panel — drives the header Paperclip
    *  icon's click-to-toggle behaviour, mirroring `toggleThreadsList`. */
   toggleFilesList: () => void;
-  /** Open a task's detail modal by writing `?task=<task_id>` (#task:1715).
+  /** Open a task's detail by writing `?task=<task_id>` (an OVERLAY pane).
    *  Every entrance (chat chip, Tasks pane card, drawer card) goes through
-   *  this one writer, so there is a single modal state. `replace` so
-   *  re-clicking task chips doesn't pile history entries. */
+   *  this one writer, so there is a single task-detail state. In a
+   *  conversation the host renders it as an overlay side pane; from the drawer
+   *  / board as a modal. `replace` so re-clicking chips doesn't pile history.
+   *  Clears `?side` + other overlays, preserves `?thread`/`?threads`. */
   openTask: (taskId: string) => void;
-  /** Close the detail modal by clearing `?task`. The tasks drawer keeps its
-   *  own open state, so this is independent of the drawer being open —
-   *  closing a modal opened from a drawer card returns to the drawer. */
+  /** Close the task detail by clearing `?task` (and `?fullscreen`). The
+   *  preserved `?thread`/`?threads` resurfaces; the tasks drawer keeps its own
+   *  open state, so closing a detail opened from a drawer card returns to the
+   *  drawer. */
   closeTask: () => void;
   /** Open agent `agentId` as the chat-section right-pane panel
    *  (`?agent=<id>`, #task:1189) so a channel + the agent's Activity show

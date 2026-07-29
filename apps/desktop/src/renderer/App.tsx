@@ -42,6 +42,7 @@ import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
 import { useLocalWorkspacePaths } from '@/features/workspaces/local-paths';
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
+import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
 import { useTasks } from '@/features/tasks/hooks';
 import {
@@ -893,10 +894,6 @@ function RegisteredAppShell(): JSX.Element {
     threadsListOpen,
     parentChannelMembership,
   );
-  useContextualCloseResponder(
-    { ...route, filesListOpen: filesListMounted, threadsListOpen: threadsListMounted },
-    nav,
-  );
   // Decouple the heavy PRIMARY pane (ChannelView + message list) from the cheap
   // sidebar highlight (#task:1162). Selecting a channel re-renders ChannelView
   // with a new conversation, which tears down the old message list (~hundreds of
@@ -1111,6 +1108,32 @@ function RegisteredAppShell(): JSX.Element {
     ((appSection === 'chat' && view === 'channel') || appSection === 'activity');
   const drawerVisible = drawerHostable && tasksDrawerOpen;
   const sectionVisible = appSection === 'tasks';
+
+  // `?task=<id>` routes to ONE of two surfaces, never both. In a channel chat
+  // (and with the task drawer down) it is an overlay SIDE PANE beside the
+  // conversation (#task:1721) — the task can be read/edited without covering the
+  // messages it was referenced from. Every other position (a board / drawer card,
+  // or a cold deep-link outside chat) keeps the app-level modal: there is no
+  // conversation there for a pane to anchor to. The split is on the SAME `?task`
+  // pointer, so the pane id and the modal id are exclusive by construction and
+  // the task can't double-render.
+  const taskPaneEligible =
+    appSection === 'chat' &&
+    view === 'channel' &&
+    selectedChannelId !== null &&
+    !drawerVisible;
+  const taskPaneId = taskPaneEligible ? taskDetailId : null;
+  const taskModalId = taskPaneEligible ? null : taskDetailId;
+
+  // ⌘W ladder. Called here (not with the other early hooks) because it needs
+  // `taskPaneId` to know whether the task shows as the peelable side pane or the
+  // self-dismissing modal. Route + nav are read through a ref inside, so the
+  // relocation only affects hook order, not freshness.
+  useContextualCloseResponder(
+    { ...route, filesListOpen: filesListMounted, threadsListOpen: threadsListMounted },
+    nav,
+    taskPaneId !== null,
+  );
 
   // Ref-stable for the same `React.memo` reason: the `/tasks` board is a reveal
   // TARGET as well as a source (#task:1715), and an inline arrow here would
@@ -1622,6 +1645,22 @@ function RegisteredAppShell(): JSX.Element {
         parentTitle={selectedChannel?.title ?? null}
         onClose={nav.closeFilesList}
         onJumpToMessage={handleJumpToMessage}
+      />
+    );
+  } else if (taskPaneId && selectedChannelId) {
+    // Task detail pane (`?task=<id>`, #task:1721). An OVERLAY pane like `?agent`
+    // / `?files`: opening it cleared `?side` and the other overlays but PRESERVED
+    // `?thread` / `?threads`, so it renders ahead of the side/thread/threads
+    // chain and closing it reveals whatever conversation pane was underneath (the
+    // URL is the restore stack). Not a conversation, so it doesn't feed
+    // `secondaryDescriptor` / notification suppression. Only reachable here when
+    // `taskPaneEligible` held (in-channel chat, drawer down); every other entry
+    // kept the modal.
+    secondaryView = (
+      <TaskDetailPanel
+        key={`task-${taskPaneId}`}
+        taskId={taskPaneId}
+        onClose={nav.closeTask}
       />
     );
   } else if (secondaryDescriptor) {
@@ -2305,12 +2344,13 @@ function RegisteredAppShell(): JSX.Element {
           onOpenTask={handleOpenTask}
         />
       ) : null}
-      {/* ONE task detail modal for the whole app (#task:1715). It is driven
-        * solely by `?task=<task_id>`, so a chat chip, a board card, a drawer
-        * card, and a cold deep-link all land in the same instance — and no
-        * surface keeps a private copy that could disagree with the URL. */}
+      {/* Task detail modal — the NON-pane half of the `?task` split (#task:1721):
+        * a board / drawer card or a cold deep-link outside chat, where there is
+        * no conversation for a side pane to anchor to. In a channel chat the same
+        * pointer renders `TaskDetailPanel` instead (`taskModalId` is null then),
+        * so exactly one surface shows the task. */}
       <TaskDetailDialog
-        taskId={taskDetailId}
+        taskId={taskModalId}
         onOpenChange={next => {
           if (!next) nav.closeTask();
         }}

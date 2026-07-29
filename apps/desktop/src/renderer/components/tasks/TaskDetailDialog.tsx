@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CheckSquare, ExternalLink, Loader2, Pencil } from 'lucide-react';
-import { TASK_CONTENT_MAX_LEN, type TaskDetailDto } from '@silverhand/shared';
+import type { TaskDetailDto } from '@silverhand/shared';
 import {
   Dialog,
   DialogContent,
@@ -11,16 +11,16 @@ import {
   DialogCornerButton,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/input';
 import { MiniIconButton } from '@/components/tasks/MiniIconButton';
 import { TaskDetailMetaPanel } from '@/components/tasks/TaskDetailMetaPanel';
-import { Markdown } from '@/components/chat/Markdown';
 import {
-  useAssignTask,
-  useEditTask,
-  useTaskDetail,
-  useUpdateTaskStatus,
-} from '@/features/tasks/hooks';
+  FAILURE_COPY,
+  InlineFieldEditor,
+  useTaskWriteSlot,
+  type EditingField,
+} from '@/components/tasks/taskDetailShared';
+import { Markdown } from '@/components/chat/Markdown';
+import { useTaskDetail } from '@/features/tasks/hooks';
 import {
   classifyTaskDetailFailure,
   resolveTaskDetailView,
@@ -29,14 +29,8 @@ import {
   type TaskDetailView,
   type TaskJumpTarget,
 } from '@/features/tasks/taskDetail';
-import { cn } from '@/lib/cn';
 
 export type { TaskJumpTarget } from '@/features/tasks/taskDetail';
-
-/** Which field is currently in inline-edit mode; `null` is the read view. Only
- *  one field edits at a time — the other field's pencil is hidden until the
- *  current edit finishes, so there is never a mid-edit switch. */
-type EditingField = 'title' | 'content' | null;
 
 export interface TaskDetailDialogProps {
   /** Task identity to show, or null when the modal is closed. An ID, not a
@@ -304,26 +298,6 @@ function TaskDetailContent({
 
 // ── Unresolved states (loading + the three failure tiers) ──────────
 
-const FAILURE_COPY: Record<TaskDetailFailure, { header: string; body: string }> = {
-  not_found: {
-    header: 'Task not found',
-    // Both causes answer 404 and the viewer can't tell them apart, so the copy
-    // names both rather than asserting the one we can't verify.
-    body: 'This task was deleted, or it belongs to a conversation you can’t read.',
-  },
-  unreachable: {
-    header: 'Can’t reach the server',
-    // No Retry here: the app-status banner already owns this signal and its
-    // retry. A second, narrower retry button would be a competing control for
-    // the same recovery.
-    body: 'The task can’t be loaded while the connection is down.',
-  },
-  transient: {
-    header: 'Couldn’t load this task',
-    body: 'The request failed.',
-  },
-};
-
 function TaskDetailStatePanel({
   failure,
   onRetry,
@@ -391,17 +365,15 @@ function TaskDetailBody({
   onStopEditing: () => void;
 }): JSX.Element {
 
-  // The metadata sidebar's two writes live HERE, with the title/content editor,
-  // because the three of them share ONE dialog-local write slot: while any of
-  // them is open or in flight the others go inert. Without that, clicking Status
-  // during a title edit fires the blur-save AND a status write in the same
-  // interaction, and `useEditTask`'s whole-object cache write can land last and
-  // clobber the newer status (Cindy review, shiki 2026-07-29 "ui 上可以加状态来阻
-  // 塞用户"). Local slot only — no lock, no revision, no multi-writer protocol.
-  const updateStatus = useUpdateTaskStatus();
-  const assign = useAssignTask();
-  const metaPending = updateStatus.isPending || assign.isPending;
-  const busy = editingField !== null || metaPending;
+  // The metadata sidebar's two writes share ONE dialog-local write slot with
+  // the title/content editor (`useTaskWriteSlot`): while any of them is open or
+  // in flight the others go inert. Without that, clicking Status during a title
+  // edit fires the blur-save AND a status write in the same interaction, and
+  // `useEditTask`'s whole-object cache write can land last and clobber the newer
+  // status (Cindy review, shiki 2026-07-29 "ui 上可以加状态来阻塞用户"). Local slot
+  // only — no lock, no revision, no multi-writer protocol.
+  const slot = useTaskWriteSlot(detail.id, editingField);
+  const { busy } = slot;
 
   return (
     <>
@@ -491,185 +463,8 @@ function TaskDetailBody({
           )}
         </div>
 
-        <TaskDetailMetaPanel
-          view={detail}
-          busy={busy}
-          statusPending={updateStatus.isPending}
-          statusFailed={updateStatus.isError}
-          onStatusChange={status => {
-            updateStatus.reset();
-            updateStatus.mutate({ taskId: detail.id, status });
-          }}
-          assignPending={assign.isPending}
-          assignFailed={assign.isError}
-          onAssign={agentId => {
-            assign.reset();
-            assign.mutate({ taskId: detail.id, agentId });
-          }}
-        />
+        <TaskDetailMetaPanel view={detail} {...slot} />
       </div>
     </>
-  );
-}
-
-// ── Inline per-field editor ────────────────────────────────────────
-
-/**
- * In-place editor for ONE field — both title and content are auto-growing
- * textareas. Mounted only while that field is active, so a task_changed
- * refetch of the same task never remounts it and the draft survives.
- *
- * Interaction is chat-composer-style: Enter saves, Shift+Enter inserts a
- * newline, and leaving the field (blur) also saves. The commit is deliberately
- * narrow —
- *   - only a real change is sent (an untouched blur just leaves edit mode);
- *   - the write carries ONLY this field (the omitted field stays unchanged — a
- *     title edit must never send `body`, and vice versa, or it clobbers it);
- *   - title is submitted VERBATIM: the single-line invariant (trim + internal
- *     whitespace collapse) is owned by `TaskTitleSchema`, and the read view
- *     refills from the canonical title in the success response — the renderer
- *     never runs a second normalization;
- *   - a validation/request failure keeps the editor open with an inline error,
- *     never silently dropping the draft;
- *   - an in-flight write dedups repeat blurs, a successful save latches so the
- *     focus-unmount blur (Enter commits while still focused) can't re-submit,
- *     and an explicit Escape-cancel wins over the blur that follows it.
- * The IME guard sits at the top of the key handler (chat-composer parity), so a
- * CJK Enter — which only confirms a candidate — never misfires a save.
- */
-function InlineFieldEditor({
-  taskId,
-  field,
-  initial,
-  onDone,
-  onCancel,
-}: {
-  taskId: string;
-  field: 'title' | 'content';
-  initial: string;
-  onDone: () => void;
-  onCancel: () => void;
-}): JSX.Element {
-  const edit = useEditTask();
-  const [value, setValue] = useState(initial);
-  // Why the editor stayed open after a blur (required title empty / body over
-  // its raw limit), if at all — drives the inline error and the error border.
-  const [blocked, setBlocked] = useState<'empty' | 'over' | null>(null);
-  const ref = useRef<HTMLTextAreaElement>(null);
-  // Escape marks a cancel BEFORE the editor unmounts, so the blur that follows
-  // the unmount is a no-op — an explicit cancel must beat blur-to-save.
-  const cancelledRef = useRef(false);
-  // A committed save latches this: Enter fires commit while the textarea is
-  // still focused, so `onDone()` unmounts a focused field → the browser fires a
-  // trailing blur → commit() would run again. The latch makes that blur (and
-  // any repeat) a no-op; a FAILED save unlatches so the kept draft can retry.
-  const submittingRef = useRef(false);
-
-  const isTitle = field === 'title';
-
-  // Both fields auto-grow to their content: reset to `auto` then to the scroll
-  // height on every value change so the box never scrolls internally.
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${el.scrollHeight}px`;
-  }, [value]);
-
-  async function commit(): Promise<void> {
-    // Escape already cancelled, or a save already went through (the trailing
-    // focus-unmount blur must not re-submit).
-    if (cancelledRef.current || submittingRef.current) return;
-    if (edit.isPending) return; // a write is already in flight — dedup blurs
-    if (value === initial) {
-      onDone(); // untouched → just leave edit mode, send nothing
-      return;
-    }
-    // Mirror the schema's non-empty title rule for instant feedback; the schema
-    // stays the authority (and collapses internal whitespace on the server).
-    if (isTitle && value.trim().length === 0) {
-      setBlocked('empty'); // stay open, inline error — never persist an empty title
-      return;
-    }
-    // Length is hard-blocked only for the body (raw 10000). Title length is
-    // NOT checked here: `TaskTitleSchema` collapses internal whitespace before
-    // testing its limit, so `"foo" + 300 spaces + "bar"` is over raw length yet
-    // has a valid canonical form. The renderer runs no second normalization, so
-    // it can't compute the canonical length — it defers title length to the
-    // server (an over-limit title returns as `edit.isError` and stays open).
-    if (!isTitle && value.length > TASK_CONTENT_MAX_LEN) {
-      setBlocked('over');
-      return;
-    }
-    submittingRef.current = true; // latch before the write settles (see ref decl)
-    try {
-      // Submit ONLY this field, VERBATIM — title normalization lives in
-      // `TaskTitleSchema`; body keeps its whitespace/newlines.
-      await edit.mutateAsync(
-        isTitle ? { taskId, title: value } : { taskId, body: value },
-      );
-    } catch {
-      submittingRef.current = false; // failed — unlatch so a retry blur/Enter can resubmit
-      return; // stay open; `edit.isError` renders the inline error, draft kept
-    }
-    onDone();
-  }
-
-  function onKeyDown(e: React.KeyboardEvent): void {
-    // Ignore keystrokes mid IME composition — Enter accepts a CJK candidate and
-    // Esc dismisses it; neither should touch the editor (chat-composer parity).
-    if (e.nativeEvent.isComposing) return;
-    // Enter saves, Shift+Enter inserts a newline — same as the chat composer.
-    // (Title is single-line by schema, so a Shift+Enter break there just
-    // collapses to a space on save.)
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      void commit();
-      return;
-    }
-    if (e.key === 'Escape') {
-      // Cancel the edit (revert to the read view) WITHOUT closing the Dialog:
-      // preventDefault stops Radix's DismissableLayer from also dismissing, and
-      // the cancel flag makes the ensuing blur a no-op.
-      e.preventDefault();
-      cancelledRef.current = true;
-      onCancel();
-    }
-  }
-
-  const errorMsg =
-    blocked === 'empty'
-      ? 'Title can’t be empty.'
-      : blocked === 'over'
-        ? `Keep it under ${TASK_CONTENT_MAX_LEN} characters.`
-        : edit.isError
-          ? 'Couldn’t save changes. Try again.'
-          : null;
-
-  return (
-    <div className="flex flex-col gap-1">
-      <Textarea
-        ref={ref}
-        aria-label={isTitle ? 'Task title' : 'Task description'}
-        rows={1}
-        value={value}
-        onChange={e => {
-          setValue(e.target.value);
-          if (blocked) setBlocked(null);
-          if (edit.isError) edit.reset();
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={() => void commit()}
-        autoFocus
-        className={cn(
-          'resize-none overflow-hidden',
-          isTitle
-            ? 'min-h-0 py-1 text-base font-medium leading-snug'
-            : 'min-h-[120px] text-sm leading-relaxed',
-          errorMsg && 'border-error focus-visible:border-error',
-        )}
-      />
-      {errorMsg ? <p className="text-xs text-error">{errorMsg}</p> : null}
-    </div>
   );
 }

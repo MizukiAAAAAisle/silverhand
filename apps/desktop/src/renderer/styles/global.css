@@ -569,6 +569,28 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   text-transform: var(--chrome-label-transform);
 }
 
+/* Task detail pane — width-adaptive metadata grid (#task:1721).
+   The conversation-anchored task pane can be dragged narrow or wide, so its
+   metadata reflows to the PANE's OWN width, not the viewport: one column when
+   narrow, two label/value pairs per row once the pane is wide enough (~460px)
+   to halve the vertical height. A container query (not a media query) is what
+   makes it track the pane — `.task-pane` names the query container. */
+.task-pane {
+  container-type: inline-size;
+  container-name: task-pane;
+}
+.task-pane-meta {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 12px 20px;
+}
+@container task-pane (min-width: 460px) {
+  .task-pane-meta {
+    grid-template-columns: 60px 1fr 60px 1fr;
+  }
+}
+
+
 /* ── Activity cluster (PR-10) ──────────────────────────────────────
    `task_* / session_cleared / rename` lifecycle events get pooled
    into an `ActivityCluster` (see `groupMessages.ts`). The cluster

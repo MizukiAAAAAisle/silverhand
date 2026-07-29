@@ -118,6 +118,7 @@ export type ContextualCloseOutcome = 'closed-panel' | 'background-app';
 type CloseTarget =
   | 'agent'
   | 'files'
+  | 'task'
   | 'side'
   | 'thread'
   | 'threads'
@@ -133,6 +134,12 @@ export interface ContextualCloseState {
    *  ⌘W peels it first; closing it reveals whatever pane it covered. */
   agentPanelId: string | null;
   filesListOpen: boolean;
+  /** Task detail is showing as the OVERLAY SIDE PANE (`?task`, #task:1721), not
+   *  the app-level modal. Only the pane is a ⌘W peel target — the modal (board /
+   *  drawer entry) is a Radix Dialog that owns its own dismissal. Sits just below
+   *  files in the ladder, mirroring the render order `agent > files > task > side
+   *  > thread > threads`. */
+  taskPaneOpen: boolean;
   sideConversationId: string | null;
   threadRootId: string | null;
   threadsListOpen: boolean;
@@ -154,16 +161,18 @@ export interface ContextualCloseResolution {
  *
  * Layer 1  ?agent (Agent panel)    → close the agent side-panel (topmost overlay)
  * Layer 2  ?files (Attachments)    → close files
- * Layer 3  secondary pane          → close side / thread / threads-list, in the
+ * Layer 3  ?task pane              → close the task detail side pane (#task:1721;
+ *          the modal entry is not a target — Radix owns its dismissal)
+ * Layer 4  secondary pane          → close side / thread / threads-list, in the
  *          SAME priority the render layer resolves (`side > thread > threads`,
  *          see `layoutMemoryFromRoute`), so we peel whichever pane is actually
  *          visible when a malformed URL sets more than one.
- * Layer 4  Activity channel detail → pop back to the full-screen Activity list
- * Layer 5  nothing left            → background-app (main hides the app)
+ * Layer 5  Activity channel detail → pop back to the full-screen Activity list
+ * Layer 6  nothing left            → background-app (main hides the app)
  *
- * The order mirrors the render-layer priority `agent > files > side > thread >
- * threads`, then the Activity channel underneath, so ⌘W always peels the
- * surface actually on top. The Chat section's main ChannelView is not a
+ * The order mirrors the render-layer priority `agent > files > task > side >
+ * thread > threads`, then the Activity channel underneath, so ⌘W always peels
+ * the surface actually on top. The Chat section's main ChannelView is not a
  * target — when only it remains, ⌘W backgrounds the app.
  */
 export function resolveContextualClose(
@@ -173,6 +182,7 @@ export function resolveContextualClose(
     return { outcome: 'closed-panel', target: 'agent' };
   }
   if (state.filesListOpen) return { outcome: 'closed-panel', target: 'files' };
+  if (state.taskPaneOpen) return { outcome: 'closed-panel', target: 'task' };
   if (state.sideConversationId != null) {
     return { outcome: 'closed-panel', target: 'side' };
   }
@@ -193,6 +203,8 @@ export function resolveContextualClose(
 export interface ContextualCloseNav {
   closeAgentPanel: () => void;
   closeFilesList: () => void;
+  /** Clear `?task` — closes the task detail side pane (#task:1721). */
+  closeTask: () => void;
   closeSide: () => void;
   closeThread: () => void;
   closeThreadsList: () => void;
@@ -222,17 +234,22 @@ type ContextualCloseRoute = Pick<
 export function useContextualCloseResponder(
   route: ContextualCloseRoute,
   nav: ContextualCloseNav,
+  /** Whether `?task` is currently showing as the side PANE (not the modal). The
+   *  pane-vs-modal split reads drawer state that isn't in `route`, so the caller
+   *  resolves it and passes the result — only the pane is a ⌘W peel target. */
+  taskPaneOpen: boolean,
 ): void {
-  const stateRef = useRef({ route, nav });
-  stateRef.current = { route, nav };
+  const stateRef = useRef({ route, nav, taskPaneOpen });
+  stateRef.current = { route, nav, taskPaneOpen };
   useEffect(() => {
     const api = window.silverhand;
     if (!api.onContextualClose || !api.respondContextualClose) return;
     return api.onContextualClose(reqId => {
-      const { route, nav } = stateRef.current;
+      const { route, nav, taskPaneOpen } = stateRef.current;
       const { outcome, target } = resolveContextualClose({
         agentPanelId: route.agentPanelId,
         filesListOpen: route.filesListOpen,
+        taskPaneOpen,
         sideConversationId: route.sideConversationId,
         threadRootId: route.threadRootId,
         threadsListOpen: route.threadsListOpen,
@@ -247,6 +264,9 @@ export function useContextualCloseResponder(
           break;
         case 'files':
           nav.closeFilesList();
+          break;
+        case 'task':
+          nav.closeTask();
           break;
         case 'side':
           nav.closeSide();
