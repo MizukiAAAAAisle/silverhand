@@ -3,7 +3,10 @@ import { CheckSquare, Loader2, Pencil } from 'lucide-react';
 import type { TaskDetailDto } from '@silverhand/shared';
 import { Button } from '@/components/ui/button';
 import { MiniIconButton } from '@/components/tasks/MiniIconButton';
-import { SidePanelHeader } from '@/components/layout/SidePanelHeader';
+import {
+  SidePanelHeader,
+  SidePanelHeaderTitle,
+} from '@/components/layout/SidePanelHeader';
 import { Markdown } from '@/components/chat/Markdown';
 import {
   FAILURE_COPY,
@@ -43,9 +46,10 @@ export interface TaskDetailPanelProps {
  * (`taskDetailShared`), differing only in chrome and metadata layout, so they
  * can never drift on how a task reads, edits, or fails.
  *
- * The header carries ONLY the task number + close (shiki 2026-07-29 mockup v2):
- * the title lives in the body with its own edit pencil, so the header doesn't
- * repeat it. Metadata reflows to the PANE's own width — one column when narrow,
+ * The header carries a static "Task" label with the task number as its subtitle
+ * plus close (shiki 2026-07-29) — the same title/subtitle idiom as the
+ * attachments pane. The task's own title lives in the body with its edit pencil,
+ * so the header doesn't repeat it. Metadata reflows to the PANE's own width — one column when narrow,
  * two when wide — via a container query (`.task-pane` / `.task-pane-meta`), not
  * the viewport, so a dragged-narrow pane stacks and a dragged-wide one saves
  * vertical height.
@@ -95,20 +99,22 @@ export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetail
       className="task-pane flex h-full w-full flex-col bg-bg-floating"
       aria-label="Task detail"
     >
-      {/* The shared side-panel header, same primitive the agent / thread /
-          attachments panes use — so the close ✕ is the ONE `data-sticker-close`
-          affordance forza6 stamps as a poster sticker (a hand-rolled
-          `MiniIconButton` here would stay a flat glyph while every other pane's
-          ✕ earned the sticker), and the `h-12` height contract can't drift. */}
+      {/* The shared side-panel header, same primitive (and same title/subtitle
+          idiom) the agent / thread / attachments panes use — so the close ✕ is
+          the ONE `data-sticker-close` affordance forza6 stamps as a poster
+          sticker, and the `h-12` height contract can't drift. Mirrors the
+          attachments pane exactly: a static section label as the title, the
+          entity's identity as the subtitle. */}
       <SidePanelHeader onClose={onClose}>
-        <CheckSquare className="size-4 shrink-0 text-text-muted" aria-hidden />
-        {/* Number, not title (shiki mockup v2): the title lives in the body. It
-            only resolves with the read, so the header shows a neutral label
-            until then rather than an empty slot. Leading identity glyph stays a
-            plain icon — forza6 stickers action buttons, not leading glyphs. */}
-        <span className="flex-1 font-mono text-xs text-text-secondary">
-          {painted ? `#${painted.task_number}` : 'Task'}
-        </span>
+        <SidePanelHeaderTitle
+          icon={<CheckSquare className="size-3.5 shrink-0 text-text-muted" aria-hidden />}
+          title="Task"
+          // The number, not the title — the task's own title lives in the body
+          // with its edit pencil, so the header doesn't repeat it (shiki mockup
+          // v2). Resolves with the read; blank until then, like the attachments
+          // subtitle before its context loads.
+          subtitle={painted ? `#${painted.task_number}` : ''}
+        />
       </SidePanelHeader>
       <PaneContent
         view={view}
