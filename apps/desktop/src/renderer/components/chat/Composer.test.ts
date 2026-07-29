@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
 import {
+  detectTrigger,
   filterChannels,
   filterMentionPeople,
   formatPickInsertion,
@@ -300,4 +301,106 @@ describe('filterChannels', () => {
     ]);
     expect(hiddenCount).toBe(0);
   });
+
+  it('filters by an ASCII substring of the title, case-insensitively', () => {
+    const channels = [
+      channel({ id: 'a', title: 'UI polish' }),
+      channel({ id: 'b', title: 'backend' }),
+    ];
+    const { items } = filterChannels(channels, 'POL');
+    expect(items.map(i => (i.kind === 'channel' ? i.channel.id : null))).toEqual([
+      'a',
+    ]);
+  });
+
+  it('filters by a CJK substring of the title (#task:1720)', () => {
+    // The channel title is real display text, so the matcher runs on the
+    // raw title — a CJK query must select CJK titles both as a prefix and
+    // mid-string, exactly like ASCII. (The upstream trigger fix in
+    // detectTrigger is what lets a CJK query reach this matcher at all.)
+    const channels = [
+      channel({ id: 'design', title: '设计评审' }),
+      channel({ id: 'polish', title: 'UI 优化' }),
+      channel({ id: 'backend', title: 'backend' }),
+    ];
+    expect(
+      filterChannels(channels, '设计').items.map(i =>
+        i.kind === 'channel' ? i.channel.id : null,
+      ),
+    ).toEqual(['design']);
+    // Mid-string CJK match: '优化' is the tail of 'UI 优化'.
+    expect(
+      filterChannels(channels, '优化').items.map(i =>
+        i.kind === 'channel' ? i.channel.id : null,
+      ),
+    ).toEqual(['polish']);
+  });
 });
+
+describe('detectTrigger', () => {
+  it('captures an ASCII @ query up to the caret', () => {
+    // "@al" with caret at end → mention trigger, query "al".
+    expect(detectTrigger('hi @al', 6)).toEqual({ kind: '@', pos: 3, query: 'al' });
+  });
+
+  it('captures an ASCII # query up to the caret', () => {
+    expect(detectTrigger('see #gen', 8)).toEqual({ kind: '#', pos: 4, query: 'gen' });
+  });
+
+  it('keeps walking through a CJK # query instead of bailing (#task:1720)', () => {
+    // The ASCII-only handle class used to bail on the first CJK char, so
+    // the menu never opened for '#设计'. The Unicode class must walk past
+    // '计' and '设' back to the '#'.
+    const text = '去 #设计';
+    expect(detectTrigger(text, text.length)).toEqual({
+      kind: '#',
+      pos: 2,
+      query: '设计',
+    });
+  });
+
+  it('keeps walking through a CJK @ query (@张三) (#task:1720)', () => {
+    const text = 'cc @张三';
+    expect(detectTrigger(text, text.length)).toEqual({
+      kind: '@',
+      pos: 3,
+      query: '张三',
+    });
+  });
+
+  it('captures a query mixing CJK and ASCII', () => {
+    const text = '#设计x';
+    expect(detectTrigger(text, text.length)).toEqual({
+      kind: '#',
+      pos: 0,
+      query: '设计x',
+    });
+  });
+
+  it('does not trigger when the char before @ extends a handle (email)', () => {
+    // 'me@example.com' — the char before '@' is a letter, so '@' is part
+    // of a token, not a mention trigger.
+    expect(detectTrigger('me@example', 10)).toBeNull();
+  });
+
+  it('does not trigger when a CJK char precedes @ (#task:1720 boundary)', () => {
+    // The widened handle class means a CJK char now also extends a handle,
+    // so '张@x' must NOT open the menu — the '@' is mid-token.
+    const text = '张@x';
+    expect(detectTrigger(text, text.length)).toBeNull();
+  });
+
+  it('does not trigger across a slash (path-like)', () => {
+    expect(detectTrigger('path/@x', 7)).toBeNull();
+  });
+
+  it('bails on whitespace between the caret and any trigger', () => {
+    expect(detectTrigger('hello world', 11)).toBeNull();
+  });
+
+  it('returns null for an out-of-range caret', () => {
+    expect(detectTrigger('@a', 0)).toBeNull();
+    expect(detectTrigger('@a', 3)).toBeNull();
+  });
+});
+

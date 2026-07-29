@@ -20,17 +20,17 @@ import { Button } from '@/components/ui/button';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
-import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import {
   useChannelsForWorkspace,
+  useWorkspaceMemberLists,
   type ChannelListItem,
+  type WorkspaceHumanMember,
 } from '@/features/workspaces/hooks';
 import { useConversationById } from '@/features/conversations/useConversationById';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
 import { useSendMessage } from '@/features/channels/hooks';
-import { useUsers } from '@/features/users/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -78,6 +78,14 @@ interface ComposerProps {
 
 const MAX_TEXTAREA_HEIGHT = 192; // Mirrors Tailwind max-h-48.
 type PendingAttachment = CachedPendingAttachment;
+
+// Stable empty defaults for the workspace-scoped mention sources. While
+// `useWorkspaceMemberLists` has no data (workspaceId null or query loading)
+// the `@` picker fails closed to these — reusing one frozen array per kind
+// keeps the candidate memo's deps referentially stable across those frames
+// instead of re-firing on a fresh `[]` each render.
+const EMPTY_AGENTS: AgentDto[] = [];
+const EMPTY_HUMANS: WorkspaceHumanMember[] = [];
 
 /**
  * Best-effort mirror of the backend's `detectContentType` hint→suffix path
@@ -279,8 +287,28 @@ export function Composer({
     };
   }, [draftKey]);
 
-  const { data: agents = [] } = useAgents();
-  const { data: users = [] } = useUsers();
+  // Both autocomplete kinds are scoped to the CURRENT conversation's
+  // workspace, so resolve that workspace once, up front. `workspaceId`
+  // is read from `useConversationById(conversationId).ref`, which
+  // resolves asynchronously — cold start, deep link, HMR, or a cleared
+  // cache can leave it null for a few frames. Everything downstream
+  // (member lists AND channel list) must fail CLOSED to empty in that
+  // window rather than fall back to a global directory, or the `@`
+  // picker would briefly leak candidates from outside this workspace
+  // (#task:1720). The product premise "there is no composer without a
+  // workspace" holds; this only closes the renderer resolution timing.
+  const conv = useConversationById(conversationId);
+  const workspaceId = conv.ref?.workspace_id ?? null;
+  const workspaceKind = conv.ref?.workspace_kind ?? null;
+  // `@` mention candidates come ONLY from this workspace's members — an
+  // agent or human outside the workspace must never be offered. While
+  // `workspaceId` is null or the query is loading, `useWorkspaceMemberLists`
+  // yields no data, so both arrays stay empty (fail closed, no global
+  // fallback). Stable empty-array constants keep the memo deps below from
+  // re-firing every render during that window.
+  const memberLists = useWorkspaceMemberLists(workspaceId);
+  const agents = memberLists.data?.agents ?? EMPTY_AGENTS;
+  const workspaceHumans = memberLists.data?.humans ?? EMPTY_HUMANS;
   const conversationMembers = useConversationMembers(conversationId);
   // #task:876 (2026-06-03): the viewer's own row in the mention picker
   // is noise — you can't @-mention yourself meaningfully. Resolve the
@@ -295,11 +323,11 @@ export function Composer({
     && !isBackendUnreachable(viewerQuery.data)
       ? viewerQuery.data.id
       : null;
-  // Membership sets used to split the mention picker into
-  // "IN THIS CHANNEL/THREAD" vs "NOT IN" groups (#task:876). Empty
-  // sets while conversationMembers is still loading collapse the
-  // picker to the NOT IN section by default; once it resolves the
-  // viewer sees the proper split.
+  // Membership sets used to split the mention picker into "In this
+  // channel" vs "Other channels" groups (#task:876). Empty sets while
+  // conversationMembers is still loading collapse the picker to the
+  // "Other channels" section by default; once it resolves the viewer
+  // sees the proper split.
   const { agentMemberIds, humanMemberIds } = useMemo(() => {
     const a = new Set<string>();
     const h = new Set<string>();
@@ -311,36 +339,31 @@ export function Composer({
     }
     return { agentMemberIds: a, humanMemberIds: h };
   }, [conversationMembers.status, conversationMembers.members]);
-  // Human mention candidate list = global users directory (D3),
-  // minus the viewer. Membership against this conversation is folded
-  // in by the picker's grouping pass downstream, not pre-filtered out
-  // (the picker now shows NOT IN candidates so the mention-cc DM
-  // path stays discoverable — see #task:864 / mention_cc fix series).
+  // Human mention candidates = this workspace's human members, minus the
+  // viewer. Membership against THIS conversation is folded in by the
+  // picker's grouping pass downstream, not pre-filtered out — the picker
+  // still shows members not in this channel so the mention-cc DM path
+  // stays discoverable (see #task:864 / mention_cc fix series), now bounded
+  // to the workspace instead of the global user directory (#task:1720).
   const mentionHumans = useMemo<HumanMentionCandidate[]>(() => {
     const out: HumanMentionCandidate[] = [];
-    for (const user of users) {
-      if (viewerId && user.id === viewerId) continue;
+    for (const human of workspaceHumans) {
+      if (viewerId && human.id === viewerId) continue;
       out.push({
-        id: user.id,
-        name: user.name,
-        display_name: user.display_name,
-        avatar_url: user.avatar_url ?? null,
+        id: human.id,
+        name: human.name,
+        display_name: human.display_name,
+        avatar_url: human.avatar_url ?? null,
       });
     }
     return out;
-  }, [users, viewerId]);
+  }, [workspaceHumans, viewerId]);
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
-  // `#` autocomplete is scoped to the *current* conversation's
-  // workspace — channel references in chat resolve per-workspace
-  // (see Markdown.tsx CHANNEL_PREFIX → ChannelRef), so suggesting
-  // channels from another workspace would only ever render as
-  // unresolved muted text. We pull the conversation ref to learn
-  // workspace_id + workspace_kind, then feed both to
-  // useChannelsForWorkspace.
-  const conv = useConversationById(conversationId);
-  const workspaceId = conv.ref?.workspace_id ?? null;
-  const workspaceKind = conv.ref?.workspace_kind ?? null;
+  // `#` autocomplete uses the same workspace resolved above — channel
+  // references in chat resolve per-workspace (see Markdown.tsx
+  // CHANNEL_PREFIX → ChannelRef), so suggesting channels from another
+  // workspace would only ever render as unresolved muted text.
   const { data: workspaceChannels = [] } = useChannelsForWorkspace(
     workspaceId,
     workspaceKind,
@@ -974,20 +997,32 @@ interface ActiveTrigger {
   query: string;
 }
 
-const HANDLE_CHAR = /[a-zA-Z0-9_-]/;
+// A "handle" character is anything that can sit inside a mention/channel
+// token as the scanner walks left from the caret. Unicode-aware
+// (`\p{L}` letters, `\p{N}` numbers, `\p{M}` combining marks, plus `_`
+// and `-`), NOT ASCII-only: a CJK channel title like `#设计` or a CJK
+// name like `@张三` must keep the menu open as the user types real text,
+// not bail on the first non-ASCII char (#task:1720). This is a strict
+// superset of `[a-zA-Z0-9_-]`, so ASCII behaviour is unchanged and the
+// boundary check below still fires on whitespace and punctuation.
+const HANDLE_CHAR = /[\p{L}\p{N}\p{M}_-]/u;
 
 /**
  * Walks left from the caret looking for the nearest `@` or `#` that
  * could plausibly start an autocomplete token. Bails on whitespace or
  * anything not in the handle character class — so `foo@bar`, `path/@x`,
- * and `2#3` don't open the menu.
+ * and `2#3` don't open the menu. The handle class is Unicode-aware, so
+ * a CJK query (`#设计`, `@张三`) keeps walking instead of stopping at the
+ * first non-ASCII char.
  *
  * Boundary check on the trigger char itself: the char before the
  * trigger must not extend the handle (i.e. not a handle char and not
  * `/`, so emails like `me@example.com` and URL-ish `path/@thing`
  * stay quiet). Mirrors the render-side regex in `Markdown.tsx`.
+ *
+ * Exported for unit tests (pure function; no DOM).
  */
-function detectTrigger(text: string, caret: number): ActiveTrigger | null {
+export function detectTrigger(text: string, caret: number): ActiveTrigger | null {
   if (caret < 1 || caret > text.length) return null;
   for (let i = caret - 1; i >= 0; i--) {
     const ch = text[i]!;
@@ -1031,14 +1066,17 @@ export interface PickerResult {
 /**
  * Filter and group the mention picker candidate set.
  *
- * Grouping (#task:876, 2026-06-03): rows are split into two visual
- * sections by `inConversation` — "IN THIS CHANNEL/THREAD" rows first,
- * then "NOT IN" rows underneath rendered in a dimmer text color. Each
- * section is internally sorted humans-first so multi-human installs
- * surface the relevant humans before the agent fleet. The whole stack
- * stays a flat `PickerItem[]` so keyboard nav (`active` index) doesn't
- * have to skip section headers — `PickerMenu` inserts the divider
- * before the first `!inConversation` row at render time.
+ * Candidate boundary (#task:1720): `agents` / `humans` are already
+ * scoped to the current workspace by the caller, so this only orders and
+ * groups — it never widens the set. Grouping (#task:876, 2026-06-03):
+ * rows are split into two visual sections by `inConversation` — "In this
+ * channel" rows first, then the remaining workspace members ("Other
+ * channels") underneath in a dimmer text color. Each section is
+ * internally sorted humans-first so multi-human installs surface the
+ * relevant humans before the agent fleet. The whole stack stays a flat
+ * `PickerItem[]` so keyboard nav (`active` index) doesn't have to skip
+ * section headers — `PickerMenu` inserts the divider before the first
+ * `!inConversation` row at render time.
  *
  * Caps: each section is capped at 5 (total max 10). The cap keeps the
  * picker short and scannable — it rewards narrowing by typing over
@@ -1175,14 +1213,15 @@ function PickerMenu({
       {items.map((item, i) => (
         <Fragment key={rowKey(item)}>
           {/* Section header — render BEFORE the row so the boundary
-              aligns with the first NOT IN entry. IN header only
-              renders when the IN section is non-empty AND we haven't
-              already passed it (i === 0 with at least one IN row). */}
+              aligns with the first "other channels" entry. The "In this
+              channel" header only renders when that section is non-empty
+              AND we haven't already passed it (i === 0 with at least one
+              in-channel row). */}
           {i === 0 && hasInSection ? (
-            <SectionHeader label="IN THIS CHANNEL" />
+            <SectionHeader label="In this channel" />
           ) : null}
           {i === headerBoundaryIndex ? (
-            <SectionHeader label="NOT IN THIS CHANNEL" />
+            <SectionHeader label="Other channels" />
           ) : null}
           <Row
             item={item}
