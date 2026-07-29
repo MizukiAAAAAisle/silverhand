@@ -86,9 +86,12 @@ export function TaskDetailPanel({ taskId, onClose, onEditingChange }: TaskDetail
 
   return (
     // `.task-pane` names the container query the metadata grid reads; it also
-    // owns the pane's own ground, since it isn't seated inside a Dialog.
+    // owns the pane's own ground, since it isn't seated inside a Dialog. `w-full`
+    // makes it fill the SplitPane's right wrapper — without it the pane is a flex
+    // row child that shrinks to its intrinsic content width (a thin strip); the
+    // inner body's `flex-1` can only fill this root, not widen it (#task:1721).
     <div
-      className="task-pane flex h-full flex-col bg-bg-floating"
+      className="task-pane flex h-full w-full flex-col bg-bg-floating"
       aria-label="Task detail"
     >
       <header className="flex h-12 flex-none items-center gap-2 border-b border-border-subtle px-3">
