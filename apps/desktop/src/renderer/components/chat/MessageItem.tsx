@@ -598,7 +598,18 @@ export function MessageItem({
   const threadPreviewRows = onStartThread
     ? visibleThreadReplyRows(threadReplyPreviews)
     : [];
-  const badgeHeadsPreview = threadPreviewRows.length > 0;
+  // The block exists only when it can have its HEADER. Two independent cache
+  // maps feed this row — the count (`replyCountsByRoot`) and the tail
+  // (`replyPreviewsByRoot`) — so a tail can be present while the count is still
+  // absent, either in a transitional apply or from a malformed payload. Deriving
+  // the block from the tail ALONE would then render a wash with reply lines and
+  // no `N replies` header: the header is the block's click entry and its only
+  // expression of unread, so a headerless block is a target that states nothing
+  // (Cindy, #task:1751). Requiring both makes that state unrepresentable rather
+  // than asserted, and the degradation is the plain root row — the same thing
+  // the reader saw one frame earlier.
+  const badgeHeadsPreview =
+    threadPreviewRows.length > 0 && threadReplyCount !== undefined;
   const replyBadgeNode =
     threadReplyCount !== undefined && onStartThread ? (
       <button
@@ -660,7 +671,9 @@ export function MessageItem({
       </button>
     ) : null;
   // Exactly one of these is non-null: the badge either stands on the shared
-  // bottom line (#task:1185) or heads the preview block.
+  // bottom line (#task:1185) or heads the preview block. `badgeHeadsPreview`
+  // now implies the badge EXISTS, so the block can never be handed a null
+  // header (#task:1751).
   const trailingNode = badgeHeadsPreview ? null : replyBadgeNode;
   // The cluster's most recent replies, one line each (#task:1745). Read-inert by
   // construction: no cursor is touched here (see ThreadReplyPreview).
