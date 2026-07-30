@@ -505,3 +505,34 @@ async function waitFor(
     await new Promise(resolve => setTimeout(resolve, 5));
   }
 }
+
+describe('unexpected-throw containment (#task:1719 dogfood follow-up)', () => {
+  it('a throw AFTER the pull routes into the failed arm: warn logged, barrier rejects typed, state recoverable — never a silent forever-running state', async () => {
+    const adapter = new FakeReconcileAdapter();
+    adapter.connections.set('host-a', 'conn-1');
+    adapter.handlers.workspace_registry_ids = async () =>
+      // Malformed result: workspace_ids missing → post-pull mapping throws.
+      ({ ok: true } as never);
+    const { reconciler, logs } = buildReconciler(adapter);
+
+    reconciler.onHostReady('host-a');
+    const outcome = await reconciler.barrier('host-a').catch(err => err);
+    expect(outcome).toBeInstanceOf(WorkspaceRegistryReconcilePendingError);
+    expect(
+      logs.some(
+        l =>
+          l.level === 'warn' &&
+          l.obj['event'] === 'workspace_registry_reconcile_failed' &&
+          String(l.obj['code']).startsWith('unexpected:'),
+      ),
+    ).toBe(true);
+
+    // Recoverable: the state is 'failed', so the next barrier re-kicks.
+    adapter.handlers.workspace_registry_ids = async () => ({
+      ok: true,
+      workspace_ids: [],
+    });
+    await reconciler.barrier('host-a');
+    reconciler.close();
+  });
+});

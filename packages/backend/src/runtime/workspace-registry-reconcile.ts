@@ -252,7 +252,20 @@ export class WorkspaceRegistryReconciler {
       rerunRequested: false,
     };
     this.states.set(hostId, state);
-    void this.runReconcile(hostId, state, gate.adapter);
+    // Top-level catch (dogfood 2026-07-30 follow-up): runReconcile's
+    // dispatch outcomes are total, but ANY unexpected throw in the
+    // post-pull section (DTO mapping, repo read, future edits) would
+    // otherwise vanish — no log, and worse, the state would stay
+    // 'running' forever, silently HANGING every subsequent barrier on
+    // this host. Route it into the ordinary failed arm: warn with the
+    // real error, reject waiters, honor a pending rerun request.
+    void this.runReconcile(hostId, state, gate.adapter).catch(err => {
+      this.failRun(
+        hostId,
+        state,
+        `unexpected: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
     return state;
   }
 
@@ -275,6 +288,41 @@ export class WorkspaceRegistryReconciler {
     );
   }
 
+  /** Shared failure arm: warn with the (possibly unexpected) error, park
+   *  the generation as failed, reject waiters, and honor a rerun request
+   *  recorded by a mid-run ready (lost-wakeup guard, Cindy P1-1). Reruns
+   *  are driven solely by ready arrivals — no timers, no backoff. */
+  private failRun(
+    hostId: string,
+    state: Extract<GenerationState, { kind: 'running' }>,
+    code: string,
+  ): void {
+    const connectionId = state.connectionId;
+    this.logger.warn(
+      {
+        event: 'workspace_registry_reconcile_failed',
+        host_id: hostId,
+        connection_id: connectionId,
+        code,
+      },
+      'workspace registry reconcile failed; provisions on this host stay gated until a retry succeeds',
+    );
+    if (this.ownsSlot(hostId, state)) {
+      this.states.set(hostId, { kind: 'failed', connectionId });
+    }
+    if (!state.settled) {
+      state.settled = true;
+      state.reject(new WorkspaceRegistryReconcilePendingError(hostId));
+    }
+    if (
+      state.rerunRequested &&
+      !this.closed &&
+      (this.adapter()?.connectionIdForHost(hostId) ?? null) === connectionId
+    ) {
+      this.ensureRunForCurrentGeneration(hostId);
+    }
+  }
+
   private async runReconcile(
     hostId: string,
     state: Extract<GenerationState, { kind: 'running' }>,
@@ -293,35 +341,7 @@ export class WorkspaceRegistryReconciler {
       }
       if (this.ownsSlot(hostId, state)) this.states.delete(hostId);
     };
-    const fail = (code: string): void => {
-      this.logger.warn(
-        {
-          event: 'workspace_registry_reconcile_failed',
-          host_id: hostId,
-          connection_id: connectionId,
-          code,
-        },
-        'workspace registry reconcile failed; provisions on this host stay gated until a retry succeeds',
-      );
-      if (this.ownsSlot(hostId, state)) {
-        this.states.set(hostId, { kind: 'failed', connectionId });
-      }
-      if (!state.settled) {
-        state.settled = true;
-        state.reject(new WorkspaceRegistryReconcilePendingError(hostId));
-      }
-      // Lost-wakeup guard (Cindy P1-1): a ready that arrived mid-run is a
-      // constructive "the binding is real now" signal — honor it with
-      // exactly ONE fresh run for the still-live generation. No timers,
-      // no backoff: reruns are driven solely by ready arrivals.
-      if (
-        state.rerunRequested &&
-        !this.closed &&
-        (this.adapter()?.connectionIdForHost(hostId) ?? null) === connectionId
-      ) {
-        this.ensureRunForCurrentGeneration(hostId);
-      }
-    };
+    const fail = (code: string): void => this.failRun(hostId, state, code);
 
     const pulled = await dispatchWorkspaceRegistryIds(
       adapter,
