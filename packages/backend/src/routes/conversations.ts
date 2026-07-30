@@ -303,6 +303,10 @@ export function createConversationReadApp(
               channel.id,
               rootIds,
             ),
+            reply_previews_by_root: messages.replyPreviewsByRoot(
+              channel.id,
+              rootIds,
+            ),
           };
         },
         result => ({

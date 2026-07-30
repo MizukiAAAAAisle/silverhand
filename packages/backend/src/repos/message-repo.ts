@@ -2,9 +2,12 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import { decodeMessageSeq } from '@silverhand/shared';
 import {
+  THREAD_PREVIEW_MAX_CHARS,
   formatAttachmentLabel,
+  normalizeThreadPreviewExcerpt,
   parseAttachmentLabel,
   readTaskSystemMetadataPartial,
+  resolveAttachmentLabels,
 } from '@silverhand/shared';
 import type {
   AttachmentSnapshot,
@@ -16,6 +19,7 @@ import type {
   TaskAssigneeDto,
   TaskStatus,
   ThreadReplier,
+  ThreadReplyPreviewRow,
   ThreadSummary,
   ThreadSummaryInvariant,
 } from '@silverhand/shared';
@@ -64,10 +68,6 @@ export class AnchorMessageNotInConversationError extends Error {
     this.name = 'AnchorMessageNotInConversationError';
   }
 }
-
-/** Max length of a thread row's plain-text preview (raw root content). The
- *  frontend adds the final ellipsis + renders mention sigils. */
-const THREAD_PREVIEW_MAX_CHARS = 160;
 
 /** Keyset position for the per-channel Threads list: the sort tuple of the
  *  last row on a page — (last_reply_at, root seq). Both components are
@@ -624,6 +624,107 @@ export class MessageRepo {
         repliers: rep.repliers,
         replier_total: rep.total,
       };
+    }
+    return result;
+  }
+
+  /** Inline thread reply-PREVIEW sidecar (#task:1746): for each root in
+   *  `rootMessageIds` that has >= 1 non-system reply, the tail-3 most-recent
+   *  replies, returned time-ASCending (oldest of the 3 first) for one-line
+   *  inline display under the root. Keyed by root id; a root with no non-system
+   *  reply is simply absent (the count-only chip covers it) — mirrors
+   *  `replyBadgeSummariesByRoot`. Scoped to the passed root set.
+   *
+   *  Eligibility is the SAME predicate as `replyCountsByRoot`
+   *  (`from_kind != 'system'`), so the preview set is a subset of that count and
+   *  the two never diverge. Selection is by `seq` alone: `seq` is the immutable
+   *  monotonic insert order (there is no message edit/delete write path), so the
+   *  top-3 highest `seq` per root ARE the 3 most-recent replies — no
+   *  message_id de-dup / "highest-seq-wins" arbitration, which would only mask
+   *  the impossible same-id/different-seq state. READ-INERT: this reads message
+   *  rows only; it advances no cursor and touches no observed/unread/follow
+   *  state. Carries only label-level attachment metadata (count + first
+   *  canonical label via `resolveAttachmentLabels`), never attachment bytes. */
+  replyPreviewsByRoot(
+    conversationId: string,
+    rootMessageIds: readonly string[],
+  ): Record<string, ThreadReplyPreviewRow[]> {
+    const result: Record<string, ThreadReplyPreviewRow[]> = {};
+    const uniqueRootIds = [...new Set(rootMessageIds)];
+    if (uniqueRootIds.length === 0) return result;
+    const placeholders = uniqueRootIds.map(() => '?').join(', ');
+    const rows = prepareObserved<
+        [string, ...string[]],
+        {
+          root_id: string;
+          message_id: string;
+          seq: number;
+          from_kind: FromKind;
+          from_agent_id: string | null;
+          from_user_id: string | null;
+          content: string;
+          metadata: string | null;
+        }
+      >(
+        this.db,
+        'messages.reply_previews_by_root',
+        // ROW_NUMBER picks the 3 highest-seq (most-recent) replies per root; the
+        // outer ORDER re-sorts them seq-ASC for time-ascending display.
+        `SELECT root_id, message_id, seq, from_kind, from_agent_id,
+                from_user_id, content, metadata
+           FROM (
+             SELECT thread_root_id AS root_id,
+                    id             AS message_id,
+                    seq            AS seq,
+                    from_kind      AS from_kind,
+                    from_agent_id  AS from_agent_id,
+                    from_user_id   AS from_user_id,
+                    content        AS content,
+                    metadata       AS metadata,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY thread_root_id ORDER BY seq DESC
+                    ) AS rn
+               FROM messages
+              WHERE conversation_id = ?
+                AND thread_root_id IN (${placeholders})
+                AND from_kind != 'system'
+           )
+          WHERE rn <= 3
+          ORDER BY root_id, seq ASC`,
+      )
+      .all(conversationId, ...uniqueRootIds);
+
+    for (const row of rows) {
+      const snapshots = extractAttachmentSnapshotsFromRow(row);
+      const preview: ThreadReplyPreviewRow = {
+        message_id: row.message_id,
+        seq: decodeMessageSeq(row.seq),
+        author: {
+          kind: row.from_kind === 'agent' ? 'agent' : 'human',
+          // A legacy row with a null actor id (pre-v26) still counts as a reply,
+          // so it stays in the tail to keep eligibility identical to the count;
+          // it degrades to a generic avatar on the client, exactly as the chip
+          // does on an unresolved identity.
+          id: (row.from_kind === 'agent' ? row.from_agent_id : row.from_user_id) ?? '',
+        },
+        // Normalized Markdown SOURCE excerpt (Option A, ruled #task:1746) via
+        // the shared `normalizeThreadPreviewExcerpt` SSOT — whitespace-compact +
+        // trim + cap, shared byte-for-byte with the live WS-merge producer
+        // (#task:1745). NO Markdown stripping here (grammar-aware stripping is
+        // renderer-owned presentation; the read model does not grow a MD parser).
+        // Literal syntax may show; the renderer displays single-line as text.
+        preview: normalizeThreadPreviewExcerpt(row.content),
+        attachment_count: snapshots?.length ?? 0,
+        // Canonical display label of the FIRST attachment (`Image #N` /
+        // `File #N`) via the shared SSOT — resolved over the WHOLE list (the
+        // positional fallback depends on sibling ordinals) then take the first.
+        // Matches the body / stdin-suffix references; never the raw filename.
+        first_attachment_label:
+          snapshots && snapshots.length > 0
+            ? resolveAttachmentLabels(snapshots)[0] ?? null
+            : null,
+      };
+      (result[row.root_id] ??= []).push(preview);
     }
     return result;
   }

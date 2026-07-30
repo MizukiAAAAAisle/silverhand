@@ -338,6 +338,164 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
   });
 });
 
+// #task:1746: the inline reply-PREVIEW sidecar. Tail-3 most-recent non-system
+// replies per root, time-ASCending, eligibility mirroring reply_count. Selection
+// is by seq alone (the immutable insert order), NOT edit-version arbitration.
+describe('MessageRepo.replyPreviewsByRoot (#task:1746)', () => {
+  it('returns the tail-3 most-recent non-system replies per root, time-ASC', () => {
+    const { channel, agentId, repo } = bootstrap();
+
+    const rootA = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'root A',
+    });
+    const rootB = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'root B',
+    });
+    // A main-line message with no replies — present in counts (as 0) but must
+    // be absent from previews (the count-only chip covers a 0-reply root).
+    const lonely = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'lonely',
+    });
+
+    // Four non-system replies to A (r1..r4 by ascending seq) plus a system
+    // reply (excluded). Interleaved with a B reply to prove per-root
+    // partitioning over the global seq.
+    const a1 = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'alice',
+      content: 'a1',
+      threadRootId: rootA.id,
+    });
+    const b1 = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'bob',
+      content: 'b1',
+      threadRootId: rootB.id,
+      attachments: [
+        { id: 'att1', filename: 'first.png', size: 10, content_type: 'image/png' },
+        { id: 'att2', filename: 'second.pdf', size: 20, content_type: 'application/pdf' },
+      ],
+    });
+    const a2 = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'a2',
+      threadRootId: rootA.id,
+    });
+    repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'system',
+      content: 'sys',
+      threadRootId: rootA.id,
+    });
+    const a3 = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'alice',
+      content: 'C'.repeat(200),
+      threadRootId: rootA.id,
+    });
+    const a4 = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'a4',
+      threadRootId: rootA.id,
+    });
+
+    const rootIds = [rootA.id, rootB.id, lonely.id];
+    const counts = repo.replyCountsByRoot(channel.id, rootIds);
+    const previews = repo.replyPreviewsByRoot(channel.id, rootIds);
+
+    // Only roots with >= 1 non-system reply appear (lonely excluded).
+    expect(Object.keys(previews).sort()).toEqual([rootA.id, rootB.id].sort());
+
+    // rootA has 4 non-system replies; the preview is the tail-3 (a2,a3,a4 —
+    // a1 the oldest is dropped), presented time-ASCending. seq is the selection
+    // key, and it mirrors reply_count eligibility (system excluded).
+    expect(counts[rootA.id]).toBe(4);
+    expect(previews[rootA.id]!.map(p => p.message_id)).toEqual([
+      a2.id,
+      a3.id,
+      a4.id,
+    ]);
+    expect(previews[rootA.id]!.map(p => p.seq)).toEqual([a2.seq, a3.seq, a4.seq]);
+    // Not a1 (dropped past the tail).
+    expect(previews[rootA.id]!.some(p => p.message_id === a1.id)).toBe(false);
+
+    // Author reuses the ThreadReplier shape: user→human, agent→agent, id from
+    // the matching actor column.
+    expect(previews[rootA.id]![0]).toMatchObject({
+      author: { kind: 'agent', id: agentId },
+      preview: 'a2',
+      attachment_count: 0,
+      first_attachment_label: null,
+    });
+    // Preview is server-truncated to <= 160 chars (a3 is 200 chars).
+    const a3Preview = previews[rootA.id]!.find(p => p.message_id === a3.id)!;
+    expect(a3Preview.preview).toBe('C'.repeat(160));
+    expect(a3Preview.author).toEqual({ kind: 'human', id: 'alice' });
+
+    // rootB's single reply carries attachments → label metadata only (count +
+    // first canonical label), never bytes. Two unlabeled attachments (image +
+    // pdf) → positional `Image #1` / `File #1` via resolveAttachmentLabels; the
+    // FIRST is `Image #1`, the same label the body references.
+    expect(previews[rootB.id]).toHaveLength(1);
+    expect(previews[rootB.id]![0]).toMatchObject({
+      message_id: b1.id,
+      author: { kind: 'human', id: 'bob' },
+      attachment_count: 2,
+      first_attachment_label: 'Image #1',
+    });
+  });
+
+  it('returns an empty record for no roots', () => {
+    const { channel, repo } = bootstrap();
+    expect(repo.replyPreviewsByRoot(channel.id, [])).toEqual({});
+  });
+
+  // Option A contract (#task:1746): `preview` is a NORMALIZED MARKDOWN SOURCE
+  // excerpt — whitespace-compacted + trimmed + capped, with NO Markdown
+  // stripping (there is no canonical MD→text helper and the read model must not
+  // grow one). Literal syntax is preserved verbatim; the renderer owns
+  // presentation. This falsifies any accidental server-side stripping.
+  it('whitespace-compacts + trims but never strips Markdown syntax', () => {
+    const { channel, agentId, repo } = bootstrap();
+    const root = repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'root',
+    });
+    repo.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: '  **bold**\n\n`code`\t[link](http://x)   trailing  ',
+      threadRootId: root.id,
+    });
+
+    const previews = repo.replyPreviewsByRoot(channel.id, [root.id]);
+    // Runs of whitespace (spaces, newlines, tabs) collapse to a single space and
+    // the ends are trimmed — but every Markdown token survives literally.
+    expect(previews[root.id]![0]!.preview).toBe(
+      '**bold** `code` [link](http://x) trailing',
+    );
+  });
+});
+
 // S1 P2 (docs/projection-recovery-s1-v1.md §5/§6): the single-root, viewer-
 // invariant threads-list entry the backend emits on a `message` frame. Mirrors
 // listChannelThreads's per-row projection MINUS viewer_following, PLUS root_seq.

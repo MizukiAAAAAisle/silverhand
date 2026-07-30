@@ -10,10 +10,13 @@ import {
   SearchOptionalStringSchema,
   hasMessagePayload,
 } from './_zod-helpers.js';
-import { AttachmentSnapshotSchema } from './attachment.js';
+import { AttachmentLabelSchema, AttachmentSnapshotSchema } from './attachment.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
 import { LinkedTaskDtoSchema } from './task.js';
-import { ThreadSummaryInvariantSchema } from './thread-summary.js';
+import {
+  ThreadReplierSchema,
+  ThreadSummaryInvariantSchema,
+} from './thread-summary.js';
 import { MessageSeqSchema } from '../seq.js';
 
 export const MessageDtoSchema = z.object({
@@ -131,6 +134,79 @@ export const ReplyBadgeSummarySchema = z.object({
 });
 export type ReplyBadgeSummary = z.infer<typeof ReplyBadgeSummarySchema>;
 
+/** One inline thread reply-PREVIEW row (#task:1746). A read-cluster's tail-3
+ *  most-recent non-system replies are shown one-line each directly under the
+ *  root message, so the reader gets the gist without opening the ThreadPanel.
+ *  This is a READ-INERT projection: rendering it advances NO read cursor and
+ *  changes no observed/unread/follow state (docs/thread-unread-v1.md §6) — it is
+ *  strictly readability, not a read surface.
+ *
+ *  Eligibility mirrors `reply_counts_by_root` EXACTLY (`from_kind != 'system'`),
+ *  so the previews are a subset of the same count and the two never diverge. */
+export const ThreadReplyPreviewRowSchema = z.object({
+  message_id: z.string(),
+  /** The reply's conversation-global `MessageSeq`. PURELY the inter-message
+   *  stream-ordering key used to select + order the tail-3 — NOT an
+   *  edit/version freshness key. `seq` is assigned monotonically at insert and
+   *  is thereafter immutable alongside `message_id` (there is no message
+   *  edit/delete write path), so one `message_id` always carries one `seq`; a
+   *  differing seq for the same id is malformed input, never a "newer edit".
+   *  Payload freshness is handled by invalidate/refetch (see
+   *  `reply_previews_by_root`), never by arbitrating seq. */
+  seq: MessageSeqSchema,
+  /** Reply author — reuses `ThreadReplier` (kind ∈ {agent,human}; a cluster's
+   *  reply set is never system). The frontend resolves avatar/name from this
+   *  `{kind,id}` via the SAME batch avatar hooks as the reply chip's stacked
+   *  repliers — no avatar URL is inlined, no second identity projection. */
+  author: ThreadReplierSchema,
+  /** A NORMALIZED MARKDOWN SOURCE EXCERPT of the reply — NOT semantically
+   *  stripped plain text. Both producers route it through the shared
+   *  {@link normalizeThreadPreviewExcerpt} SSOT: whitespace-compact (`\s+`→space)
+   *  + trim + cap at 160 chars (the Activity `preview()` normalization; NO
+   *  Markdown parser — there is no canonical MD→text helper and the read model
+   *  must not grow one, since grammar-aware stripping is renderer-owned
+   *  presentation). So literal `**`, backticks, `[x](y)` etc. MAY appear, and a
+   *  token bisected by the 160-cap MAY be partial — this is accepted for v1.
+   *  Both this and `ThreadSummary.root_preview` are Markdown SOURCE excerpts
+   *  (not stripped), but they do NOT share normalization: `root_preview` is a
+   *  raw slice, whereas this one is whitespace-compacted + trimmed for the
+   *  single-line context. The renderer displays it single-line as ordinary text
+   *  and owns the display ellipsis + mention sigils; its single-line width is
+   *  far below 160, so the cap is a wire bound, not the display truncation. */
+  preview: z.string(),
+  /** Number of attachments on the reply — label metadata only, never the bytes. */
+  attachment_count: z.number().int().nonnegative(),
+  /** Canonical display LABEL of the FIRST attachment (`Image #N` / `File #N`),
+   *  via the shared `resolveAttachmentLabels` SSOT, or null when the reply has
+   *  none. This is the SAME label the message body and the agent stdin suffix
+   *  reference, so the preview's "<label> +N" affordance stays in sync with the
+   *  body — never the raw filename (which would decouple the preview from an
+   *  inline "Image #1" reference). The renderer composes "+N" from
+   *  `attachment_count`. No attachment content is read. */
+  first_attachment_label: AttachmentLabelSchema.nullable(),
+});
+export type ThreadReplyPreviewRow = z.infer<typeof ThreadReplyPreviewRowSchema>;
+
+/** Wire cap for a thread reply-preview excerpt (see {@link normalizeThreadPreviewExcerpt}).
+ *  A bound on the projected SOURCE, not the renderer's single-line display width. */
+export const THREAD_PREVIEW_MAX_CHARS = 160;
+
+/** SSOT for the `ThreadReplyPreviewRow.preview` normalization (Option A, ruled
+ *  #task:1746): whitespace-compact (`\s+`→space) + trim + cap at
+ *  {@link THREAD_PREVIEW_MAX_CHARS}. This is a WIRE-PROJECTION rule, not visual
+ *  parsing — it does NOT strip Markdown grammar (literal `**`, backticks,
+ *  `[x](y)` survive; grammar-aware stripping is renderer-owned presentation).
+ *
+ *  Both the cold read-model producer (`MessageRepo.replyPreviewsByRoot`) and the
+ *  live WS-merge producer (`threadReplyPreviewRowFromMessage`, #task:1745) MUST
+ *  route the `preview` field through here, since it is required to be byte-identical
+ *  across reload vs live merge — the same reason attachment labels share
+ *  `resolveAttachmentLabels`. Does NOT govern `ThreadSummary.root_preview`, which
+ *  is deliberately a RAW slice (no whitespace compaction). */
+export function normalizeThreadPreviewExcerpt(content: string): string {
+  return content.replace(/\s+/g, ' ').trim().slice(0, THREAD_PREVIEW_MAX_CHARS);
+}
+
 export const ConversationMessagesDtoSchema = z.object({
   messages: z.array(MessageDtoSchema),
   /** Reply-cluster badge data keyed by root message id. Values are the
@@ -142,6 +218,37 @@ export const ConversationMessagesDtoSchema = z.object({
    *  must treat it as possibly-undefined and fall back to count-only. */
   reply_summaries_by_root: z
     .record(z.string(), ReplyBadgeSummarySchema)
+    .optional(),
+  /** Optional inline thread reply-PREVIEW sidecar keyed by root message id
+   *  (#task:1746). Each value is that root's tail-3 most-recent non-system
+   *  replies, time-ASCending — a bounded 1..3 array (schema-enforced `.min(1)
+   *  .max(3)`; the backend NEVER emits `[]`). Present only once the backend
+   *  ships it; consumers treat it as possibly-undefined and fall back to the
+   *  count-only chip. The FIELD is computed over the COMPLETE set of non-system
+   *  top-level roots in the returned window, so its presence + a root's window
+   *  membership disambiguate absence into THREE states:
+   *   • WHOLE-FIELD absent (`undefined`) — this server does not project previews
+   *     (old backend) / not projected on this response: UNKNOWN, never seedable.
+   *   • field present, root IS a loaded eligible (non-system top-level) row, key
+   *     MISSING — that root was authoritatively 0-eligible-reply at fetch time
+   *     (0 replies ⇒ no preview key AND no reply chip, since the chip is gated on
+   *     count>0; the first live reply opens both the chip and the tail in the
+   *     same frame).
+   *   • root NOT in the returned window — UNKNOWN (its tail was never computed).
+   *  So a per-root missing key UNDER A PRESENT FIELD is an authoritative fetched-
+   *  zero: the client MAY seed a fresh 1-row tail from a single live WS create
+   *  for such a loaded eligible root (the common 0→1). It MUST NOT synthesize a
+   *  tail when the WHOLE field is absent, or for a root outside the loaded
+   *  eligible set. Eligibility mirrors `reply_counts_by_root`
+   *  (non-system), so previews are a subset of that count. READ-INERT: rendering
+   *  advances no cursor and changes no observed/unread/follow state. Freshness
+   *  is a #task:1745 RENDERER concern — the backend adds no WS projection here:
+   *  a WS create can patch the ordered, bounded set (append the newest, drop the
+   *  oldest past 3) when the client already holds this root's tail; an
+   *  edit/delete/hide/attachment change (dropping one of the 3 needs the 4th,
+   *  which the client's 3 cannot supply) → invalidate + refetch this root. */
+  reply_previews_by_root: z
+    .record(z.string(), z.array(ThreadReplyPreviewRowSchema).min(1).max(3))
     .optional(),
   has_more_before: z.boolean(),
   /** Open-time snapshot of the opened stream's head (#task:1226): the

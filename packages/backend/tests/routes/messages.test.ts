@@ -128,6 +128,72 @@ describe('GET /api/channels/:id/messages — reply_summaries_by_root (P1)', () =
   });
 });
 
+describe('GET /api/channels/:id/messages — reply_previews_by_root (#task:1746)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('serves the tail-3 inline reply-preview sidecar keyed like reply_counts_by_root', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const messages = new MessageRepo(t.ctx.db);
+
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'has a thread',
+    });
+    const r1 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentIds.alice!,
+      content: 'first reply',
+      threadRootId: root.id,
+    });
+    const r2 = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'second reply',
+      threadRootId: root.id,
+    });
+    // A main-line message with no replies — appears in counts (0) but not in
+    // the previews sidecar.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'user',
+      fromUserId: 'local',
+      content: 'no thread',
+    });
+
+    const body = (await (
+      await http(t).get(`/api/channels/${channelId}/messages`)
+    ).json()) as any;
+
+    const previews = body.reply_previews_by_root;
+    expect(previews).toBeDefined();
+    expect(previews[root.id]).toBeDefined();
+    // Time-ASCending tail (both replies, oldest first).
+    expect(previews[root.id].map((p: any) => p.message_id)).toEqual([r1.id, r2.id]);
+    expect(previews[root.id][0]).toMatchObject({
+      author: { kind: 'agent', id: agentIds.alice },
+      preview: 'first reply',
+      attachment_count: 0,
+      first_attachment_label: null,
+    });
+    // Read-inert projection — no per-viewer read/unread state leaks onto a row.
+    expect(previews[root.id][0]).not.toHaveProperty('unread_count');
+    expect(previews[root.id][0]).not.toHaveProperty('viewer_following');
+    // Every preview key is a count key (never widens the root set).
+    for (const k of Object.keys(previews)) {
+      expect(body.reply_counts_by_root).toHaveProperty(k);
+    }
+  });
+});
+
 describe('POST /api/channels/:id/messages — content byte cap', () => {
   let t: TestApp | null = null;
   afterEach(() => {
