@@ -323,6 +323,22 @@
      kept to the lightest tint. */
   --chip-bg: rgba(15, 31, 29, 0.06);
   --chip-bg-hover: rgba(15, 31, 29, 0.12);
+  /* Thread reply block (#task:1745) — the wash behind the reply badge + its
+     preview lines. Lighter than `--chip-bg` on purpose (shiki 2026-07-31): it
+     covers a full-width multi-line area rather than a 18px pill, and at chip
+     strength that much surface reads as a second card competing with the
+     message body. Neutral black tint, no poster ink hue — this is a recess,
+     not an identity. The other two themes declare this trio themselves (this
+     file owns `:root`, so anything they omit arrives with forza6's value). */
+  --thread-preview-bg: oklab(0 0 0 / 0.03);
+  --thread-preview-bg-hover: oklab(0 0 0 / 0.08);
+  /* Reply-excerpt ink — one step below `--text-muted`, which is otherwise the
+     faintest ink this theme has (shiki 2026-07-31). A literal neutral at a
+     single-decimal alpha, not a derived `color-mix`: the computed value stays
+     round and the value is readable on sight. Resting 5.52:1 on the wash
+     (name above it 6.23:1, hover lifts the whole line to `--text-secondary`
+     5.57:1) — normal text stays at WCAG AA, per design-new-theme §4.2. */
+  --thread-preview-text: oklab(0 0 0 / 0.6);
 
   /* ── Row radius (review round 2 #task:912) ──
      Single token for the 5 row-style surfaces (sidebar rows / NavRail /

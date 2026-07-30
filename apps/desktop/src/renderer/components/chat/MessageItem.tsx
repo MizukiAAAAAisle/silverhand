@@ -8,6 +8,7 @@ import type {
   ReplyBadgeSummary,
   StreamUnreadDto,
   TaskAssigneeDto,
+  ThreadReplyPreviewRow,
   UserDto,
 } from '@silverhand/shared';
 import { resolveAttachmentLabels } from '@silverhand/shared';
@@ -38,6 +39,10 @@ import type { CachedMessage } from '@/features/channels/pending-message';
 import { isCommittedMessage } from '@/features/channels/pending-message';
 import { MessageReactions } from './MessageReactions';
 import { MessageRowContent } from './MessageRowContent';
+import {
+  ThreadReplyPreview,
+  visibleThreadReplyRows,
+} from './ThreadReplyPreview';
 import { ReactionPicker } from './ReactionPicker';
 import { StatusPicker, taskStatusLabel, TASK_STATUS_ICON } from '@/components/tasks/TaskStatusBadge';
 import { useUpdateTaskStatus } from '@/features/tasks/hooks';
@@ -94,6 +99,15 @@ export interface MessageItemProps {
    *  longer lives in `threadReplySummary` (which keeps only the optimistically
    *  patchable count / last-reply / repliers). Absent / sparse-missing ⇒ 0. */
   threadUnread?: StreamUnreadDto;
+  /** Most recent replies of this root's cluster (at most 3, ascending time),
+   *  rendered as one line each under the row (#task:1745). Mainline-only: the
+   *  ThreadPanel shows the real replies, so it never passes this. Absent ⇒ no
+   *  preview block, which is also the degradation when the backend sidecar
+   *  (#task:1746) is not present — the chip alone stays correct.
+   *
+   *  READ-INERT: rendering it advances no cursor (`docs/thread-unread-v1.md`
+   *  §6 / invariant 2). See `ThreadReplyPreview`. */
+  threadReplyPreviews?: ThreadReplyPreviewRow[];
   onSave?: (msg: CachedMessage) => void;
   saved?: boolean;
   /** Whether the viewer may add/remove reactions here. False in a closed or
@@ -237,6 +251,7 @@ export function MessageItem({
   threadReplyCount,
   threadReplySummary,
   threadUnread,
+  threadReplyPreviews,
   onSave,
   saved = false,
   canReact = true,
@@ -445,6 +460,34 @@ export function MessageItem({
     );
   };
 
+  // The SAME name rule the message header uses (`displayLabel` above):
+  // `display_name` → `name` → the shared fallback. No `@` for either actor kind
+  // (shiki 2026-07-31): here the avatar sits immediately left of the name, so it
+  // already says which actor this is — an `@` would be a second, redundant
+  // identity marker, and it reads as a mention where nothing is being mentioned.
+  // Kept next to `renderReplierAvatar` so one owner resolves both halves of a
+  // replier's identity — a face and a name that disagree would be worse than
+  // either alone. A lookup miss degrades exactly as the mainline does: the
+  // avatar falls back to the generic one, an agent to `agent`, and a human
+  // through the shared `formatUserDisplayName` chain — whose last step is the
+  // raw id, deliberately (an id makes a directory miss debuggable where a
+  // placeholder would hide it).
+  const resolveReplierName = (replier: {
+    kind: 'agent' | 'human';
+    id: string;
+  }): string => {
+    if (replier.kind === 'agent') {
+      const a = agentsById.get(replier.id);
+      return a?.display_name?.trim() || a?.name || 'agent';
+    }
+    const u = humansById?.get(replier.id);
+    return (
+      u?.display_name?.trim() ||
+      u?.name ||
+      formatUserDisplayName(replier.id, userResolver)
+    );
+  };
+
   // ── MessageRowContent slot nodes ────────────────────────────────────────
   // The shared content layer owns section order + layout; MessageItem fills
   // each (required) slot with its INTERACTIVE node. Anything default-visible
@@ -513,12 +556,21 @@ export function MessageItem({
     ) : null;
   // Inline thread-replies badge — only when the message has an open thread.
   // Carries real information (N replies, click to open), so it earns persistent
-  // space below the bubble. With an enriched summary it upgrades to a
-  // Slack-style strip (replier avatars + count + last-reply time); the count
-  // stays ink, not accent — louder via INFORMATION, not by spending the brand
-  // hue. Live-only: the export omits it (passes `null`). A bare inline element
-  // — the shared bottom row (MessageRowContent) owns spacing + alignment so
-  // task tag · replies · reactions share one line.
+  // space below the bubble. Live-only: the export omits it (passes `null`). A
+  // bare inline element either way: whichever container it lands in — the shared
+  // bottom row or the preview block's header — owns its spacing and alignment.
+  //
+  // ONE shape, not an enriched/fallback pair: `ThreadIcon` + `N replies` +
+  // trailing modifier. The stacked replier avatars were removed once the reply
+  // preview began rendering the same identities one line each directly below
+  // (shiki 2026-07-31): the same faces twice in ~20px of vertical space read as
+  // repetition and crowding, and identity belongs on the line that says what
+  // the person actually wrote. The avatars were only ever standing in for
+  // content that now exists. `enrichedReply` therefore no longer switches the
+  // chip's composition — it only decides whether the last-reply time can be
+  // stated (it is the sole carrier of that fact), so the chip no longer changes
+  // silhouette when the summary loads.
+  //
   // Unread signal as a TEXT modifier, not a filled sticker. The chip is a
   // LOCAL affordance (already a full click target); the loud filled square
   // belongs to the GLOBAL pressure signals (sidebar badge / Threads list
@@ -537,7 +589,17 @@ export function MessageItem({
         {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
       </span>
     ) : null;
-  const trailingNode =
+  // The badge and the preview lines are ONE object when there are lines to head
+  // (shiki 2026-07-31) — see ThreadReplyPreview for why. Resolved once, here,
+  // because it decides BOTH where the badge renders and whether the block
+  // exists: deriving it separately in each place would let the two answers
+  // drift. Same `onStartThread` gate as the badge — a surface that cannot open a
+  // thread must not render a target that claims it can.
+  const threadPreviewRows = onStartThread
+    ? visibleThreadReplyRows(threadReplyPreviews)
+    : [];
+  const badgeHeadsPreview = threadPreviewRows.length > 0;
+  const replyBadgeNode =
     threadReplyCount !== undefined && onStartThread ? (
       <button
         type="button"
@@ -545,37 +607,45 @@ export function MessageItem({
         onClick={() => onStartThread(message, threadFirstUnreadId ?? undefined)}
         title={replyBadgeTitle}
         aria-label={replyBadgeTitle}
-        className="inline-flex h-[18px] items-center gap-1.5 rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 text-xs leading-none text-text-muted transition-colors hover:bg-[var(--chip-bg-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className={
+          'inline-flex h-[18px] items-center gap-1.5 text-xs leading-none text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+          // Its own fill / corner / inset ONLY when it stands alone. Inside the
+          // preview block the wrapper owns all three: two stacked translucent
+          // fills of the same token compose darker and would redraw the seam
+          // that block exists to remove. The glyph then sits in the same left
+          // column as the lines' avatars, so the badge reads as their header.
+          (badgeHeadsPreview
+            ? ''
+            : 'rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 hover:bg-[var(--chip-bg-hover)]')
+        }
       >
-        {enrichedReply ? (
-          <>
-            <span className="flex items-center gap-[3px] leading-none">
-              {enrichedReply.repliers.map(r =>
-                renderReplierAvatar(r, 14, `${r.kind}:${r.id}`),
-              )}
-              {enrichedReply.replier_total > enrichedReply.repliers.length ? (
-                <span data-avatar-ground className="flex size-[14px] shrink-0 items-center justify-center rounded-none text-[9px] font-medium text-text-muted">
-                  +{enrichedReply.replier_total - enrichedReply.repliers.length}
-                </span>
-              ) : null}
+        <ThreadIcon className="size-3.5 shrink-0" />
+        <span className="font-medium">{replyBadgeLabel}</span>
+        {threadUnreadNode ??
+          (enrichedReply ? (
+            <span className="inline-flex items-center gap-0.5 text-text-muted">
+              <Clock className="size-3 shrink-0" />
+              {replyRelativeTime}
             </span>
-            <span className="font-medium">{replyBadgeLabel}</span>
-            {threadUnreadNode ?? (
-              <span className="inline-flex items-center gap-0.5 text-text-muted">
-                <Clock className="size-3 shrink-0" />
-                {replyRelativeTime}
-              </span>
-            )}
-          </>
-        ) : (
-          <>
-            <ThreadIcon className="size-3.5 shrink-0" />
-            <span>{replyBadgeLabel}</span>
-            {threadUnreadNode}
-          </>
-        )}
+          ) : null)}
       </button>
     ) : null;
+  // Exactly one of these is non-null: the badge either stands on the shared
+  // bottom line (#task:1185) or heads the preview block.
+  const trailingNode = badgeHeadsPreview ? null : replyBadgeNode;
+  // The cluster's most recent replies, one line each (#task:1745). Read-inert by
+  // construction: no cursor is touched here (see ThreadReplyPreview).
+  const threadPreviewNode = badgeHeadsPreview ? (
+    <ThreadReplyPreview
+      rows={threadPreviewRows}
+      badge={replyBadgeNode}
+      alignRight={alignRight}
+      title={replyBadgeTitle}
+      onOpen={() => onStartThread?.(message, threadFirstUnreadId ?? undefined)}
+      renderAuthorAvatar={renderReplierAvatar}
+      resolveAuthorName={resolveReplierName}
+    />
+  ) : null;
 
   const row = (
     <div
@@ -688,6 +758,7 @@ export function MessageItem({
         attachments={attachmentsNode}
         reactions={reactionsNode}
         trailing={trailingNode}
+        threadPreview={threadPreviewNode}
       />
 
       {/* Frame-corner action controls (Save + Thread) — absolutely

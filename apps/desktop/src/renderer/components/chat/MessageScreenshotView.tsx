@@ -230,6 +230,9 @@ function ScreenshotRow({
           ) : null
         }
         trailing={null}
+        /* The export captures the MESSAGE, not its thread: the reply badge is
+           already omitted, so its preview lines are too. */
+        threadPreview={null}
       />
     </div>
   );

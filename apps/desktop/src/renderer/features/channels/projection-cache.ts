@@ -11,10 +11,16 @@ import type {
   MessageReactionChangedEvent,
   ReactionAggregateDto,
   TaskChangedEvent,
+  ThreadReplyPreviewRow,
+} from '@silverhand/shared';
+import {
+  normalizeThreadPreviewExcerpt,
+  resolveAttachmentLabels,
 } from '@silverhand/shared';
 import { isCommittedMessage } from '@/features/channels/pending-message';
 import {
   type MessagesCache,
+  type CachedMessagesPage,
   messagesKey,
   clusterMessagesKey,
   threadRootKey,
@@ -720,6 +726,153 @@ export function mergeMainlineReplyCount(
         reply_counts_by_root: {
           ...page.reply_counts_by_root,
           [rootId]: replyCount,
+        },
+      };
+    });
+    return changed ? { ...prev, pages } : prev;
+  });
+  return true;
+}
+
+/** Wire bound on the displayed tail, mirroring the read model's `ROW_NUMBER() <= 3`
+ *  and the schema's `.max(3)`. The cache converges to it on every write: the
+ *  reader's own tail-3 is a last line of defense, not the bound — a cache that
+ *  keeps growing violates the contract its own type declares and, on a long-lived
+ *  channel with a hot thread, keeps every reply ever seen alive per page. */
+const THREAD_PREVIEW_TAIL_SIZE = 3;
+
+/** Converge a patched tail to exactly what an authoritative fetch would return:
+ *  the `THREAD_PREVIEW_TAIL_SIZE` highest-`seq` rows, `seq`-ascending, one row per
+ *  `message_id`. `seq` is immutable insert order (no edit/delete write path), so
+ *  seq-ordering IS recency and an out-of-order frame lands in its true position
+ *  instead of at the end. */
+function convergeReplyPreviewTail(
+  rows: readonly ThreadReplyPreviewRow[],
+): ThreadReplyPreviewRow[] {
+  const byId = new Map(rows.map(row => [row.message_id, row]));
+  return [...byId.values()]
+    .sort((a, b) => a.seq - b.seq)
+    .slice(-THREAD_PREVIEW_TAIL_SIZE);
+}
+
+/** Build this reply's preview row from the frame that delivered it (#task:1745
+ *  renderer freshness, the handoff #task:1746 names): a reply's WS frame carries
+ *  an absolute `thread_root_reply_count` patch, which SUPPRESSES the mainline
+ *  invalidate — so nothing else would refresh the tail, and the badge would tick
+ *  to `N+1` above lines that predate the reply it just counted.
+ *
+ *  Every field is derived from the same inputs the read model uses, and the one
+ *  two that could drift are derived through their SHARED SSOTs: the attachment
+ *  label from `resolveAttachmentLabels()` over the whole list (the positional
+ *  fallback depends on sibling ordinals) so a patched line names the attachment
+ *  exactly as the body does, and the excerpt from `normalizeThreadPreviewExcerpt()`
+ *  (#task:1746) — the field must read byte-identically whether it arrived cold
+ *  from the read model or was merged live from this frame.
+ *
+ *  `null` for a system reply — eligibility mirrors `reply_counts_by_root`. */
+export function threadReplyPreviewRowFromMessage(
+  msg: MessageDto,
+): ThreadReplyPreviewRow | null {
+  if (msg.from_kind === 'system') return null;
+  const snapshots = msg.attachments ?? [];
+  return {
+    message_id: msg.id,
+    seq: msg.seq,
+    author: {
+      kind: msg.from_kind === 'agent' ? 'agent' : 'human',
+      // A null actor id still counts as a reply, so it stays in the tail and
+      // degrades to the generic avatar — identical to the read model's rule.
+      id: (msg.from_kind === 'agent' ? msg.from_agent_id : msg.from_user_id) ?? '',
+    },
+    preview: normalizeThreadPreviewExcerpt(msg.content),
+    attachment_count: snapshots.length,
+    first_attachment_label:
+      snapshots.length > 0 ? resolveAttachmentLabels(snapshots)[0] ?? null : null,
+  };
+}
+
+/** Patch the mainline reply-PREVIEW tail for `rootId` from the reply frame
+ *  itself (#task:1745), the companion to {@link mergeMainlineReplyCount} on the
+ *  patched-reply path where the window is deliberately not refetched.
+ *
+ *  ── What "no key for this root" means, per page ────────────────────────────
+ *  A page that carries `reply_previews_by_root` AT ALL comes from a preview-
+ *  projecting read model, and that read model COMPUTES the sidecar over the
+ *  page's complete eligible root set (every non-system top-level message, not
+ *  just the ones with replies) and simply OMITS the key for a root whose tail is
+ *  empty. So on such a page a missing key is not "unknown": it is the
+ *  authoritative statement "this root had no eligible reply when the window was
+ *  fetched", and this frame's reply is therefore the tail's first row (Cindy,
+ *  #task:1745 BLOCKER 1 — the common 0→1 reply would otherwise only move the
+ *  badge). The two genuinely unknown cases stay untouched, both cache-only,
+ *  neither fixable by a refetch: a page from a read model that does not project
+ *  previews at all (no `reply_previews_by_root` object → nothing to display, so
+ *  today's
+ *  badge-only row is correct), and a root that is on no loaded page. That is
+ *  why this stays a pure cache patch and never falls back to the invalidate
+ *  #task:1277 removed: reintroducing it here would refetch the whole window on
+ *  every first reply — and on EVERY reply against a non-projecting read model —
+ *  which is exactly the amplification that change killed.
+ *
+ *  Eligibility is mirrored, not re-derived: a system reply is skipped (as in
+ *  `reply_counts_by_root`), and a root is seeded only when the page displays it
+ *  as a non-system top-level message — the read model's own filter, so an
+ *  ineligible root can never grow a tail here that a fetch would then remove.
+ *
+ *  Replay-safe and BOUNDED: the tail is converged on every write
+ *  ({@link convergeReplyPreviewTail}) — one row per `message_id`, seq-ordered,
+ *  tail-3 — so replay, an out-of-order frame, and a long burst all land the same
+ *  three rows an authoritative fetch would.
+ *
+ *  Returns `true` when the root's displayed tail is current after this call,
+ *  `false` when this root displays no tail at all (ineligible reply, absent
+ *  projection, or off-window root) — in every `false` case there is nothing the
+ *  caller could recover, so it is a no-op, not a fallback trigger. */
+export function mergeMainlineReplyPreview(
+  qc: QueryClient,
+  channelId: string,
+  rootId: string,
+  msg: MessageDto,
+): boolean {
+  const row = threadReplyPreviewRowFromMessage(msg);
+  if (!row) return false;
+  /** The read model's `rootIds` filter, evaluated against a loaded page. */
+  const pageDisplaysEligibleRoot = (page: CachedMessagesPage): boolean =>
+    page.messages.some(
+      m => m.id === rootId && m.thread_root_id === null && m.from_kind !== 'system',
+    );
+  const nextTailFor = (page: CachedMessagesPage): ThreadReplyPreviewRow[] | null => {
+    const previews = page.reply_previews_by_root;
+    if (!previews) return null; // read model does not project previews
+    const tail = previews[rootId];
+    if (!tail) {
+      return pageDisplaysEligibleRoot(page) ? [row] : null;
+    }
+    if (tail.some(r => r.message_id === row.message_id)) return null;
+    return convergeReplyPreviewTail([...tail, row]);
+  };
+
+  const cur = qc.getQueryData<MessagesCache>(messagesKey(channelId));
+  const displaysTail =
+    cur?.pages.some(
+      page =>
+        page.reply_previews_by_root != null &&
+        (page.reply_previews_by_root[rootId] != null ||
+          pageDisplaysEligibleRoot(page)),
+    ) ?? false;
+  if (!displaysTail) return false;
+  qc.setQueryData<MessagesCache>(messagesKey(channelId), prev => {
+    if (!prev) return prev;
+    let changed = false;
+    const pages = prev.pages.map(page => {
+      const next = nextTailFor(page);
+      if (!next) return page;
+      changed = true;
+      return {
+        ...page,
+        reply_previews_by_root: {
+          ...page.reply_previews_by_root,
+          [rootId]: next,
         },
       };
     });

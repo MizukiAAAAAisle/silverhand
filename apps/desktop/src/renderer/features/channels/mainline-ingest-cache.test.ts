@@ -3,12 +3,14 @@ import { QueryClient } from '@tanstack/react-query';
 import type {
   ConversationMessagesDto,
   MessageDto,
+  ThreadReplyPreviewRow,
 } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import {
   applyMainlineMessageToChannelCaches,
   applyTaskChangedToMessage,
   mainlineLiveGapKey,
+  mergeMainlineReplyPreview,
   messagesKey,
   reconcileChannelMainlineOnSnapshotRequired,
 } from './hooks';
@@ -208,6 +210,290 @@ describe('applyTaskChangedToMessage (the one task-chip merge helper)', () => {
       status: 'in_progress',
       assignee: null,
     });
+  });
+});
+
+describe('mergeMainlineReplyPreview — inline reply-preview tail (#task:1745)', () => {
+  /** A tail window that already carries `rootId`'s displayed preview tail. */
+  function cacheWithPreviewTail(rows: ThreadReplyPreviewRow[]) {
+    const page: ConversationMessagesDto = {
+      ...windowDto([message({ id: 'root1', seq: 1 })], { root1: rows.length }, false),
+      reply_previews_by_root: { root1: rows },
+    };
+    return { pages: [page], pageParams: [undefined] };
+  }
+
+  /** A tail window whose read model PROJECTS previews (the object is present)
+   *  but where `root1` has no key yet — the authoritative "no eligible reply
+   *  yet" state, because the read model builds the map over every non-system
+   *  top-level message on the page, not only the ones with replies. */
+  function cacheProjectingPreviews(rows: MessageDto[] = [message({ id: 'root1', seq: 1 })]) {
+    const page: ConversationMessagesDto = {
+      ...windowDto(rows, {}, false),
+      reply_previews_by_root: {},
+    };
+    return { pages: [page], pageParams: [undefined] };
+  }
+
+  function tailOf(qc: QueryClient): ThreadReplyPreviewRow[] | undefined {
+    return qc.getQueryData<{ pages: ConversationMessagesDto[] }>(
+      messagesKey('c1'),
+    )?.pages[0]?.reply_previews_by_root?.root1;
+  }
+
+  const existing: ThreadReplyPreviewRow = {
+    message_id: 'reply1',
+    seq: decodeMessageSeq(2),
+    author: { kind: 'human', id: 'u1' },
+    preview: 'first',
+    attachment_count: 0,
+    first_attachment_label: null,
+  };
+
+  const row = (messageId: string, seq: number): ThreadReplyPreviewRow => ({
+    ...existing,
+    message_id: messageId,
+    seq: decodeMessageSeq(seq),
+  });
+
+  it('appends the frame’s own row when the root has a displayed tail', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messagesKey('c1'), cacheWithPreviewTail([existing]));
+
+    const merged = mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({
+        id: 'reply2',
+        seq: 3,
+        thread_root_id: 'root1',
+        from_kind: 'agent',
+        from_agent_id: 'a1',
+        from_user_id: null,
+        content: '  second\n\nreply  ',
+      }),
+    );
+
+    expect(merged).toBe(true);
+    expect(tailOf(qc)).toEqual([
+      existing,
+      {
+        message_id: 'reply2',
+        seq: decodeMessageSeq(3),
+        author: { kind: 'agent', id: 'a1' },
+        // Whitespace-compacted + trimmed, mirroring the read model.
+        preview: 'second reply',
+        attachment_count: 0,
+        first_attachment_label: null,
+      },
+    ]);
+  });
+
+  it('is a no-op when the read model projects NO previews at all', () => {
+    const qc = new QueryClient();
+    // The window holds the root and its count but carries no
+    // `reply_previews_by_root` object — nothing can be displayed for any root
+    // here, so a live frame has nothing to patch and a refetch would not help.
+    qc.setQueryData(messagesKey('c1'), tailCache([message({ id: 'root1', seq: 1 })], { root1: 1 }));
+
+    const merged = mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({ id: 'reply1', seq: 2, thread_root_id: 'root1' }),
+    );
+
+    expect(merged).toBe(false);
+    expect(tailOf(qc)).toBeUndefined();
+  });
+
+  it('seeds the FIRST row when the page projects previews but this root has none', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messagesKey('c1'), cacheProjectingPreviews());
+
+    const merged = mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({ id: 'reply1', seq: 2, thread_root_id: 'root1' }),
+    );
+
+    // The 0→1 reply is the most common case: the count patch suppresses the
+    // window refetch, so without this the badge would say "1 reply" over an
+    // empty block until something else happened to refetch.
+    expect(merged).toBe(true);
+    expect(tailOf(qc)?.map(r => r.message_id)).toEqual(['reply1']);
+  });
+
+  it('does NOT seed a root the page does not display as an eligible root', () => {
+    const qc = new QueryClient();
+    // Previews are projected, but `rootX` is on no loaded page — the read model
+    // never spoke about it, so its tail is unknown rather than empty.
+    qc.setQueryData(messagesKey('c1'), cacheProjectingPreviews());
+
+    const merged = mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'rootX',
+      message({ id: 'reply1', seq: 2, thread_root_id: 'rootX' }),
+    );
+
+    expect(merged).toBe(false);
+    expect(
+      qc.getQueryData<{ pages: ConversationMessagesDto[] }>(messagesKey('c1'))
+        ?.pages[0]?.reply_previews_by_root,
+    ).toEqual({});
+  });
+
+  it('does NOT seed a SYSTEM root — it mirrors the read model’s own filter', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(
+      messagesKey('c1'),
+      // A system message can be a top-level row, but the read model excludes it
+      // from `rootIds`, so it displays neither a badge nor a tail; seeding one
+      // would show lines that the next fetch removes (a row-height jump).
+      cacheProjectingPreviews([
+        message({ id: 'root1', seq: 1, from_kind: 'system', from_user_id: null }),
+      ]),
+    );
+
+    const merged = mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({ id: 'reply1', seq: 2, thread_root_id: 'root1' }),
+    );
+
+    expect(merged).toBe(false);
+    expect(tailOf(qc)).toBeUndefined();
+  });
+
+  it('stays BOUNDED at three rows — the oldest leaves as a new reply lands', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(
+      messagesKey('c1'),
+      cacheWithPreviewTail([
+        row('reply1', 2),
+        row('reply2', 3),
+        row('reply3', 4),
+      ]),
+    );
+
+    for (const seq of [5, 6]) {
+      mergeMainlineReplyPreview(
+        qc,
+        'c1',
+        'root1',
+        message({ id: `reply${seq}`, seq, thread_root_id: 'root1' }),
+      );
+    }
+
+    // The cache — not just the reader — holds exactly what a fetch would return.
+    expect(tailOf(qc)?.map(r => r.message_id)).toEqual([
+      'reply3',
+      'reply5',
+      'reply6',
+    ]);
+  });
+
+  it('orders an out-of-order frame by seq, and drops it when it is older than the tail', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(
+      messagesKey('c1'),
+      cacheWithPreviewTail([row('reply2', 3), row('reply4', 5)]),
+    );
+
+    // Arrives late but belongs in the middle: `seq` is immutable insert order,
+    // so it is placed by seq rather than at the end.
+    mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({ id: 'reply3', seq: 4, thread_root_id: 'root1' }),
+    );
+    // Older than all three → converging keeps the three most recent.
+    mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({ id: 'reply1', seq: 2, thread_root_id: 'root1' }),
+    );
+
+    expect(tailOf(qc)?.map(r => r.message_id)).toEqual([
+      'reply2',
+      'reply3',
+      'reply4',
+    ]);
+  });
+
+  it('is idempotent on replay (same message_id is not appended twice)', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messagesKey('c1'), cacheWithPreviewTail([existing]));
+    const frame = message({ id: 'reply2', seq: 3, thread_root_id: 'root1' });
+
+    mergeMainlineReplyPreview(qc, 'c1', 'root1', frame);
+    mergeMainlineReplyPreview(qc, 'c1', 'root1', frame);
+
+    expect(tailOf(qc)?.map(r => r.message_id)).toEqual(['reply1', 'reply2']);
+  });
+
+  it('skips system replies — eligibility mirrors the reply count', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messagesKey('c1'), cacheWithPreviewTail([existing]));
+
+    const merged = mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({
+        id: 'sys1',
+        seq: 3,
+        thread_root_id: 'root1',
+        from_kind: 'system',
+        from_user_id: null,
+      }),
+    );
+
+    expect(merged).toBe(false);
+    expect(tailOf(qc)).toEqual([existing]);
+  });
+
+  it('labels the first attachment through the shared canonical resolver', () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messagesKey('c1'), cacheWithPreviewTail([existing]));
+
+    mergeMainlineReplyPreview(
+      qc,
+      'c1',
+      'root1',
+      message({
+        id: 'reply2',
+        seq: 3,
+        thread_root_id: 'root1',
+        content: '',
+        attachments: [
+          {
+            id: 'att1',
+            filename: 'shot.png',
+            content_type: 'image/png',
+            size: 10,
+          },
+          {
+            id: 'att2',
+            filename: 'notes.pdf',
+            content_type: 'application/pdf',
+            size: 20,
+          },
+        ],
+      }),
+    );
+
+    const appended = tailOf(qc)?.[1];
+    expect(appended?.attachment_count).toBe(2);
+    // Canonical label of the FIRST attachment, resolved over the whole list —
+    // the same string the message body references, never the filename.
+    expect(appended?.first_attachment_label).toBe('Image #1');
   });
 });
 

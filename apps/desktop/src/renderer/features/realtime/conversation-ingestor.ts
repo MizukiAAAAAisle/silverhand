@@ -49,6 +49,7 @@ import {
   hasActiveMainlineReader,
   hasWarmInactiveMainline,
   invalidateThreadFollowers,
+  mergeMainlineReplyPreview,
   openClusterReaderRoots,
   openThreadFollowerReaderRoots,
   openThreadRootReaderRoots,
@@ -375,6 +376,18 @@ function ingestMessage(
     // (append/gap) and the no-patch reply-badge fallback still go through here.
     if (!isPatchedReply) {
       push(applyMainlineMessageToChannelCaches(qc, channelId, msg));
+    } else if (msg.thread_root_id !== null) {
+      // #task:1745: the count patch suppressed the invalidate that used to be
+      // what refreshed the root's inline reply-PREVIEW tail, so patch that tail
+      // from this very frame — otherwise the badge counts a reply the lines
+      // above it predate, and a root's FIRST reply would never open a tail at
+      // all. Cursor-inert and cache-only. It deliberately does NOT fall back to
+      // the invalidate this branch exists to suppress: every case it declines
+      // (ineligible reply, off-window root, a read model that projects no
+      // previews) displays no tail, so a whole-window refetch would buy nothing
+      // and would re-add the amplification #task:1277 removed. Hence no
+      // satisfaction promise either.
+      mergeMainlineReplyPreview(qc, channelId, msg.thread_root_id, msg);
     }
   } else if (hasWarmInactiveMainline(qc, channelId)) {
     push(removeInactiveMainlineCache(qc, channelId));

@@ -232,6 +232,16 @@
      表达"这条是我"，不做颜色反转。 */
   --chip-bg: rgba(17, 23, 37, 0.06);
   --chip-bg-hover: rgba(17, 23, 37, 0.11);
+  /* Thread reply block (#task:1745) — declared HERE on purpose: the default
+     theme file owns the document root block, so a token it defines and this
+     file omits arrives with forza6's own value rather than falling back. The
+     excerpt ink is a literal neutral at a single-decimal alpha (round computed
+     value): 5.53:1 on the resting wash, one visible step below the replier
+     name at 7.11:1, so the excerpt reads quieter and normal text still clears
+     WCAG AA. `--text-muted` is NOT usable here — 2.73:1 on this wash. */
+  --thread-preview-bg: var(--chip-bg);
+  --thread-preview-bg-hover: var(--chip-bg-hover);
+  --thread-preview-text: oklab(0 0 0 / 0.6);
 
   /* ── Closed-status chip (#task:770) ──
      closed 是终态 status（第 5 列），不外扩到 channel archived badge

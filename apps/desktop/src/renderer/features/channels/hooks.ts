@@ -28,6 +28,7 @@ import type {
   MessageSeq,
   ThreadFollowerStateDto,
   ThreadFollowMutationDto,
+  ThreadReplyPreviewRow,
 } from '@silverhand/shared';
 import {
   apiPaths,
@@ -152,6 +153,7 @@ export {
   applyThreadRootReplyBump,
   mergeThreadRootReplyCount,
   mergeMainlineReplyCount,
+  mergeMainlineReplyPreview,
   applyThreadFollowersMessage,
   invalidateThreadFollowers,
 } from '@/features/channels/projection-cache';
@@ -335,6 +337,28 @@ export function useChannelMessages(
     return merged;
   }, [query.data]);
 
+  // Per-root inline reply PREVIEWS (#task:1746) — the tail-3 most recent
+  // replies of each root in this window, merged page-by-page like the counts
+  // (later pages win). Optional sidecar, and the two absences differ: a page
+  // with no `reply_previews_by_root` object at all comes from a read model that
+  // does not project previews (→ degrade to today's count-only badge), while a
+  // page that HAS the object but no key for a root states that root had no
+  // eligible reply when the window was fetched. Either way this reader shows
+  // nothing for that root; the distinction is what lets the live merge open a
+  // tail on a first reply without inventing one (`mergeMainlineReplyPreview`).
+  // READ-INERT — nothing here observes or scores read state
+  // (docs/thread-unread-v1.md §6).
+  const replyPreviewsByRoot = useMemo(() => {
+    const merged: Record<string, ThreadReplyPreviewRow[]> = {};
+    for (const page of query.data?.pages ?? []) {
+      if (!page.reply_previews_by_root) continue;
+      for (const [rootId, rows] of Object.entries(page.reply_previews_by_root)) {
+        merged[rootId] = rows;
+      }
+    }
+    return merged;
+  }, [query.data]);
+
   /** Reset the active query to the latest window. We do NOT keep the
    *  previous pages here: an around-message window may not be
    *  contiguous with latest, and stitching disjoint ranges would
@@ -368,6 +392,7 @@ export function useChannelMessages(
     resetToLatest,
     replyCountsByRoot,
     replySummariesByRoot,
+    replyPreviewsByRoot,
   };
 }
 

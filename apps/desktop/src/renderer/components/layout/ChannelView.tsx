@@ -278,6 +278,7 @@ function ActiveChannelView({
     resetToLatest,
     replyCountsByRoot,
     replySummariesByRoot,
+    replyPreviewsByRoot,
   } = useChannelMessages(conversation.id);
 
   // Per-viewer membership gate. A PUBLIC channel is readable by a
@@ -912,6 +913,7 @@ function ActiveChannelView({
             onOpenThread={onOpenThread}
             replyCountsByRoot={replyCountsByRoot}
             replySummariesByRoot={replySummariesByRoot}
+            replyPreviewsByRoot={replyPreviewsByRoot}
             threadUnreadByRoot={threadUnreadByRoot}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}

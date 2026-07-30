@@ -1237,6 +1237,117 @@ describe('ingestConversationFrame — S1 reply_count projection merge (#task:127
   });
 });
 
+// #task:1745 — the inline reply-PREVIEW tail rides the SAME suppressed-invalidate
+// path as the count patch above, so it is patched from the reply frame itself. The
+// two gates that matter at this level: the tail actually appears for a root's
+// FIRST reply (the common 0→1 case, which has no tail to append to), and it never
+// buys that by reintroducing the whole-window refetch #1277 removed.
+describe('ingestConversationFrame — inline reply-preview tail (#task:1745)', () => {
+  let markSatisfied: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    markSatisfied = vi
+      .spyOn(eventWsClient, 'markSatisfied')
+      .mockImplementation(() => {});
+    vi.spyOn(eventWsClient, 'commitSnapshotBaseline').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A displayed window whose read model projects previews (object present). */
+  function seedPreviewWindow(
+    qc: QueryClient,
+    channelId: string,
+    rootId: string,
+    previews: Record<string, unknown> | undefined,
+  ): void {
+    qc.setQueryData(messagesKey(channelId), {
+      pages: [
+        {
+          messages: [message({ id: rootId, seq: 1 })],
+          reply_counts_by_root: { [rootId]: 0 },
+          ...(previews ? { reply_previews_by_root: previews } : {}),
+          has_more_before: false,
+          has_more_after: false,
+          stream_head_seq: 5,
+        },
+      ],
+      pageParams: [undefined],
+    });
+  }
+  function previewTail(
+    qc: QueryClient,
+    channelId: string,
+    rootId: string,
+  ): { message_id: string }[] | undefined {
+    return qc.getQueryData<{
+      pages: { reply_previews_by_root?: Record<string, { message_id: string }[]> }[];
+    }>(messagesKey(channelId))?.pages[0]?.reply_previews_by_root?.[rootId];
+  }
+  function patchedReply(channelId: string, rootId: string, seq: number): ServerFrame {
+    return {
+      type: 'event',
+      scope: conversationScope(channelId),
+      seq,
+      epoch: 'epoch-1',
+      kind: 'message',
+      payload: {
+        message: message({ id: `r${seq}`, seq, thread_root_id: rootId }),
+        projections: {
+          thread_root_reply_count: { root_id: rootId, reply_count: 1 },
+        },
+      },
+    } as ServerFrame;
+  }
+
+  it('opens the tail on a root’s FIRST reply — and still never refetches the window', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    seedPreviewWindow(qc, 'c1', 'root1', {}); // projects previews, root has none yet
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, patchedReply('c1', 'root1', 6));
+
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(previewTail(qc, 'c1', 'root1')?.map(r => r.message_id)).toEqual(['r6']);
+    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(1);
+    expect(invalidate).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it('a read model that projects no previews stays badge-only — no tail, no refetch', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    seedPreviewWindow(qc, 'c1', 'root1', undefined);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, patchedReply('c1', 'root1', 6));
+
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    // Nothing to display and nothing a refetch would add — the badge alone moves.
+    expect(previewTail(qc, 'c1', 'root1')).toBeUndefined();
+    expect(mainlineReplyCount(qc, 'c1', 'root1')).toBe(1);
+    expect(invalidate).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it('stays bounded at three rows across a burst of live replies', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    seedPreviewWindow(qc, 'c1', 'root1', {});
+
+    for (const seq of [6, 7, 8, 9]) {
+      ingestConversationFrame(qc, patchedReply('c1', 'root1', seq));
+    }
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(4));
+
+    expect(previewTail(qc, 'c1', 'root1')?.map(r => r.message_id)).toEqual([
+      'r7',
+      'r8',
+      'r9',
+    ]);
+    unsub();
+  });
+});
+
 // #task:1278 — S1 P2 threads_list_entry projection MERGE. A reply frame carrying an
 // absolute viewer-invariant `threads_list_entry` repositions the HELD threads-list
 // row in place (keyset resort) instead of the blanket invalidate→refetch. Same

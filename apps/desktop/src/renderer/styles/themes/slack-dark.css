@@ -222,6 +222,18 @@
      `--accent-soft` for a stronger fill. */
   --chip-bg: rgba(255, 255, 255, 0.06);
   --chip-bg-hover: rgba(255, 255, 255, 0.12);
+  /* Thread reply block (#task:1745) — declared HERE on purpose: the default
+     theme file owns the document root block, so a token it defines and this
+     file omits arrives with forza6's own value rather than falling back
+     (forza6 recesses the block with a black tint that would be invisible on a
+     dark ground, and fades the excerpt with black ink). The excerpt fades
+     toward the ground the same way, which on a dark theme means WHITE at a
+     single-decimal alpha: 4.75:1 on the resting wash, a clear step below the
+     replier name at 6.24:1, and still WCAG AA for normal text.
+     `--text-muted` is NOT usable here — 4.38:1 over this fill. */
+  --thread-preview-bg: var(--chip-bg);
+  --thread-preview-bg-hover: var(--chip-bg-hover);
+  --thread-preview-text: oklab(1 0 0 / 0.5);
 
   /* ── Control border width ──
      1px hairline 派；不走 forza6 的 2px hard-cut。 */

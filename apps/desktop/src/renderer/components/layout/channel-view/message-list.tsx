@@ -10,7 +10,11 @@ import {
 } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ArrowDown } from 'lucide-react';
-import type { ReplyBadgeSummary, StreamUnreadDto } from '@silverhand/shared';
+import type {
+  ReplyBadgeSummary,
+  StreamUnreadDto,
+  ThreadReplyPreviewRow,
+} from '@silverhand/shared';
 import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { SystemMessage } from '@/components/chat/SystemMessage';
@@ -60,6 +64,7 @@ export function MessageList({
   replyCountsByRoot,
   replySummariesByRoot,
   threadUnreadByRoot,
+  replyPreviewsByRoot,
   conversationRefsById,
   onOpenConversationRef,
   onOpenChannelRef,
@@ -118,6 +123,14 @@ export function MessageList({
    *  optimistically-patched `replySummariesByRoot` so the server-scored fact
    *  never lives in the message-window cache. */
   threadUnreadByRoot?: Record<string, StreamUnreadDto>;
+  /** Per-root inline preview of the cluster's most recent replies (#task:1745),
+   *  from the message window's `reply_previews_by_root` sidecar. Optional:
+   *  absent root ⇒ no preview block (and the whole sidecar is absent until the
+   *  backend ships it, which degrades to today's chip-only row).
+   *
+   *  Mainline only — the ThreadPanel renders the real replies. Read-inert: no
+   *  cursor is advanced by rendering it (`docs/thread-unread-v1.md` §6). */
+  replyPreviewsByRoot?: Record<string, ThreadReplyPreviewRow[]>;
   conversationRefsById?: Map<string, ConversationReference>;
   onOpenConversationRef?: (id: string) => void;
   /** Pre-bound (workspace already resolved) click handler for inline
@@ -647,6 +660,7 @@ export function MessageList({
           }
           threadReplySummary={replySummariesByRoot?.[m.id]}
           threadUnread={threadUnreadByRoot?.[m.id]}
+          threadReplyPreviews={replyPreviewsByRoot?.[m.id]}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
           viewer={viewer}
           humanAvatarUrls={humanAvatarUrls}
@@ -680,6 +694,7 @@ export function MessageList({
       replyCountsByRoot,
       replySummariesByRoot,
       threadUnreadByRoot,
+      replyPreviewsByRoot,
       viewerAvatarObjectUrl,
       viewer,
       agentAvatarUrls,

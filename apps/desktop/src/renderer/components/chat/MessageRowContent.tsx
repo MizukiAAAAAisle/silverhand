@@ -24,8 +24,9 @@ import type { ReactNode } from 'react';
  * invisible on screenshots) — becomes a build error rather than a silent gap.
  *
  * That is why even genuinely live-only adornments (`taskTag` = task tag,
- * `trailing` = thread-replies badge) are required: the export passes `null`,
- * making its deliberate omission explicit instead of implicit. The single
+ * `trailing` = thread-replies badge, `threadPreview` = inline reply preview)
+ * are required: the export passes `null`, making its deliberate omission
+ * explicit instead of implicit. The single
  * residual hole — inlining an adornment straight into the live chrome wrapper
  * without going through a slot — is left to review + the screenshot parity test
  * (the stricter "content-starve MessageItem" form is a named follow-up).
@@ -61,9 +62,16 @@ export interface MessageRowContentProps {
   /** Reaction row node, or `null` when there are no reactions. Live supplies
    *  the interactive `MessageReactions`, export the static `ReactionChipRow`. */
   reactions: ReactNode;
-  /** Live-only below-content adornment (the thread-replies badge). Export
+  /** Live-only below-content adornment: the thread-replies badge WHEN it stands
+   *  alone. `null` once there are reply preview lines for it to head — it then
+   *  travels inside `threadPreview`, which is the block the badge counts. Export
    *  passes `null`. */
   trailing: ReactNode;
+  /** Live-only inline reply block — the badge as its header line plus the
+   *  cluster's most recent replies, under ONE wash, BELOW the bottom adornment
+   *  row (shiki 2026-07-31). Export passes `null`. Read-inert (see
+   *  ThreadReplyPreview). Mutually exclusive with `trailing`. */
+  threadPreview: ReactNode;
 }
 
 export function MessageRowContent({
@@ -76,6 +84,7 @@ export function MessageRowContent({
   attachments,
   reactions,
   trailing,
+  threadPreview,
 }: MessageRowContentProps): JSX.Element {
   return (
     <div className={columnClassName}>
@@ -115,7 +124,10 @@ export function MessageRowContent({
           line, no wrapping (shiki #task:1185). Each child is a bare inline
           element; this row owns the top spacing + alignment + gap, so they
           never stack. Renders only when at least one is present. Reversed for
-          own-messages so the task tag hugs the reading (right) edge. */}
+          own-messages so the task tag hugs the reading (right) edge. The
+          replies badge is absent from this row when it heads the reply block
+          below — grouping it with the lines it counts outranks keeping it here
+          (shiki 2026-07-31). */}
       {taskTag || trailing || reactions ? (
         <div
           className={
@@ -128,6 +140,11 @@ export function MessageRowContent({
           {reactions}
         </div>
       ) : null}
+
+      {/* The reply block — badge header + preview lines under one wash. Its own
+          block below the adornment row: the lines are full-width, so they never
+          share a line with anything else. */}
+      {threadPreview}
     </div>
   );
 }
