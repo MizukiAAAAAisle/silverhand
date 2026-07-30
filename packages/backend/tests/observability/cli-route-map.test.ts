@@ -4,8 +4,9 @@
  * Three invariants we never want to lose:
  *
  *   1. Every entry in `CLI_INVOKE_ROUTES` maps to a `(noun, verb)` pair
- *      that actually exists in `COMMAND_GROUPS`. If we rename a CLI
- *      verb, the test points at the orphan immediately.
+ *      that exists in `COMMAND_GROUPS`, which is exhaustively bound from
+ *      the shared command discovery manifest. If we rename a CLI verb,
+ *      the test points at the orphan immediately.
  *
  *   2. Every internal route defined in `internalPaths` (minus the
  *      observability-only `agentCliTrace` and the profile-self avatar

@@ -47,6 +47,10 @@ export function nounHelp(noun: string): string | null {
   const lines: string[] = [];
   lines.push(`silverhand ${noun} — ${group.summary}`);
   lines.push('');
+  if (group.guidance) {
+    lines.push(group.guidance);
+    lines.push('');
+  }
   // Faceted noun (3-level): list facets. A faceted noun may ALSO carry
   // flat verbs (e.g. `profile mcp <verb>` + `profile get|update`); list
   // those too so they are discoverable from `silverhand <noun> --help`.

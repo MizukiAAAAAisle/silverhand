@@ -2,7 +2,8 @@
 
 > Current contract for the agent-facing `silverhand` CLI.
 > Keep this document in sync with `packages/cli`, the internal agent routes in
-> `packages/backend/src/routes.ts`, and the prompt rules in
+> `packages/backend/src/routes.ts`, the shared discovery manifest in
+> `packages/shared/src/cli-command-manifest.ts`, and the prompt rules in
 > `packages/shared/src/platform-prompt.ts`.
 
 ## 1. Purpose
@@ -47,6 +48,13 @@ and event publishing.
 
 All commands default to machine-readable JSON on stdout. Use
 `silverhand <noun> <verb> --help` for exact flags.
+
+The agent-facing noun/verb discovery tree is declared once in
+`packages/shared/src/cli-command-manifest.ts`. The CLI must bind every manifest
+entry to one concrete command, the platform prompt renders its Domain →
+subcommand index from the same source, and backend route attribution validates
+against the resulting CLI groups. Leaf help text remains with the CLI command
+implementation because it owns exact flags, examples, and recovery behavior.
 
 | Command | Purpose |
 |---|---|

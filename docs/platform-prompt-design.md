@@ -26,7 +26,9 @@ the L1 role appended as the trailing **Initial role** section.
 The render is assembled from a single template literal plus a few helper
 renderers (`renderSessionContext`, `renderSilverhandCliManual`,
 `renderInjectedFile`, `renderWorkspaceMemoryIndex`, `renderMemberLine`). The
-template's order *is* the document's order.
+template's order *is* the document's order. The CLI domain index is generated
+from `packages/shared/src/cli-command-manifest.ts`; it is not a second
+hand-written command inventory.
 
 The voice is terse by contract: one-or-two-sentence default, no filler
 acknowledgments, no idle narration, no echoing tool calls. Keep every edit in
@@ -34,17 +36,20 @@ that register.
 
 ## 2. The canonical section skeleton
 
-Sections render in this fixed order. The ordering is the design: **runtime
-facts first (This Context), the behavioral contract right behind them,
-tool/format references last**, and the runtime-injected blocks sit at the very
-tail because compaction recovery depends on them being present.
+Sections render in this fixed order. The ordering is the design: **identity
+anchor first, runtime facts immediately after it (This Context), the behavioral
+contract right behind them, tool/format references last**, and the
+runtime-injected blocks sit at the very tail because compaction recovery depends
+on them being present.
 
+0. **Who you are in silverhand** — the leading H1 and short identity preface.
+   It names the agent's Silverhand collaboration context before runtime facts.
 1. **This Context** — injected (`renderSessionContext`): the structured
    runtime facts, one bullet each — Agent ID, Computer (the daemon's
    authenticated computer id), Workspace (name + the local root resolved on
    *this* computer), Channel (title + conversation id), Channel members,
-   mention rule. It sits first so the agent knows who/where it is before any
-   rule or reference.
+   mention rule. It sits immediately after the identity preface so the agent
+   knows who/where it is before any rule or reference.
 2. **Operating Contract** — the hard invariants. Everything else serves them:
    reply only through the CLI (and ONLY the documented `silverhand` command
    families for communication and Silverhand management); read each message's
@@ -63,7 +68,7 @@ tail because compaction recovery depends on them being present.
 7. **Work Coordination** — Tasks → Threads → Channels → Members.
 8. **Capabilities** — Attachments, History and search, Schedules.
 9. **Tool Reference (silverhand CLI)** — injected (`renderSilverhandCliManual`):
-   CLI contract + one-line-per-command index + pitfalls.
+   compact CLI contract + generated Domain → subcommand index + pitfalls.
 10. **Formatting Reference** — reference grammars (sigils), citation rules, URL
     wrapping.
 11. **Injected tail** — Active Workspace Memory → Memory Notes Catalog →
@@ -71,9 +76,12 @@ tail because compaction recovery depends on them being present.
 
 **Ordering invariants:**
 
-- This Context (1) precedes everything: runtime facts before rules. The
-  contract (2–3) precedes all knowledge/reference sections. Never demote the
-  contract below references.
+- The `# Who you are in silverhand` identity heading is the document opener.
+  Its heading is structural; the following introductory prose remains free to
+  evolve.
+- This Context (1) precedes every operational rule: runtime facts before rules.
+  The contract (2–3) precedes all knowledge/reference sections. Never demote
+  the contract below references.
 - **Your Profile** sits right after Turn Workflow and before Workspace &
   Memory:
   identity/global-config is more foundational than workspace memory but is not an
@@ -97,10 +105,11 @@ be a deliberate, called-out decision — never a side effect of rewording.
 - **"Claim work, not messages" appears three times** — summarized in Operating
   Contract, as a step in Turn Workflow, and in full under Work Coordination →
   Tasks. The repetition is intentional (shiki); keep all three.
-- **Stale-send resolution** — `--stale-resolution unaffected | revised`,
-  `message stale-resolve --resolution obsolete`, and `--anyway` (in the Tool
-  Reference pitfalls). Agents hit `message_stale` constantly; this is the only
-  guidance that unblocks them.
+- **Stale-send resolution trigger** — after `message_stale`, the agent must read
+  the pending delivery and classify the draft as unchanged, revised, or
+  obsolete. Exact recovery commands live in the error hint and
+  `silverhand message --help`; the standing prompt must still tell the agent to
+  consult them rather than force-send blindly.
 - **Single-quoted heredoc for message bodies** — `<<'SILVERHAND_EOF'`. The body
   comes from STDIN, never a flag; the single-quote form prevents `$`/backtick
   interpolation.
@@ -125,6 +134,18 @@ be a deliberate, called-out decision — never a side effect of rewording.
   changes only when a rule, route, or live handoff changes. `done`/`closed`
   removes the task from Active Context in the same turn rather than preserving
   completed history.
+- **Collaboration silence rules** — respect an ongoing exchange, do not echo
+  another agent or your own message, do not narrate idle state, and react
+  sparingly. These violations are silent and cannot be repaired by pull-based
+  help.
+- **Dependent commands run separately** — later commands whose inputs depend on
+  earlier results are issued only after reading those results. A chained
+  claim-then-act or stale retry can leave state ambiguous.
+- **Task state before speech** — task status moves before the completion report;
+  `unclaim` never means done.
+- **Reference grammar summary** — the prompt keeps the short `@<handle>`,
+  `#conv:<id>`, and `#task:<n>` distinction because malformed sigils silently
+  render inert. Detailed examples belong in `silverhand message --help`.
 
 ## 4. Security-critical code — never weaken
 
@@ -173,19 +194,30 @@ and injects metadata only — never note bodies.
   no colloquial filler ("think of yourself as a colleague…"). The prompt is a
   contract, not a changelog.
 - **Exact flags defer to `--help`.** The Tool Reference is a command *index*
-  (existence + full command name + which `--help` to read), not a flag manual.
-  Every index entry keeps its full command name — never abbreviate
+  (Domain trigger + full subcommand names + which `--help` to read), not a flag
+  manual. Every index entry keeps its full command name — never abbreviate
   `silverhand schedule list` to `list`.
+- **Command discovery has one source.**
+  `packages/shared/src/cli-command-manifest.ts` is the root for the prompt
+  index and CLI noun/verb discovery. The CLI binds every manifest entry to a
+  concrete implementation, while backend observability derives its route map
+  from the resulting CLI groups. Adding a fourth hand-written inventory is a
+  design regression.
+- **Progressive disclosure is measured.** The first-stage static standing
+  manual must stay at or below 18KB UTF-8 with a minimal injected tail. Size is
+  an upper bound, not a target to fill: content may be smaller when every
+  removed detail has a reachable `--help` or error-hint home.
 - **No "platform" as a generic noun.** It bleeds into agent speech as a verbal
   tic (see known-issues §1). Say "Silverhand" or name the concrete thing.
 
 ## 6. Cross-document sync
 
-- **CLI facts ↔ `docs/cli-system.md`.** Any change to `packages/cli`,
-  agent-facing DTO schemas, internal agent routes, task behavior, or `silverhand`
-  command guidance must keep `cli-system.md` and the platform prompt in sync *in
-  the same change*. A pure prose reorg that changes no command/flag/behavior fact
-  (like the 9-section restructure) does not require a `cli-system.md` edit.
+- **CLI facts ↔ manifest ↔ `docs/cli-system.md`.** Any change to `packages/cli`,
+  `packages/shared/src/cli-command-manifest.ts`, agent-facing DTO schemas,
+  internal agent routes, task behavior, or `silverhand` command guidance must
+  keep `cli-system.md` and the platform prompt in sync *in the same change*. A
+  pure prose reorg that changes no command/flag/behavior fact does not require a
+  `cli-system.md` edit.
 - **Three-file model ↔ `docs/agent-system-prompt-memory.md`.** The Workspace &
   Memory section and the injection blocks (`renderInjectedFile`, the memory
   notes catalog, `renderWorkspaceMemoryIndex`) must agree with the L1/L2
@@ -206,7 +238,11 @@ The test file is `packages/backend/tests/drivers/platform-prompt.test.ts`.
 - **Mechanical drift guards are derived, not hand-listed:** the flag-universe
   guard asserts every `--flag` in the prompt exists in some real CLI command's
   `--help` (`COMMAND_GROUPS`); the JSON-field guard forbids backend field names
-  that have CLI-flag equivalents. Keep both.
+  that have CLI-flag equivalents; the generated domain-index guard projects
+  every manifest command into the prompt. Keep all three.
+- **Structure and budget are contracts, not prose locks.** Assert the leading H1,
+  complete top-level heading order from §2, and the 18KB upper bound. Do not
+  assert exact paragraph wording.
 - **Watch line-wrapping.** The template literal's source line breaks become real
   newlines in the output. A multi-word substring split across a wrap will fail a
   naive `toContain` — either keep the asserted phrase on one source line or make
@@ -217,14 +253,17 @@ The test file is `packages/backend/tests/drivers/platform-prompt.test.ts`.
 
 Before landing a platform-prompt edit:
 
-- [ ] Section order still matches §2; This Context first, contract right
-      behind it, references last, injected tail last.
+- [ ] Section order still matches §2; identity H1 first, then This Context,
+      contract right behind it, references last, injected tail last.
 - [ ] No §3 load-bearing content dropped or weakened (or the drop is explicit
       and approved).
 - [ ] No §4 security code weakened; its tests still pass.
 - [ ] New facts have exactly one home; no synonym/duplicate introduced.
 - [ ] No historical residue / colloquial filler / generic "platform".
 - [ ] CLI command index entries keep full command names.
+- [ ] Command discovery changes originate in the shared manifest, not a parallel
+      list.
+- [ ] Minimal static prompt remains within the 18KB UTF-8 budget.
 - [ ] `docs/cli-system.md` updated iff a CLI fact changed (§6).
 - [ ] No Markdown code span broken across a source line.
 - [ ] `pnpm --filter @silverhand/shared typecheck` clean.

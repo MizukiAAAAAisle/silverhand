@@ -7,7 +7,9 @@
  * every observed CLI call with a `(noun, verb)` pair so `cli-*.log`
  * lines can be filtered/aggregated by command.
  *
- * The entries here are intentionally locked by a drift-guard test
+ * The agent-facing command tree originates in the shared discovery manifest,
+ * which the CLI binds into `COMMAND_GROUPS`. The entries here are then locked
+ * to that bound tree by a drift-guard test
  * (`packages/backend/tests/observability/cli-route-map.test.ts`):
  *   - every `(noun, verb)` must exist in `COMMAND_GROUPS`, and
  *   - every internal route exposed by `internalPaths` (minus the

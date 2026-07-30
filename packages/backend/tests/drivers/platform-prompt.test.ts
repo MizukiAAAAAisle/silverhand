@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COMMAND_GROUPS } from '@silverhand/cli';
+import { SILVERHAND_COMMAND_DOMAINS } from '@silverhand/shared/cli-command-manifest';
 import {
   buildPlatformPrompt as buildPlatformPromptImpl,
   type InjectedFileContent,
@@ -61,6 +62,12 @@ function prompt(): string {
 }
 
 describe('buildPlatformPrompt', () => {
+  it('opens with the explicit Silverhand identity heading', () => {
+    const text = prompt();
+    expect(text).toMatch(/^# Who you are in silverhand\n\n/);
+    expect(text).toContain('**@Cindy**');
+  });
+
   it('renders the structured This Context block from session-context input', () => {
     const regular = prompt();
     expect(regular).toContain('- Agent ID: `agent-1`');
@@ -81,6 +88,33 @@ describe('buildPlatformPrompt', () => {
     expect(context).toBeGreaterThan(-1);
     expect(contract).toBeGreaterThan(-1);
     expect(context).toBeLessThan(contract);
+  });
+
+  it('preserves the canonical top-level section skeleton and order', () => {
+    const headings = prompt().match(/^## .+$/gm);
+    expect(headings).toEqual([
+      '## This Context',
+      '## Operating Contract',
+      '## Turn Workflow',
+      '## Your Profile',
+      '## Workspace & Memory',
+      '## Collaboration Policy',
+      '## Work Coordination',
+      '## Attachments',
+      '## History and search',
+      '## Schedules',
+      '## Tool Reference (silverhand CLI)',
+      '## Formatting Reference',
+      '## Active Workspace Memory',
+      '## Memory Notes Catalog',
+      '## Workspace Memory Index',
+      '## Initial role (your assignment in this workspace/channel)',
+    ]);
+  });
+
+  it('keeps the static standing manual within the first-stage size budget', () => {
+    const byteLength = new TextEncoder().encode(prompt()).length;
+    expect(byteLength).toBeLessThanOrEqual(18 * 1024);
   });
 
   it('renders the DM workspace line with the local L1 root', () => {
@@ -631,6 +665,26 @@ describe('buildPlatformPrompt', () => {
     const missing = [...promptFlags].filter(f => !cliFlags.has(f)).sort();
     expect(missing, `prompt mentions flags not in any CLI help: ${missing.join(', ')}`)
       .toEqual([]);
+  });
+
+  it('renders the command index from every shared manifest domain and command', () => {
+    const text = prompt();
+    for (const [index, domain] of SILVERHAND_COMMAND_DOMAINS.entries()) {
+      expect(text).toContain(`${index + 1}. **${domain.domain}**`);
+      for (const noun of domain.nouns) {
+        for (const verb of noun.verbs) {
+          expect(text).toContain(`\`silverhand ${noun.noun} ${verb}\``);
+        }
+        if (!('facets' in noun)) continue;
+        for (const facet of noun.facets) {
+          for (const verb of facet.verbs) {
+            expect(text).toContain(
+              `\`silverhand ${noun.noun} ${facet.facet} ${verb}\``,
+            );
+          }
+        }
+      }
+    }
   });
 });
 

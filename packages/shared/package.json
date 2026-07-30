@@ -12,6 +12,7 @@
     "./db/baseline-schema": "./src/db/baseline-schema.ts",
     "./db/migrations": "./src/db/migrations.ts",
     "./db/schema": "./src/db/schema.ts",
+    "./cli-command-manifest": "./src/cli-command-manifest.ts",
     "./driver": "./src/driver/index.ts",
     "./app-data-layout": "./src/app-data-layout.ts"
   },
