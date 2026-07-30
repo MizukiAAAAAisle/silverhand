@@ -69,6 +69,9 @@ describe('materializeAgent — §4.6 decision tree', () => {
     // Template seeded — system_prompt + MEMORY + notes/ files
     expect(existsSync(join(agentDir, 'system_prompt.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'MEMORY.md'))).toBe(true);
+    expect(readFileSync(join(agentDir, 'MEMORY.md'), 'utf8')).toContain(
+      'Group live handoffs by source channel name',
+    );
     expect(existsSync(join(agentDir, 'notes/onboarding-guide.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/onboarding-faq.md'))).toBe(true);
     expect(existsSync(join(agentDir, 'notes/user-preferences.md'))).toBe(true);

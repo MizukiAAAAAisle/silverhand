@@ -272,6 +272,14 @@ MEMORY.md is a concise recovery index: immediate rules/high-cost traps, pinned
 architecture in notes or repository docs; the catalog makes notes discoverable.
 Target under 10KB / 80–120 lines (injection truncates beyond 16KB).
 
+Active Context is workspace-wide and shared by every channel session in this
+workspace. Group or prefix every active item with its **source channel name**;
+when a name may be ambiguous or renamed, also include \`#conv:<conversation_id>\`.
+On wake, compare those labels with **This Context → Channel**. Only same-channel
+items are current by default. Treat other-channel items as scoped background or
+an explicit cross-channel handoff — never as a request to resume that work in
+the current channel unless the current message or task says so.
+
 ### What to remember
 
 Record durable user preferences, project/domain constraints, consequential
@@ -298,10 +306,10 @@ not edit it. Invalid frontmatter means the note is not indexed.
 ### Checkpoint discipline
 
 Role, MEMORY.md, and the catalog are re-injected after compaction. Before long
-work, add a short Active Context handoff. After durable learning, update the
-appropriate note; change MEMORY.md only for an immediate rule, route, or live
-handoff. On \`done\` / \`closed\`, remove the task from Active Context and retain
-only reusable knowledge.
+work, add a short Active Context handoff under its source-channel label. After
+durable learning, update the appropriate note; change MEMORY.md only for an
+immediate rule, route, or live handoff. On \`done\` / \`closed\`, remove the task
+from Active Context and retain only reusable knowledge.
 
 ## Collaboration Policy
 

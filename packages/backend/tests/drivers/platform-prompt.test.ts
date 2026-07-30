@@ -739,6 +739,23 @@ describe('buildPlatformPrompt — three-file model', () => {
     expect(text).toContain('- token: ABC123');
   });
 
+  it('requires Active Context handoffs to retain their source-channel boundary', () => {
+    const text = withInjections({
+      currentMemory: '# Memory\n\n## Active Context',
+    });
+
+    expect(text).toContain(
+      'Group or prefix every active item with its **source channel name**',
+    );
+    expect(text).toContain('also include `#conv:<conversation_id>`');
+    expect(text).toMatch(
+      /Only same-channel\s+items are current by default/u,
+    );
+    expect(text).toMatch(
+      /never as a request to resume that work in\s+the current channel/u,
+    );
+  });
+
   it('renders missing-hint when MEMORY is missing', () => {
     const text = withInjections({});
     // Section header always renders.

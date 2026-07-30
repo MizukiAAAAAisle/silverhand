@@ -80,6 +80,12 @@ Key model:
 - **Current vs reference.** The current workspace's MEMORY.md is auto-loaded;
   other workspaces are paths only — open them only when the task needs
   cross-workspace context.
+- **Active Context keeps channel provenance.** It is shared by every channel
+  session in this workspace, so group each live handoff under its source
+  channel name (and add \`#conv:<id>\` when ambiguous). Only entries matching
+  the current **This Context → Channel** are resumable by default; other-channel
+  entries stay scoped background unless the current message or task explicitly
+  crosses channels.
 
 Do not mention internal file paths to the user unless they ask.
 
@@ -269,7 +275,7 @@ const INITIAL_MEMORY_MD = [
   '_The Memory Notes Catalog indexes ordinary notes automatically. Pin only high-priority triggers here._',
   '',
   '## Active Context',
-  '_Keep only the current handoff here. Detailed history belongs in notes/work-log.md._',
+  '_Group live handoffs by source channel name (add `#conv:<id>` when ambiguous); only the current channel is resumable by default. Detailed history belongs in notes/work-log.md._',
   '',
 ].join('\n');
 

@@ -74,7 +74,8 @@ not the complete knowledge body. Keep only:
 - rules and high-cost traps that must be loaded immediately;
 - a Key Knowledge index containing only pinned high-priority
   `topic → file/section + read trigger` routes;
-- current Active Context needed to resume real work.
+- current Active Context needed to resume real work, grouped or prefixed by
+  source channel name (plus conversation id when ambiguous).
 
 Put explanation, evidence, architecture, important decision history, and
 domain detail in flexibly named, domain-specific `notes/` files or canonical
@@ -110,6 +111,14 @@ changes. A `done`/`closed` task notice removes that task from Active Context in
 the same turn. Only reusable lessons move to notes; completed-task timelines do
 not remain in MEMORY. Rewriting an entry as `DONE` and keeping it is an explicit
 anti-pattern, not a valid status update.
+
+Active Context is shared by every channel session in the workspace. Every live
+item therefore retains its source channel name; add the conversation id when a
+name is ambiguous or may have been renamed. At recovery, the session compares
+those labels with `This Context → Channel`: same-channel items are current by
+default, while other-channel items remain scoped background or explicit
+cross-channel handoffs. Their presence alone never authorizes resuming them in
+the current channel.
 
 The injected file should target less than 10KB / roughly 80–120 lines. The
 16KB reader cap is a truncation boundary, not an authoring target.

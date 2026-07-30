@@ -134,6 +134,12 @@ be a deliberate, called-out decision — never a side effect of rewording.
   changes only when a rule, route, or live handoff changes. `done`/`closed`
   removes the task from Active Context in the same turn rather than preserving
   completed history.
+- **Active Context channel provenance** — L2 MEMORY is workspace-wide across
+  channel sessions, so every live handoff is grouped or prefixed by source
+  channel name (plus conversation id when ambiguous). Recovery treats only
+  entries matching `This Context → Channel` as current by default;
+  other-channel entries remain scoped background unless the current message or
+  task explicitly crosses channels.
 - **Collaboration silence rules** — respect an ongoing exchange, do not echo
   another agent or your own message, do not narrate idle state, and react
   sparingly. These violations are silent and cannot be repaired by pull-based
