@@ -67,9 +67,11 @@ interface ThreadReplyPreviewProps {
   badge: ReactNode;
   /** Own-message layout (flush right) — mirrors the line composition. */
   alignRight: boolean;
-  /** Same human-readable action label the reply badge uses. */
+  /** Same human-readable action label the reply badge uses; it titles the whole
+   *  block, since the whole block performs that action. */
   title: string;
-  /** Opens the thread. Identical action to the reply badge. */
+  /** Opens the thread. Fired by a click anywhere in the block that a nested
+   *  control did not already claim — identical action to the reply badge. */
   onOpen: () => void;
   /** Author identity is resolved by the owner of the agent/human maps
    *  (MessageItem's `renderReplierAvatar`, the same call the reply chip's
@@ -97,10 +99,11 @@ interface ThreadReplyPreviewProps {
  * ── Why the badge lives INSIDE this block ──────────────────────────────────
  * The badge counts the very lines below it, so a second surface tone between
  * them read as two unrelated adornments stacked by accident. One wash, one
- * hover, one object: hovering anywhere — badge included — lifts the whole block,
- * because the whole block performs the same action. The cost is that the badge
- * leaves the shared `taskTag · replies · reactions` line (#task:1185) whenever
- * there are lines to head; with no lines it stays on that line untouched.
+ * hover, one target: the whole block opens the thread, so hovering anywhere —
+ * badge included — lifts the whole block (shiki 2026-07-31). The cost is that
+ * the badge leaves the shared `taskTag · replies · reactions` line (#task:1185)
+ * whenever there are lines to head; with no lines it stays on that line
+ * untouched — and the block, along with its click, does not exist at all.
  *
  * ── Read state: this block is READ-INERT ───────────────────────────────────
  * Rendering it advances NO cursor. That is not a local choice —
@@ -134,12 +137,29 @@ export function ThreadReplyPreview({
 }: ThreadReplyPreviewProps): JSX.Element {
   return (
     // Not a button: it holds the badge button, and nesting buttons is invalid.
-    // The wash, the corner and the hover live here so both children read as one
-    // surface; the click targets stay the badge (tabbable) and the lines below.
+    // The wash, the corner, the hover AND the click all live here, so the whole
+    // block — padding, gaps and every line — is one target (shiki 2026-07-31).
+    // It stays a plain div rather than `role="button"`: a button role must not
+    // contain interactive descendants, and the badge inside is already the
+    // tabbable stop for this same action, so this is a MOUSE-ONLY redundant
+    // affordance — a second tab stop to one destination would only lengthen the
+    // keyboard path. `group` makes a hover anywhere lift the line ink too, so
+    // hovering the badge and hovering a line give the identical response.
     <div
       data-thread-reply-group
+      onClick={event => {
+        // The badge is a nested control that already fires this SAME action
+        // (both are `onStartThread(message, threadFirstUnreadId)` — the block
+        // jumps to first-unread exactly like the badge, shiki 2026-07-31), so
+        // this guard is about not firing it TWICE on one press, not about two
+        // different behaviours. A bare click's target is a text node or a plain
+        // span, which never matches.
+        if ((event.target as HTMLElement).closest('button, a')) return;
+        onOpen();
+      }}
+      title={title}
       className={
-        'mt-1.5 flex w-full flex-col gap-1 rounded-[var(--chip-radius)] px-2 py-1.5 transition-colors ' +
+        'group mt-1.5 flex w-full cursor-pointer flex-col gap-1 rounded-[var(--chip-radius)] px-2 py-1.5 transition-colors ' +
         // A recessed WASH separates the replies from the message body above
         // (shiki 2026-07-31) — one layer only: the fill REPLACED the hairline
         // rule that used to do this job rather than stacking on top of it, and
@@ -156,19 +176,11 @@ export function ThreadReplyPreview({
       }
     >
       {badge}
-      <button
-        type="button"
-        // A REDUNDANT affordance: the badge above is the primary, tabbable
-        // target for this exact action, so the lines stay out of the tab order
-        // instead of adding a second stop to the same destination. They are
-        // still a real button because a preview line looks clickable — leaving
-        // it inert would make an obvious click target a dead zone. The lines are
-        // truncated plain text with no nested control, so a real `<button>` is
-        // correct here (no bare-click / text-selection guard needed).
-        tabIndex={-1}
-        onClick={onOpen}
-        title={title}
-        aria-label={title}
+      <div
+        // The lines carry no click of their own: the WRAPPER owns the block's
+        // click, so a line is not a separate target that happens to do the same
+        // thing. They are plain text — no `<button>`, no tab stop, no
+        // aria-label restating the badge's.
         data-thread-reply-preview
         className={
           // Same 0.25rem rhythm as the wrapper's badge→lines gap (shiki
@@ -183,8 +195,10 @@ export function ThreadReplyPreview({
           // to stay at WCAG AA for normal text (this is 12px prose a reader
           // actually reads, not decoration). Every theme DECLARES it —
           // `forza6.css` owns `:root`, so the `var(…, var(--text-muted))`
-          // fallback here only covers a theme that does not exist yet.
-          'flex w-full flex-col gap-1 text-xs leading-tight text-[var(--thread-preview-text,var(--text-muted))] transition-colors hover:text-text-secondary focus-visible:outline-none ' +
+          // fallback here only covers a theme that does not exist yet. The ink
+          // lifts on a hover ANYWHERE in the block (`group-hover`), not only
+          // over the lines: one target, one response.
+          'flex w-full flex-col gap-1 text-xs leading-tight text-[var(--thread-preview-text,var(--text-muted))] transition-colors group-hover:text-text-secondary ' +
           (alignRight ? 'items-end text-right' : 'items-start text-left')
         }
       >
@@ -232,7 +246,7 @@ export function ThreadReplyPreview({
           ) : null}
         </span>
       ))}
-      </button>
+      </div>
     </div>
   );
 }
