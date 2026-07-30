@@ -345,11 +345,6 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --duration: 200ms;
 
-  /* ── Chat default ──
-     14px 与 forza6 / studio-light / appearance slider 默认对齐（三主题
-     同一个产品基线，不做 per-theme 漂移）。 */
-  --chat-font-size: 14px;
-
   /* ── Compat: forza6-introduced tokens (design-new-theme §3 关键 3) ──
      slack-dark 是单 accent / 无纹理 / 无黑结构主题，全部退化到 sibling，
      避免 forza6 → slack-dark 切换时 festival 值漏过来。 */

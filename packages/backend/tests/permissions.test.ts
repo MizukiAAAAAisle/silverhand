@@ -129,15 +129,20 @@ describe('permission helpers', () => {
       expect(canReadConversation(t!.ctx, user, f.channel.id)).toBe(false);
     });
 
-    it('denies the public read path to agents (agents never get public access)', () => {
+    it('gives agents no public read / interaction path (discovery-union list is not a permission)', () => {
       const { f, publicChannel } = seedNonMember();
-      // bob is not an agent-member of the public channel.
+      // bob is not an agent-member of the public channel. The agent-side
+      // `channel list` discovery union (channel-visibility-v1 §4.3) may LIST
+      // this public channel for bob, but that grants no read or interaction:
+      // all three channel gates stay fail-closed for a public non-member agent.
       const bob: AgentPrincipal = {
         kind: 'agent',
         agentId: f.bob.id,
         conversationId: publicChannel.id,
       };
       expect(canReadConversation(t!.ctx, bob, publicChannel.id)).toBe(false);
+      expect(canViewConversation(t!.ctx, bob, publicChannel.id)).toBe(false);
+      expect(canPostToConversation(t!.ctx, bob, publicChannel.id)).toBe(false);
     });
 
     it('denies public read to a non-workspace-member', () => {

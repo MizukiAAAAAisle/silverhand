@@ -8,6 +8,7 @@ import {
   type AppEnv,
 } from '../../auth/principal.js';
 import {
+  canAgentAccessWorkspace,
   canPostToConversation,
   canViewConversation,
 } from '../../permissions.js';
@@ -127,22 +128,57 @@ export function registerTaskRoutes(
       );
     }
     const principal = getAgentPrincipal(c);
-    if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+    // Destination conversation: an explicit `--conversation-id` lands the
+    // task(s) in ANOTHER conversation (the cross-conversation case — discuss in
+    // A, file the work in B); omitted = the agent's current conversation (legacy
+    // default).
+    const destination = parsed.data.conversation_id ?? principal.conversationId;
+    // Cross-conversation create (explicit destination ≠ the calling conversation) is
+    // a DISPATCH: the task is filed UNCLAIMED so a member of the DESTINATION
+    // conversation picks it up. `--claim` self-assigns to the CALLER, which defeats
+    // that intent and would let A pin work it cannot execute onto B. Reject the
+    // combination BEFORE any destination lookup or authorization — so it writes
+    // no task/event AND never probes whether the destination exists (no side
+    // channel). Returned as the typed 200 op-error envelope (like
+    // source_conflict) so the CLI classifies it by `code` and owns the sole
+    // human-readable reason string. Same-channel create+claim is untouched
+    // (destination === principal.conversationId).
+    if (parsed.data.claim === true && destination !== principal.conversationId) {
+      return c.json({ error: 'cross_conversation_claim' });
+    }
+    // Create-specific NARROW authorization against the DESTINATION. We cannot
+    // reuse `canPostToConversation` / `canViewConversation` here: their agent
+    // branches are origin-bound (they require `principal.conversationId ===
+    // conversation.id` AND derive the workspace from the ORIGIN conversation),
+    // so they would 403 every cross-conversation create. Instead authorize B
+    // directly with the origin-free primitives — workspace access + destination
+    // membership — which reproduces the same membership floor a
+    // same-conversation create requires WITHOUT relaxing the ~90-call-site
+    // global post/view predicates. Unknown destination and non-member
+    // destination collapse to ONE 403 shape: never probe existence.
+    const destConv = conversations.get(destination);
+    const authorized =
+      !!destConv &&
+      canAgentAccessWorkspace(ctx, principal.agentId, destConv.workspace_id) &&
+      conversations.getAgent(destination, principal.agentId) != null;
+    if (!destConv || !authorized) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const createWorkspaceId = conversations.get(principal.conversationId)?.workspace_id;
+    // Capabilities are judged on the DESTINATION's workspace — a cross-workspace
+    // create needs create_tasks (and write_tasks for --claim) in B, not in the
+    // origin workspace.
     {
-      const denied = requireAgentCapability(c, ctx, principal, 'create_tasks', createWorkspaceId);
+      const denied = requireAgentCapability(c, ctx, principal, 'create_tasks', destConv.workspace_id);
       if (denied) return denied;
     }
     // `--claim` self-assigns the created task, which is a task write — gate it
     // on write_tasks in addition to create_tasks (same capability claim needs).
     if (parsed.data.claim === true) {
-      const denied = requireAgentCapability(c, ctx, principal, 'write_tasks', createWorkspaceId);
+      const denied = requireAgentCapability(c, ctx, principal, 'write_tasks', destConv.workspace_id);
       if (denied) return denied;
     }
     const result = await ctx.taskService.createTasks({
-      conversationId: principal.conversationId,
+      conversationId: destination,
       actor: principal,
       // Map the wire (snake_case) task items to the service contract shape
       // (camelCase `sourceMessageId`).

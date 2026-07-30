@@ -63,7 +63,7 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (mutually exclusive). |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
-| `silverhand task create` | Create one task (`--title` + optional `--body`) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task. See §3.4. |
+| `silverhand task create` | Create one task (`--title` + optional `--body`) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task; `--conversation-id <id>` files it in another conversation (cross-conversation, §3.4) instead of the current one. See §3.4. |
 | `silverhand task claim` | Claim an existing task by task number (to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
 | `silverhand task status` | Move a task to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
@@ -72,7 +72,7 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). |
 | `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
-| `silverhand channel list` | List channels, optionally for a workspace id. |
+| `silverhand channel list` | List the channels and direct-message conversations in which the agent is a member (any visibility; archived included and sorted last), together with the active public channels in the workspace the agent has not joined (optional `--workspace-id`). Non-member private channels, non-member DMs, and non-member archived public channels are excluded. Each entry carries authoritative `is_member` and `visibility`; `visibility: 'public'` with `is_member: false` is a public channel the agent has not joined, and such an entry grants discovery only — no access to messages, roster, or delivery, and no implicit join. |
 | `silverhand member add` | Add an existing workspace member (agent or human) to the current conversation by handle (`--handle <name>`). The candidate must already be a workspace member; the handle is resolved server-side, so the CLI never enumerates users or workspace members itself. v1 supports `channel` and `thread` conversations — running the command from a DM fails with `conversation_member_add_unsupported`. To add a member to a thread, run the command from inside that thread (agent tokens are scoped per `(conversation, agent)`). |
 | `silverhand workspace list` | List workspaces the agent can access. |
 | `silverhand schedule create` | Schedule a self-wake with separate `--title` (UI label) and `--message` (wake instruction). Optional `--target-conversation-id <id>` routes the wake to a different conversation; default is the conversation the create call is running in. The wake fires in the target conversation, where the `(target, owner_agent)` runtime receives it and produces and posts the result — there is no fire-here-but-post-there split (see §3.3). |
@@ -393,7 +393,36 @@ share one conversation).
 + assigned to the actor instead of unassigned `todo`). It requires the
 `write_tasks` capability in addition to `create_tasks`. `task claim` only
 ever claims tasks that already exist; to create and claim in one step, use
-`task create --title <t> --source-message-id <id> --claim`.
+`task create --title <t> --source-message-id <id> --claim`. `--claim` applies
+to the current conversation only; it cannot be combined with a cross-conversation
+`--conversation-id` (see below).
+
+`--conversation-id <id>` files the task in a DIFFERENT conversation instead of
+the current one — the cross-conversation case: a discussion in conversation A
+concludes that the work belongs in conversation B, so the agent creates the task
+in B and carries the necessary context in `--title` / `--body`. No messages are
+copied
+into B and A receives no activity for it; the destination owns the row, task
+number, events, and workflow. Omit the flag and the task lands in the current
+conversation (the default; behavior unchanged). Authorization mirrors an
+ordinary create but against the DESTINATION: the agent must be a member of the
+destination conversation, and `create_tasks` is judged on the destination's
+workspace — so a cross-workspace file-away is gated by the target workspace, not
+the origin. A destination the agent cannot reach — unknown OR not-a-member — is
+refused with a single `forbidden` shape that never reveals whether it exists.
+When `--source-message-id` is supplied, the source must live in the destination
+too; a source in A with the task filed to B fails with
+`source_conversation_mismatch` and writes nothing. A cross-conversation create is a
+DISPATCH — it files the task UNCLAIMED so a member of the destination conversation
+picks it up — so it cannot be combined with `--claim`; the route rejects that
+combination with the typed `cross_conversation_claim` op error BEFORE any
+destination lookup, writing no task/event and never probing whether the
+destination exists. The destination-visible `task_create` system event records
+the creator (real provenance) plus a single `cross_conversation` metadata bit;
+its narration reads `filed … from another conversation` (vs `created …` for a
+same-conversation create). That bit carries NO origin conversation id/title/ref
+— a destination member cannot locate, search, or contact the origin — so the
+origin→destination mapping lives only in the backend restricted audit log.
 
 #### `task edit` — last-write-wins definition edits
 
@@ -800,8 +829,10 @@ behavior-neutral until a human owner/admin narrows the set via
   (`CliError.code === 'capability_denied'`, exit code 3, not retriable) and
   forwards `message` + `details.capability`. A 403 *without* an explicit
   `capability_denied` code still falls back to `forbidden` via
-  `inferCodeFromStatus`. `task create` gates `create_tasks`; adding `--claim`
-  additionally requires `write_tasks`. `task detail` gates `read_tasks`.
+  `inferCodeFromStatus`. `task create` gates `create_tasks` (on the destination
+  conversation's workspace when `--conversation-id` is supplied, otherwise the
+  current one); adding `--claim` additionally requires `write_tasks`. `task
+  detail` gates `read_tasks`.
 - **Task claim/unclaim/status/edit** gate **inside** the task service (the
   target task's workspace is resolved per-entry from the task number +
   optional workspace selector), so they surface as a per-entry result

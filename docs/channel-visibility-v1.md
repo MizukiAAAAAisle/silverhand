@@ -13,10 +13,16 @@ be served to a renderer that has not classified its consumers by `is_member`.
 A regular channel (`conversations.kind = 'channel'`) has a stored, identity-level
 `visibility ∈ {'private', 'public'}` (`ConversationDtoSchema.visibility`).
 
-- `private` (default) — membership-gated. Only `conversation_users` members can
-  see or interact with it. This is the historical behavior.
-- `public` — every **workspace member** may *browse* it (pure reads) and *self-join*;
-  interaction still requires membership.
+- `private` (default) — **conversation-membership gated for both actors**. Only
+  an explicit `conversation_users` (user) or `conversation_agents` (agent)
+  member can see or interact with it. This is the historical behavior.
+- `public` — a widened surface for **workspace members**, actor-asymmetric:
+  - a **human** workspace member may *browse* it (pure reads) and *self-join*;
+  - an **agent** workspace member may only *discover* it in the
+    `silverhand channel list` union (§4.3) — a listing entry, not access.
+
+  For either actor, read / join / interaction beyond the above still require
+  conversation membership (the three gates in §2 are unwidened for agents; §2.4).
 
 Invariants:
 
@@ -34,7 +40,8 @@ Creation: a channel's members are the creator (implicit) plus any explicit
 `member_user_ids` / `member_agent_ids` — there is **no** full-workspace member
 snapshot. `public` is a human-actor choice and is rejected on the agent_home DM
 path. Making a channel public does **not** add every workspace member to it; it
-only opens the browse/join surface.
+only opens the actor-specific non-member surfaces defined above (human browse /
+self-join; agent §4.3 discovery listing).
 
 ## 2. The three authorization gates
 
@@ -88,7 +95,10 @@ admitted to `/join` — even an existing member. The use case runs this admissio
 The public admission both public predicates share:
 `principal.kind === 'user'` ∧ `kind === 'channel'` ∧ `visibility === 'public'`
 ∧ `archived_at === null` ∧ `canViewWorkspace(...)`. Deliberately
-membership-agnostic. Agents have **no** public path; an archived public channel
+membership-agnostic. Agents have **no** public read / join / interaction path:
+this branch is user-only, and the agent-facing discovery list (§4.3) passes
+through neither this branch nor any of the three gates — it is a listing
+projection that grants no read, join, or interaction. An archived public channel
 drops out of the non-member surface (archive ≠ delete — it stays reachable to
 members via the membership branch).
 
@@ -172,6 +182,45 @@ an un-migrated renderer.
   autocomplete, and `#channel` / `#conv:` reference rendering (a link pointing at
   a public channel is a read-side fact and is correct).
 
+### 4.3 Agent-facing discovery union (`silverhand channel list`)
+
+The agent route
+`GET /internal/conversations/:id/agents/:agentId/list-channels`
+(`listAgentVisibleChannels`, `AgentListChannelsDto`) returns the agent-side
+analogue of the viewer discovery union, gated by workspace access AND the
+`read_messages` capability — a missing capability denies the whole list, so
+discovery is never capability-free. It is one explicit union per workspace:
+
+- **member arm** — channels and DMs the agent has joined
+  (`conversation_agents`), any visibility, `channel` + `dm_channel`, archived
+  included and sorted last; `is_member: true`.
+- **discovery arm** — active **public** regular channels the agent has **not**
+  joined (`kind = 'channel'` ∧ `visibility = 'public'` ∧ `archived_at IS NULL`);
+  `is_member: false`.
+
+Excluded: non-member private channels, non-member DMs, and non-member archived
+public channels. DMs are never discoverable — the discovery arm is
+`kind = 'channel'` and a `dm_channel` is always `private` (§1). The predicate
+mirrors `listActiveChannelsForViewer` (§4): the discovery arm is the same
+active/public/non-member set, swapping `conversation_users` for
+`conversation_agents`, while the member arm keeps the agent's DM and archived
+rows.
+
+Each `AgentListedChannel` carries authoritative `visibility` and `is_member`.
+`is_member` is computed independently from the membership relation
+(`EXISTS conversation_agents`), never inferred from which arm matched, `kind`,
+`visibility`, or list position — a joined public channel is `is_member: true`.
+`visibility: 'public'` with `is_member: false` is the public-but-not-joined
+discovery state.
+
+Discovery grants **listing only**. It confers no public read, join,
+interaction, roster, unread, search, delivery, or restore; those stay behind
+`canViewConversation` / `canReadConversation` (both **unwidened for agents** —
+§2.1/§2.4) and membership, and there is no agent self-join (§3 is user-only).
+Unlike the human union (§4.2), `AgentListedChannel` has no renderer consumer —
+the CLI passes the DTO through verbatim — so the same-release renderer
+consumer-split invariant does not apply to this list.
+
 ## 5. Membership-scoped projections (unchanged by this feature)
 
 Unread, ambient attention, favorites, Activity, archived lists, restore, and
@@ -193,6 +242,10 @@ projection.
 
 ## 6. Deliberate scope boundaries (v1)
 
-- The agent-facing `silverhand channel list` (`agentListChannels`) is
-  **unchanged** — agent-side public-channel discovery / join is out of scope.
+- Agent-side public-channel **discovery** is in scope via the
+  `silverhand channel list` union (§4.3): an agent can *list* active public
+  channels it has not joined, each carrying authoritative `visibility` +
+  `is_member`. Agent public **read**, **join**, and **interaction** remain out
+  of scope — the three gates (§2) are unwidened for agents and there is no agent
+  self-join.
 - Search and the Archived aggregate stay member-scoped in v1.

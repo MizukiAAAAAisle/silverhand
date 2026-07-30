@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
@@ -47,6 +48,22 @@ async function createChannel(
   return created.channel.id;
 }
 
+async function createPublicChannel(
+  t: TestApp,
+  workspaceId: string,
+  title: string,
+  memberAgentIds: string[],
+): Promise<string> {
+  const created = await (
+    await http(t).post(`/api/workspaces/${workspaceId}/channels`, {
+      title,
+      member_agent_ids: memberAgentIds,
+      visibility: 'public',
+    })
+  ).json() as any;
+  return created.channel.id;
+}
+
 function listChannelsPath(conversationId: string, agentId: string): string {
   return `/internal/conversations/${conversationId}/agents/${agentId}/list-channels`;
 }
@@ -62,7 +79,7 @@ describe('agent list_channels / search_messages routes', () => {
     t = null;
   });
 
-  it('lists only current-workspace channels where the agent is a current member', async () => {
+  it('includes member channels (incl. archived) and excludes non-member private channels', async () => {
     t = buildTestApp();
     const { workspaceId, channelId, agentIds } = await createWorkspaceChannel(t, [
       'alice',
@@ -86,6 +103,105 @@ describe('agent list_channels / search_messages routes', () => {
       kind: 'channel',
       archived: true,
     });
+  });
+
+  it('unions member channel-like with unjoined active public channels, is_member from membership not arm', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId, agentIds } = await createWorkspaceChannel(t, [
+      'alice',
+      'bob',
+    ]);
+    const aliceId = agentIds.alice!;
+    const bobId = agentIds.bob!;
+
+    // member arm — any visibility, archived included
+    const joinedPrivate = await createChannel(t, workspaceId, 'joined-private', [
+      aliceId,
+    ]);
+    const joinedPublic = await createPublicChannel(t, workspaceId, 'joined-public', [
+      aliceId,
+    ]);
+    const joinedArchived = await createChannel(t, workspaceId, 'joined-archived', [
+      aliceId,
+    ]);
+    await http(t).patch(`/api/channels/${joinedArchived}/archive`, {
+      archived: true,
+    });
+
+    // discovery arm — unjoined active public channel
+    const unjoinedPublic = await createPublicChannel(
+      t,
+      workspaceId,
+      'unjoined-public',
+      [bobId],
+    );
+
+    // excluded — unjoined private, and unjoined archived public (no discovery arm)
+    const unjoinedPrivate = await createChannel(t, workspaceId, 'unjoined-private', [
+      bobId,
+    ]);
+    const unjoinedPublicArchived = await createPublicChannel(
+      t,
+      workspaceId,
+      'unjoined-public-archived',
+      [bobId],
+    );
+    await http(t).patch(`/api/channels/${unjoinedPublicArchived}/archive`, {
+      archived: true,
+    });
+
+    // excluded — an unjoined DM (dm_channel is always private; the discovery
+    // arm is kind='channel' only, so a DM never enters via discovery, and alice
+    // is not a member so the member arm skips it too).
+    const unjoinedDm = new ConversationRepo(t.ctx.db).insertDmChannel({
+      workspaceId,
+      workspacePath: '/tmp/unjoined-dm',
+      title: 'unjoined-dm',
+    });
+
+    const res = await http(t).get(listChannelsPath(channelId, aliceId));
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const byId = new Map(body.channels.map((c: any) => [c.id, c]));
+
+    // member arm: present, is_member true, visibility preserved
+    expect(byId.get(joinedPrivate)).toMatchObject({
+      is_member: true,
+      visibility: 'private',
+      archived: false,
+    });
+    // a joined PUBLIC channel is is_member:true — not demoted by matching the
+    // public predicate first
+    expect(byId.get(joinedPublic)).toMatchObject({
+      is_member: true,
+      visibility: 'public',
+      archived: false,
+    });
+    // discovery arm: the public-but-not-joined state
+    expect(byId.get(unjoinedPublic)).toMatchObject({
+      is_member: false,
+      visibility: 'public',
+      archived: false,
+    });
+
+    // excluded rows
+    expect(byId.has(unjoinedPrivate)).toBe(false);
+    expect(byId.has(unjoinedPublicArchived)).toBe(false);
+    expect(byId.has(unjoinedDm.id)).toBe(false);
+
+    // member archived channel present, is_member true, and sorted last
+    expect(byId.get(joinedArchived)).toMatchObject({
+      is_member: true,
+      archived: true,
+    });
+    const archivedIndex = body.channels.findIndex(
+      (c: any) => c.id === joinedArchived,
+    );
+    const lastActiveIndex = body.channels.reduce(
+      (acc: number, c: any, i: number) => (c.archived ? acc : i),
+      -1,
+    );
+    expect(archivedIndex).toBeGreaterThan(lastActiveIndex);
   });
 
   it('searches current conversation and returns excerpt refs, not full content', async () => {

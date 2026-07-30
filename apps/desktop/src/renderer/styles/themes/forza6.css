@@ -615,9 +615,6 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --duration: 200ms;
 
-  /* ── Chat default ── */
-  --chat-font-size: 14px;
-
   /* ============================================================
      NEW TOKENS introduced by forza6 (extending design-new-theme §3).
      Documented also in design-new-theme.md so future themes know to

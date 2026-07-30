@@ -6,7 +6,6 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { TaskService, type TaskServiceOptions } from '../../src/services/task-service.js';
-import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
@@ -1341,22 +1340,29 @@ describe('TaskService.list / getTaskDetail', () => {
 });
 
 describe('TaskService agent-actor validation', () => {
-  it('createTasks: actor.conversationId mismatch → PrincipalConversationMismatchError (no insert)', async () => {
+  it('createTasks: actor origin conversation may differ from the destination — authorization is by DESTINATION membership, not a principal-conversation match (#task:1738)', async () => {
     const t = bootstrap();
     try {
+      // alice runs in `other` (her origin conversation) but files the task into
+      // `t.channel` (the destination) where she IS a member. The old
+      // principal-conversation-mismatch throw is gone: `input.conversationId` is
+      // the destination authority, and the destination-membership floor is the
+      // sole service-level gate (the route holds the create-specific narrow
+      // authorization). So this SUCCEEDS and the row belongs to the destination.
       const other = t.conversations.insertChannel({
         workspaceId: t.workspace.id,
         workspacePath: t.workspace.workspace_path,
         title: 'other',
       });
-      await expect(
-        t.service.createTasks({
-          conversationId: t.channel.id,
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
-          tasks: [{ title: 'x' }],
-        }),
-      ).rejects.toBeInstanceOf(PrincipalConversationMismatchError);
-      expect(t.service.list({ actor: { kind: 'user', userId: 'local' } })).toEqual([]);
+      const result = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+        tasks: [{ title: 'filed cross-channel' }],
+      });
+      expect('tasks' in result).toBe(true);
+      const listed = t.service.list({ actor: { kind: 'user', userId: 'local' } });
+      expect(listed.map(x => x.title)).toContain('filed cross-channel');
+      expect(listed.every(x => x.conversation.id === t.channel.id)).toBe(true);
     } finally {
       t.cleanup();
     }

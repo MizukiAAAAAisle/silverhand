@@ -584,19 +584,47 @@ export function listAgentVisibleChannels(
   workspaceId: string,
   agentId: string,
 ): AgentListChannelsDto {
+  // The result is one explicit union of two arms, mirroring the discovery
+  // predicate of the human-side `listActiveChannelsForViewer`:
+  //   - member arm: conversations the agent has joined — any visibility,
+  //     `channel` or `dm_channel`, archived included (sorted last).
+  //   - discovery arm: active PUBLIC regular channels the agent has NOT joined
+  //     — the browse surface. DMs are never discoverable; archived public
+  //     channels have no discovery arm (frozen), matching the human side.
+  // Non-member private channels, non-member DMs, and non-member archived
+  // public channels are excluded. `is_member` is computed independently from
+  // the membership relation (one `EXISTS`), never inferred from which arm a
+  // row matched — so a joined public channel is `is_member: true`, not falsely
+  // demoted by matching the public predicate first. Discovery grants nothing
+  // beyond listing: no roster, messages, unread, search, delivery, restore, or
+  // write, and no implicit join.
   const rows = ctx.db
-    .prepare<[string, string], ConversationDto>(
-      `SELECT c.*
+    .prepare<[string, string, string], ConversationDto & { is_member: number }>(
+      `SELECT c.*,
+              EXISTS (
+                SELECT 1 FROM conversation_agents ca
+                 WHERE ca.conversation_id = c.id AND ca.agent_id = ?
+              ) AS is_member
          FROM conversations c
-         JOIN conversation_agents ca
-           ON ca.conversation_id = c.id
-          AND ca.agent_id = ?
         WHERE c.workspace_id = ?
-          AND c.kind IN ('channel', 'dm_channel')
+          AND (
+            (
+              c.kind IN ('channel', 'dm_channel')
+              AND EXISTS (
+                SELECT 1 FROM conversation_agents ca2
+                 WHERE ca2.conversation_id = c.id AND ca2.agent_id = ?
+              )
+            )
+            OR (
+              c.kind = 'channel'
+              AND c.visibility = 'public'
+              AND c.archived_at IS NULL
+            )
+          )
         ORDER BY (c.archived_at IS NOT NULL) ASC,
                  c.updated_at DESC`,
     )
-    .all(agentId, workspaceId);
+    .all(agentId, workspaceId, agentId);
   return {
     workspace_id: workspaceId,
     channels: rows.map(
@@ -604,7 +632,9 @@ export function listAgentVisibleChannels(
         id: row.id,
         title: row.title,
         kind: row.kind === 'dm_channel' ? 'dm_channel' : 'channel',
+        visibility: row.visibility,
         archived: row.archived_at !== null,
+        is_member: row.is_member === 1,
         updated_at: row.updated_at,
       }),
     ),

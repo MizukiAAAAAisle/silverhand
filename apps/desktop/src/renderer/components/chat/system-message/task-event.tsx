@@ -30,7 +30,10 @@ import { type RendererProps, useUserResolver } from './shared';
  *    transitions. PR-9 unified actor position to the front across the
  *    subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`). The claim/unclaim
  *    VERB branches on `actor.kind`: an agent claims/unclaims (workflow),
- *    a human assigns/unassigns (ownership) — see `TaskEventBody`.
+ *    a human assigns/unassigns (ownership) — see `TaskEventBody`. A
+ *    `task_create` carrying `cross_conversation` reads
+ *    `<actor> filed <chip> from another conversation` (origin deliberately
+ *    unnamed — see `TaskEventBody`).
  *  - Partial legacy metadata (pre-PR-2 rows: subtype + task_number +
  *    task_status only): degraded row keeps the dot + chip + verb (or
  *    `→ pill` for status), drops the actor pill / inline title — we
@@ -138,9 +141,29 @@ function TaskEventBody({
       </>
     );
   }
+  // `cross_conversation` (`TaskSystemMetadataSchema`, create-only) says an agent
+  // filed this task from a DIFFERENT conversation than the one it landed in.
+  // Without it the row reads "@Norman created #task:N" to members who watched
+  // nothing happen here — including that agent, which cannot tell its own
+  // sessions apart (claim/creator granularity is the AGENT, not the session), so
+  // no identity field can fix "I have no memory of creating this"; the missing
+  // fact is that it came from elsewhere. HARD PRIVACY INVARIANT — the bit
+  // carries no origin id/title/ref, so this row says THAT it was filed remotely
+  // and never WHERE from: do not add the origin conversation's name, link, or
+  // icon. A destination (and an origin) can be ANY conversation — a DM
+  // qualifies, the create route has no kind gate — so nothing on this surface
+  // may be phrased as "channel" either. Absent
+  // (legacy rows + same-conversation creates) reads `created`, so the immutable
+  // metadata snapshot degrades by itself, no migration. The agent-facing
+  // narration derives its own wording from this same bit — neither face reads
+  // the other's product.
+  const filedRemotely =
+    subtype === 'task_create' && meta.cross_conversation === true;
   const verb =
     subtype === 'task_create'
-      ? 'created'
+      ? filedRemotely
+        ? 'filed'
+        : 'created'
       : subtype === 'task_claim'
         ? 'claimed'
         : subtype === 'task_edit'
@@ -151,6 +174,9 @@ function TaskEventBody({
       <span className="font-medium text-text-primary">{actorLabel}</span>
       <span className="text-text-muted">{verb}</span>
       <TaskRef taskNumber={meta.task_number} />
+      {filedRemotely ? (
+        <span className="text-text-muted">from another conversation</span>
+      ) : null}
     </>
   );
 }

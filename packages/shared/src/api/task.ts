@@ -212,6 +212,19 @@ export const CreateTasksInputSchema = z.object({
       }),
     )
     .min(1),
+  /** Explicit destination conversation the task(s) belong to. OMITTED = the
+   *  agent's current conversation (the calling `:cid`), preserving the legacy
+   *  same-conversation default. When supplied, the task lands in THAT
+   *  conversation (cross-conversation create; the destination may be any
+   *  conversation, including a DM): the row, number, `task_create` event, and
+   *  all downstream workflow belong to the destination, and the backend
+   *  authorizes membership / closed-archived / capability / source / thread
+   *  against the destination — never the calling conversation. The agent must be
+   *  a member of the destination; a non-member (or unknown) destination is
+   *  refused fail-closed without leaking whether it exists. `source_message_id`,
+   *  if given, must live in the destination too (else
+   *  `source_conversation_mismatch`). */
+  conversation_id: z.string().min(1).optional(),
   /** Agent-only: atomically self-claim the created task(s) (status
    *  in_progress + assignee = the creating agent) in the same write as the
    *  create. Ignored for human creates. In addition to `create_tasks`, an
@@ -241,6 +254,14 @@ export const CreateTasksOpErrorSchema = z.enum([
   /** A task already exists for this source message (permanent 1:1). The
    *  failure carries `existing_task` so the caller can point at it. */
   'source_conflict',
+  /** `--claim` was combined with a cross-conversation create (an explicit
+   *  `conversation_id` that differs from the calling conversation). A
+   *  cross-conversation create is a DISPATCH — the task is filed UNCLAIMED so a
+   *  member of the destination conversation picks it up — so self-claiming to the
+   *  caller is refused. Decided at the route BEFORE any destination lookup, so
+   *  it writes no task/event and never probes whether the destination exists.
+   *  The human-readable reason lives only in the CLI mapper. */
+  'cross_conversation_claim',
 ]);
 export type CreateTasksOpError = z.infer<typeof CreateTasksOpErrorSchema>;
 

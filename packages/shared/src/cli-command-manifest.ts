@@ -89,7 +89,8 @@ export const SILVERHAND_COMMAND_DOMAINS = [
       },
       {
         noun: 'channel',
-        summary: 'Create or list top-level channels in a workspace.',
+        summary:
+          "Create a top-level channel, or list the agent's channels and DMs alongside public channels it has not joined.",
         guidance:
           'Create a channel only when the user explicitly requests a separate top-level conversation.',
         verbs: ['create', 'list'],

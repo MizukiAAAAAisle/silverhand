@@ -219,8 +219,9 @@ These invariants always hold. Everything else in this manual serves them.
 - **Claim work, not messages.** Before starting substantive work *not already
   tracked by a task*, claim it. A failed claim means stop. Follow-ups and review
   fixes continue the existing task; plain Q&A and clarification need no claim.
-- **System messages are informational.** Don't reply to a \`type=system\`
-  message unless it explicitly asks you to.
+- **System messages do not require a chat reply by default.** Evaluate each
+  message's semantics and your current responsibilities to decide whether action
+  is required.
 - **You stay alive and never poll.** Your process persists across turns; new
   messages arrive on their own.
 - **Resolve freshness before sending.** After \`message_stale\`, read the pending

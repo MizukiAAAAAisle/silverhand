@@ -67,6 +67,10 @@ export type ErrorSubkind =
    *  another task already owns that source. Carries `details.existing_task` so
    *  the agent can hand off to the winner instead of retrying. */
   | 'source_conflict'
+  /** `task create --claim` was combined with a cross-conversation `--conversation-id`.
+   *  A cross-conversation create is a dispatch (filed unclaimed so a destination
+   *  member picks it up), so the self-claim is refused. Omit `--claim`. */
+  | 'cross_conversation_claim'
   /** `message stale-receive` non-custody arbitration failures (#task:1614),
    *  mirroring the daemon's typed codes 1:1 — the pull call could not
    *  arbitrate; custody and the stale event are unchanged. */

@@ -11,7 +11,6 @@ import {
   type TaskStatus,
   type TaskSummaryDto,
 } from '@silverhand/shared';
-import { assertActorConversationMatch } from '../auth/principal.js';
 import { TaskStore } from './task/store.js';
 import { TaskAccessControl } from './task/access.js';
 import { TaskBroadcaster, type TaskEventArgs } from './task/broadcaster.js';
@@ -88,9 +87,16 @@ type PendingTaskEvent = Omit<TaskEventArgs, 'conversation'>;
  *   deliver AFTER commit. It creates NO ordinary anchor message. Every task
  *   action's conversational footprint is a system event, never a body message.
  * - claim/unclaim/status commit the mutation, then broadcast the system event.
- * - For agent ops, the target workspace resolves from the optional
- *   `workspace_id` / `workspace_name` selector or defaults to the actor's
- *   current conversation's workspace; the agent must be a member.
+ * - For agent claim/unclaim/status/edit/detail, the target workspace resolves
+ *   from the optional `workspace_id` / `workspace_name` selector or defaults to
+ *   the actor's current conversation's workspace; the agent must be a member.
+ * - `create` is the EXCEPTION: its target workspace is the one owning the
+ *   DESTINATION conversation (`conversation_id`, default = the actor's current
+ *   conversation — the cross-conversation case files work into another
+ *   conversation). The
+ *   route authorizes that destination directly (workspace access + destination
+ *   membership) and gates `create_tasks` / `write_tasks` on ITS workspace, NOT
+ *   the origin's. Do not re-add an origin-conversation gate here on that basis.
  *
  * This class is the task-lifecycle aggregate root. Peripheral concerns are
  * delegated to `TaskStore` (all `tasks` SQL + reads + nav resolution),
@@ -145,7 +151,14 @@ export class TaskService {
   // ── Create ──────────────────────────────────────────────────────
 
   async createTasks(input: CreateTasksInput): Promise<CreateTasksResult> {
-    assertActorConversationMatch(input.actor, input.conversationId);
+    // NOTE: `input.conversationId` is the DESTINATION conversation, which the
+    // route resolves from an explicit `--conversation-id` (cross-conversation) or
+    // defaults to the agent's current conversation. It deliberately does NOT
+    // have to equal `actor.conversationId` — so we do NOT call
+    // `assertActorConversationMatch` here (unlike the message services). The
+    // membership floor below (agent :getAgent / human :userCanAccessConversation,
+    // both against the destination) is the authorization boundary; the route has
+    // already run a create-specific narrow check against the destination.
     const conversation = this.conversations.get(input.conversationId);
     if (!conversation) return { error: 'conversation_not_found' };
     if (conversation.closed_at !== null) return { error: 'conversation_closed' };
@@ -209,6 +222,16 @@ export class TaskService {
     const creatorKind = input.actor.kind;
     const creatorAgentId = input.actor.kind === 'agent' ? input.actor.agentId : null;
     const creatorUserId = input.actor.kind === 'user' ? input.actor.userId : null;
+    // Cross-conversation create: an agent filed this task from a DIFFERENT
+    // conversation than the destination it lands in (explicit
+    // `--conversation-id`). This drives the single-source `cross_conversation`
+    // metadata bit AND the agent-facing narration below; it carries no origin
+    // id/title (privacy invariant). A cross-conversation create can never be
+    // claimed (the route rejects `--claim` + cross with `cross_conversation_claim`),
+    // so it has no "and claimed it" variant. Humans have no origin conversation,
+    // mirroring the cross-op audit.
+    const crossConversation =
+      input.actor.kind === 'agent' && input.actor.conversationId !== input.conversationId;
     const now = Date.now();
 
     // H4: task row + task_create event + created_event backfill in ONE txn (the
@@ -254,9 +277,12 @@ export class TaskService {
             ...eventArgs,
             kind: 'create',
             actor: input.actor,
-            sysMessage: claimByAgentId
-              ? `${actorLabel} created task #${taskNumber} "${t.title}" and claimed it`
-              : `${actorLabel} created task #${taskNumber} "${t.title}"`,
+            sysMessage: crossConversation
+              ? `${actorLabel} filed task #${taskNumber} "${t.title}" here from another conversation`
+              : claimByAgentId
+                ? `${actorLabel} created task #${taskNumber} "${t.title}" and claimed it`
+                : `${actorLabel} created task #${taskNumber} "${t.title}"`,
+            ...(crossConversation ? { crossConversation: true } : {}),
           });
           this.store.backfillCreatedEvent(id, sysMsg.id);
           rows.push({ out: { id, task_number: taskNumber, title: t.title }, sysMsg, eventArgs });
@@ -274,6 +300,29 @@ export class TaskService {
 
     for (const c of created) {
       this.broadcaster.publish(c.eventArgs, c.sysMsg);
+    }
+
+    // Cross-conversation create audit. When an agent creates task(s) in a
+    // DIFFERENT conversation than the one it is running in (explicit
+    // `--conversation-id`), leave one audit line per task recording origin
+    // (source = the agent's own conversation) → owner (the destination). Human
+    // actors have no origin conversation, so no cross-op audit — mirroring
+    // claim/unclaim/status. Same-conversation default creates emit nothing:
+    // auditCrossOp early-returns when sourceConv.id === ownerConv.id.
+    if (input.actor.kind === 'agent') {
+      const sourceConv = this.conversations.get(input.actor.conversationId);
+      if (sourceConv) {
+        for (const c of created) {
+          this.broadcaster.auditCrossOp({
+            op: 'create',
+            actor: input.actor,
+            sourceConv,
+            ownerConv: conversation,
+            taskNumber: c.out.task_number,
+            taskWorkspaceId,
+          });
+        }
+      }
     }
 
     return { tasks: created.map(c => c.out) };

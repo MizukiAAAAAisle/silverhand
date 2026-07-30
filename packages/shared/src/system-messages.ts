@@ -302,6 +302,19 @@ export const TaskSystemMetadataSchema = z.object({
   task_title: z.string(),
   task_assignee: TaskAssigneeDtoSchema.nullable(),
   actor: TaskSystemActorSchema,
+  /** True ONLY on a `task_create` event that was filed from a DIFFERENT
+   *  conversation than the one it landed in (an agent's cross-conversation
+   *  create via `--conversation-id`; destination may be any conversation,
+   *  including a DM). This bit is the SINGLE SOURCE OF TRUTH for the
+   *  destination-visible wording: the agent-facing narration (`content`) and
+   *  the desktop enriched row BOTH derive "filed … from another conversation"
+   *  vs "created …" from it — neither reads the other's face. HARD PRIVACY
+   *  INVARIANT: it carries NO origin conversation id/title/ref, so a
+   *  destination member cannot locate, search, or contact the origin (the
+   *  origin→destination mapping lives only in the backend restricted audit
+   *  log). Absent = false: legacy events and every same-conversation create
+   *  render "created". Only ever set for subtype `task_create`. */
+  cross_conversation: z.boolean().optional(),
 });
 export type TaskSystemMetadata = z.infer<typeof TaskSystemMetadataSchema>;
 

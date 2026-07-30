@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { canPostToConversation, canViewConversation } from '../../src/permissions.js';
+import type { AgentPrincipal } from '../../src/auth/principal.js';
+import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
+import { AGENT_CAPABILITIES } from '@silverhand/shared';
 
 interface SetupResult {
   workspaceId: string;
@@ -785,6 +789,19 @@ describe('Task create/edit/detail routes', () => {
   let t: TestApp;
   afterEach(() => t?.cleanup());
 
+  // Local mirror of the PR-T1 suite's helper (that one closes over its own
+  // `t`). Counts conversation messages by author kind — the falsifier for
+  // "zero write" on a rejected create and for "no reverse activity in the
+  // origin" on a cross-channel create. Deltas, so onboarding seeds never leak.
+  const countByKind = (conversationId: string, kind: string): number =>
+    (
+      t.ctx.db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND from_kind = ?`,
+        )
+        .get(conversationId, kind) as { n: number }
+    ).n;
+
   it('agent create with source_message_id + claim links provenance and self-claims', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
@@ -833,6 +850,431 @@ describe('Task create/edit/detail routes', () => {
     const body = await res.json() as any;
     expect(body.error).toBe('source_conflict');
     expect(body.existing_task.task_number).toBe(first.tasks[0].task_number);
+  });
+
+  // ── #task:1738 — agent cross-channel task create ──────────────────
+  // An agent discussing in conversation A can file the task in another
+  // conversation B via explicit `conversation_id`, carrying context in the
+  // title/body (no messages copied, no reverse activity in A). Authorization is
+  // judged against the DESTINATION through a create-specific NARROW check
+  // (workspace access + destination membership), never the origin-bound global
+  // post/view predicates. Omitting the field keeps the legacy current-channel
+  // default.
+
+  it('agent create --conversation-id files the task in another channel of the same workspace; origin gets no activity', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, channelId, agentIds, workspaceId } = await setup(t);
+    const h = http(t);
+    // Destination channel B in the SAME workspace; alice is a member.
+    const chB = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: 'channel-b',
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convB = chB.channel.id;
+
+    const sysABefore = countByKind(convA, 'system');
+    const sysBBefore = countByKind(convB, 'system');
+
+    const res = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { conversation_id: convB, tasks: [{ title: 'file me in B' }] },
+    );
+    expect(res.status).toBe(200);
+    const created = (await res.json()) as any;
+    expect(created.tasks).toHaveLength(1);
+
+    // Row + number + workflow belong to B — read it back as a B member.
+    const listedB = (await (
+      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+    ).json()) as any;
+    const row = listedB.tasks.find((x: any) => x.title === 'file me in B');
+    expect(row).toBeTruthy();
+    expect(row.conversation.id).toBe(convB);
+    expect(row.workspace_id).toBe(workspaceId);
+
+    // The `task_create` system event lands in B; the origin A sees nothing.
+    expect(countByKind(convB, 'system') - sysBBefore).toBe(1);
+    expect(countByKind(convA, 'system') - sysABefore).toBe(0);
+  });
+
+  it('agent create --conversation-id into a DIFFERENT workspace succeeds; capability is judged by the destination workspace', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, agentIds } = await setup(t);
+    const h = http(t);
+    // Second workspace where alice is a member; its onboarding channel is B.
+    const ws2 = (await (
+      await h.post('/api/workspaces', {
+        name: 'eng2',
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convB = ws2.onboarding_channel_id;
+
+    const res = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { conversation_id: convB, tasks: [{ title: 'cross-ws' }] },
+    );
+    expect(res.status).toBe(200);
+    const created = (await res.json()) as any;
+
+    // Task lives in B's (other) workspace — success itself proves create_tasks
+    // was judged against ws2, where alice is a member.
+    const detail = (await (
+      await h.get(
+        `/internal/conversations/${convB}/agents/${agentIds.alice}/tasks/detail?task_number=${created.tasks[0].task_number}`,
+      )
+    ).json()) as any;
+    expect(detail.task.title).toBe('cross-ws');
+    const listedB = (await (
+      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+    ).json()) as any;
+    expect(listedB.tasks.find((x: any) => x.title === 'cross-ws').workspace_id).toBe(
+      ws2.workspace.id,
+    );
+  });
+
+  it('agent create --conversation-id judges capability on the DESTINATION workspace: create_tasks held only in the ORIGIN does not authorize a create in B', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, agentIds } = await setup(t);
+    const h = http(t);
+    // Second workspace B; alice is a member (default full caps in BOTH A and B).
+    const ws2 = (await (
+      await h.post('/api/workspaces', { name: 'eng2', member_agent_ids: [agentIds.alice] })
+    ).json()) as any;
+    const convB = ws2.onboarding_channel_id;
+    // Narrow B's caps to everything EXCEPT create_tasks; leave A's full set
+    // intact. This is the discriminating falsifier Cindy called out: if the
+    // implementation mistakenly judged create_tasks against the ORIGIN (A),
+    // alice still holds it there and the create would wrongly succeed.
+    new AgentCapabilityRepo(t.ctx.db).replaceSet(
+      ws2.workspace.id,
+      agentIds.alice!,
+      AGENT_CAPABILITIES.filter(cap => cap !== 'create_tasks'),
+    );
+    const sysBBefore = countByKind(convB, 'system');
+
+    const res = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { conversation_id: convB, tasks: [{ title: 'blocked-by-B-caps' }] },
+    );
+    // Typed capability denial keyed to the missing bucket — never string-stuffed.
+    expect(res.status).toBe(403);
+    expect((await res.json()) as any).toMatchObject({
+      code: 'capability_denied',
+      capability: 'create_tasks',
+      details: { capability: 'create_tasks' },
+    });
+    // Zero write in B.
+    expect(countByKind(convB, 'system') - sysBBefore).toBe(0);
+    const listedB = (await (
+      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+    ).json()) as any;
+    expect(listedB.tasks.some((x: any) => x.title === 'blocked-by-B-caps')).toBe(false);
+  });
+
+  it('same-channel create --claim requires write_tasks: create_tasks without write_tasks rejects the self-claim with zero write', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, agentIds, workspaceId } = await setup(t);
+    const h = http(t);
+    // Same-channel create+claim is the ONLY path `--claim` survives to the
+    // write_tasks gate — a cross-channel `--claim` is refused earlier as
+    // `cross_conversation_claim` (see the next test). Grant create_tasks but NOT
+    // write_tasks in the (origin = destination) workspace: the create passes the
+    // create_tasks gate, but the self-claim must be refused, with zero write.
+    new AgentCapabilityRepo(t.ctx.db).replaceSet(
+      workspaceId,
+      agentIds.alice!,
+      AGENT_CAPABILITIES.filter(cap => cap !== 'write_tasks'),
+    );
+    const sysBefore = countByKind(convA, 'system');
+
+    const res = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { claim: true, tasks: [{ title: 'claim-blocked' }] },
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()) as any).toMatchObject({
+      code: 'capability_denied',
+      capability: 'write_tasks',
+      details: { capability: 'write_tasks' },
+    });
+    // The claim gate runs BEFORE createTasks, so nothing is written.
+    expect(countByKind(convA, 'system') - sysBefore).toBe(0);
+    const listed = (await (
+      await h.get(`/internal/conversations/${convA}/agents/${agentIds.alice}/tasks`)
+    ).json()) as any;
+    expect(listed.tasks.some((x: any) => x.title === 'claim-blocked')).toBe(false);
+  });
+
+  it('agent create --conversation-id --claim is refused as cross_conversation_claim BEFORE any lookup: zero write, no destination probe', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, channelId, agentIds } = await setup(t);
+    const h = http(t);
+    const chB = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: 'channel-b',
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convB = chB.channel.id;
+
+    const sysABefore = countByKind(convA, 'system');
+    const sysBBefore = countByKind(convB, 'system');
+
+    // Cross-channel create is a DISPATCH — filed UNCLAIMED so a destination
+    // member picks it up — so `--claim` (self-assign to the caller) is refused
+    // with the typed op error and writes nothing.
+    const res = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { conversation_id: convB, claim: true, tasks: [{ title: 'cross-claim' }] },
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()) as any).toEqual({ error: 'cross_conversation_claim' });
+    expect(countByKind(convB, 'system') - sysBBefore).toBe(0);
+    expect(countByKind(convA, 'system') - sysABefore).toBe(0);
+    const listedB = (await (
+      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+    ).json()) as any;
+    expect(listedB.tasks.some((x: any) => x.title === 'cross-claim')).toBe(false);
+
+    // Decided BEFORE any destination lookup: an UNKNOWN destination + --claim
+    // returns the SAME op error (not `forbidden`), proving there is no existence
+    // probe — the conflict cannot become a side channel.
+    const resUnknown = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { conversation_id: 'conversation-does-not-exist', claim: true, tasks: [{ title: 'x' }] },
+    );
+    expect(resUnknown.status).toBe(200);
+    expect((await resUnknown.json()) as any).toEqual({ error: 'cross_conversation_claim' });
+  });
+
+  it('cross-channel create emits a `filed … from another conversation` narration + cross_conversation metadata bit; same-channel emits `created …` without it', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await setup(t);
+    const h = http(t);
+    // Origin carries a uniquely identifiable sentinel title so the privacy
+    // falsifier can prove that NO origin coordinate — id OR title — leaks into
+    // the destination's narration or metadata.
+    const ORIGIN_SENTINEL = 'ORIGIN-SENTINEL-DO-NOT-LEAK';
+    const chOrigin = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: ORIGIN_SENTINEL,
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convA = chOrigin.channel.id;
+    const chB = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: 'channel-b',
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convB = chB.channel.id;
+
+    // Newest system message's content + parsed metadata for a conversation. Both
+    // faces (this agent-facing `content` string and the desktop enriched row)
+    // derive their wording from the SAME `cross_conversation` metadata bit; the
+    // bit carries NO origin id/title, so neither content nor metadata may name A.
+    const latestSystem = (conversationId: string) =>
+      t.ctx.db
+        .prepare(
+          `SELECT content, metadata FROM messages
+             WHERE conversation_id = ? AND from_kind = 'system'
+             ORDER BY seq DESC LIMIT 1`,
+        )
+        .get(conversationId) as { content: string; metadata: string | null };
+
+    // Cross-channel create (from A into B). The narration is conversation-neutral
+    // ("here from another conversation") because the destination may be a DM, not
+    // just a channel — the contract is a conversation.
+    await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { conversation_id: convB, tasks: [{ title: 'ship it' }] },
+    );
+    const crossMsg = latestSystem(convB);
+    expect(crossMsg.content).toMatch(
+      / filed task #\d+ "ship it" here from another conversation$/,
+    );
+    const crossMeta = JSON.parse(crossMsg.metadata!) as Record<string, unknown>;
+    expect(crossMeta.cross_conversation).toBe(true);
+
+    // Privacy invariant — TWO orthogonal layers, each checked against BOTH the
+    // agent-facing content string AND the serialized metadata: neither the origin
+    // conversation id NOR its (sentinel) title may appear anywhere.
+    for (const leak of [convA, ORIGIN_SENTINEL]) {
+      expect(crossMsg.content.includes(leak)).toBe(false);
+      expect(crossMsg.metadata!.includes(leak)).toBe(false);
+    }
+
+    // Same-channel create (in A): classic `created` narration, no cross bit.
+    await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { tasks: [{ title: 'local task' }] },
+    );
+    const sameMsg = latestSystem(convA);
+    expect(sameMsg.content).toMatch(/ created task #\d+ "local task"$/);
+    const sameMeta = JSON.parse(sameMsg.metadata!) as Record<string, unknown>;
+    expect(sameMeta.cross_conversation).toBeUndefined();
+
+    // Structural falsifier: the ONLY thing the cross-conversation bit adds over an
+    // ordinary create's metadata is `cross_conversation` — no origin / source
+    // conversation coordinate key sneaks in alongside it, in either direction.
+    const addedKeys = Object.keys(crossMeta).filter(k => !(k in sameMeta));
+    const removedKeys = Object.keys(sameMeta).filter(k => !(k in crossMeta));
+    expect(addedKeys).toEqual(['cross_conversation']);
+    expect(removedKeys).toEqual([]);
+  });
+
+  it('agent create --conversation-id is fail-closed: unknown id, non-channel-member, and non-workspace-member all return the SAME forbidden with zero write', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, channelId, agentIds } = await setup(t);
+    const h = http(t);
+    const createFromA = `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`;
+
+    // (1) Unknown destination id.
+    const unknown = await h.post(createFromA, {
+      conversation_id: 'conversation-does-not-exist',
+      tasks: [{ title: 'nope' }],
+    });
+
+    // (2) Real channel in alice's OWN workspace that alice is NOT a member of —
+    //     exercises the destination-membership (getAgent) layer.
+    const chC = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: 'channel-c',
+        member_agent_ids: [agentIds.bob],
+      })
+    ).json()) as any;
+    const convC = chC.channel.id;
+    const sysCBefore = countByKind(convC, 'system');
+    const nonChannelMember = await h.post(createFromA, {
+      conversation_id: convC,
+      tasks: [{ title: 'nope' }],
+    });
+
+    // (3) Real conversation in a workspace alice is NOT a member of — exercises
+    //     the workspace-access (canAgentAccessWorkspace) layer.
+    const ws2 = (await (
+      await h.post('/api/workspaces', { name: 'eng2', member_agent_ids: [agentIds.bob] })
+    ).json()) as any;
+    const nonWsMember = await h.post(createFromA, {
+      conversation_id: ws2.onboarding_channel_id,
+      tasks: [{ title: 'nope' }],
+    });
+
+    // All three collapse to ONE shape — a caller cannot distinguish "unknown"
+    // from "exists but you cannot reach it".
+    for (const r of [unknown, nonChannelMember, nonWsMember]) {
+      expect(r.status).toBe(403);
+      expect((await r.json()) as any).toEqual({ error: 'forbidden' });
+    }
+    // Zero write in the real-but-forbidden destination.
+    expect(countByKind(convC, 'system') - sysCBefore).toBe(0);
+  });
+
+  it('agent create --conversation-id with a source in the ORIGIN and the task in the DESTINATION → source_conversation_mismatch with zero write', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, channelId, agentIds } = await setup(t);
+    const h = http(t);
+    const chB = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: 'channel-b',
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convB = chB.channel.id;
+    // The source message lives in the ORIGIN (A); the task is filed to B.
+    const src = (await (
+      await h.post(`/api/channels/${convA}/messages`, { content: 'prompt in A' })
+    ).json()) as any;
+    const sysBBefore = countByKind(convB, 'system');
+
+    const res = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      {
+        conversation_id: convB,
+        tasks: [{ title: 'derived', source_message_id: src.message.id }],
+      },
+    );
+    // Typed envelope on 200 (mirrors source_conflict), never an HTTP throw.
+    expect(res.status).toBe(200);
+    expect((await res.json()) as any).toEqual({ error: 'source_conversation_mismatch' });
+    // Zero task + zero event in the destination.
+    expect(countByKind(convB, 'system') - sysBBefore).toBe(0);
+    const listedB = (await (
+      await h.get(`/internal/conversations/${convB}/agents/${agentIds.alice}/tasks`)
+    ).json()) as any;
+    expect(listedB.tasks.some((x: any) => x.title === 'derived')).toBe(false);
+  });
+
+  it('cross-channel create emits one task_cross_op audit line; same-conversation (default) create emits none', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, channelId, agentIds } = await setup(t);
+    const h = http(t);
+    const chB = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: 'channel-b',
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convB = chB.channel.id;
+    const createFromA = `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`;
+    const isCreateAudit = (call: unknown[]): boolean =>
+      (call[0] as any)?.op === 'task_cross_op' && (call[0] as any)?.action === 'create';
+
+    // Cross-channel: exactly one audit line, source = A, owner = B.
+    const crossSpy = vi.spyOn(t.ctx.logger, 'warn');
+    await h.post(createFromA, { conversation_id: convB, tasks: [{ title: 'x-audit' }] });
+    const crossCalls = crossSpy.mock.calls.filter(isCreateAudit);
+    crossSpy.mockRestore();
+    expect(crossCalls).toHaveLength(1);
+    expect(crossCalls[0]?.[0]).toMatchObject({
+      action: 'create',
+      source_conversation_id: convA,
+      owner_conversation_id: convB,
+    });
+
+    // Same-conversation default: no cross-op audit (sourceConv === ownerConv).
+    const sameSpy = vi.spyOn(t.ctx.logger, 'warn');
+    await h.post(createFromA, { tasks: [{ title: 'same-audit' }] });
+    const sameCalls = sameSpy.mock.calls.filter(isCreateAudit);
+    sameSpy.mockRestore();
+    expect(sameCalls).toHaveLength(0);
+  });
+
+  it('a successful cross-channel create does NOT relax the origin-bound global post/view predicates against the destination', async () => {
+    t = buildTestApp();
+    const { sessionId: convA, channelId, agentIds } = await setup(t);
+    const h = http(t);
+    const chB = (await (
+      await h.post(`/api/workspaces/${channelId}/channels`, {
+        title: 'channel-b',
+        member_agent_ids: [agentIds.alice],
+      })
+    ).json()) as any;
+    const convB = chB.channel.id;
+
+    // Cross-channel create succeeds (narrow, create-specific authorization)…
+    const res = await h.post(
+      `/internal/conversations/${convA}/agents/${agentIds.alice}/tasks/create`,
+      { conversation_id: convB, tasks: [{ title: 'ok' }] },
+    );
+    expect(res.status).toBe(200);
+
+    // …yet the agent's ORIGIN-A principal still cannot post to / view B through
+    // the global predicates the ~90 other call sites share: they remain
+    // origin-bound (require principal.conversationId === conversation.id), so
+    // even though alice IS a member of B, an A-origin principal is refused. This
+    // proves create used a separate narrow check and did NOT widen these.
+    const originAPrincipal: AgentPrincipal = {
+      kind: 'agent',
+      agentId: agentIds.alice!,
+      conversationId: convA,
+    };
+    expect(canPostToConversation(t.ctx, originAPrincipal, convB)).toBe(false);
+    expect(canViewConversation(t.ctx, originAPrincipal, convB)).toBe(false);
   });
 
   it('human edit + detail round-trips', async () => {

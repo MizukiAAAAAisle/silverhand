@@ -110,7 +110,7 @@ export class TaskBroadcaster {
    *  conversation/workspace boundary. Lightweight audit trail (no visible
    *  system message hook). */
   auditCrossOp(args: {
-    op: 'claim' | 'unclaim' | 'status';
+    op: 'claim' | 'unclaim' | 'status' | 'create';
     actor: AgentActor;
     sourceConv: ConversationDto;
     ownerConv: ConversationDto;
@@ -149,6 +149,11 @@ export class TaskBroadcaster {
     kind: TaskMutationKind;
     actor: TaskActor;
     sysMessage: string;
+    /** Create-only: the task was filed from a different conversation than the
+     *  one it lands in. Written into metadata as the single-source bit both the
+     *  agent narration and the desktop row derive their wording from. Carries
+     *  NO origin id/title (privacy invariant). Omitted/false everywhere else. */
+    crossConversation?: boolean;
   }): MessageDto {
     const systemActor: TaskSystemActor = this.taskSystemActor(args.actor);
     return this.messages.insertForConversation({
@@ -164,6 +169,7 @@ export class TaskBroadcaster {
         task_title: args.title,
         task_assignee: args.assignee,
         actor: systemActor,
+        ...(args.crossConversation ? { cross_conversation: true } : {}),
       },
     });
   }

@@ -3,6 +3,7 @@
 import { z } from 'zod';
 import {
   ConversationKindSchema,
+  ConversationVisibilitySchema,
   FromKindSchema,
   WorkspaceKindSchema,
 } from '../db/schema.js';
@@ -318,7 +319,16 @@ export const AgentListedChannelSchema = z.object({
   id: z.string(),
   title: z.string(),
   kind: z.enum(['channel', 'dm_channel']),
+  /** Channel visibility. Authoritative on every row; a caller must not infer
+   *  it from `kind` or list position. A `dm_channel` is always `private`. */
+  visibility: ConversationVisibilitySchema,
   archived: z.boolean(),
+  /** Whether the listed agent is a member of the conversation. Authoritative:
+   *  computed from the membership relation, never inferred from `visibility`,
+   *  `kind`, or list position. `visibility: 'public'` with `is_member: false`
+   *  is the public-but-not-joined discovery state. Discovery grants no read,
+   *  write, roster, or delivery; joining remains a separate action. */
+  is_member: z.boolean(),
   updated_at: z.number(),
 });
 export type AgentListedChannel = z.infer<typeof AgentListedChannelSchema>;

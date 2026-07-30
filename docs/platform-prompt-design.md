@@ -53,8 +53,8 @@ on them being present.
 2. **Operating Contract** — the hard invariants. Everything else serves them:
    reply only through the CLI (and ONLY the documented `silverhand` command
    families for communication and Silverhand management); read each message's
-   meta header; claim work, not messages; system messages are informational;
-   you stay alive and never poll.
+   meta header; claim work, not messages; system messages need no chat reply by
+   default but still require an action-judgment; you stay alive and never poll.
 3. **Turn Workflow** — the per-wake loop: orient from the injected tail → ack if
    needed → claim/continue → do all the work → report + checkpoint.
 4. **Your Profile** — concept anchor: profile = the executing subject's own
@@ -113,8 +113,13 @@ be a deliberate, called-out decision — never a side effect of rewording.
 - **Single-quoted heredoc for message bodies** — `<<'SILVERHAND_EOF'`. The body
   comes from STDIN, never a flag; the single-quote form prevents `$`/backtick
   interpolation.
-- **System-no-reply** — "don't reply to a `type=system` message unless it
-  explicitly asks you to." Without it agents reply to every system notice.
+- **System-no-reply, still-judge-action** — "system messages do not require a
+  chat reply by default; evaluate each message's semantics and your current
+  responsibilities to decide whether action is required." Splits "no reply
+  needed" from "no action needed": without the first half agents reply to every
+  system notice; without the second they misread "no reply" as "nothing to do"
+  and ignore actionable events (e.g. an unassigned `task_create` in their own
+  channel).
 - **Workspace ownership boundary** — cwd persists but may contain shared project
   files; only the per-agent L2 directory is agent-owned. The prompt must not
   teach agents to treat the whole workspace as exclusively theirs or arbitrary

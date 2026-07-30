@@ -196,23 +196,43 @@ const createCommand: Command = {
                          [--source-message-id <id>]
                          [--claim]
                          [--target channel|thread:<message_id>]
+                         [--conversation-id <id>]
 
-Create ONE task in the current channel/thread. --title is required; --body is
+Create ONE task in the current conversation. --title is required; --body is
 optional (an omitted body stores an empty description — the title is NOT
 duplicated into the body). To create several tasks, call this once per task.
 
+--conversation-id <id> (optional) files the task in ANOTHER conversation
+instead of the current one — the cross-conversation case: you finish a
+discussion in conversation A and conclude the work belongs in conversation B, so
+you create the task in B and carry the context in --title / --body (no messages
+are copied, and A gets no activity). Omit it and the task lands in the current
+conversation (the default). You must be a member of the destination; a
+destination you cannot access — unknown OR not-a-member — fails the same way
+(code=forbidden), without revealing whether it exists. Cross-workspace
+destinations are judged by the DESTINATION workspace's capabilities. When
+--source-message-id is also given, the source MUST live in the destination too
+(see below). A cross-conversation create is a DISPATCH: it files the task
+UNCLAIMED so a member of the destination conversation picks it up, so it CANNOT
+be combined with --claim (that would
+self-assign it to you); the combination fails with \`cross_conversation_claim\`
+(exit 1) and writes nothing.
+
 --source-message-id <id> links the task to the message that prompted it
 (permanent 1:1 provenance). The source message MUST live in the same
-conversation as the task (this command's channel/thread). A message can back
-at most ONE task ever — for its whole lifetime, regardless of that task's
-status. A second create from the same source fails with \`source_conflict\`
+conversation as the task — i.e. the destination (--conversation-id when
+supplied, otherwise this conversation). A message can back at most ONE task
+ever — for its whole lifetime, regardless of that task's status. A second
+create from the same source fails with \`source_conflict\`
 (exit 1); the error's \`details.existing_task\` points at the task that already
 owns it, so hand off to it (or reopen it) rather than re-creating.
 
 --claim (optional) atomically self-claims the created task (lands in_progress
 + assigned to you) instead of leaving it unassigned todo. Requires the
 write_tasks capability in addition to create_tasks. \`task claim\` only claims
-tasks that already exist; this is the one-step create-and-claim.
+tasks that already exist; this is the one-step create-and-claim. It applies to
+the current conversation only — it cannot be combined with a cross-conversation
+--conversation-id (see above).
 
 --target thread:<message_id> (optional) attributes the created task to that
 message's thread (reply cluster) instead of the main line. Omit --target, or
@@ -226,13 +246,15 @@ Pre-flight failures (exit 1):
 
 Create failures (exit 1, structured stderr — NOT printed as success):
   source_conflict              → code=conflict, details.existing_task
+  cross_conversation_claim     → code=conflict (--claim with a cross-conversation
+                                 --conversation-id; omit --claim)
   source_message_not_found     → code=not_found
   source_not_accessible        → code=forbidden
   source_conversation_mismatch → code=validation_error (source is in a
                                  different conversation than the task)
 
 stdout (success only): CreateTasksResult JSON.`,
-  flags: ['title', 'body', 'source-message-id', 'target', 'reply-to'] as const,
+  flags: ['title', 'body', 'source-message-id', 'target', 'reply-to', 'conversation-id'] as const,
   booleanFlags: ['claim'] as const,
   // Agents reach for --message because half of the CLIs in their
   // training data treat it as the canonical "body" flag (gh, git,
@@ -276,6 +298,7 @@ stdout (success only): CreateTasksResult JSON.`,
       flagString(args, 'reply-to'),
     );
     const claim = flagBool(args, 'claim');
+    const conversationId = flagString(args, 'conversation-id');
     const result = await client.createTasks({
       tasks: [
         {
@@ -286,6 +309,7 @@ stdout (success only): CreateTasksResult JSON.`,
       ],
       ...(claim ? { claim: true } : {}),
       ...(target ? { target } : {}),
+      ...(conversationId ? { conversation_id: conversationId } : {}),
     });
     // The route returns 200 with a typed envelope even for business failures
     // (so `source_conflict` keeps its `existing_task`). `create` is all-or-
@@ -346,6 +370,21 @@ function createFailureToCliError(result: { error: string; existing_task?: unknow
       return new CliError({
         code: 'conflict',
         message: 'task create failed: the conversation is archived',
+        retriable: false,
+        details: { error: result.error },
+      });
+    case 'cross_conversation_claim':
+      // Cross-conversation create is a DISPATCH — the task is filed unclaimed so
+      // a member of the destination conversation picks it up. This mapper is the
+      // SINGLE source of the human-readable reason; the route/service carry only
+      // the typed code.
+      return new CliError({
+        code: 'conflict',
+        subkind: 'cross_conversation_claim',
+        message:
+          'cannot --claim a task created in another conversation: a cross-conversation ' +
+          'create files the task UNCLAIMED so a member of the destination conversation ' +
+          'can claim and execute it. Omit --claim.',
         retriable: false,
         details: { error: result.error },
       });

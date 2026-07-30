@@ -159,6 +159,20 @@ describe('readTaskSystemMetadata + readTaskSystemMetadataPartial', () => {
     ).toBeNull();
   });
 
+  it('preserves cross_conversation when set on a cross-channel create', () => {
+    const m = readTaskSystemMetadata({ ...validFull, cross_conversation: true });
+    expect(m).not.toBeNull();
+    expect(m!.cross_conversation).toBe(true);
+  });
+
+  it('leaves cross_conversation absent for legacy + same-conversation events', () => {
+    // validFull carries no cross_conversation field — the same-conversation and
+    // pre-feature shape. It must still parse, with the bit undefined (= false).
+    const m = readTaskSystemMetadata(validFull);
+    expect(m).not.toBeNull();
+    expect(m!.cross_conversation).toBeUndefined();
+  });
+
 });
 
 interface ParserRejectionCase {

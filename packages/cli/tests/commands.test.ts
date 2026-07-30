@@ -666,7 +666,7 @@ describe('task create --target thread:<message_id>', () => {
         client,
       args: { flags, positional: [], rest: [] },
     } as any)
-      .then(() => captured as { tasks: unknown[]; target?: unknown; reply_to_message_id?: string });
+      .then(() => captured as { tasks: unknown[]; target?: unknown; reply_to_message_id?: string; conversation_id?: string });
   }
 
   it('keeps --reply-to as a hidden compatibility alias for the public thread target', async () => {
@@ -715,5 +715,45 @@ describe('task create --target thread:<message_id>', () => {
     expect(input.tasks).toEqual([{ title: 'T' }]);
     expect('target' in input).toBe(false);
     expect('reply_to_message_id' in input).toBe(false);
+  });
+
+  // Locks the ONLY new wire behavior of the cross-channel create: an explicit
+  // --conversation-id must reach the body as `conversation_id`, and omitting it
+  // must leave the field absent so the backend applies its origin-conversation
+  // default. Without this, the flag could regress to "accepted but never
+  // forwarded" with backend/schema/typecheck all green (#task:1738 review).
+  it('forwards --conversation-id as the wire `conversation_id` destination', async () => {
+    const input = await captureCreateTasks({ title: 'T', 'conversation-id': 'convB' });
+    expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect(input.conversation_id).toBe('convB');
+  });
+
+  it('omits conversation_id when --conversation-id is not provided (backend defaults to the origin conversation)', async () => {
+    const input = await captureCreateTasks({ title: 'T' });
+    expect(input.tasks).toEqual([{ title: 'T' }]);
+    expect('conversation_id' in input).toBe(false);
+  });
+
+  // The route refuses cross-channel + --claim with the typed
+  // `cross_conversation_claim` op error and carries NO human-readable reason;
+  // this mapper is the SINGLE source of that reason. Lock the classification
+  // (code + subkind) so the CLI keys on the code, not the message text.
+  it('maps a cross_conversation_claim failure envelope to conflict + subkind', async () => {
+    const cmd = findCommand('task', 'create');
+    const client = {
+      createTasks: async () => ({ error: 'cross_conversation_claim' }),
+    } as unknown as BackendClient;
+    await expect(
+      cmd!.run({
+        env: {
+          conversationId: 'conv',
+          agentId: 'agent',
+          serverUrl: 'http://127.0.0.1:4488',
+          authToken: 'token',
+        },
+        client,
+        args: { flags: { title: 'T' }, positional: [], rest: [] },
+      } as any),
+    ).rejects.toMatchObject({ code: 'conflict', subkind: 'cross_conversation_claim' });
   });
 });
