@@ -585,7 +585,7 @@ export function MessageItem({
   // jumps to first unread.
   const threadUnreadNode =
     threadUnreadCount > 0 ? (
-      <span className="shrink-0 font-medium text-accent">
+      <span className="shrink-0 whitespace-nowrap font-medium text-accent">
         {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
       </span>
     ) : null;
@@ -608,24 +608,53 @@ export function MessageItem({
         title={replyBadgeTitle}
         aria-label={replyBadgeTitle}
         className={
-          'inline-flex h-[18px] items-center gap-1.5 text-xs leading-none text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+          // ONE metric for every box on this row: `leading-none` makes the copy's
+          // line box exactly its 12px font size, and both glyphs are `size-3`
+          // (12px) to match it, so icon and text share a height instead of the
+          // glyph standing 2px taller than the words next to it (shiki
+          // 2026-07-31). The row's height is therefore its text metric, not a
+          // number chosen for it.
+          //
+          // `min-w-0` + the children's own no-wrap/truncate rules are what keep
+          // that true: this row USED to pin `h-[18px]` while its children were
+          // free to wrap, so in a narrow bubble the time segment relaid out to
+          // three 12px lines (36px) inside an 18px box and spilled — which is
+          // exactly the "height is 30" misalignment. A row that states one fact
+          // must stay one line high; when it cannot fit, the time segment gives
+          // way (see below) rather than the row growing.
+          'inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs leading-none text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
           // Its own fill / corner / inset ONLY when it stands alone. Inside the
           // preview block the wrapper owns all three: two stacked translucent
           // fills of the same token compose darker and would redraw the seam
           // that block exists to remove. The glyph then sits in the same left
           // column as the lines' avatars, so the badge reads as their header.
+          //
+          // The fixed height belongs to the same branch, because it is PILL
+          // geometry (fill + corner + inset need breathing room around the
+          // 12px content), not a property of the row: as the preview block's
+          // header there is no fill, so 18px would only add 6px of dead space
+          // above lines that are themselves content-height.
           (badgeHeadsPreview
             ? ''
-            : 'rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 hover:bg-[var(--chip-bg-hover)]')
+            : 'h-[18px] rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 hover:bg-[var(--chip-bg-hover)]')
         }
       >
-        <ThreadIcon className="size-3.5 shrink-0" />
-        <span className="font-medium">{replyBadgeLabel}</span>
+        <ThreadIcon className="size-3 shrink-0" />
+        {/* The subject of the row: it never wraps and never shrinks, so the
+            count stays readable at any row width. */}
+        <span className="shrink-0 whitespace-nowrap font-medium">
+          {replyBadgeLabel}
+        </span>
         {threadUnreadNode ??
           (enrichedReply ? (
-            <span className="inline-flex items-center gap-0.5 text-text-muted">
+            // Freshness is the row's DECORATION, so it is the segment that
+            // gives way when the row is too narrow: it shrinks and truncates
+            // (`truncate` also forbids the wrap that used to make this span
+            // three lines tall inside a one-line row). The clock keeps its
+            // 12px box so the glyph matches the words beside it.
+            <span className="inline-flex min-w-0 shrink items-center gap-0.5 text-text-muted">
               <Clock className="size-3 shrink-0" />
-              {replyRelativeTime}
+              <span className="truncate">{replyRelativeTime}</span>
             </span>
           ) : null)}
       </button>
