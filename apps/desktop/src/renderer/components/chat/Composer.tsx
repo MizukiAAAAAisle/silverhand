@@ -787,10 +787,13 @@ export function Composer({
           data-composer-shell
           className="flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-within:border-border-focus focus-within:ring-2 focus-within:ring-border-focus"
         >
+          {/* Identity self-sourced (#task:1731): the header resolves agent
+              name/avatar from the global directory internally — it must NOT
+              share the mention picker's workspace-scoped `agents` roster,
+              which is empty for dm_channels (agent_home workspaces have no
+              workspace_members rows by schema). */}
           <ComposerActivityHeader
             conversationId={conversationId}
-            agents={agents}
-            agentAvatarUrls={agentAvatarUrls}
             restrictToAgentIds={activityAgentIds}
           />
           <textarea

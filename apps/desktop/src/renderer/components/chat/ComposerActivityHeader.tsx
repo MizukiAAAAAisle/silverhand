@@ -11,6 +11,8 @@ import type { AgentDto, AgentRunState } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentRunStates } from '@/features/channels/hooks';
+import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useNav } from '@/router';
 import { focusAgentSideSection } from '@/features/agents/AgentView';
 
@@ -146,9 +148,6 @@ function displayNameOf(agent: AgentDto | undefined): string {
 
 interface ComposerActivityHeaderProps {
   conversationId: string;
-  /** Reused from the Composer's own batch hooks — no extra fetch. */
-  agents: AgentDto[];
-  agentAvatarUrls: Map<string, string | null>;
   /** When non-null, only show run-state for these agent ids. Used inside
    *  the ThreadPanel: the run-state stream is channel-scoped (a reply
    *  cluster is not a separate conversation), so without this filter the
@@ -175,11 +174,21 @@ interface ComposerActivityHeaderProps {
  */
 export function ComposerActivityHeader({
   conversationId,
-  agents,
-  agentAvatarUrls,
   restrictToAgentIds,
 }: ComposerActivityHeaderProps): JSX.Element | null {
   const { data: runStates = [] } = useAgentRunStates(conversationId);
+  // Identity source (#task:1731): the bubble resolves its subjects from the
+  // GLOBAL agent directory, deliberately NOT from the Composer's
+  // workspace-member roster. The two surfaces have different semantics:
+  // the mention picker offers CANDIDATES and must stay workspace-scoped +
+  // fail-closed (#task:1720), while the bubble labels agents that are
+  // ALREADY active in this conversation (the run-state stream is the
+  // authority on who they are — only their name/avatar is looked up).
+  // Sharing the picker's roster here is what regressed DM channels: a
+  // dm_channel lives in an agent_home workspace, whose `workspace_members`
+  // is empty BY SCHEMA (agents are conversation members there), so the
+  // lookup missed and every bubble fell back to '@agent' + default avatar.
+  const { data: directoryAgents = [] } = useAgents();
   const [expanded, setExpanded] = useState(false);
   const { openAgentPanel } = useNav();
   // Click a bubble agent's avatar → open its docked side panel on Activity,
@@ -194,9 +203,9 @@ export function ComposerActivityHeader({
 
   const agentsById = useMemo(() => {
     const m = new Map<string, AgentDto>();
-    for (const agent of agents) m.set(agent.id, agent);
+    for (const agent of directoryAgents) m.set(agent.id, agent);
     return m;
-  }, [agents]);
+  }, [directoryAgents]);
 
   // Active = non-terminal, optionally restricted to the thread's follower
   // agents (item 4), sorted by main-status priority then recency.
@@ -204,6 +213,13 @@ export function ComposerActivityHeader({
     () => selectActiveRunStates(runStates, restrictToAgentIds),
     [runStates, restrictToAgentIds],
   );
+
+  // Avatars only for the agents actually shown — not the whole directory.
+  const activeAgents = useMemo(() => {
+    const ids = new Set(active.map(s => s.agentId));
+    return directoryAgents.filter(a => ids.has(a.id));
+  }, [directoryAgents, active]);
+  const agentAvatarUrls = useAgentAvatarObjectUrls(activeAgents);
 
   const subject = active[0];
   // Hook order is fixed regardless of how many agents run; falls back to a
