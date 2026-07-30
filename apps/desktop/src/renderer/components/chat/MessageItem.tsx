@@ -142,6 +142,15 @@ export interface MessageItemProps {
    *  the thread pane is open. Doesn't expose the action bar, since the
    *  highlight is informational, not interactive. */
   highlighted?: boolean;
+  /** Render this row as a CONTINUATION of the message above it — the second and
+   *  later rows of a consecutive-same-author run (#task:1737). The avatar and
+   *  the author name drop out (the group head already said who), the row's
+   *  vertical padding tightens so the run reads as one block, and this row's
+   *  timestamp moves into the leading rail where hover reveals it. The decision
+   *  is NOT made here: it comes from `authorGroupContinuations`, which is the
+   *  single rule shared by the channel stream and the ThreadPanel. Defaults to
+   *  false — a row with no known predecessor renders its full header. */
+  continuesPrevious?: boolean;
   /** One-shot "jump flash": render the `.msg-jump-flash` animation class
    *  on this row. Declarative (not an imperative `classList.add`) so the
    *  flash survives a Virtuoso remount / refetch-driven window reset — the
@@ -234,6 +243,7 @@ export function MessageItem({
   canParticipate = true,
   canMutateLinkedTask = false,
   highlighted = false,
+  continuesPrevious = false,
   jumpFlash = false,
   viewerAvatarObjectUrl = null,
   viewer,
@@ -300,6 +310,10 @@ export function MessageItem({
   const createdAt = dayjs(message.created_at);
   const timeLabel = createdAt.format('MM/DD HH:mm');
   const timeTooltip = createdAt.format('YYYY-MM-DD HH:mm:ss');
+  // Continuation rail (#task:1737) — clock only, no date: a group never spans
+  // a day boundary, so the head's `MM/DD` already dates every row under it,
+  // and `HH:mm` is what fits the avatar-width rail.
+  const continuationTimeLabel = createdAt.format('HH:mm');
   const { openAgentPanel, toMembersUser } = useNav();
   // Clicking an agent avatar/name in the message stream opens the agent's
   // compact side panel (`?agent=`) instead of jumping to the full members
@@ -594,7 +608,14 @@ export function MessageItem({
         // 6px in slack-dark and stays 0 in warm/forza6 — the soft hover
         // box is invisible at 0 radius anyway, so consistency here is
         // about *framed* presentations.
-        'relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 py-1.5 transition-colors ' +
+        //
+        // A grouped continuation row (#task:1737) tightens its vertical
+        // padding so the run reads as ONE block instead of N evenly-spaced
+        // rows; the horizontal padding and the leading-column width are
+        // untouched, so every body in the group stays on the same text
+        // baseline as its head.
+        'relative flex items-start gap-3 rounded-[var(--row-radius)] border-2 px-2 transition-colors ' +
+        (continuesPrevious ? 'py-0.5 ' : 'py-1.5 ') +
         (jumpFlash ? 'msg-jump-flash ' : '') +
         (selectionMode && committed ? 'cursor-pointer ' : '') +
         (alignRight ? 'flex-row-reverse' : 'flex-row') +
@@ -610,23 +631,58 @@ export function MessageItem({
           onChange={() => onToggleSelected?.(message)}
         />
       ) : null}
-      <Avatar
-        isUser={isUser}
-        human={human}
-        humanAvatarObjectUrl={humanAvatarObjectUrl}
-        agent={agent}
-        agentAvatarObjectUrl={
-          agent ? agentAvatarUrls?.get(agent.id) ?? null : null
-        }
-        conversationId={conversationId}
-        onNavigateAgent={navigateToAgent}
-        onNavigateHuman={navigateToHuman}
-      />
+      {continuesPrevious ? (
+        /* Continuation rail — occupies the avatar column's exact WIDTH (`w-8`)
+           so the body lands on the same text baseline as the group head's, but
+           only ONE body line of HEIGHT: a taller rail would pad the row back
+           out and undo the tightening that makes a run read as one block. The
+           line box is taken off the same Appearance token `.markdown-body`
+           uses (see `[data-message-continuation-rail]` in global.css), so it
+           still matches the body's first line at any font-size slider value.
+
+           It carries THIS row's own clock time, revealed on row hover: the
+           time is never lost to grouping, it just stops competing for
+           attention on every line. Driven by the row's `hover` state rather
+           than a `group-hover:` variant — same reason as the action controls
+           below, Tailwind's variant ties with the base opacity class and loses
+           in the compiled sheet. Only opacity animates, so the time stays in
+           the a11y tree throughout rather than being `aria-hidden` while
+           invisible. */
+        <time
+          data-message-continuation-rail
+          dateTime={new Date(message.created_at).toISOString()}
+          title={timeTooltip}
+          className={
+            'w-8 shrink-0 select-none text-[10px] text-text-muted transition-opacity ' +
+            (alignRight ? 'text-left ' : 'text-right ') +
+            (hover ? 'opacity-100' : 'opacity-0')
+          }
+        >
+          {continuationTimeLabel}
+        </time>
+      ) : (
+        <Avatar
+          isUser={isUser}
+          human={human}
+          humanAvatarObjectUrl={humanAvatarObjectUrl}
+          agent={agent}
+          agentAvatarObjectUrl={
+            agent ? agentAvatarUrls?.get(agent.id) ?? null : null
+          }
+          conversationId={conversationId}
+          onNavigateAgent={navigateToAgent}
+          onNavigateHuman={navigateToHuman}
+        />
+      )}
       <MessageRowContent
         alignRight={alignRight}
         columnClassName="min-w-0 max-w-[85%]"
-        author={authorNode}
-        timestamp={timestampNode}
+        /* A continuation row states neither author nor time in the content
+           column: the group head already named the author, and this row's own
+           time sits in the hover rail beside it. Both null ⇒ MessageRowContent
+           drops the whole header element (#task:1737). */
+        author={continuesPrevious ? null : authorNode}
+        timestamp={continuesPrevious ? null : timestampNode}
         taskTag={taskTag}
         body={bodyNode}
         attachments={attachmentsNode}

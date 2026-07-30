@@ -290,6 +290,21 @@ button:disabled { cursor: not-allowed; }
 .markdown-body > *:first-child { margin-top: 0; }
 .markdown-body > *:last-child { margin-bottom: 0; }
 
+/* Grouped-continuation leading rail (#task:1737) — the hover-revealed clock
+   time that stands in for the avatar on a message row that continues its
+   author's run. The rail sits in the avatar column (width owned by the
+   consumer) and must be exactly ONE body line tall: any taller and it pads the
+   row back out, undoing the tightening that makes a run read as one block
+   instead of N evenly spaced events.
+   So the line box is derived from the same Appearance token `.markdown-body`
+   uses above rather than a px guess, which would only line up at the default
+   font size and drift at every other slider value. `line-height` alone sets
+   the height (single line of text) and centers the smaller glyphs in it by
+   half-leading. */
+[data-message-continuation-rail] {
+  line-height: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) + 8px);
+}
+
 /* ── System message row — picks up theme prose font/size like
        `.markdown-body` does for full message bodies. The plain text
        inside system audit rows (task events, schedule banners, rename
@@ -801,6 +816,24 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   overflow-wrap: anywhere;
 }
 
+/* @mention chip (Mention.tsx live `<button>`, StaticMentionRef `<span>`) —
+   hover/focus `bg-accent-soft` pill sized to the inline-code chip's height
+   (shiki #task:1730; measured over CDP against the running app). The live
+   mention is a `<button>`, and Chromium COERCES form controls to inline-block
+   and ignores `display:inline` — so the pill filled the whole prose
+   line-height box (24px) and stood taller than the 19px inline-code chip. The
+   lever that collapses an inline-block box is line-height, not display: `1.24`
+   + the same `0.06em` block padding as inline code lands the pill at 19px,
+   equal to the inline-code chip. Both scale with the Appearance font slider —
+   unitless line-height and em padding track the type. Font-size is deliberately
+   NOT set: the text keeps prose size (shiki — only the pill height matches, the
+   text must not shrink). Horizontal padding / margin / colour / weight / hover
+   fill / radius / focus stay in Tailwind; these don't touch Tailwind's `px-*`. */
+.markdown-body [data-mention-kind] {
+  padding-block: 0.06em;
+  line-height: 1.24;
+}
+
 /* Inline reference chips — `[data-task-ref]` (TaskRef.tsx), `[data-channel-ref-state]`
    (ChannelRef.tsx, `#name`), and `[data-conversation-ref]` (ConversationRef.tsx,
    `#conv:<id>`). Shared base for every theme: a reference chip sits inline in the
@@ -825,11 +858,40 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
    Themes layer identity (fill / border / radius / colour / `font-family`) on
    top; they no longer set the size. The `.system-message-row` variant keeps
-   its own explicit `height`, unaffected by this. */
+   its own explicit `height`, unaffected by this. NOTE (shiki 2026-07-30): the
+   in-prose chips now OVERRIDE this to `font-size: inherit` (full prose size —
+   see the `.markdown-body` rule below); this `body − 2px` now applies only to
+   the non-prose system-chrome surfaces. */
 [data-task-ref],
 [data-channel-ref-state],
 [data-conversation-ref] {
   font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
+}
+
+/* In prose the reference-chip family matches the surrounding regular text
+   size, not the `body − 2px` set above. The one-notch-smaller treatment read
+   as too short beside full-size prose (shiki 2026-07-30 "现在看着有点矮" —
+   reversing the earlier #1192/#1721 convergence to 12px, which was only ever
+   about avoiding the fractional `em` size). `inherit` = literally the size of
+   the text the chip sits in, so a chip in a heading tracks the heading too;
+   the chip no longer signals "reference" by being smaller — the ☑ / `#` /
+   `#conv:` glyph + accent colour carry that. The `body − 2px` base rule now
+   governs only the non-prose surfaces (system-activity / system-message
+   chrome), which stay one notch down in their denser rows.
+
+   Baseline alignment: these chips are `inline-flex` and grow to fill the
+   prose line-height box; with the flex default `align-items` the glyph centres
+   in the line box and floats above the prose baseline, reading as sitting
+   higher than the words around it (shiki #task:1732; measured over CDP against
+   the running app). `baseline` aligns the flex box on its text baseline; the
+   icon keeps its own `self-center` (align-self overrides the container) so it
+   stays vertically centred against the label. Scoped to `.markdown-body` so
+   the system chrome — which sets its own explicit height — is untouched. */
+.markdown-body [data-task-ref],
+.markdown-body [data-channel-ref-state],
+.markdown-body [data-conversation-ref] {
+  font-size: inherit;
+  align-items: baseline;
 }
 
 /* Resolved task-ref = borderless accent link, shared across every theme

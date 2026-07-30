@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUpRight, Bell, BellOff, Search } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
+import { authorGroupContinuations } from '@/components/chat/authorGrouping';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
 import { InlineFindBar } from './InlineFindBar';
@@ -320,6 +321,14 @@ export function ThreadPanel({
     [messages, rootMessageId],
   );
   const items = useMemo(() => groupMessages(replyMessages), [replyMessages]);
+  // Consecutive-same-author runs (#task:1737) — the same rule the channel
+  // stream applies, over the same post-clustering sequence. Computed from
+  // `items` (replies only), so the separately pinned root above the divider is
+  // never in the set and the first reply always leads its own group.
+  const authorContinuations = useMemo(
+    () => authorGroupContinuations(items),
+    [items],
+  );
 
   // Authoritative full reply count from the cut3-6 sidecar (kept live by
   // useThreadRoot) — NOT a count of currently-loaded rows, which would be
@@ -786,6 +795,7 @@ export function ThreadPanel({
         searchActive={
           find.activeMessageId != null && m.id === find.activeMessageId
         }
+        continuesPrevious={authorContinuations.has(m.id)}
         {...actions.rowActionProps(m)}
       />
     );
@@ -930,6 +940,24 @@ export function ThreadPanel({
                 first message in the stream. No longer pinned (#task:1050
                 item 1) so replies get the panel's full height. */}
             {rootCtx.root ? renderMessage(rootCtx.root) : null}
+
+            {/* Root's bottom divider — sets the thread's originating message
+                (its subject) apart from the replies below it (#task:1735). It is
+                the SAME kind of element as the panel header's bottom rule (an
+                internal separator between stacked regions of one surface), so it
+                speaks the same language: `border-border-subtle`, the 1px neutral
+                hairline, in every theme — matching `SidePanelHeader`. forza6's
+                2px poster ink is reserved for FRAME borders (things enclosed on
+                all sides + hard shadow); using it here read as a frame fragment
+                next to the header hairline (#task:1735 shiki feedback). Full-bleed
+                horizontally (`-mx-1` cancels the scroll container's `px-1`) so it
+                runs edge to edge. `shrink-0` keeps it a hairline in the flex
+                column even when the "No replies yet" empty state claims the
+                remaining height. Gated on the root so it reads as the root's own
+                bottom edge — present whether or not there are replies yet. */}
+            {rootCtx.root ? (
+              <div className="-mx-1 my-2 shrink-0 border-t border-border-subtle" />
+            ) : null}
 
             {threadClusterShowsLoader({
               isLoading: cluster.isLoading,

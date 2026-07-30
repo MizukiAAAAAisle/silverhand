@@ -42,10 +42,13 @@ export interface MessageRowContentProps {
    *  responsive (`max-w-[85%]`), export is the fixed capture width
    *  (`max-w-[640px] flex-1`) — so it is supplied, not baked in. */
   columnClassName: string;
-  /** Author label node (interactive popover trigger live; static span export). */
+  /** Author label node (interactive popover trigger live; static span export).
+   *  `null` on a grouped continuation row (#task:1737) — the author is stated
+   *  once by the group head. */
   author: ReactNode;
   /** Timestamp node (a `<time>`/`<span>` with its intrinsic type styles only;
-   *  the positional margin is owned by this layout). */
+   *  the positional margin is owned by this layout). `null` on a grouped
+   *  continuation row, whose time lives in the row's hover rail instead. */
   timestamp: ReactNode;
   /** Live-only below-content task tag — its own row at the message's bottom
    *  edge, ahead of `reactions` / `trailing` (#task:1185). Export passes
@@ -76,19 +79,27 @@ export function MessageRowContent({
 }: MessageRowContentProps): JSX.Element {
   return (
     <div className={columnClassName}>
-      <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
-        {alignRight ? (
-          <>
-            {timestamp}
-            <span className="ml-2 inline-block">{author}</span>
-          </>
-        ) : (
-          <>
-            {author}
-            <span className="ml-2">{timestamp}</span>
-          </>
-        )}
-      </header>
+      {/* Header renders only when it has something to say. A grouped
+          continuation row (#task:1737) passes BOTH slots as null — its author
+          is already stated by the group head and its timestamp moved to the
+          row's hover rail — so the whole element (and its `mb-1`) drops out
+          rather than leaving an empty band above the body. Same
+          render-only-when-present shape as the bottom adornment row below. */}
+      {author || timestamp ? (
+        <header className={'mb-1 text-xs ' + (alignRight ? 'text-right' : '')}>
+          {alignRight ? (
+            <>
+              {timestamp}
+              <span className="ml-2 inline-block">{author}</span>
+            </>
+          ) : (
+            <>
+              {author}
+              <span className="ml-2">{timestamp}</span>
+            </>
+          )}
+        </header>
+      ) : null}
 
       <div
         data-message-body

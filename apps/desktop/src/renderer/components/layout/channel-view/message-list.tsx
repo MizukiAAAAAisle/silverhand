@@ -15,6 +15,7 @@ import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
+import { authorGroupContinuations } from '@/components/chat/authorGrouping';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { useMessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import { MessageActionChrome } from '@/components/chat/MessageActionChrome';
@@ -223,6 +224,14 @@ export function MessageList({
   //     replaced by Virtuoso's auto-follow which is gated on at-bottom
   //     state (saner default and matches user intent).
   const items = useMemo(() => groupMessages(messages), [messages]);
+  // Consecutive-same-author runs (#task:1737). Derived from the RENDERED
+  // sequence (post-clustering) so an activity strip between two of my messages
+  // correctly breaks the run. Same call in the ThreadPanel — one rule, both
+  // surfaces.
+  const authorContinuations = useMemo(
+    () => authorGroupContinuations(items),
+    [items],
+  );
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
@@ -646,6 +655,7 @@ export function MessageList({
             highlightedMessageId != null && m.id === highlightedMessageId
           }
           jumpFlash={flashedMessageId != null && m.id === flashedMessageId}
+          continuesPrevious={authorContinuations.has(m.id)}
           userResolver={userResolver}
           searchQuery={searchQuery}
           searchActive={
@@ -675,6 +685,7 @@ export function MessageList({
       agentAvatarUrls,
       highlightedMessageId,
       flashedMessageId,
+      authorContinuations,
       userResolver,
       searchQuery,
       searchActiveMessageId,
