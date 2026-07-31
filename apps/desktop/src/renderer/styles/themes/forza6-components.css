@@ -412,20 +412,28 @@
   text-decoration: none;
 }
 
-/* Cluster task-ref hover — neutral, not a saturated hue (#task:1766).
-   Inside a system-activity cluster the task-ref rests demoted + borderless
-   (muted `--text-secondary`, #task:1760) and lifts only on hover. The base
-   filled that hover with `--accent` (pink here); once task identity became
-   yellow, pink crossed signals — but swapping in the tile's full yellow made
-   it the brightest thing on this quiet narration strip (shiki
-   `l_HrXnJFsr-oZzMG` "太亮了"). A cluster hover is a clickability affordance,
-   i.e. a UTILITY state, so it should read in ink — not any identity hue.
-   Darken with the neutral `--chip-bg-hover` wash and pull the text from muted
-   up to full `--text-primary`: the text darkening is the real hover signal,
-   the wash just seats it. No pink, no loud yellow. Resting demotion unchanged. */
+/* Cluster task-ref — render the SAME yellow tile as prose (#task:1766).
+   This overrides the #1760 demotion (transparent / borderless / muted
+   secondary). #1760 read the cluster as background narration to be quieted;
+   shiki `A7mz_GE28TQyfQb_` reframed it: a task system message is a TURN
+   BOUNDARY the user watches — a task moving to in_review is the hand-off from
+   the agent side to the human side — so the task-ref there is a focal point,
+   not chrome, and earns the full tile identity. Same pale-yellow wash + solid
+   ink frame + ink text as the in-prose tile; hover deepens the fill to full
+   yellow the same way. On a status-change row the yellow tile now sits beside
+   the status pill's own hue — intended here (task identity + status are both
+   signal at a hand-off), not the single-colour quiet strip #1760 aimed for.
+   `font-weight` restored to the tile's 500 (the #1760 rule dropped it to 400);
+   the number keeps Rajdhani via the shared `[data-task-ref-num]` rule above. */
+[data-theme='forza6'] .system-activity-cluster [data-task-ref] {
+  background: color-mix(in srgb, var(--forza6-yellow) 32%, transparent);
+  border: 1px solid var(--forza6-ink);
+  color: var(--forza6-ink);
+  font-weight: 500;
+}
 [data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover {
-  background: var(--chip-bg-hover);
-  color: var(--text-primary);
+  background: var(--forza6-yellow);
+  color: var(--forza6-ink);
 }
 
 /* ── Markdown inline code ─────────────────────────────────────────
