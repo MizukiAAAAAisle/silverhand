@@ -86,6 +86,7 @@ const silverhand = {
   login: vi.fn(),
   logout: vi.fn(),
   onShutdownProgress: vi.fn(() => () => {}),
+  onEpochUpdateRequired: vi.fn(() => () => {}),
   onAppearanceUpdated: vi.fn(() => () => {}),
   onNavigateSettings: vi.fn(() => () => {}),
   onBackendInfoUpdated: vi.fn(() => () => {}),

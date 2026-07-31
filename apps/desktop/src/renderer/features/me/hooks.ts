@@ -299,6 +299,43 @@ export function useViewerUser() {
   return query;
 }
 
+/**
+ * #task:1763 — runtime epoch promotion subscription. Main pushes
+ * 'epoch:update-required' only after CONFIRMING client_too_old — via a
+ * verifying server-info probe for REST 426 suspects, or directly from the
+ * authoritative desktop_api advertisement carried by backend:info discovery.
+ * The renderer's sole job is to invalidate the auth-state query so
+ * `useViewerUser` re-asks `getAuthState()` and the startup precheck (the
+ * single authority) returns the `app_update_required` arm — which unmounts
+ * RegisteredAppShell through the existing App gate order.
+ *
+ * `subscribeRuntimeEpochPromotion` is the testable seam: behavior tests
+ * inject a fake subscribe, capture the callback, and assert it invalidates
+ * exactly the auth-state key.
+ */
+export function subscribeRuntimeEpochPromotion(
+  qc: QueryClient,
+  subscribe: (handler: () => void) => () => void,
+): () => void {
+  return subscribe(() => {
+    // Drop the cached auth state so the live useViewerUser observer
+    // refetches getAuthState() and the startup precheck (the single
+    // authority) returns the gate arm.
+    void qc.invalidateQueries({ queryKey: meKey });
+  });
+}
+
+export function useRuntimeEpochPromotion(): void {
+  const qc = useQueryClient();
+  useEffect(
+    () =>
+      subscribeRuntimeEpochPromotion(qc, handler =>
+        window.silverhand.onEpochUpdateRequired(handler),
+      ),
+    [qc],
+  );
+}
+
 export function authResultToUser(result: Awaited<ReturnType<typeof window.silverhand.signup>>): UserDto {
   if (result.ok) return result.user;
   // D4.a Commit 5d-fixup (Cindy P1-2): preserve the typed

@@ -32,6 +32,7 @@ import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
+  useRuntimeEpochPromotion,
   useViewerUser,
 } from '@/features/me/hooks';
 import { RegistrationGate } from '@/features/me/RegistrationGate';
@@ -151,6 +152,9 @@ import { pickWorkspaceToRestore } from '@/lib/workspace-restore';
 import { resolveRestoreNavigation } from '@/lib/restore-navigation';
 export function App(): JSX.Element {
   useAppearance();
+  // #task:1763 — subscribe to main's confirmed runtime epoch promotion so a
+  // running session gates without waiting for restart/focus refetch.
+  useRuntimeEpochPromotion();
   // Hydrate the viewer profile from the main-process auth session so
   // `isCurrentUserId` resolves correctly. Returns either the resolved
   // UserDto or the setup-required shape that mounts the auth wizard.

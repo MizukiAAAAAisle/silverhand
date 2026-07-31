@@ -96,13 +96,39 @@ THREE epoch constants bumped to the same value in this same commit?"*
    behavior, not an incident. Desktop-first: the new desktop shows
    `server_update_required` at startup against the old server.
 
-**Scope of the desktop gate (deliberately narrow):** server-side fail closed
-is immediate and authoritative. A desktop that is ALREADY RUNNING when a
-remote server bumps does not promote scattered 426s into the full-screen gate
-mid-session; it sees failing requests / WS reconnect failures until the next
-startup, window-focus refetch, or explicit retry triggers the auth-state
-re-probe. Promoting a runtime 426 into the typed gate is a named follow-up
-(renderer event path + behavior tests), not part of this contract.
+**Runtime promotion (#task:1763):** server-side fail closed is immediate and
+authoritative; a RUNNING desktop additionally promotes into the full-screen
+gate without waiting for a restart. The path keeps one authority:
+
+1. Two inputs reach the main-process runtime-upgrade monitor
+   (`apps/desktop/src/main/runtime-upgrade-monitor.ts`): a REST proxy 426
+   whose body parses as `UpgradeRequiredBody` (suspect — never trusted
+   directly), and the `desktop_api` advertisement main fetches inside the
+   backend:info handler (authoritative — classified directly). That handler
+   is hit by the ws-client's reconnect discovery — `openSocket()` re-runs
+   `getBackendInfo()` before EVERY reconnect attempt (first backoff tier
+   500ms) — so a rejected WS upgrade promotes within the next reconnect
+   cycle; the renderer's 30s backend-info poll is the idle fallback, not
+   the primary path.
+   There is deliberately NO event-WS arm: spike-verified, Electron's
+   webRequest layer cannot observe a failed WS upgrade's status/headers/
+   body (only net::ERR_FAILED), so a dead socket carries zero epoch
+   semantics and never promotes by itself — promotion comes from the
+   discovery that precedes the reconnect, not from the failure.
+2. A REST suspect triggers ONE single-flight server-info probe,
+   re-classified with the same shared classifier the startup precheck
+   uses. Only a confirmed `client_too_old` (from probe or advertisement)
+   pushes `epoch:update-required` to the renderer (latched — at most once
+   per incompatibility period; the latch is a notification dedupe, not a
+   second compatibility state).
+3. The renderer invalidates its auth-state query; `getAuthState()` re-runs
+   the startup precheck, which returns the `app_update_required` arm and
+   unmounts the registered shell through the normal gate order.
+
+Recovery: when a later auth-state probe observes a compatible pair again
+(app updated, or server rolled back), the monitor re-arms automatically.
+Unrelated failures (network errors, 401/403, foreign 426 bodies, malformed
+payloads, unreachable probe) never promote.
 
 **Plan B (one-off N-1 bridge)** is NOT built by default. Only when a release
 explicitly requires zero interruption: keep `MINIMUM_CLIENT_API_EPOCH` at N
@@ -146,9 +172,6 @@ Neither bridge is permanent fail-open; this section is the §11 record.
   the dedicated header and is unaffected.
 - The desktop-side gate is advisory UX; enforcement authority stays
   server-side (a modified client can skip its own gate but not the 426).
-- Runtime promotion gap (see §4): a running desktop does not surface the
-  full-screen gate until its next re-probe after a server-side bump.
-  Follow-up candidate: route REST/WS 426 into an auth-state invalidation.
 - Race window: if the server bumps between the desktop's server-info
   precheck and a business request, that single request 426s before the next
   re-probe corrects the classification.

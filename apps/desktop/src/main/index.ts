@@ -19,6 +19,7 @@ import {
   authPaths,
   classifyDesktopServerApiCompatibility,
   classifyServerUrl,
+  type DesktopApiAdvertisement,
   DESKTOP_API_EPOCH_HEADER,
   DESKTOP_SERVER_API_EPOCH,
   MINIMUM_SERVER_API_EPOCH,
@@ -72,6 +73,7 @@ import {
 } from './config.js';
 import { resolveEffectiveBootProfile } from './desktop-build-config.js';
 import { desktopClientInfoHeaderValue } from './client-info.js';
+import { createRuntimeUpgradeMonitor } from './runtime-upgrade-monitor.js';
 import { waitForDaemonGeneration } from './daemon-generation-attach.js';
 import { applyFatalExitToClaim } from './local-host-failure.js';
 import {
@@ -242,6 +244,25 @@ let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
+
+// #task:1763 — runtime promotion of the epoch gate. Two inputs: a REST
+// proxy 426 with a valid UpgradeRequiredBody triggers ONE verifying
+// server-info probe; the backend:info handler feeds the authoritative
+// desktop_api advertisement directly (the ws-client re-runs that discovery
+// before every reconnect, so a rejected WS upgrade lands here without any
+// dead-socket inference). A confirmed client_too_old pushes
+// 'epoch:update-required' so the renderer re-asks getAuthState() and the
+// startup precheck (the single authority) gates.
+const runtimeUpgradeMonitor = createRuntimeUpgradeMonitor({
+  probe: async () => (await fetchServerInfo()).desktop_api,
+  notify: () => {
+    mainWindow?.webContents.send('epoch:update-required');
+  },
+  log: {
+    info: (obj, msg) => logger?.info(obj, msg),
+    warn: (obj, msg) => logger?.warn(obj, msg),
+  },
+});
 let localHostClaim: LocalHostClaimStatus = { status: 'unclaimed', hostId: null };
 let rendererBackendResolvedProxy: string | null = null;
 
@@ -882,7 +903,19 @@ async function fetchServerInfo(): Promise<ServerInfo> {
   });
 }
 
-async function readOutboundProtocolCompatibility(): Promise<OutboundProtocolCompatibility> {
+/**
+ * #task:1763 (Cindy round-3) — one cheap server-info read modeled as a NAMED
+ * snapshot carrying BOTH remote-compatibility axes side by side, so neither
+ * axis hides inside the other's helper and a future refactor cannot silently
+ * drop one. Pure read — feeding the runtime upgrade monitor is the CALLER's
+ * explicit job (the backend:info handler), not a side effect here.
+ */
+interface RemoteCompatibilitySnapshot {
+  outbound: OutboundProtocolCompatibility;
+  desktopApi: DesktopApiAdvertisement | undefined;
+}
+
+async function fetchRemoteCompatibilitySnapshot(): Promise<RemoteCompatibilitySnapshot> {
   try {
     const info = await fetchServerInfoWithRetry({
       url: backendUrl(apiPaths.serverInfo),
@@ -892,19 +925,22 @@ async function readOutboundProtocolCompatibility(): Promise<OutboundProtocolComp
       // next poll/focus refetch retries without blocking the renderer.
       retryDelaysMs: [],
     });
-    return classifyOutboundProtocolCompatibility({
-      appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
-      serverProtocolVersion: info.outbound_protocol_version,
-    });
+    return {
+      outbound: classifyOutboundProtocolCompatibility({
+        appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+        serverProtocolVersion: info.outbound_protocol_version,
+      }),
+      desktopApi: info.desktop_api,
+    };
   } catch (err) {
-    logger?.debug(
-      { err },
-      'outbound protocol compatibility probe unavailable',
-    );
-    return classifyOutboundProtocolCompatibility({
-      appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
-      serverProtocolVersion: undefined,
-    });
+    logger?.debug({ err }, 'remote compatibility snapshot unavailable');
+    return {
+      outbound: classifyOutboundProtocolCompatibility({
+        appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+        serverProtocolVersion: undefined,
+      }),
+      desktopApi: undefined,
+    };
   }
 }
 
@@ -1029,6 +1065,10 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
         desktop_api_epoch: DESKTOP_SERVER_API_EPOCH,
       };
     }
+    // Compatible pair observed: re-arm the runtime monitor (#task:1763) so a
+    // later server bump can promote again (covers server rollback / app
+    // update cycles).
+    runtimeUpgradeMonitor.reset();
   }
   // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): recovery
   // path. If our in-memory session is empty but a persisted token
@@ -2007,6 +2047,9 @@ async function proxyBackendRequest(
     await clearUserSessionAfterUnauthorized('backend request');
   }
   const response = await marshalBackendResponse(res, input.responseType ?? 'text');
+  // #task:1763 — runtime epoch promotion (suspect trigger only; verified by
+  // a server-info probe inside the monitor, never trusted directly).
+  runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
   reseatCachedUserSessionFromProxy(
     { path: input.path, method: input.method },
     response,
@@ -2060,6 +2103,7 @@ async function proxyBackendUpload(
     await clearUserSessionAfterUnauthorized('backend upload');
   }
   const response = await marshalBackendResponse(res, 'text');
+  runtimeUpgradeMonitor.onRestResponse(response.status, response.bodyText);
   reseatCachedUserSessionFromProxy(
     { path: input.path, method: 'POST' },
     response,
@@ -2861,16 +2905,30 @@ ipcMain.handle('backend:info', async () => {
   // `serverConfig.mode`. Both happen to render the same string set
   // (`'embedded' | 'remote'`), so the renderer-facing `BackendInfo`
   // contract is unchanged.
+  if (backend.kind === 'embedded') {
+    // Embedded ships both sides from one tree: zero skew by construction,
+    // no snapshot fetch and no runtime-promotion feed needed.
+    return {
+      url: requireBackendUrl(),
+      mode: backend.kind,
+      outbound_protocol_compatibility: classifyOutboundProtocolCompatibility({
+        appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+        serverProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+      }),
+      ...snapshotLocalHostInfo(),
+    };
+  }
+  const snapshot = await fetchRemoteCompatibilitySnapshot();
+  // #task:1763 — EXPLICIT feed at the composition point: every backend:info
+  // request (renderer 30s poll AND the ws-client's pre-reconnect discovery)
+  // hands the authoritative desktop_api advertisement to the runtime
+  // upgrade monitor. A rejected event-WS upgrade therefore promotes within
+  // one reconnect cycle without inferring anything from the dead socket.
+  runtimeUpgradeMonitor.onAdvertisement(snapshot.desktopApi);
   return {
     url: requireBackendUrl(),
     mode: backend.kind,
-    outbound_protocol_compatibility:
-      backend.kind === 'embedded'
-        ? classifyOutboundProtocolCompatibility({
-            appProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
-            serverProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
-          })
-        : await readOutboundProtocolCompatibility(),
+    outbound_protocol_compatibility: snapshot.outbound,
     ...snapshotLocalHostInfo(),
   };
 });

@@ -526,6 +526,15 @@ const api = {
     ipcRenderer.on('shutdown:progress', listener);
     return () => ipcRenderer.off('shutdown:progress', listener);
   },
+  /** #task:1763 — main confirmed via server-info classification that this
+   *  build is below the server's minimum API epoch while running. The
+   *  renderer should invalidate its auth-state query; the startup precheck
+   *  then gates. */
+  onEpochUpdateRequired: (handler: () => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent) => handler();
+    ipcRenderer.on('epoch:update-required', listener);
+    return () => ipcRenderer.off('epoch:update-required', listener);
+  },
   /** Fired by the App menu's "Settings…" item (Cmd+,) so the renderer
    *  can navigate to the Settings page. The main process also focuses
    *  the window before emitting, so the handler only needs to navigate. */

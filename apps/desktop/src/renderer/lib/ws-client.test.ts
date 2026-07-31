@@ -153,6 +153,63 @@ afterEach(() => {
   restoreWebSocket();
 });
 
+describe('EventWsClient — failed-upgrade reconnect discovery (#task:1763)', () => {
+  /**
+   * Runtime epoch promotion, WS half. A rejected upgrade is only visible to
+   * the renderer as a bare close (spike-verified: no status/body at any
+   * layer), so the client must NOT infer epoch semantics from the close.
+   * What it MUST do — and what main relies on — is re-run getBackendInfo()
+   * before every reconnect attempt: that IPC lands in the backend:info
+   * handler, whose server-info fetch feeds the runtime-upgrade monitor with
+   * the authoritative desktop_api advertisement. This test pins the renderer
+   * half of that chain: close → scheduled reconnect (first delay tier) →
+   * getBackendInfo BEFORE the next socket.
+   */
+  it('re-runs backend-info discovery before the reconnect socket after a non-clean close', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = await import('./api');
+      const client = makeClient();
+      client.subscribeViewerScope();
+      await flushMicrotasks();
+      expect(createdSockets).toHaveLength(1);
+      const callsBefore = vi.mocked(api.getBackendInfo).mock.calls.length;
+
+      createdSockets[0]!.fireClose();
+      // No reconnect (and no discovery) synchronously on close.
+      await flushMicrotasks();
+      expect(createdSockets).toHaveLength(1);
+
+      // First backoff tier elapses → openSocket() → getBackendInfo() → socket.
+      await vi.advanceTimersByTimeAsync(500);
+      await flushMicrotasks();
+      expect(vi.mocked(api.getBackendInfo).mock.calls.length).toBe(callsBefore + 1);
+      expect(createdSockets).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failed discovery keeps reconnecting without opening a socket (no epoch inference from the failure)', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = await import('./api');
+      vi.mocked(api.getBackendInfo).mockRejectedValueOnce(new Error('backend down'));
+      const client = makeClient();
+      client.subscribeViewerScope();
+      await flushMicrotasks();
+      // Discovery failed: no socket, but a reconnect was scheduled.
+      expect(createdSockets).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(500);
+      await flushMicrotasks();
+      // Second attempt succeeded (mock restored) and opened the socket.
+      expect(createdSockets).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('EventWsClient — viewer scope canonicalisation', () => {
   /**
    * The B1 contract: whatever the renderer subscribes to via

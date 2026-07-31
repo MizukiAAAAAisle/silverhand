@@ -610,6 +610,8 @@ declare global {
       dismissSystemNotifications(notificationIds: string[]): Promise<void>;
       setBadgeCount(count: number): Promise<void>;
       onShutdownProgress(handler: (step: string) => void): () => void;
+      /** #task:1763 — runtime epoch promotion push; see preload/index.ts. */
+      onEpochUpdateRequired(handler: () => void): () => void;
       onNavigateSettings(handler: () => void): () => void;
       /**
        * ⌘W contextual close. Main is the single interception owner

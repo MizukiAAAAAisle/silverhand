@@ -32,12 +32,14 @@
  * the same pattern as `apps/desktop/src/renderer/lib/api.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient } from '@tanstack/react-query';
 import {
   authResultToUser,
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   mapAuthStateToViewer,
+  subscribeRuntimeEpochPromotion,
   type BackendUnreachable,
   type SetupRequired,
   type UpdateRequired,
@@ -169,6 +171,34 @@ describe('mapAuthStateToViewer — three IPC arms (D4.a Commit 6 part 2)', () =>
         signup_enabled: true,
       }),
     ).toBe(false);
+  });
+});
+
+// #task:1763 — the renderer half of runtime promotion, tested through the
+// subscription seam: the captured callback must invalidate EXACTLY the
+// auth-state key (so the live useViewerUser observer refetches getAuthState
+// and the precheck gates), and teardown must flow through.
+describe('subscribeRuntimeEpochPromotion (runtime promotion seam)', () => {
+  it('captured callback invalidates exactly the auth-state key', () => {
+    const qc = new QueryClient();
+    const invalidateSpy = vi.spyOn(qc, 'invalidateQueries');
+    let captured: (() => void) | null = null;
+    const unsubscribe = vi.fn();
+    const returned = subscribeRuntimeEpochPromotion(qc, handler => {
+      captured = handler;
+      return unsubscribe;
+    });
+    expect(captured).toBeTypeOf('function');
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    captured!();
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['me'] });
+    // repeated pushes stay idempotent in effect: same single key each time
+    captured!();
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenLastCalledWith({ queryKey: ['me'] });
+    // teardown flows through to the underlying unsubscribe
+    expect(returned).toBe(unsubscribe);
   });
 });
 
