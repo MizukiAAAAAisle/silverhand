@@ -364,10 +364,69 @@
   letter-spacing: 0.01em;
 }
 
-/* task-ref link form (borderless accent link + hover underline) is now the
-   shared base in global.css (#task:1725) — every theme gets it via its own
-   `--accent`, no per-theme colour/fill override. forza6 keeps only the
-   prose-font TYPEFACE above. */
+/* Resolved task-ref chip — forza6 wears Tasks' own hue (#task:1766).
+   The shared base (#task:1725, global.css) renders the resolved chip as a
+   borderless `--accent` link (pink here) with a hover underline. In forza6
+   that left the inline task-ref as the ONE task surface NOT wearing its
+   reserved hue: the colour-allocation lock assigns `yellow = task`
+   (forza6.css `--forza6-yellow`), and the board / drawer hero is already a
+   yellow hazard sticker (`[data-tasks-hero]` below). Pulling the inline chip
+   onto that same yellow converges it with the board identity and leaves pink
+   for channels only — inline: yellow = task, pink = channel.
+
+   Loudness is a budget: full `--forza6-yellow` is the brightest fill on the
+   warm near-white chat bg and reads as "loud" in running prose (shiki
+   `1SFFrKXElCQNGO1n`). So the RESTING fill is the SAME token diluted to a
+   pale wash (derived via `color-mix`, not a new hardcoded hex — one source of
+   truth); hover restores the full hue. The frame is a constant solid
+   `--forza6-ink` (the plan-B poster frame, same ink the board hero uses) and
+   does NOT change on hover — only the fill deepens (shiki `bnN39TJ7UmaAj0r1`:
+   "border 没有自己的 hover color，常态采用之前方案 B 的实墨框"). No hover
+   poster shadow (shiki `NCjF1i8uFjx3fE-5`). Number + title go `--forza6-ink`,
+   off the accent pink (`[data-task-ref-num]` sets no colour, so it inherits
+   this). Radius/padding stay the shared `--chip-radius` (0) / `px-1.5`.
+   Scoped to `.markdown-body` so the system-activity-cluster keeps its own
+   treatment. */
+[data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] {
+  background: color-mix(in srgb, var(--forza6-yellow) 32%, transparent);
+  border: 1px solid var(--forza6-ink);
+  color: var(--forza6-ink);
+  /* Height: hug the text like inline code, not fill the prose line box.
+     The shared base (global.css) leaves this inline-flex chip's line-height
+     unset, so it grows to the full prose line box — invisible while the chip
+     was a borderless link, but once #1766 gives it a fill + ink frame that
+     tall box shows as a lump beside the ~19px inline-code tile. Same case the
+     @mention pill hit (`[data-mention-kind]`): collapse the box with
+     `line-height: 1.24` + `padding-block: 0.06em` — the exact levers +
+     values that landed the mention pill at inline-code height. Only forza6
+     carries a visible tile here, so the collapse is scoped to it. */
+  line-height: 1.24;
+  padding-block: 0.06em;
+}
+[data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover {
+  background: var(--forza6-yellow);
+}
+/* Kill the base's hover underline — a filled tile signals hover by deepening
+   its fill, and an underline on top of that reads as noise. */
+[data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
+  text-decoration: none;
+}
+
+/* Cluster task-ref hover — neutral, not a saturated hue (#task:1766).
+   Inside a system-activity cluster the task-ref rests demoted + borderless
+   (muted `--text-secondary`, #task:1760) and lifts only on hover. The base
+   filled that hover with `--accent` (pink here); once task identity became
+   yellow, pink crossed signals — but swapping in the tile's full yellow made
+   it the brightest thing on this quiet narration strip (shiki
+   `l_HrXnJFsr-oZzMG` "太亮了"). A cluster hover is a clickability affordance,
+   i.e. a UTILITY state, so it should read in ink — not any identity hue.
+   Darken with the neutral `--chip-bg-hover` wash and pull the text from muted
+   up to full `--text-primary`: the text darkening is the real hover signal,
+   the wash just seats it. No pink, no loud yellow. Resting demotion unchanged. */
+[data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover {
+  background: var(--chip-bg-hover);
+  color: var(--text-primary);
+}
 
 /* ── Markdown inline code ─────────────────────────────────────────
    Promoted to the token contract in PR-3 (#task:344). The recipe lives
