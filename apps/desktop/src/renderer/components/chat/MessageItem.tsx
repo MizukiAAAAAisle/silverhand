@@ -314,9 +314,15 @@ export function MessageItem({
   const name = isUser
     ? human?.name ?? formatUserDisplayName(message.from_user_id, userResolver)
     : agent?.name ?? 'agent';
+  // Author label is a recognition surface (who spoke), not a mention — so it
+  // shows the plain display name for BOTH kinds, no leading `@`. Agents stay
+  // distinguishable via `data-author-kind` + the accent color below; the `@`
+  // is reserved for handle/mention contexts (mention pills, composer, board
+  // assignee). Branching `@` on kind here read as "agent = handle, human =
+  // person" and broke actor isomorphism (shiki 2026-08-01).
   const displayLabel = isUser
     ? human?.display_name?.trim() || name
-    : `@${agent?.display_name?.trim() || name}`;
+    : agent?.display_name?.trim() || name;
   // Absolute time stamp (shiki #task:918): the header shows the literal
   // wall-clock value (`MM/DD HH:mm`) instead of "3 分钟前", and the
   // tooltip carries the fuller `YYYY-MM-DD HH:mm:ss` for precise
@@ -1048,7 +1054,12 @@ function formatTaskAssignee(
     assignee.name.trim() ||
     assignee.id
   ).replace(/^@/, '');
-  return `@${name}`;
+  // In-message task cards are a recognition surface: plain names for both
+  // kinds, no leading `@` (the user branch above is already bare). The `@`
+  // handle form stays on the board (TaskRef / drawer / TasksSection), so the
+  // stream reads as recognition and the board as handle refs — split by
+  // surface, not by actor kind (shiki 2026-08-01, #task:1768).
+  return name;
 }
 
 function Avatar({
