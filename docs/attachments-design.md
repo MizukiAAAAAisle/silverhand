@@ -85,7 +85,9 @@ message 表、下载 URL 形态、chat-bridge 工具签名、renderer 都不需�
 
 新增 `attachments` 表保存每次上传的元数据 + `storage` / `storage_key` 引用。**不做去重**：不建 `UNIQUE(channel_id, hash)`，也不存 `hash`；每次上传都是一条新的 attachment 记录，避免复用旧 row 时污染本次上传的 filename / source / created_by 语义。
 
-message 侧不另起关联表——attachment 引用是 message 的固有面，不是平行实体，用一列 JSON snapshot（`[{id, filename, size, content_type}]`）承载即可，避免 N+1 查询和事务复杂度（与 `tasks-design.md` 的判断一致）。刻意把 `size` / `content_type` snapshot 进 message，让 renderer 渲染时不用再按 id 做 meta 查询；因为 v1 每次上传都新建 row，不存在"复用旧 row 导致 snapshot 漂移"的问题。
+`id` 与 `storage_key` 天然解耦：`id` 是稳定 handle（`attachments.id`），`storage_key` 是纯物理指针（`attachments/{channelId}/{blobId}{ext}`）。内容可被 creator **原地更新**（见 §4.3），更新只重指 `storage_key` 并 bump `content_revision`，`id` 不变——所以引用同一 id 的一切（reviewer 解析出的本地路径、renderer 的 blob 缓存）在多轮迭代间保持稳定。`content_revision` 是每 attachment 单调递增的新鲜度 / cache-bust token（DEFAULT 1），既不是版本号（不存历史、不可回滚）也不是 HTTP validator（下载 `no-store`）。
+
+message 侧不另起关联表——attachment 引用是 message 的固有面，不是平行实体，用一列 JSON snapshot（`[{id, filename, size, content_type}]`）承载即可，避免 N+1 查询和事务复杂度（与 `tasks-design.md` 的判断一致）。刻意把 `size` / `content_type` snapshot 进 message，让 renderer 渲染时不用再按 id 做 meta 查询。`filename` / `content_type` 在更新时**锁定**（见 §4.3），永不偏离 snapshot；`size` 会随内容更新而变，所以 snapshot 的 `size` 是一个时间点快照，可能滞后于 row 当前字节——这是刻意的：snapshot 是历史捕获，DTO 是活 row。snapshot **不携带** `content_revision`（它不是当前新鲜度的权威；renderer 通过 DTO + `attachment_changed` 事件解析最新态）。
 
 ### 3.2 `channel_id` vs `source_conversation_id` 的角色
 
@@ -125,6 +127,24 @@ chat-bridge 在 local 模式下需要一个"这个 id 在本地能不能直接�
 
 - **bridge 通过 backend 询问，永不自己假设路径**（§2.4 规则 1 / §5.2）。remote 模式下该通道仍存在但永不返回本地路径，bridge 自动 fallback 到 HTTP 下载。
 - scope 校验不能延期，且不能靠 shared token 猜 id 跨界：当前 conversation id 由平台启动参数注入（不是 agent tool 参数）；agent 必须是该 conversation 成员；channel 上下文要求 `attachment.channel_id` 等于当前 channel-like conversation。
+- **返回稳定别名路径，而非物理路径**。物理 key 每次内容更新都会变（§4.3 pointer-swap 落新 blob key），但 embedded CLI 把路径交给了期望它不变的 viewer——所以 local locate 返回一个以稳定 `attachment.id` 为 basename 的**别名**（`attachments/{channelId}/{attachmentId}{ext}`，相对 symlink 指向当前物理 blob），保证 reviewer 的本地地址跨迭代不变。别名是 DB 指针的**派生缓存**：首次 locate 惰性建、更新时立即重指、locate/启动时自愈；它的非事务重指是可恢复的 cache miss，绝不构成权威 split-brain。`serve()`（HTTP 下载）走物理 `storage_key`，不碰别名。用 symlink 而非 hardlink：symlink 不占物理 inode，物理 key 一删字节立即释放，channel/workspace 删除的字节回收对别名零感知（残留的悬空 symlink 无害）。
+
+### 4.3 内容更新（creator-only，原地 pointer-swap）
+
+agent 迭代同一件产物（如反复修改的 mockup）时，重新上传会产生新 id → reviewer 的本地地址每轮都变。内容更新让 id 稳定：`silverhand file update`（human 侧 `PATCH /api/attachments/:id`）**原地替换字节**，`id` / `filename` / `content_type` 不变，只有内容与 `content_revision` 变。**无版本化**：旧字节被 GC，不保留历史（`content_revision` 只是新鲜度 token，不是可回滚的版本轴）。
+
+**权限**：creator-only 的 MEMBER mutation——与 delete 同一条规则（频道成员 + 原始 creator 归属，human/agent 同构），二者仅在 `in_use` 轴分岔：delete 拒绝被引用的 attachment，update **允许**（更新被引用 blob 的字节正是本功能的目的）。所以 `canUpdateAttachment` 与 `canDeleteAttachment` 共享同一谓词 `canMutateOwnAttachment`。agent 侧复用 `upload_attachments` capability（更新是同类写，不新增 capability 枚举），并要求 attachment 属于 caller 当前 channel（service 层 `requireCallerChannelOf` 守卫，跨 channel 折叠成 `not_found` 不泄露存在性）。
+
+**pointer-swap 协议（正确性强制，不可退化为单文件原地 rename）**：
+
+1. 新字节写到一个**全新 blob key**（fresh `blobId`）。该 key 未被任何 row 引用 ⇒ 对所有 reader 不可见，直到第 2 步。
+2. 一条原子 DB `UPDATE` 重指 `storage_key` + `size` 并 `content_revision++`——这是**唯一的可见性开关**。commit 前崩溃：新 blob 是无引用 orphan，row 仍指旧字节（绝不发生"失败的写却已生效"）；commit 后崩溃：row 干净地落在新字节。
+3. 立即重指别名（§4.2），让已打开的零拷贝 viewer 重新加载即见新字节。best-effort，locate/启动自愈兜底崩溃。
+4. GC 旧物理 blob，**在别名指向新字节之后**。best-effort：失败只泄露一个 orphan blob，绝不损坏状态。
+
+为什么不能单文件原地 rename-first：rename 会让字节突变在 rename 那一刻就**持久可见**——早于本应 gate 它的 DB commit。一次失败/崩溃的更新会永久改写内容却无记录、无事件 = 一次失败操作留下权威可见的持久副作用（retry 不是恢复协议）。pointer-swap 把可见性 gate 在 DB commit，从根上消解。
+
+**新鲜度排除（freshness exclusion）**：内容更新**绝不能**推进 message seq / stream head / read cursor——它不是一条新消息，不该把频道标记为未读或触发投递。commit + 别名重指后，在**频道 side channel**（`conversation-side:{channelId}`，cursor-inert、自愈、不写 markSatisfied floor）发一条 `attachment_changed` 事件做 cache-bust。payload 只说"什么变新了"（`{attachment_id, content_revision}`），不搬字节；renderer 据此把该 id 的 blob generation 提升并重取权威 DTO/字节。事件是 bust 信号，不是数据载体。
 
 ---
 
@@ -135,7 +155,8 @@ chat-bridge 在 local 模式下需要一个"这个 id 在本地能不能直接�
 chat-bridge 暴露 `upload_file(file_path)` / `view_file(id)` / `send_message(..., attachment_ids)`：
 
 - **`upload_file`** 是 agent 把"本地已存在文件"转成 attachment id 的出口。coding agent 能通过 shell / 脚本 / 外部工具间接产出二进制文件（Playwright 截图、print-to-PDF、matplotlib / Pillow 生图、pandoc / zip / ffmpeg 产物等），但不能把二进制塞进聊天 stdout。human composer 上传不走这个 MCP 工具，直接由 renderer 调 public upload API。
-- **`view_file`** 返回 `{ path }`（见 §2.4 规则 3，双模式对 agent 透明）。返回路径必须带扩展名（从原始 filename 优先推导，其次 content-type，兜底 `.bin`），减少 agent 用 Read / 视觉工具时的类型猜测失败。这不违反 §2.4 规则 1——DB 仍只存 `storage_key`。
+- **`view_file`** 返回 `{ path }`（见 §2.4 规则 3，双模式对 agent 透明）。返回路径必须带扩展名（从原始 filename 优先推导，其次 content-type，兜底 `.bin`），减少 agent 用 Read / 视觉工具时的类型猜测失败。这不违反 §2.4 规则 1——DB 仍只存 `storage_key`。返回的是稳定别名路径（§4.2），跨内容更新不变。
+- **`update_file(id, file_path)`** 原地替换 creator 自己上传的 attachment 的字节（§4.3），保持 id / filename / content_type 不变——agent 迭代产物时用它而不是重新 upload，reviewer 的 `view_file` 路径跨轮次稳定。
 - **`send_message` 扩展 `attachment_ids`**，但**不新增 `channel` 字段**。附件只是 message 的扩展面，不改变现有 MCP 的会话边界模型；agent 发到当前 channel 或以某条消息为 root 的 reply-cluster 仍只走现有 `target` 规则。
 
 关键约束：
@@ -178,7 +199,8 @@ platform-prompt（`packages/shared/src/platform-prompt.ts`）需说明：附件�
 DB cascade 只删 row，不会自动删磁盘文件。v1 无去重，物理清理保持简单：
 
 - 每个 attachment row 对应一个 `storage_key`，无 refcount。
-- **channel 删除 / workspace 删除**时，先列出受影响 channel 的 attachments，按 storage backend 删除对应 key，再提交 DB 删除（或事务后 best-effort cleanup job 清理已记录 keys）。**关键是不能只依赖 `ON DELETE CASCADE`**——它删 row 不删 blob。
+- **内容更新**（§4.3）重指 `storage_key` 到新 blob 后，best-effort GC 旧 blob——同一 id 在任一时刻只留一份物理字节，旧字节不累积。崩溃只会泄露一个无引用 orphan（下次 channel/workspace 删除时随扫）。
+- **channel 删除 / workspace 删除**时，先列出受影响 channel 的 attachments，按 storage backend 删除对应 key，再提交 DB 删除（或事务后 best-effort cleanup job 清理已记录 keys）。**关键是不能只依赖 `ON DELETE CASCADE`**——它删 row 不删 blob。别名是 symlink（§4.2），不占物理 inode，所以删物理 key 即释放字节；残留的悬空别名 symlink 无害（orphan 删除路径会顺带清理单个别名）。
 - **单条 message 删除默认不删 blob**，避免破坏其它消息引用和审计语义。reply 只是同一 channel 里的普通消息，删除单条 reply 不触及 blob。未来若要支持"删除未发送的 composer 上传"，单独做 orphan cleanup。
 - agent 读文件的本地缓存目录不跟随 channel delete 立即清理，后续按 LRU / 大小上限管理。
 

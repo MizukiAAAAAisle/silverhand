@@ -442,6 +442,12 @@ export const internalPaths = {
    *  Backend resolves channel ownership from `cid`. */
   agentUploadAttachment: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/attachments`,
+  /** Agent replaces the bytes of an attachment it created, in place. Same id,
+   *  same stable local path; filename/content_type stay locked. Creator-only,
+   *  same-channel — the natural home for iterating a mockup without churning
+   *  the reviewer's local address every round. */
+  agentUpdateAttachment: (cid: string, aid: string, attachmentId: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/attachments/${attachmentId}`,
   /** Agent asks the backend where/how to read an attachment. Embedded can
    *  return a zero-copy local path; remote-safe callers may use the
    *  paired download route and cache bytes locally. */

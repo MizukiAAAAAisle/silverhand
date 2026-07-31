@@ -519,6 +519,68 @@ export class BackendClient {
     return (await res.json()) as AttachmentDto;
   }
 
+  /** Replace the bytes of an attachment this agent uploaded, in place. The id,
+   *  filename, and content-type are unchanged — only the content updates, so a
+   *  reviewer's resolved local path (`file view`) stays valid across iterations.
+   *  Backend enforces creator ownership + same-channel scope. */
+  async updateAttachment(input: {
+    attachmentId: string;
+    path: string;
+    contentType?: string | null;
+  }): Promise<AttachmentDto> {
+    if (!isAbsolute(input.path)) {
+      throw new CliError({
+        code: 'validation_error',
+        message: 'file update --path must be absolute',
+        retriable: false,
+      });
+    }
+    let buffer: Buffer;
+    try {
+      buffer = await readFile(input.path);
+    } catch (err) {
+      throw new CliError({
+        code: 'not_found',
+        message: `cannot read file at ${input.path}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        retriable: false,
+      });
+    }
+    const url =
+      this.env.serverUrl +
+      internalPaths.agentUpdateAttachment(
+        this.env.conversationId,
+        this.env.agentId,
+        input.attachmentId,
+      );
+    const form = new FormData();
+    // content_type is LOCKED on update (see the backend service), so a hint
+    // here does not retype the row — kept only so a caller can round-trip the
+    // same Blob shape as upload. Empty type falls through to no-op detection.
+    const blob = new Blob([buffer], { type: input.contentType ?? '' });
+    form.append('file', blob, basename(input.path));
+    let res: Response;
+    markRequestAttempted();
+    try {
+      res = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          [AUTH_TOKEN_HEADER]: `Bearer ${this.env.authToken}`,
+          'X-Agent-Hub-Caller': 'silverhand-cli',
+        },
+        body: form,
+      });
+    } catch (err) {
+      throw fromNetworkError(err);
+    }
+    if (!res.ok) {
+      const text = await safeReadText(res);
+      throw mapHttpError(res.status, text);
+    }
+    return (await res.json()) as AttachmentDto;
+  }
+
   locateAttachment(attachmentId: string): Promise<AttachmentLocateDto> {
     return this.request(
       'GET',

@@ -70,7 +70,7 @@ describe('LocalBlobFileStorage', () => {
 
     expect(response.headers.get('content-type')).toBe('application/pdf');
     expect(response.headers.get('content-length')).toBe('4');
-    expect(response.headers.get('cache-control')).toContain('immutable');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('content-disposition')).toContain('report.pdf');
     expect(Buffer.from(await response.arrayBuffer()).toString('utf8')).toBe('%PDF');
   });

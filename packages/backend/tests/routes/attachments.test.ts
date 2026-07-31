@@ -2,8 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  ATTACHMENT_CHANGED_EVENT,
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER,
+  conversationScope,
+  conversationSideScope,
   encodeUserPrincipalHeader,
 } from '@silverhand/shared';
 import { formatAttachmentSuffix } from '../../src/runtime/stdin-format.js';
@@ -78,6 +81,31 @@ const PNG_BYTES = Buffer.concat([
   Buffer.from([0x89, 0x50, 0x4e, 0x47]),
   Buffer.alloc(8, 0),
 ]);
+
+/** Direct multipart PATCH — mirrors `uploadFile` but for the in-place
+ *  content-update route (`PATCH .../attachments/:id`). */
+async function patchFile(
+  t: TestApp,
+  path: string,
+  filename: string,
+  contentType: string,
+  bytes: Buffer,
+  extraHeaders?: Record<string, string>,
+): Promise<Response> {
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: contentType }), filename);
+  const headers: Record<string, string> = extraHeaders ?? {
+    'X-Silverhand-User-Id': 'local',
+    authorization: `Bearer ${t.authToken}`,
+  };
+  return t.app.fetch(
+    new Request(`http://localhost${path}`, {
+      method: 'PATCH',
+      headers,
+      body: form,
+    }),
+  );
+}
 
 describe('Attachment routes', () => {
   let t: TestApp | null = null;
@@ -1135,6 +1163,261 @@ describe('Single attachment DELETE (orphan-only)', () => {
     const del = await viewer.del(`/api/attachments/${dto.id}`);
     expect(del.status).toBe(403);
     expect(new AttachmentRepo(t.ctx.db).getById(dto.id)).not.toBeNull();
+  });
+});
+
+describe('Attachment content update (PATCH)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  const NEXT_PNG = Buffer.concat([PNG_BYTES, Buffer.from('revised')]);
+
+  it('creator updates in place: same id, bumped revision, new bytes on download', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'mockup.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+    expect(dto.content_revision).toBe(1);
+
+    const patched = await patchFile(
+      t,
+      `/api/attachments/${dto.id}`,
+      'ignored-on-update.png',
+      'image/png',
+      NEXT_PNG,
+    );
+    expect(patched.status).toBe(200);
+    const updated = await patched.json() as any;
+    expect(updated.id).toBe(dto.id);
+    expect(updated.filename).toBe('mockup.png'); // locked
+    expect(updated.content_type).toBe('image/png'); // locked
+    expect(updated.content_revision).toBe(2);
+    expect(updated.size).toBe(NEXT_PNG.length);
+
+    const get = await viewer.get(`/api/attachments/${dto.id}`);
+    expect(Buffer.from(await get.arrayBuffer())).toEqual(NEXT_PNG);
+  });
+
+  it('does not advance the message stream, and emits attachment_changed on the side channel', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'a.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+
+    // Capture the message-stream seq (freshness floor) before the update.
+    const msgScope = conversationScope(channelId);
+    const seqBefore = t.ctx.events.currentSeq(msgScope);
+
+    const sideEvents: Array<{ kind: string; payload: any }> = [];
+    const unsub = t.ctx.events.subscribeScope(
+      conversationSideScope(channelId),
+      e => sideEvents.push({ kind: e.kind, payload: e.payload }),
+    );
+    try {
+      const patched = await patchFile(
+        t,
+        `/api/attachments/${dto.id}`,
+        'a.png',
+        'image/png',
+        NEXT_PNG,
+      );
+      expect(patched.status).toBe(200);
+    } finally {
+      unsub();
+    }
+
+    // Freshness exclusion: the message stream never advanced (no new message,
+    // no unread bump, no read-cursor movement).
+    expect(t.ctx.events.currentSeq(msgScope)).toBe(seqBefore);
+    // …but a cursor-inert cache-bust landed on the side channel, naming the id
+    // and its new revision (not the bytes).
+    expect(sideEvents).toEqual([
+      {
+        kind: ATTACHMENT_CHANGED_EVENT,
+        payload: { attachment_id: dto.id, content_revision: 2 },
+      },
+    ]);
+  });
+
+  it('allows updating an attachment already referenced by a message (contrast DELETE 409)', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'sent.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+    const send = await viewer.post(`/api/channels/${channelId}/messages`, {
+      content: 'with file',
+      attachment_ids: [dto.id],
+    });
+    expect(send.status).toBe(201);
+
+    // DELETE is refused for an in-use attachment…
+    const del = await viewer.del(`/api/attachments/${dto.id}`);
+    expect(del.status).toBe(409);
+    // …but PATCH (update) is allowed — updating referenced bytes is the point.
+    const patched = await patchFile(
+      t,
+      `/api/attachments/${dto.id}`,
+      'sent.png',
+      'image/png',
+      NEXT_PNG,
+    );
+    expect(patched.status).toBe(200);
+  });
+
+  it('rejects a non-creator (user updating an agent-uploaded attachment) with 403', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const dto = await (
+      await uploadFile(
+        t,
+        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        'a.png',
+        'image/png',
+        PNG_BYTES,
+        internalAuthHeaders(t, channelId, aliceId),
+      )
+    ).json() as any;
+
+    const patched = await patchFile(
+      t,
+      `/api/attachments/${dto.id}`,
+      'a.png',
+      'image/png',
+      NEXT_PNG,
+    );
+    expect(patched.status).toBe(403);
+  });
+
+  it('returns 404 for an unknown attachment id', async () => {
+    t = buildTestApp();
+    await createWorkspaceChannel(t);
+    const patched = await patchFile(
+      t,
+      '/api/attachments/does-not-exist',
+      'a.png',
+      'image/png',
+      NEXT_PNG,
+    );
+    expect(patched.status).toBe(404);
+  });
+
+  it('agent updates its own attachment via the internal route', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice']);
+    const aliceId = agentIds.alice!;
+    const dto = await (
+      await uploadFile(
+        t,
+        `/internal/conversations/${channelId}/agents/${aliceId}/attachments`,
+        'agent.png',
+        'image/png',
+        PNG_BYTES,
+        internalAuthHeaders(t, channelId, aliceId),
+      )
+    ).json() as any;
+
+    const patched = await patchFile(
+      t,
+      `/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}`,
+      'agent.png',
+      'image/png',
+      NEXT_PNG,
+      internalAuthHeaders(t, channelId, aliceId),
+    );
+    expect(patched.status).toBe(200);
+    const updated = await patched.json() as any;
+    expect(updated.id).toBe(dto.id);
+    expect(updated.content_revision).toBe(2);
+
+    // The agent-visible download now streams the new bytes.
+    const download = await t.app.fetch(
+      new Request(
+        `http://localhost/internal/conversations/${channelId}/agents/${aliceId}/attachments/${dto.id}/download`,
+        { headers: internalAuthHeaders(t, channelId, aliceId) },
+      ),
+    );
+    expect(Buffer.from(await download.arrayBuffer())).toEqual(NEXT_PNG);
+  });
+
+  it('agent update denies a cross-channel attachment with 404 (no existence leak)', async () => {
+    t = buildTestApp();
+    const a = await createWorkspaceChannel(t, ['alice1']);
+    const b = await createWorkspaceChannel(t, ['alice2']);
+    const aliceA = a.agentIds.alice1!;
+    const aliceB = b.agentIds.alice2!;
+    const dto = await (
+      await uploadFile(
+        t,
+        `/internal/conversations/${a.channelId}/agents/${aliceA}/attachments`,
+        'a.png',
+        'image/png',
+        PNG_BYTES,
+        internalAuthHeaders(t, a.channelId, aliceA),
+      )
+    ).json() as any;
+
+    const cross = await patchFile(
+      t,
+      `/internal/conversations/${b.channelId}/agents/${aliceB}/attachments/${dto.id}`,
+      'a.png',
+      'image/png',
+      NEXT_PNG,
+      internalAuthHeaders(t, b.channelId, aliceB),
+    );
+    expect(cross.status).toBe(404);
+  });
+
+  it('agent update is rejected when the agent is not a member (403)', async () => {
+    t = buildTestApp();
+    const a = await createWorkspaceChannel(t, ['alice']);
+    const b = await createWorkspaceChannel(t, ['bob']);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/internal/conversations/${a.channelId}/agents/${a.agentIds.alice}/attachments`,
+        'a.png',
+        'image/png',
+        PNG_BYTES,
+        internalAuthHeaders(t, a.channelId, a.agentIds.alice!),
+      )
+    ).json() as any;
+
+    const res = await patchFile(
+      t,
+      `/internal/conversations/${a.channelId}/agents/${b.agentIds.bob}/attachments/${dto.id}`,
+      'a.png',
+      'image/png',
+      NEXT_PNG,
+      internalAuthHeaders(t, a.channelId, b.agentIds.bob!),
+    );
+    expect(res.status).toBe(403);
   });
 });
 

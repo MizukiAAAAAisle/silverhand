@@ -633,6 +633,13 @@ export type AttachmentCreatorKind = z.infer<typeof AttachmentCreatorKindSchema>;
  *
  * No de-duplication: every upload creates a new row + new blob, so each
  * filename/source/creator is preserved cleanly.
+ *
+ * Content is mutable in place via the creator's attachment-update path
+ * (`AttachmentService.update`): `storage_key` + `size` + `content_revision`
+ * are repointed atomically to a freshly written physical blob (pointer-swap),
+ * while `id`, `filename`, and `content_type` stay locked for the row's life.
+ * `storage_key` is therefore a pure PHYSICAL pointer (it moves on every update),
+ * NOT a stable public handle — the stable handle is `id`.
  */
 export interface AttachmentRow {
   id: string;
@@ -645,6 +652,10 @@ export interface AttachmentRow {
   content_type: string;
   storage: StorageKind;
   storage_key: string;
+  /** Monotonic per-attachment freshness token, bumped on every content update.
+   *  A cache-bust / renderer-generation signal ONLY — NOT a version system
+   *  (no history, no rollback) and NOT an HTTP validator. Starts at 1. */
+  content_revision: number;
   created_by_kind: AttachmentCreatorKind;
   created_by_id: string;
   created_at: number;

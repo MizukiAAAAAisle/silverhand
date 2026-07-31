@@ -13,7 +13,7 @@ import {
   canViewConversation,
 } from '../../permissions.js';
 import { requireAgentCapability } from '../capability.js';
-import { uploadAttachment } from '../attachment-upload.js';
+import { updateAttachment, uploadAttachment } from '../attachment-upload.js';
 import { internalPaths } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 
@@ -52,6 +52,48 @@ export function registerFileRoutes(
       principal.agentId,
     );
   });
+
+  // PATCH — in-place content update (creator-only pointer-swap). Reuses the
+  // `upload_attachments` capability (updating is a write of the same class, so
+  // no new capability enum). Channel scope is enforced in the service via
+  // `requireCallerChannelOf` (the caller may only touch attachments in its own
+  // channel); the service also re-checks agent creator ownership.
+  app.patch(
+    internalPaths.agentUpdateAttachment(':cid', ':aid', ':attachmentId'),
+    async c => {
+      const cid = c.req.param('cid');
+      const aid = c.req.param('aid');
+      const attachmentId = c.req.param('attachmentId');
+      if (!cid || !aid || !attachmentId) {
+        return c.json(
+          { error: 'conversation id, agent id, and attachment id required' },
+          400,
+        );
+      }
+      const conversation = conversations.get(cid);
+      if (!conversation) return c.json({ error: 'conversation not found' }, 404);
+      if (!agents.get(aid)) return c.json({ error: 'agent not found' }, 404);
+      if (!conversations.getAgent(cid, aid)) {
+        return c.json({ error: 'agent is not a member of this conversation' }, 403);
+      }
+      const principal = getAgentPrincipal(c);
+      if (!canPostToConversation(ctx, principal, principal.conversationId)) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      {
+        const denied = requireAgentCapability(c, ctx, principal, 'upload_attachments',
+          conversation.workspace_id);
+        if (denied) return denied;
+      }
+      return updateAttachment(
+        ctx,
+        c,
+        attachmentId,
+        { kind: 'agent', id: principal.agentId },
+        { requireCallerChannelOf: principal.conversationId },
+      );
+    },
+  );
 
   app.get(
     internalPaths.agentLocateAttachment(':cid', ':aid', ':attachmentId'),

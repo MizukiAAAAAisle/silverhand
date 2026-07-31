@@ -1,5 +1,5 @@
 /**
- * `silverhand file` — upload, view.
+ * `silverhand file` — upload, update, view.
  */
 import { constants } from 'node:fs';
 import { access, mkdir, rename, stat, writeFile } from 'node:fs/promises';
@@ -53,6 +53,56 @@ stdout: AttachmentDto JSON.`,
   },
 };
 
+const updateCommand: Command = {
+  verb: 'update',
+  summary: 'Replace the bytes of an attachment you uploaded, keeping its id.',
+  help: `silverhand file update --attachment-id <id> --path <abs_path>
+                        [--content-type <mime>]
+
+Replace the CONTENT of an attachment you previously uploaded, in place.
+The attachment id, filename, and content-type stay fixed — only the bytes
+change. Use this when iterating on an artifact (e.g. a mockup) so a
+reviewer's resolved local path from \`silverhand file view\` stays valid
+across rounds instead of changing every re-upload.
+
+Creator-only: you can update only attachments you uploaded, and only from
+within their channel. There is no versioning — the previous bytes are
+replaced, not retained.
+
+Flags:
+  --attachment-id  Required. The attachment id to update.
+  --path           Required. Absolute path to the new local file.
+  --content-type   Ignored for typing (content-type is locked at upload);
+                   accepted only for symmetry with \`file upload\`.
+
+stdout: AttachmentDto JSON (same id, bumped content_revision).`,
+  flags: ['attachment-id', 'path', 'content-type'] as const,
+  async run({ client, args }) {
+    const attachmentId = flagString(args, 'attachment-id');
+    if (!attachmentId) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--attachment-id is required',
+        retriable: false,
+      });
+    }
+    const path = flagString(args, 'path');
+    if (!path) {
+      throw new CliError({
+        code: 'validation_error',
+        message: '--path is required',
+        retriable: false,
+      });
+    }
+    const contentType = flagString(args, 'content-type');
+    return client.updateAttachment({
+      attachmentId,
+      path,
+      ...(contentType ? { contentType } : {}),
+    });
+  },
+};
+
 const viewCommand: Command = {
   verb: 'view',
   summary: 'Resolve an attachment id to a readable local path.',
@@ -94,7 +144,7 @@ stdout: AttachmentLocateDto JSON:
   },
 };
 
-export const fileCommands: readonly Command[] = [uploadCommand, viewCommand];
+export const fileCommands: readonly Command[] = [uploadCommand, updateCommand, viewCommand];
 
 async function canReadFile(path: string): Promise<boolean> {
   try {

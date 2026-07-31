@@ -27,10 +27,11 @@ import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import {
   canDeleteAttachment,
   canPostToConversation,
+  canUpdateAttachment,
   canViewAttachment,
   canViewConversation,
 } from '../permissions.js';
-import { uploadAttachment } from './attachment-upload.js';
+import { updateAttachment, uploadAttachment } from './attachment-upload.js';
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 100;
@@ -233,6 +234,21 @@ export function createAttachmentsApp(deps: AttachmentsRouteDeps): Hono<AppEnv> {
     );
     if (!response) return c.json({ error: 'attachment not found' }, 404);
     return response;
+  });
+
+  // PATCH /api/attachments/:id — creator-only in-place content update
+  // (pointer-swap). The id stays stable so a viewer's local address survives
+  // every iteration; `filename`/`content_type` are locked by the service.
+  app.patch(apiPaths.attachment(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'attachment id required' }, 400);
+    const viewerUserId = requireViewerUserId(c);
+    const attachment = attachments.getById(id);
+    if (!attachment) return c.json({ error: 'attachment not found' }, 404);
+    if (!canUpdateAttachment(ctx, getUserPrincipal(c), attachment)) {
+      return c.json({ error: 'cannot update attachment owned by another uploader' }, 403);
+    }
+    return updateAttachment(ctx, c, id, { kind: 'user', id: viewerUserId });
   });
 
   app.delete(apiPaths.attachment(':id'), async c => {

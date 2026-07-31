@@ -76,6 +76,17 @@ function suffixOf(path: string): string {
   return m ? m[1]! : '';
 }
 
+/** Collapse the literal `ATT` attachment-id probe segment to the `*`
+ *  wildcard the route map records — matches whether the id sits mid-path
+ *  (`attachments/ATT/locate`) or as the trailing segment
+ *  (`attachments/ATT` for the update route). */
+function normalizeProbedSuffix(suffix: string): string {
+  return suffix
+    .split('/')
+    .map(seg => (seg === 'ATT' ? '*' : seg))
+    .join('/');
+}
+
 /**
  * Read the backend route source and build a map from `internalPaths`
  * helper name → registered HTTP method (`'GET'|'POST'`).
@@ -105,7 +116,7 @@ function collectRouteSources(dir: string): string[] {
   return out;
 }
 
-function buildRegistrationMap(): Map<string, 'GET' | 'POST'> {
+function buildRegistrationMap(): Map<string, 'GET' | 'POST' | 'PATCH'> {
   const here = dirname(fileURLToPath(import.meta.url));
   const srcDir = resolve(here, '../../src');
   const routesDir = resolve(srcDir, 'routes');
@@ -113,13 +124,13 @@ function buildRegistrationMap(): Map<string, 'GET' | 'POST'> {
     resolve(srcDir, 'routes.ts'),
     ...collectRouteSources(routesDir),
   ];
-  const re = /app\.(get|post)\(\s*internalPaths\.(\w+)\s*\(/g;
-  const map = new Map<string, 'GET' | 'POST'>();
+  const re = /app\.(get|post|patch)\(\s*internalPaths\.(\w+)\s*\(/g;
+  const map = new Map<string, 'GET' | 'POST' | 'PATCH'>();
   for (const file of files) {
     const src = readFileSync(file, 'utf8');
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) {
-      const method = m[1]!.toUpperCase() as 'GET' | 'POST';
+      const method = m[1]!.toUpperCase() as 'GET' | 'POST' | 'PATCH';
       const name = m[2]!;
       // First registration wins. There should never be duplicates; if a
       // name shows up twice we fail loudly below.
@@ -135,7 +146,11 @@ function buildRegistrationMap(): Map<string, 'GET' | 'POST'> {
 }
 
 function isAttachmentWildcardRoute(name: string): boolean {
-  return name === 'agentLocateAttachment' || name === 'agentDownloadAttachment';
+  return (
+    name === 'agentLocateAttachment' ||
+    name === 'agentDownloadAttachment' ||
+    name === 'agentUpdateAttachment'
+  );
 }
 
 describe('CLI invoke route map', () => {
@@ -164,7 +179,7 @@ describe('CLI invoke route map', () => {
         isAttachmentWildcardRoute(name)
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
-      const suffix = suffixOf(probed).replace('/ATT/', '/*/');
+      const suffix = normalizeProbedSuffix(suffixOf(probed));
       // Strict match: the test must know the exact registered method.
       // Without this the previous `GET ?? POST` fallback masked the
       // 5/14 `schedules/list` regression — the map said GET, the route
@@ -201,7 +216,7 @@ describe('CLI invoke route map', () => {
         isAttachmentWildcardRoute(name)
           ? (fn as (...a: string[]) => string)(':cid', ':aid', 'ATT')
           : (fn as (...a: string[]) => string)(':cid', ':aid');
-      const suffix = suffixOf(probed).replace('/ATT/', '/*/');
+      const suffix = normalizeProbedSuffix(suffixOf(probed));
       const method = registered.get(name);
       if (method) keyToName.set(`${method} ${suffix}`, name);
     }

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, relative, resolve } from 'node:path';
 
 export type StorageKind = 'local' | 's3' | 'oss';
@@ -27,6 +27,24 @@ export interface BlobFileStorage {
   serve(ref: StoredFileRef, headers: BlobFileServeHeaders): Promise<Response>;
   locate(ref: StoredFileRef): Promise<{ localPath: string } | null>;
   delete(ref: StoredFileRef): Promise<void>;
+  /**
+   * Ensure a STABLE local path (keyed on `stableId`, e.g. the attachment id)
+   * resolves to the bytes named by `physicalRef`, and return it. The physical
+   * key moves on every content update (pointer-swap writes a fresh blob id), so
+   * a raw `locate` path would change each round; this alias keeps the path the
+   * embedded CLI handed a viewer fixed across updates. Idempotent and
+   * self-healing — safe to call on every locate and eagerly after an update.
+   * Returns null when the physical bytes are absent. Backends without a local
+   * path (future s3/oss) return null.
+   */
+  materializeAlias(
+    physicalRef: StoredFileRef,
+    stableId: string,
+  ): Promise<{ localPath: string } | null>;
+  /** Best-effort removal of the stable alias for `stableId`. No-op when the
+   *  backend has no local alias. Called on attachment delete so the alias does
+   *  not dangle; never affects the physical blob's lifecycle. */
+  deleteAlias(physicalRef: StoredFileRef, stableId: string): Promise<void>;
 }
 
 export class BlobFileStorageError extends Error {
@@ -82,7 +100,15 @@ export class LocalBlobFileStorage implements BlobFileStorage {
         'Content-Type': normalizeContentType(headers.contentType),
         'Content-Length': String(fileStat.size),
         'Content-Disposition': contentDisposition(headers.filename),
-        'Cache-Control': 'private, max-age=31536000, immutable',
+        // Attachment bytes are mutable in place (creator update repoints the
+        // row to a fresh blob), so the old `immutable, 1yr` was a lie once an
+        // id could change content. The renderer fetches blobs through
+        // renderer→IPC→main (`backendFetch`), where the HTTP cache/validators
+        // never engage on the normal path — so ETag/304 would be dead weight.
+        // `no-store` keeps every fetch authoritative; freshness/cache-busting
+        // is the renderer's generation map keyed on `content_revision` + the
+        // `attachment_changed` event, not an HTTP validator.
+        'Cache-Control': 'private, no-store',
       },
     });
   }
@@ -102,6 +128,63 @@ export class LocalBlobFileStorage implements BlobFileStorage {
   async delete(ref: StoredFileRef): Promise<void> {
     this.assertRefKind(ref);
     await rm(this.resolveStorageKey(ref.storageKey), { force: true });
+  }
+
+  async materializeAlias(
+    physicalRef: StoredFileRef,
+    stableId: string,
+  ): Promise<{ localPath: string } | null> {
+    this.assertRefKind(physicalRef);
+    const physicalPath = this.resolveStorageKey(physicalRef.storageKey);
+    try {
+      const s = await stat(physicalPath);
+      if (!s.isFile()) return null;
+    } catch (err) {
+      if (isNodeErrno(err, 'ENOENT')) return null;
+      throw err;
+    }
+
+    const aliasKey = this.aliasKeyFor(physicalRef.storageKey, stableId);
+    const aliasPath = this.resolveStorageKey(aliasKey);
+    // Relative target: the alias lives in the physical blob's directory and
+    // points at its basename, so relocating the blob root never breaks it.
+    const target = basename(physicalPath);
+
+    // Fast path: alias is already a symlink to the current physical basename.
+    try {
+      if ((await readlink(aliasPath)) === target) return { localPath: aliasPath };
+    } catch (err) {
+      // ENOENT: no alias yet. EINVAL: exists but is not a symlink (shouldn't
+      // happen — the alias id-space never overlaps a physical key). Either way,
+      // fall through and (re)create it atomically below.
+      if (!isNodeErrno(err, 'ENOENT') && !isNodeErrno(err, 'EINVAL')) throw err;
+    }
+
+    // Atomic (re)link: create the new symlink under a unique temp name in the
+    // same dir, then rename it over the alias. A reader opening the alias always
+    // resolves to either the old or the new physical blob, never a missing path.
+    await mkdir(dirname(aliasPath), { recursive: true });
+    const tempPath = `${aliasPath}.${globalThis.crypto.randomUUID()}.tmp`;
+    await rm(tempPath, { force: true });
+    await symlink(target, tempPath);
+    await rename(tempPath, aliasPath);
+    return { localPath: aliasPath };
+  }
+
+  async deleteAlias(physicalRef: StoredFileRef, stableId: string): Promise<void> {
+    this.assertRefKind(physicalRef);
+    const aliasKey = this.aliasKeyFor(physicalRef.storageKey, stableId);
+    await rm(this.resolveStorageKey(aliasKey), { force: true });
+  }
+
+  /** The alias shares the physical blob's directory + extension but swaps in the
+   *  STABLE id as the basename, so the alias path is invariant across updates
+   *  (`content_type`/`filename` are locked on update, so the ext never drifts). */
+  private aliasKeyFor(physicalStorageKey: string, stableId: string): string {
+    const dir = dirname(physicalStorageKey);
+    const ext = extname(physicalStorageKey);
+    const id = sanitizeRequiredSegment(stableId, 'alias id');
+    return dir === '.' ? `${id}${ext}` : `${dir}/${id}${ext}`;
   }
 
   private assertRefKind(ref: StoredFileRef): void {

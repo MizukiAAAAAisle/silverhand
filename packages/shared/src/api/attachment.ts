@@ -16,8 +16,16 @@ import { MessageSeqSchema } from '../seq.js';
 //     `metadata.attachments` so renderers can render image/file cells
 //     without an extra round-trip.
 //
-// No de-duplication: every upload creates a new row + new blob, so the
-// snapshot/source row never drift.
+// No de-duplication: every upload creates a new row + new blob. The snapshot
+// captures {id, filename, size, content_type} at compose time and is NEVER
+// rewritten. Content update (creator-only, in place) locks `filename` and
+// `content_type` for the row's life, so those never drift from a snapshot;
+// `size` and `content_revision` DO advance on update, so a snapshot's `size`
+// is a point-in-time value that may lag the row's current bytes — intentional,
+// the snapshot is a historical capture, the DTO is the live row. The snapshot
+// deliberately does NOT carry `content_revision` (it is not an authority for
+// current freshness; the renderer resolves latest via the DTO + the
+// `attachment_changed` event).
 
 export const AttachmentDtoSchema = z.object({
   id: z.string(),
@@ -27,6 +35,10 @@ export const AttachmentDtoSchema = z.object({
   size: z.number(),
   content_type: z.string(),
   storage: StorageKindSchema,
+  /** Monotonic freshness/cache-bust token, bumped on every content update
+   *  (starts at 1). NOT a version number and NOT an HTTP validator — the
+   *  renderer keys its blob generation on it; see `docs/attachments-design.md`. */
+  content_revision: z.number(),
   created_by_kind: AttachmentCreatorKindSchema,
   created_by_id: z.string(),
   created_at: z.number(),
@@ -100,6 +112,26 @@ export const AttachmentSnapshotSchema = z.object({
   label: AttachmentLabelSchema.optional(),
 });
 export type AttachmentSnapshot = z.infer<typeof AttachmentSnapshotSchema>;
+
+// ── attachment_changed event (content update cache-bust) ────────────────────
+//
+// Emitted after a successful in-place content update (`AttachmentService.update`
+// → pointer-swap commit → alias relink), on the CHANNEL SIDE CHANNEL
+// (`conversation-side:{channelId}`), NOT the message stream. Rationale: an
+// attachment update must never advance message seq / stream head / read cursor
+// (`docs/attachments-design.md` §4.3 freshness exclusion), and the side channel is
+// cursor-inert and self-healing — exactly a fire-and-forget cache-bust. The
+// payload is intentionally minimal: it names WHAT got fresher, not the new
+// bytes. The renderer keys its blob generation on `content_revision` and refetches
+// the authoritative DTO/bytes; the event is a bust signal, not a data carrier.
+export const AttachmentChangedEventSchema = z.object({
+  attachment_id: z.string(),
+  /** The post-update revision — strictly greater than the client's last-seen
+   *  value for this id; monotonic, so a client can ignore a stale replay. */
+  content_revision: z.number(),
+});
+export type AttachmentChangedEvent = z.infer<typeof AttachmentChangedEventSchema>;
+export const ATTACHMENT_CHANGED_EVENT = 'attachment_changed';
 
 /** One attachment reference in a send payload. The id is the sole required
  *  handle; `label` is the compose-time display identity when the sender has

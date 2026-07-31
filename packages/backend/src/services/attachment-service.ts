@@ -1,4 +1,5 @@
 import type {
+  AttachmentCreatorKind,
   AttachmentDto,
   AttachmentLocateDto,
   AttachmentRefInput,
@@ -14,6 +15,7 @@ import {
 } from '@silverhand/shared';
 import {
   AttachmentRepo,
+  rowToDto,
   rowToSnapshot,
 } from '../repos/attachment-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
@@ -145,6 +147,107 @@ export class AttachmentService {
     return row;
   }
 
+  /**
+   * In-place content update, creator-only, via POINTER-SWAP.
+   *
+   * The whole point of this path is that the attachment id (and therefore the
+   * reviewer's stable local address) stays fixed while the bytes change — an
+   * agent iterating a mockup re-runs `file update` each round instead of
+   * uploading a new id. No versioning, no history: the previous bytes are GC'd.
+   *
+   * Protocol (correctness-mandated — see `docs/attachments-design.md`):
+   *   1. Write the new bytes at a FRESH blob key. Unreferenced by any row, so
+   *      invisible to every reader until step 2.
+   *   2. One atomic DB UPDATE repoints storage_key + size and bumps
+   *      content_revision — the SOLE visibility switch. A crash before this
+   *      commit leaves an unreferenced orphan (row still on old bytes); a crash
+   *      after leaves the row cleanly on the new bytes. Never a durable
+   *      failed-write-that-took-effect.
+   *   3. Eager alias relink so an already-open zero-copy viewer refreshes.
+   *   4. GC the old blob — best-effort, after the alias points at the new bytes.
+   *
+   * `filename` and `content_type` are LOCKED (identity + type never drift from a
+   * message snapshot). The caller is responsible for the membership + creator
+   * ACL (`canUpdateAttachment`); the creator re-check here is defense-in-depth.
+   * `opts.requireCallerChannelOf` scopes the update to the caller's own channel
+   * (the agent path, whose membership is conversation-derived rather than
+   * channel-explicit) — a mismatch folds to `not_found` so it never leaks
+   * existence across channels, mirroring {@link locateForAgent}. Byte validation
+   * mirrors `upload` (throws `AttachmentRejection`).
+   */
+  async update(
+    attachmentId: string,
+    buffer: Buffer,
+    updater: { kind: AttachmentCreatorKind; id: string },
+    opts: { requireCallerChannelOf?: string } = {},
+  ): Promise<
+    | { ok: true; dto: AttachmentDto }
+    | { ok: false; error: 'not_found' | 'forbidden' }
+  > {
+    if (buffer.length === 0) {
+      throw new AttachmentRejection({ kind: 'invalid_buffer' });
+    }
+    if (buffer.length > this.maxBytes) {
+      throw new AttachmentRejection({
+        kind: 'too_large',
+        size: buffer.length,
+        max: this.maxBytes,
+      });
+    }
+
+    const row = this.attachments.getById(attachmentId);
+    if (!row) return { ok: false, error: 'not_found' };
+    if (opts.requireCallerChannelOf !== undefined) {
+      // Agent path: only attachments in the caller's own channel are reachable.
+      const callerChannelId = this.resolveChannelId(opts.requireCallerChannelOf);
+      if (callerChannelId !== row.channel_id) return { ok: false, error: 'not_found' };
+    }
+    if (row.created_by_kind !== updater.kind || row.created_by_id !== updater.id) {
+      return { ok: false, error: 'forbidden' };
+    }
+
+    // 1) New bytes at a fresh key — unreferenced, invisible until the commit.
+    const oldRef = refOf(row);
+    const newRef = await this.storage.put({
+      namespace: `attachments/${row.channel_id}`,
+      id: randomBlobId(),
+      filename: row.filename, // locked
+      contentType: row.content_type, // locked
+      buffer,
+    });
+
+    // 2) The sole visibility switch. If it fails/crashes, newRef is an orphan.
+    let revision: number | null;
+    try {
+      revision = this.attachments.repointContent(attachmentId, {
+        storageKey: newRef.storageKey,
+        size: buffer.length,
+      });
+    } catch (err) {
+      await this.storage.delete(newRef).catch(() => {});
+      throw err;
+    }
+    if (revision === null) {
+      // Row vanished (concurrent delete) between the read and the repoint — the
+      // new blob is an orphan; drop it and report gone.
+      await this.storage.delete(newRef).catch(() => {});
+      return { ok: false, error: 'not_found' };
+    }
+
+    // 3) Eager alias relink (best-effort; locate/startup self-heals a miss).
+    await this.storage.materializeAlias(newRef, row.id).catch(() => {});
+
+    // 4) GC the old blob — after the alias points at the new bytes. Best-effort:
+    //    a failure leaks a blob, never corrupts state.
+    if (oldRef.storageKey !== newRef.storageKey) {
+      await this.storage.delete(oldRef).catch(() => {});
+    }
+
+    const updated = this.attachments.getById(attachmentId);
+    if (!updated) return { ok: false, error: 'not_found' };
+    return { ok: true, dto: rowToDto(updated) };
+  }
+
   /** Public download with route-supplied ACL.
    *
    *  Missing rows and ACL denials are both folded to null so callers can
@@ -181,7 +284,12 @@ export class AttachmentService {
       return null;
     }
     if (row.storage === 'local') {
-      const located = await this.storage.locate(refOf(row));
+      // Return the STABLE alias path, not the raw physical path. The physical
+      // key moves on every content update (pointer-swap), but the embedded CLI
+      // handed this path to a viewer that expects it fixed — the alias keeps it
+      // so the reviewer's local address survives every mockup iteration. Lazy +
+      // self-healing: created on first locate, repointed on update.
+      const located = await this.storage.materializeAlias(refOf(row), row.id);
       if (!located) return null;
       return {
         row,
@@ -328,6 +436,9 @@ export class AttachmentService {
     this.attachments.deleteById(id);
     try {
       await this.storage.delete(refOf(row));
+      // Drop the stable alias too so it doesn't dangle. Symlink-only, so this
+      // never affected the physical blob's lifecycle — purely tidy-up.
+      await this.storage.deleteAlias(refOf(row), row.id);
     } catch {
       // Best-effort: the row is already gone. A leaked blob will be
       // swept the next time the channel/workspace is deleted.

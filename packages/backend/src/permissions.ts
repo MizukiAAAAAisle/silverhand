@@ -687,11 +687,36 @@ export function canDeleteAttachment(
   principal: Principal,
   attachment: AttachmentAclRow,
 ): boolean {
-  // Delete is a MEMBER mutation, NOT read. Gate on strict
-  // conversation membership (`canViewConversation`), NOT `canViewAttachment`
-  // (which now widens to public read): otherwise a former uploader who was
-  // removed from the channel could still delete via the creator-ownership
-  // check below. Read widened; delete stays membership + original ownership.
+  return canMutateOwnAttachment(ctx, principal, attachment);
+}
+
+/**
+ * Content update, creator-only. Same MEMBER-mutation + creator-ownership rule
+ * as delete (see {@link canMutateOwnAttachment}); they diverge only on the
+ * `in_use` axis — delete rejects a referenced attachment at the service, update
+ * ALLOWS it (updating the bytes of a referenced blob is the whole feature). That
+ * distinction is not an ACL concern, so both verbs share this predicate.
+ */
+export function canUpdateAttachment(
+  ctx: BackendContext,
+  principal: Principal,
+  attachment: AttachmentAclRow,
+): boolean {
+  return canMutateOwnAttachment(ctx, principal, attachment);
+}
+
+/**
+ * The shared rule behind every creator-only attachment mutation: a MEMBER
+ * mutation (NOT read), gated on strict conversation membership
+ * (`canViewConversation`, NOT the read-widened `canViewAttachment`) plus
+ * original creator ownership for both actor kinds — otherwise a former uploader
+ * removed from the channel could still mutate via the ownership check alone.
+ */
+function canMutateOwnAttachment(
+  ctx: BackendContext,
+  principal: Principal,
+  attachment: AttachmentAclRow,
+): boolean {
   if (!canViewConversation(ctx, principal, attachment.channel_id)) return false;
   if (principal.kind === 'system') return true;
   if (principal.kind === 'user') {

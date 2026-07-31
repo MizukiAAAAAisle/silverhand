@@ -69,6 +69,7 @@ describe('command catalogue', () => {
       ['schedule', 'list'],
       ['schedule', 'cancel'],
       ['file', 'upload'],
+      ['file', 'update'],
       ['file', 'view'],
       ['profile', 'get'],
       ['profile', 'update'],
@@ -78,7 +79,7 @@ describe('command catalogue', () => {
       expect(cmd, `${noun} ${verb}`).toBeDefined();
     }
     const total = COMMAND_GROUPS.reduce((acc, g) => acc + g.commands.length, 0);
-    expect(total).toBe(26);
+    expect(total).toBe(27);
   });
 
   it('every command has a non-empty help block', () => {

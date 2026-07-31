@@ -100,6 +100,7 @@ interface ChannelAttachmentRefRow {
   a_size: number;
   a_content_type: string;
   a_storage: StorageKind;
+  a_content_revision: number;
   a_created_by_kind: AttachmentCreatorKind;
   a_created_by_id: string;
   a_created_at: number;
@@ -114,6 +115,7 @@ function refRowToListItem(row: ChannelAttachmentRefRow): AttachmentListItem {
     size: row.a_size,
     content_type: row.a_content_type,
     storage: row.a_storage,
+    content_revision: row.a_content_revision,
     created_by_kind: row.a_created_by_kind,
     created_by_id: row.a_created_by_id,
     created_at: row.a_created_at,
@@ -417,6 +419,7 @@ export class AttachmentRepo {
            a.size                    AS a_size,
            a.content_type            AS a_content_type,
            a.storage                 AS a_storage,
+           a.content_revision        AS a_content_revision,
            a.created_by_kind         AS a_created_by_kind,
            a.created_by_id           AS a_created_by_id,
            a.created_at              AS a_created_at
@@ -531,6 +534,40 @@ export class AttachmentRepo {
     this.db.prepare('DELETE FROM attachments WHERE id = ?').run(id);
   }
 
+  /**
+   * Pointer-swap: atomically repoint a row at a freshly written physical blob
+   * and bump its freshness token. This single UPDATE is the SOLE visibility
+   * switch for a content update — the new bytes live at `storageKey` (a fresh,
+   * as-yet-unreferenced key) and become readable ONLY when this statement
+   * commits. A crash before commit leaves the new blob an unreferenced orphan
+   * and the row still pointing at the old bytes (no failed-write-takes-effect);
+   * a crash after leaves the row cleanly on the new bytes.
+   *
+   * `filename`, `content_type`, `channel_id`, `created_by_*` are intentionally
+   * NOT touched — content update locks identity and type. Returns the new
+   * `content_revision`, or null if the row vanished between the caller's read
+   * and this write (concurrent delete) — the caller then GCs the orphan blob.
+   */
+  repointContent(
+    id: string,
+    next: { storageKey: string; size: number },
+  ): number | null {
+    const row = this.db
+      .prepare<
+        { id: string; storageKey: string; size: number },
+        { content_revision: number }
+      >(
+        `UPDATE attachments
+            SET storage_key = @storageKey,
+                size = @size,
+                content_revision = content_revision + 1
+          WHERE id = @id
+        RETURNING content_revision`,
+      )
+      .get({ id, storageKey: next.storageKey, size: next.size });
+    return row ? row.content_revision : null;
+  }
+
   private requireRow(id: string): AttachmentRow {
     const row = this.getById(id);
     if (!row) throw new Error(`attachment row missing after insert: ${id}`);
@@ -547,6 +584,7 @@ export function rowToDto(row: AttachmentRow): AttachmentDto {
     size: row.size,
     content_type: row.content_type,
     storage: row.storage,
+    content_revision: row.content_revision,
     created_by_kind: row.created_by_kind,
     created_by_id: row.created_by_id,
     created_at: row.created_at,

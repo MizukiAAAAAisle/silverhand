@@ -389,6 +389,7 @@ function attachment(id: string): AttachmentDto {
     channel_id: 'c1',
     source_conversation_id: 'c1',
     storage: 'local',
+    content_revision: 1,
     created_by_kind: 'user',
     created_by_id: 'local',
   };

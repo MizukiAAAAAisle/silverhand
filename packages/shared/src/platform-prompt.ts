@@ -11,6 +11,7 @@ type ToolName =
   | 'detail_task'
   | 'unclaim_task'
   | 'upload_file'
+  | 'update_file'
   | 'view_file'
   | 'read_history'
   | 'search_messages'
@@ -27,6 +28,7 @@ const CLI_COMMANDS: Record<ToolName, string> = {
   detail_task: '`silverhand task detail`',
   unclaim_task: '`silverhand task unclaim`',
   upload_file: '`silverhand file upload`',
+  update_file: '`silverhand file update`',
   view_file: '`silverhand file view`',
   read_history: '`silverhand message history`',
   search_messages: '`silverhand message search`',
@@ -161,6 +163,7 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const detailTask = t('detail_task');
   const unclaimTask = t('unclaim_task');
   const uploadFile = t('upload_file');
+  const updateFile = t('update_file');
   const viewFile = t('view_file');
   const readHistory = t('read_history');
   const searchMessages = t('search_messages');
@@ -377,7 +380,12 @@ only adds an existing workspace member here. Use \`silverhand member --help\`.
 
 Use ${uploadFile} for generated binary artifacts and ${viewFile} for received
 attachments; paste short text inline. Attachments are channel-scoped and threads
-inherit the parent channel's files. Exact usage is in \`silverhand file --help\`.
+inherit the parent channel's files. When you iterate on an artifact you already
+uploaded (e.g. a mockup you keep revising), use ${updateFile} to replace its
+bytes in place instead of uploading a new one — the attachment id and everyone's
+resolved local path stay fixed across rounds, so a reviewer re-opens the same
+path to see your latest version. You can update only attachments you uploaded.
+Exact usage is in \`silverhand file --help\`.
 
 ## History and search
 

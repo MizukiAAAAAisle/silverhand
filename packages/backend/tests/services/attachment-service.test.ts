@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { existsSync, readFileSync } from 'node:fs';
 import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +7,7 @@ import { isSafeOpenExtension } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import {
   AttachmentRejection,
@@ -184,6 +186,281 @@ describe('AttachmentService.locateForAgent', () => {
       });
       const denied = await service.locateForAgent(dto.id, otherChannel.id);
       expect(denied).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+const PDF_BYTES = Buffer.from('%PDF-1.4\n');
+const PNG_BYTES = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+  Buffer.alloc(8, 0),
+]);
+
+describe('AttachmentService.update (creator-only pointer-swap)', () => {
+  it('swaps bytes in place: id/filename/content_type stable, size + revision advance', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'mockup.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      expect(dto.content_revision).toBe(1);
+
+      const next = Buffer.concat([PNG_BYTES, Buffer.from('more-pixels')]);
+      const res = await service.update(dto.id, next, { kind: 'user', id: 'local' });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      // Identity axis is frozen; only content-derived fields move.
+      expect(res.dto.id).toBe(dto.id);
+      expect(res.dto.filename).toBe('mockup.png');
+      expect(res.dto.content_type).toBe('image/png');
+      expect(res.dto.size).toBe(next.length);
+      expect(res.dto.content_revision).toBe(2);
+
+      // The served bytes are the new ones.
+      const served = await service.serveForViewer(dto.id, () => true);
+      expect(Buffer.from(await served!.arrayBuffer())).toEqual(next);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('locks content_type/filename even when the new bytes are a different type', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'shot.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      // Feed PDF magic bytes — a re-detect would flip the type; the update
+      // path must NOT re-run the MIME pipeline (snapshot stability contract).
+      const res = await service.update(dto.id, PDF_BYTES, { kind: 'user', id: 'local' });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.dto.content_type).toBe('image/png');
+      expect(res.dto.filename).toBe('shot.png');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('GCs the old physical blob and leaves exactly one live blob', async () => {
+    const { service, channel, cleanup, db, silverhandDir } = bootstrap();
+    try {
+      const repo = new AttachmentRepo(db);
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'a.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const oldKey = repo.getById(dto.id)!.storage_key;
+      const oldPath = join(silverhandDir, 'blobs', oldKey);
+      expect(existsSync(oldPath)).toBe(true);
+
+      const res = await service.update(
+        dto.id,
+        Buffer.from('brand-new-bytes'),
+        { kind: 'user', id: 'local' },
+      );
+      expect(res.ok).toBe(true);
+      const newKey = repo.getById(dto.id)!.storage_key;
+      const newPath = join(silverhandDir, 'blobs', newKey);
+
+      expect(newKey).not.toBe(oldKey); // fresh blob key (pointer-swap)
+      expect(existsSync(newPath)).toBe(true);
+      expect(existsSync(oldPath)).toBe(false); // old bytes GC'd, no accumulation
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps the agent locate alias path stable across updates and reflects new bytes', async () => {
+    const { service, channel, agent, cleanup } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'iter.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'agent',
+        createdById: agent.id,
+      });
+      const before = await service.locateForAgent(dto.id, channel.id);
+      expect(before!.locate.storage).toBe('local');
+      const aliasPath =
+        before!.locate.storage === 'local' ? before!.locate.local_path : '';
+
+      const next = Buffer.from('the-next-revision');
+      const res = await service.update(dto.id, next, { kind: 'agent', id: agent.id });
+      expect(res.ok).toBe(true);
+
+      const after = await service.locateForAgent(dto.id, channel.id);
+      const aliasPathAfter =
+        after!.locate.storage === 'local' ? after!.locate.local_path : '';
+      // Reviewer's local address is unchanged (the whole point of update)…
+      expect(aliasPathAfter).toBe(aliasPath);
+      // …and reading it (through the symlink) yields the new bytes.
+      expect(readFileSync(aliasPath)).toEqual(next);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('allows updating an attachment already referenced by a message (in_use), unlike delete', async () => {
+    const { service, channel, cleanup, db } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'sent.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      // Reference it from a persisted message so it counts as in_use.
+      new MessageRepo(db).insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: 'here',
+        attachments: [
+          { id: dto.id, filename: 'sent.png', size: PNG_BYTES.length, content_type: 'image/png' },
+        ],
+      });
+
+      // delete rejects an in-use attachment…
+      const del = await service.deleteOrphan(dto.id, { kind: 'user', userId: 'local' });
+      expect(del).toEqual({ ok: false, error: 'in_use' });
+      // …but update accepts it — updating referenced bytes is the feature.
+      const upd = await service.update(dto.id, Buffer.from('revised'), {
+        kind: 'user',
+        id: 'local',
+      });
+      expect(upd.ok).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects a non-creator with forbidden and does not touch the bytes', async () => {
+    const { service, channel, agent, cleanup } = bootstrap();
+    try {
+      // Agent-uploaded: a user (or a different agent) is not the creator.
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'owned.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'agent',
+        createdById: agent.id,
+      });
+      const byUser = await service.update(dto.id, Buffer.from('x'), {
+        kind: 'user',
+        id: 'local',
+      });
+      expect(byUser).toEqual({ ok: false, error: 'forbidden' });
+      const byOtherAgent = await service.update(dto.id, Buffer.from('x'), {
+        kind: 'agent',
+        id: 'some-other-agent',
+      });
+      expect(byOtherAgent).toEqual({ ok: false, error: 'forbidden' });
+
+      // Bytes untouched.
+      const served = await service.serveForViewer(dto.id, () => true);
+      expect(Buffer.from(await served!.arrayBuffer())).toEqual(PNG_BYTES);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('returns not_found for a missing id', async () => {
+    const { service, cleanup } = bootstrap();
+    try {
+      const res = await service.update('missing', Buffer.from('x'), {
+        kind: 'user',
+        id: 'local',
+      });
+      expect(res).toEqual({ ok: false, error: 'not_found' });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('folds a cross-channel agent update into not_found (no existence leak)', async () => {
+    const { service, channel, agent, cleanup, db, localHostId } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'a.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'agent',
+        createdById: agent.id,
+      });
+      const otherWorkspace = new WorkspaceRepo(db).insert({
+        name: 'other',
+        description: null,
+        workspacePath: join(tmpdir(), 'silverhand-attsvc-update', 'other'),
+        workspaceHostId: localHostId,
+      });
+      const otherChannel = new ConversationRepo(db).insertChannel({
+        workspaceId: otherWorkspace.id,
+        workspacePath: otherWorkspace.workspace_path,
+        title: 'o',
+      });
+      // Creator matches, but the caller's channel is a different one → the
+      // channel guard folds to not_found BEFORE the creator check can 403.
+      const res = await service.update(
+        dto.id,
+        Buffer.from('x'),
+        { kind: 'agent', id: agent.id },
+        { requireCallerChannelOf: otherChannel.id },
+      );
+      expect(res).toEqual({ ok: false, error: 'not_found' });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects empty and oversize buffers with AttachmentRejection', async () => {
+    const { db, channel, cleanup } = bootstrap();
+    try {
+      const tmp = makeTempSilverhandDir();
+      const storage = createLocalBlobFileStorage({ rootDir: join(tmp.silverhandDir, 'blobs') });
+      const service = new AttachmentService({
+        storage,
+        attachments: new AttachmentRepo(db),
+        conversations: new ConversationRepo(db),
+        maxBytes: 8,
+      });
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'x.png',
+        contentType: 'image/png',
+        buffer: Buffer.from('abc'),
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      await expect(
+        service.update(dto.id, Buffer.alloc(0), { kind: 'user', id: 'local' }),
+      ).rejects.toBeInstanceOf(AttachmentRejection);
+      await expect(
+        service.update(dto.id, Buffer.alloc(16), { kind: 'user', id: 'local' }),
+      ).rejects.toMatchObject({ failure: { kind: 'too_large' } });
+      tmp.cleanup();
     } finally {
       cleanup();
     }

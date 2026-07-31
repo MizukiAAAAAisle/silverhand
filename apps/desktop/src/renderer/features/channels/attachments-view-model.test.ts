@@ -43,6 +43,7 @@ function attachment(overrides: Partial<AttachmentDto> = {}): AttachmentDto {
     size: 42,
     content_type: 'application/octet-stream',
     storage: 'local',
+    content_revision: 1,
     created_by_kind: 'user',
     created_by_id: 'u1',
     created_at: NOW,

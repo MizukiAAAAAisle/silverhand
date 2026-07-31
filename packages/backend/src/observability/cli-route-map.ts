@@ -20,7 +20,7 @@
  */
 export interface CliInvokeRoute {
   /** HTTP method as registered with Hono. */
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH';
   /** Path suffix after `/internal/conversations/:cid/agents/:aid/`. */
   suffix: string;
   /** Logical CLI surface this route serves. */
@@ -70,6 +70,10 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   { method: 'POST', suffix: 'schedules/cancel', noun: 'schedule', verb: 'cancel' },
   // file
   { method: 'POST', suffix: 'attachments', noun: 'file', verb: 'upload' },
+  // attachments/:attachmentId — in-place content update (creator-only
+  // pointer-swap). PATCH; the id is a trailing wildcard segment, normalized
+  // away like the locate/download ids so it never lands in `cli-<utc>.log`.
+  { method: 'PATCH', suffix: 'attachments/*', noun: 'file', verb: 'update' },
   // attachments/:id/locate — middleware matches by prefix `attachments/`
   // + suffix `/locate`; we record it as a single entry.
   { method: 'GET', suffix: 'attachments/*/locate', noun: 'file', verb: 'view' },

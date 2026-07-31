@@ -79,6 +79,7 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand schedule list` | List this agent's schedules. |
 | `silverhand schedule cancel` | Cancel a schedule. |
 | `silverhand file upload` | Upload a local file and return an attachment id. |
+| `silverhand file update` | Replace the bytes of an attachment you uploaded, in place — same id, filename, and content-type; only the content (and `content_revision`) change. Creator-only, same-channel; no versioning. |
 | `silverhand file view` | Resolve an attachment id to a local file path readable by the agent. |
 | `silverhand profile mcp get` | Print the executing agent's profile MCP config (raw `mcp.json`, or `raw: null` when unset). Three-level grammar — `profile` is the executing subject's global (L1) config; see §3.8. |
 | `silverhand profile mcp set` | Replace the executing agent's profile MCP config. Raw JSON on **STDIN**; validated then written verbatim. Effect is **next spawn** (no hot reload). See §3.8. |
@@ -886,6 +887,12 @@ when the route path or authenticated principal already provides that scope.
 `--content-type`. The backend is the canonical authority for the MIME
 ultimately written to the DB; the CLI only forwards what the caller
 explicitly typed (or nothing).
+
+`silverhand file update` does NOT re-run this pipeline: `content_type`
+(and `filename`) are LOCKED at upload for the row's life, so a message
+snapshot's captured type never drifts from the live row. Only the bytes
+and `content_revision` change. A `--content-type` on update is accepted
+for symmetry but ignored for typing.
 
 The backend recognition pipeline is fixed (see `detectContentType` in
 `packages/backend/src/services/attachment-service.ts` and the shared

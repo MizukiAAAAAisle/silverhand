@@ -133,8 +133,8 @@ export const SILVERHAND_COMMAND_DOMAINS = [
     nouns: [
       {
         noun: 'file',
-        summary: 'Upload a local file or resolve an attachment id.',
-        verbs: ['upload', 'view'],
+        summary: 'Upload a local file, update one you own, or resolve an attachment id.',
+        verbs: ['upload', 'update', 'view'],
       },
     ],
   },

@@ -887,6 +887,25 @@ export const migrations: Migration[] = [
         ON thread_followers(conversation_id);
     `,
   },
+  {
+    version: 62,
+    name: 'attachment_content_revision',
+    up: `
+      -- Attachment update capability (#task:1767, docs/attachments-design.md).
+      -- An attachment id is now a STABLE reference whose bytes the creator may
+      -- replace in place; it no longer promises id→bytes永久不变. content_revision
+      -- is a monotonic freshness/cache-bust token (NOT a version system — no
+      -- history is retained, no rollback): it advances on every successful
+      -- content replace so a renderer can key its blob cache / inflight fetch on
+      -- (id, revision) and an \`attachment_changed\` event can bump the client's
+      -- generation. It is NOT an HTTP validator (serve is \`no-store\`) and it is
+      -- NOT carried in a message's attachment snapshot (the snapshot stays a
+      -- point-in-time {id,filename,size,content_type}; live authority is the DTO).
+      -- Every existing row starts at 1 via the DEFAULT so there is no
+      -- "missing = 1" compat branch — the column is authoritative from day one.
+      ALTER TABLE attachments ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

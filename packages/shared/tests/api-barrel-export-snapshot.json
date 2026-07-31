@@ -57,6 +57,8 @@
   "ArchivedChannelListItemDtoSchema",
   "ArchivedChannelsDtoSchema",
   "ArchivedChannelsQueryInputSchema",
+  "ATTACHMENT_CHANGED_EVENT",
+  "AttachmentChangedEventSchema",
   "AttachmentDtoSchema",
   "AttachmentLabelSchema",
   "AttachmentListItemSchema",
