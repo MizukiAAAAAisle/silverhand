@@ -46,7 +46,7 @@ interface ContextCardModel {
    *  conversation (cross-workspace safe via `useConversationById`). */
   sourceConversationId: string;
   /** Optional secondary label appended after the chip with a `·`
-   *  separator (e.g. "@shiki", "by @Cindy"). Empty when the source
+   *  separator (e.g. "shiki", "by Cindy"). Empty when the source
    *  has no companion identity to surface. */
   sourceAuthorLabel: string;
   /** raw body text rendered through Markdown when expanded */
@@ -290,11 +290,9 @@ function threadAnchorModel(
 ): ContextCardModel {
   let authorLabel: string;
   if (meta.quoted_from_kind === 'agent') {
-    authorLabel = meta.quoted_agent_name
-      ? `@${meta.quoted_agent_name}`
-      : '@agent';
+    authorLabel = meta.quoted_agent_name || 'agent';
   } else if (meta.quoted_from_kind === 'user') {
-    authorLabel = `@${formatUserDisplayName(meta.quoted_from_user_id, userResolver)}`;
+    authorLabel = formatUserDisplayName(meta.quoted_from_user_id, userResolver);
   } else {
     authorLabel = 'system';
   }
@@ -380,7 +378,7 @@ function channelContextModel(
   content: string,
 ): ContextCardModel {
   const agentLabel = meta.created_by_agent_name
-    ? `by @${meta.created_by_agent_name}`
+    ? `by ${meta.created_by_agent_name}`
     : 'by an agent';
   return {
     kind: 'spawned',

@@ -206,7 +206,7 @@ function SessionClearedRow({
   // misattribute the action to the current viewer.
   const userResolver = useUserResolver();
   const actorLabel = meta.actor_user_id
-    ? `@${formatUserDisplayName(meta.actor_user_id, userResolver)}`
+    ? formatUserDisplayName(meta.actor_user_id, userResolver)
     : 'a user';
   return (
     <div
@@ -221,7 +221,7 @@ function SessionClearedRow({
         {actorLabel}
       </span>
       <span>reset</span>
-      <span className="font-medium text-text-primary">@{meta.agent_name}</span>
+      <span className="font-medium text-text-primary">{meta.agent_name}</span>
       <span>'s session context</span>
       {meta.previous_cli_session_id_prefix ? (
         <>
@@ -359,7 +359,7 @@ export function RenameRow(props: RendererProps): JSX.Element {
 
 /**
  * One renderer for both member-change events so add and remove read
- * identically (same chrome / centered narration / @-label treatment) —
+ * identically (same chrome / centered narration / name-label treatment) —
  * only the icon, verb, and preposition swap off `subtype`. Before this,
  * remove had no structured renderer and fell through to the generic
  * markdown fallback, rendering the raw `@actor removed @member …` text as
@@ -408,7 +408,7 @@ function participantLabel(input: {
   displayName: string | null;
 }): string {
   if (input.kind === 'system') return 'system';
-  const handle = `@${input.name}`;
-  const display = input.displayName?.trim();
-  return display && display !== input.name ? `${display} ${handle}` : handle;
+  // Recognition surface (system-message narration), not a mention — plain
+  // display name, no `@` handle (#task:1768, shiki 2026-08-01).
+  return input.displayName?.trim() || input.name;
 }
