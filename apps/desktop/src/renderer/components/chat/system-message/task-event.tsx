@@ -72,8 +72,9 @@ function TaskEventRowEnriched({
   const userResolver = useUserResolver();
   // Recognition surface (who acted), not a mention — plain name for both kinds,
   // no leading `@`. Matches the message author label / task-assignee rule; the
-  // `@` handle form stays on mentions and the board (#task:1768, shiki
-  // 2026-08-01).
+  // `@` handle form is reserved for mentions, the composer, and the assignee
+  // picker — every assignee/creator DISPLAY (including the board) reads plain
+  // (#task:1768, shiki 2026-08-01).
   const actorLabel = meta.actor.kind === 'user'
     ? formatUserDisplayName(meta.actor.id, userResolver) || meta.actor.name || 'user'
     : meta.actor.name;

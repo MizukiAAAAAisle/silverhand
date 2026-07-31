@@ -539,7 +539,7 @@ function TaskCard({
             stay pinned. 稳定 > 自适应. */}
         <div className="mt-1 flex items-center gap-x-2 text-[10px] text-text-muted">
           <span className="shrink-0 text-text-secondary">
-            {task.assignee ? `@${task.assignee.name}` : (
+            {task.assignee ? task.assignee.name : (
               <span className="italic">unassigned</span>
             )}
           </span>

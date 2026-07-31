@@ -238,9 +238,7 @@ export function useTaskMetaRows({
             />
           ) : null}
           <span className="truncate" title={view.creator.name}>
-            {view.creator.type === 'system'
-              ? view.creator.name
-              : `@${view.creator.name}`}
+            {view.creator.name}
           </span>
         </span>
       ),
@@ -280,7 +278,7 @@ export function useTaskMetaRows({
               {...directory}
             />
             <span className="truncate" title={editor.name}>
-              @{editor.name}
+              {editor.name}
             </span>
           </span>
           <Timestamp at={editedAt} muted />
@@ -335,7 +333,7 @@ function AssigneeValue({
         {...directory}
       />
       <span className="truncate" title={view.assignee.name}>
-        @{view.assignee.name}
+        {view.assignee.name}
       </span>
     </span>
   );
@@ -452,6 +450,13 @@ function PickerBody({
               name={c.displayName}
               {...directory}
             />
+            {/* Handle-pick surface: this is the one task place that shows a
+                genuine `@`-handle (`c.name` = roster handle, distinct from the
+                `c.displayName` on the avatar) — you're choosing who to assign,
+                the same moment as typing a mention. Every DISPLAY of an
+                assignee/creator (rows above, board cards, filter, TaskRef
+                popover) shows the plain display name with no `@` (#task:1768,
+                shiki 2026-08-01). */}
             <span className="truncate" title={c.displayName}>
               @{c.name}
             </span>

@@ -308,7 +308,7 @@ function TaskPopoverBody({
       </p>
       <p className="flex items-baseline gap-1.5 text-[11px] text-text-muted">
         <span className="shrink-0 text-text-secondary">
-          {task.assignee ? `@${task.assignee.name}` : <em>unassigned</em>}
+          {task.assignee ? task.assignee.name : <em>unassigned</em>}
         </span>
         <span aria-hidden className="shrink-0 text-text-muted/60">·</span>
         <span

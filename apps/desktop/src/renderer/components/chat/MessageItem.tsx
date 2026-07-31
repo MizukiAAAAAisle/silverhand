@@ -1055,10 +1055,13 @@ function formatTaskAssignee(
     assignee.id
   ).replace(/^@/, '');
   // In-message task cards are a recognition surface: plain names for both
-  // kinds, no leading `@` (the user branch above is already bare). The `@`
-  // handle form stays on the board (TaskRef / drawer / TasksSection), so the
-  // stream reads as recognition and the board as handle refs — split by
-  // surface, not by actor kind (shiki 2026-08-01, #task:1768).
+  // kinds, no leading `@` (the user branch above is already bare). Every task
+  // assignee/creator DISPLAY reads the same way now — board cards, the drawer,
+  // TasksSection, the filter, and the TaskRef popover all show the plain
+  // display name (the dto's `name` is the denormalized display_name, never a
+  // handle). `@` is reserved for surfaces that show a real handle: mentions,
+  // the composer, and the assignee picker — split by surface, not by actor
+  // kind (shiki 2026-08-01, #task:1768).
   return name;
 }
 

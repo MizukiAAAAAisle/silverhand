@@ -826,11 +826,13 @@ function PersonFilterControl({
       ? anyLabel
       : value.kind === 'unassigned'
         ? 'No assignee'
-        : // Humans and agents are both first-class participants, so both
-          // render with `@` (shiki) — only the unmentionable `system`
-          // creator (filtered out of the option list) lacks one.
+        : // The filter shows the assignee's/creator's display name (the
+          // denormalized `name` on the dto — NOT a handle), so it renders
+          // plain, no `@`, matching every other assignee/creator DISPLAY
+          // (#task:1768, shiki 2026-08-01). `@` is reserved for surfaces that
+          // show a real handle (mentions, composer, the assignee picker).
           selectedName
-          ? `@${selectedName}`
+          ? selectedName
           : 'Selected';
 
   const choose = (next: PersonFilter): void => {
@@ -915,7 +917,7 @@ function PersonFilterControl({
                     userAvatarUrls={userAvatarUrls}
                   />
                 </span>
-                <span className="truncate">{`@${o.name}`}</span>
+                <span className="truncate">{o.name}</span>
               </span>
             </OptionRow>
           );
