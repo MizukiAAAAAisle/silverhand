@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
+import { app, BrowserWindow, Menu, session as electronSession, shell, type MenuItemConstructorOptions } from 'electron';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -74,6 +74,8 @@ import {
 import { resolveEffectiveBootProfile } from './desktop-build-config.js';
 import { desktopClientInfoHeaderValue } from './client-info.js';
 import { createRuntimeUpgradeMonitor } from './runtime-upgrade-monitor.js';
+import { resolveRendererEntry } from './renderer-entry.js';
+import { createGuardedIpcRegistrar } from './ipc/guarded-ipc.js';
 import { waitForDaemonGeneration } from './daemon-generation-attach.js';
 import { applyFatalExitToClaim } from './local-host-failure.js';
 import {
@@ -253,6 +255,25 @@ let userSessionUser: UserDto | null = null;
 // dead-socket inference). A confirmed client_too_old pushes
 // 'epoch:update-required' so the renderer re-asks getAuthState() and the
 // startup precheck (the single authority) gates.
+// #task:1762 — the single IPC ingress root: every renderer→main channel is
+// registered through this validator (see ipc/guarded-ipc.ts). A source fence
+// test keeps raw registrations out of the rest of main.
+// Resolved ONCE here (the composition root) and handed to both consumers:
+// the window loader below and the IPC sender validator. One value, so the
+// allowed IPC source is the load target by construction.
+const rendererEntry = resolveRendererEntry({
+  devServerUrl: process.env['ELECTRON_RENDERER_URL'],
+  mainDirname: __dirname,
+});
+
+const guardedIpc = createGuardedIpcRegistrar({
+  resolveRendererWebContents: () => mainWindow?.webContents ?? null,
+  entry: rendererEntry,
+  log: {
+    warn: (obj, msg) => logger?.warn(obj, msg),
+  },
+});
+
 const runtimeUpgradeMonitor = createRuntimeUpgradeMonitor({
   probe: async () => (await fetchServerInfo()).desktop_api,
   notify: () => {
@@ -2712,10 +2733,11 @@ function createWindow(): void {
     return { action: 'deny' };
   });
 
-  if (process.env['ELECTRON_RENDERER_URL']) {
-    win.loadURL(process.env['ELECTRON_RENDERER_URL']);
+  // #task:1762 — the SAME resolved entry the IPC sender validator was given.
+  if (rendererEntry.kind === 'dev-server') {
+    win.loadURL(rendererEntry.url);
   } else {
-    win.loadFile(join(__dirname, '../renderer/index.html'));
+    win.loadFile(rendererEntry.filePath);
   }
 }
 
@@ -2888,7 +2910,7 @@ function handleContextualClose(triggeringWindow: BrowserWindow): void {
   contextualClose.begin(closeTargetFor(triggeringWindow));
 }
 
-ipcMain.on(
+guardedIpc.on(
   'shortcut:contextual-close-result',
   (event, reqId: unknown, outcome: unknown) => {
     if (typeof reqId !== 'string') return;
@@ -2896,9 +2918,9 @@ ipcMain.on(
   },
 );
 
-registerEventWsDiagnosticIpcHandler({ getLogger: () => logger });
+registerEventWsDiagnosticIpcHandler({ getLogger: () => logger, ipc: guardedIpc });
 
-ipcMain.handle('backend:info', async () => {
+guardedIpc.handle('backend:info', async () => {
   if (!backend) return null;
   // D4.a Commit 5d — `mode` is the union discriminator on
   // {@link BackendHandle}, not derived from the embedded-only
@@ -2933,39 +2955,39 @@ ipcMain.handle('backend:info', async () => {
   };
 });
 
-ipcMain.handle('auth:getState', () => desktopAuthState());
+guardedIpc.handle('auth:getState', () => desktopAuthState());
 
-ipcMain.handle('auth:signup', (_event, input: AuthSignupInput) =>
+guardedIpc.handle('auth:signup', (_event, input: AuthSignupInput) =>
   postAuthSession(authPaths.signup, input),
 );
 
-ipcMain.handle('auth:login', (_event, input: AuthLoginInput) =>
+guardedIpc.handle('auth:login', (_event, input: AuthLoginInput) =>
   postAuthSession(authPaths.login, input),
 );
 
-ipcMain.handle('auth:logout', () => logoutUserSession());
+guardedIpc.handle('auth:logout', () => logoutUserSession());
 
-ipcMain.handle('backend:request', (_event, input: BackendProxyRequest) =>
+guardedIpc.handle('backend:request', (_event, input: BackendProxyRequest) =>
   proxyBackendRequest(input),
 );
 
-ipcMain.handle('backend:upload', (_event, input: BackendUploadRequest) =>
+guardedIpc.handle('backend:upload', (_event, input: BackendUploadRequest) =>
   proxyBackendUpload(input),
 );
 
-ipcMain.handle('hosts:rotate', (_event, input: { hostId: string }) =>
+guardedIpc.handle('hosts:rotate', (_event, input: { hostId: string }) =>
   rotateHostToken(input?.hostId ?? ''),
 );
 
-ipcMain.handle('hosts:revoke', (_event, input: { hostId: string }) =>
+guardedIpc.handle('hosts:revoke', (_event, input: { hostId: string }) =>
   revokeHost(input?.hostId ?? ''),
 );
 
-ipcMain.handle('hosts:proxyConfig:get', (_event, input: { hostId: string }) =>
+guardedIpc.handle('hosts:proxyConfig:get', (_event, input: { hostId: string }) =>
   getHostProxyConfig(input?.hostId ?? ''),
 );
 
-ipcMain.handle(
+guardedIpc.handle(
   'hosts:proxyConfig:set',
   (_event, input: { hostId: string; config: unknown }) =>
     saveHostProxyConfig({
@@ -2995,7 +3017,7 @@ ipcMain.handle(
  * rotate-token / re-login paths) so two polling timers don't
  * race after a save during an in-flight attach.
  */
-ipcMain.handle(
+guardedIpc.handle(
   'settings:saveServerUrl',
   (_event, input: { serverUrl: string }) =>
     saveServerUrlFromSettings(input?.serverUrl ?? ''),
@@ -3411,7 +3433,7 @@ async function handlePartialApplyRetry(): Promise<PartialApplyRetryResult> {
   return { ok: true, outcome, state: partialApplyState };
 }
 
-ipcMain.handle(
+guardedIpc.handle(
   'profile:get',
   (): ServerConnectionProfileView | null =>
     readServerConnectionProfileViewOrNull({
@@ -3420,12 +3442,12 @@ ipcMain.handle(
     }),
 );
 
-ipcMain.handle(
+guardedIpc.handle(
   'profile:saveWithTest',
   (_event, input: { serverUrl: string }) => handleProfileSaveWithTest(input),
 );
 
-ipcMain.handle('profile:clear', () => {
+guardedIpc.handle('profile:clear', () => {
   const result = clearServerConnectionProfile({
     profilePath: desktopAppPaths().desktop.serverProfile,
     logger: logger ?? undefined,
@@ -3457,18 +3479,18 @@ ipcMain.handle('profile:clear', () => {
  * `handlePartialApplyRetry` for the semantics around profile read
  * failures vs absence.
  */
-ipcMain.handle(
+guardedIpc.handle(
   'partialApply:get',
   (): PartialApplyState => partialApplyState,
 );
 
-ipcMain.handle(
+guardedIpc.handle(
   'partialApply:retry',
   (): Promise<PartialApplyRetryResult> => handlePartialApplyRetry(),
 );
 
-registerSurfaceIpcHandlers();
-registerSelectionExportIpcHandlers();
+registerSurfaceIpcHandlers(guardedIpc);
+registerSelectionExportIpcHandlers(guardedIpc);
 
 // #task:1603 — §5.1 process-ownership prerequisite: exactly one desktop
 // instance may run the startup preparation (and later the migration) per

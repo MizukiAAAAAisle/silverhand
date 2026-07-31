@@ -1,18 +1,19 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from 'electron';
+import { app, BrowserWindow, dialog, Notification, shell } from 'electron';
+import type { GuardedIpcRegistrar } from './guarded-ipc.js';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSafeOpenExtension } from '@silverhand/shared';
 import { handleAttachmentSave } from './attachment-save.js';
 
-export function registerSurfaceIpcHandlers(): void {
+export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
   // Live OS notifications keyed by the renderer-supplied notification id (the
   // backend notification row id). Retained so `notification:dismiss` can
   // `.close()` the exact alert when the backend reports it was read
   // (#task:1431). Entries self-evict on the Notification's own `close` event.
   const shownNotifications = new Map<string, Notification>();
 
-  ipcMain.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {
+  ipc.handle('dialog:pickDirectory', async (event, options?: { defaultPath?: string }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(win ?? undefined!, {
       properties: ['openDirectory', 'createDirectory'],
@@ -22,7 +23,7 @@ export function registerSurfaceIpcHandlers(): void {
     return result.filePaths[0] ?? null;
   });
 
-  ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  ipc.handle('shell:openExternal', async (_event, url: string) => {
     if (typeof url !== 'string') return;
     // Refuse anything that isn't an http(s) link — preload is a security
     // boundary; agent-rendered content can hand us arbitrary strings.
@@ -69,7 +70,7 @@ export function registerSurfaceIpcHandlers(): void {
    * simpler — the OS browser already provides the right sandbox, CSP,
    * and origin isolation. So HTML files leave Electron entirely.
    */
-  ipcMain.handle(
+  ipc.handle(
     'attachment:openExternal',
     async (
       _event,
@@ -142,7 +143,7 @@ export function registerSurfaceIpcHandlers(): void {
    * and control chars stripped) and pre-fills the dialog; the user has
    * final say over the destination path and extension.
    */
-  ipcMain.handle(
+  ipc.handle(
     'attachment:save',
     async (
       event,
@@ -159,7 +160,7 @@ export function registerSurfaceIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle('shell:showItemInFolder', (_event, fullPath: string) => {
+  ipc.handle('shell:showItemInFolder', (_event, fullPath: string) => {
     // Reveal a file/dir in Finder/Explorer. Used by the agent profile's
     // "Reveal in Finder" buttons. Path validity is enforced by Electron;
     // an unknown path simply opens the home dir, which is harmless.
@@ -167,7 +168,7 @@ export function registerSurfaceIpcHandlers(): void {
     shell.showItemInFolder(fullPath);
   });
 
-  ipcMain.handle('badge:setCount', (_event, value: unknown) => {
+  ipc.handle('badge:setCount', (_event, value: unknown) => {
     // macOS dock badge. n=0 clears it; non-finite / negative values are
     // coerced to 0 so a buggy renderer can't paint nonsense on the icon.
     // Renderer drives this from `useMessageUnreadSummary` (sum across
@@ -179,7 +180,7 @@ export function registerSurfaceIpcHandlers(): void {
     app.setBadgeCount(count);
   });
 
-  ipcMain.handle('notification:show', (event, opts: unknown) => {
+  ipc.handle('notification:show', (event, opts: unknown) => {
     if (!opts || typeof opts !== 'object') return;
     const { title, body, force, notificationId } = opts as Partial<
       Record<string, unknown>
@@ -230,7 +231,7 @@ export function registerSurfaceIpcHandlers(): void {
     n.show();
   });
 
-  ipcMain.handle('notification:dismiss', (_event, notificationIds: unknown) => {
+  ipc.handle('notification:dismiss', (_event, notificationIds: unknown) => {
     // Close OS notifications the backend reported as read (#task:1431). The
     // renderer forwards the exact ids from the viewer-scoped "notification read"
     // fact — main never re-derives read state. Unknown / already-closed ids are

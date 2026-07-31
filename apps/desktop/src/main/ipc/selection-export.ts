@@ -1,4 +1,5 @@
-import { BrowserWindow, clipboard, dialog, ipcMain, nativeImage } from 'electron';
+import { BrowserWindow, clipboard, dialog, nativeImage } from 'electron';
+import type { GuardedIpcRegistrar } from './guarded-ipc.js';
 
 // ── Selection export pipeline ─────────────────────────────────────────
 //
@@ -23,8 +24,8 @@ type ExportSaveResult =
 
 type ExportCopyResult = { ok: true } | { ok: false; error: string };
 
-export function registerSelectionExportIpcHandlers(): void {
-  ipcMain.handle(
+export function registerSelectionExportIpcHandlers(ipc: GuardedIpcRegistrar): void {
+  ipc.handle(
     'export:savePng',
     async (
       event,
@@ -57,7 +58,7 @@ export function registerSelectionExportIpcHandlers(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     'export:copyPng',
     async (
       _event,

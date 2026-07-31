@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron';
+import type { GuardedIpcRegistrar } from './guarded-ipc.js';
 
 interface EventWsDiagnosticLogger {
   info(fields: Record<string, unknown>, message: string): void;
@@ -33,8 +33,9 @@ interface RendererEventWsDiagnostic {
 
 export function registerEventWsDiagnosticIpcHandler(opts: {
   getLogger: () => EventWsDiagnosticLogger | null;
+  ipc: GuardedIpcRegistrar;
 }): void {
-  ipcMain.handle('eventWs:diagnostic', (_event, input: unknown) => {
+  opts.ipc.handle('eventWs:diagnostic', (_event, input: unknown) => {
     const diagnostic = normalizeRendererEventWsDiagnostic(input);
     if (!diagnostic) return;
     opts.getLogger()?.info(

@@ -302,10 +302,20 @@ describe('desktop protocol purity catalogue', () => {
   });
 
   it('keeps main IPC handlers in sync with the protocol-purity catalogue', () => {
+    // #task:1762 — registrations go through the guarded registrar rather than
+    // the Electron object. The scan must NOT key on the receiver's local
+    // variable name: a future module writing `registrar.handle('new:channel')`
+    // would silently escape the catalogue. Match any `.handle(<string>)` in
+    // production main instead — today nothing else in main calls `.handle`
+    // with a string first argument, so an unexpected match is a signal to
+    // classify explicitly, not to widen the pattern.
     const channels = sourceFiles(mainRoot, new Set(['.ts']))
       .flatMap(source =>
-        [...source.content.matchAll(/ipcMain\.handle\(\s*['"`]([^'"`]+)['"`]/g)]
-          .map(match => match[1]),
+        [
+          ...source.content.matchAll(
+            /\.handle\(\s*['"`]([^'"`]+)['"`]/g,
+          ),
+        ].map(match => match[1]),
       )
       .sort();
 
