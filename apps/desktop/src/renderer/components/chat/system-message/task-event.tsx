@@ -70,9 +70,13 @@ function TaskEventRowEnriched({
   meta: TaskSystemMetadata;
 }): JSX.Element {
   const userResolver = useUserResolver();
+  // Recognition surface (who acted), not a mention — plain name for both kinds,
+  // no leading `@`. Matches the message author label / task-assignee rule; the
+  // `@` handle form stays on mentions and the board (#task:1768, shiki
+  // 2026-08-01).
   const actorLabel = meta.actor.kind === 'user'
-    ? `@${formatUserDisplayName(meta.actor.id, userResolver) || meta.actor.name || 'user'}`
-    : `@${meta.actor.name}`;
+    ? formatUserDisplayName(meta.actor.id, userResolver) || meta.actor.name || 'user'
+    : meta.actor.name;
 
   const dotKind: TaskEventDotKind =
     meta.subtype === 'task_unclaim' ? 'unclaim' : meta.task_status;
@@ -114,7 +118,7 @@ function TaskEventBody({
   // acted (`docs/tasks-design.md` §4.4, wire contract in
   // `TaskSystemMetadataSchema`): an AGENT is taking or releasing the job
   // (claimed / unclaimed — a workflow verb), while a HUMAN is writing ownership
-  // from the board (assigned / unassigned — status is untouched). Saying "@shiki
+  // from the board (assigned / unassigned — status is untouched). Saying "shiki
   // claimed #task" for an assignment to someone else states the wrong fact.
   // A human assign also names the new owner, since that is the whole content of
   // the write.
@@ -134,7 +138,7 @@ function TaskEventBody({
           <>
             <span className="text-text-muted" aria-hidden>→</span>
             <span className="font-medium text-text-primary">
-              @{assignee.name}
+              {assignee.name}
             </span>
           </>
         ) : null}
