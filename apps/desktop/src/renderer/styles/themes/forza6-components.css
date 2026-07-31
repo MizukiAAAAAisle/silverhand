@@ -346,6 +346,12 @@
    removed). */
 [data-theme='forza6'] [data-task-ref] {
   font-family: var(--appearance-prose-font, var(--font-sans));
+  /* Title weight normal — not the shared base's `font-medium` (500). On
+     forza6's warm near-white bg that 500 title read heavy beside the bold
+     Rajdhani number (shiki, #task:1766). This lightens only the title; the
+     number keeps its own 700 via the more-specific `[data-task-ref-num]`
+     rule below. Scoped to forza6 so other themes keep the base 500. */
+  font-weight: 400;
 }
 
 /* Number-only display face (#task:1760). The chip title keeps the prose
@@ -423,13 +429,12 @@
    yellow the same way. On a status-change row the yellow tile now sits beside
    the status pill's own hue — intended here (task identity + status are both
    signal at a hand-off), not the single-colour quiet strip #1760 aimed for.
-   `font-weight` restored to the tile's 500 (the #1760 rule dropped it to 400);
-   the number keeps Rajdhani via the shared `[data-task-ref-num]` rule above. */
+   Title weight follows the forza6 base rule above (400 — shiki #task:1766
+   found 500 heavy); the number keeps Rajdhani 700 via `[data-task-ref-num]`. */
 [data-theme='forza6'] .system-activity-cluster [data-task-ref] {
   background: color-mix(in srgb, var(--forza6-yellow) 32%, transparent);
   border: 1px solid var(--forza6-ink);
   color: var(--forza6-ink);
-  font-weight: 500;
 }
 [data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover {
   background: var(--forza6-yellow);
