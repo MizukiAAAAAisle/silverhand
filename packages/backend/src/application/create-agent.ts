@@ -407,10 +407,12 @@ async function materializeReservedAgent(
 }
 
 /**
- * Post-commit best-effort runtime effects (spec §5.1). Each closure returns
- * `void` and kicks off a self-catching detached promise, so draining them adds
- * no response latency and `start` is NOT serialized behind `deliver`. Order is
- * deliver → start, preserved from the original route.
+ * Post-commit best-effort effects (spec §5.1). Each closure is self-catching,
+ * so draining them adds no response latency and `start` is NOT serialized
+ * behind `deliver`. Order is announce → deliver → start. Only the `created`
+ * arms build these effects (echo / failure never do) and the drain runs after
+ * the L3a commit, so the identity announce fires exactly once per genuine
+ * creation.
  */
 function buildPostCommitEffects(
   deps: CreateAgentDeps,
@@ -420,6 +422,14 @@ function buildPostCommitEffects(
 ): PostCommitEffect[] {
   const { ctx } = deps;
   return [
+    () => {
+      // Announce the freshly materialized agent so every already-open
+      // app-scope viewer converges its directory + identity carriers without
+      // a remount — the mirror of `UserService.publishChanged`, since human
+      // and agent are isomorphic actors. Id-only payload (client re-reads the
+      // authority); contract on `AgentChangedEventSchema` (#task:1707).
+      ctx.events.publishToScope('app', 'agent_changed', { agent_id: agentId });
+    },
     () => {
       ctx.runtimeHost
         .deliverMessage(dmId, agentId, onboardingMessageId)

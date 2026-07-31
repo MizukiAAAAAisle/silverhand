@@ -368,6 +368,7 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     users,
     passwordCredentials: ctx.passwordCredentials,
     authSessions: ctx.authSessions,
+    events: ctx.events,
   });
   // Shared by the workspace and conversation membership sub-apps.
   const membershipDeps: MembershipRouteDeps = {

@@ -136,23 +136,24 @@ export type UploadAvatarResponse = z.infer<typeof UploadAvatarResponseSchema>;
 /**
  * `user_changed` — WS event on the **`app`** scope, the human counterpart
  * of `agent_changed` (same shape, same scope, same "id only" payload), so
- * the two isomorphic actors propagate a profile edit the same way.
+ * the two isomorphic actors propagate an identity change the same way.
  *
- * Coverage is the PROFILE write paths, and only those: `PATCH /api/me`
- * (display_name) and avatar upload / clear, i.e. every `UserService`
- * method that mutates a stored `UserDto` after the row exists. `name` is
- * immutable after registration, so it never triggers this.
- *
- * Publisher coverage is therefore updates only: user CREATION
- * (`/auth/signup`, embedded bootstrap, `UserService.register`) writes a
- * stored `UserDto` but publishes nothing, so a human who appears on one
- * machine is not announced to the others until that client remounts.
- * `agent_changed` has the same updates-only producer boundary. Whether
- * creation should reuse these two events is open — see #task:1707. This is
- * a description of today's producers, not a claim that the gap is
- * intentional; on the consumer side the renderer's subject-kind carrier
- * registry already routes "the directory grew" and "an entry changed"
- * through one invalidation path.
+ * Coverage is every identity write that changes what the human directory
+ * shows — both CREATION and UPDATE, each gated on the write actually
+ * landing:
+ *   - create: `UserService.register` (embedded first-boot) and
+ *     `UserAuthService.signup` (standalone), published after the row's
+ *     commit succeeds. A genuine first creation publishes exactly once; an
+ *     already-registered / duplicate-email / rejected attempt writes no row
+ *     and stays silent.
+ *   - update: `PATCH /api/me` (display_name) and avatar upload / clear —
+ *     every `UserService` profile write after the row exists. `name` is
+ *     immutable after registration, so it never triggers this, and a no-op
+ *     profile write publishes nothing.
+ * `agent_changed` has the same create+update producer boundary. On the
+ * consumer side the renderer's subject-kind carrier registry routes "the
+ * directory grew" (create) and "an entry changed" (update) through one
+ * invalidation path, so both converge identically (#task:1707).
  *
  * Clients treat it as an INVALIDATION SIGNAL ONLY and re-read the existing
  * authorities — the global human directory (`GET /api/users`), the

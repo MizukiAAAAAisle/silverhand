@@ -58,18 +58,20 @@ export class UserService {
   /**
    * The single seam that broadcasts a user-DTO change to all clients —
    * the mirror image of `AgentService.publishChanged`, because human and
-   * agent are isomorphic actors and their profile edits must propagate
-   * through the same mechanism. Every profile write path in this service
-   * funnels through here, so no route hand-copies a publish.
+   * agent are isomorphic actors and their identity writes must propagate
+   * through the same mechanism. Every identity write path in this service —
+   * a genuine first-time `register` and every profile edit — funnels
+   * through here, so no route hand-copies a publish.
    *
    * `app` scope + minimal `{user_id}` payload: no profile data on the wire
    * (the client re-reads the authority), and the audience equals the
    * audience of the ungated human directory it invalidates. Contract and
    * its falsifier live on `UserChangedEventSchema` in @silverhand/shared.
    *
-   * Called only after a write has actually changed the row: a no-op
-   * update (same display_name) or a clear on a user with no avatar
-   * publishes nothing, and a rejected write throws before reaching here.
+   * Called only after a write has actually changed the row: a genuine
+   * creation, or a real profile change. A no-op update (same display_name)
+   * or a clear on a user with no avatar publishes nothing, and a rejected
+   * write throws before reaching here (#task:1707).
    */
   private publishChanged(id: string): void {
     this.events.publishToScope('app', 'user_changed', { user_id: id });
@@ -205,6 +207,12 @@ export class UserService {
       }
       throw err;
     }
+    // Reaching here means a genuine first-time registration: the single-user
+    // gate above throws `already_registered` otherwise, and a name collision
+    // throws `name_taken`. Announce the new identity so every already-open
+    // app-scope viewer converges its directory + identity carriers without a
+    // remount (#task:1707).
+    this.publishChanged(row.id);
     return rowToDto(row);
   }
 

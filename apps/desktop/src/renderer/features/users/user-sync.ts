@@ -65,14 +65,16 @@ export function userSyncTouchesViewer(
  * Subscribe to the global `app` scope and reseat every cache that carries a
  * human's identity whenever the backend publishes `user_changed` (or a
  * `snapshot_required` recovery). **Mount ONCE in the app shell**, next to
- * {@link useAgentSync} — the two isomorphic actors propagate a profile edit the
- * same way and share one carrier registry, each under its own subject kind, so
- * a human avatar change never refetches host status or DM favorites.
+ * {@link useAgentSync} — the two isomorphic actors propagate an identity
+ * change the same way and share one carrier registry, each under its own
+ * subject kind, so a human avatar change never refetches host status or DM
+ * favorites.
  *
- * This is what makes a REMOTE edit visible: a profile changed on another
- * machine never touches this client's mutation caches, so before #task:1702 the
- * roster / directory / Activity / reaction / task copies of that human's name
- * and avatar sat stale until each surface happened to remount (global
+ * This is what makes a REMOTE identity change visible: a new human signing
+ * up / registering, or a profile edited on another machine, never touches
+ * this client's mutation caches, so before #task:1702 / #task:1707 the
+ * directory / roster / Activity / reaction / task copies of that human sat
+ * stale until each surface happened to remount (global
  * `refetchOnWindowFocus` is off — `lib/queryClient.ts`).
  *
  * The event is an invalidation signal only; its payload carries no profile

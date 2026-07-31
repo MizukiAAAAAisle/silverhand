@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { Database as Db } from 'better-sqlite3';
 import type { AuthSignupInput } from '@silverhand/shared';
 import { UserRepo } from '../repos/user-repo.js';
+import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import {
   normalizeLoginEmail,
   type PasswordCredentialService,
@@ -19,17 +20,32 @@ export class UserAuthService {
   private readonly users: UserRepo;
   private readonly passwordCredentials: PasswordCredentialService;
   private readonly authSessions: AuthSessionService;
+  private readonly events?: ScopeEventBus;
 
   constructor(opts: {
     db: Db;
     users: UserRepo;
     passwordCredentials: PasswordCredentialService;
     authSessions: AuthSessionService;
+    events?: ScopeEventBus;
   }) {
     this.db = opts.db;
     this.users = opts.users;
     this.passwordCredentials = opts.passwordCredentials;
     this.authSessions = opts.authSessions;
+    this.events = opts.events;
+  }
+
+  /**
+   * Announce a genuine first-time signup to every app-scope viewer, the
+   * standalone-path twin of `UserService.publishChanged` (human and agent
+   * are isomorphic actors, so both identity-create paths propagate through
+   * the same `user_changed` mechanism + `{user_id}` payload). Optional
+   * because the offline reset-password admin path constructs this service
+   * with no live event bus and never signs up (#task:1707).
+   */
+  private publishCreated(id: string): void {
+    this.events?.publishToScope('app', 'user_changed', { user_id: id });
   }
 
   async signup(
@@ -68,15 +84,17 @@ export class UserAuthService {
     const baseName = profileNameFromEmailLocalPart(emailLocalPart(email));
     for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
-        return {
-          ok: true,
-          userId: tx({
-            id: randomHex(8),
-            name: nameCandidate(baseName, attempt),
-            displayName,
-            email,
-          }),
-        };
+        const userId = tx({
+          id: randomHex(8),
+          name: nameCandidate(baseName, attempt),
+          displayName,
+          email,
+        });
+        // The tx committed a brand-new user row — the existing-email case is
+        // handled above and returns `auth_failed` before reaching here — so
+        // announce the genuine creation exactly once after commit.
+        this.publishCreated(userId);
+        return { ok: true, userId };
       } catch (err) {
         if (isEmailConflict(err)) {
           await this.passwordCredentials.verifyLoginPassword({

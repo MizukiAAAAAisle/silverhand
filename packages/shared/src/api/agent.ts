@@ -215,18 +215,17 @@ export type UpdateProfileInput = z.infer<typeof UpdateProfileInputSchema>;
 
 /**
  * `agent_changed` — WS event on the **`app`** scope, published by the
- * backend when an agent's stored `AgentDto` is UPDATED: human
- * `PATCH /api/agents/:id`, human avatar upload/delete, the agent's own
- * `silverhand profile update` (display_name / description / avatar), and a
- * completed runtime transition. Those are the only callers of
- * `AgentService.publishChanged`, which is the sole publisher.
- *
- * Agent CREATION (`createAgentWithHome` in `routes.ts`) writes a stored
- * `AgentDto` but publishes nothing, so a new agent is not announced to
- * other clients until they remount. `user_changed` has the same
- * updates-only producer boundary; whether creation should reuse the two
- * events is open — see #task:1707. This states today's producers, not a
- * claim that the gap is intentional.
+ * backend on any identity write that changes what the agent directory
+ * shows, both UPDATE and CREATION:
+ *   - update: human `PATCH /api/agents/:id`, human avatar upload/delete,
+ *     the agent's own `silverhand profile update` (display_name /
+ *     description / avatar), and a completed runtime transition — the
+ *     callers of `AgentService.publishChanged`.
+ *   - create: a genuine agent provisioning, published once as a
+ *     post-commit effect of `createAgent`'s `created` result (after the
+ *     dependent-row commit). An idempotent echo or a failed materialization
+ *     builds no such effect, so it publishes nothing.
+ * `user_changed` has the same create+update producer boundary (#task:1707).
  *
  * Clients treat it as an invalidation signal and reseat every cache that
  * denormalizes an agent's identity — the agent-kind entries of the

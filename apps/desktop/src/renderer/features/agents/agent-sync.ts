@@ -25,11 +25,12 @@ import { onWsFrame, subscribeWsScope } from '@/lib/ws-client';
  * / task scope hooks do.
  *
  * `agent_changed` is the backend's single propagation signal for any
- * AgentDto mutation (display_name / description / avatar / runtime /
- * model), published on the global `app` scope by `agentService` after a
- * successful write — from BOTH write paths (human `PATCH /api/agents/:id`
- * + avatar upload/delete, and the agent CLI `profile update`). See
- * #task:1178.
+ * AgentDto identity write — a genuine agent creation, or a mutation
+ * (display_name / description / avatar / runtime / model) — published on
+ * the global `app` scope after a successful commit. Update paths (human
+ * `PATCH /api/agents/:id` + avatar upload/delete, and the agent CLI
+ * `profile update`) go through `agentService`; the create path is a
+ * post-commit effect of provisioning. See #task:1178 / #task:1707.
  */
 export type AgentSyncAction = { kind: 'invalidate' };
 
