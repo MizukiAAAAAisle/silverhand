@@ -150,6 +150,7 @@ import { resolveChannelOpen } from '@/lib/channel-open';
 import { pickFallbackAfterArchive } from '@/lib/archive-fallback';
 import { pickWorkspaceToRestore } from '@/lib/workspace-restore';
 import { resolveRestoreNavigation } from '@/lib/restore-navigation';
+import { dmRecognitionName } from '@/lib/workspace-name';
 export function App(): JSX.Element {
   useAppearance();
   // #task:1763 — subscribe to main's confirmed runtime epoch promotion so a
@@ -390,6 +391,23 @@ function RegisteredAppShell(): JSX.Element {
   const selectedWorkspacePath = selectedWorkspaceId
     ? localWorkspacePaths.get(selectedWorkspaceId) ?? null
     : null;
+  // Titlebar name for a DM = the bound agent's raw display name, resolved the
+  // SAME way as the rail (`dmRecognitionName`, shared so they can't drift) so
+  // the header reads like the person, not `@handle` (#task:1768). Regular
+  // workspaces keep their bare name. The `· DM` marker itself stays in the
+  // Titlebar — it's the standalone header's only cue that this is a DM vs a
+  // channel workspace (the rail conveys that structurally via its section).
+  const titlebarWorkspaceName =
+    selectedWorkspace === null
+      ? null
+      : selectedWorkspace.kind === 'dm'
+        ? dmRecognitionName(
+            selectedWorkspace.name,
+            selectedWorkspace.dm_agent_id
+              ? agentsById.get(selectedWorkspace.dm_agent_id)
+              : undefined,
+          )
+        : selectedWorkspace.name;
   // Activity is a GLOBAL list — it shows rows from every workspace, so it needs
   // workspace_id → identity (name + icon inputs), so a GLOBAL list (Activity)
   // can show each row's workspace icon and disambiguate same-named channels
@@ -1859,7 +1877,7 @@ function RegisteredAppShell(): JSX.Element {
     <div className="flex h-screen w-screen flex-col overflow-hidden">
       <Titlebar
         workspaceId={selectedWorkspace?.id ?? null}
-        workspaceName={selectedWorkspace?.name ?? null}
+        workspaceName={titlebarWorkspaceName}
         workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
         workspacePath={selectedWorkspacePath}
         workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}

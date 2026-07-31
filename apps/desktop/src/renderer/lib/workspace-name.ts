@@ -7,10 +7,11 @@
  * filter's `dmScopeLabel` / `archivedRowWorkspaceLabel` — two said `@<agent>`,
  * one said `DM <agent>`. Same filter concept, different labels. Collapsed here.
  *
- * The workspace RAIL no longer uses these: it shows a DM as the agent's raw
- * display name, no `@` (`WorkspacesPanel`, #task:1768) — the rail is a
- * recognition surface, while these helpers serve handle-ref surfaces (pickers,
- * filters, search results) that keep `@<agent>`.
+ * The workspace RAIL and the app TITLEBAR don't use `dmWorkspaceLabel`: they
+ * show a DM as the bound agent's raw display name via `dmRecognitionName`
+ * (below), no `@` (#task:1768) — recognition surfaces, not handle refs. The
+ * remaining `@<agent>` handle-ref surfaces (pickers, filters, search results)
+ * keep `dmWorkspaceLabel`.
  *
  * The subtlety the `stripDmPrefix` covers: a DM workspace surfaces under two
  * name shapes. The `WorkspaceListItem` carries a UI `dm-` prefix
@@ -38,4 +39,18 @@ export function workspaceDisplayName(workspace: {
   kind: 'regular' | 'dm';
 }): string {
   return workspace.kind === 'dm' ? dmWorkspaceLabel(workspace.name) : workspace.name;
+}
+
+/** Recognition-surface label for a DM: the bound agent's RAW display name —
+ *  no `@`, no suffix (#task:1768). The rail AND the titlebar read this so the
+ *  two can't drift (the drift shiki caught: rail showed the display name,
+ *  titlebar showed the handle). Distinct from `dmWorkspaceLabel`, which serves
+ *  the handle-ref surfaces (pickers / filters / search). Falls back to the
+ *  agent's handle, then the bare workspace name (`dm-` prefix stripped) when
+ *  the agent isn't resolved yet. */
+export function dmRecognitionName(
+  workspaceName: string,
+  agent: { display_name?: string | null; name?: string | null } | undefined,
+): string {
+  return agent?.display_name?.trim() || agent?.name || stripDmPrefix(workspaceName);
 }
