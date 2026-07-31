@@ -52,13 +52,9 @@ export function TaskRefStaticChip({
     >
       <CheckSquare className="size-3 shrink-0 self-center" />
       {task ? (
-        <span className="truncate">
-          <span className="font-mono">#{task.task_number}</span>
-          {' '}
-          {task.title}
-        </span>
+        <span className="truncate">#{task.task_number} {task.title}</span>
       ) : (
-        <span className="truncate font-mono">{inertLabel}</span>
+        <span className="truncate">{inertLabel}</span>
       )}
     </span>
   );
@@ -136,9 +132,11 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref-state="no-context"
       >
         <CheckSquare className="size-3 shrink-0 self-center" />
-        {/* Whole label is ASCII (`#task:NNN`) → mono everywhere on the
-            inert/loading/missing chips. See forza6 font split spec. */}
-        <span className="truncate font-mono">{inertLabel}</span>
+        {/* No `font-mono` on the label — the number follows the chip's own
+            typeface (`--appearance-prose-font`, sans by default). forza6's
+            `--font-mono` resolves to Space Mono, whose digits read poorly
+            (@shiki `sLh6CqwNw0uAtThk`, #task:1757). */}
+        <span className="truncate">{inertLabel}</span>
       </span>
     );
   }
@@ -159,7 +157,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref-state="loading"
       >
         <CheckSquare className="size-3 shrink-0 self-center" />
-        <span className="truncate font-mono">{inertLabel}</span>
+        <span className="truncate">{inertLabel}</span>
       </span>
     );
     return (
@@ -182,25 +180,22 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref-state="missing"
       >
         <CheckSquare className="size-3 shrink-0 self-center" />
-        <span className="truncate font-mono">{inertLabel}</span>
+        <span className="truncate">{inertLabel}</span>
       </span>
     );
   }
 
   const label = `#${task.task_number} · ${task.title}`;
   const tooltip = `Task ${label}`;
-  // ASCII sigil (`#NNN`) renders in mono so numbers line up identically
-  // across chips; title stays sans because it may contain CJK and mono
-  // CJK fallback (PingFang etc.) looks uneven next to ASCII digits. See
-  // forza6 font split spec (msg vWYNLYq_Wtw6P4rj).
+  // Number and title share one typeface: the chip inherits
+  // `--appearance-prose-font` (sans by default) from the message body, so
+  // the label reads as one run instead of a mono/sans seam. No `font-mono`
+  // on the number — forza6's `--font-mono` is Space Mono, whose digits read
+  // poorly (@shiki `sLh6CqwNw0uAtThk`, #task:1757).
   const chipContent = (
     <>
       <CheckSquare className="size-3 shrink-0 self-center" />
-      <span className="truncate">
-        <span className="font-mono">#{task.task_number}</span>
-        {' '}
-        {task.title}
-      </span>
+      <span className="truncate">#{task.task_number} {task.title}</span>
     </>
   );
 

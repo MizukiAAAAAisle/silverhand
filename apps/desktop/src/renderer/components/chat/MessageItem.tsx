@@ -971,10 +971,12 @@ function MessageTaskTag({
       {/* Status glyph from the shared TASK_STATUS_ICON source (kanban /
           drawer use the same), so a future icon swap updates everywhere. */}
       <StatusIcon className="size-3 shrink-0" aria-hidden />
-      {/* ASCII sigil (`#NNN`) in mono so the number reads as a task
-          reference; forza6 swaps it to poster display caps via the
-          `[data-task-status]` font rule, which is on-theme there. */}
-      <span className="font-mono shrink-0">#{linkedTask.task_number}</span>
+      {/* No `font-mono` on the number — it inherits the chip's typeface, so
+          it matches the `· assignee` next to it (and forza6's
+          `[data-task-status]` display face applies to the whole chip rather
+          than to the label alone). Space Mono digits read poorly in forza6
+          (@shiki `sLh6CqwNw0uAtThk`, #task:1757). */}
+      <span className="shrink-0">#{linkedTask.task_number}</span>
       {assignee ? (
         <span className="min-w-0 truncate font-normal">· {assignee}</span>
       ) : null}
