@@ -92,8 +92,10 @@ export interface BlobSweepOutcome {
  *  self-heals, never corrupting state. Returned (not logged) because the
  *  service has no logger; the route adapter owns one and records a miss. */
 export interface AttachmentUpdateMaintenance {
-  /** The stable alias now points at the new physical blob. When false, the GC
-   *  of the old blob is deliberately SKIPPED so the alias stays readable. */
+  /** The stable alias is CONFIRMED pointing at the new physical blob (the relink
+   *  returned a local path). False on either a throw OR a `null` return (bytes
+   *  absent / no local alias) — a resolved `null` is never read as confirmed. When
+   *  false, the GC of the old blob is deliberately SKIPPED so the alias stays readable. */
   aliasRelinked: boolean;
   /** The old physical blob was GC'd (only attempted after a successful relink). */
   oldBlobDeleted: boolean;
@@ -273,13 +275,18 @@ export class AttachmentService {
     }
 
     // 3) Eager alias relink. Best-effort, but its result GATES the GC below:
-    //    a failed relink leaves the alias resolving to the old blob, so we must
-    //    NOT delete that blob (it'd dangle) — keep it readable-stale until the
-    //    next locate self-heals. The outcome is surfaced, never swallowed.
+    //    a relink that did NOT confirm the new bytes leaves the alias resolving
+    //    to the old blob, so we must NOT delete that blob (it'd dangle) — keep
+    //    it readable-stale until the next locate self-heals. "Did not confirm"
+    //    is BOTH a throw AND a `null` return: `materializeAlias`'s contract is
+    //    `{localPath} | null`, and `null` means the physical bytes are absent /
+    //    the backend has no local alias — fail closed on it exactly like a
+    //    throw, never read a resolved `null` as "confirmed on the new bytes".
+    //    The outcome is surfaced, never swallowed.
     let maintenanceError: unknown;
     const aliasRelinked = await this.storage
       .materializeAlias(newRef, row.id)
-      .then(() => true)
+      .then(located => located !== null)
       .catch((err: unknown) => {
         maintenanceError = err;
         return false;

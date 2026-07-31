@@ -674,6 +674,40 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
     }
   });
 
+  it('relink returns null: fail-closed like a throw — old blob RETAINED, no dangle', async () => {
+    const { service, channel, cleanup, storage, silverhandDir } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'a.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const blobsRoot = join(silverhandDir, 'blobs');
+      // `materializeAlias`'s contract is `{localPath} | null`; null means the
+      // bytes are absent / no local alias. It must NOT be read as "confirmed on
+      // the new bytes" — otherwise the GC below would delete the last readable
+      // copy behind the still-old alias.
+      storage.materializeAlias = async () => null;
+      const next = Buffer.concat([PNG_BYTES, Buffer.from('new')]);
+      const res = await service.update(dto.id, next, { kind: 'user', id: 'local' });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      // Authoritative switch landed…
+      expect(res.dto.content_revision).toBe(2);
+      const served = await service.serveForViewer(dto.id, () => true);
+      expect(Buffer.from(await served!.arrayBuffer())).toEqual(next);
+      // …but the relink is NOT confirmed, so GC is skipped: old blob retained.
+      expect(res.maintenance.aliasRelinked).toBe(false);
+      expect(res.maintenance.oldBlobDeleted).toBe(false);
+      expect(countPhysicalBlobs(blobsRoot)).toBe(2); // old retained (not dangled)
+    } finally {
+      cleanup();
+    }
+  });
+
   it('GC fail: DB + alias on new bytes, old-blob leak surfaced in maintenance', async () => {
     const { service, channel, cleanup, storage, silverhandDir } = bootstrap();
     try {

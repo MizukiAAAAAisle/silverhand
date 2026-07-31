@@ -127,6 +127,15 @@ export type AttachmentSnapshot = z.infer<typeof AttachmentSnapshotSchema>;
 // payload is intentionally minimal: it names WHAT got fresher, not the new
 // bytes. The renderer keys its blob generation on `content_revision` and refetches
 // the authoritative DTO/bytes; the event is a bust signal, not a data carrier.
+//
+// Reconnect obligation (renderer contract): the `id+content_revision` bust above
+// only covers the GAP-FREE path. If a disconnect makes the side scope emit
+// `snapshot_required`, the client missed an unknown set of these events and the
+// payload cannot name which attachments changed — so a consumer MUST, on a
+// side-scope `snapshot_required`, bust the affected blob generations (clear/bump
+// this channel's — or, when it can't scope precisely, all — cached object URLs).
+// Without that, an already-open viewer can hold a stale object URL forever and
+// the "self-healing" above does not hold for it.
 export const AttachmentChangedEventSchema = z.object({
   attachment_id: z.string(),
   /** The post-update revision — strictly greater than the client's last-seen
