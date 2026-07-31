@@ -36,9 +36,11 @@ import {
   authResultToUser,
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   mapAuthStateToViewer,
   type BackendUnreachable,
   type SetupRequired,
+  type UpdateRequired,
   type ViewerState,
 } from './hooks';
 import { ApiError } from '@/lib/api';
@@ -116,6 +118,57 @@ describe('mapAuthStateToViewer — three IPC arms (D4.a Commit 6 part 2)', () =>
     expect(
       (viewer as ViewerState & { signup_enabled?: boolean }).signup_enabled,
     ).toBeUndefined();
+  });
+
+  // #task:1761 — the two epoch hard-gate arms map to the UpdateRequired
+  // marker with the direction discriminant; no signup_enabled leaks through
+  // an incompatible pair for the same reason as backend_unreachable.
+  it('app_update_required arm → UpdateRequired with direction app', () => {
+    const viewer = mapAuthStateToViewer({
+      status: 'app_update_required',
+      server_api_epoch: 3,
+      minimum_client_epoch: 2,
+    });
+    expect(viewer).toEqual({
+      update_required: true,
+      direction: 'app',
+      server_api_epoch: 3,
+    } satisfies UpdateRequired);
+    expect(isUpdateRequired(viewer)).toBe(true);
+    expect(
+      (viewer as ViewerState & { signup_enabled?: boolean }).signup_enabled,
+    ).toBeUndefined();
+  });
+
+  it('server_update_required arm → UpdateRequired with direction server', () => {
+    const viewer = mapAuthStateToViewer({
+      status: 'server_update_required',
+      server_api_epoch: 1,
+      desktop_api_epoch: 2,
+    });
+    expect(viewer).toEqual({
+      update_required: true,
+      direction: 'server',
+      server_api_epoch: 1,
+    } satisfies UpdateRequired);
+    expect(isUpdateRequired(viewer)).toBe(true);
+  });
+
+  it('isUpdateRequired is false for the other three viewer shapes', () => {
+    expect(
+      isUpdateRequired({
+        backend_unreachable: true,
+        server_url: 'https://x.test',
+        message: 'down',
+      }),
+    ).toBe(false);
+    expect(
+      isUpdateRequired({
+        registration_required: true,
+        suggested_name: '',
+        signup_enabled: true,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -1,0 +1,72 @@
+/**
+ * #task:1761 — full-screen gate for the desktop↔server API epoch hard gate.
+ *
+ * Rendered when `desktopAuthState()` classified the pair as incompatible
+ * BEFORE any business DTO was read:
+ *   - `direction: 'app'`    → this build is older than the server's minimum
+ *     client epoch; the remedy is upgrading the app.
+ *   - `direction: 'server'` → the server generation (possibly pre-epoch,
+ *     classified 0) is older than this build's minimum; the remedy is
+ *     upgrading the server deployment.
+ *
+ * Deliberately minimal: no signup/login affordances (no business state may
+ * be inferred through an incompatible pair — same rule as
+ * BackendUnreachableGate), just the typed explanation and a re-probe button
+ * for after the other side has been upgraded.
+ */
+import { RefreshCw, AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { primaryAction } from '@/features/common/PrimaryAction';
+
+export interface UpdateRequiredGateProps {
+  direction: 'app' | 'server';
+  serverApiEpoch: number;
+  onRetry: () => void;
+}
+
+export function UpdateRequiredGate({
+  direction,
+  serverApiEpoch,
+  onRetry,
+}: UpdateRequiredGateProps): JSX.Element {
+  const title =
+    direction === 'app' ? 'Update Silverhand to continue' : 'Server update required';
+  const description =
+    direction === 'app'
+      ? 'This version of the app is older than what the server supports. ' +
+        'Install the latest Silverhand release, then try again.'
+      : 'The server this app is connected to runs an older API generation ' +
+        'than this build requires. Upgrade the server deployment, then try again.';
+  return (
+    <main
+      data-gate="update-required"
+      className="grid h-screen w-screen place-items-center bg-bg-base px-6 py-14 text-text-primary"
+      style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+    >
+      <div
+        className="w-full max-w-[480px] rounded-md border border-border bg-bg-floating p-6 shadow-modal"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
+        <header className="mb-4 flex items-center gap-2">
+          <span className="grid size-7 place-items-center rounded-md border border-border-subtle bg-bg-row-hover text-status-warning">
+            <AlertTriangle className="size-4" />
+          </span>
+          <h1 className="text-base font-semibold leading-tight">{title}</h1>
+        </header>
+        <p className="mb-4 text-xs leading-relaxed text-text-muted">{description}</p>
+        <p className="mb-4 text-[11px] text-text-muted">
+          Server API generation: {serverApiEpoch}
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          {...primaryAction()}
+          onClick={onRetry}
+        >
+          <RefreshCw className="size-3.5" />
+          Check again
+        </Button>
+      </div>
+    </main>
+  );
+}

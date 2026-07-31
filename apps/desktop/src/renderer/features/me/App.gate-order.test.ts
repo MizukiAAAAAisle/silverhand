@@ -219,4 +219,48 @@ describe('App.tsx gate ordering (D4.a Commit 6 part 2)', () => {
     // The registration form must NOT appear — order proven.
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
+
+  // #task:1761 (Cindy P1-3) — the epoch hard gate must prevent the
+  // registered shell (and therefore every business query it mounts) from
+  // rendering. Structural signals only: the gate's data-gate marker and the
+  // absence of registration/shell markup.
+  it('update_required branch: UpdateRequiredGate renders and the registered shell does not mount', async () => {
+    const viewer = {
+      update_required: true,
+      direction: 'app',
+      server_api_epoch: 2,
+    } as unknown as ViewerState;
+    const html = await renderApp(viewer);
+    expect(html).toContain('data-gate="update-required"');
+    expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
+    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
+  });
+
+  it('GATE ORDER: synthetic ViewerState satisfying BOTH update_required AND registration_required renders the update gate, not the registration form', async () => {
+    const synthetic = {
+      update_required: true,
+      direction: 'server',
+      server_api_epoch: 0,
+      registration_required: true,
+      suggested_name: '',
+      signup_enabled: true,
+    } as unknown as ViewerState;
+    const html = await renderApp(synthetic);
+    expect(html).toContain('data-gate="update-required"');
+    expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
+  });
+
+  it('GATE ORDER: unreachable wins over update_required (connectivity before compatibility)', async () => {
+    const synthetic = {
+      backend_unreachable: true,
+      server_url: 'https://down.example.test',
+      message: 'mixed',
+      update_required: true,
+      direction: 'app',
+      server_api_epoch: 2,
+    } as unknown as ViewerState;
+    const html = await renderApp(synthetic);
+    expect(html).toContain(SIG_UNREACHABLE_GATE);
+    expect(html).not.toContain('data-gate="update-required"');
+  });
 });

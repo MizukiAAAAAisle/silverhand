@@ -30,7 +30,7 @@ import {
 import { canManageAgentSchedules, canViewAgentFiles } from './permissions';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { useHostProvenanceGate } from '@/features/hosts/hooks';
-import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
 
 const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
 const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
@@ -101,7 +101,7 @@ export function AgentView({
   const [section, setSection] = useState<AgentSection>(() => readSection());
   const agentForPermissions = agentQuery.data;
   const viewerForPermissions =
-    viewerQuery.data && !isBackendUnreachable(viewerQuery.data)
+    viewerQuery.data && !isBackendUnreachable(viewerQuery.data) && !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data
       : undefined;
   const scheduleAccessKnown = Boolean(agentForPermissions && viewerForPermissions);

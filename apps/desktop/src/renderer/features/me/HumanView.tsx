@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useUsers } from '@/features/users/hooks';
-import { useViewerUser, isRegistrationRequired, isBackendUnreachable } from './hooks';
+import { useViewerUser, isRegistrationRequired, isBackendUnreachable, isUpdateRequired } from './hooks';
 import { HumanHeader } from './HumanHeader';
 import { HumanProfileCard } from './HumanProfileCard';
 
@@ -32,7 +32,7 @@ export function HumanView({
   const viewerDto =
     viewer.data
     && !isRegistrationRequired(viewer.data)
-    && !isBackendUnreachable(viewer.data)
+    && !isBackendUnreachable(viewer.data) && !isUpdateRequired(viewer.data)
       ? viewer.data
       : null;
   const dto = viewerDto?.id === userId

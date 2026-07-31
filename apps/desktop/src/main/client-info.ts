@@ -1,6 +1,8 @@
 import { app } from 'electron';
 import {
   serializeClientInfoHeader,
+  DESKTOP_SERVER_API_EPOCH,
+  MINIMUM_SERVER_API_EPOCH,
   type ClientInfo,
   type ClientDeployment,
 } from '@silverhand/shared';
@@ -39,6 +41,11 @@ export function desktopClientInfoHeaderValue(
       platform: process.platform,
       arch: process.arch,
       installation_id: loadOrCreateInstallationId(installationIdPath),
+      // #task:1761 — desktop↔server API epoch range compiled into this build.
+      // Carried on BOTH the REST proxy requests and the event-WS upgrade so
+      // server-side admission has one uniform source.
+      desktop_api_epoch: DESKTOP_SERVER_API_EPOCH,
+      minimum_server_api_epoch: MINIMUM_SERVER_API_EPOCH,
     };
     cachedHeaderValue = serializeClientInfoHeader(info);
   } catch (err) {

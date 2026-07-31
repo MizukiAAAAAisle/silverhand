@@ -13,7 +13,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/server.js --external:better-sqlite3 --external:@node-rs/argon2 --minify=${SILVERHAND_MINIFY:-false} --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);'",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node24 --outfile=dist/server.js --external:better-sqlite3 --external:@node-rs/argon2 --minify=${SILVERHAND_MINIFY:-false} --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);' && node ../../scripts/epoch-runbook-reminder.mjs",
     "start": "tsx src/main.ts",
     "test": "vitest run",
     "test:watch": "vitest"

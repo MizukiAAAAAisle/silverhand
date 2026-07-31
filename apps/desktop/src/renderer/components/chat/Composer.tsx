@@ -35,6 +35,7 @@ import { useSendMessage } from '@/features/channels/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import {
@@ -321,7 +322,7 @@ export function Composer({
   const viewerId =
     viewerQuery.data
     && !isRegistrationRequired(viewerQuery.data)
-    && !isBackendUnreachable(viewerQuery.data)
+    && !isBackendUnreachable(viewerQuery.data) && !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data.id
       : null;
   // Membership sets used to split the mention picker into "In this

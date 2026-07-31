@@ -17,7 +17,7 @@ import { EditPencilButton } from '@/features/common/EditPencilButton';
 import { InlineText } from '@/features/common/InlineText';
 import { InlineTextarea } from './InlineTextarea';
 import { RuntimeConfigEditor } from './RuntimeConfigEditor';
-import { isBackendUnreachable, useViewerUser } from '@/features/me/hooks';
+import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
 import { useHostsQuery } from '@/features/hosts/hooks';
 import { resolveComputerName } from '@/features/hosts/host-display';
 
@@ -55,7 +55,7 @@ export function AgentProfileCard({
   // reaches the registered shell — but if it ever does, map to `undefined`
   // (deny edit, mirror loading).
   const viewerForPermissions =
-    viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+    viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
   const canEdit = canEditAgentProfile(viewerForPermissions, agent);
   const update = useUpdateAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);

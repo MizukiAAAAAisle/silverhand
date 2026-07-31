@@ -14,6 +14,7 @@ import { InlineText } from '@/features/common/InlineText';
 import {
   useClearAvatar,
   isBackendUnreachable,
+  isUpdateRequired,
   useUpdateProfile,
   useUploadAvatar,
   useViewerAvatarObjectUrl,
@@ -52,7 +53,7 @@ interface HumanProfileCardProps {
 export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
   const viewerForPermissions =
-    viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+    viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
   const canEdit = canEditUserProfile(viewerForPermissions, user);
   const update = useUpdateProfile();
   const upload = useUploadAvatar();

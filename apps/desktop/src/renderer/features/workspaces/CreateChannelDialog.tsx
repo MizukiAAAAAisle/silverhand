@@ -19,6 +19,7 @@ import { cn } from '@/lib/cn';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { MemberPicker, type MemberPickerCandidate } from './AgentPicker';
@@ -121,6 +122,7 @@ export function CreateChannelDialog({
     viewer.data
     && !isRegistrationRequired(viewer.data)
     && !isBackendUnreachable(viewer.data)
+    && !isUpdateRequired(viewer.data)
       ? viewer.data.id
       : null;
 

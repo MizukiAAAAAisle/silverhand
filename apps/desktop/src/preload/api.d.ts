@@ -88,7 +88,18 @@ export type DesktopAuthState =
   | { status: 'unauthenticated'; signup_enabled: boolean }
   // D4.a Commit 5d-fixup (Cindy P1-2): typed backend-unreachable arm.
   // No `signup_enabled` — unknown when the server is unreachable.
-  | { status: 'backend_unreachable'; server_url: string; message: string };
+  | { status: 'backend_unreachable'; server_url: string; message: string }
+  // #task:1761 — desktop↔server API epoch hard gate arms; see main/index.ts.
+  | {
+      status: 'app_update_required';
+      server_api_epoch: number;
+      minimum_client_epoch: number;
+    }
+  | {
+      status: 'server_update_required';
+      server_api_epoch: number;
+      desktop_api_epoch: number;
+    };
 
 export type DesktopAuthResult =
   | { ok: true; user: UserDto }

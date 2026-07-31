@@ -1,6 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: server. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
+import { DesktopApiAdvertisementSchema } from '../desktop-server-api-epoch.js';
 
 export const BindAddressScopeSchema = z.enum(['loopback', 'lan', 'public']);
 export type BindAddressScope = z.infer<typeof BindAddressScopeSchema>;
@@ -41,5 +42,17 @@ export const ServerInfoSchema = z.object({
    * `/api/server/info` MUST populate it.
    */
   bind_address_scope: BindAddressScopeSchema.optional(),
+  /**
+   * #task:1761 — desktop↔server application API epoch advertisement
+   * (`current_epoch` + `minimum_client_epoch`). The discovery half of the
+   * safe-version-skew contract: an epoch-aware desktop compares this against
+   * its own compiled range BEFORE issuing business requests and renders a
+   * typed upgrade gate on mismatch. Optional on receive so a new desktop can
+   * parse a pre-epoch server's response (classified as server epoch 0 during
+   * the symmetric bootstrap); epoch-aware servers emit it unconditionally.
+   * Enforcement does NOT rely on this field — the REST middleware and WS
+   * admission are the authoritative gates. See docs/desktop-server-api-epoch.md.
+   */
+  desktop_api: DesktopApiAdvertisementSchema.optional(),
 });
 export type ServerInfo = z.infer<typeof ServerInfoSchema>;

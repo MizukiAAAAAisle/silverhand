@@ -12,6 +12,7 @@ import {
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from '@/features/me/hooks';
@@ -118,7 +119,7 @@ export function MembersPanel({
   const viewer =
     viewerQuery.data
     && !isRegistrationRequired(viewerQuery.data)
-    && !isBackendUnreachable(viewerQuery.data)
+    && !isBackendUnreachable(viewerQuery.data) && !isUpdateRequired(viewerQuery.data)
       ? viewerQuery.data
       : null;
   // Multi-human audit 2026-06-03 #task:857 P0.6: HUMANS is the global

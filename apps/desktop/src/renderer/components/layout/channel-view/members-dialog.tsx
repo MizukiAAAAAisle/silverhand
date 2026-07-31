@@ -97,6 +97,7 @@ import { presenceDotStatus, usePresenceById } from '@/features/presence/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { STATUS_DOT } from './member-strip';
@@ -178,7 +179,7 @@ export function ChannelMembersDialog({
   const membersResult = useConversationMembers(channelId);
   const { data: viewer } = useViewerUser();
   const viewerUserId =
-    viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer)
+    viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) && !isUpdateRequired(viewer)
       ? viewer.id
       : null;
 

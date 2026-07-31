@@ -7,6 +7,7 @@ import {
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from './hooks';
@@ -40,7 +41,7 @@ export function HumanHeader({ user }: HumanHeaderProps): JSX.Element {
   const viewer =
     viewerState
     && !isRegistrationRequired(viewerState)
-    && !isBackendUnreachable(viewerState)
+    && !isBackendUnreachable(viewerState) && !isUpdateRequired(viewerState)
       ? viewerState
       : null;
   const isSelf = viewer?.id === user.id;

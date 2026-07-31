@@ -2,7 +2,8 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { apiPaths, CLIENT_INFO_HEADER, EVENT_WS_SESSION_COOKIE, parseClientInfoHeader } from '@silverhand/shared';
+import { apiPaths, CLIENT_INFO_HEADER, DESKTOP_API_EPOCH_HEADER, EVENT_WS_SESSION_COOKIE, parseClientInfoHeader, parseDesktopApiEpochHeader, UPGRADE_REQUIRED_HTTP_STATUS } from '@silverhand/shared';
+import { checkDesktopApiEpochOnUpgrade } from '../auth/desktop-api-epoch.js';
 import type { BackendContext } from '../context.js';
 import { EventWsConnection, type EventWsConnectionOptions } from './ws-connection.js';
 
@@ -12,6 +13,8 @@ export interface EventWsServerOptions extends Omit<EventWsConnectionOptions, 'vi
   path?: string;
   maxPayloadBytes?: number;
   shutdownGraceMs?: number;
+  /** #task:1761 test seam — see DesktopApiEpochOptions in auth/desktop-api-epoch.ts. */
+  desktopApiEpochMinimum?: number;
 }
 
 export interface EventWsServerController {
@@ -50,6 +53,30 @@ export function installEventWebSocketServer(
     const viewerUserId = resolveViewerUserIdFromCookie(req, ctx);
     if (!viewerUserId) {
       rejectUpgrade(socket, 401, 'Unauthorized');
+      return;
+    }
+    // #task:1761 — desktop API epoch admission (WS half). Same epoch source
+    // and normalization as the REST middleware by construction; checked after
+    // auth so the gate mirrors the REST position (bearer first, epoch second).
+    const epochRejection = checkDesktopApiEpochOnUpgrade(req, {
+      minimumClientEpoch: opts.desktopApiEpochMinimum,
+    });
+    if (epochRejection) {
+      ctx.logger.warn(
+        {
+          action: 'desktop_api_epoch_rejected',
+          transport: 'event_ws',
+          user_id: viewerUserId,
+          minimum_client_epoch: epochRejection.minimum_client_epoch,
+        },
+        'desktop api epoch: client too old',
+      );
+      rejectUpgrade(
+        socket,
+        UPGRADE_REQUIRED_HTTP_STATUS,
+        'Upgrade Required',
+        epochRejection,
+      );
       return;
     }
     if (closing) {
@@ -160,6 +187,12 @@ function logDesktopClientConnected(
       user_id: viewerUserId,
       connection_id: connectionId,
       client_info_status: clientInfo.status,
+      // #task:1761 — ADMISSION epoch from the dedicated header (0 = pre-epoch
+      // or malformed), logged for every session regardless of telemetry
+      // status so the cutoff evidence covers all three telemetry buckets.
+      admission_epoch: parseDesktopApiEpochHeader(
+        req.headers[DESKTOP_API_EPOCH_HEADER],
+      ),
       ...(clientInfo.status === 'valid'
         ? {
             client_surface: clientInfo.value.client_surface,
@@ -170,6 +203,10 @@ function logDesktopClientConnected(
             platform: clientInfo.value.platform,
             arch: clientInfo.value.arch,
             installation_id: clientInfo.value.installation_id,
+            // #task:1761 — observation bridge: per-session epoch distribution.
+            // Absent field logs as 0 (pre-epoch generation), matching the
+            // admission normalization.
+            desktop_api_epoch: clientInfo.value.desktop_api_epoch ?? 0,
           }
         : {}),
     },
@@ -202,8 +239,29 @@ function requestPathname(req: IncomingMessage): string {
   }
 }
 
-function rejectUpgrade(socket: Duplex, statusCode: number, reason: string): void {
-  socket.write(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`);
+function rejectUpgrade(
+  socket: Duplex,
+  statusCode: number,
+  reason: string,
+  body?: unknown,
+): void {
+  // #task:1761 — same JSON-body shape as host-ws-server's reject helper: a
+  // structured rejection (e.g. the 426 UpgradeRequiredBody) is written as a
+  // real HTTP response body, not dropped on the floor.
+  if (body === undefined) {
+    socket.write(`HTTP/1.1 ${statusCode} ${reason}\r\nConnection: close\r\n\r\n`);
+    socket.destroy();
+    return;
+  }
+  const payload = JSON.stringify(body);
+  socket.write(
+    `HTTP/1.1 ${statusCode} ${reason}\r\n` +
+      `Connection: close\r\n` +
+      `Content-Type: application/json\r\n` +
+      `Content-Length: ${Buffer.byteLength(payload)}\r\n` +
+      `\r\n` +
+      payload,
+  );
   socket.destroy();
 }
 

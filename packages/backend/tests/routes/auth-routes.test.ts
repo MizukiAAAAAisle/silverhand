@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
-import { apiPaths, authPaths } from '@silverhand/shared';
+import {
+  apiPaths,
+  authPaths,
+  DESKTOP_SERVER_API_EPOCH,
+  MINIMUM_CLIENT_API_EPOCH,
+} from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 describe('auth routes', () => {
@@ -31,6 +36,12 @@ describe('auth routes', () => {
       signup_enabled: false,
       bind_address_scope: 'lan',
       outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      // #task:1761 — desktop API epoch advertisement is part of the public
+      // server-info contract; asserted exactly, not loosely matched.
+      desktop_api: {
+        current_epoch: DESKTOP_SERVER_API_EPOCH,
+        minimum_client_epoch: MINIMUM_CLIENT_API_EPOCH,
+      },
     });
 
     const disabled = await requestJson(t, 'POST', authPaths.signup, {

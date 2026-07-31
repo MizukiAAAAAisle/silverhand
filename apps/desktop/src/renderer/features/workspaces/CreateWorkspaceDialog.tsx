@@ -27,6 +27,7 @@ import { useAgents } from '@/features/agents/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { useUsers } from '@/features/users/hooks';
@@ -63,6 +64,7 @@ export function CreateWorkspaceDialog({
     viewer.data
     && !isRegistrationRequired(viewer.data)
     && !isBackendUnreachable(viewer.data)
+    && !isUpdateRequired(viewer.data)
       ? viewer.data.id
       : null;
   const createWorkspace = useCreateWorkspace();

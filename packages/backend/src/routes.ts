@@ -3,6 +3,14 @@ import { routePath } from 'hono/route';
 import { getConnInfo } from '@hono/node-server/conninfo';
 import { performance } from 'node:perf_hooks';
 import { apiPaths, authPaths, probePaths } from '@silverhand/shared';
+import {
+  DESKTOP_SERVER_API_EPOCH,
+  MINIMUM_CLIENT_API_EPOCH,
+} from '@silverhand/shared';
+import {
+  installDesktopApiEpochMiddleware,
+  type DesktopApiEpochOptions,
+} from './auth/desktop-api-epoch.js';
 import type { BackendContext } from './context.js';
 import { elapsedSince } from './observability/route-span.js';
 import { AgentRepo } from './repos/agent-repo.js';
@@ -323,7 +331,15 @@ function isChannelSwitchDiagnosticPath(path: string): boolean {
   );
 }
 
-export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
+export interface ApiRouterOptions {
+  /** #task:1761 test seam — see DesktopApiEpochOptions. */
+  desktopApiEpoch?: DesktopApiEpochOptions;
+}
+
+export function createApiRouter(
+  ctx: BackendContext,
+  options: ApiRouterOptions = {},
+): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   installApiTimingMiddleware(app, ctx);
   installPublicBearerMiddleware(app, ctx, {
@@ -336,6 +352,11 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
     ],
   });
   installPublicPrincipalMiddleware(app);
+  // #task:1761 — desktop API epoch admission. After bearer (authenticated
+  // requests only reach here), before the registration gate and all business
+  // routes. Exemptions come from the shared manifest so advertise/enforce
+  // cannot drift; `/internal/*`, `/auth/*`, `/readyz` are outside the mount.
+  installDesktopApiEpochMiddleware(app, ctx, options.desktopApiEpoch ?? {});
   // Registration gate: after the public bearer middleware authenticates
   // a session, this verifies the user row still exists before public
   // data routes run. Probe paths, `/api/server/info`, `/auth/*`, and
@@ -388,6 +409,10 @@ export function createApiRouter(ctx: BackendContext): Hono<AppEnv> {
       signup_enabled: ctx.authConfig.signupEnabled,
       bind_address_scope: ctx.bindAddressScope,
       outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      desktop_api: {
+        current_epoch: DESKTOP_SERVER_API_EPOCH,
+        minimum_client_epoch: MINIMUM_CLIENT_API_EPOCH,
+      },
     }),
   );
 

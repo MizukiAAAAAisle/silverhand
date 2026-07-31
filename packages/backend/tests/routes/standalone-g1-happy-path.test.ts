@@ -39,7 +39,12 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
-import { apiPaths, authPaths } from '@silverhand/shared';
+import {
+  apiPaths,
+  authPaths,
+  DESKTOP_SERVER_API_EPOCH,
+  MINIMUM_CLIENT_API_EPOCH,
+} from '@silverhand/shared';
 import type { ConversationBusEvent } from '../../src/ws/scope-event-bus.js';
 import { buildTestApp, type TestApp } from '../utils/app.js';
 
@@ -63,6 +68,11 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       signup_enabled: true,
       bind_address_scope: 'lan',
       outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      // #task:1761 — epoch advertisement joins the server-info contract.
+      desktop_api: {
+        current_epoch: DESKTOP_SERVER_API_EPOCH,
+        minimum_client_epoch: MINIMUM_CLIENT_API_EPOCH,
+      },
     });
   });
 
@@ -81,6 +91,11 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       signup_enabled: false,
       bind_address_scope: 'public',
       outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
+      // #task:1761 — epoch advertisement joins the server-info contract.
+      desktop_api: {
+        current_epoch: DESKTOP_SERVER_API_EPOCH,
+        minimum_client_epoch: MINIMUM_CLIENT_API_EPOCH,
+      },
     });
     const blocked = await fetchJson(t, 'POST', authPaths.signup, {
       email: 'late@example.com',

@@ -13,6 +13,7 @@ import { useConversationMembers } from '@/features/conversations/useConversation
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from '@/features/me/hooks';
@@ -96,7 +97,7 @@ export function useMessageRenderContext(
   const viewer =
     rawViewer &&
     !isRegistrationRequired(rawViewer) &&
-    !isBackendUnreachable(rawViewer)
+    !isBackendUnreachable(rawViewer) && !isUpdateRequired(rawViewer)
       ? rawViewer
       : undefined;
   const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();

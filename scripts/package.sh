@@ -513,4 +513,9 @@ fi
 # sealed bundle byte before the artifact is handed off.
 verify_packaged_code_signature "$PACKAGED_APP_PATH"
 
+# #task:1761 — desktop↔server API epoch release reminder (shared helper,
+# fail-loud on a dangling runbook path; also wired into the standalone server
+# build). Correctness is owned by the admission gates and tests, not this line.
+node "$ROOT_DIR/scripts/epoch-runbook-reminder.mjs"
+
 echo "[package] artifacts in apps/desktop/$ARTIFACT_OUTPUT_DIR/"

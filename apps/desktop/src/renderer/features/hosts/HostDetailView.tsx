@@ -96,6 +96,7 @@ import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { useNav } from '@/router';
@@ -219,7 +220,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
   const viewerId =
     viewerState
     && !isRegistrationRequired(viewerState)
-    && !isBackendUnreachable(viewerState)
+    && !isBackendUnreachable(viewerState) && !isUpdateRequired(viewerState)
       ? viewerState.id
       : null;
   const canEditHostLocalConfig =

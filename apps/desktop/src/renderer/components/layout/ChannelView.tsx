@@ -29,6 +29,7 @@ import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
   isBackendUnreachable,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { canEditAgentProfile } from '@/features/agents/permissions';
@@ -411,7 +412,7 @@ function ActiveChannelView({
   const canManageAllChannelAgents = useMemo(() => {
     if (agentIds.length === 0) return false;
     const viewerForPermissions =
-      viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+      viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
     const agentsById = new Map(agents.map(agent => [agent.id, agent]));
     for (const agentId of agentIds) {
       const agent = agentsById.get(agentId);

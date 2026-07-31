@@ -99,6 +99,43 @@ describe('parseClientInfoHeader', () => {
     ).toBe('invalid');
   });
 
+  // #task:1761 — the API-epoch fields travel as a pair; a half payload is a
+  // malformed sender (invalid), never a legacy one, and the range must be
+  // internally consistent (min <= current).
+  it('accepts the epoch pair, and both-absent stays the valid legacy shape', () => {
+    expect(parseClientInfoHeader(JSON.stringify(VALID)).status).toBe('valid');
+    const paired = parseClientInfoHeader(
+      JSON.stringify({ ...VALID, desktop_api_epoch: 2, minimum_server_api_epoch: 1 }),
+    );
+    expect(paired.status).toBe('valid');
+    if (paired.status === 'valid') {
+      expect(paired.value.desktop_api_epoch).toBe(2);
+      expect(paired.value.minimum_server_api_epoch).toBe(1);
+    }
+  });
+
+  it('rejects a lone epoch field and an inverted range', () => {
+    expect(
+      parseClientInfoHeader(
+        JSON.stringify({ ...VALID, desktop_api_epoch: 1 }),
+      ).status,
+    ).toBe('invalid');
+    expect(
+      parseClientInfoHeader(
+        JSON.stringify({ ...VALID, minimum_server_api_epoch: 1 }),
+      ).status,
+    ).toBe('invalid');
+    expect(
+      parseClientInfoHeader(
+        JSON.stringify({
+          ...VALID,
+          desktop_api_epoch: 1,
+          minimum_server_api_epoch: 2,
+        }),
+      ).status,
+    ).toBe('invalid');
+  });
+
   it('rejects malformed fields', () => {
     const cases: Array<Partial<Record<keyof ClientInfo, unknown>>> = [
       { client_surface: 'cli' },

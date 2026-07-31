@@ -17,6 +17,7 @@ import { usePresenceById, presenceDotStatus } from '@/features/presence/hooks';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { useConversationMembers } from '@/features/conversations/useConversationMembers';
@@ -60,7 +61,7 @@ export function MemberStrip({
   // UI meaning for chips and is intentionally not filtered.
   const membersResult = useConversationMembers(channelId);
   const { data: viewer } = useViewerUser();
-  const viewerUserId = viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) ? viewer.id : null;
+  const viewerUserId = viewer && !isRegistrationRequired(viewer) && !isBackendUnreachable(viewer) && !isUpdateRequired(viewer) ? viewer.id : null;
 
   const visibleMembers = useMemo(() => {
     if (membersResult.status !== 'resolved') return [];

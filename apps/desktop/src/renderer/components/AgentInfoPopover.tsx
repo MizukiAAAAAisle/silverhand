@@ -18,6 +18,7 @@ import { useWorkspaceMemberLists } from '@/features/workspaces/hooks';
 import { useAgentAvatarObjectUrl } from '@/features/agents/avatar-hooks';
 import {
   isBackendUnreachable,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { Button } from '@/components/ui/button';
@@ -315,7 +316,7 @@ function AgentManagementActions({
   const row = conversationAgents.find(s => s.agent_id === agent.id);
   if (!row) return null;
   const viewerForPermissions =
-    viewer && isBackendUnreachable(viewer) ? undefined : viewer;
+    viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
   // Runtime controls (restart / stop / clear) stay creator-only, mirroring
   // the backend `canEditAgent` gate. Removing from the conversation is a
   // wider governance action — agent owner OR workspace owner/admin

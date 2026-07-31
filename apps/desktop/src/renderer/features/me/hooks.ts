@@ -101,7 +101,26 @@ export interface BackendUnreachable {
   message: string;
 }
 
-export type ViewerState = UserDto | SetupRequired | BackendUnreachable;
+/**
+ * #task:1761 — typed renderer arm for the desktop↔server API epoch hard
+ * gate. `direction` says which side is behind: `app` → this build is older
+ * than the server's minimum client epoch (remedy: upgrade the app);
+ * `server` → the server generation is older than this build's minimum
+ * (remedy: upgrade the server). No `signup_enabled` for the same reason as
+ * `BackendUnreachable`: no business state may be inferred through an
+ * incompatible pair.
+ */
+export interface UpdateRequired {
+  update_required: true;
+  direction: 'app' | 'server';
+  server_api_epoch: number;
+}
+
+export type ViewerState =
+  | UserDto
+  | SetupRequired
+  | BackendUnreachable
+  | UpdateRequired;
 
 /**
  * Seat a fresh viewer dto everywhere the renderer keeps a copy of it.
@@ -194,6 +213,16 @@ export function isBackendUnreachable(body: ViewerState): body is BackendUnreacha
   );
 }
 
+/** #task:1761 — type guard for the epoch update-required arm. */
+export function isUpdateRequired(body: ViewerState): body is UpdateRequired {
+  return (
+    typeof body === 'object'
+    && body !== null
+    && 'update_required' in body
+    && (body as { update_required: unknown }).update_required === true
+  );
+}
+
 /**
  * D4.a Commit 6 (2) — pure mapping from the main-process IPC arm to
  * the renderer's `ViewerState` union. Extracted out of `useViewerUser`
@@ -222,6 +251,21 @@ export function mapAuthStateToViewer(
       message: state.message,
     };
   }
+  // #task:1761 — epoch hard-gate arms map to the UpdateRequired marker.
+  if (state.status === 'app_update_required') {
+    return {
+      update_required: true,
+      direction: 'app',
+      server_api_epoch: state.server_api_epoch,
+    };
+  }
+  if (state.status === 'server_update_required') {
+    return {
+      update_required: true,
+      direction: 'server',
+      server_api_epoch: state.server_api_epoch,
+    };
+  }
   return {
     registration_required: true,
     suggested_name: '',
@@ -247,6 +291,7 @@ export function useViewerUser() {
       query.data
       && !isRegistrationRequired(query.data)
       && !isBackendUnreachable(query.data)
+      && !isUpdateRequired(query.data)
     ) {
       setCurrentUserId(query.data.id, query.data.display_name);
     }
@@ -375,7 +420,10 @@ export function useClearAvatar() {
 export function useViewerAvatarObjectUrl(): string | null {
   const { data } = useViewerUser();
   const avatarUrl =
-    data && !isRegistrationRequired(data) && !isBackendUnreachable(data)
+    data
+    && !isRegistrationRequired(data)
+    && !isBackendUnreachable(data)
+    && !isUpdateRequired(data)
       ? data.avatar_url
       : null;
   // Shares the app-session avatar cache (#task:1321): the viewer's blob is

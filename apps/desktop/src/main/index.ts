@@ -17,7 +17,11 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
   apiPaths,
   authPaths,
+  classifyDesktopServerApiCompatibility,
   classifyServerUrl,
+  DESKTOP_API_EPOCH_HEADER,
+  DESKTOP_SERVER_API_EPOCH,
+  MINIMUM_SERVER_API_EPOCH,
   readAllowInsecureRemoteFlag,
   readForceEmbeddedFlag,
   redactServerConnectionProfile,
@@ -151,6 +155,35 @@ import {
   configureRendererBackendNetwork,
   fetchBackendWithNetworkPolicy,
 } from './renderer-backend-network.js';
+
+/**
+ * #task:1761 — the ONE main-process seam for backend HTTP. Injects the
+ * client-info header (incl. desktop_api_epoch) on every request so server-side
+ * epoch admission sees a uniform source on ALL desktop REST paths, not just the
+ * renderer proxy. A source-scan test forbids raw calls of the underlying
+ * network-policy fetch (literal `fetch` first argument) in this file outside
+ * this wrapper — a new direct call missing the
+ * header would otherwise be classified as a pre-epoch legacy desktop and get
+ * 426-rejected after the observation-bridge cutoff.
+ */
+function backendFetch(
+  input: string | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  // Admission input (#task:1761 round-2): the dedicated epoch header is a
+  // compiled constant — no IO, cannot fail, always present.
+  headers.set(DESKTOP_API_EPOCH_HEADER, String(DESKTOP_SERVER_API_EPOCH));
+  // Observability input: fail-open telemetry; null just omits the header.
+  if (!headers.has(CLIENT_INFO_HEADER)) {
+    const value = desktopClientInfoHeaderValue(
+      desktopAppPaths().installationId,
+      logger,
+    );
+    if (value) headers.set(CLIENT_INFO_HEADER, value);
+  }
+  return fetchBackendWithNetworkPolicy(fetch, input, { ...init, headers });
+}
 import {
   registerSurfaceIpcHandlers,
 } from './ipc/surface-ipc.js';
@@ -261,7 +294,21 @@ type DesktopAuthState =
   // Pinned to `preload/index.ts` and `preload/api.d.ts` — the three
   // copies stay in lock-step. **No `signup_enabled`** — unknown
   // when the server is unreachable.
-  | { status: 'backend_unreachable'; server_url: string; message: string };
+  | { status: 'backend_unreachable'; server_url: string; message: string }
+  // #task:1761 — desktop↔server API epoch hard gate, returned BEFORE any
+  // business DTO is read. `app_update_required`: this build is older than
+  // the server's minimum. `server_update_required`: the server (possibly
+  // pre-epoch, classified 0) is older than this build's minimum.
+  | {
+      status: 'app_update_required';
+      server_api_epoch: number;
+      minimum_client_epoch: number;
+    }
+  | {
+      status: 'server_update_required';
+      server_api_epoch: number;
+      desktop_api_epoch: number;
+    };
 
 interface BackendProxyRequest {
   path: string;
@@ -691,6 +738,10 @@ function installBackendEventWsOriginOverride(): void {
         if (clientInfoHeader) {
           details.requestHeaders[CLIENT_INFO_HEADER] = clientInfoHeader;
         }
+        // #task:1761 — admission epoch on the WS upgrade; compiled constant,
+        // never absent (unlike the fail-open telemetry header above).
+        details.requestHeaders[DESKTOP_API_EPOCH_HEADER] =
+          String(DESKTOP_SERVER_API_EPOCH);
       }
       callback({ requestHeaders: details.requestHeaders });
     },
@@ -751,7 +802,7 @@ async function reportPendingLayoutMigrationFailuresOnce(
       appRoot: silverhandDir(),
       endpoint: backendUrl(apiPaths.clientLayoutMigrationDiagnostics),
       token,
-      fetchImpl: (input, init) => fetchBackendWithNetworkPolicy(fetch, input, init),
+      fetchImpl: (input, init) => backendFetch(input, init),
       logger,
     });
   } catch (err) {
@@ -835,7 +886,7 @@ async function readOutboundProtocolCompatibility(): Promise<OutboundProtocolComp
   try {
     const info = await fetchServerInfoWithRetry({
       url: backendUrl(apiPaths.serverInfo),
-      fetcher: input => fetchBackendWithNetworkPolicy(fetch, input),
+      fetcher: input => backendFetch(input),
       // BackendInfo is a periodic capability probe, not a boot gate. One
       // attempt keeps it cheap; a transient failure becomes `unknown` and the
       // next poll/focus refetch retries without blocking the renderer.
@@ -870,7 +921,7 @@ async function validateUserSessionToken(
   // pure `classifyMeFetchOutcome` classifier (see auth-hydrate.ts).
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.me), {
+    res = await backendFetch(backendUrl(apiPaths.me), {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
@@ -948,6 +999,37 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       message,
     };
   }
+  // #task:1761 — epoch hard gate. Runs after the discovery fetch and BEFORE
+  // the /api/me hydrate below, so an incompatible pair never reads a business
+  // DTO. A pre-epoch server (no `desktop_api` field) is classified epoch 0;
+  // while MINIMUM_SERVER_API_EPOCH is 0 that still passes (symmetric
+  // bootstrap). The server-side REST/WS admission remains the authoritative
+  // enforcement — this gate exists to give the user a typed explanation
+  // instead of scattered 426 failures.
+  {
+    const advertised = info.desktop_api;
+    const serverEpoch = advertised?.current_epoch ?? 0;
+    const compatibility = classifyDesktopServerApiCompatibility({
+      clientEpoch: DESKTOP_SERVER_API_EPOCH,
+      minimumClientEpoch: advertised?.minimum_client_epoch ?? 0,
+      serverEpoch,
+      minimumServerEpoch: MINIMUM_SERVER_API_EPOCH,
+    });
+    if (compatibility === 'client_too_old') {
+      return {
+        status: 'app_update_required',
+        server_api_epoch: serverEpoch,
+        minimum_client_epoch: advertised?.minimum_client_epoch ?? 0,
+      };
+    }
+    if (compatibility === 'server_too_old') {
+      return {
+        status: 'server_update_required',
+        server_api_epoch: serverEpoch,
+        desktop_api_epoch: DESKTOP_SERVER_API_EPOCH,
+      };
+    }
+  }
   // D4.a Commit 6 fixup (Cindy P1 #task:658 follow-up): recovery
   // path. If our in-memory session is empty but a persisted token
   // still sits on disk, hydrate was deferred at boot due to a
@@ -1006,7 +1088,7 @@ async function postAuthSession(
   // exposes `kind: 'backend_unreachable'`.
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(path), {
+    res = await backendFetch(backendUrl(path), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -1054,7 +1136,7 @@ async function bootstrapEmbeddedUserSession(): Promise<boolean> {
   if (!existsSync(path)) return false;
   const token = readFileSync(path, 'utf8').trim();
   if (!token) return false;
-  const res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(authPaths.embeddedBootstrap), {
+  const res = await backendFetch(backendUrl(authPaths.embeddedBootstrap), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token }),
@@ -1107,7 +1189,7 @@ async function claimLocalHostForUserSession(): Promise<void> {
       installationId,
       existingConfig,
     });
-    const res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostClaimOrCreate), {
+    const res = await backendFetch(backendUrl(apiPaths.hostClaimOrCreate), {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1203,7 +1285,7 @@ async function logoutUserSession(): Promise<{ ok: true }> {
   const token = userSessionToken;
   await clearUserSession();
   if (token) {
-    await fetchBackendWithNetworkPolicy(fetch, backendUrl(authPaths.logout), {
+    await backendFetch(backendUrl(authPaths.logout), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     }).catch(err => {
@@ -1466,7 +1548,7 @@ async function rotateHostToken(
 
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostRotateToken(hostId)), {
+    res = await backendFetch(backendUrl(apiPaths.hostRotateToken(hostId)), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -1536,7 +1618,7 @@ async function revokeHost(
 
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostRevoke(hostId)), {
+    res = await backendFetch(backendUrl(apiPaths.hostRevoke(hostId)), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -1601,7 +1683,7 @@ async function getHostProxyConfig(
 
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostProxyConfig(hostId)), {
+    res = await backendFetch(backendUrl(apiPaths.hostProxyConfig(hostId)), {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch (err) {
@@ -1648,7 +1730,7 @@ async function saveHostProxyConfig(input: {
 
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(apiPaths.hostProxyConfig(input.hostId)), {
+    res = await backendFetch(backendUrl(apiPaths.hostProxyConfig(input.hostId)), {
       method: 'PUT',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -1907,7 +1989,7 @@ async function proxyBackendRequest(
   // `kind: 'backend_unreachable'`.
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(input.path), {
+    res = await backendFetch(backendUrl(input.path), {
       method: input.method ?? 'GET',
       headers,
       body: input.bodyText,
@@ -1960,7 +2042,7 @@ async function proxyBackendUpload(
   // renderer can rely on `status: 0` regardless of which proxy ran.
   let res: Response;
   try {
-    res = await fetchBackendWithNetworkPolicy(fetch, backendUrl(input.path), {
+    res = await backendFetch(backendUrl(input.path), {
       method: 'POST',
       headers: { Authorization: `Bearer ${userSessionToken}` },
       body: form,

@@ -31,10 +31,12 @@ import { useLayoutSettings } from '@/hooks/useLayoutSettings';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useViewerUser,
 } from '@/features/me/hooks';
 import { RegistrationGate } from '@/features/me/RegistrationGate';
 import { BackendUnreachableGate } from '@/features/me/BackendUnreachableGate';
+import { UpdateRequiredGate } from '@/features/me/UpdateRequiredGate';
 import { AppStatusBanner } from '@/features/me/AppStatusBanner';
 import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
@@ -180,6 +182,19 @@ export function App(): JSX.Element {
       <BackendUnreachableGate
         serverUrl={viewer.data.server_url}
         message={viewer.data.message}
+        onRetry={() => {
+          void viewer.refetch();
+        }}
+      />
+    );
+  }
+  // #task:1761 — epoch hard gate: after unreachable (connectivity first),
+  // before registration (no business/auth flow through an incompatible pair).
+  if (isUpdateRequired(viewer.data)) {
+    return (
+      <UpdateRequiredGate
+        direction={viewer.data.direction}
+        serverApiEpoch={viewer.data.server_api_epoch}
         onRetry={() => {
           void viewer.refetch();
         }}

@@ -11,10 +11,16 @@ import { z } from 'zod';
  *
  * This is UNTRUSTED input at the server boundary: the header is bounded-parsed
  * into `valid | missing | invalid` and NEVER `JSON.parse`+spread into a logger.
- * Telemetry is fail-open — a missing/malformed header must NEVER reject the WS
- * upgrade. `missing` is still logged (so we can observe old desktops that don't
- * send the header at all); `invalid` logs only the status, never the raw header
- * or a parse error.
+ * The telemetry LOGGER itself is fail-open — a missing/malformed header never
+ * affects the log-side handling. Note (#task:1761): ADMISSION is a separate
+ * concern on a separate, dedicated header (`x-silverhand-desktop-api-epoch`,
+ * see desktop-server-api-epoch.ts); once the server's minimum client epoch is
+ * raised, admission WILL reject pre-epoch clients — this file's fail-open
+ * guarantee covers observability only. The epoch fields carried here are
+ * telemetry (fleet distribution), not admission input.
+ * `missing` is still logged (so we can observe old desktops that don't
+ * send the header at all); `invalid` logs only the status, never the raw
+ * header or a parse error.
  *
  * Bounded-context note: this describes the desktop↔server RELEASE identity, not
  * the daemon↔server wire protocol. It deliberately carries NO `protocol_version`
@@ -83,8 +89,46 @@ export const ClientInfoSchema = z
       .regex(/^[a-z0-9]+$/),
     /** The existing stable per-install identity (`installation_id` file). */
     installation_id: z.string().uuid(),
+    /**
+     * #task:1761 — desktop↔server application API epoch carried by epoch-aware
+     * desktops on BOTH the REST proxy requests and the event-WS upgrade.
+     * Optional: pre-epoch desktops omit them and are classified as epoch 0 by
+     * the admission layer (observation bridge). Absence here is a legacy
+     * generation, not `invalid`.
+     *
+     * Known residual: this schema is `.strict()`, so an OLD server parsing a
+     * NEW desktop's header (with these keys) classifies it `invalid` — that
+     * consumer is log-only, so the impact is a telemetry blip, accepted in
+     * docs/desktop-server-api-epoch.md rather than forking the schema.
+     */
+    desktop_api_epoch: z.number().int().nonnegative().optional(),
+    minimum_server_api_epoch: z.number().int().nonnegative().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    // The epoch fields travel as a pair: one without the other is a malformed
+    // sender, not a legacy one, and must land in `invalid` — otherwise the
+    // admission layer would silently misread a half-payload as pre-epoch.
+    // Both absent = valid legacy generation (epoch 0).
+    const hasEpoch = value.desktop_api_epoch !== undefined;
+    const hasMinimum = value.minimum_server_api_epoch !== undefined;
+    if (hasEpoch !== hasMinimum) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'desktop_api_epoch and minimum_server_api_epoch must appear together',
+      });
+      return;
+    }
+    if (
+      hasEpoch &&
+      value.minimum_server_api_epoch! > value.desktop_api_epoch!
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'minimum_server_api_epoch must not exceed desktop_api_epoch',
+      });
+    }
+  });
 export type ClientInfo = z.infer<typeof ClientInfoSchema>;
 
 export type ClientInfoStatus = 'valid' | 'missing' | 'invalid';

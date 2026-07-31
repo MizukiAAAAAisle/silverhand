@@ -1057,6 +1057,12 @@ export interface BuildTestAppOptions {
    * resolved `SILVERHAND_LISTEN` value via `classifyBindAddressScope`.
    */
   bindAddressScope?: BindAddressScope;
+  /**
+   * #task:1761 — override the desktop API epoch minimum so tests can prove
+   * the post-cutoff fail-closed arm while the shipped constant is still the
+   * observation-bridge value (0).
+   */
+  desktopApiEpoch?: { minimumClientEpoch?: number };
 }
 
 export interface TestApp {
@@ -1317,7 +1323,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
 
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
-  app.route('/', createApiRouter(ctx));
+  app.route('/', createApiRouter(ctx, { desktopApiEpoch: options.desktopApiEpoch }));
   app.route('/', createInternalRouter(ctx));
 
   return {

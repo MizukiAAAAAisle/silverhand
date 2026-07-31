@@ -90,7 +90,18 @@ export type DesktopAuthState =
   // leak a guess into the gate UI. Renderer must treat it as
   // unknown and avoid rendering signup CTAs until the next
   // re-fetch.
-  | { status: 'backend_unreachable'; server_url: string; message: string };
+  | { status: 'backend_unreachable'; server_url: string; message: string }
+  // #task:1761 — desktop↔server API epoch hard gate arms; see main/index.ts.
+  | {
+      status: 'app_update_required';
+      server_api_epoch: number;
+      minimum_client_epoch: number;
+    }
+  | {
+      status: 'server_update_required';
+      server_api_epoch: number;
+      desktop_api_epoch: number;
+    };
 
 export type DesktopAuthResult =
   | { ok: true; user: UserDto }
