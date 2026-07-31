@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { CheckSquare } from 'lucide-react';
 import { useTaskByNumber } from '@/features/tasks/useTaskByNumber';
 import { useTaskRefContext } from '@/features/tasks/TaskRefContext';
 import { useUpdateTaskStatus } from '@/features/tasks/hooks';
@@ -50,7 +49,6 @@ export function TaskRefStaticChip({
       data-task-ref={String(taskNumber)}
       data-task-ref-state={task ? 'static-resolved' : 'static'}
     >
-      <CheckSquare className="size-3 shrink-0 self-center" />
       {task ? (
         <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
       ) : (
@@ -78,8 +76,10 @@ export function TaskRefStaticChip({
  *    exist in this workspace). Surfacing a broken chip would be
  *    worse than a silent demote.
  *  - Resolved + present → clickable borderless accent link, label
- *    `#<n> title`, icon `CheckSquare` (matches the task board / nav-rail
- *    task glyph; number and title read as one link, no `·` separator).
+ *    `#<n> title` (number and title read as one link, no `·` separator;
+ *    no leading glyph — the `#` is the task's inline identity marker,
+ *    like `#` for a channel, so the chip needs no CheckSquare in prose,
+ *    #task:1765).
  *    The link form is the shared base across all themes — flat accent
  *    text at rest, hover underlines the label — each theme just paints
  *    it in its own `--accent` (#task:1725). Click hands off to
@@ -131,7 +131,6 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref={String(taskNumber)}
         data-task-ref-state="no-context"
       >
-        <CheckSquare className="size-3 shrink-0 self-center" />
         {/* No `font-mono` on the label — the number follows the chip's own
             typeface (`--appearance-prose-font`, sans by default). forza6's
             `--font-mono` resolves to Space Mono, whose digits read poorly
@@ -156,7 +155,6 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref={String(taskNumber)}
         data-task-ref-state="loading"
       >
-        <CheckSquare className="size-3 shrink-0 self-center" />
         <span className="truncate">{inertLabel}</span>
       </span>
     );
@@ -179,7 +177,6 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
         data-task-ref={String(taskNumber)}
         data-task-ref-state="missing"
       >
-        <CheckSquare className="size-3 shrink-0 self-center" />
         <span className="truncate">{inertLabel}</span>
       </span>
     );
@@ -197,7 +194,6 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // (#task:1760).
   const chipContent = (
     <>
-      <CheckSquare className="size-3 shrink-0 self-center" />
       <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
     </>
   );
@@ -219,8 +215,8 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // Borderless accent link — the shared base for every theme. Rest is flat
   // accent text (no fill / no border); hover underlines the label span (see
   // `.markdown-body [data-task-ref-state='resolved']:hover > span` in
-  // global.css — text-decoration on this inline-flex box won't paint over the
-  // icon child). A filled block reads as a slab in running prose regardless of
+  // global.css — text-decoration targets the label span directly). A filled
+  // block reads as a slab in running prose regardless of
   // hue; a link reads as what it is (#task:1725). Each theme just supplies its
   // own `--accent`. focus-visible ring kept — the sole focus signal now that
   // the chip is borderless.
