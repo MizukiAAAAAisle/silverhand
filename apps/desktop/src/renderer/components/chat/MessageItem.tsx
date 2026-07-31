@@ -368,6 +368,14 @@ export function MessageItem({
   // out, so the row would otherwise collapse from under it.
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const toggleReaction = useToggleReaction();
+  // The reaction delta's routing identity, read off this row (#task:1753) — the
+  // ACK's authoritative recovery needs the channel + thread context, not just the
+  // message id, to reach every projection that displays the row.
+  const reactionTarget = {
+    channelId: message.conversation_id,
+    messageId: message.id,
+    threadRootId: message.thread_root_id,
+  };
   const handleActionsBlur = useCallback(
     (event: FocusEvent<HTMLDivElement>) => {
       const next = event.relatedTarget as Node | null;
@@ -549,7 +557,7 @@ export function MessageItem({
         alignRight={alignRight}
         canReact={canReact}
         onReact={(emoji, remove) =>
-          toggleReaction.mutate({ messageId: message.id, emoji, remove })
+          toggleReaction.mutate({ target: reactionTarget, emoji, remove })
         }
         onPickerOpenChange={setReactionPickerOpen}
       />
@@ -847,7 +855,7 @@ export function MessageItem({
             onOpenChange={setReactionPickerOpen}
             onPick={emoji =>
               toggleReaction.mutate({
-                messageId: message.id,
+                target: reactionTarget,
                 emoji,
                 remove: false,
               })

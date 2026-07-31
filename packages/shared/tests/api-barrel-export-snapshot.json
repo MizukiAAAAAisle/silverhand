@@ -201,6 +201,7 @@
   "PresenceResponseSchema",
   "ReactMessageInputSchema",
   "ReactionAggregateDtoSchema",
+  "ReactionMutationAckSchema",
   "ReactionReactorDtoSchema",
   "ReactorKindSchema",
   "ReadHistoryAnchorSchema",

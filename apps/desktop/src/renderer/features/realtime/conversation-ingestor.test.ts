@@ -22,7 +22,12 @@ import {
   ingestConversationFrame,
 } from './conversation-ingestor';
 import { clusterMessagesKey, messagesKey, threadRootKey } from '@/features/channels/hooks';
-import { messageReactorsKey } from '@/features/channels/reaction-hooks';
+import {
+  applyCommittedReactionFromEvent,
+  messageReactorsKey,
+  recoverCommittedReactionsAfterWrite,
+} from '@/features/channels/reaction-hooks';
+import { clearCurrentUser, setCurrentUserId } from '@/lib/current-user';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { taskDetailKey } from '@/features/tasks/taskDetail';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
@@ -1797,6 +1802,456 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
   });
 });
 
+// #task:1753 — a committed reaction reaches the renderer on TWO planes: the
+// `message_reaction_changed` WS echo and the ACK of the viewer's own write. The
+// viewer's own toggle produces BOTH, in either order, and its window may not even
+// be subscribed to the echo. What the two planes may DO differs, and that is the
+// point of this grid:
+//   - WS is ORDERED per scope (replay + a `snapshot_required` gap fence), so its
+//     absolute aggregate can be ASSIGNED; a re-delivered frame carrying the same
+//     value must write nothing at all (identity-preserving merge → no re-render
+//     per reaction per projection).
+//   - the ACK shares NO ordering axis with that stream, nor with a second local
+//     toggle's ACK, so it may not assign: it is a FRESHNESS TRIGGER that re-reads
+//     the row authoritatively. Two falsifiers below pin that (a late OLDER ACK
+//     cannot undo a newer fact; reversed ACKs of two local toggles converge on
+//     the server) — both of which an absolute ACK write regresses, permanently.
+//   - the ACK's diagnostic `changed:false` cannot gate any of this, and is not
+//     representable: the recovery seam takes only a target, never the payload.
+// Both planes converge over the SAME displayed projections, and only WS touches
+// the resume floor.
+describe('committed reactions converge across the ACK and WS planes (#task:1753)', () => {
+  const VIEWER = 'u-self';
+
+  beforeEach(() => {
+    vi.spyOn(eventWsClient, 'markSatisfied').mockImplementation(() => {});
+    vi.spyOn(eventWsClient, 'commitSnapshotBaseline').mockImplementation(() => {});
+    // The WS plane resolves `viewerReacted` by comparing the event's reactor id
+    // against the hydrated viewer; the ACK plane never does. Both are exercised.
+    setCurrentUserId(VIEWER);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearCurrentUser();
+  });
+
+  const windowCache = (rows: MessageDto[]) => ({
+    pages: [
+      {
+        messages: rows,
+        reply_counts_by_root: {},
+        has_more_before: false,
+        has_more_after: false,
+        stream_head_seq: 5,
+      },
+    ],
+    pageParams: [undefined],
+  });
+  const rowIn = (
+    qc: QueryClient,
+    key: readonly unknown[],
+    id: string,
+  ): MessageDto | undefined =>
+    qc
+      .getQueryData<{ pages: { messages: MessageDto[] }[] }>(key)
+      ?.pages.flatMap(p => p.messages)
+      .find(m => m.id === id);
+  const chip = (row: MessageDto | undefined, emoji = '👍') =>
+    row?.reactions?.find(r => r.emoji === emoji);
+  const thumbsUp = (count: number, viewer: boolean) => [
+    { emoji: '👍', count, viewer_reacted: viewer },
+  ];
+
+  /** The ACK plane, driven exactly as `useToggleReaction.onSuccess` drives it:
+   *  the write committed, so recover this row. Note what is NOT passed — the
+   *  ACK's `emoji` / `count` / `changed` cannot reach the cache even by mistake. */
+  const ackWrite = (
+    qc: QueryClient,
+    args: { messageId: string; threadRootId?: string | null },
+  ): Promise<void> =>
+    recoverCommittedReactionsAfterWrite(qc, {
+      channelId: 'c1',
+      messageId: args.messageId,
+      threadRootId: args.threadRootId ?? null,
+    });
+
+  const invalidated = (qc: QueryClient, key: readonly unknown[]): boolean =>
+    qc.getQueryState(key)?.isInvalidated ?? false;
+
+  /** A mounted reader whose refetch returns the CURRENT server state — the
+   *  authoritative round a recovery triggers. Seeded data + `staleTime: Infinity`
+   *  means mounting itself fetches nothing, so every fetch counted here is one
+   *  the code under test asked for. (A plain observer stands in for
+   *  `useChannelMessages`: the seam reads only the observer count and the window
+   *  shape.) */
+  const mountAuthoritativeReader = (
+    qc: QueryClient,
+    key: readonly unknown[],
+    server: { rows: MessageDto[]; fetches: number },
+  ): (() => void) => {
+    const observer = new QueryObserver(qc, {
+      queryKey: key,
+      staleTime: Infinity,
+      queryFn: () => {
+        server.fetches += 1;
+        return Promise.resolve(windowCache(server.rows));
+      },
+    });
+    return observer.subscribe(() => {});
+  };
+
+  it('the WS plane assigns the absolute count; a re-delivered frame writes nothing', () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    qc.setQueryData(messagesKey('c1'), windowCache([message({ id: 'm1', seq: 5 })]));
+
+    ingestConversationFrame(
+      qc,
+      reactionFrame('c1', 'm1', 6, null, { reactorId: VIEWER, count: 1 }),
+    );
+    expect(chip(rowIn(qc, messagesKey('c1'), 'm1'))).toEqual({
+      emoji: '👍',
+      count: 1,
+      viewer_reacted: true,
+    });
+
+    // The same committed value delivered again. Capture the cache object first:
+    // an identity-preserving no-op leaves the whole page container untouched,
+    // which is what keeps subscribers from re-rendering.
+    const before = qc.getQueryData(messagesKey('c1'));
+    ingestConversationFrame(
+      qc,
+      reactionFrame('c1', 'm1', 7, null, { reactorId: VIEWER, count: 1 }),
+    );
+    expect(qc.getQueryData(messagesKey('c1'))).toBe(before);
+    expect(chip(rowIn(qc, messagesKey('c1'), 'm1'))).toEqual({
+      emoji: '👍',
+      count: 1,
+      viewer_reacted: true,
+    });
+    unsub();
+  });
+
+  it('the ACK plane recovers the row instead of writing it — the payload never reaches the cache', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    qc.setQueryData(
+      messagesKey('c1'),
+      windowCache([message({ id: 'm1', seq: 5, reactions: thumbsUp(1, false) })]),
+    );
+    qc.setQueryData(messageReactorsKey('m1'), []);
+    const before = qc.getQueryData(messagesKey('c1'));
+
+    await ackWrite(qc, { messageId: 'm1' });
+
+    // Not one byte of the row was written by the ACK — the value it reported is
+    // not the renderer's to assign. Both caches are marked for re-read instead.
+    expect(qc.getQueryData(messagesKey('c1'))).toBe(before);
+    expect(invalidated(qc, messagesKey('c1'))).toBe(true);
+    expect(invalidated(qc, messageReactorsKey('m1'))).toBe(true);
+    unsub();
+  });
+
+  it('FALSIFIER: a delayed OLDER ACK cannot undo a newer committed fact', async () => {
+    const qc = new QueryClient();
+    // Server truth once both writes have committed: the viewer's own reaction
+    // plus a third party's, aggregate 2.
+    const server = {
+      rows: [message({ id: 'm1', seq: 5, reactions: thumbsUp(2, true) })],
+      fetches: 0,
+    };
+    qc.setQueryData(messagesKey('c1'), windowCache([message({ id: 'm1', seq: 5 })]));
+    const unsub = mountAuthoritativeReader(qc, messagesKey('c1'), server);
+
+    // The viewer POSTs (server aggregate 1). Before its ACK returns, a third
+    // party reacts and that frame lands first — the ordered plane assigns 2.
+    ingestConversationFrame(
+      qc,
+      reactionFrame('c1', 'm1', 6, null, { reactorId: 'u2', count: 2 }),
+    );
+    expect(chip(rowIn(qc, messagesKey('c1'), 'm1'))?.count).toBe(2);
+
+    // Now the viewer's own ACK finally arrives, carrying the aggregate AS OF its
+    // own write (1). Assigning it would drop the third party's reaction and STICK
+    // there until the next event — the regression this whole seam exists to
+    // exclude. A recovery cannot express that: the cache is untouched until the
+    // authoritative read lands.
+    const recovering = ackWrite(qc, { messageId: 'm1' });
+    expect(chip(rowIn(qc, messagesKey('c1'), 'm1'))?.count).toBe(2);
+    await recovering;
+
+    expect(server.fetches).toBe(1);
+    expect(chip(rowIn(qc, messagesKey('c1'), 'm1'))).toEqual({
+      emoji: '👍',
+      count: 2,
+      viewer_reacted: true,
+    });
+    unsub();
+
+    // WITNESS that the invariant above is not vacuous: the degenerate model —
+    // assign the ACK's absolute aggregate, as the ORDERED plane legitimately may
+    // — applied to the very same state drops the third party's reaction, and
+    // nothing brings it back until the next event.
+    const degenerate = new QueryClient();
+    const unsubD = mountMainlineReader(degenerate, 'c1');
+    degenerate.setQueryData(
+      messagesKey('c1'),
+      windowCache([message({ id: 'm1', seq: 5, reactions: thumbsUp(2, false) })]),
+    );
+    applyCommittedReactionFromEvent(degenerate, {
+      target: { channelId: 'c1', messageId: 'm1', threadRootId: null },
+      emoji: '👍',
+      count: 1,
+      viewerReacted: true,
+    });
+    expect(chip(rowIn(degenerate, messagesKey('c1'), 'm1'))?.count).toBe(1);
+    unsubD();
+  });
+
+  it('FALSIFIER: reversed ACKs of two local toggles converge on the server, not on the last ACK', async () => {
+    const qc = new QueryClient();
+    // The viewer added then removed; both writes have committed, so server truth
+    // is "no reaction". Only the ACKs are still in flight, and reversed.
+    const server = { rows: [message({ id: 'm1', seq: 5 })], fetches: 0 };
+    qc.setQueryData(
+      messagesKey('c1'),
+      windowCache([message({ id: 'm1', seq: 5, reactions: thumbsUp(1, true) })]),
+    );
+    const unsub = mountAuthoritativeReader(qc, messagesKey('c1'), server);
+
+    // The remove's ACK lands first and converges the row.
+    await ackWrite(qc, { messageId: 'm1' });
+    expect(rowIn(qc, messagesKey('c1'), 'm1')?.reactions).toBeNull();
+
+    // Then the ADD's ACK — older, and it says `count: 1, viewer_reacted: true`.
+    // Assigning it would resurrect a reaction the viewer already removed.
+    await ackWrite(qc, { messageId: 'm1' });
+    expect(rowIn(qc, messagesKey('c1'), 'm1')?.reactions).toBeNull();
+    expect(server.fetches).toBe(2);
+    unsub();
+
+    // WITNESS: that same late ADD ACK, assigned, resurrects a reaction the viewer
+    // already removed — and the row then disagrees with the server indefinitely.
+    const degenerate = new QueryClient();
+    const unsubD = mountMainlineReader(degenerate, 'c1');
+    degenerate.setQueryData(
+      messagesKey('c1'),
+      windowCache([message({ id: 'm1', seq: 5 })]),
+    );
+    applyCommittedReactionFromEvent(degenerate, {
+      target: { channelId: 'c1', messageId: 'm1', threadRootId: null },
+      emoji: '👍',
+      count: 1,
+      viewerReacted: true,
+    });
+    expect(chip(rowIn(degenerate, messagesKey('c1'), 'm1'))).toEqual({
+      emoji: '👍',
+      count: 1,
+      viewer_reacted: true,
+    });
+    unsubD();
+  });
+
+  /** A mounted reader whose FIRST fetch HANGS until released — the in-flight
+   *  authoritative read a live patch can race. Its response is the server as of
+   *  BEFORE the patched commit; any later fetch resolves with current server
+   *  truth, because a read issued after a commit cannot miss it. */
+  const mountHeldReader = (
+    qc: QueryClient,
+    key: readonly unknown[],
+    stale: MessageDto[],
+    server: { rows: MessageDto[]; fetches: number },
+  ) => {
+    let release = () => {};
+    let aborted = false;
+    const observer = new QueryObserver(qc, {
+      queryKey: key,
+      staleTime: Infinity,
+      retry: false,
+      queryFn: ({ signal }) => {
+        server.fetches += 1;
+        if (server.fetches > 1) return Promise.resolve(windowCache(server.rows));
+        signal.addEventListener('abort', () => {
+          aborted = true;
+        });
+        return new Promise<ReturnType<typeof windowCache>>(resolve => {
+          release = () => resolve(windowCache(stale));
+        });
+      },
+    });
+    const unsub = observer.subscribe(() => {});
+    return { unsub, release: () => release(), wasAborted: () => aborted };
+  };
+
+  it('FALSIFIER: an authoritative read already in flight cannot commit over a newer WS patch', async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(messagesKey('c1'), windowCache([message({ id: 'm1', seq: 5 })]));
+    // Server truth once the third party's reaction has committed: aggregate 2.
+    const server = {
+      rows: [message({ id: 'm1', seq: 5, reactions: thumbsUp(2, true) })],
+      fetches: 0,
+    };
+    // ...and the read the ACK recovery starts a moment earlier, which snapshots
+    // the server BEFORE that reaction and therefore answers 1.
+    const held = mountHeldReader(
+      qc,
+      messagesKey('c1'),
+      [message({ id: 'm1', seq: 5, reactions: thumbsUp(1, true) })],
+      server,
+    );
+
+    const recovering = ackWrite(qc, { messageId: 'm1' });
+    await Promise.resolve();
+    expect(server.fetches).toBe(1);
+
+    // The third party's frame lands while that read is still out. Assigning is
+    // this plane's privilege — but React Query commits a settled read over the
+    // WHOLE query result, so an absolute patch must not leave a read that was
+    // issued before its commit in flight.
+    ingestConversationFrame(
+      qc,
+      reactionFrame('c1', 'm1', 6, null, { reactorId: 'u2', count: 2 }),
+    );
+    expect(chip(rowIn(qc, messagesKey('c1'), 'm1'))?.count).toBe(2);
+
+    // The pre-commit response comes back now. It must reach nothing: the patch
+    // restarted that read, which aborts the old one and rejects its promise.
+    held.release();
+    await recovering;
+
+    expect(held.wasAborted()).toBe(true);
+    expect(server.fetches).toBe(2);
+    expect(chip(rowIn(qc, messagesKey('c1'), 'm1'))).toEqual({
+      emoji: '👍',
+      count: 2,
+      viewer_reacted: true,
+    });
+    held.unsub();
+
+    // WITNESS that the restart is load-bearing: the degenerate model — assign and
+    // leave the racing read alone — has its patch silently undone by the stale
+    // response, and stays wrong until the next event.
+    const degenerate = new QueryClient();
+    const serverD = {
+      rows: [message({ id: 'm1', seq: 5, reactions: thumbsUp(2, true) })],
+      fetches: 0,
+    };
+    degenerate.setQueryData(
+      messagesKey('c1'),
+      windowCache([message({ id: 'm1', seq: 5 })]),
+    );
+    const heldD = mountHeldReader(
+      degenerate,
+      messagesKey('c1'),
+      [message({ id: 'm1', seq: 5, reactions: thumbsUp(1, true) })],
+      serverD,
+    );
+    const recoveringD = ackWrite(degenerate, { messageId: 'm1' });
+    await Promise.resolve();
+    degenerate.setQueryData(
+      messagesKey('c1'),
+      windowCache([message({ id: 'm1', seq: 5, reactions: thumbsUp(2, true) })]),
+    );
+    heldD.release();
+    await recoveringD;
+    expect(chip(rowIn(degenerate, messagesKey('c1'), 'm1'))?.count).toBe(1);
+    expect(serverD.fetches).toBe(1);
+    heldD.unsub();
+  });
+
+  it('recovery reaches EVERY displayed projection holding the row, not just the rendered one', async () => {
+    const qc = new QueryClient();
+    // A thread root is displayed three ways at once: the mainline row, the
+    // cluster's first row, and the thread-root projection.
+    const unsubM = mountMainlineReader(qc, 'c1');
+    const unsubC = mountReader(qc, clusterMessagesKey('c1', 'root1'));
+    const unsubR = mountReader(qc, threadRootKey('c1', 'root1'));
+    const row = message({ id: 'root1', seq: 5 });
+    qc.setQueryData(messagesKey('c1'), windowCache([row]));
+    qc.setQueryData(clusterMessagesKey('c1', 'root1'), windowCache([row]));
+    qc.setQueryData(threadRootKey('c1', 'root1'), {
+      messages: [row],
+      reply_counts_by_root: {},
+      has_more_before: false,
+      has_more_after: false,
+      stream_head_seq: 5,
+    });
+
+    await ackWrite(qc, { messageId: 'root1' });
+
+    expect(invalidated(qc, messagesKey('c1'))).toBe(true);
+    expect(invalidated(qc, clusterMessagesKey('c1', 'root1'))).toBe(true);
+    expect(invalidated(qc, threadRootKey('c1', 'root1'))).toBe(true);
+    unsubM();
+    unsubC();
+    unsubR();
+  });
+
+  it('recovery scope equals the patch seam scope: a cluster-only reader, an unmounted mainline left alone', async () => {
+    const qc = new QueryClient();
+    // The reacted row is a reply in an open cluster; the mainline holds it too
+    // but has NO reader. Reaction's scope is the displayed projections — the same
+    // set the WS patch writes — so the mainline stays out of it (its warm-cache
+    // semantics are unchanged by this task).
+    const unsub = mountReader(qc, clusterMessagesKey('c1', 'root1'));
+    const reply = message({ id: 'r1', seq: 5, thread_root_id: 'root1' });
+    qc.setQueryData(clusterMessagesKey('c1', 'root1'), windowCache([reply]));
+    qc.setQueryData(messagesKey('c1'), windowCache([reply]));
+    const mainlineBefore = qc.getQueryData(messagesKey('c1'));
+
+    await ackWrite(qc, { messageId: 'r1', threadRootId: 'root1' });
+
+    expect(invalidated(qc, clusterMessagesKey('c1', 'root1'))).toBe(true);
+    expect(invalidated(qc, messagesKey('c1'))).toBe(false);
+    expect(qc.getQueryData(messagesKey('c1'))).toBe(mainlineBefore);
+    unsub();
+  });
+
+  it('a displayed projection that does not hold the row is neither refetched nor bootstrapped', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    qc.setQueryData(messagesKey('c1'), windowCache([message({ id: 'other', seq: 5 })]));
+
+    await ackWrite(qc, { messageId: 'm1' });
+
+    // Membership gating is what bounds the cost: no window-wide refetch for a row
+    // this window never showed, and no absent projection brought to life.
+    expect(invalidated(qc, messagesKey('c1'))).toBe(false);
+    expect(rowIn(qc, messagesKey('c1'), 'm1')).toBeUndefined();
+    expect(qc.getQueryState(clusterMessagesKey('c1', 'root1'))).toBeUndefined();
+    unsub();
+  });
+
+  it('the ACK plane never advances the resume floor', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    qc.setQueryData(messagesKey('c1'), windowCache([message({ id: 'm1', seq: 5 })]));
+
+    await ackWrite(qc, { messageId: 'm1' });
+
+    // The water-mark is a TRANSPORT fact: only frames may move it, or a resume
+    // would skip events an HTTP round trip never carried.
+    expect(vi.mocked(eventWsClient.markSatisfied)).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it('recovery refreshes the who-reacted detail but never writes reactor rows', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    qc.setQueryData(messagesKey('c1'), windowCache([message({ id: 'm1', seq: 5 })]));
+    const seeded: unknown[] = [];
+    qc.setQueryData(messageReactorsKey('m1'), seeded);
+
+    await ackWrite(qc, { messageId: 'm1' });
+
+    // Authoritative-on-open, same as the WS plane: mark it stale, never derive
+    // reactor rows from a write.
+    expect(invalidated(qc, messageReactorsKey('m1'))).toBe(true);
+    expect(qc.getQueryData(messageReactorsKey('m1'))).toBe(seeded);
+    unsub();
+  });
+});
+
 // #task:1270 — SOURCE-SCAN FENCE (orthogonal to the by-construction fence: the
 // 4 per-projection fan-out exports were deleted so a handler physically cannot
 // hand-pick projections). This fence guards the OTHER direction: the message-row
@@ -1808,12 +2263,12 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
 // scoped to the two row-patch handlers. The node test env can't render, so — in
 // the spirit of the read-inert fences — we statically slice + scan the source.
 describe('message-row patch handlers — route through the seam, never hand-pick projections (#task:1270)', () => {
-  const source = readFileSync(
-    fileURLToPath(new URL('./conversation-ingestor.ts', import.meta.url)),
-    'utf8',
-  );
+  const read = (relative: string): string =>
+    readFileSync(fileURLToPath(new URL(relative, import.meta.url)), 'utf8');
+  const ingestorSource = read('./conversation-ingestor.ts');
+  const reactionSource = read('../channels/reaction-hooks.ts');
 
-  function sliceFunctionBody(declaration: string): string {
+  function sliceFunctionBody(source: string, declaration: string): string {
     const start = source.indexOf(declaration);
     if (start === -1) {
       throw new Error(`could not find "${declaration}" — was it renamed?`);
@@ -1833,18 +2288,66 @@ describe('message-row patch handlers — route through the seam, never hand-pick
     'openThreadRootReaderRoots(',
   ];
 
-  for (const decl of ['function ingestReaction(', 'function ingestTaskChanged(']) {
-    const name = decl.replace('function ', '').replace('(', '');
-    const body = sliceFunctionBody(decl);
+  // Each row-patch handler names the seam it delegates to. `ingestTaskChanged`
+  // calls the row seam directly; `ingestReaction` reaches it through the
+  // ordered-plane committed-reaction seam (#task:1753). That seam is the chain's
+  // second link and is scanned here too — otherwise "route through the seam"
+  // could be satisfied by a wrapper that hand-picks projections itself.
+  const LINKS = [
+    {
+      source: ingestorSource,
+      decl: 'function ingestReaction(',
+      seam: 'applyCommittedReactionFromEvent(',
+    },
+    {
+      source: ingestorSource,
+      decl: 'function ingestTaskChanged(',
+      seam: 'patchMessageInActiveProjections(',
+    },
+    {
+      source: reactionSource,
+      decl: 'export function applyCommittedReactionFromEvent(',
+      seam: 'patchMessageInActiveProjections(',
+    },
+  ];
 
-    it(`${name} routes projection writes through patchMessageInActiveProjections`, () => {
-      expect(body).toContain('patchMessageInActiveProjections(');
+  for (const { source, decl, seam } of LINKS) {
+    const name = decl.replace('export ', '').replace('function ', '').replace('(', '');
+    const body = sliceFunctionBody(source, decl);
+
+    it(`${name} routes projection writes through ${seam.replace('(', '')}`, () => {
+      expect(body).toContain(seam);
     });
 
     it(`${name} never hand-picks projections (no gate predicate / direct setQueryData)`, () => {
       for (const sym of FORBIDDEN) expect(body).not.toContain(sym);
     });
   }
+
+  // #task:1753 review — the ACK plane's own fence. An HTTP ACK shares no ordering
+  // axis with the WS stream, so it may recover the row but never ASSIGN a value
+  // (the two falsifiers in the convergence grid above are what an assignment
+  // breaks). Those falsifiers can only fail if someone re-adds the assignment, and
+  // the tempting shortcut — "we already have the authoritative count, just patch
+  // it" — is exactly what this scan forbids, including reading the payload at all.
+  it('the write ACK converges by recovery only, never by assigning its payload', () => {
+    const body = sliceFunctionBody(
+      reactionSource,
+      'export function useToggleReaction(',
+    );
+    expect(body).toContain('recoverCommittedReactionsAfterWrite(');
+    for (const sym of [
+      ...FORBIDDEN,
+      'applyReactionToMessage(',
+      'applyCommittedReactionFromEvent(',
+      'patchMessageInActiveProjections(',
+      'ack.count',
+      'ack.emoji',
+      'ack.changed',
+    ]) {
+      expect(body).not.toContain(sym);
+    }
+  });
 });
 
 // #task:1715 — `['task-detail', id]` has exactly ONE realtime owner, and it is
@@ -1920,6 +2423,15 @@ function reactionFrame(
   messageId: string,
   seq: number,
   threadRootId: string | null = null,
+  // The reactor / op / count the default add-by-`u2` fixture pins. Overridable
+  // for the ACK-plane convergence grid (#task:1753), which needs the viewer's own
+  // echo and removes.
+  payload: Partial<{
+    emoji: string;
+    op: 'add' | 'remove';
+    reactorId: string;
+    count: number;
+  }> = {},
 ): ServerFrame {
   return {
     type: 'event',
@@ -1931,11 +2443,11 @@ function reactionFrame(
       message_id: messageId,
       conversation_id: channelId,
       thread_root_id: threadRootId,
-      emoji: '👍',
-      op: 'add',
+      emoji: payload.emoji ?? '👍',
+      op: payload.op ?? 'add',
       reactor_kind: 'user',
-      reactor_id: 'u2',
-      count: 1,
+      reactor_id: payload.reactorId ?? 'u2',
+      count: payload.count ?? 1,
     },
   } as ServerFrame;
 }

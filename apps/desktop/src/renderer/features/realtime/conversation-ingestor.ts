@@ -41,7 +41,6 @@ import {
   applyAgentStatusToCache,
   applyClusterMessageToCaches,
   applyMainlineMessageToChannelCaches,
-  applyReactionToMessage,
   applyTaskChangedToMessage,
   applyThreadFollowersMessage,
   applyThreadRootReplyBump,
@@ -64,7 +63,7 @@ import {
   warmInactiveClusterRoots,
 } from '@/features/channels/hooks';
 import type { ConversationAgentStatusPatch } from '@/features/channels/hooks';
-import { messageReactorsKey } from '@/features/channels/reaction-hooks';
+import { applyCommittedReactionFromEvent } from '@/features/channels/reaction-hooks';
 import { applyTaskChangedToTaskByNumberCache } from '@/features/tasks/useTaskByNumber';
 import {
   dispositionSettle,
@@ -624,35 +623,44 @@ function ingestTaskChanged(
   return contentEffectApplied('task_message_patch', true);
 }
 
+/** WS wrapper over the ordered-plane committed-reaction seam (#task:1753). Its
+ *  only transport-specific job is resolving the event's REACTOR into the viewer's
+ *  own terminal state — `null` when someone else reacted, so the count moves and
+ *  the viewer's flag does not — and then reporting the apply to the resume floor.
+ *  The cache convergence itself (absolute row merge across every displayed
+ *  projection + reactor-detail refresh) lives in
+ *  `applyCommittedReactionFromEvent`. Absolute assignment is THIS plane's
+ *  privilege: it is ordered per scope, with replay and a `snapshot_required` gap
+ *  fence. The viewer's own write ACK, having no shared ordering axis, converges
+ *  through the re-read seam instead; the floor likewise stays WS-exclusive, so no
+ *  ACK can ever advance a water-mark.
+ *
+ *  #1263 hybrid boundary: reaction keeps the SYNCHRONOUS content-apply (boolean)
+ *  gate — `applied` is the content-commit signal. The seam's detail invalidate is
+ *  fire-and-forget and deliberately NOT commit-gated via allSettled (see
+ *  REPLAY_SAFETY_CONTRACTS.reactors_list_refresh). */
 function ingestReaction(
   qc: QueryClient,
   channelId: string,
   ev: MessageReactionChangedEvent,
 ): boolean {
-  const viewerId = getCurrentUserId();
-  // Message-scoped absolute-count row patch → the seam fans it to every
-  // displayed projection holding the row (mainline / open clusters / open
-  // thread-root). This is what fixes #task:1269 item 1 by construction: the
-  // Activity thread side panel opens a reply cluster with NO mainline reader, and
-  // the old hand-enumerated gate only checked the mainline → live reactions were
-  // dropped. #1263 hybrid boundary: reaction keeps the SYNCHRONOUS content-apply
-  // (boolean) gate; `applied` is the synchronous content-commit signal.
-  const applied = contentEffectApplied(
+  const byViewer =
+    ev.reactor_kind === 'user' && ev.reactor_id === getCurrentUserId();
+  return contentEffectApplied(
     'reaction_message_patch',
-    patchMessageInActiveProjections(
-      qc,
-      { channelId, messageId: ev.message_id, threadRootId: ev.thread_root_id },
-      message => applyReactionToMessage(message, ev, viewerId),
-    ),
+    applyCommittedReactionFromEvent(qc, {
+      // `channelId` comes from the frame SCOPE, the routing authority — not the
+      // event's self-declared `conversation_id`.
+      target: {
+        channelId,
+        messageId: ev.message_id,
+        threadRootId: ev.thread_root_id,
+      },
+      emoji: ev.emoji,
+      count: ev.count,
+      viewerReacted: byViewer ? ev.op === 'add' : null,
+    }),
   );
-  // FIRE-AND-FORGET, cursor-inert, authoritative-on-open: refresh the open
-  // "who reacted" popover (`reactors_list_refresh`). Fired once regardless of row
-  // writes and NEVER counted in `applied` — it self-heals on next open, so it
-  // stays off the resume floor / the `message`-kind allSettled commit-gate (do
-  // not promote reaction to the satisfaction path on its account — see
-  // REPLAY_SAFETY_CONTRACTS).
-  void qc.invalidateQueries({ queryKey: messageReactorsKey(ev.message_id) });
-  return applied;
 }
 
 /** `snapshot_required` on the message-stream scope (`conversation:<id>`):

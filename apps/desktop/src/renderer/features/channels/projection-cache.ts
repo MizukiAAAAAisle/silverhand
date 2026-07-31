@@ -8,7 +8,6 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 import type {
   ConversationMessagesDto,
   MessageDto,
-  MessageReactionChangedEvent,
   ReactionAggregateDto,
   TaskChangedEvent,
   ThreadReplyPreviewRow,
@@ -58,62 +57,74 @@ export function applyTaskChangedToMessage(
   };
 }
 
-/** Apply a `message_reaction_changed` event to a SINGLE message row.
+/** A COMMITTED reaction change carried by the ORDERED plane — the
+ *  `message_reaction_changed` WS event (#task:1753).
  *
- *  Count is **absolute-assigned** from the event (`ev.count`, the server's
- *  authoritative post-change aggregate), never derived from `op` +/- — WS
- *  replay / reorder + the viewer's own optimism would otherwise drift
- *  (docs/reactions-design.md §5.2). `viewer_reacted` flips ONLY when the
- *  event's reactor is the current viewer; other reactors bump the count but
- *  leave the viewer flag untouched. `count <= 0` drops the emoji's chip;
- *  the array collapses to `null` when the last reaction goes.
+ *  Only that plane produces this delta. The viewer's own write ACK converges by
+ *  authoritative re-read instead ({@link invalidateMessageRowInActiveProjections});
+ *  which carrier may assign and why is the contract in
+ *  `docs/reactions-design.md` §5.3.
  *
- *  The caller is responsible for matching `message.id === ev.message_id`;
+ *  `viewerReacted` is resolved at the transport edge, so the merge never sees an
+ *  identity: `op === 'add'` when the event's reactor IS the viewer, and `null`
+ *  when the change is someone else's — the count moves, the viewer's own flag
+ *  must not.
+ *
+ *  `count` is the server's absolute post-change aggregate; the merge never
+ *  derives it from an op (§5.2). `target` routes the row patch and is read off
+ *  the row being changed, never from view state. */
+export type CommittedReaction = {
+  target: { channelId: string; messageId: string; threadRootId: string | null };
+  emoji: string;
+  /** Server-authoritative post-change count for this emoji; `0` drops the chip. */
+  count: number;
+  /** The viewer's terminal state for this emoji, or `null` when this change says
+   *  nothing about the viewer (another reactor's). */
+  viewerReacted: boolean | null;
+};
+
+/** Apply a committed reaction to a SINGLE message row.
+ *
+ *  Count is **absolute-assigned** from the delta (the server's authoritative
+ *  post-change aggregate), never derived from an add/remove op — WS replay /
+ *  reorder, the dual ACK+WS apply, and the viewer's own toggle would otherwise
+ *  drift (docs/reactions-design.md §5.2). `viewerReacted: null` bumps the count
+ *  and leaves the viewer flag untouched. `count <= 0` drops the emoji's chip; the
+ *  array collapses to `null` when the last reaction goes.
+ *
+ *  Returns the SAME object when the merge is a no-op, so a duplicate apply (WS
+ *  replay, or a re-read that already landed the same value) costs no re-render.
+ *  Callers must preserve that: the projection writers compare identity.
+ *
+ *  The caller is responsible for matching `message.id === delta.target.messageId`;
  *  this is the one place the reaction-merge logic lives so the main window,
  *  reply-cluster window, and the thread-pane root row all stay consistent
  *  (#task:1122 review, P1.1 — no second copy of the merge). */
 export function applyReactionToMessage(
   message: MessageDto,
-  ev: MessageReactionChangedEvent,
-  viewerUserId: string | null,
+  delta: CommittedReaction,
 ): MessageDto {
-  const viewerMatch =
-    ev.reactor_kind === 'user' && ev.reactor_id === viewerUserId;
+  const { emoji, count, viewerReacted } = delta;
   const prev = message.reactions ?? [];
-  const idx = prev.findIndex(r => r.emoji === ev.emoji);
+  const existing = prev.find(r => r.emoji === emoji);
   let next: ReactionAggregateDto[];
-  if (ev.count <= 0) {
-    next = prev.filter(r => r.emoji !== ev.emoji);
-  } else if (idx === -1) {
-    next = [
-      ...prev,
-      {
-        emoji: ev.emoji,
-        count: ev.count,
-        viewer_reacted: viewerMatch && ev.op === 'add',
-      },
-    ];
+  if (count <= 0) {
+    if (!existing) return message;
+    next = prev.filter(r => r.emoji !== emoji);
+  } else if (!existing) {
+    next = [...prev, { emoji, count, viewer_reacted: viewerReacted ?? false }];
   } else {
-    next = prev.map((r, i) =>
-      i === idx
-        ? {
-            emoji: r.emoji,
-            count: ev.count,
-            viewer_reacted: viewerMatch ? ev.op === 'add' : r.viewer_reacted,
-          }
-        : r,
+    const viewer = viewerReacted ?? existing.viewer_reacted;
+    if (existing.count === count && existing.viewer_reacted === viewer) {
+      return message;
+    }
+    next = prev.map(r =>
+      r.emoji === emoji ? { emoji: r.emoji, count, viewer_reacted: viewer } : r,
     );
   }
   return { ...message, reactions: next.length ? next : null };
 }
 
-/** Apply a `message_reaction_changed` event to a message-window cache.
- *
- *  Delegates the per-row merge to {@link applyReactionToMessage}; this just
- *  walks the infinite-query pages and is a no-op when the message isn't in
- *  this window — so the same handler can be fired against both the
- *  main-stream and reply-cluster caches and only the one actually holding
- *  the row changes. */
 // ─── Message-scoped content-patch seam (#task:1270) ──────────────────────────
 // SINGLE entry for "set fields on an existing message row, by id, across every
 // currently-DISPLAYED projection that holds it". Before this, each row-patch
@@ -141,19 +152,59 @@ export function applyReactionToMessage(
 // S1 note: only the resolver (which projections + membership) is React-Query
 // specific; the seam SIGNATURE is the S1 projection-recovery shape, so S1 can
 // swap the resolver internals without touching callers.
+//
+// The module owns TWO entries over that same projection set, chosen by what the
+// carrier can prove: {@link patchMessageInActiveProjections} ASSIGNS a value (an
+// ordered carrier — WS — knows it holds the newest one), {@link
+// invalidateMessageRowInActiveProjections} RE-READS (an unordered carrier — an
+// HTTP write ACK — does not). Both resolve their projections through the ONE
+// enumeration {@link heldMessageProjections}; that shared list, not a comment, is
+// why the two planes cannot disagree about which surfaces a committed fact
+// reaches.
+
+/** Whether a paginated message-window cache currently holds the row — the one
+ *  definition of window MEMBERSHIP, shared by the patch and the re-read seams so
+ *  the two planes can never disagree about which projections a fact reaches. */
+function windowHoldsMessage(
+  qc: QueryClient,
+  key: readonly unknown[],
+  messageId: string,
+): boolean {
+  return cacheHasMessage(qc.getQueryData<MessagesCache>(key), messageId);
+}
+
+/** Whether an open thread-pane root cache holds the row: only its OWN root row
+ *  can be the target (replies live in the cluster window, not this single-row
+ *  cache), and only once loaded. Thread-root sibling of {@link
+ *  windowHoldsMessage}. */
+function threadRootHoldsMessage(
+  qc: QueryClient,
+  channelId: string,
+  rootId: string,
+  messageId: string,
+): boolean {
+  if (rootId !== messageId) return false;
+  const prev = qc.getQueryData<ConversationMessagesDto>(
+    threadRootKey(channelId, rootId),
+  );
+  return prev?.messages.some(m => m.id === messageId) ?? false;
+}
 
 /** Map the one row `messageId` inside a paginated message-window cache via
- *  `patchRow`; a no-op (returns false) when the window is absent or doesn't hold
- *  the row. Only committed rows are touched — a pending optimistic row carries a
- *  temp id an event's server id can't match anyway (belt-and-suspenders). */
-function mapMessageRowInWindow(
+ *  `patchRow`. Membership is the CALLER's business (this only runs for a key
+ *  {@link heldMessageProjections} already gated). Only committed rows are touched
+ *  — a pending optimistic row carries a temp id an event's server id can't match
+ *  anyway (belt-and-suspenders).
+ *
+ *  A `patchRow` that returns its argument unchanged writes nothing: an
+ *  equal-value merge must not churn the cache reference and re-render every
+ *  observer. */
+function writeMessageRowInWindow(
   qc: QueryClient,
   key: readonly unknown[],
   messageId: string,
   patchRow: (message: MessageDto) => MessageDto,
-): boolean {
-  const cur = qc.getQueryData<MessagesCache>(key);
-  if (!cacheHasMessage(cur, messageId)) return false;
+): void {
   qc.setQueryData<MessagesCache>(key, prev => {
     if (!prev) return prev;
     let changed = false;
@@ -163,52 +214,103 @@ function mapMessageRowInWindow(
         if (message.id !== messageId || !isCommittedMessage(message)) {
           return message;
         }
+        const patched = patchRow(message);
+        if (patched === message) return message;
         changed = true;
         pageChanged = true;
-        return patchRow(message);
+        return patched;
       });
       return pageChanged ? { ...page, messages } : page;
     });
     return changed ? { ...prev, pages } : prev;
   });
-  return true;
 }
 
-/** Map the single root row of an open thread-pane root cache via `patchRow`;
- *  a no-op unless this open root IS `messageId` and its row is loaded. (Replies
- *  in the pane live in the cluster window, not this single-row root cache.) */
-function mapMessageRowInThreadRoot(
+/** Map the single root row of an open thread-pane root cache via `patchRow`.
+ *  (Replies in the pane live in the cluster window, not this single-row root
+ *  cache.) Identity-preserving like {@link writeMessageRowInWindow}: an
+ *  equal-value merge leaves the cache reference alone. */
+function writeMessageRowInThreadRoot(
   qc: QueryClient,
   channelId: string,
   rootId: string,
   messageId: string,
   patchRow: (message: MessageDto) => MessageDto,
-): boolean {
-  if (rootId !== messageId) return false;
-  const prev = qc.getQueryData<ConversationMessagesDto>(
-    threadRootKey(channelId, rootId),
-  );
-  if (!(prev?.messages.some(m => m.id === messageId) ?? false)) return false;
+): void {
   qc.setQueryData<ConversationMessagesDto>(
     threadRootKey(channelId, rootId),
-    p =>
-      p
-        ? {
-            ...p,
-            messages: p.messages.map(m =>
-              m.id === messageId ? patchRow(m) : m,
-            ),
-          }
-        : p,
+    p => {
+      if (!p) return p;
+      let changed = false;
+      const messages = p.messages.map(m => {
+        if (m.id !== messageId) return m;
+        const patched = patchRow(m);
+        if (patched === m) return m;
+        changed = true;
+        return patched;
+      });
+      return changed ? { ...p, messages } : p;
+    },
   );
-  return true;
+}
+
+/** One DISPLAYED projection that currently holds the row: its query key plus how
+ *  to write that row. */
+type HeldMessageProjection = {
+  key: readonly unknown[];
+  write: (patchRow: (message: MessageDto) => MessageDto) => void;
+};
+
+/** THE enumeration of "which displayed caches carry message M right now" —
+ *  mainline (gated on a mounted reader), every open reply cluster, every open
+ *  thread-root row, each membership-gated, never bootstrapping an absent window.
+ *
+ *  Every operation this module performs over that set consumes THIS list: assign
+ *  (patch), re-read (invalidate), and restart-a-racing-read. Keeping it one list
+ *  is what makes "the ACK plane and the WS plane reach the same surfaces" a
+ *  structural fact rather than two loops that a comment claims are equal — a
+ *  third copy of the walk is how the two planes would silently drift apart. */
+function heldMessageProjections(
+  qc: QueryClient,
+  target: { channelId: string; messageId: string },
+): HeldMessageProjection[] {
+  const { channelId, messageId } = target;
+  const held: HeldMessageProjection[] = [];
+  const addWindow = (key: readonly unknown[]) => {
+    if (!windowHoldsMessage(qc, key, messageId)) return;
+    held.push({
+      key,
+      write: patchRow => writeMessageRowInWindow(qc, key, messageId, patchRow),
+    });
+  };
+  // MAINLINE window — gated on a mounted mainline reader; then membership-gated.
+  if (hasActiveMainlineReader(qc, channelId)) addWindow(messagesKey(channelId));
+  // REPLY-CLUSTER windows — every OPEN cluster; each dropped unless its window
+  // holds the row. Enumerate-all + membership-gate (rather than only the row's
+  // own root cluster) mirrors the mainline-append path and is robust to a row
+  // surfacing in more than one loaded window.
+  for (const rootId of openClusterReaderRoots(qc, channelId)) {
+    addWindow(clusterMessagesKey(channelId, rootId));
+  }
+  // THREAD-PANE root rows — a separate single-row cache; present only when this
+  // open root IS the target message. This is the projection reaction covered but
+  // task_changed did not (#task:1269-class gap) — the enumeration closes it
+  // uniformly.
+  for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
+    if (!threadRootHoldsMessage(qc, channelId, rootId, messageId)) continue;
+    held.push({
+      key: threadRootKey(channelId, rootId),
+      write: patchRow =>
+        writeMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow),
+    });
+  }
+  return held;
 }
 
 /** THE message-row content-patch seam (#task:1270) — see the block comment
  *  above. Fans an idempotent `patchRow` out to every DISPLAYED projection that
- *  holds `messageId` (mainline window, each open reply cluster, each open
- *  thread-root row), membership-gated so it never bootstraps an absent window.
- *  Returns `applied` = at least one displayed projection was written (the
+ *  holds `messageId` ({@link heldMessageProjections}).
+ *  Returns `applied` = at least one displayed projection held the row (the
  *  synchronous content-commit signal for the resume floor). */
 export function patchMessageInActiveProjections(
   qc: QueryClient,
@@ -221,40 +323,62 @@ export function patchMessageInActiveProjections(
   // never by trusting the event's declared root. It stays on the target so an S1
   // per-projection recovery can key off it without a signature change; if that
   // never lands, drop the field rather than start trusting it as input.
-  const { channelId, messageId } = target;
-  let applied = false;
-  // MAINLINE window — gated on a mounted mainline reader; then membership-gated.
-  if (
-    hasActiveMainlineReader(qc, channelId) &&
-    mapMessageRowInWindow(qc, messagesKey(channelId), messageId, patchRow)
-  ) {
-    applied = true;
+  const held = heldMessageProjections(qc, target);
+  // A read already in flight on one of these projections was ISSUED BEFORE this
+  // commit, so its response can be older than the value being assigned — and
+  // React Query commits a settled read over any interim `setQueryData`, silently
+  // undoing this patch until the next event (#task:1753 review).
+  //
+  // Restart those reads instead of cancelling them: `invalidateQueries`
+  // (cancelRefetch, default) silently cancels the in-flight retryer — whose
+  // promise is already rejected, so the stale response can never commit data,
+  // independent of whether its queryFn honours `signal` — and issues a fresh read
+  // that can only snapshot at-or-after this commit.
+  //
+  // NOT `cancelQueries`: it reverts the query to its pre-fetch state, discarding
+  // every OTHER interim write too (an appended message, another row's patch).
+  const racing = held.filter(
+    projection => qc.getQueryState(projection.key)?.fetchStatus === 'fetching',
+  );
+  for (const projection of held) projection.write(patchRow);
+  for (const projection of racing) {
+    void qc.invalidateQueries({ queryKey: projection.key, exact: true });
   }
-  // REPLY-CLUSTER windows — every OPEN cluster; each no-ops unless its window
-  // holds the row. Enumerate-all + membership-gate (rather than only the row's
-  // own root cluster) mirrors the mainline-append path and is robust to a row
-  // surfacing in more than one loaded window.
-  for (const rootId of openClusterReaderRoots(qc, channelId)) {
-    if (
-      mapMessageRowInWindow(
-        qc,
-        clusterMessagesKey(channelId, rootId),
-        messageId,
-        patchRow,
-      )
-    ) {
-      applied = true;
-    }
-  }
-  // THREAD-PANE root rows — a separate single-row cache; no-op unless this open
-  // root IS the target message. This is the projection reaction covered but
-  // task_changed did not (#task:1269-class gap) — the seam closes it uniformly.
-  for (const rootId of openThreadRootReaderRoots(qc, channelId)) {
-    if (mapMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow)) {
-      applied = true;
-    }
-  }
-  return applied;
+  return held.length > 0;
+}
+
+/** Recover ONE message row's server state AUTHORITATIVELY across the SAME
+ *  displayed projections {@link patchMessageInActiveProjections} writes — the
+ *  seam for a committed fact whose carrier cannot prove it holds the newest value
+ *  (#task:1753 review).
+ *
+ *  An HTTP write ACK shares no ordering axis with the event stream (nor with a
+ *  second local write's ACK), so it RE-READS rather than assigns; the full
+ *  argument, the rejected alternatives, and why the ordered plane MAY assign are
+ *  the contract in `docs/reactions-design.md` §5.3.
+ *
+ *  Scope is deliberately identical to the patch seam — both consume {@link
+ *  heldMessageProjections}, so the two planes converge on exactly the same
+ *  projection set by construction, and a warm-inactive cache's semantics stay
+ *  untouched (it was never patched either). Membership gating also bounds the
+ *  cost: a window that doesn't hold the row is left alone rather than refetched,
+ *  and no absent window is ever bootstrapped. A read already in flight needs no
+ *  special handling on this plane — `invalidateQueries` cancels and restarts it,
+ *  so the value is decided by a read issued after this write committed.
+ *
+ *  Returns the settle promise of the recovery round, so a caller can join it to a
+ *  commit gate; `applied`-style membership is not reported, because "no displayed
+ *  projection holds it" and "the re-read landed" are the same outcome here — the
+ *  row re-reads authoritatively whenever it next becomes displayed. */
+export function invalidateMessageRowInActiveProjections(
+  qc: QueryClient,
+  target: { channelId: string; messageId: string },
+): Promise<void> {
+  return Promise.all(
+    heldMessageProjections(qc, target).map(projection =>
+      qc.invalidateQueries({ queryKey: projection.key, exact: true }),
+    ),
+  ).then(() => undefined);
 }
 
 /** Patch the source-message row in WARM-INACTIVE caches — a warm cache with NO
@@ -277,32 +401,29 @@ export function patchWarmInactiveMessageRow(
   patchRow: (message: MessageDto) => MessageDto,
 ): boolean {
   let patched = false;
+  // Membership-then-write, the same two steps {@link heldMessageProjections}
+  // composes for the displayed set. This path keeps its own walk because its
+  // membership question is the OPPOSITE one (warm caches with zero observers),
+  // and because a warm cache has no read in flight to race.
+  const patchWindow = (key: readonly unknown[]): boolean => {
+    if (!windowHoldsMessage(qc, key, messageId)) return false;
+    writeMessageRowInWindow(qc, key, messageId, patchRow);
+    return true;
+  };
   // Warm-inactive mainline window.
-  if (
-    hasWarmInactiveMainline(qc, channelId) &&
-    mapMessageRowInWindow(qc, messagesKey(channelId), messageId, patchRow)
-  ) {
+  if (hasWarmInactiveMainline(qc, channelId) && patchWindow(messagesKey(channelId))) {
     patched = true;
   }
   // Warm-inactive reply-cluster windows.
   for (const rootId of warmInactiveClusterRoots(qc, channelId)) {
-    if (
-      mapMessageRowInWindow(
-        qc,
-        clusterMessagesKey(channelId, rootId),
-        messageId,
-        patchRow,
-      )
-    ) {
-      patched = true;
-    }
+    if (patchWindow(clusterMessagesKey(channelId, rootId))) patched = true;
   }
   // Warm-inactive thread-pane root rows (single-row cache; no-op unless this
   // closed-but-warm root IS the source message).
   for (const rootId of warmInactiveThreadRootRoots(qc, channelId)) {
-    if (mapMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow)) {
-      patched = true;
-    }
+    if (!threadRootHoldsMessage(qc, channelId, rootId, messageId)) continue;
+    writeMessageRowInThreadRoot(qc, channelId, rootId, messageId, patchRow);
+    patched = true;
   }
   return patched;
 }

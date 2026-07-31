@@ -3,6 +3,7 @@
 // results. They live in a neutral leaf so route modules can share them without
 // import cycles.
 import { type Context } from 'hono';
+import type { ReactionMutationAck } from '@silverhand/shared';
 import { RuntimeHostPlacementError } from '../host-placement-errors.js';
 import {
   HostWsCommandResponseError,
@@ -212,17 +213,22 @@ export function conversationMemberResultResponse(
  * the human `/api/messages/:id/reactions` and internal agent `react-message`
  * routes so both surfaces emit the same status/code set
  * (docs/reactions-design.md §5).
+ *
+ * The success body is typed as the shared {@link ReactionMutationAck}, the one
+ * shape both surfaces promise their callers (§5.3), so a field drifting here must
+ * break the build, not a live surface.
  */
 export function reactionResultResponse(
   c: Context,
   result: ReactionResult,
 ): Response {
   if (result.ok) {
-    return c.json({
+    const ack: ReactionMutationAck = {
       changed: result.changed,
       emoji: result.emoji,
       count: result.count,
-    });
+    };
+    return c.json(ack);
   }
   const error = result.error;
   switch (error.code) {

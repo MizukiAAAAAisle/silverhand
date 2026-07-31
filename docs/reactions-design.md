@@ -128,6 +128,57 @@ surface(主线 vs thread pane)。
   开放 `string`,**不要**为此改成严格 union;新增一个 shared payload schema(仿 `TaskChangedEventSchema`)
   供 renderer parse。
 
+### 5.3 ACK 与 event 双消费(renderer 侧两个收敛面)
+
+一次 committed reaction 会从**两个面**到达 renderer:写请求的 **HTTP ACK**
+(`ReactionMutationAck = { changed, emoji, count }`,与 event 同源的服务端权威聚合)与
+`message_reaction_changed` **WS event**。viewer 自己的 toggle 两个面都会产生。它所在的窗口通常
+**确实**订阅了该 scope(消息窗 hook 自己 retain `conversation:<cid>`,后端 publish 也不排除发送者),
+但**订阅 ≠ 已观察**:commit 与 event 到达之间可能断线,而 replay / `snapshot_required` 保证的是
+**恢复后**的最终收敛,不是点击后的即时反馈 ⇒ ACK 那面不是冗余(删掉它,WS 不可用时"写成功却毫无
+反馈"就会回来),而 **重复收敛是常态,不是边界情况**。
+
+两个面能做的事**不对称**,判据是「这个载体能不能证明自己拿的是最新值」:
+
+| | 载体的序 | 收敛方式 | `viewer_reacted` |
+| --- | --- | --- | --- |
+| WS event | 每 scope 一条有序流,带 replay 与 `snapshot_required` 缺口栅栏 | **绝对赋值** payload 的聚合(§5.2) | `reactor_kind/reactor_id` 命中 viewer 时按 `op`;否则 `null`(这条变更不表态) |
+| HTTP ACK | 与 event 流、与另一次本地写的 ACK **都没有共同的序** | **权威重读**(invalidate → refetch),不写值 | 由重读结果给出 |
+
+- **无版本的绝对值不能由两个各自有序的载体同时写。** 迟到的 ACK 可能比 cache 里已有的值更旧
+  (它的聚合是「我这次写提交时」的),赋值下去会把更新的事实覆盖掉并**一直停在那**,直到下一条
+  event 才恢复。所以 ACK 只当 **freshness trigger**:成功后 invalidate 该行所在的全部在显示
+  projection + reactor detail,让一轮有界的权威读定值——谁最后落地都读到同一份服务端状态,顺序
+  因此不再有意义。这与 reply-badge 从 `+1` 改成 invalidate(#1263 (c))是同一条判断:**载体证不了序,
+  就重读,不要赋值**。
+- **代价是一轮有界 refetch**,收敛面按 membership 收窄(只 invalidate 真的持有该行的在显示
+  projection,不持有的不动、不 bootstrap)。
+- **绝对赋值前不能留着一次更早发出的权威读**:那次读的响应可能比这次 commit 更旧,而 React Query
+  会用整份 query result 覆盖期间的任何 `setQueryData`,于是 patch 被静默撤销、并一直错到下一条 event。
+  ⇒ patch 时**重启**这些在飞的读(invalidate 的 cancelRefetch 会静默取消旧 retryer——它的 promise 已被
+  reject,旧响应因此永远无法落地,不依赖 queryFn 是否响应 `signal`——并发起一次只可能快照于 commit
+  之后的新读)。**不要用纯取消**:那会把 query 回滚到发起读之前的状态,连带丢掉期间所有别的写入
+  (新到的消息、别的行的 patch)。ACK 那面不需要额外处理:invalidate 本身就是取消+重启。
+- **为什么 message 的写 ACK 能直接落 cache、reaction 的不能 —— 同一条判据,两种值。** message 的
+  committed 行**不可变**、自带 commit 时分配的 **domain 序**(`MessageSeq`,不是 WS frame 的投递序)、
+  且这一行只属于这一次写 ⇒ 载体带着"我拿的就是这一行的终值"的证据:晚到的重复按 `id` 幂等,乱序按
+  seq 落位。**所以 message 不是"赋值的例外",而是本规则已被满足的实例** —— 够格的是它携带的证据,
+  不是"ACK"这种载体。reaction 的 `{count, viewer_reacted}` 是**多 actor 共有的可变聚合、无版本**:同一
+  个 key 的下一个真值可能来自别人,ACK 只能证明"我提交那一刻" ⇒ 判不了新旧,只能重读。
+  ⇒ **只有明确要求「ACK 后零额外读、立即 absolute patch」时**,才给 reaction 聚合加一个与 `MessageSeq`
+  同构的 **domain monotonic revision**(ACK 与 event 同时携带、只接受更新的 revision)。**不要借
+  transport seq 充当 domain version**:它排的是一条流,不是这个领域事实。
+- **`changed:false` 照样触发重读**:它只说明服务端状态本来就匹配请求(§3.3),不是关于**客户端缓存**
+  持有什么的陈述,所以它不 gate 任何东西(收敛入口的签名里根本没有它)。
+- **两个面覆盖同一组 projection**(mainline / cluster / thread-root),消费**同一份枚举**(而非两段
+  声称等价的循环),所以不可能一个面到得了、另一个面到不了;要新增第三种操作(取消 / 重启)也只能
+  接在这一份上。赋值那面的 merge 值相同时**返回原对象**,第二次 apply 因此完全不写 cache、不触发
+  re-render。
+- **只有 WS 那层碰 transport floor / satisfaction**;ACK 永不推进 resume water-mark。
+- **不做 pre-ACK optimistic 写**:绝对聚合模型下本地 +/- 正是它要禁的漂移;提交前不写,也就没有
+  回滚路径。
+
+
 ---
 
 ## 6. 性能(列表查询的 N+1)

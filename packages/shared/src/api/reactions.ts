@@ -54,6 +54,27 @@ export const ReactMessageInputSchema = z.object({
 });
 export type ReactMessageInput = z.infer<typeof ReactMessageInputSchema>;
 
+/** ACK of a reaction write — POST/DELETE `/api/messages/:id/reactions` and its
+ *  internal-agent `react-message` twin (both build it through the one response
+ *  mapper, so this schema is the single shape of a successful reaction write).
+ *
+ *  `count` is the SAME server-authoritative post-change aggregate the
+ *  `message_reaction_changed` event carries — as of THIS write's commit. That
+ *  qualifier is the whole reason the renderer treats the ACK as a freshness
+ *  trigger rather than a value to assign (§5.3): the ACK shares no ordering axis
+ *  with the event stream, so a late one can be older than what the cache already
+ *  holds. Consumers wanting to display it must re-read, or the write model needs a
+ *  domain revision this shape deliberately does not have.
+ *  `changed:false` means the stored state already matched the request
+ *  (idempotent re-toggle, §3.3) — a diagnostic about the SERVER's prior state,
+ *  never a statement about any client's, so it gates nothing. */
+export const ReactionMutationAckSchema = z.object({
+  changed: z.boolean(),
+  emoji: z.string(),
+  count: z.number().int().nonnegative(),
+});
+export type ReactionMutationAck = z.infer<typeof ReactionMutationAckSchema>;
+
 /** Internal agent route body (POST/DELETE …/react-message). Carries the
  *  message id because the agent route is conversation-scoped, not
  *  message-scoped. */
@@ -91,7 +112,7 @@ export type MessageReactionChangedEvent = z.infer<
  *  to a union, per §12.I). */
 export const MESSAGE_REACTION_CHANGED_EVENT = 'message_reaction_changed';
 
-// ── emoji validation (§5.3) ──────────────────────────────────────────
+// ── emoji validation (§5.1) ──────────────────────────────────────────
 // Conservative, slock-borrowed rule: trim non-empty, no internal
 // whitespace, char length ≤ 16, and only emoji code points. We do NOT
 // try to count grapheme clusters / ZWJ sequences — a char cap is the
