@@ -22,6 +22,7 @@ import { useNav } from '@/router';
 import {
   getAttachmentBlobUrl,
   loadAttachmentBlobUrl,
+  useAttachmentBlobToken,
 } from '@/lib/attachment-blob-cache';
 import {
   formatUserDisplayName,
@@ -1363,6 +1364,11 @@ function AttachmentTile({
   canExport?: boolean;
 }): JSX.Element {
   const isImage = attachment.content_type.startsWith('image/');
+  // Generation token for this attachment (#task:1769). Bumps when the creator
+  // updates the bytes in place (`attachment_changed`) or a reconnect gap forces
+  // a coarse epoch bump — either way we re-fetch the latest bytes and swap them
+  // in below without unmounting the current <img> (no loading flash).
+  const token = useAttachmentBlobToken(attachment.id);
   // Synchronous cache hit covers both the optimistic-message render
   // (Composer pre-populated the cache from the local File) and any
   // later viewer who has already fetched this attachment in this
@@ -1371,28 +1377,42 @@ function AttachmentTile({
   const [imageUrl, setImageUrl] = useState<string | null>(() =>
     isImage ? getAttachmentBlobUrl(attachment.id) ?? null : null,
   );
+  // The generation `imageUrl` was fetched under; a token change past this means
+  // the displayed bytes are stale and the load effect must refetch.
+  const loadedTokenRef = useRef(token);
   const [error, setError] = useState<string | null>(null);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   // Terminal "this image can't be decoded" flag. A first `onError` is treated
   // as a stale/evicted blob url and retried ONCE (see onImgError); a second is
   // taken as "the bytes themselves won't decode" and lands here so we stop
   // retrying. `retriedRef` carries the once-flag across renders without
-  // triggering one. Both reset when the tile is pointed at a new attachment.
+  // triggering one. Both are GENERATION-scoped: they reset when the tile is
+  // pointed at a new attachment OR when the bytes are updated in place (#task:1769)
+  // — an undecodable intermediate revision must not permanently poison a later
+  // fixed revision.
   const [decodeFailed, setDecodeFailed] = useState(false);
   const retriedRef = useRef(false);
 
   useEffect(() => {
+    // Re-allow load/retry for a new generation without dropping the visible old
+    // image (no white flash) — a successful reload swaps it in place below.
     retriedRef.current = false;
     setDecodeFailed(false);
     setError(null);
-  }, [attachment.id]);
+  }, [attachment.id, token]);
 
   useEffect(() => {
-    if (!isImage || imageUrl || decodeFailed) return;
+    if (!isImage || decodeFailed) return;
+    // Already showing bytes for the current generation — nothing to do.
+    if (imageUrl && loadedTokenRef.current === token) return;
     let cancelled = false;
     loadAttachmentBlobUrl(attachment.id)
       .then(url => {
-        if (!cancelled) setImageUrl(url);
+        if (!cancelled) {
+          loadedTokenRef.current = token;
+          setImageUrl(url);
+          setError(null);
+        }
       })
       .catch(err => {
         if (!cancelled) {
@@ -1402,7 +1422,7 @@ function AttachmentTile({
     return () => {
       cancelled = true;
     };
-  }, [attachment.id, isImage, imageUrl, decodeFailed]);
+  }, [attachment.id, isImage, imageUrl, decodeFailed, token]);
 
   // Bound the image-error recovery. The FIRST error may be a stale blob url
   // that was evicted + revoked out from under us — drop it and let the effect

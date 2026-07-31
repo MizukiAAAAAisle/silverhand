@@ -312,7 +312,9 @@ async function uploadAttachment(
       return;
     }
     if (input.previewUrl) {
-      setAttachmentBlobUrl(dto.id, input.previewUrl);
+      // Seed the local preview under the server's revision so a redelivered
+      // `attachment_changed` for this same revision is a no-op (#task:1769).
+      setAttachmentBlobUrl(dto.id, input.previewUrl, dto.content_revision);
     }
     patchAttachment(
       input.conversationId,

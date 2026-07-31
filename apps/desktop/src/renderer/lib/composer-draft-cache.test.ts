@@ -132,7 +132,7 @@ describe('composer draft cache', () => {
     const item = readComposerDraft('c1')?.pending[0];
     expect(item?.state).toBe('done');
     expect(item?.attachment?.id).toBe('att-1');
-    expect(setAttachmentBlobUrl).toHaveBeenCalledWith('att-1', 'blob:image');
+    expect(setAttachmentBlobUrl).toHaveBeenCalledWith('att-1', 'blob:image', 1);
   });
 
   it('upload error preserves file and preview for retry', async () => {

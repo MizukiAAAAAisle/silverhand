@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { QueryClient, QueryObserver, notifyManager } from '@tanstack/react-query';
 import {
+  ATTACHMENT_CHANGED_EVENT,
   MESSAGE_REACTION_CHANGED_EVENT,
   conversationSideScope,
   conversationScope,
@@ -28,6 +29,10 @@ import {
   recoverCommittedReactionsAfterWrite,
 } from '@/features/channels/reaction-hooks';
 import { clearCurrentUser, setCurrentUserId } from '@/lib/current-user';
+import {
+  __resetAttachmentBlobCacheForTest,
+  readAttachmentToken,
+} from '@/lib/attachment-blob-cache';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { taskDetailKey } from '@/features/tasks/taskDetail';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
@@ -88,6 +93,7 @@ describe('replay-safety contract matrix (#task:1262, reclassified #task:1263 (c)
     expect(Object.keys(SIDE_KIND_CONTRACTS).sort()).toEqual([
       'agent_activity',
       'agent_status',
+      'attachment_changed',
       'conversation_activity',
     ].sort());
     for (const effectId of Object.values(SIDE_KIND_CONTRACTS).flat()) {
@@ -472,6 +478,84 @@ describe('ingestConversationFrame — agent-run-states gate (#1255 P1c)', () => 
 });
 
 const agentsKey = (cid: string) => ['channels', cid, 'agents'] as const;
+
+// The attachment blob cache is module-global; the ingestor only drives its
+// generation counters (precise per-id revision on `attachment_changed`, coarse
+// epoch on a side-scope `snapshot_required`). These assert the SEAM — that the
+// dispatch routes to the right mutator — not any rendering behaviour.
+describe('ingestConversationFrame — attachment blob generation (#task:1769)', () => {
+  beforeEach(() => __resetAttachmentBlobCacheForTest());
+  afterEach(() => __resetAttachmentBlobCacheForTest());
+
+  it('bumps the named attachment revision on an attachment_changed event', () => {
+    const qc = new QueryClient();
+
+    ingestConversationFrame(qc, {
+      type: 'event',
+      scope: conversationSideScope('c1'),
+      seq: 1,
+      epoch: 'epoch-1',
+      kind: ATTACHMENT_CHANGED_EVENT,
+      payload: { attachment_id: 'att1', content_revision: 3 },
+    } as ServerFrame);
+
+    expect(readAttachmentToken('att1')).toBe('0:3');
+    // A sibling id is untouched — the bump is precise, not global.
+    expect(readAttachmentToken('att2')).toBe('0:0');
+  });
+
+  it('coarse-bumps the global epoch on a side-scope snapshot_required (gap recovery)', () => {
+    const qc = new QueryClient();
+
+    ingestConversationFrame(qc, {
+      type: 'snapshot_required',
+      scope: conversationSideScope('c1'),
+      epoch: 'e',
+      currentSeq: 5,
+    } as ServerFrame);
+
+    // Every id's token moves — the dropped event's id is unknowable.
+    expect(readAttachmentToken('att1')).toBe('1:0');
+    expect(readAttachmentToken('att2')).toBe('1:0');
+  });
+
+  function attachmentChangedFrame(channelId: string): ServerFrame {
+    return {
+      type: 'event',
+      scope: conversationSideScope(channelId),
+      seq: 1,
+      epoch: 'epoch-1',
+      kind: ATTACHMENT_CHANGED_EVENT,
+      payload: { attachment_id: 'att1', content_revision: 2 },
+    } as ServerFrame;
+  }
+
+  it('invalidates ONLY the same-channel attachments list when its reader is mounted (size refresh)', () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelAttachmentsKey('c1'));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, attachmentChangedFrame('c1'));
+
+    expect(spy).toHaveBeenCalledWith({ queryKey: channelAttachmentsKey('c1') });
+    // A content update changes bytes/size, not membership → senders left alone.
+    expect(spy).not.toHaveBeenCalledWith({
+      queryKey: channelAttachmentSendersKey('c1'),
+    });
+    unsub();
+  });
+
+  it('does NOT bootstrap/refetch the attachments list with no reader mounted (falsifier)', () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, attachmentChangedFrame('c1'));
+
+    expect(spy).not.toHaveBeenCalledWith({
+      queryKey: channelAttachmentsKey('c1'),
+    });
+  });
+});
 
 describe('ingestConversationFrame — agents (agent_status) gate (#1255 P1c)', () => {
   afterEach(() => clearPendingAgentStatusPatches('c1'));

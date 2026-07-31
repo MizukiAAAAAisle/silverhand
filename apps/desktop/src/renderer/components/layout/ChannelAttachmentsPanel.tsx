@@ -70,6 +70,7 @@ import { Lightbox } from '@/components/chat/Lightbox';
 import {
   getAttachmentBlobUrl,
   loadAttachmentBlobUrl,
+  useAttachmentBlobToken,
 } from '@/lib/attachment-blob-cache';
 import type { MessageJumpTarget } from '@/features/channels/useMessageJumpController';
 
@@ -694,20 +695,39 @@ function AttachmentThumb({
   const [imageUrl, setImageUrl] = useState<string | null>(() =>
     isImage ? getAttachmentBlobUrl(attachment.id) ?? null : null,
   );
+  // Generation token (#task:1769): a content update or gap-recovery bump swaps
+  // the fresh bytes in place without unmounting the thumbnail.
+  const token = useAttachmentBlobToken(attachment.id);
+  const loadedTokenRef = useRef(token);
   // Stale-URL recovery is bounded: the shared blob-cache LRU may evict a
   // URL while an `<img>` still holds it, at which point the browser fires
-  // `onError`. We refetch AT MOST ONCE per mount — if the second attempt
+  // `onError`. We refetch AT MOST ONCE per generation — if the second attempt
   // also fails, we give up and show the icon fallback, so a permanently
   // broken blob can't produce an infinite fetch→revoke→error loop.
   const retriedRef = useRef(false);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!isImage || imageUrl || failed) return;
+    // A new generation (#task:1769: in-place content update or gap-recovery
+    // bump) re-allows load/retry — an undecodable intermediate revision must
+    // not permanently poison a later fixed one. Don't drop the visible old
+    // image; the reload swaps it in place below.
+    retriedRef.current = false;
+    setFailed(false);
+  }, [token]);
+
+  useEffect(() => {
+    if (!isImage || failed) return;
+    // Already showing bytes for the current generation — nothing to do.
+    if (imageUrl && loadedTokenRef.current === token) return;
     let cancelled = false;
     loadAttachmentBlobUrl(attachment.id)
       .then(url => {
-        if (!cancelled) setImageUrl(url);
+        if (!cancelled) {
+          loadedTokenRef.current = token;
+          setImageUrl(url);
+          setFailed(false);
+        }
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -715,7 +735,7 @@ function AttachmentThumb({
     return () => {
       cancelled = true;
     };
-  }, [attachment.id, isImage, imageUrl, failed]);
+  }, [attachment.id, isImage, imageUrl, failed, token]);
 
   function onImgError(): void {
     if (retriedRef.current) {
@@ -773,12 +793,19 @@ function ImageLightboxHost({
   const [url, setUrl] = useState<string | null>(() =>
     getAttachmentBlobUrl(attachment.id) ?? null,
   );
+  // Refresh in place if the bytes are updated while the lightbox is open
+  // (#task:1769) — the "staring at a preview, no surrounding re-render" case.
+  const token = useAttachmentBlobToken(attachment.id);
+  const loadedTokenRef = useRef(token);
   useEffect(() => {
-    if (url) return;
+    if (url && loadedTokenRef.current === token) return;
     let cancelled = false;
     loadAttachmentBlobUrl(attachment.id)
       .then(next => {
-        if (!cancelled) setUrl(next);
+        if (!cancelled) {
+          loadedTokenRef.current = token;
+          setUrl(next);
+        }
       })
       .catch(err => {
         if (cancelled) return;
@@ -788,7 +815,7 @@ function ImageLightboxHost({
     return () => {
       cancelled = true;
     };
-  }, [attachment.id, url, onOpenChange]);
+  }, [attachment.id, url, onOpenChange, token]);
   if (!url) return null;
   return (
     <Lightbox

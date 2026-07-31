@@ -2,12 +2,14 @@ import { useEffect } from 'react';
 import { useQueryClient, notifyManager } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import {
+  ATTACHMENT_CHANGED_EVENT,
   MESSAGE_REACTION_CHANGED_EVENT,
   parseConversationScope,
   parseConversationSideScope,
 } from '@silverhand/shared';
 import type {
   AgentRunState,
+  AttachmentChangedEvent,
   ConversationActivityEvent,
   MessageDto,
   MessageEventPayload,
@@ -17,6 +19,10 @@ import type {
   TaskChangedEvent,
 } from '@silverhand/shared';
 import { onWsFrame, eventWsClient } from '@/lib/ws-client';
+import {
+  bumpAttachmentBlobEpoch,
+  bumpAttachmentRevision,
+} from '@/lib/attachment-blob-cache';
 import { getCurrentUserId } from '@/lib/current-user';
 import {
   appendAgentActivityToCache,
@@ -173,6 +179,12 @@ export const REPLAY_SAFETY_CONTRACTS = {
     recovery: 'side-scope-self-healing',
     summary: 'side scope activity feed merges by row id and has REST cold-start',
   },
+  attachment_blob_generation: {
+    cursor: 'cursor-inert',
+    recovery: 'side-scope-self-healing',
+    summary:
+      'side scope blob-URL cache generation; attachment_changed bumps the named id revision (and invalidates the open files-panel list so its size refreshes), snapshot_required coarse-bumps the epoch, both self-heal via no-store refetch of the latest bytes (holds no message content)',
+  },
 } as const satisfies Record<string, ReplaySafetySpec>;
 
 type ReplaySafetyContracts = typeof REPLAY_SAFETY_CONTRACTS;
@@ -212,6 +224,7 @@ export const SIDE_KIND_CONTRACTS = {
   agent_activity: ['agent_run_states'],
   agent_status: ['channel_agents'],
   conversation_activity: ['agent_activity_feed'],
+  [ATTACHMENT_CHANGED_EVENT]: ['attachment_blob_generation'],
 } as const satisfies Record<string, readonly ReplayEffectId[]>;
 
 type SideKind = keyof typeof SIDE_KIND_CONTRACTS;
@@ -737,6 +750,11 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
   // Agent-activity feeds are per-agentId; invalidate the whole conversation
   // prefix so every mounted feed refetches (item-2 gap, §4.1 / P1c #2).
   void reconcileAgentActivityOnSnapshotRequired(qc, channelId);
+  // A side-scope gap may have dropped an `attachment_changed` whose id the
+  // `snapshot_required` cannot name (#task:1769). Coarse-bump the blob epoch so
+  // every displayed preview refetches the latest bytes; the precise per-id
+  // revision bust only covers the no-gap path.
+  bumpAttachmentBlobEpoch();
 }
 
 /**
@@ -870,6 +888,23 @@ export function ingestConversationFrame(
   } else if (sideKind === 'conversation_activity') {
     const row = frame.payload as ConversationActivityEvent | undefined;
     if (row?.id != null) ingestConversationActivity(qc, sideId, row);
+  } else if (sideKind === ATTACHMENT_CHANGED_EVENT) {
+    // Creator updated the attachment's bytes in place (#task:1767 / #task:1769).
+    const ev = frame.payload as AttachmentChangedEvent | undefined;
+    if (ev?.attachment_id) {
+      // (1) Bump the named id's blob generation so any displayed preview
+      // refetches the latest bytes under `no-store`. No react-query cache holds
+      // the blob URL, so this lives in the blob cache, not `qc`.
+      bumpAttachmentRevision(ev.attachment_id, ev.content_revision);
+      // (2) The files panel row also renders the attachment `size`, which a
+      // content update changes; that field lives in the (message-derived)
+      // attachments-list query, so invalidate it when the panel is open so the
+      // size refreshes alongside the thumbnail. Membership is unchanged (no
+      // message added/removed) → senders list is left alone.
+      if (hasActiveChannelAttachmentsReader(qc, sideId)) {
+        void invalidateChannelAttachmentsList(qc, sideId);
+      }
+    }
   }
 }
 
