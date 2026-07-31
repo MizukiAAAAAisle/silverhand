@@ -541,7 +541,7 @@ function SenderFilterSelect({
                     }
                     suffix={agent.runtime}
                   >
-                    @{agent.display_name?.trim() || agent.name}
+                    {agent.display_name?.trim() || agent.name}
                   </SelectItem>
                 ))
               )}

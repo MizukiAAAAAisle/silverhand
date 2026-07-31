@@ -241,10 +241,12 @@ function EmptyState({ text }: { text: string }): JSX.Element {
  * Workspace label for an archived row's context (#task:1145, label converged
  * #task:1156). A regular `channel` row shows its bare workspace name; a
  * `dm_channel` row shows `@<agentName>` — the same handle the filter dropdown
- * and the rail use (one shared `dmWorkspaceLabel`, no per-surface variant).
- * The DM name arrives bare here (`insertAgentHome` sets `name = agent.name`);
- * `dmWorkspaceLabel` also strips the `dm-` UI prefix the dropdown shape carries,
- * so both normalize to the same handle.
+ * shows (one shared `dmWorkspaceLabel`). The workspace RAIL is the one
+ * exception: it shows the agent's raw display name, no `@` (#task:1768) — a
+ * recognition surface, not a handle ref. The DM name arrives bare here
+ * (`insertAgentHome` sets `name = agent.name`); `dmWorkspaceLabel` also strips
+ * the `dm-` UI prefix the dropdown shape carries, so both normalize to the
+ * same handle.
  */
 export function archivedRowWorkspaceLabel(
   item: ArchivedChannelListItemDto,

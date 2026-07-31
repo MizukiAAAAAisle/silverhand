@@ -9,7 +9,7 @@ import {
 } from '@/components/layout/list-drag-sort';
 import { SidebarSection } from './sidebar-shared';
 import { WorkspaceContextMenu } from './WorkspaceContextMenu';
-import { dmWorkspaceLabel } from '@/lib/workspace-name';
+import { stripDmPrefix } from '@/lib/workspace-name';
 import { railRowTierClass, railSelectionTier } from '@/lib/rail-selection';
 
 type WorkspaceUiKind = 'regular' | 'dm';
@@ -256,7 +256,21 @@ function WorkspaceRow({
   /** Manual mode: show the grab cursor. Listeners live on the parent `<li>`. */
   draggable?: boolean;
 }): JSX.Element {
-  const title = workspace.kind === 'dm' ? dmWorkspaceLabel(workspace.name) : workspace.name;
+  // DM rail rows show the bound agent's RAW display name — no `@`, no `· DM`
+  // suffix (shiki 2026-08-01, #task:1768). The rail is a recognition surface
+  // (who you're talking to), so it reads like a person, not a handle. This is
+  // the one rail exception to the shared `dmWorkspaceLabel` (which still gives
+  // `@<handle>` to the pickers / filters / search that DO read as handle refs).
+  // `dm_agent_id` → `agentsById` for the display name; fall back to the bare
+  // handle (no `@`) if the agent isn't resolved (agentsById is optional).
+  const dmAgent =
+    workspace.kind === 'dm' && workspace.dm_agent_id
+      ? ctx.agentsById?.get(workspace.dm_agent_id)
+      : undefined;
+  const title =
+    workspace.kind === 'dm'
+      ? dmAgent?.display_name?.trim() || dmAgent?.name || stripDmPrefix(workspace.name)
+      : workspace.name;
   const icon = rowIconFor(workspace, ctx);
   const canStar = canStarWorkspace(workspace, ctx);
   const workspacePath = ctx.localWorkspacePaths.get(workspace.id) ?? null;

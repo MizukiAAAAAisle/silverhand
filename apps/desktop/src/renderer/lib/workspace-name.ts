@@ -1,11 +1,16 @@
 /**
  * Canonical workspace display-name helpers — ONE source so every picker,
- * filter, result row, and the rail render a workspace the same way (#task:1156).
+ * filter, and result row renders a workspace the same way (#task:1156).
  *
  * Before this, four copies had drifted: the rail's `displayDmName`, the
  * message-search filter's `formatWorkspaceName`, and the archived-channel
  * filter's `dmScopeLabel` / `archivedRowWorkspaceLabel` — two said `@<agent>`,
  * one said `DM <agent>`. Same filter concept, different labels. Collapsed here.
+ *
+ * The workspace RAIL no longer uses these: it shows a DM as the agent's raw
+ * display name, no `@` (`WorkspacesPanel`, #task:1768) — the rail is a
+ * recognition surface, while these helpers serve handle-ref surfaces (pickers,
+ * filters, search results) that keep `@<agent>`.
  *
  * The subtlety the `stripDmPrefix` covers: a DM workspace surfaces under two
  * name shapes. The `WorkspaceListItem` carries a UI `dm-` prefix
