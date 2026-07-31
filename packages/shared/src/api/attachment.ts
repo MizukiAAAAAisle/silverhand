@@ -37,8 +37,11 @@ export const AttachmentDtoSchema = z.object({
   storage: StorageKindSchema,
   /** Monotonic freshness/cache-bust token, bumped on every content update
    *  (starts at 1). NOT a version number and NOT an HTTP validator — the
-   *  renderer keys its blob generation on it; see `docs/attachments-design.md`. */
-  content_revision: z.number(),
+   *  renderer keys its blob generation on it; see `docs/attachments-design.md`.
+   *  A positive integer by construction (DEFAULT 1, only ever `+1`); the wire
+   *  contract asserts that so a negative/fractional value can't masquerade as
+   *  a monotonic token. */
+  content_revision: z.number().int().positive(),
   created_by_kind: AttachmentCreatorKindSchema,
   created_by_id: z.string(),
   created_at: z.number(),
@@ -128,7 +131,7 @@ export const AttachmentChangedEventSchema = z.object({
   attachment_id: z.string(),
   /** The post-update revision — strictly greater than the client's last-seen
    *  value for this id; monotonic, so a client can ignore a stale replay. */
-  content_revision: z.number(),
+  content_revision: z.number().int().positive(),
 });
 export type AttachmentChangedEvent = z.infer<typeof AttachmentChangedEventSchema>;
 export const ATTACHMENT_CHANGED_EVENT = 'attachment_changed';

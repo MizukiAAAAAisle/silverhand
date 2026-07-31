@@ -1209,6 +1209,39 @@ describe('Attachment content update (PATCH)', () => {
     expect(Buffer.from(await get.arrayBuffer())).toEqual(NEXT_PNG);
   });
 
+  it('rejects a cross-type update with 400 (type lock enforced from bytes, not the declared type)', async () => {
+    t = buildTestApp();
+    const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
+    const { channelId } = await createWorkspaceChannel(t);
+    const dto = await (
+      await uploadFile(
+        t,
+        `/api/channels/${channelId}/attachments`,
+        'mockup.png',
+        'image/png',
+        PNG_BYTES,
+      )
+    ).json() as any;
+
+    // PDF bytes, even with a declared `image/png` part type, must be rejected:
+    // the lock is checked against the sniffed magic family, never the caller's
+    // declared type (declaring png is exactly the impersonation this blocks).
+    const patched = await patchFile(
+      t,
+      `/api/attachments/${dto.id}`,
+      'mockup.png',
+      'image/png',
+      Buffer.from('%PDF-1.4\n'),
+    );
+    expect(patched.status).toBe(400);
+    const body = await patched.json() as any;
+    expect(body.code).toBe('content_type_mismatch');
+
+    // Row untouched — still revision 1 and the original PNG bytes.
+    const get = await viewer.get(`/api/attachments/${dto.id}`);
+    expect(Buffer.from(await get.arrayBuffer())).toEqual(PNG_BYTES);
+  });
+
   it('does not advance the message stream, and emits attachment_changed on the side channel', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);

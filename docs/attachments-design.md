@@ -127,7 +127,7 @@ chat-bridge 在 local 模式下需要一个"这个 id 在本地能不能直接�
 
 - **bridge 通过 backend 询问，永不自己假设路径**（§2.4 规则 1 / §5.2）。remote 模式下该通道仍存在但永不返回本地路径，bridge 自动 fallback 到 HTTP 下载。
 - scope 校验不能延期，且不能靠 shared token 猜 id 跨界：当前 conversation id 由平台启动参数注入（不是 agent tool 参数）；agent 必须是该 conversation 成员；channel 上下文要求 `attachment.channel_id` 等于当前 channel-like conversation。
-- **返回稳定别名路径，而非物理路径**。物理 key 每次内容更新都会变（§4.3 pointer-swap 落新 blob key），但 embedded CLI 把路径交给了期望它不变的 viewer——所以 local locate 返回一个以稳定 `attachment.id` 为 basename 的**别名**（`attachments/{channelId}/{attachmentId}{ext}`，相对 symlink 指向当前物理 blob），保证 reviewer 的本地地址跨迭代不变。别名是 DB 指针的**派生缓存**：首次 locate 惰性建、更新时立即重指、locate/启动时自愈；它的非事务重指是可恢复的 cache miss，绝不构成权威 split-brain。`serve()`（HTTP 下载）走物理 `storage_key`，不碰别名。用 symlink 而非 hardlink：symlink 不占物理 inode，物理 key 一删字节立即释放，channel/workspace 删除的字节回收对别名零感知（残留的悬空 symlink 无害）。
+- **返回稳定别名路径，而非物理路径**。物理 key 每次内容更新都会变（§4.3 pointer-swap 落新 blob key），但 embedded CLI 把路径交给了期望它不变的 viewer——所以 local locate 返回一个以稳定 `attachment.id` 为 basename 的**别名**（`attachments/{channelId}/{attachmentId}{ext}`，相对 symlink 指向当前物理 blob），保证 reviewer 的本地地址跨迭代不变。别名是 DB 指针的**派生缓存**：首次 locate 惰性建、更新时立即重指、后续 locate 自愈；它的非事务重指是可恢复的 cache miss，绝不构成权威 split-brain。`serve()`（HTTP 下载）走物理 `storage_key`，不碰别名。用 symlink 而非 hardlink：symlink 不占物理 inode，物理 key 一删字节立即释放，channel/workspace 删除的字节回收对别名零感知（残留的悬空 symlink 无害）。
 
 ### 4.3 内容更新（creator-only，原地 pointer-swap）
 
@@ -135,12 +135,14 @@ agent 迭代同一件产物（如反复修改的 mockup）时，重新上传会�
 
 **权限**：creator-only 的 MEMBER mutation——与 delete 同一条规则（频道成员 + 原始 creator 归属，human/agent 同构），二者仅在 `in_use` 轴分岔：delete 拒绝被引用的 attachment，update **允许**（更新被引用 blob 的字节正是本功能的目的）。所以 `canUpdateAttachment` 与 `canDeleteAttachment` 共享同一谓词 `canMutateOwnAttachment`。agent 侧复用 `upload_attachments` capability（更新是同类写，不新增 capability 枚举），并要求 attachment 属于 caller 当前 channel（service 层 `requireCallerChannelOf` 守卫，跨 channel 折叠成 `not_found` 不泄露存在性）。
 
+**类型锁定是强制的，不只是字段不变**：`content_type` 不变意味着新字节必须仍是同一类型。服务端**从字节 magic-sniff 出真实类型**（绝不信 caller 声明的 type，否则 `--content-type image/png` + PDF 字节照样蒙混），要求它与 row 锁定类型属同一 magic 家族（png/jpeg/gif/webp/pdf 各自成族；`application/zip` / `*+zip` / OpenXML / OpenDocument 同属 zip 族，所以 docx→docx 通过、docx→png 拒）。magic-backed 的二进制槽（image/pdf/zip）**fail-closed**：塞进无法识别 magic 的 payload 也拒。text-like / octet 槽无法用字节区分子类型，text↔text 放行（明确残留）。类型不符一律 400、不写 blob；换类型请新建 attachment。因此 `file update` 不接受任何 type 输入（`--content-type` 不存在）。
+
 **pointer-swap 协议（正确性强制，不可退化为单文件原地 rename）**：
 
 1. 新字节写到一个**全新 blob key**（fresh `blobId`）。该 key 未被任何 row 引用 ⇒ 对所有 reader 不可见，直到第 2 步。
 2. 一条原子 DB `UPDATE` 重指 `storage_key` + `size` 并 `content_revision++`——这是**唯一的可见性开关**。commit 前崩溃：新 blob 是无引用 orphan，row 仍指旧字节（绝不发生"失败的写却已生效"）；commit 后崩溃：row 干净地落在新字节。
-3. 立即重指别名（§4.2），让已打开的零拷贝 viewer 重新加载即见新字节。best-effort，locate/启动自愈兜底崩溃。
-4. GC 旧物理 blob，**在别名指向新字节之后**。best-effort：失败只泄露一个 orphan blob，绝不损坏状态。
+3. 立即重指别名（§4.2），让已打开的零拷贝 viewer 重新加载即见新字节。best-effort，后续 locate 自愈兜底崩溃。
+4. GC 旧物理 blob，**仅在别名成功重指到新字节之后**。若重指失败，则**保留旧 blob**（别名仍解析到旧字节、可读，下次 locate 自愈），不把它删成悬空——保留一个可读的旧态优于一个悬空别名。best-effort：失败只泄露一个 orphan blob，绝不损坏状态；重指/GC 的结果回传给持 logger 的 route adapter 记录，不静默吞。
 
 为什么不能单文件原地 rename-first：rename 会让字节突变在 rename 那一刻就**持久可见**——早于本应 gate 它的 DB commit。一次失败/崩溃的更新会永久改写内容却无记录、无事件 = 一次失败操作留下权威可见的持久副作用（retry 不是恢复协议）。pointer-swap 把可见性 gate 在 DB commit，从根上消解。
 

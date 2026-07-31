@@ -57,7 +57,6 @@ const updateCommand: Command = {
   verb: 'update',
   summary: 'Replace the bytes of an attachment you uploaded, keeping its id.',
   help: `silverhand file update --attachment-id <id> --path <abs_path>
-                        [--content-type <mime>]
 
 Replace the CONTENT of an attachment you previously uploaded, in place.
 The attachment id, filename, and content-type stay fixed — only the bytes
@@ -69,14 +68,17 @@ Creator-only: you can update only attachments you uploaded, and only from
 within their channel. There is no versioning — the previous bytes are
 replaced, not retained.
 
+The content type is LOCKED: the new file must be the same kind as the
+original (the server verifies it from the bytes), so this can refresh a
+PNG mockup but not turn it into a PDF. To change type, upload a new
+attachment.
+
 Flags:
   --attachment-id  Required. The attachment id to update.
   --path           Required. Absolute path to the new local file.
-  --content-type   Ignored for typing (content-type is locked at upload);
-                   accepted only for symmetry with \`file upload\`.
 
 stdout: AttachmentDto JSON (same id, bumped content_revision).`,
-  flags: ['attachment-id', 'path', 'content-type'] as const,
+  flags: ['attachment-id', 'path'] as const,
   async run({ client, args }) {
     const attachmentId = flagString(args, 'attachment-id');
     if (!attachmentId) {
@@ -94,12 +96,7 @@ stdout: AttachmentDto JSON (same id, bumped content_revision).`,
         retriable: false,
       });
     }
-    const contentType = flagString(args, 'content-type');
-    return client.updateAttachment({
-      attachmentId,
-      path,
-      ...(contentType ? { contentType } : {}),
-    });
+    return client.updateAttachment({ attachmentId, path });
   },
 };
 

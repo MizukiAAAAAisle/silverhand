@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,9 +39,10 @@ function bootstrap() {
   conversations.addAgent(channel.id, agent.id);
 
   const storage = createLocalBlobFileStorage({ rootDir: join(tmp.silverhandDir, 'blobs') });
+  const attachments = new AttachmentRepo(db);
   const service = new AttachmentService({
     storage,
-    attachments: new AttachmentRepo(db),
+    attachments,
     conversations,
   });
   return {
@@ -49,11 +50,37 @@ function bootstrap() {
     channel,
     service,
     storage,
+    attachments,
     agent,
     cleanup: tmp.cleanup,
     silverhandDir: tmp.silverhandDir,
     localHostId,
   };
+}
+
+/** Count physical blob files under a blobs root — regular files only, so the
+ *  stable-alias symlinks (which live in the same tree) never inflate the count.
+ *  Used by the pointer-swap failure matrix to assert "exactly one live blob" /
+ *  "old blob retained" without threading storage keys through injected faults. */
+function countPhysicalBlobs(root: string): number {
+  let n = 0;
+  const walk = (dir: string): void => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      const p = join(dir, name);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) continue; // an alias, not a physical blob
+      if (st.isDirectory()) walk(p);
+      else if (st.isFile()) n += 1;
+    }
+  };
+  walk(root);
+  return n;
 }
 
 describe('AttachmentService.upload', () => {
@@ -231,7 +258,39 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
     }
   });
 
-  it('locks content_type/filename even when the new bytes are a different type', async () => {
+  it('rejects an update whose bytes are a different magic family (type lock enforced)', async () => {
+    const { service, channel, cleanup, silverhandDir } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'shot.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const blobsRoot = join(silverhandDir, 'blobs');
+      const before = countPhysicalBlobs(blobsRoot);
+
+      // PDF bytes into an image/png slot: the lock is ENFORCED from the bytes
+      // (never the caller's declared type), so this rejects rather than
+      // smuggling a format the renderer would decode as PNG.
+      await expect(
+        service.update(dto.id, PDF_BYTES, { kind: 'user', id: 'local' }),
+      ).rejects.toMatchObject({ failure: { kind: 'content_type_mismatch' } });
+
+      // No blob written, row untouched: same revision, same (PNG) bytes.
+      expect(countPhysicalBlobs(blobsRoot)).toBe(before);
+      const reread = await service.serveForViewer(dto.id, () => true);
+      expect(Buffer.from(await reread!.arrayBuffer())).toEqual(PNG_BYTES);
+      const served = await service.serveForViewer(dto.id, () => true);
+      expect(served).not.toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('fail-closed: unrecognizable bytes into a binary (image) slot are rejected', async () => {
     const { service, channel, cleanup } = bootstrap();
     try {
       const dto = await service.upload({
@@ -242,13 +301,63 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
         createdByKind: 'user',
         createdById: 'local',
       });
-      // Feed PDF magic bytes — a re-detect would flip the type; the update
-      // path must NOT re-run the MIME pipeline (snapshot stability contract).
-      const res = await service.update(dto.id, PDF_BYTES, { kind: 'user', id: 'local' });
+      // No magic → not provably the same family → rejected, not waved through.
+      await expect(
+        service.update(dto.id, Buffer.from('not an image at all'), {
+          kind: 'user',
+          id: 'local',
+        }),
+      ).rejects.toMatchObject({ failure: { kind: 'content_type_mismatch' } });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('treats zip containers as one family: docx bytes update a docx row', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      const zip = Buffer.concat([
+        Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+        Buffer.alloc(8, 0),
+      ]);
+      const docxType =
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'spec.docx',
+        contentType: docxType,
+        buffer: zip,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      expect(dto.content_type).toBe(docxType);
+      // Fresh zip-magic bytes are the same family → allowed, type stays docx.
+      const next = Buffer.concat([zip, Buffer.from('revised-doc')]);
+      const res = await service.update(dto.id, next, { kind: 'user', id: 'local' });
       expect(res.ok).toBe(true);
-      if (!res.ok) return;
-      expect(res.dto.content_type).toBe('image/png');
-      expect(res.dto.filename).toBe('shot.png');
+      if (res.ok) expect(res.dto.content_type).toBe(docxType);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('allows a text→text update (a text slot has no magic to lock)', async () => {
+    const { service, channel, cleanup } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'notes.txt',
+        contentType: 'text/plain',
+        buffer: Buffer.from('first draft'),
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const res = await service.update(dto.id, Buffer.from('second draft, longer'), {
+        kind: 'user',
+        id: 'local',
+      });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.dto.content_type).toBe('text/plain');
     } finally {
       cleanup();
     }
@@ -272,7 +381,7 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
 
       const res = await service.update(
         dto.id,
-        Buffer.from('brand-new-bytes'),
+        Buffer.concat([PNG_BYTES, Buffer.from('brand-new-bytes')]),
         { kind: 'user', id: 'local' },
       );
       expect(res.ok).toBe(true);
@@ -287,7 +396,7 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
     }
   });
 
-  it('keeps the agent locate alias path stable across updates and reflects new bytes', async () => {
+  it('eager-relinks the alias in place: same path yields new bytes with NO re-locate', async () => {
     const { service, channel, agent, cleanup } = bootstrap();
     try {
       const dto = await service.upload({
@@ -303,16 +412,15 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
       const aliasPath =
         before!.locate.storage === 'local' ? before!.locate.local_path : '';
 
-      const next = Buffer.from('the-next-revision');
+      const next = Buffer.concat([PNG_BYTES, Buffer.from('the-next-revision')]);
       const res = await service.update(dto.id, next, { kind: 'agent', id: agent.id });
       expect(res.ok).toBe(true);
 
-      const after = await service.locateForAgent(dto.id, channel.id);
-      const aliasPathAfter =
-        after!.locate.storage === 'local' ? after!.locate.local_path : '';
-      // Reviewer's local address is unchanged (the whole point of update)…
-      expect(aliasPathAfter).toBe(aliasPath);
-      // …and reading it (through the symlink) yields the new bytes.
+      // Read the SAME alias path captured before the update, WITHOUT a second
+      // locate — so a broken eager relink can't be masked by locate's own
+      // self-heal. The alias must already resolve (through the symlink) to the
+      // new bytes: proves the reviewer's held path both stays fixed and reflects
+      // the update the instant it lands.
       expect(readFileSync(aliasPath)).toEqual(next);
     } finally {
       cleanup();
@@ -345,10 +453,14 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
       const del = await service.deleteOrphan(dto.id, { kind: 'user', userId: 'local' });
       expect(del).toEqual({ ok: false, error: 'in_use' });
       // …but update accepts it — updating referenced bytes is the feature.
-      const upd = await service.update(dto.id, Buffer.from('revised'), {
-        kind: 'user',
-        id: 'local',
-      });
+      const upd = await service.update(
+        dto.id,
+        Buffer.concat([PNG_BYTES, Buffer.from('revised')]),
+        {
+          kind: 'user',
+          id: 'local',
+        },
+      );
       expect(upd.ok).toBe(true);
     } finally {
       cleanup();
@@ -461,6 +573,134 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
         service.update(dto.id, Buffer.alloc(16), { kind: 'user', id: 'local' }),
       ).rejects.toMatchObject({ failure: { kind: 'too_large' } });
       tmp.cleanup();
+    } finally {
+      cleanup();
+    }
+  });
+
+  // ── pointer-swap failure matrix ────────────────────────────────────────────
+  // The DB repoint is the sole visibility switch; everything around it is
+  // best-effort. These prove: a failed switch never durably takes effect and
+  // never leaks the pre-switch blob, and a failed post-switch sweep degrades to
+  // a readable-stale alias / one leaked blob (surfaced, not corrupt).
+
+  it('repoint throw: rethrows, row + old bytes unchanged, new blob cleaned', async () => {
+    const { service, channel, cleanup, attachments, silverhandDir } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'a.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const blobsRoot = join(silverhandDir, 'blobs');
+      const boom = new Error('repoint boom');
+      attachments.repointContent = () => {
+        throw boom;
+      };
+      await expect(
+        service.update(dto.id, Buffer.concat([PNG_BYTES, Buffer.from('x')]), {
+          kind: 'user',
+          id: 'local',
+        }),
+      ).rejects.toBe(boom);
+      // New blob was written then cleaned on the throw → exactly the old one.
+      expect(countPhysicalBlobs(blobsRoot)).toBe(1);
+      const served = await service.serveForViewer(dto.id, () => true);
+      expect(Buffer.from(await served!.arrayBuffer())).toEqual(PNG_BYTES);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('repoint null (row vanished): not_found, new blob cleaned', async () => {
+    const { service, channel, cleanup, attachments, silverhandDir } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'a.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const blobsRoot = join(silverhandDir, 'blobs');
+      attachments.repointContent = () => null; // concurrent delete between read + repoint
+      const res = await service.update(
+        dto.id,
+        Buffer.concat([PNG_BYTES, Buffer.from('x')]),
+        { kind: 'user', id: 'local' },
+      );
+      expect(res).toEqual({ ok: false, error: 'not_found' });
+      expect(countPhysicalBlobs(blobsRoot)).toBe(1); // orphan cleaned
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('relink fail: DB on new bytes, OLD blob RETAINED, maintenance flags the miss', async () => {
+    const { service, channel, cleanup, storage, silverhandDir } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'a.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const blobsRoot = join(silverhandDir, 'blobs');
+      const relinkErr = new Error('relink boom');
+      storage.materializeAlias = async () => {
+        throw relinkErr;
+      };
+      const next = Buffer.concat([PNG_BYTES, Buffer.from('new')]);
+      const res = await service.update(dto.id, next, { kind: 'user', id: 'local' });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      // Authoritative switch landed…
+      expect(res.dto.content_revision).toBe(2);
+      const served = await service.serveForViewer(dto.id, () => true);
+      expect(Buffer.from(await served!.arrayBuffer())).toEqual(next);
+      // …GC was SKIPPED so the alias stays readable-stale, not dangling.
+      expect(res.maintenance.aliasRelinked).toBe(false);
+      expect(res.maintenance.oldBlobDeleted).toBe(false);
+      expect(res.maintenance.error).toBe(relinkErr);
+      expect(countPhysicalBlobs(blobsRoot)).toBe(2); // old retained + new
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('GC fail: DB + alias on new bytes, old-blob leak surfaced in maintenance', async () => {
+    const { service, channel, cleanup, storage, silverhandDir } = bootstrap();
+    try {
+      const dto = await service.upload({
+        sourceConversationId: channel.id,
+        filename: 'a.png',
+        contentType: 'image/png',
+        buffer: PNG_BYTES,
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const blobsRoot = join(silverhandDir, 'blobs');
+      const gcErr = new Error('gc boom');
+      storage.delete = async () => {
+        throw gcErr;
+      };
+      const next = Buffer.concat([PNG_BYTES, Buffer.from('new')]);
+      const res = await service.update(dto.id, next, { kind: 'user', id: 'local' });
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      // Relink succeeded, only the old-blob GC failed → surfaced, never swallowed.
+      expect(res.maintenance.aliasRelinked).toBe(true);
+      expect(res.maintenance.oldBlobDeleted).toBe(false);
+      expect(res.maintenance.error).toBe(gcErr);
+      const served = await service.serveForViewer(dto.id, () => true);
+      expect(Buffer.from(await served!.arrayBuffer())).toEqual(next);
+      expect(countPhysicalBlobs(blobsRoot)).toBe(2); // old blob leaked (attributable)
     } finally {
       cleanup();
     }

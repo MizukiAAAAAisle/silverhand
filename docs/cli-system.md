@@ -891,8 +891,15 @@ explicitly typed (or nothing).
 `silverhand file update` does NOT re-run this pipeline: `content_type`
 (and `filename`) are LOCKED at upload for the row's life, so a message
 snapshot's captured type never drifts from the live row. Only the bytes
-and `content_revision` change. A `--content-type` on update is accepted
-for symmetry but ignored for typing.
+and `content_revision` change. `file update` therefore takes NO
+`--content-type` flag at all — accepting one would only invite the
+illusion that a type change is possible. The lock is ENFORCED, not just
+assumed: the backend magic-sniffs the new bytes and rejects (400) a
+payload whose magic family differs from the stored type (e.g. PDF bytes
+into a `image/png` row), so an update can refresh a PNG mockup but can't
+smuggle a different format into a slot the renderer will decode by the
+locked type. The caller's declared type is never consulted for this —
+only the bytes. To change type, upload a new attachment.
 
 The backend recognition pipeline is fixed (see `detectContentType` in
 `packages/backend/src/services/attachment-service.ts` and the shared

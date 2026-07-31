@@ -90,6 +90,15 @@ export async function updateAttachment(
       }
       return c.json({ error: 'cannot update attachment owned by another uploader' }, 403);
     }
+    // The DB repoint (authoritative) succeeded; alias relink + old-blob GC are
+    // best-effort tidy-up. Surface an incomplete sweep so a leaked/stale-alias
+    // residue is attributable rather than silently swallowed in the service.
+    if (!result.maintenance.aliasRelinked || result.maintenance.error !== undefined) {
+      ctx.logger.warn(
+        { attachmentId, maintenance: result.maintenance },
+        'api: attachment update — best-effort alias relink / old-blob GC incomplete',
+      );
+    }
     // Post-write cache-bust on the side channel (see the doc comment above).
     ctx.events.publishSide(result.dto.channel_id, {
       kind: ATTACHMENT_CHANGED_EVENT,

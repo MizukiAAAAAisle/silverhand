@@ -50,7 +50,8 @@ export type UploadFailure =
   | { kind: 'too_large'; size: number; max: number }
   | { kind: 'conversation_not_found' }
   | { kind: 'invalid_filename' }
-  | { kind: 'invalid_buffer' };
+  | { kind: 'invalid_buffer' }
+  | { kind: 'content_type_mismatch'; expected: string; detected: string };
 
 export class AttachmentRejection extends Error {
   constructor(public readonly failure: UploadFailure) {
@@ -69,6 +70,8 @@ function describeFailure(f: UploadFailure): string {
       return 'attachment filename is empty or invalid';
     case 'invalid_buffer':
       return 'attachment payload is empty';
+    case 'content_type_mismatch':
+      return `attachment update payload type ${f.detected} does not match its locked content type ${f.expected}`;
   }
 }
 
@@ -80,6 +83,22 @@ export interface BlobSweepOutcome {
   failed: number;
   /** First storage error, for the caller's log line. */
   firstError?: unknown;
+}
+
+/** Best-effort maintenance outcome of a content update (pointer-swap). The
+ *  authoritative update — the DB repoint — already succeeded when this is
+ *  returned; these two are the post-commit tidy-up whose failure leaks a blob
+ *  or leaves the stable alias resolving to the old bytes until the next locate
+ *  self-heals, never corrupting state. Returned (not logged) because the
+ *  service has no logger; the route adapter owns one and records a miss. */
+export interface AttachmentUpdateMaintenance {
+  /** The stable alias now points at the new physical blob. When false, the GC
+   *  of the old blob is deliberately SKIPPED so the alias stays readable. */
+  aliasRelinked: boolean;
+  /** The old physical blob was GC'd (only attempted after a successful relink). */
+  oldBlobDeleted: boolean;
+  /** First relink/GC error, for the adapter's log line. */
+  error?: unknown;
 }
 
 /**
@@ -122,8 +141,13 @@ export class AttachmentService {
     }
 
     const contentType = detectContentType(input.contentType, input.buffer, filename);
-    // Pre-allocate id so we can use it as the storage key — both stable
-    // identifiers for the lifetime of the blob.
+    // The physical blob key is a throwaway random id — deliberately NOT the
+    // attachment id. The attachment id (assigned by the repo insert below) is
+    // the stable identity; the physical key is free to move on every content
+    // update (pointer-swap writes a fresh blob), while the stable local path is
+    // held by a separate alias keyed on the attachment id (see `update`). The
+    // two id-spaces never overlap, so the alias can never collide with a
+    // physical key.
     const id = randomBlobId();
     const ref = await this.storage.put({
       namespace: `attachments/${channelId}`,
@@ -164,16 +188,25 @@ export class AttachmentService {
    *      after leaves the row cleanly on the new bytes. Never a durable
    *      failed-write-that-took-effect.
    *   3. Eager alias relink so an already-open zero-copy viewer refreshes.
-   *   4. GC the old blob — best-effort, after the alias points at the new bytes.
+   *   4. GC the old blob — best-effort, ONLY after the alias is confirmed on the
+   *      new bytes. A failed relink SKIPS the GC so the alias keeps resolving to
+   *      the old blob (readable-stale) rather than dangling; the next locate
+   *      self-heals. The relink/GC outcome is returned for the adapter to log.
    *
    * `filename` and `content_type` are LOCKED (identity + type never drift from a
-   * message snapshot). The caller is responsible for the membership + creator
-   * ACL (`canUpdateAttachment`); the creator re-check here is defense-in-depth.
-   * `opts.requireCallerChannelOf` scopes the update to the caller's own channel
-   * (the agent path, whose membership is conversation-derived rather than
-   * channel-explicit) — a mismatch folds to `not_found` so it never leaks
-   * existence across channels, mirroring {@link locateForAgent}. Byte validation
-   * mirrors `upload` (throws `AttachmentRejection`).
+   * message snapshot) — and the lock is ENFORCED, not just assumed: the new
+   * payload is magic-sniffed and must be the same binary family as the stored
+   * type, so an update can refresh a PNG mockup but can't smuggle PDF/HTML bytes
+   * into a slot the renderer will decode as `image/png`. The caller's declared
+   * content type is never trusted for this — only the bytes. A real type change
+   * means a new attachment. The caller is responsible for the membership +
+   * creator ACL (`canUpdateAttachment`); the creator re-check here is
+   * defense-in-depth. `opts.requireCallerChannelOf` scopes the update to the
+   * caller's own channel (the agent path, whose membership is
+   * conversation-derived rather than channel-explicit) — a mismatch folds to
+   * `not_found` so it never leaks existence across channels, mirroring
+   * {@link locateForAgent}. Byte validation mirrors `upload` (throws
+   * `AttachmentRejection`, including the type-mismatch reject).
    */
   async update(
     attachmentId: string,
@@ -181,7 +214,7 @@ export class AttachmentService {
     updater: { kind: AttachmentCreatorKind; id: string },
     opts: { requireCallerChannelOf?: string } = {},
   ): Promise<
-    | { ok: true; dto: AttachmentDto }
+    | { ok: true; dto: AttachmentDto; maintenance: AttachmentUpdateMaintenance }
     | { ok: false; error: 'not_found' | 'forbidden' }
   > {
     if (buffer.length === 0) {
@@ -205,6 +238,11 @@ export class AttachmentService {
     if (row.created_by_kind !== updater.kind || row.created_by_id !== updater.id) {
       return { ok: false, error: 'forbidden' };
     }
+
+    // Content type is LOCKED and ENFORCED: the new payload must be the same
+    // magic family as the stored type (sniffed from the BYTES, never the
+    // caller's declared type). Rejects before any blob is written.
+    assertPayloadMatchesLockedType(buffer, row.content_type);
 
     // 1) New bytes at a fresh key — unreferenced, invisible until the commit.
     const oldRef = refOf(row);
@@ -234,18 +272,42 @@ export class AttachmentService {
       return { ok: false, error: 'not_found' };
     }
 
-    // 3) Eager alias relink (best-effort; locate/startup self-heals a miss).
-    await this.storage.materializeAlias(newRef, row.id).catch(() => {});
+    // 3) Eager alias relink. Best-effort, but its result GATES the GC below:
+    //    a failed relink leaves the alias resolving to the old blob, so we must
+    //    NOT delete that blob (it'd dangle) — keep it readable-stale until the
+    //    next locate self-heals. The outcome is surfaced, never swallowed.
+    let maintenanceError: unknown;
+    const aliasRelinked = await this.storage
+      .materializeAlias(newRef, row.id)
+      .then(() => true)
+      .catch((err: unknown) => {
+        maintenanceError = err;
+        return false;
+      });
 
-    // 4) GC the old blob — after the alias points at the new bytes. Best-effort:
-    //    a failure leaks a blob, never corrupts state.
-    if (oldRef.storageKey !== newRef.storageKey) {
-      await this.storage.delete(oldRef).catch(() => {});
+    // 4) GC the old blob — ONLY after a confirmed relink, and only if the key
+    //    actually moved. A failure here leaks a blob, never corrupts state.
+    let oldBlobDeleted = false;
+    if (aliasRelinked && oldRef.storageKey !== newRef.storageKey) {
+      try {
+        await this.storage.delete(oldRef);
+        oldBlobDeleted = true;
+      } catch (err) {
+        maintenanceError ??= err;
+      }
     }
 
     const updated = this.attachments.getById(attachmentId);
     if (!updated) return { ok: false, error: 'not_found' };
-    return { ok: true, dto: rowToDto(updated) };
+    return {
+      ok: true,
+      dto: rowToDto(updated),
+      maintenance: {
+        aliasRelinked,
+        oldBlobDeleted,
+        ...(maintenanceError !== undefined ? { error: maintenanceError } : {}),
+      },
+    };
   }
 
   /** Public download with route-supplied ACL.
@@ -553,4 +615,59 @@ function sniffMagic(buf: Buffer): string | null {
 /** Helper for tests so they can craft ServiceFailure shapes without imports. */
 export function attachmentRejection(failure: UploadFailure): AttachmentRejection {
   return new AttachmentRejection(failure);
+}
+
+/**
+ * Enforce the content-type lock on a content update: the new payload must be
+ * the same MAGIC FAMILY as the attachment's stored (locked) type, decided from
+ * the BYTES — the caller's declared type is never consulted, since trusting it
+ * is exactly the impersonation vector (`--content-type image/png` + PDF bytes).
+ *
+ * The families are the ones {@link sniffMagic} can assert: png/jpeg/gif/webp/
+ * pdf are their own family; every zip container (`application/zip`, `*+zip`,
+ * OpenXML/OpenDocument office types) is the `zip` family, so a real docx→docx
+ * update passes while docx→png is rejected. A magic-backed binary slot is
+ * FAIL-CLOSED: an unrecognizable payload (no magic) landing in an image/pdf/zip
+ * slot is rejected, not waved through as "same type". text-like / octet slots
+ * have no magic to compare, so a text↔text swap is allowed (an acknowledged
+ * residual — bytes can't disambiguate `text/markdown` from `text/plain`); only
+ * a DEFINITE binary family sniffed into such a slot is rejected.
+ */
+function assertPayloadMatchesLockedType(buffer: Buffer, lockedType: string): void {
+  const sniffed = sniffMagic(buffer);
+  const detectedFamily = sniffed === 'application/zip' ? 'zip' : sniffed;
+  const expectedFamily = expectedMagicFamily(lockedType);
+  const compatible =
+    expectedFamily !== null
+      ? detectedFamily === expectedFamily // binary slot: must match, fail-closed on null
+      : detectedFamily === null; // text/octet slot: reject a definite binary family
+  if (!compatible) {
+    throw new AttachmentRejection({
+      kind: 'content_type_mismatch',
+      expected: lockedType,
+      detected: sniffed ?? 'unrecognized',
+    });
+  }
+}
+
+/** The magic family a stored content type is expected to sniff to, or null when
+ *  the type has no stable magic (text-like, octet-stream, legacy OLE office). */
+function expectedMagicFamily(contentType: string): string | null {
+  switch (contentType) {
+    case 'image/png':
+    case 'image/jpeg':
+    case 'image/gif':
+    case 'image/webp':
+    case 'application/pdf':
+      return contentType;
+  }
+  if (
+    contentType === 'application/zip'
+    || contentType.endsWith('+zip')
+    || contentType.startsWith('application/vnd.openxmlformats-officedocument.')
+    || contentType.startsWith('application/vnd.oasis.opendocument.')
+  ) {
+    return 'zip';
+  }
+  return null;
 }

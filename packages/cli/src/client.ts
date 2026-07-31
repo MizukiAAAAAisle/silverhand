@@ -526,7 +526,6 @@ export class BackendClient {
   async updateAttachment(input: {
     attachmentId: string;
     path: string;
-    contentType?: string | null;
   }): Promise<AttachmentDto> {
     if (!isAbsolute(input.path)) {
       throw new CliError({
@@ -555,10 +554,11 @@ export class BackendClient {
         input.attachmentId,
       );
     const form = new FormData();
-    // content_type is LOCKED on update (see the backend service), so a hint
-    // here does not retype the row — kept only so a caller can round-trip the
-    // same Blob shape as upload. Empty type falls through to no-op detection.
-    const blob = new Blob([buffer], { type: input.contentType ?? '' });
+    // filename + content_type are LOCKED on update (see the backend service):
+    // the server ignores this Blob's name/type and reuses the row's, and
+    // re-verifies the new bytes are the same magic family. A type hint here
+    // would be a dead input, so none is sent.
+    const blob = new Blob([buffer]);
     form.append('file', blob, basename(input.path));
     let res: Response;
     markRequestAttempted();
