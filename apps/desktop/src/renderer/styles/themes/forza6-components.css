@@ -348,6 +348,22 @@
   font-family: var(--appearance-prose-font, var(--font-sans));
 }
 
+/* Number-only display face (#task:1760). The chip title keeps the prose
+   sans above; the number span alone gets Rajdhani — the same display face
+   the board / popover task stamp uses (`[data-tasks-num]` below), so a
+   `#1758` in running prose reads with the same "jersey number" identity.
+   Space Grotesk's digits (the prose default here) read poorly to shiki
+   (`10q3aesEBGlhOzP1`); Rajdhani's stand upright and clean. Lighter than
+   the board stamp's 800/.06em — this is an inline number, not a card
+   headline. No colour set: the number inherits the chip's own colour
+   (accent link in prose, muted `--text-secondary` inside a cluster).
+   Other themes have no such rule, so their number stays prose sans. */
+[data-theme='forza6'] [data-task-ref] [data-task-ref-num] {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
 /* task-ref link form (borderless accent link + hover underline) is now the
    shared base in global.css (#task:1725) — every theme gets it via its own
    `--accent`, no per-theme colour/fill override. forza6 keeps only the

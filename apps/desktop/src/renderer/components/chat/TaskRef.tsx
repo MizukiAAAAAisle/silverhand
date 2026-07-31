@@ -41,7 +41,7 @@ export function TaskRefStaticChip({
   return (
     <span
       className={
-        'inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium' +
+        'inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium' +
         (task
           ? ' text-accent'
           : ' bg-bg-elevated text-text-muted')
@@ -52,7 +52,7 @@ export function TaskRefStaticChip({
     >
       <CheckSquare className="size-3 shrink-0 self-center" />
       {task ? (
-        <span className="truncate">#{task.task_number} {task.title}</span>
+        <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
       ) : (
         <span className="truncate">{inertLabel}</span>
       )}
@@ -126,7 +126,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   if (!workspaceId) {
     return (
       <span
-        className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         title={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
         data-task-ref-state="no-context"
@@ -144,7 +144,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   if (result.isLoading) {
     const loadingChip = (
       <span
-        className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         // Wrapped in HoverPopover below — use aria-label, not the
         // native `title` attribute. macOS browsers schedule the native
         // tooltip on a 2-3s cycle that competes with Radix HoverCard
@@ -174,7 +174,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     // popover doesn't add information beyond the inert pill.
     return (
       <span
-        className="inline-flex max-w-[220px] items-center gap-0.5 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
         title={`Task ${inertLabel}`}
         data-task-ref={String(taskNumber)}
         data-task-ref-state="missing"
@@ -187,15 +187,18 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
 
   const label = `#${task.task_number} · ${task.title}`;
   const tooltip = `Task ${label}`;
-  // Number and title share one typeface: the chip inherits
-  // `--appearance-prose-font` (sans by default) from the message body, so
-  // the label reads as one run instead of a mono/sans seam. No `font-mono`
-  // on the number — forza6's `--font-mono` is Space Mono, whose digits read
-  // poorly (@shiki `sLh6CqwNw0uAtThk`, #task:1757).
+  // The number sits in its own `data-task-ref-num` span so a theme can give
+  // digits their own display face while the title keeps prose sans. By default
+  // both inherit `--appearance-prose-font` (one sans run, no mono/sans seam —
+  // never `font-mono`: forza6's `--font-mono` is Space Mono, whose digits read
+  // poorly, @shiki `sLh6CqwNw0uAtThk`, #task:1757). forza6 alone routes the
+  // number to `--font-display` (Rajdhani) — a deliberate "number is a number,
+  // title is a title" hierarchy matching its board / popover stamp, not a seam
+  // (#task:1760).
   const chipContent = (
     <>
       <CheckSquare className="size-3 shrink-0 self-center" />
-      <span className="truncate">#{task.task_number} {task.title}</span>
+      <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
     </>
   );
 
@@ -225,7 +228,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex max-w-[220px] cursor-pointer items-center gap-0.5 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex max-w-[220px] cursor-pointer items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"

@@ -670,22 +670,33 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
 /* TaskRef chip — strip the filled `bg-bg-elevated` / `bg-accent-soft`
    variants AND the cluster outline for a fully borderless chip. Inside
-   a cluster the chip is just inline text — clickability is conveyed by
-   the `text-accent` color and a full accent fill on hover, not by a
-   border. (`data-task-ref` is on the chip element itself in
-   TaskRef.tsx.) */
+   a cluster the chip is narration, not a headline: the WHOLE chip —
+   glyph, number, title — drops to `--text-secondary` regular (weight
+   400), matching the muted actor/verb on the same row (@shiki
+   `iiO79y4siciSkcNY` / `m4v0_aD98VW5g8IF`, #task:1760). The row already
+   carries exactly one intentional colour — the event dot (created /
+   moved) and, on a status change, the pill — so a saturated glyph on top
+   of that reads as a second, competing signal. Clickability is a utility
+   affordance, not a semantic hue: it lives entirely in hover (full accent
+   fill), not in a loud resting glyph. The glyph has no explicit colour,
+   so it inherits the chip's `currentColor` in every state — muted at
+   rest, `--text-on-accent` on hover — no per-glyph rule needed.
+   (`data-task-ref` is on the chip element itself in TaskRef.tsx.) */
 .system-activity-cluster [data-task-ref] {
   background: transparent;
   border: none;
+  color: var(--text-secondary);
+  font-weight: 400;
 }
 .system-activity-cluster [data-task-ref]:hover {
   /* This is a distinct, denser surface: fill with full accent and flip
-     text to `--text-on-accent` so the chip stays legible on the saturated
-     cluster ground. Lighter alternatives (`--bg-hover`, `--accent-soft`)
-     read as gray or barely-visible here. NOTE the standalone prose chip no
-     longer fills on hover — it's a borderless accent link with a hover
-     underline now (#task:1725) — but that link treatment is too quiet for
-     this surface, so the cluster deliberately keeps the fill. */
+     text (and, via currentColor, the glyph) to `--text-on-accent` so the
+     chip stays legible on the saturated cluster ground. Lighter
+     alternatives (`--bg-hover`, `--accent-soft`) read as gray or
+     barely-visible here. NOTE the standalone prose chip no longer fills on
+     hover — it's a borderless accent link with a hover underline now
+     (#task:1725) — but that link treatment is too quiet for this surface,
+     so the cluster deliberately keeps the fill. */
   background: var(--accent);
   color: var(--text-on-accent);
 }
