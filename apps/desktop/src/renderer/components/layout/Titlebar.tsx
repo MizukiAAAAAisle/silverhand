@@ -212,10 +212,12 @@ export function Titlebar({
           data-workspace-name
           className="truncate font-serif text-sm font-semibold text-text-primary"
         >
+          {/* DM titlebars show only the bound agent's raw display name — no
+            * `@`, no `· DM` marker (shiki 2026-08-01, #task:1768). Reads like
+            * the person you're talking to; the icon + rail already convey it's
+            * a DM. The name itself is resolved upstream via `dmRecognitionName`
+            * (App.tsx), shared with the rail so the two can't drift. */}
           {workspaceName}
-          {workspaceKind === 'dm' ? (
-            <span className="ml-1 text-text-muted">· DM</span>
-          ) : null}
         </span>
       ) : null}
 

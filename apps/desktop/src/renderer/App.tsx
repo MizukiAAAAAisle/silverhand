@@ -394,9 +394,8 @@ function RegisteredAppShell(): JSX.Element {
   // Titlebar name for a DM = the bound agent's raw display name, resolved the
   // SAME way as the rail (`dmRecognitionName`, shared so they can't drift) so
   // the header reads like the person, not `@handle` (#task:1768). Regular
-  // workspaces keep their bare name. The `· DM` marker itself stays in the
-  // Titlebar — it's the standalone header's only cue that this is a DM vs a
-  // channel workspace (the rail conveys that structurally via its section).
+  // workspaces keep their bare name. The Titlebar drops the `· DM` marker too
+  // (shiki) — the DM icon carries that cue.
   const titlebarWorkspaceName =
     selectedWorkspace === null
       ? null
