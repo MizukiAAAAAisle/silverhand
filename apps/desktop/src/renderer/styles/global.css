@@ -858,26 +858,24 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
    Themes layer identity (fill / border / radius / colour / `font-family`) on
    top; they no longer set the size. The `.system-message-row` variant keeps
-   its own explicit `height`, unaffected by this. NOTE (shiki 2026-07-30): the
-   in-prose chips now OVERRIDE this to `font-size: inherit` (full prose size —
-   see the `.markdown-body` rule below); this `body − 2px` now applies only to
-   the non-prose system-chrome surfaces. */
+   its own explicit `height`, unaffected by this. This one rule now governs
+   EVERY surface — prose included: the 2026-07-30 full-prose-size experiment
+   (`font-size: inherit` on the in-prose chips) was reverted in #task:1758
+   (shiki "再把 task fontsize 改成 12"). */
 [data-task-ref],
 [data-channel-ref-state],
 [data-conversation-ref] {
   font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
 }
 
-/* In prose the reference-chip family matches the surrounding regular text
-   size, not the `body − 2px` set above. The one-notch-smaller treatment read
-   as too short beside full-size prose (shiki 2026-07-30 "现在看着有点矮" —
-   reversing the earlier #1192/#1721 convergence to 12px, which was only ever
-   about avoiding the fractional `em` size). `inherit` = literally the size of
-   the text the chip sits in, so a chip in a heading tracks the heading too;
-   the chip no longer signals "reference" by being smaller — the ☑ / `#` /
-   `#conv:` glyph + accent colour carry that. The `body − 2px` base rule now
-   governs only the non-prose surfaces (system-activity / system-message
-   chrome), which stay one notch down in their denser rows.
+/* In-prose reference chips keep the family size above (`body − 2px`) and only
+   fix their vertical alignment here. A prose-only `font-size: inherit` lived
+   in this block for one day (chips at full prose size, shiki 2026-07-30
+   "现在看着有点矮") and is gone again in #task:1758 — the chip reads as a
+   reference by being one notch down, and 12px at the 14px default is the size
+   this family has converged on twice (#1192 / #1721). Do NOT hardcode 12px:
+   the base rule subtracts from the Appearance token, so the chip still tracks
+   the slider.
 
    Baseline alignment: these chips are `inline-flex` and grow to fill the
    prose line-height box; with the flex default `align-items` the glyph centres
@@ -890,7 +888,6 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 .markdown-body [data-task-ref],
 .markdown-body [data-channel-ref-state],
 .markdown-body [data-conversation-ref] {
-  font-size: inherit;
   align-items: baseline;
 }
 
