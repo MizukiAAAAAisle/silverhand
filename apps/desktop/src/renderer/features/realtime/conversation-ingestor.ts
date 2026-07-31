@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, notifyManager } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import {
   MESSAGE_REACTION_CHANGED_EVENT,
@@ -321,7 +321,7 @@ function asSideKind(kind: string): SideKind | null {
 // agent_status / agent_activity / conversation_activity). The two prefixes are
 // disjoint by construction (#task:1255 P2 step-3).
 
-/** Build the SATISFACTION disposition for one message-stream `message` frame
+/** Build the SATISFACTION disposition for one committed-message payload
  *  (#task:1255 / #task:1263 (c)). Returns the per-effect settle Promises the
  *  caller joins with `Promise.allSettled` to gate `markSatisfied` — all-fulfilled
  *  advances the resume floor once; a rejected refetch pins it (§4.1 / #1261,
@@ -335,8 +335,27 @@ function asSideKind(kind: string): SideKind | null {
  *  advancing the floor past it can't strand a warm cache — the #1251 hole needs a
  *  warm displayable cache, which cold-absent lacks). Unlike the snapshot handler's
  *  blanket sweep, a live frame touches only its OWN root, so the warm-cluster
- *  removal is SCOPED to that root. */
-function ingestMessage(
+ *  removal is SCOPED to that root.
+ *
+ *  RAW effects only — NEVER call this from two planes directly. Both the WS frame
+ *  and the human send ACK are authoritative inputs for the SAME committed message,
+ *  so they enter through {@link applyCommittedMessage}, which batches these writes
+ *  for atomic observer visibility (count + preview tail + threads-list land in one
+ *  notification). Data correctness does NOT depend on running exactly once: every
+ *  write here is by-id/absolute (append short-circuits on `cacheHasMessage`, counts
+ *  SET an absolute value, previews dedupe by message_id, threads-list overwrites by
+ *  root) or an idempotent invalidate. So when the ACK and the WS frame both deliver
+ *  this committed message, re-running is safe — the only cost is that the
+ *  invalidate-only effects (followers / attachments / no-projection fallback) MAY
+ *  refetch once more. That duplicate is deliberately accepted (Cindy + shiki,
+ *  #task:1749): a message-level coordination receipt to erase it would trade real
+ *  state complexity (per-scope retention aligned to the replay horizon, in-flight
+ *  pinning, compare-and-delete release) for a bounded best-effort refetch. If
+ *  telemetry ever proves a material amplification, upgrade the specific projection
+ *  to an absolute patch or add generic coalescing at the query layer instead of a
+ *  message-level receipt. This function itself writes NO transport water —
+ *  `markSatisfied` is the WS wrapper's exclusive job (#task:1749). */
+function committedMessageEffects(
   qc: QueryClient,
   channelId: string,
   msg: MessageDto,
@@ -438,8 +457,9 @@ function ingestMessage(
   // NOT cause a full-list refetch — the reader must not fan a full-message
   // storm into a projection refetch) AND on an active reader (no work while
   // the panel is closed). Thread replies land here too — the DTO carries
-  // the parent channel id, so this fires exactly once per attachment-bearing
-  // message.
+  // the parent channel id. This invalidate is idempotent, so under the
+  // ACK+WS dual apply it may run once on each plane (accepted best-effort);
+  // it is not once-only per message.
   if (
     msg.attachments &&
     msg.attachments.length > 0 &&
@@ -467,6 +487,42 @@ function ingestMessage(
   }
 
   return settles;
+}
+
+/** The shared committed-message apply seam. BOTH the WS `message` frame and the
+ *  human send ACK call this for a committed message; it runs the derived cache
+ *  convergence ({@link committedMessageEffects}), batching the synchronous writes so
+ *  an observer never sees a half-applied 0→1 (count without preview tail or vice-
+ *  versa), and returns the settled per-effect results.
+ *
+ *  There is NO once-only guard: the two entry points may each run the effects for
+ *  the same committed message. That is safe by the contract on
+ *  {@link committedMessageEffects} — data writes are by-id/absolute/idempotent, so a
+ *  second run converges to the same cache; only invalidate-only effects may refetch
+ *  once more, a bounded best-effort cost deliberately accepted in #task:1749 (see
+ *  that docblock for why a coordination receipt is NOT worth its state complexity).
+ *
+ *  Callers:
+ *  - WS wrapper: `.then` → `markSatisfied` iff every settle fulfilled (the ONLY
+ *    place transport water advances). A rejected settle pins the floor so the
+ *    transport re-drives on the next resume.
+ *  - ACK (`useSendMessage.onSuccess`): swaps the optimistic row to committed, then
+ *    calls this and `void`s the result — it never writes transport water, viewer
+ *    read cursor, thread-observe, or unread/follow rollup. */
+export function applyCommittedMessage(
+  qc: QueryClient,
+  channelId: string,
+  msg: MessageDto,
+  projections: MessageProjections | undefined,
+): Promise<PromiseSettledResult<void>[]> {
+  // `notifyManager.batch`: every synchronous `setQueryData` / invalidate this
+  // payload triggers is flushed to observers as ONE notification, so count +
+  // preview tail + threads-list absolute merges are atomically visible. The async
+  // refetch settles resolve outside the batch and gate the WS floor via the result.
+  const settles = notifyManager.batch(() =>
+    committedMessageEffects(qc, channelId, msg, projections),
+  );
+  return Promise.allSettled(settles);
 }
 
 /** Apply a live/replayed `agent_activity` frame to the agent-run-states cache
@@ -687,8 +743,9 @@ function ingestSideSnapshotRequired(qc: QueryClient, channelId: string): void {
  * DUAL-WATER FLOOR (#1255 P2 step-4 / #1263 (c)). For the content-gated
  * message-stream scope this is the SOLE content-driven writer of the transport
  * applied-water (resume floor):
- *  - a `message` `event` → build the per-frame SATISFACTION disposition
- *    ({@link ingestMessage}) and, once its `Promise.allSettled` join is
+ *  - a `message` `event` → run the shared apply seam
+ *    ({@link applyCommittedMessage}, built on {@link committedMessageEffects}) and,
+ *    once its `Promise.allSettled` join is
  *    all-fulfilled, `markSatisfied(scope, seq, epoch)` once (#1261: content applies
  *    + committed derived-invalidates + warm-removes + cold-absent vacuous all
  *    satisfy; a rejected refetch pins the floor);
@@ -760,14 +817,19 @@ export function ingestConversationFrame(
       const payload = frame.payload as MessageEventPayload | undefined;
       const msg = payload?.message;
       if (msg) {
-        const settles = ingestMessage(
+        const { scope, seq, epoch } = frame;
+        // The WS frame and the human send ACK share ONE apply seam. There is no
+        // once-only guard: if the ACK already applied this committed message, this
+        // WS run re-converges the same by-id/absolute writes (a no-op on data) and
+        // may re-fire the invalidate-only effects — accepted, #task:1749.
+        // `markSatisfied` is WS-exclusive: it is the only transport-water write,
+        // gated on every effect settling fulfilled.
+        void applyCommittedMessage(
           qc,
           messageStreamId,
           msg,
           payload?.projections,
-        );
-        const { scope, seq, epoch } = frame;
-        void Promise.allSettled(settles).then(results => {
+        ).then(results => {
           if (results.every(r => r.status === 'fulfilled')) {
             eventWsClient.markSatisfied(scope, seq, epoch);
           }

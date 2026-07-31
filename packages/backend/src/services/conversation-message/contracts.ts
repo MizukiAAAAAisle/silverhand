@@ -12,6 +12,7 @@ import type {
   AttachmentRefInput,
   LegacySendMessageTarget,
   MessageDto,
+  MessageEventPayload,
   MessageProjections,
   SendMessageTarget,
 } from '@silverhand/shared';
@@ -60,14 +61,23 @@ export interface SendMessageInput {
 }
 
 export interface SendMessageResult {
-  message: MessageDto;
+  /** The committed-message payload — the persisted message plus the
+   *  viewer-invariant absolute projections computed IN the send transaction.
+   *  STRUCTURALLY IDENTICAL to the post-commit `message` WS frame
+   *  ({@link MessageEventPayload}): the human send route echoes it verbatim so
+   *  the HTTP ACK and the WS echo converge through the renderer's single
+   *  committed-message apply seam, independent of WS echo timing (#task:1749).
+   *  The service builds this object ONCE and reuses it for both the WS publish
+   *  and this return — there is no second, projection-less payload shape. */
+  committed: MessageEventPayload;
   targetConversationId: string;
   /** Stream head at the moment BEFORE this message was inserted. Only set
    *  for agent `freshnessBypass` sends: the daemon uses it as the merge
    *  prerequisite for the sender's own seq — once its observed cursor
    *  covers everything freshness-relevant below the forced message, the
    *  own seq joins the watermark (countgame P1: without this, a bypass in
-   *  a quiet stream leaves the sender permanently stale on its own head). */
+   *  a quiet stream leaves the sender permanently stale on its own head).
+   *  Carried uniformly for main-line AND thread-reply sends. */
   streamHeadBeforeSend?: number;
 }
 

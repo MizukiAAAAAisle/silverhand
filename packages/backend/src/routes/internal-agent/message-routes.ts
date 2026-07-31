@@ -132,9 +132,9 @@ export function registerMessageRoutes(
         freshnessBypass: parsed.data.freshness_bypass ?? false,
       });
       return c.json({
-        message_id: result.message.id,
-        message_seq: result.message.seq,
-        thread_root_id: result.message.thread_root_id,
+        message_id: result.committed.message.id,
+        message_seq: result.committed.message.seq,
+        thread_root_id: result.committed.message.thread_root_id,
         ...(result.streamHeadBeforeSend !== undefined
           ? { stream_head_before: result.streamHeadBeforeSend }
           : {}),

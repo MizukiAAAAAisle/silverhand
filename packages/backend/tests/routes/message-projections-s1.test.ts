@@ -118,4 +118,54 @@ describe('S1 P1 — message event reply_count projection', () => {
       last_reply_message_id: reply2.message.id,
     });
   });
+
+  it('human send route response is the SAME committed payload the WS frame publishes', async () => {
+    // Acceptance #task:1749 (6): the HTTP ACK and the post-commit `message`
+    // event carry ONE structurally identical committed-message payload
+    // ({ message, projections? }). If the route ever returns a projection-less
+    // or otherwise divergent shape, the renderer's single apply seam would
+    // converge differently on ACK vs WS — this deep-equal is that falsifier.
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t, ['alice']);
+
+    const messageEvents: MessageEventPayload[] = [];
+    const unsub = t.ctx.events.subscribe(channelId, e => {
+      if (e.kind === 'message') messageEvents.push(e.payload as MessageEventPayload);
+    });
+
+    // Main-line send: response has no projections; event has no projections.
+    const rootAck = (await (
+      await http(t).post(`/api/channels/${channelId}/messages`, {
+        content: 'root topic',
+      })
+    ).json()) as MessageEventPayload;
+    const rootId = rootAck.message.id;
+
+    // Thread reply: response carries thread_root_reply_count + threads_list_entry.
+    const replyAck = (await (
+      await http(t).post(`/api/channels/${channelId}/messages`, {
+        content: 'a reply',
+        reply_to_message_id: rootId,
+      })
+    ).json()) as MessageEventPayload;
+
+    unsub();
+
+    const eventFor = (id: string): MessageEventPayload => {
+      const found = messageEvents.find(p => p.message.id === id);
+      expect(found, `message event for ${id}`).toBeDefined();
+      return found!;
+    };
+
+    // Byte-for-byte: ACK === published frame (JSON round-trip on the ACK side
+    // only; both must still deep-equal). Main-line: no projections either side.
+    expect(rootAck).toEqual(eventFor(rootId));
+    expect(rootAck.projections).toBeUndefined();
+    // Reply: projections present and identical on both planes.
+    expect(replyAck).toEqual(eventFor(replyAck.message.id));
+    expect(replyAck.projections?.thread_root_reply_count).toEqual({
+      root_id: rootId,
+      reply_count: 1,
+    });
+  });
 });

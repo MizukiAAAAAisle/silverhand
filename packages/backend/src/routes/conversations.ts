@@ -932,7 +932,12 @@ export function createConversationMessagingApp(
           ? { kind: 'thread', message_id: parsed.data.reply_to_message_id }
           : undefined,
       });
-      return c.json({ message: result.message }, 201);
+      // Echo the committed-message payload VERBATIM — the same
+      // `MessageEventPayload` ({ message, projections? }) the post-commit WS
+      // frame carries. The renderer runs one idempotent apply seam over both
+      // the ACK and the WS echo, so the self-sender's root reply block converges
+      // immediately without depending on WS echo timing (#task:1749).
+      return c.json(result.committed, 201);
     } catch (err) {
       const mapped = conversationMessageServiceErrorResponse(c, err);
       if (mapped) return mapped;

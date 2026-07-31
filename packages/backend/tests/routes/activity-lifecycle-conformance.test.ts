@@ -83,7 +83,7 @@ async function sendAsAgent(
       ? { target: { kind: 'thread' as const, message_id: rootMsgId } }
       : {}),
   });
-  return result.message.id;
+  return result.committed.message.id;
 }
 
 async function getActivity(t: TestApp): Promise<any[]> {

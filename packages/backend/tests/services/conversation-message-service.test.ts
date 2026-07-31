@@ -197,7 +197,7 @@ describe('ConversationMessageService.sendMessage', () => {
       unsubViewer();
 
       expect(result.targetConversationId).toBe(t.channel.id);
-      expect(result.message.from_kind).toBe('user');
+      expect(result.committed.message.from_kind).toBe('user');
       expect(t.fake.delivered.map(d => d.agentId).sort()).toEqual(
         [t.alice.id, t.bob.id].sort(),
       );
@@ -207,7 +207,7 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(vi.mocked(ccMentionsFromUserMessage)).toHaveBeenCalledTimes(1);
       expect(conversationEvents[0]).toMatchObject({
         kind: 'message',
-        payload: { message: { id: result.message.id } },
+        payload: { message: { id: result.committed.message.id } },
       });
       // #task:1283: the message variant now carries authoritative absolute
       // unread counts (enriched), keyed by conversation_id (the discriminator).
@@ -279,7 +279,7 @@ describe('ConversationMessageService.sendMessage', () => {
         workspace_unread_count: 1,
         latest_unread: {
           conversation_id: t.channel.id,
-          message_id: result.message.id,
+          message_id: result.committed.message.id,
           thread_root_id: null,
         },
       });
@@ -308,9 +308,9 @@ describe('ConversationMessageService.sendMessage', () => {
           kind: 'mention_self',
           user_id: 'local',
           conversation_id: t.channel.id,
-          message_id: result.message.id,
+          message_id: result.committed.message.id,
           source_conversation_id: t.channel.id,
-          source_message_id: result.message.id,
+          source_message_id: result.committed.message.id,
           payload: expect.objectContaining({
             conversation_title: 'source',
             trigger_name: 'alice',
@@ -323,7 +323,7 @@ describe('ConversationMessageService.sendMessage', () => {
         payload: {
           kind: 'mention_self',
           conversation_id: t.channel.id,
-          message_id: result.message.id,
+          message_id: result.committed.message.id,
         },
       });
     } finally {
@@ -359,18 +359,18 @@ describe('ConversationMessageService.sendMessage', () => {
       });
       unsubViewer();
 
-      expect(reply.message.thread_root_id).toBe(root.id);
+      expect(reply.committed.message.thread_root_id).toBe(root.id);
       const notifications = t.notifications.list({ userId: 'local', unread: true });
       expect(notifications).toEqual([
         expect.objectContaining({
           kind: 'mention_self',
           user_id: 'local',
           conversation_id: t.channel.id,
-          message_id: reply.message.id,
+          message_id: reply.committed.message.id,
           // Derived from the replied message — routes Activity to the thread.
           thread_root_id: root.id,
           source_conversation_id: t.channel.id,
-          source_message_id: reply.message.id,
+          source_message_id: reply.committed.message.id,
           read_at: null,
         }),
       ]);
@@ -379,7 +379,7 @@ describe('ConversationMessageService.sendMessage', () => {
         payload: {
           kind: 'mention_self',
           conversation_id: t.channel.id,
-          message_id: reply.message.id,
+          message_id: reply.committed.message.id,
         },
       });
     } finally {
@@ -438,7 +438,7 @@ describe('ConversationMessageService.sendMessage', () => {
           conversation_id: t.channel.id,
           message_id: null,
           source_conversation_id: t.channel.id,
-          source_message_id: result.message.id,
+          source_message_id: result.committed.message.id,
           payload: expect.objectContaining({
             reason: 'runtime_start_failed',
             agent_name: 'alice',
@@ -522,7 +522,7 @@ describe('ConversationMessageService.sendMessage', () => {
           kind: 'agent_start_failed',
           user_id: 'local',
           agent_id: t.alice.id,
-          source_message_id: result.message.id,
+          source_message_id: result.committed.message.id,
           payload: expect.objectContaining({
             reason: 'runtime_start_failed',
             error: 'manual start failed',
@@ -648,7 +648,7 @@ describe('ConversationMessageService.sendMessage', () => {
         attachmentRefs: [{ id: attachment.id, label: 'Image #1' }],
       });
 
-      expect(result.message.attachments).toEqual([
+      expect(result.committed.message.attachments).toEqual([
         {
           id: attachment.id,
           filename: 'ok.png',
@@ -693,8 +693,8 @@ describe('ConversationMessageService.sendMessage', () => {
         content: 'agent reply',
       });
 
-      expect(result.message.from_kind).toBe('agent');
-      expect(result.message.from_agent_id).toBe(t.alice.id);
+      expect(result.committed.message.from_kind).toBe('agent');
+      expect(result.committed.message.from_agent_id).toBe(t.alice.id);
       expect(t.fake.delivered.map(d => d.agentId)).toEqual([t.bob.id]);
       expect(t.fake.starts).toEqual([]);
       expect(t.fake.resolvedRuns).toEqual([
@@ -805,7 +805,7 @@ describe('ConversationMessageService.sendMessage', () => {
         freshnessBypass: true,
       });
 
-      expect(result.message.content).toBe('send anyway');
+      expect(result.committed.message.content).toBe('send anyway');
       expect(t.messages.listForConversation(t.channel.id).map(m => m.content))
         .toEqual(['observed', 'newer context', 'send anyway']);
       expect(t.logger.warn).toHaveBeenCalledWith(
@@ -817,8 +817,8 @@ describe('ConversationMessageService.sendMessage', () => {
           staleEventId: 'evt-force',
           resolutionReason: 'force_send',
           outcome: 'message_sent',
-          messageId: result.message.id,
-          messageSeq: result.message.seq,
+          messageId: result.committed.message.id,
+          messageSeq: result.committed.message.seq,
         }),
         'conversation-message-service: stale send resolution observed',
       );
@@ -841,15 +841,15 @@ describe('ConversationMessageService.sendMessage', () => {
         content: 'threaded answer',
         target: { kind: 'thread', message_id: root.id },
       });
-      expect(result.message.thread_root_id).toBe(root.id);
+      expect(result.committed.message.thread_root_id).toBe(root.id);
       // a reply to that reply joins the SAME root (no nested threads)
       const nested = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: 'follow-up',
-        target: { kind: 'thread', message_id: result.message.id },
+        target: { kind: 'thread', message_id: result.committed.message.id },
       });
-      expect(nested.message.thread_root_id).toBe(root.id);
+      expect(nested.committed.message.thread_root_id).toBe(root.id);
     } finally {
       t.cleanup();
     }
@@ -873,7 +873,7 @@ describe('ConversationMessageService.sendMessage', () => {
         assertedStreamKey: `thread:${root.id}`,
         seenUpToSeq: 0,
       });
-      expect(ok.message.thread_root_id).toBe(root.id);
+      expect(ok.committed.message.thread_root_id).toBe(root.id);
       // A main-line send asserting 'main' also passes.
       const mainOk = await t.service.sendMessage({
         conversationId: t.channel.id,
@@ -882,7 +882,7 @@ describe('ConversationMessageService.sendMessage', () => {
         assertedStreamKey: 'main',
         seenUpToSeq: root.seq,
       });
-      expect(mainOk.message.thread_root_id).toBeNull();
+      expect(mainOk.committed.message.thread_root_id).toBeNull();
       // A mismatched assertion (daemon thinks main, backend resolves a thread)
       // hard-rejects.
       await expect(
@@ -940,8 +940,8 @@ describe('ConversationMessageService.sendMessage', () => {
         content: 'main-line answer',
         seenUpToSeq: root.seq,
       });
-      expect(result.message.content).toBe('main-line answer');
-      expect(result.message.thread_root_id).toBeNull();
+      expect(result.committed.message.content).toBe('main-line answer');
+      expect(result.committed.message.thread_root_id).toBeNull();
     } finally {
       t.cleanup();
     }
@@ -984,7 +984,7 @@ describe('ConversationMessageService.sendMessage', () => {
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'stale thread draft',
           target: { kind: 'thread', message_id: root.id },
-          seenUpToSeq: firstReply.message.seq,
+          seenUpToSeq: firstReply.committed.message.seq,
         }),
       ).rejects.toMatchObject({
         code: 'message_stale',
@@ -1069,7 +1069,7 @@ describe('ConversationMessageService.sendMessage', () => {
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'stale draft',
           target: { kind: 'thread', message_id: root.id },
-          seenUpToSeq: firstReply.message.seq,
+          seenUpToSeq: firstReply.committed.message.seq,
         }),
       ).rejects.toThrowError('disk full');
       vi.restoreAllMocks();
@@ -1110,9 +1110,55 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
         content: 'normal',
-        seenUpToSeq: forced.message.seq,
+        seenUpToSeq: forced.committed.message.seq,
       });
       expect(normal.streamHeadBeforeSend).toBeUndefined();
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('bypass reply returns the THREAD stream head, not the main-line head (per-stream scoping falsifier, #task:1749)', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'root question',
+      });
+      // Advance the THREAD head: a reply lands in root's stream.
+      const threadReply = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'earlier thread reply',
+        threadRootId: root.id,
+      });
+      // Advance the MAIN-LINE head PAST the thread head with an unrelated
+      // main-line message. This is the trap value: if the bypass branch
+      // captured the head with a null (main-line) thread scope instead of
+      // `threadRootId`, `streamHeadBeforeSend` would be this seq.
+      const mainGap = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'unrelated main-line gap',
+      });
+      expect(mainGap.seq).toBeGreaterThan(threadReply.seq);
+
+      const forced = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'forced thread reply',
+        target: { kind: 'thread', message_id: root.id },
+        seenUpToSeq: root.seq,
+        freshnessBypass: true,
+      });
+
+      // The bypass send is a thread reply, so the merge prerequisite is the
+      // THREAD stream head at insert time — everything in THIS thread the
+      // sender skipped — not the higher main-line head.
+      expect(forced.committed.message.thread_root_id).toBe(root.id);
+      expect(forced.streamHeadBeforeSend).toBe(threadReply.seq);
+      expect(forced.streamHeadBeforeSend).not.toBe(mainGap.seq);
     } finally {
       t.cleanup();
     }
@@ -1129,14 +1175,14 @@ describe('ConversationMessageService.sendMessage', () => {
         staleResolutionReason: 'revised',
       });
 
-      expect(result.message.content).toBe('revised reply');
+      expect(result.committed.message.content).toBe('revised reply');
       expect(t.logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           staleEventId: 'evt-revised',
           resolutionReason: 'revised',
           outcome: 'message_sent',
-          messageId: result.message.id,
-          messageSeq: result.message.seq,
+          messageId: result.committed.message.id,
+          messageSeq: result.committed.message.seq,
         }),
         'conversation-message-service: stale send resolution observed',
       );
@@ -1155,14 +1201,14 @@ describe('ConversationMessageService.sendMessage', () => {
         staleEventId: 'evt-unattributed',
       });
 
-      expect(result.message.content).toBe('retry without reason');
+      expect(result.committed.message.content).toBe('retry without reason');
       expect(t.logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           staleEventId: 'evt-unattributed',
           resolutionReason: 'unattributed',
           outcome: 'message_sent',
-          messageId: result.message.id,
-          messageSeq: result.message.seq,
+          messageId: result.committed.message.id,
+          messageSeq: result.committed.message.seq,
         }),
         'conversation-message-service: stale send resolution observed',
       );
@@ -1242,7 +1288,7 @@ describe('ConversationMessageService.sendMessage', () => {
       });
       unsub();
 
-      expect(result.message.content).toBe('still returns');
+      expect(result.committed.message.content).toBe('still returns');
       expect(order[0]).toBe('publish');
       expect(order).toContain('deliver');
     } finally {
@@ -1260,7 +1306,7 @@ describe('ConversationMessageService.sendMessage', () => {
           actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
           content: 'deliver fail',
         }),
-      ).resolves.toMatchObject({ message: { content: 'deliver fail' } });
+      ).resolves.toMatchObject({ committed: { message: { content: 'deliver fail' } } });
       expect(t.logger.warn).toHaveBeenCalled();
     } finally {
       t.cleanup();
@@ -1306,11 +1352,11 @@ describe('ConversationMessageService.sendMessage', () => {
         content: 'human reply',
         target: { kind: 'thread', message_id: root.id },
       });
-      expect(reply.message.thread_root_id).toBe(root.id);
+      expect(reply.committed.message.thread_root_id).toBe(root.id);
 
       await waitFor(() =>
         t.fake.delivered.some(
-          d => d.agentId === t.bob.id && d.messageId === reply.message.id,
+          d => d.agentId === t.bob.id && d.messageId === reply.committed.message.id,
         ),
       );
       expect(t.fake.starts.some(s => s.agentId === t.bob.id)).toBe(false);
@@ -1327,12 +1373,12 @@ describe('ConversationMessageService.sendMessage', () => {
       });
       await waitFor(() =>
         t.fake.delivered.some(
-          d => d.agentId === t.bob.id && d.messageId === second.message.id,
+          d => d.agentId === t.bob.id && d.messageId === second.committed.message.id,
         ),
       );
       expect(
         t.fake.delivered.some(
-          d => d.agentId === t.bob.id && d.messageId === second.message.id,
+          d => d.agentId === t.bob.id && d.messageId === second.committed.message.id,
         ),
       ).toBe(true);
       expect(t.fake.starts.some(s => s.agentId === t.bob.id)).toBe(false);
@@ -1402,11 +1448,11 @@ describe('ConversationMessageService.sendMessage', () => {
       expect(
         t.conversationInboxes
           .listPending(t.channel.id, t.bob.id)
-          .some(i => i.message.id === second.message.id),
+          .some(i => i.message.id === second.committed.message.id),
       ).toBe(false);
       expect(
         t.fake.delivered.some(
-          d => d.agentId === t.bob.id && d.messageId === second.message.id,
+          d => d.agentId === t.bob.id && d.messageId === second.committed.message.id,
         ),
       ).toBe(false);
     } finally {
@@ -1446,7 +1492,7 @@ describe('ConversationMessageService.sendMessage', () => {
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
         content: '@carol please look',
-        target: { kind: 'thread', message_id: reply1.message.id },
+        target: { kind: 'thread', message_id: reply1.committed.message.id },
       });
 
       // follower with source 'mention'.
@@ -1461,13 +1507,13 @@ describe('ConversationMessageService.sendMessage', () => {
       const backfilled = t.conversationInboxes
         .listPending(t.channel.id, carol.id)
         .map(i => i.message.id);
-      expect(backfilled).toEqual([root.id, reply1.message.id]);
-      expect(backfilled).not.toContain(mentionReply.message.id);
+      expect(backfilled).toEqual([root.id, reply1.committed.message.id]);
+      expect(backfilled).not.toContain(mentionReply.committed.message.id);
 
       // current reply reaches carol as a turn (deliverMessage → wake).
       await waitFor(() =>
         t.fake.delivered.some(
-          d => d.agentId === carol.id && d.messageId === mentionReply.message.id,
+          d => d.agentId === carol.id && d.messageId === mentionReply.committed.message.id,
         ),
       );
     } finally {
@@ -1578,9 +1624,9 @@ describe('ConversationMessageService.sendMessage', () => {
       const inbox = t.conversationInboxes
         .listPending(t.channel.id, carol.id)
         .map(i => i.message.id);
-      expect(inbox).toEqual([root.id, reply1.message.id, reply3.message.id]);
+      expect(inbox).toEqual([root.id, reply1.committed.message.id, reply3.committed.message.id]);
       expect(inbox).not.toContain(carolOwn.id);
-      expect(inbox).not.toContain(mention.message.id);
+      expect(inbox).not.toContain(mention.committed.message.id);
     } finally {
       t.cleanup();
     }
@@ -1635,7 +1681,7 @@ describe('ConversationMessageService.sendMessage', () => {
       // Regression guard: the OLD `ORDER BY seq ASC LIMIT 500` kept the oldest
       // 500 and dropped the newest 20 — the most relevant context.
       expect(inbox).toContain(replyIds[REPLY_COUNT - 1]);
-      expect(inbox).not.toContain(mention.message.id);
+      expect(inbox).not.toContain(mention.committed.message.id);
     } finally {
       t.cleanup();
     }

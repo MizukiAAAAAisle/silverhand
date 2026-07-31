@@ -351,13 +351,35 @@ export class ConversationMessageService {
       'conversation-message-service: message inserted',
     );
 
+    // The committed-message payload: persisted message + in-transaction
+    // absolute projections. Built ONCE here and reused verbatim for both the
+    // WS publish (below) and the caller-facing result — the human send route
+    // echoes it as the HTTP ACK so ACK and WS echo are structurally identical
+    // and converge through one renderer apply seam (#task:1749). Any second,
+    // projection-less payload shape would reintroduce the divergence.
+    const committed: MessageEventPayload = {
+      message: txResult.message,
+      ...(txResult.projections ? { projections: txResult.projections } : {}),
+    };
+
     this.events.publish(txResult.targetConversation.id, {
       kind: 'message',
-      payload: {
-        message: txResult.message,
-        ...(txResult.projections ? { projections: txResult.projections } : {}),
-      } satisfies MessageEventPayload,
+      payload: committed,
     });
+
+    // The caller-facing result reuses the SAME committed payload. Built once
+    // here so both send branches (thread-reply / main-line) return an identical
+    // shape — `streamHeadBeforeSend` rides uniformly (it is a bypass-send
+    // transaction pre-value, independent of thread vs main-line; the old
+    // thread-reply early return dropped it, stranding a freshnessBypass thread
+    // reply on its own head — countgame P1).
+    const result: SendMessageResult = {
+      committed,
+      targetConversationId: txResult.targetConversation.id,
+      ...(txResult.streamHeadBeforeSend !== null
+        ? { streamHeadBeforeSend: txResult.streamHeadBeforeSend }
+        : {}),
+    };
     this.delivery.publishUnreadUpdated(txResult.targetConversation.id);
     this.delivery.notifyViewerMentionBestEffort(
       txResult.targetConversation,
@@ -407,10 +429,7 @@ export class ConversationMessageService {
         txResult.message,
         txResult.threadDelivery,
       );
-      return {
-        message: txResult.message,
-        targetConversationId: txResult.targetConversation.id,
-      };
+      return result;
     }
 
     void this.delivery.deliverBestEffort(
@@ -446,13 +465,7 @@ export class ConversationMessageService {
       );
     }
 
-    return {
-      message: txResult.message,
-      targetConversationId: txResult.targetConversation.id,
-      ...(txResult.streamHeadBeforeSend !== null
-        ? { streamHeadBeforeSend: txResult.streamHeadBeforeSend }
-        : {}),
-    };
+    return result;
   }
 
   resolveStaleMessage(input: ResolveStaleMessageInput): void {

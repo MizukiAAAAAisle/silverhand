@@ -644,7 +644,20 @@ export class MessageRepo {
    *  the impossible same-id/different-seq state. READ-INERT: this reads message
    *  rows only; it advances no cursor and touches no observed/unread/follow
    *  state. Carries only label-level attachment metadata (count + first
-   *  canonical label via `resolveAttachmentLabels`), never attachment bytes. */
+   *  canonical label via `resolveAttachmentLabels`), never attachment bytes.
+   *
+   *  MIRRORED SELECTION (#task:1749): the renderer re-selects this same tail
+   *  incrementally on the committed-message apply seam —
+   *  `convergeReplyPreviewTail` + `pageDisplaysEligibleRoot`
+   *  (apps/desktop/src/renderer/features/channels/projection-cache.ts). The tail
+   *  *content* is single-sourced (both sides call the same shared normalizer /
+   *  `resolveAttachmentLabels`), but the *selection* rule (eligibility
+   *  `from_kind != 'system'`, seq-only ordering, `rn <= 3`) is a mirror, NOT one
+   *  implementation. Changing any selection boundary here (count, eligibility,
+   *  sort key) MUST change the renderer mirror in the same batch, or a self-sent
+   *  reply's optimistic tail diverges from this cold read. To truly converge,
+   *  lift the selection into a shared pure function — do not make the renderer
+   *  read this SQL's result. */
   replyPreviewsByRoot(
     conversationId: string,
     rootMessageIds: readonly string[],

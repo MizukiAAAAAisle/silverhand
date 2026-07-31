@@ -11,9 +11,10 @@ import type {
   MessageSeq,
 } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
-import type {
-  CachedMessage,
-  PendingMessage,
+import {
+  isPendingMessage,
+  type CachedMessage,
+  type PendingMessage,
 } from '@/features/channels/pending-message';
 
 /** Page-param shape for the bidirectional infinite query.
@@ -209,19 +210,98 @@ export function removeMessageFromCache(
   };
 }
 
+/** Insert a committed row into the tail page at the position dictated by its
+ *  immutable {@link MessageSeq}. Committed rows stay seq-ordered; pending rows
+ *  carry no seq, so they keep their tail-by-insertion position and a committed
+ *  insert always lands before the first pending row. An empty / page-less cache
+ *  bootstraps via {@link appendMessageToCache} (which stamps the head). Callers
+ *  own id-dedup — this helper does not check for an existing row. */
+function insertCommittedBySeq(
+  data: MessagesCache | undefined,
+  msg: MessageDto,
+): MessagesCache {
+  if (!data || data.pages.length === 0) {
+    return appendMessageToCache(data, msg);
+  }
+  const lastIndex = data.pages.length - 1;
+  return {
+    ...data,
+    pages: data.pages.map((page, index) => {
+      if (index !== lastIndex) return page;
+      const msgs = page.messages;
+      let at = msgs.length;
+      for (let i = 0; i < msgs.length; i++) {
+        const existing = msgs[i]!;
+        if (isPendingMessage(existing) || existing.seq > msg.seq) {
+          at = i;
+          break;
+        }
+      }
+      return {
+        ...page,
+        messages: [...msgs.slice(0, at), msg, ...msgs.slice(at)],
+      };
+    }),
+  };
+}
+
+/** Converge the optimistic temp row against the committed message on ACK.
+ *
+ *  The ACK swap only has authority over a cache that still owns THIS mutation —
+ *  and the committed row's position is governed by its immutable
+ *  {@link MessageSeq}, never by ACK arrival order (the ACK is itself an
+ *  authoritative, potentially out-of-order input: two local sends can race and
+ *  ACK newest-first). Three cases, by what the cache still holds:
+ *  - **committed id already present** (a WS echo delivered it in seq order — WS
+ *    is the in-order transport) → drop only the temp row; never move it.
+ *  - **committed absent, temp present** → the cache still owns this send. Swap:
+ *    drop the temp row and seq-upsert the committed row into the tail page
+ *    (before the first pending row or the first committed row of a higher seq),
+ *    so a later WS echo dedupes by id and does not reorder it.
+ *  - **neither present** → a jump/prime replaced this window (temp gone,
+ *    possibly a non-tail authoritative window). The swap has NO right to splice a
+ *    row into a window it no longer owns — that would break seq adjacency.
+ *    Return it untouched; the shared committed-message seam then applies the row
+ *    under the existing tail / gap-affordance / eviction rules. */
 export function replacePendingMessageInCache(
   data: MessagesCache | undefined,
   tempId: string,
   msg: MessageDto,
-): MessagesCache {
-  const withoutTempAndDuplicate = data
-    ? {
-        ...data,
-        pages: data.pages.map(page => ({
-          ...page,
-          messages: page.messages.filter(m => m.id !== tempId && m.id !== msg.id),
-        })),
-      }
-    : undefined;
-  return appendMessageToCache(withoutTempAndDuplicate, msg);
+): MessagesCache | undefined {
+  if (cacheHasMessage(data, msg.id)) {
+    return removeMessageFromCache(data, tempId);
+  }
+  if (cacheHasMessage(data, tempId)) {
+    return insertCommittedBySeq(removeMessageFromCache(data, tempId), msg);
+  }
+  return data;
+}
+
+/** Converge the optimistic temp row when a send FAILS. An HTTP error is an
+ *  AMBIGUOUS result — the send may still have committed and a WS frame (own
+ *  echo or a concurrent message) may already have applied to this cache. So the
+ *  rollback must undo ONLY this mutation's optimistic temp fact, never overwrite
+ *  committed facts that arrived after the optimistic write.
+ *
+ *  Mutation-local CAS, no persistent coordination state: `optimistic` is the
+ *  exact cache reference written when the temp row was appended.
+ *  - `current === optimistic` → nothing authoritative/concurrent landed since
+ *    (an equal-valued projection merge short-circuits to the SAME reference, so
+ *    a structural no-op counts here too — by definition no committed fact sits
+ *    on this key). Restore the prior snapshot, recovering a rebuilt non-tail
+ *    browsing window. `prev` may be undefined (bootstrapped from empty) → fall
+ *    through to surgical removal.
+ *  - reference changed → a committed/concurrent fact is present. Remove only the
+ *    temp row; keep the committed row, concurrent rows, and any advanced
+ *    projections/floor (which live on their own keys). */
+export function rollbackOptimisticSend(
+  current: MessagesCache | undefined,
+  prev: MessagesCache | undefined,
+  optimistic: MessagesCache | undefined,
+  tempId: string,
+): MessagesCache | undefined {
+  if (prev !== undefined && current === optimistic) {
+    return prev;
+  }
+  return removeMessageFromCache(current, tempId);
 }

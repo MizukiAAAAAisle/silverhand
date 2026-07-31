@@ -230,6 +230,36 @@ fact does not touch the cursor.*
 channel, not a separate thread scope). So one cursor per conversation, many gap facts per conversation —
 another reason the two axes must stay separate.
 
+### 4.3.8 The shared committed-message apply seam (#task:1749)
+
+A committed message reaches the renderer on **two** authoritative planes: the
+broadcast **WS `message` frame** and the **HTTP ACK** the human send route
+returns (the SAME `MessageEventPayload = { message, projections? }`, produced
+once backend-side). Both enter one function — `applyCommittedMessage` — which
+runs the derived-cache convergence and wraps the synchronous writes in
+`notifyManager.batch` so an observer never sees a half-applied 0→1 (reply count
+present while the preview tail is still absent, or vice-versa).
+
+There is **deliberately no once-only guard** (Cindy + shiki ruling on #task:1749).
+The two planes may each run the effects for the same committed message; that is
+safe because the data writes are **by-id / absolute / idempotent** (`cacheHasMessage`
+id-dedup on append, absolute SET on counts, message_id-dedup on preview tails,
+root-keyed overwrite on the threads-list entry) — a second run converges to the
+same cache. Only the **invalidate-only** effects (followers / attachments /
+no-projection fallback) may refetch once more, a bounded best-effort cost. A
+message-level coordination receipt to erase that duplicate was evaluated and
+**cut**: it would trade real state (per-scope retention aligned to the WS replay
+horizon, in-flight pinning, compare-and-delete release) for a refetch that only
+occurs when the relevant panel is open. If telemetry ever proves a material
+amplification, upgrade the specific projection to an absolute patch or add generic
+coalescing at the query layer — not a message-level receipt.
+
+Plane ownership stays split: **`markSatisfied` is WS-exclusive** — only the WS
+wrapper advances the transport floor, gated on every effect settling fulfilled
+(§4.3.3). The ACK path calls the seam and discards the result; it writes **no**
+transport water, viewer read cursor, thread-observe, or unread/follow rollup. The
+ACK is not a transport source.
+
 ### 4.4 Scope subscription / interest (bandwidth, P3)
 
 Subscription stays driven by the active conversation set (open primary + secondary pane + open threads),

@@ -24,6 +24,14 @@ fallback**, not the hot path.
   values or authoritative ordering-key values. No local `+1`, no local sort
   invention.
 - The resume floor still advances **only on authoritative settle**.
+- The same committed payload (`{ message, projections? }`) is produced **once**
+  per send and consumed on **both** planes — the human send **HTTP ACK** and the
+  broadcast **WS `message` frame** — through one idempotent client apply seam
+  (#task:1749). The ACK is **not** a transport source: **only the WS settle
+  advances the resume floor**; the ACK converges content + derived projections
+  and writes no transport water. Duplicate invalidate-only effects across the two
+  planes are accepted (the data merges are absolute/idempotent), not deduped by a
+  coordination receipt.
 
 ## 1. Projections and their fallbacks
 
@@ -106,6 +114,17 @@ payload: {
 `ThreadSummaryInvariant` = `ThreadSummary` minus the per-viewer `viewer_following`,
 plus `root_seq` (additive DTO field, §6). The client keeps its own
 `viewer_following` for a row it already holds.
+
+This exact `payload` shape is the `MessageEventPayload` the backend produces
+**once** per send (#task:1749): the human send route returns it as the **HTTP
+ACK** (`201`) and the `conversation:{id}` broadcast publishes the SAME object as
+the WS `message` frame. One producer, two transports — the renderer runs one
+idempotent apply seam for both planes. The ACK is **not** a transport source:
+only the WS frame's settle advances the resume floor (§2 #3); the ACK converges
+content + projections and writes no transport water, viewer read cursor, or
+follow/unread rollup. Because both apply paths are absolute/idempotent, a
+committed message applied on both planes is safe without a once-only receipt —
+only invalidate-only effects may refetch once more, an accepted best-effort cost.
 
 Two backend invariants:
 

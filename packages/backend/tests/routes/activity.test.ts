@@ -45,7 +45,7 @@ async function sendAsAgent(
     actor: { kind: 'agent', agentId, conversationId: channelId },
     content,
   });
-  return result.message.id;
+  return result.committed.message.id;
 }
 
 /** Send an agent reply into a thread (reply-cluster) under `rootMsgId`. */
@@ -62,7 +62,7 @@ async function sendThreadReply(
     content,
     target: { kind: 'thread', message_id: rootMsgId },
   });
-  return result.message.id;
+  return result.committed.message.id;
 }
 
 async function getActivity(t: TestApp): Promise<any[]> {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { QueryClient, QueryObserver } from '@tanstack/react-query';
+import { QueryClient, QueryObserver, notifyManager } from '@tanstack/react-query';
 import {
   MESSAGE_REACTION_CHANGED_EVENT,
   conversationSideScope,
@@ -18,6 +18,7 @@ import {
   MESSAGE_STREAM_KIND_CONTRACTS,
   REPLAY_SAFETY_CONTRACTS,
   SIDE_KIND_CONTRACTS,
+  applyCommittedMessage,
   ingestConversationFrame,
 } from './conversation-ingestor';
 import { clusterMessagesKey, messagesKey, threadRootKey } from '@/features/channels/hooks';
@@ -2089,5 +2090,211 @@ describe('ingestConversationFrame — warm-remove inactive cluster on snapshot (
 
     expect(qc.getQueryData(messagesKey('c1'))).toBeUndefined();
     expect(qc.getQueryData(clusterMessagesKey('c1', 'root1'))).toBeUndefined();
+  });
+});
+
+// #task:1749 — the SHARED committed-message apply seam. The human send ACK and the
+// WS echo are BOTH authoritative inputs for the SAME committed message, so they
+// enter through `applyCommittedMessage`, which (1) runs the derived cache
+// convergence and (2) wraps the synchronous cache writes in `notifyManager.batch`
+// so an observer never sees a half-applied 0→1 (preview tail present while the
+// reply count is still absent — Norman's headerless-block coupling).
+//
+// There is deliberately NO once-only guard (Cindy + shiki, #task:1749): the two
+// planes may each run the effects for the same committed message. Correctness rests
+// on the data writes being by-id/absolute/idempotent — a second run converges to
+// the same cache; only the invalidate-only effects may refetch once more, an
+// accepted best-effort cost (a message-level receipt to erase it would trade real
+// state complexity for that bounded refetch). So these tests assert the CONTRACT —
+// dual apply is data-idempotent (no duplicate row, no inflated count) and the WS
+// plane still owns the floor — NOT once-only. `markSatisfied` stays WS-exclusive
+// (the ACK writes NO transport water).
+describe('applyCommittedMessage — shared committed seam, data-idempotent under dual apply (#task:1749)', () => {
+  let markSatisfied: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    markSatisfied = vi
+      .spyOn(eventWsClient, 'markSatisfied')
+      .mockImplementation(() => {});
+    vi.spyOn(eventWsClient, 'commitSnapshotBaseline').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const flush = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  // A message with an active threads reader drives one invalidate-only effect per
+  // seam run: the blanket channel-threads-list invalidate. Counting its calls
+  // DOCUMENTS the accepted duplicate — it runs once per plane — while the data
+  // assertions prove that duplicate never corrupts the cache.
+  const countThreadsInvalidations = (
+    spy: ReturnType<typeof vi.spyOn>,
+    channelId: string,
+  ): number =>
+    spy.mock.calls.filter(
+      (c: unknown[]) =>
+        JSON.stringify((c[0] as { queryKey?: unknown } | undefined)?.queryKey) ===
+        JSON.stringify(channelThreadsKey(channelId)),
+    ).length;
+
+  const mainlineRowCount = (
+    qc: QueryClient,
+    channelId: string,
+    id: string,
+  ): number =>
+    (
+      qc.getQueryData<{ pages: { messages: { id: string }[] }[] }>(
+        messagesKey(channelId),
+      )?.pages.flatMap(p => p.messages) ?? []
+    ).filter(m => m.id === id).length;
+
+  it('ACK then WS: dual apply yields ONE row (no duplicate); the invalidate may repeat; WS advances the floor', async () => {
+    const qc = new QueryClient();
+    const unsubMain = mountMainlineReader(qc, 'c1');
+    const unsubThreads = mountReader(qc, channelThreadsKey('c1'));
+    const spy = vi.spyOn(qc, 'invalidateQueries');
+    const msg = message({ id: 'm1', seq: 6 });
+
+    // ACK plane applies first, then the SAME committed message arrives on the wire.
+    await applyCommittedMessage(qc, 'c1', msg, undefined);
+    ingestConversationFrame(qc, messageFrameSeq('c1', msg, 6));
+    await flush();
+
+    // DATA IDEMPOTENT: the content append short-circuits on `cacheHasMessage`, so
+    // the row exists exactly once despite two authoritative applies.
+    expect(mainlineRowCount(qc, 'c1', 'm1')).toBe(1);
+    // The invalidate-only effect is NOT deduped — it runs once per plane. That
+    // duplicate is the accepted best-effort cost; the row assertion above proves it
+    // never translates into corrupted data (the whole reason a receipt was cut).
+    expect(countThreadsInvalidations(spy, 'c1')).toBe(2);
+    // markSatisfied is WS-exclusive and fires once (the ACK writes no transport
+    // water), so the resume floor advances even though the ACK applied first.
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+    expect(markSatisfied).toHaveBeenCalledWith(conversationScope('c1'), 6, 'epoch-1');
+    unsubThreads();
+    unsubMain();
+  });
+
+  it('WS then ACK: order-independent — still ONE row', async () => {
+    const qc = new QueryClient();
+    const unsubMain = mountMainlineReader(qc, 'c1');
+    const msg = message({ id: 'm1', seq: 6 });
+
+    ingestConversationFrame(qc, messageFrameSeq('c1', msg, 6));
+    await flush();
+    // ACK replay of the same committed message re-converges the same by-id write.
+    await applyCommittedMessage(qc, 'c1', msg, undefined);
+
+    expect(mainlineRowCount(qc, 'c1', 'm1')).toBe(1);
+    unsubMain();
+  });
+
+  it('patched reply applied twice keeps the reply count ABSOLUTE (1, not incremented to 2)', async () => {
+    const qc = new QueryClient();
+    const unsub = mountMainlineReader(qc, 'c1');
+    qc.setQueryData(messagesKey('c1'), {
+      pages: [
+        {
+          messages: [message({ id: 'root1', seq: 1 })],
+          reply_counts_by_root: { root1: 0 },
+          reply_previews_by_root: {},
+          has_more_before: false,
+          has_more_after: false,
+          stream_head_seq: 5,
+        },
+      ],
+      pageParams: [undefined],
+    });
+    const reply = message({ id: 'reply1', seq: 2, thread_root_id: 'root1' });
+    const patch = { thread_root_reply_count: { root_id: 'root1', reply_count: 1 } };
+
+    // Both planes carry the SAME absolute count patch; a second apply must SET, not
+    // increment.
+    await applyCommittedMessage(qc, 'c1', reply, patch);
+    await applyCommittedMessage(qc, 'c1', reply, patch);
+    await flush();
+
+    const count = qc.getQueryData<{
+      pages: { reply_counts_by_root: Record<string, number> }[];
+    }>(messagesKey('c1'))?.pages[0]?.reply_counts_by_root.root1;
+    expect(count).toBe(1);
+    unsub();
+  });
+
+  it('atomic visibility: count + preview tail converge in the SAME tick, so a React observer never renders a tail without its count (Norman/Cindy #1749 falsifier)', async () => {
+    const qc = new QueryClient();
+    // Seed a tail window that PROJECTS previews (the object is present) with root1
+    // at count 0 and no tail row yet — the exact 0→1 first-reply transition
+    // Norman's headerless-block coupling is about.
+    qc.setQueryData(messagesKey('c1'), {
+      pages: [
+        {
+          messages: [message({ id: 'root1', seq: 1 })],
+          reply_counts_by_root: { root1: 0 },
+          reply_previews_by_root: {},
+          has_more_before: false,
+          has_more_after: false,
+          stream_head_seq: 5,
+        },
+      ],
+      pageParams: [undefined],
+    });
+
+    type Snap = { count: number | undefined; tailLen: number };
+    const readSnap = (): Snap => {
+      const page = qc.getQueryData<{
+        pages: {
+          reply_counts_by_root: Record<string, number>;
+          reply_previews_by_root?: Record<string, unknown[]>;
+        }[];
+      }>(messagesKey('c1'))?.pages[0];
+      return {
+        count: page?.reply_counts_by_root.root1,
+        tailLen: page?.reply_previews_by_root?.root1?.length ?? 0,
+      };
+    };
+
+    // Model a React consumer EXACTLY: `useBaseQuery` subscribes with
+    // `notifyManager.batchCalls(onStoreChange)`, so re-renders are coalesced
+    // through the SAME notifyManager the seam's `batch` holds open, and React reads
+    // the snapshot at flush time — NOT once per synchronous write (a raw observer
+    // listener fires per write and would model the wrong layer). Capturing the
+    // cache on each coalesced fire is the render sequence a component actually
+    // sees. This observer also makes `hasActiveMainlineReader` true so the count
+    // and tail merges run.
+    const rendered: Snap[] = [];
+    const observer = new QueryObserver(qc, {
+      queryKey: messagesKey('c1'),
+      queryFn: () => new Promise<never>(() => {}),
+      enabled: false,
+    });
+    const unsub = observer.subscribe(
+      notifyManager.batchCalls(() => rendered.push(readSnap())),
+    );
+
+    const settled = applyCommittedMessage(
+      qc,
+      'c1',
+      message({ id: 'reply1', seq: 2, thread_root_id: 'root1' }),
+      { thread_root_reply_count: { root_id: 'root1', reply_count: 1 } },
+    );
+
+    // SAME-TICK co-presence — the strongest falsifier: the count merge (registry)
+    // and the tail seed (mergeMainlineReplyPreview) are BOTH synchronous writes
+    // inside the seam's batch, so the instant the seam has run (before any await)
+    // the cache already holds both. If the count were recovered by an async refetch
+    // (the pre-#1749 headerless bug), tail would be present here with count still 0.
+    expect(readSnap()).toEqual({ count: 1, tailLen: 1 });
+
+    await settled;
+    await new Promise(resolve => setTimeout(resolve, 0)); // let the coalesced flush run
+
+    // The render sequence a React consumer sees never shows a tail without its
+    // matching count — the headerless-block state is structurally absent.
+    expect(rendered.every(f => !(f.tailLen > 0 && (f.count ?? 0) < 1))).toBe(true);
+    expect(rendered.at(-1)).toMatchObject({ count: 1, tailLen: 1 });
+    unsub();
   });
 });

@@ -87,6 +87,20 @@ needs to know whether a frame is live or a backfill drain. The wire `event`
 frame and `MessageDto` are byte-identical, and no path writes read-state, so
 read-inertness (§2) holds unchanged.
 
+**The HTTP ACK is not a transport source.** A committed `message` reaches the
+renderer on the WS `message` frame **and** as the human send route's HTTP ACK —
+the SAME committed payload (`{ message, projections? }`), produced once
+backend-side (#task:1749). Only the **WS frame is a transport event**: it carries
+a per-scope `seq`/`epoch`, advances `received`, and — once its effects settle —
+advances the `applied` resume floor via `markSatisfied`. The ACK carries **no**
+transport identity: no `seq`, no `epoch`, no watermark of either kind, and no
+read state (§2 table stands). It shares only the renderer's idempotent apply seam
+so the sender sees content + derived projections immediately; it never
+participates in resume, forward-gap detection, or the satisfaction state machine.
+Because both apply paths are absolute/idempotent, the same committed message
+applied on both planes is safe with no once-only coordination — only
+invalidate-only effects may refetch once more, an accepted best-effort cost.
+
 ## 3. Subscribe = establish-listener, resume-from-cursor
 
 `subscribe(scope)`:

@@ -24,6 +24,7 @@ import type {
   ConversationMembersResponse,
   ConversationMessagesDto,
   MessageDto,
+  MessageEventPayload,
   ReplyBadgeSummary,
   MessageSeq,
   ThreadFollowerStateDto,
@@ -44,6 +45,7 @@ import { api, ApiError, apiUpload } from '@/lib/api';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { getCurrentUserId } from '@/lib/current-user';
 import { useInterest } from '@/features/realtime/interest-registry';
+import { applyCommittedMessage } from '@/features/realtime/conversation-ingestor';
 import {
   AGENT_RUN_STATES_GC_MS,
   agentRunStatesKey,
@@ -77,7 +79,7 @@ import {
   makeMessagesCache,
   appendPendingMessage,
   replacePendingMessageInCache,
-  removeMessageFromCache,
+  rollbackOptimisticSend,
   lastPageIsTail,
 } from '@/features/channels/message-cache-core';
 import {
@@ -929,8 +931,10 @@ export function useSendMessage(
   /** When set, the message is a reply into this root's cluster: the
    *  request carries `reply_to_message_id` and all optimistic cache
    *  writes target the cluster window (`clusterMessagesKey`) instead of
-   *  the channel's main stream. The reply's reply-count badge on the main
-   *  stream is bumped by the live `message` event, not here. */
+   *  the channel's main stream. On ACK the root's reply-count badge and
+   *  preview tail converge through the shared committed-message apply seam
+   *  ({@link applyCommittedMessage}), not by waiting for the live `message`
+   *  event (#task:1749). */
   threadRootId?: string | null,
 ) {
   const qc = useQueryClient();
@@ -951,11 +955,11 @@ export function useSendMessage(
         input,
         threadRootId,
       });
-      const res = await api<{ message: MessageDto }>(
+      const res = await api<MessageEventPayload>(
         path,
         { method: 'POST', body: JSON.stringify(body) },
       );
-      return res.message;
+      return res;
     },
     // Optimistic update: show the message immediately on Enter, before
     // the HTTP response arrives. The temp message uses a `pending-` id;
@@ -975,7 +979,9 @@ export function useSendMessage(
       // — and any subsequent live appends — land on a real tail.
       // `has_more_before: true` lets the user scroll up to fetch
       // earlier history once the latest window is established.
-      // Rollback is preserved by the captured `prev` baseline above.
+      // This rebuild is undone on error only when no committed/concurrent
+      // write landed meanwhile (the onError CAS below); if one did, the temp
+      // row is removed surgically and the rebuilt tail window is kept.
       if (prev && !lastPageIsTail(prev)) {
         qc.setQueryData<MessagesCache>(key, {
           pages: [
@@ -1029,24 +1035,48 @@ export function useSendMessage(
       qc.setQueryData<MessagesCache>(key, cur =>
         appendPendingMessage(cur, tempMsg),
       );
-      return { prev, tempId };
+      // Capture the exact post-write cache reference as a mutation-local CAS
+      // token. React Query stores our optimistic object by reference; any
+      // authoritative WS apply or concurrent write between now and settle
+      // replaces it with a NEW reference. onError uses `current === optimistic`
+      // to tell "nothing landed since our write" (safe to restore the prior
+      // window) from "a committed/concurrent fact arrived" (must not clobber
+      // it — remove only our temp row). No persistent coordination state.
+      const optimistic = qc.getQueryData<MessagesCache>(key);
+      return { prev, tempId, optimistic };
     },
-    onSuccess: (msg, _input, ctx) => {
-      if (!targetKey || !ctx) return;
-      qc.setQueryData<MessagesCache>(targetKey, cur =>
-        replacePendingMessageInCache(cur, ctx.tempId, msg),
-      );
+    onSuccess: (committed, _input, ctx) => {
+      if (!channelId || !ctx) return;
+      const { message, projections } = committed;
+      // Swap the optimistic row to the committed one first — this removes the
+      // temp id AND any row a WS echo already appended (replacePendingMessage
+      // filters both), so ACK↔WS in either order converges to a single row.
+      if (targetKey) {
+        qc.setQueryData<MessagesCache | undefined>(targetKey, cur =>
+          replacePendingMessageInCache(cur, ctx.tempId, message),
+        );
+      }
+      // Then run the SHARED committed-message apply seam: the root's reply count,
+      // preview tail, and threads-list converge immediately, independent of WS
+      // echo timing (#task:1749). No once-only guard: the effects are
+      // data-idempotent (by-id/absolute writes), so this plane and the WS echo
+      // may each apply the same committed message safely; only invalidate-only
+      // effects may refetch once more (accepted best-effort). Writes no transport
+      // water, so the settles are voided (satisfaction is the WS wrapper's job).
+      void applyCommittedMessage(qc, channelId, message, projections);
     },
     onError: (_err, _input, ctx) => {
       if (!targetKey || !ctx) return;
-      // Roll back optimistic message so the user doesn't see a ghost.
-      if (ctx.prev) {
-        qc.setQueryData<MessagesCache>(targetKey, ctx.prev);
-      } else {
-        qc.setQueryData<MessagesCache | undefined>(targetKey, cur =>
-          removeMessageFromCache(cur, ctx.tempId),
-        );
-      }
+      // An HTTP error is an AMBIGUOUS result, not proof the send did not
+      // commit: rollback must undo ONLY this mutation's optimistic temp fact,
+      // never overwrite committed/concurrent facts that arrived after onMutate.
+      // The mutation-local CAS lives in `rollbackOptimisticSend` (see its
+      // contract) — `ctx.optimistic` is the reference we wrote in onMutate.
+      const current = qc.getQueryData<MessagesCache>(targetKey);
+      qc.setQueryData<MessagesCache | undefined>(
+        targetKey,
+        rollbackOptimisticSend(current, ctx.prev, ctx.optimistic, ctx.tempId),
+      );
     },
   });
 }
