@@ -856,11 +856,15 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    kept as a px SUBTRACTION (not an `em` factor: `0.85em × 14px = 11.9px` was
    fractional, shiki #task:1192 "很多小数"; px-subtraction stays integer at any
    slider value and does NOT double-apply the way an `em` chained onto the
-   already-scaled `.markdown-body` would). The offset is the single knob for
-   this family — currently 0px, i.e. full body size (shiki 2026-08-01 "改成 14,
-   去掉那个 -2 … 试试 -0,后续更改更方便"). Size has bounced between a notch-down
-   12px (#1192 / #1721 / #1758) and full body 14px (2026-07-30 experiment,
-   reverted #1758, re-adopted here); the calc keeps the swap a one-number edit.
+   already-scaled `.markdown-body` would).
+
+   This unscoped rule is the DEFAULT / lighter size — offset 2px, i.e. 12px at
+   the 14px default. It governs the system-message chrome (activity clusters /
+   `.system-message-row`), which shiki wants kept lighter than running text
+   (2026-08-01 "system message 更 light,需要保持 12"). The IN-PROSE chips
+   override up to full body size in the `.markdown-body` block below — prose
+   text is 14px and the chip should match it there. Two offsets, two knobs:
+   change this one for system chips, the `.markdown-body` one for prose.
 
    line-height is intentionally NOT set — the chip inherits `.markdown-body`'s
    line-height, matching inline code so the reference chips share one line
@@ -875,17 +879,19 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 [data-task-ref],
 [data-channel-ref-state],
 [data-conversation-ref] {
-  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 0px);
+  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
 }
 
-/* In-prose reference chips keep the family size above (`body − 2px`) and only
-   fix their vertical alignment here. A prose-only `font-size: inherit` lived
-   in this block for one day (chips at full prose size, shiki 2026-07-30
-   "现在看着有点矮") and is gone again in #task:1758 — the chip reads as a
-   reference by being one notch down, and 12px at the 14px default is the size
-   this family has converged on twice (#1192 / #1721). Do NOT hardcode 12px:
-   the base rule subtracts from the Appearance token, so the chip still tracks
-   the slider.
+/* In-prose reference chips match the running text at FULL body size (offset
+   0px → 14px at the default), and fix their vertical alignment. Prose text is
+   14px and an in-line chip reads as part of the sentence, so it takes the same
+   size (shiki 2026-08-01 "正文其他文字是 14,有保持一致的需求" — distinct from the
+   lighter 12px system-message chips governed by the base rule above). This
+   split re-adopts the full-prose size the 2026-07-30 experiment tried, but now
+   scoped to prose only (that experiment was reverted whole in #task:1758;
+   history: the family also sat at 12px per #1192 / #1721). Do NOT hardcode
+   14px: the calc subtracts from the Appearance token so the chip still tracks
+   the slider; the 0px offset is the prose knob.
 
    Baseline alignment: these chips are `inline-flex` and grow to fill the
    prose line-height box; with the flex default `align-items` the glyph centres
@@ -894,10 +900,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    the running app). `baseline` aligns the flex box on its text baseline; the
    icon keeps its own `self-center` (align-self overrides the container) so it
    stays vertically centred against the label. Scoped to `.markdown-body` so
-   the system chrome — which sets its own explicit height — is untouched. */
+   the system chrome — which stays 12px via the base rule — is untouched. */
 .markdown-body [data-task-ref],
 .markdown-body [data-channel-ref-state],
 .markdown-body [data-conversation-ref] {
+  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 0px);
   align-items: baseline;
 }
 
