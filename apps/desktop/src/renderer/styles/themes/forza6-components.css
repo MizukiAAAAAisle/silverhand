@@ -394,42 +394,47 @@
    Scoped to `.markdown-body` so the system-activity-cluster keeps its own
    treatment. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] {
-  /* Highlighter (记号笔) treatment — no fill, no frame; the bright yellow is a
-     marker band swiped under ink text (shiki 2026-08-01, #task:1766, borrowing
-     Studio Light's borderless underline "way" but in forza6's yellow). Full
-     `--forza6-yellow` as TEXT is illegible on the near-white ground, so the ink
-     text stays and the yellow rides as a highlight band on the label span
-     below. Lighter than the solid tile, keeps the yellow identity, and reads
-     inline without slabbing the prose. */
+  /* Studio-Light model, forza6 dialect (shiki 2026-08-01, #task:1766): coloured
+     link text at rest, hover adds the decoration — except forza6's decoration
+     is its signature 记号笔 (highlighter) marker, not a plain underline.
+     REST colour = a readable darkened forza6 yellow (mustard), NOT the bright
+     `--forza6-yellow` (illegible as text on the near-white ground) and NOT the
+     pink `--accent` (that's forza6's primary-action semantic — the whole reason
+     #1766 pulled task chips off pink). So the task's rest identity is the yellow
+     family dimmed to a legible text colour; the bright marker is saved for the
+     hover state below. No fill / border / band at rest. */
   background: transparent;
   border: none;
-  color: var(--forza6-ink);
+  color: color-mix(in oklab, var(--forza6-yellow) 50%, var(--forza6-ink));
   /* Keep the chip's line box tight (the shared base leaves it unset → grows to
-     the ~1.6 prose line box, which floats the marker band low). 1.24 hugs the
-     band to the text like inline code. */
+     the ~1.6 prose line box, which floats the marker band low on hover). 1.24
+     hugs the band to the text like inline code. */
   line-height: 1.24;
+  transition: color 130ms ease;
 }
-/* The marker band rides the LABEL span (number + title), not the inline-flex
-   chip box — a background on the flex box would sit behind the whole line box,
-   not hug the words. Band = lower ~42% of the text, near the baseline, so ink
-   descenders still read over the yellow. */
+/* The marker rides the LABEL span (number + title), not the inline-flex chip
+   box — a background on the flex box would sit behind the whole line box, not
+   hug the words. Defined here but ZERO-HEIGHT at rest (`100% 0%`) so it's
+   invisible until hover swipes it in; keeping it declared lets the height
+   transition animate the marker stroking on. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] > span {
   background-image: linear-gradient(var(--forza6-yellow), var(--forza6-yellow));
   background-repeat: no-repeat;
-  background-size: 100% 42%;
+  background-size: 100% 0%;
   background-position: 0 88%;
-  /* Hover sweeps the marker up to a full fill (below) — animate the band
-     rising so it reads as one continuous marker stroke, not a state swap. */
   transition: background-size 130ms ease;
 }
-/* Hover = the marker sweeps up to fill the word (band 42% → 100%). Stays in the
-   one yellow language — no new colour, no border, no reflow (the fill grows
-   within the same box) — so it reads as "the highlighter completes the swipe",
-   the loud/earned end of the same quiet resting mark. Base resolved-link hover
-   underline stays suppressed so it doesn't stack a line over the fill. */
+/* Hover = the 记号笔 swipes in as the "underline": the bright-yellow marker
+   band appears across the lower ~42% of the label (forza6's signature, standing
+   in for Studio Light's plain underline). Text darkens to ink so it reads
+   cleanly over the bright band. Base resolved-link hover underline stays
+   suppressed so it doesn't stack a line over the marker. */
+[data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover {
+  color: var(--forza6-ink);
+}
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: none;
-  background-size: 100% 100%;
+  background-size: 100% 42%;
 }
 
 /* Cluster task-ref — flat ink text at rest, full yellow tile on hover
