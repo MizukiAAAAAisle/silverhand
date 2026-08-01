@@ -394,7 +394,10 @@
    Scoped to `.markdown-body` so the system-activity-cluster keeps its own
    treatment. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] {
-  background: color-mix(in srgb, var(--forza6-yellow) 32%, transparent);
+  /* Resting uses the FULL yellow — the former hover colour promoted to the
+     default (shiki 2026-08-01, #task:1766). The hover lift is dropped (below),
+     so the chip reads as a solid yellow tile in every state. */
+  background: var(--forza6-yellow);
   border: 1px solid var(--forza6-ink);
   color: var(--forza6-ink);
   /* Height: hug the text like inline code, not fill the prose line box.
@@ -409,13 +412,13 @@
   line-height: 1.24;
   padding-block: 0.06em;
 }
-/* Hover has NO effect — the chip holds its resting look (shiki 2026-08-01,
-   #task:1766). Explicitly re-assert the resting wash on `:hover` (rather than
-   dropping the rule) so the base resolved-link hover can't leak a different
-   fill in; the resting border/colour already carry over untouched. The base
-   hover underline stays suppressed below. */
+/* Hover has NO effect for now — the resting tile already IS the full yellow,
+   so hover re-asserts it (shiki 2026-08-01: 常态用 hover 颜色, hover 效果暂时
+   取消). Kept as an explicit override (not a dropped rule) so the base
+   resolved-link hover can't leak a different fill in. The base hover underline
+   stays suppressed below. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover {
-  background: color-mix(in srgb, var(--forza6-yellow) 32%, transparent);
+  background: var(--forza6-yellow);
 }
 /* Kill the base's hover underline — a filled tile signals hover by deepening
    its fill, and an underline on top of that reads as noise. */
@@ -423,21 +426,25 @@
   text-decoration: none;
 }
 
-/* Cluster task-ref — fully static: flat ink text, NO hover effect
+/* Cluster task-ref — flat ink text at rest, full yellow tile on hover
    (#task:1766). History: #1760 muted it; #1766 first made it a full resting
-   tile (pale wash + ink frame), then quieted the resting state to flat ink
-   text with the tile EARNED on hover, then — shiki 2026-08-01 — dropped the
-   hover lift entirely: the chip is plain ink text in every state. Hover is
-   explicitly neutralized to match rest because the base rule
-   (`global.css .system-activity-cluster [data-task-ref]:hover`) fills
-   `--accent` (pink here) — leaving forza6 without a `:hover` override would let
-   that pink fill leak in. The chip stays a clickable link (cursor unchanged);
-   it just carries no hover chrome. Title weight follows the forza6 base rule
+   tile (pale wash + ink frame), then quieted the RESTING state to flat ink
+   text with the tile EARNED on hover. shiki keeps this hover on the system
+   message chip (unlike the in-prose chip above, whose hover is dropped): a
+   task system message is a turn boundary, and the hover tile is its live
+   affordance. At rest the chip is plain ink text (no fill, no visible border);
+   hover deepens to the full yellow fill + ink frame. The resting
+   `1px solid transparent` border reserves the frame's box so the hover frame
+   doesn't reflow the row by 1px. Title weight follows the forza6 base rule
    above (400); the number keeps Rajdhani 700 via `[data-task-ref-num]`. */
-[data-theme='forza6'] .system-activity-cluster [data-task-ref],
-[data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover {
+[data-theme='forza6'] .system-activity-cluster [data-task-ref] {
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
+  color: var(--forza6-ink);
+}
+[data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover {
+  background: var(--forza6-yellow);
+  border-color: var(--forza6-ink);
   color: var(--forza6-ink);
 }
 
