@@ -402,22 +402,21 @@
   initial-value: transparent;
 }
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] {
-  /* forza6 dialect of the Studio-Light link model, take 2 (shiki 2026-08-01,
+  /* forza6 dialect of the Studio-Light link model (shiki 2026-08-01,
      #task:1766): the 记号笔 marker is present in BOTH states — picking a rest
      TEXT colour proved thankless (bright yellow illegible, yellow⊕ink mixes to
      olive, pink is the primary-action semantic), so instead of colouring the
-     text we keep it ink and let the always-on marker carry identity. Rest keeps
-     BOTH the text and the marker slightly faded; hover DEEPENS both (text ink,
-     marker full bright yellow). No fill / border. */
+     text we keep it full ink and let the always-on marker carry identity. Text
+     stays full ink in BOTH states (a faded rest text read as low-contrast over
+     the band); only the marker deepens on hover (pale → full bright yellow).
+     No fill / border. */
   background: transparent;
   border: none;
-  /* Rest text: ink faded toward the chat ground — a soft dark, not full black. */
-  color: color-mix(in oklab, var(--forza6-ink) 58%, var(--bg-chat));
+  color: var(--forza6-ink);
   /* Keep the chip's line box tight (the shared base leaves it unset → grows to
      the ~1.6 prose line box, which floats the marker band low). 1.24 hugs the
      band to the text like inline code. */
   line-height: 1.24;
-  transition: color 130ms ease;
 }
 /* The marker rides the LABEL span (number + title), not the inline-flex chip
    box — a background on the flex box would sit behind the whole line box, not
@@ -431,12 +430,9 @@
   background-position: 0 88%;
   transition: --forza6-taskmark 130ms ease;
 }
-/* Hover DEEPENS both colours: text to full ink, marker to full bright yellow.
-   Base resolved-link hover underline stays suppressed so it doesn't stack a
-   line over the marker. */
-[data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover {
-  color: var(--forza6-ink);
-}
+/* Hover DEEPENS the marker only (text colour is constant): the band goes from
+   pale to full bright yellow. Base resolved-link hover underline stays
+   suppressed so it doesn't stack a line over the marker. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: none;
   --forza6-taskmark: var(--forza6-yellow);
