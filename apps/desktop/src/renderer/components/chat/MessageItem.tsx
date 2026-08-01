@@ -1229,14 +1229,17 @@ function AuthorLabel({
           }}
           /* `data-message-author` + `data-author-kind` are theme-neutral
            *  identity hooks: the author name is the one place per message
-           *  group that says "who". Size / weight / the cross-theme default
-           *  colour stay here; a theme that gives agents their own identity
-           *  hue (studio-light paints the agent arm green so `--accent` can
-           *  keep meaning action/state) repaints via the hook instead of
-           *  matching a Tailwind class. */
+           *  group that says "who". Size / weight / colour live here, and
+           *  BOTH kinds take `text-text-primary` in EVERY theme — the label
+           *  is a recognition surface, not a status signal, and agent and
+           *  human are isomorphic actors, so they must read the same to
+           *  signal equal identity (shiki 2026-08-02). `data-author-kind`
+           *  stays as neutral metadata; a theme must not repaint the author
+           *  name by kind — that would re-introduce a "which actor" hierarchy
+           *  the design deliberately rejects. */
           data-message-author
           data-author-kind="agent"
-          className="rounded font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="rounded font-medium text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
         >
           {displayLabel}
         </button>
@@ -1270,9 +1273,7 @@ function AuthorLabel({
     <span
       data-message-author
       data-author-kind={isUser ? 'human' : 'agent'}
-      className={
-        'font-medium ' + (isUser ? 'text-text-primary' : 'text-accent')
-      }
+      className="font-medium text-text-primary"
     >
       {displayLabel}
     </span>

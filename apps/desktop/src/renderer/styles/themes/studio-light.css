@@ -136,14 +136,6 @@
                                    一段技术消息里 code span 能出现十几次，是
                                    全屏出现频次最高的标记之一。 */
 
-  /* Agent identity（这个主题独有的一支，原则 2）──
-     agent 作者名 / liveness 用绿，跟 accent 明确分家。`#0C7E60` 在白底
-     5.0:1，所以它可以直接当**文字**用（不只是 dot）—— 这是"身份色"必须过的
-     门槛，不然又要给名字单独找一个可读的替身。`--success` 共用这支绿：
-     "系统成功 / 还活着"跟"agent 在动"是同一族语义。
-     注意 **task 的 done 不吃这支绿**（见下一节）。 */
-  --text-agent: #0C7E60;
-
   /* Inline-code chip — cool wash, borderless, soft-rounded：inline 强调，
      不是硬贴纸。 */
   --bg-inline-code: #ECF1F7;
@@ -296,10 +288,10 @@
   --search-hit-text: #111725;
 
   /* ── Semantic ──
-     `--success` 共用 agent 身份绿（同一族"还活着 / 成功了"），见上面
-     `--text-agent`。warning 是琥珀 35°（in progress 的那一段），error 砖红
-     5°：两段都离 accent 的 225° 有 65° 以上，四个饱和色各占一段色环（换到蓝
-     之后离绿比紫罗兰时近了，但 agent 绿是深青绿、accent 是深蓝，仍分得开）。 */
+     `--success` 是深青绿 #0C7E60（"系统成功 / 还活着"），白底 5.0:1。warning
+     是琥珀 35°（in progress 的那一段），error 砖红 5°：三段都离 accent 的
+     225° 有 65° 以上，饱和色各占一段色环（success 绿是深青绿、accent 是深蓝，
+     分得开）。 */
   --success: #0C7E60;
   --success-soft: rgba(12, 126, 96, 0.09);
   --warning: #B46500;
@@ -393,17 +385,6 @@
   color: var(--text-on-structure);
   border-radius: var(--chip-radius);
   font-size: 11px;
-}
-
-/* ── agent 作者名 = 身份绿（原则 2）─────────────────────────────────
-   `[data-message-author]` + `[data-author-kind]`（MessageItem.tsx 三个分支都带）
-   是主题中性的身份钩子。跨主题默认"agent 作者名吃 accent"没问题（那些主题只有
-   一个饱和 hue 可用），但这个主题把 accent 定成 action/state，身份必须分家 ——
-   否则 agent 名字跟 mention / in_review 同色，读作"这条消息有状态"。每组消息
-   只出现一次的标记（身份）值得花一个 hue；一屏出现十几次的 chrome glyph 不值得
-   （那些一律走墨色）。 */
-[data-theme='studio-light'] [data-message-author][data-author-kind='agent'] {
-  color: var(--text-agent);
 }
 
 /* ── 连续 system message 不画左规（shiki 2026-07-27）──────────────────
