@@ -847,18 +847,20 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
 /* Inline reference chips — `[data-task-ref]` (TaskRef.tsx), `[data-channel-ref-state]`
    (ChannelRef.tsx, `#name`), and `[data-conversation-ref]` (ConversationRef.tsx,
-   `#conv:<id>`). Shared base for every theme: a reference chip sits inline in the
-   message stream, so its glyph stays one notch below the surrounding prose —
-   `body − 2px` off the same Appearance token `.markdown-body` reads (NOT an `em`
-   factor: `0.85em × 14px = 11.9px` was fractional, shiki #task:1192 "很多小数";
-   px-subtraction resolves to a whole 12px at the 14px default and stays
-   integer at any integer slider value, and it does NOT double-apply the way
-   an `em` chained onto the already-scaled `.markdown-body` would).
+   `#conv:<id>`). Shared base for every theme: one rule sizes the whole
+   reference-chip family in lockstep so a channel / conversation / task chip
+   never reads a notch off from its siblings (shiki 2026-07-21 "channel chip
+   字体从 14 换成 12,和 task chip 一致").
 
-   The channel / conversation chips were previously inheriting the full body
-   14px, reading a notch larger than the 12px task chip (shiki 2026-07-21 "channel
-   chip 字体从 14 换成 12,和 task chip 一致"); folding them into this one rule
-   keeps the whole reference-chip family in lockstep at any slider value.
+   Size is `body − <offset>` off the Appearance token `.markdown-body` reads,
+   kept as a px SUBTRACTION (not an `em` factor: `0.85em × 14px = 11.9px` was
+   fractional, shiki #task:1192 "很多小数"; px-subtraction stays integer at any
+   slider value and does NOT double-apply the way an `em` chained onto the
+   already-scaled `.markdown-body` would). The offset is the single knob for
+   this family — currently 0px, i.e. full body size (shiki 2026-08-01 "改成 14,
+   去掉那个 -2 … 试试 -0,后续更改更方便"). Size has bounced between a notch-down
+   12px (#1192 / #1721 / #1758) and full body 14px (2026-07-30 experiment,
+   reverted #1758, re-adopted here); the calc keeps the swap a one-number edit.
 
    line-height is intentionally NOT set — the chip inherits `.markdown-body`'s
    line-height, matching inline code so the reference chips share one line
@@ -869,14 +871,11 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
    Themes layer identity (fill / border / radius / colour / `font-family`) on
    top; they no longer set the size. The `.system-message-row` variant keeps
-   its own explicit `height`, unaffected by this. This one rule now governs
-   EVERY surface — prose included: the 2026-07-30 full-prose-size experiment
-   (`font-size: inherit` on the in-prose chips) was reverted in #task:1758
-   (shiki "再把 task fontsize 改成 12"). */
+   its own explicit `height`, unaffected by this. */
 [data-task-ref],
 [data-channel-ref-state],
 [data-conversation-ref] {
-  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
+  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 0px);
 }
 
 /* In-prose reference chips keep the family size above (`body − 2px`) and only
