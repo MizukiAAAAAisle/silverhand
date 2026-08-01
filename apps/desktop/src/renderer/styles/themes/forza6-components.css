@@ -409,8 +409,13 @@
   line-height: 1.24;
   padding-block: 0.06em;
 }
+/* Hover has NO effect — the chip holds its resting look (shiki 2026-08-01,
+   #task:1766). Explicitly re-assert the resting wash on `:hover` (rather than
+   dropping the rule) so the base resolved-link hover can't leak a different
+   fill in; the resting border/colour already carry over untouched. The base
+   hover underline stays suppressed below. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover {
-  background: var(--forza6-yellow);
+  background: color-mix(in srgb, var(--forza6-yellow) 32%, transparent);
 }
 /* Kill the base's hover underline — a filled tile signals hover by deepening
    its fill, and an underline on top of that reads as noise. */
