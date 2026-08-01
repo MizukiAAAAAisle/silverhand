@@ -418,27 +418,21 @@
   text-decoration: none;
 }
 
-/* Cluster task-ref — flat ink text at rest, full yellow tile on hover
-   (#task:1770). History: #1760 demoted the cluster to transparent/muted
-   narration; #1766 reversed that to a full resting tile (pale wash + ink
-   frame), reading the row as a TURN BOUNDARY the user watches. In daily use
-   shiki found that resting tile (border + wash, both) still too heavy — the
-   solid ink frame in particular reads like a billboard edge in the ambient
-   activity stream. So the tile identity is now EARNED on hover, not resting:
-   at rest the chip is plain ink text (no fill, no visible border), and hover
-   deepens to the full yellow fill + ink frame (the state shiki kept). The
-   resting `1px solid transparent` border reserves the frame's box so the
-   hover frame doesn't reflow the row by 1px. Title weight follows the forza6
-   base rule above (400); the number keeps Rajdhani 700 via
-   `[data-task-ref-num]`. */
-[data-theme='forza6'] .system-activity-cluster [data-task-ref] {
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--forza6-ink);
-}
+/* Cluster task-ref — fully static: flat ink text, NO hover effect
+   (#task:1766). History: #1760 muted it; #1766 first made it a full resting
+   tile (pale wash + ink frame), then quieted the resting state to flat ink
+   text with the tile EARNED on hover, then — shiki 2026-08-01 — dropped the
+   hover lift entirely: the chip is plain ink text in every state. Hover is
+   explicitly neutralized to match rest because the base rule
+   (`global.css .system-activity-cluster [data-task-ref]:hover`) fills
+   `--accent` (pink here) — leaving forza6 without a `:hover` override would let
+   that pink fill leak in. The chip stays a clickable link (cursor unchanged);
+   it just carries no hover chrome. Title weight follows the forza6 base rule
+   above (400); the number keeps Rajdhani 700 via `[data-task-ref-num]`. */
+[data-theme='forza6'] .system-activity-cluster [data-task-ref],
 [data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover {
-  background: var(--forza6-yellow);
-  border-color: var(--forza6-ink);
+  background: transparent;
+  border: none;
   color: var(--forza6-ink);
 }
 
