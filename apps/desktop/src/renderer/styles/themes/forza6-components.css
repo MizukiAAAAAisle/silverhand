@@ -394,34 +394,34 @@
    Scoped to `.markdown-body` so the system-activity-cluster keeps its own
    treatment. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] {
-  /* Resting uses the FULL yellow — the former hover colour promoted to the
-     default (shiki 2026-08-01, #task:1766). The hover lift is dropped (below),
-     so the chip reads as a solid yellow tile in every state. */
-  background: var(--forza6-yellow);
-  border: 1px solid var(--forza6-ink);
+  /* Highlighter (记号笔) treatment — no fill, no frame; the bright yellow is a
+     marker band swiped under ink text (shiki 2026-08-01, #task:1766, borrowing
+     Studio Light's borderless underline "way" but in forza6's yellow). Full
+     `--forza6-yellow` as TEXT is illegible on the near-white ground, so the ink
+     text stays and the yellow rides as a highlight band on the label span
+     below. Lighter than the solid tile, keeps the yellow identity, and reads
+     inline without slabbing the prose. */
+  background: transparent;
+  border: none;
   color: var(--forza6-ink);
-  /* Height: hug the text like inline code, not fill the prose line box.
-     The shared base (global.css) leaves this inline-flex chip's line-height
-     unset, so it grows to the full prose line box — invisible while the chip
-     was a borderless link, but once #1766 gives it a fill + ink frame that
-     tall box shows as a lump beside the ~19px inline-code tile. Same case the
-     @mention pill hit (`[data-mention-kind]`): collapse the box with
-     `line-height: 1.24` + `padding-block: 0.06em` — the exact levers +
-     values that landed the mention pill at inline-code height. Only forza6
-     carries a visible tile here, so the collapse is scoped to it. */
+  /* Keep the chip's line box tight (the shared base leaves it unset → grows to
+     the ~1.6 prose line box, which floats the marker band low). 1.24 hugs the
+     band to the text like inline code. */
   line-height: 1.24;
-  padding-block: 0.06em;
 }
-/* Hover has NO effect for now — the resting tile already IS the full yellow,
-   so hover re-asserts it (shiki 2026-08-01: 常态用 hover 颜色, hover 效果暂时
-   取消). Kept as an explicit override (not a dropped rule) so the base
-   resolved-link hover can't leak a different fill in. The base hover underline
-   stays suppressed below. */
-[data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover {
-  background: var(--forza6-yellow);
+/* The marker band rides the LABEL span (number + title), not the inline-flex
+   chip box — a background on the flex box would sit behind the whole line box,
+   not hug the words. Band = lower ~42% of the text, near the baseline, so ink
+   descenders still read over the yellow. */
+[data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] > span {
+  background-image: linear-gradient(var(--forza6-yellow), var(--forza6-yellow));
+  background-repeat: no-repeat;
+  background-size: 100% 42%;
+  background-position: 0 88%;
 }
-/* Kill the base's hover underline — a filled tile signals hover by deepening
-   its fill, and an underline on top of that reads as noise. */
+/* Hover has NO effect for now (shiki: 正文 chip hover 效果暂时取消) — the marker
+   is static. Suppress the base resolved-link hover underline so it doesn't
+   stack a line on top of the highlight. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: none;
 }
