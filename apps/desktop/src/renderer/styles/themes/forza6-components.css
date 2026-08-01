@@ -420,10 +420,10 @@
 }
 /* The marker rides the LABEL span (number + title), not the inline-flex chip
    box — a background on the flex box would sit behind the whole line box, not
-   hug the words. Present at rest (42% band) in a PALE yellow; hover deepens the
-   colour (below), band height unchanged. */
+   hug the words. Present at rest in the marker gold `#ffd440` at 66% alpha;
+   hover deepens it to full opacity (below), band height unchanged. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] > span {
-  --forza6-taskmark: color-mix(in oklab, var(--forza6-yellow) 52%, var(--bg-chat));
+  --forza6-taskmark: rgb(255 212 64 / 0.66);
   background-image: linear-gradient(var(--forza6-taskmark), var(--forza6-taskmark));
   background-repeat: no-repeat;
   background-size: 100% 42%;
@@ -431,11 +431,11 @@
   transition: --forza6-taskmark 130ms ease;
 }
 /* Hover DEEPENS the marker only (text colour is constant): the band goes from
-   pale to full bright yellow. Base resolved-link hover underline stays
+   66% to full opacity `#ffd440`. Base resolved-link hover underline stays
    suppressed so it doesn't stack a line over the marker. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: none;
-  --forza6-taskmark: var(--forza6-yellow);
+  --forza6-taskmark: #ffd440;
 }
 
 /* Cluster task-ref — flat ink text at rest, full yellow tile on hover
