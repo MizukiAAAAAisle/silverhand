@@ -418,12 +418,18 @@
   background-repeat: no-repeat;
   background-size: 100% 42%;
   background-position: 0 88%;
+  /* Hover sweeps the marker up to a full fill (below) — animate the band
+     rising so it reads as one continuous marker stroke, not a state swap. */
+  transition: background-size 130ms ease;
 }
-/* Hover has NO effect for now (shiki: 正文 chip hover 效果暂时取消) — the marker
-   is static. Suppress the base resolved-link hover underline so it doesn't
-   stack a line on top of the highlight. */
+/* Hover = the marker sweeps up to fill the word (band 42% → 100%). Stays in the
+   one yellow language — no new colour, no border, no reflow (the fill grows
+   within the same box) — so it reads as "the highlighter completes the swipe",
+   the loud/earned end of the same quiet resting mark. Base resolved-link hover
+   underline stays suppressed so it doesn't stack a line over the fill. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: none;
+  background-size: 100% 100%;
 }
 
 /* Cluster task-ref — flat ink text at rest, full yellow tile on hover
