@@ -220,11 +220,19 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // hue; a link reads as what it is (#task:1725). Each theme just supplies its
   // own `--accent`. focus-visible ring kept — the sole focus signal now that
   // the chip is borderless.
+  //
+  // No `px-1.5 -mx-0.5`: unlike the inert variants (which keep a
+  // `bg-bg-elevated` fill that needs side padding), this chip has no fill, so
+  // the padding was dead box drawn around a bare link. The `-mx-0.5` only
+  // existed to pull that padded box back into the text flow; with the padding
+  // gone it would instead pull the chip 2px into its neighbours. Dropping both
+  // lets the link sit as plain inline text — the hover marker/underline rides
+  // the label span, which already hugs the words (shiki, #task:1770).
   const interactiveChip = (
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex max-w-[220px] cursor-pointer items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex max-w-[220px] cursor-pointer items-center gap-1 rounded-[var(--chip-radius)] font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"

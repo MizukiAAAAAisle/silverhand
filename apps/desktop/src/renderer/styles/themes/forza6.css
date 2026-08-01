@@ -39,6 +39,15 @@
                                         Was dormant through v6.2-v6.5; now reads
                                         as "tasks identity" wherever the Tasks
                                         pane / drawer surfaces. */
+  --forza6-task-gold: #ffd440;       /* task-identity gold (#task:1770, shiki) —
+                                        a warmer gold than the fluorescent
+                                        `--forza6-yellow`, shared by the two task
+                                        surfaces that read as one mark: the
+                                        `[data-tasks-hero]` ✓ sticker ground and
+                                        the in-prose task-ref 记号笔 highlighter
+                                        band (`--forza6-taskmark`). Deliberately
+                                        distinct from `--forza6-yellow`, which
+                                        still anchors the channel `#` sticker. */
   --forza6-orange: #FF7A1A;          /* poster orange — caution / in_review (v6.5q):
                                         sits between pink and yellow on the wheel,
                                         carries universal "needs review / pending"

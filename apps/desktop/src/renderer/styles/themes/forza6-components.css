@@ -420,10 +420,12 @@
 }
 /* The marker rides the LABEL span (number + title), not the inline-flex chip
    box — a background on the flex box would sit behind the whole line box, not
-   hug the words. Present at rest in the marker gold `#ffd440` at 66% alpha;
-   hover deepens it to full opacity (below), band height unchanged. */
+   hug the words. Present at rest in the task-identity gold `--forza6-task-gold`
+   at 66% alpha (mixed toward `transparent` so it stays true-translucent over
+   the chat ground); hover deepens it to full opacity (below), band height
+   unchanged. The gold is shared with the `[data-tasks-hero]` ✓ sticker. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved'] > span {
-  --forza6-taskmark: rgb(255 212 64 / 0.66);
+  --forza6-taskmark: color-mix(in srgb, var(--forza6-task-gold) 66%, transparent);
   background-image: linear-gradient(var(--forza6-taskmark), var(--forza6-taskmark));
   background-repeat: no-repeat;
   background-size: 100% 42%;
@@ -431,33 +433,48 @@
   transition: --forza6-taskmark 130ms ease;
 }
 /* Hover DEEPENS the marker only (text colour is constant): the band goes from
-   66% to full opacity `#ffd440`. Base resolved-link hover underline stays
-   suppressed so it doesn't stack a line over the marker. */
+   66% to full opacity `--forza6-task-gold`. Base resolved-link hover underline
+   stays suppressed so it doesn't stack a line over the marker. */
 [data-theme='forza6'] .markdown-body [data-task-ref][data-task-ref-state='resolved']:hover > span {
   text-decoration: none;
-  --forza6-taskmark: #ffd440;
+  --forza6-taskmark: var(--forza6-task-gold);
 }
 
-/* Cluster task-ref — flat ink text at rest, full yellow tile on hover
-   (#task:1766). History: #1760 muted it; #1766 first made it a full resting
-   tile (pale wash + ink frame), then quieted the RESTING state to flat ink
-   text with the tile EARNED on hover. shiki keeps this hover on the system
-   message chip (unlike the in-prose chip above, whose hover is dropped): a
-   task system message is a turn boundary, and the hover tile is its live
-   affordance. At rest the chip is plain ink text (no fill, no visible border);
-   hover deepens to the full yellow fill + ink frame. The resting
-   `1px solid transparent` border reserves the frame's box so the hover frame
-   doesn't reflow the row by 1px. Title weight follows the forza6 base rule
-   above (400); the number keeps Rajdhani 700 via `[data-task-ref-num]`. */
+/* Cluster task-ref — muted text at rest, ink text + gold 记号笔 on hover
+   (#task:1770). History: #1760 muted it; #1766 made it a full yellow hover
+   tile (pale wash + ink frame); #1770 drops the tile and converges the
+   cluster onto the same 记号笔 idiom as the in-prose chip above, so both
+   task-ref surfaces read as one identity. At rest the chip is quiet
+   `--text-muted` text (no fill, no border, no band); on hover the text
+   deepens to `--forza6-ink` and a `--forza6-task-gold` highlighter band
+   swipes up under the label (same 100%×42% @ 88% geometry as prose, sized
+   0→42% so it grows in rather than the old fill/frame). The band is a
+   background-image on `> span`, so it never reflows the row — no reserved
+   border needed. Title weight follows the forza6 base rule above (400); the
+   number keeps Rajdhani 700 via `[data-task-ref-num]` and inherits the chip
+   colour (muted → ink). Gold, not `--forza6-yellow`: the channel-# sticker
+   keeps the fluorescent yellow; task identity is gold. */
 [data-theme='forza6'] .system-activity-cluster [data-task-ref] {
   background: transparent;
-  border: 1px solid transparent;
-  color: var(--forza6-ink);
+  border: none;
+  color: var(--text-muted);
+}
+[data-theme='forza6'] .system-activity-cluster [data-task-ref] > span {
+  background-image: linear-gradient(
+    var(--forza6-task-gold),
+    var(--forza6-task-gold)
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 0%;
+  background-position: 0 88%;
+  transition: background-size 130ms ease;
 }
 [data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover {
-  background: var(--forza6-yellow);
-  border-color: var(--forza6-ink);
+  background: transparent;
   color: var(--forza6-ink);
+}
+[data-theme='forza6'] .system-activity-cluster [data-task-ref]:hover > span {
+  background-size: 100% 42%;
 }
 
 /* ── Markdown inline code ─────────────────────────────────────────
@@ -1817,7 +1834,7 @@
      pink         → unread badge + general brand accent (no longer
                     `#`-exclusive after v6.7) */
 
-/* Tasks hero — yellow sticker, ink CheckSquare icon (22×22).
+/* Tasks hero — gold sticker, ink CheckSquare icon (22×22).
    v6.6.1 sized DOWN from the 28×28 chat-header `#` proportion: the
    tasks-pane header lives in a 36px-tall titlebar (`var(--titlebar-
    height)`), not the chat header's 48px h-12 surface, so the 28×28
@@ -1842,7 +1859,10 @@
   width: 22px;
   height: 22px;
   padding: 3px;
-  background-color: var(--forza6-yellow);
+  /* Task-identity gold, shared with the in-prose task-ref 记号笔 marker
+     (#task:1770). NOT `--forza6-yellow` — that stays the channel `#` sticker's
+     fluorescent yellow; the tasks mark is the warmer gold. */
+  background-color: var(--forza6-task-gold);
   color: var(--forza6-ink);
   border: 1px solid var(--forza6-ink);
   border-radius: 0;
