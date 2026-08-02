@@ -201,6 +201,20 @@ function PopoverBody({
     return list;
   }, [pickableAgents, pickableHumans, inConversation, query]);
 
+  // Split the already-filtered candidates into their two kinds so each gets its
+  // own labelled section (shiki 2026-08-03). A kind with no candidates drops
+  // out entirely — a header never sits above an empty list — and `candidates`
+  // keeps agents ahead of humans, so the section order is stable. This mirrors
+  // the workspace member picker's AGENTS / HUMANS grouping (ManageMembersPopover).
+  const groups = useMemo(
+    () =>
+      [
+        { label: 'AGENTS', items: candidates.filter(c => c.kind === 'agent') },
+        { label: 'HUMANS', items: candidates.filter(c => c.kind === 'human') },
+      ].filter(g => g.items.length > 0),
+    [candidates],
+  );
+
   const onPick = async (c: PickableMember): Promise<void> => {
     setError(null);
     try {
@@ -236,9 +250,9 @@ function PopoverBody({
         />
       </label>
 
-      <ul className="flex max-h-[40vh] flex-col gap-0.5 overflow-y-auto">
+      <div className="flex max-h-[40vh] flex-col gap-2 overflow-y-auto">
         {candidates.length === 0 ? (
-          <li className="px-2 py-3 text-center text-xs italic text-text-muted">
+          <p className="px-2 py-3 text-center text-xs italic text-text-muted">
             {isLoading
               ? 'Loading…'
               : query
@@ -246,56 +260,66 @@ function PopoverBody({
                 : canAddOthers
                   ? 'Everyone is already in this conversation'
                   : 'You have no agents left to add'}
-          </li>
+          </p>
         ) : (
-          candidates.map(c => {
-            const displayName =
-              c.kind === 'agent'
-                ? c.agent.display_name || c.agent.name
-                : c.user.display_name || c.user.name;
-            const handle = c.kind === 'agent' ? c.agent.name : c.user.name;
-            return (
-              <li key={candidateKey(c)}>
-                <button
-                  type="button"
-                  onClick={() => void onPick(c)}
-                  disabled={addMember.isPending}
-                  className="flex w-full items-center gap-2 rounded-[var(--chip-radius)] px-2 py-1.5 text-left transition-colors hover:bg-bg-hover disabled:opacity-60"
-                >
-                  {c.kind === 'agent' ? (
-                    <AgentAvatar
-                      runtime={c.agent.runtime}
-                      size={AVATAR_PX.sm}
-                      avatarObjectUrl={agentAvatars.get(c.agent.id) ?? null}
-                      alt={displayName}
-                    />
-                  ) : (
-                    <UserAvatar
-                      size={AVATAR_PX.sm}
-                      avatarObjectUrl={humanAvatars.get(c.user.id) ?? null}
-                      alt={displayName}
-                    />
-                  )}
-                  {/* Same name budget as the members-modal row: the handle is
-                      capped and `shrink-0`, so an overlong display name
-                      truncates first instead of squeezing the handle away. */}
-                  <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                    <span
-                      className="truncate text-sm font-medium text-text-primary"
-                      title={displayName}
-                    >
-                      {displayName}
-                    </span>
-                    <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-text-muted">
-                      @{handle}
-                    </span>
-                  </span>
-                </button>
-              </li>
-            );
-          })
+          groups.map(group => (
+            <div key={group.label}>
+              <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+                {group.label}
+              </div>
+              <ul className="flex flex-col gap-0.5">
+                {group.items.map(c => {
+                  const displayName =
+                    c.kind === 'agent'
+                      ? c.agent.display_name || c.agent.name
+                      : c.user.display_name || c.user.name;
+                  const handle = c.kind === 'agent' ? c.agent.name : c.user.name;
+                  return (
+                    <li key={candidateKey(c)}>
+                      <button
+                        type="button"
+                        onClick={() => void onPick(c)}
+                        disabled={addMember.isPending}
+                        className="flex w-full items-center gap-2 rounded-[var(--chip-radius)] px-2 py-1.5 text-left transition-colors hover:bg-bg-hover disabled:opacity-60"
+                      >
+                        {c.kind === 'agent' ? (
+                          <AgentAvatar
+                            runtime={c.agent.runtime}
+                            size={AVATAR_PX.sm}
+                            avatarObjectUrl={agentAvatars.get(c.agent.id) ?? null}
+                            alt={displayName}
+                          />
+                        ) : (
+                          <UserAvatar
+                            size={AVATAR_PX.sm}
+                            avatarObjectUrl={humanAvatars.get(c.user.id) ?? null}
+                            alt={displayName}
+                          />
+                        )}
+                        {/* Same name budget as the members-modal row: the handle is
+                            capped and `shrink-0`, so an overlong display name
+                            truncates first instead of squeezing the handle away. */}
+                        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                          <span
+                            className="truncate text-sm font-medium text-text-primary"
+                            title={displayName}
+                          >
+                            {displayName}
+                          </span>
+                          <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-text-muted">
+                            @{handle}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))
         )}
-      </ul>
+      </div>
+
 
       {error ? (
         <div role="alert" className="text-xs text-error">
