@@ -18,7 +18,16 @@ import {
 import { cn } from '@/lib/cn';
 import { AgentPermissionsPanel } from './AgentPermissionsPanel';
 import { HumanRolesPanel } from './HumanRolesPanel';
-import { useArchiveWorkspace, useDeleteWorkspace, useRenameWorkspace } from './hooks';
+import {
+  useArchiveWorkspace,
+  useDeleteWorkspace,
+  useRenameWorkspace,
+  useWorkspaceMemberLists,
+} from './hooks';
+import {
+  canManageWorkspaceLifecycle,
+  canRenameWorkspace,
+} from './workspace-permissions';
 
 type SettingsSection = 'general' | 'agents';
 type PermissionTab = 'agents' | 'human';
@@ -79,6 +88,17 @@ export function WorkspaceSettingsDialog({
   const renameWorkspace = useRenameWorkspace();
   const deleteWorkspace = useDeleteWorkspace();
   const archiveWorkspace = useArchiveWorkspace();
+
+  // Governance affordances are driven by the server-authoritative viewer_role
+  // (the SAME source the Permission panels consume), never guessed from the
+  // owner id or local identity. Fail-closed: while the members query is
+  // unresolved `data` is undefined → role null → no write control renders, so
+  // the UI never flashes a writable control it then retracts (#task:1772). The
+  // backend gate stays the real boundary; this only decides what to show.
+  const membersQuery = useWorkspaceMemberLists(workspaceId);
+  const viewerRole = membersQuery.data?.viewerRole ?? null;
+  const canRename = canRenameWorkspace(viewerRole);
+  const canManageLifecycle = canManageWorkspaceLifecycle(viewerRole);
 
   const isDm = workspaceKind === 'dm';
   const isArchived = archivedAt !== null;
@@ -200,6 +220,8 @@ export function WorkspaceSettingsDialog({
               <GeneralSection
                 isDm={isDm}
                 isArchived={isArchived}
+                canRename={canRename}
+                canManageLifecycle={canManageLifecycle}
                 name={name}
                 onNameChange={setName}
                 onRename={handleRename}
@@ -270,6 +292,10 @@ export function WorkspaceSettingsDialog({
 interface GeneralSectionProps {
   isDm: boolean;
   isArchived: boolean;
+  /** Viewer may rename (owner|admin). When false, Name is shown read-only. */
+  canRename: boolean;
+  /** Viewer may archive/delete (owner). When false, both blocks are hidden. */
+  canManageLifecycle: boolean;
   name: string;
   onNameChange: (v: string) => void;
   onRename: (e: FormEvent) => void;
@@ -291,6 +317,8 @@ interface GeneralSectionProps {
 function GeneralSection({
   isDm,
   isArchived,
+  canRename,
+  canManageLifecycle,
   name,
   onNameChange,
   onRename,
@@ -308,34 +336,55 @@ function GeneralSection({
   onDelete,
   deletePending,
 }: GeneralSectionProps): JSX.Element {
+  // A DM name is immutable (auto-generated); a regular workspace is editable
+  // only for owner|admin. Everyone else sees the name read-only — the value is
+  // still worth showing, but there is no Save affordance that would 403.
+  const nameEditable = !isDm && canRename;
+
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-xs text-text-muted">
-        {isDm
-          ? 'DM workspace names are auto-generated as dm-<agent> and cannot be changed.'
-          : 'Renaming notifies online agents to update old name references in MEMORY; the working directory is unchanged.'}
-      </p>
+      {isDm ? (
+        <p className="text-xs text-text-muted">
+          {'DM workspace names are auto-generated as dm-<agent> and cannot be changed.'}
+        </p>
+      ) : canRename ? (
+        <p className="text-xs text-text-muted">
+          Renaming notifies online agents to update old name references in MEMORY;
+          the working directory is unchanged.
+        </p>
+      ) : null}
 
-      <form onSubmit={onRename} className="flex flex-col gap-1.5">
-        <Label htmlFor="workspace-settings-name">Name</Label>
-        <div className="flex gap-2">
+      {nameEditable ? (
+        <form onSubmit={onRename} className="flex flex-col gap-1.5">
+          <Label htmlFor="workspace-settings-name">Name</Label>
+          <div className="flex gap-2">
+            <Input
+              id="workspace-settings-name"
+              value={name}
+              onChange={e => onNameChange(e.target.value)}
+              placeholder="my-frontend"
+              autoFocus
+              className="transition-colors hover:border-[color:var(--border-control-hover)]"
+            />
+            <Button type="submit" disabled={renameDisabled} {...primaryAction()}>
+              {renamePending ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+          {renameError ? (
+            <div className="text-xs text-error">{renameError}</div>
+          ) : null}
+        </form>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="workspace-settings-name">Name</Label>
           <Input
             id="workspace-settings-name"
             value={name}
-            onChange={e => onNameChange(e.target.value)}
-            placeholder="my-frontend"
-            disabled={isDm}
-            autoFocus={!isDm}
-            className="transition-colors hover:border-[color:var(--border-control-hover)]"
+            readOnly
+            onFocus={e => e.currentTarget.select()}
           />
-          <Button type="submit" disabled={renameDisabled} {...primaryAction()}>
-            {renamePending ? 'Saving…' : 'Save'}
-          </Button>
         </div>
-        {renameError ? (
-          <div className="text-xs text-error">{renameError}</div>
-        ) : null}
-      </form>
+      )}
 
       {workspacePath ? (
         <div className="flex flex-col gap-1.5">
@@ -365,9 +414,15 @@ function GeneralSection({
         </div>
       ) : null}
 
-      {!isDm ? (
+      {!isDm && canManageLifecycle ? (
         <>
-          {/* Administrative blocks are static panels, not controls: the only
+          {/* Archive + Delete are owner-only administrative ACTIONS (gated on
+              canManageLifecycle). Unlike Name, they carry no read value for a
+              viewer who can't perform them — a disabled button + "owner required"
+              caption would be pure noise and a false affordance — so they are
+              hidden entirely rather than shown disabled (#task:1772).
+
+              Administrative blocks are static panels, not controls: the only
               affordance is the Button inside, so neither this one nor the
               Delete block below reacts to hover (shiki 2026-07-27 — Archive
               used to light up its border while Delete stayed inert). A hover
