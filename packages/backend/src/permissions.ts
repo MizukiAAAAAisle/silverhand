@@ -546,6 +546,51 @@ export function canEnrollAgent(
 }
 
 /**
+ * WHO may edit a workspace-agent's capability set (#task:1777, approved #1775
+ * option A). The named composite for the `PUT .../agents/:agentId/capabilities`
+ * gate — the third member of the #task:1683 placement-ownership family, built
+ * from the SAME two factors as enrollment/removal:
+ *
+ *   admin(workspace)  ∨  (member(workspace)  ∧  canEnrollAgent(agent))
+ *
+ * - `admin` governs the WHOLE roster's caps (the roster-authority arm), so it
+ *   needs no per-agent ownership.
+ * - Otherwise a plain workspace `member` may edit the caps of an agent they
+ *   CREATED — the same ownership factor that let them enroll it. The `member`
+ *   floor is load-bearing: a non-member creator cannot reach in and edit caps
+ *   for a workspace they are not part of (mirrors "cannot enroll into a
+ *   workspace you are not in").
+ *
+ * Deliberately reuses `canEnrollAgent`, NOT `canEditAgent`: the latter has an
+ * AGENT-self arm (`principal.agentId === agentId`), which here would let an
+ * agent widen its OWN capability set — a self-escalation. `canEnrollAgent`
+ * returns `false` for every agent principal, so this predicate can never grant
+ * an agent authority over its own caps. A capability-enforcement test locks
+ * that (an agent principal is refused even against its own row).
+ *
+ * Why widening here adds NO new escalation path: enrollment already seeds the
+ * FULL default capability set (`defaultCapabilitySet()`), so a creator can
+ * already grant their agent everything by placing it. Letting the creator EDIT
+ * that set afterward is single-layer last-write-wins, not a new privilege —
+ * see docs/graded-permissions-v1.md §2.4.
+ *
+ * System stays unconditional via both arms; a `user` who is neither admin nor
+ * the creator, and any non-member, get `false` (the route maps that to 403).
+ */
+export function canEditAgentCapabilities(
+  ctx: BackendContext,
+  principal: Principal,
+  workspaceId: string,
+  agentId: string,
+): boolean {
+  if (canGovernWorkspace(ctx, principal, workspaceId, 'admin')) return true;
+  return (
+    canGovernWorkspace(ctx, principal, workspaceId, 'member') &&
+    canEnrollAgent(ctx, principal, agentId)
+  );
+}
+
+/**
  * D4.d D5 fixup (Cindy `vB9vzUo4y_vgSZf8` P1) — options surface for
  * `canViewAgent`'s `materialization_status` widener. Default-active
  * is the load-bearing contract:

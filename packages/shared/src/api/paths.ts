@@ -150,7 +150,7 @@ export const apiPaths = {
     `/api/workspaces/${id}/members/users/${userId}/role`,
   /** Agent capability set within a workspace (graded-permissions cut 2).
    *  GET reads the effective set (any workspace viewer); PUT replaces it
-   *  (owner/admin). */
+   *  (workspace admin, or a member who created the target agent — #task:1777). */
   workspaceAgentCapabilities: (id: string, agentId: string) =>
     `/api/workspaces/${id}/agents/${agentId}/capabilities`,
   workspaceChannels: (id: string) => `/api/workspaces/${id}/channels`,

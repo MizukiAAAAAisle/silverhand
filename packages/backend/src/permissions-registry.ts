@@ -114,12 +114,21 @@ export const HUMAN_GOVERNANCE_ROUTES: readonly GovernanceRouteDecl[] = [
     roleScope: 'workspace',
     note: 'human-member removal is owner-only; the owner itself can never be removed (owner_removal_unsupported)',
   },
-  // Editing an agent's capability set is governance (owner/admin, doc
-  // §2.4). This is the human-axis gate ON the agent-capability axis —
-  // WHO may edit caps is a role decision; WHAT the caps then authorize is
-  // the orthogonal agent axis. GET is a non-mutating viewer read (not
-  // listed; coverage only scans mutating routes).
-  { method: 'PUT', path: '/api/workspaces/:id/agents/:agentId/capabilities', minRole: 'admin', roleScope: 'workspace' },
+  // Editing an agent's capability set is the third member of the #task:1683
+  // placement-ownership family (approved #1775 option A): FLOOR member, then it
+  // ESCALATES by target — admin governs the whole roster's caps, otherwise a
+  // member may edit the caps of an agent they created (canEnrollAgent). This is
+  // the human-axis gate ON the agent-capability axis — WHO may edit caps is a
+  // role+ownership decision; WHAT the caps then authorize is the orthogonal
+  // agent axis. GET is a non-mutating viewer read (not listed; coverage only
+  // scans mutating routes).
+  {
+    method: 'PUT',
+    path: '/api/workspaces/:id/agents/:agentId/capabilities',
+    minRole: 'member',
+    roleScope: 'workspace',
+    note: 'FLOOR member, then ESCALATES by target (canEditAgentCapabilities, #task:1777): admin governs the whole roster\'s caps, otherwise canEnrollAgent (the agent you created) — a plain member gets 403 for a teammate\'s agent; the agent-self arm is deliberately excluded (canEnrollAgent is false for agent principals) so no agent can widen its own caps; authorization runs BEFORE the pair 404 so a non-member cannot probe membership',
+  },
   // Channel archive — day-to-day governance on a channel. (Star is personal
   // view state, not governance — see NON_GOVERNANCE_MUTATING_ROUTES.)
   { method: 'PATCH', path: '/api/channels/:id/archive', minRole: 'admin', roleScope: 'workspace' },

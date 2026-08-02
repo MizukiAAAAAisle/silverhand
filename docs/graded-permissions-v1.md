@@ -45,7 +45,8 @@ specific conversation.
 | Add **someone else's agent** — already a workspace member — to a channel | ✓ | ✓ | ✗ |
 | Add **someone else's agent** — *not yet* a workspace member — to a channel (it would enroll) | ✗ | ✗ | ✗ |
 | Edit workspace settings — name / description / icon (**includes rename**) | ✓ | ✓ | ✗ |
-| Edit agent **capabilities** in this workspace (§2) | ✓ | ✓ | ✗ |
+| Edit **capabilities** of **an agent you created** in this workspace (§2, #task:1777) | ✓ | ✓ | ✓ |
+| Edit **capabilities** of **someone else's** agent in this workspace (§2) | ✓ | ✓ | ✗ |
 | Add **human** member | ✓ | ✓ | ✗ |
 | Remove **human** member / change human role | ✓ | ✗ | ✗ |
 | Grant / revoke `admin` | ✓ | ✗ | ✗ |
@@ -154,8 +155,11 @@ away from behaviour in either direction.
 Capabilities are **per-(workspace, agent)**, stored as the agent's **effective** capability set in
 that workspace. **No** "creator-global-default + owner-narrow-only" inheritance (it
 re-entangles agent-owner with workspace-owner). The set is authoritative
-on its own; **who may edit it** is decided by the human role gate (§1, owner/admin), keeping the axes
-orthogonal.
+on its own; **who may edit it** is a single-layer co-editor gate (§2.4, #task:1777): workspace
+**admin** (governs the whole roster's caps) OR a **member who created the agent** (their own
+placement authority). There is exactly one set — no ceiling/desired-set layers — edited
+last-write-wins. The axes stay orthogonal: this is a human-side gate ON the agent axis, never the
+agent's own capability reading itself.
 
 **Structural isolation is the floor beneath capabilities.** An agent never sees a
 conversation it is not a member of — not because a route forbids it, but because
@@ -168,7 +172,9 @@ widen authority on top of structural isolation; they can never breach it.
 ### 2.1 Storage
 
 `workspace_agent_capabilities(workspace_id, agent_id, capability)` — presence = granted. Edited only
-through routes gated by `canGovernWorkspace(..., 'admin')`. The agent itself cannot widen its own set.
+through the route gated by `canEditAgentCapabilities` (admin ∨ member-who-created-the-agent, §2.4).
+The agent itself can never widen its own set: the creator arm reuses `canEnrollAgent`, which is
+`false` for every agent principal, so no agent principal ever passes this gate.
 
 ### 2.2 Capability buckets
 
@@ -223,16 +229,33 @@ These use different helpers on different axes; sharing a name (`manage_members`)
 - **Read:** `GET /api/workspaces/:id/agents/:aid/capabilities` → current effective set. Gated
   `canViewWorkspace` (any member can see what an agent may do).
 - **Edit:** `PUT /api/workspaces/:id/agents/:aid/capabilities` (replace-set semantics) → gated
-  `canGovernWorkspace(..., 'admin')`. Validates against the known bucket enum (unknown cap → 400).
+  `canEditAgentCapabilities` = `admin(ws) ∨ (member(ws) ∧ canEnrollAgent(agent))` (#task:1777,
+  approved #1775 option A). Admin governs the whole roster's caps; otherwise a member may edit the
+  caps of an agent **they created** — the same ownership factor as enrollment (§1.3), and the
+  `member(ws)` floor means a departed creator (no live workspace role) can no longer reach in.
+  Validates against the known bucket enum (unknown cap → 400).
+- **Why co-editor is safe (adds no new escalation):** enrollment already seeds the **full** set (§2.3),
+  so a creator can already grant their agent everything by placing it. Editing afterward is single-layer
+  last-write-wins, not a new privilege. If an admin narrows a member's agent, the creator can re-open it;
+  the only durable constraint on a member's own agent is to remove it from the workspace. This is the
+  accepted trade for keeping "your agent is yours to configure" true without a two-layer ceiling.
 - **On agent add to workspace:** capability set seeded from `buildDefaultCapabilities()` (full set)
   at member-add time, in the same transaction as the `workspace_members` insert.
 - **On agent remove:** capability rows deleted with the membership (no orphan caps).
 
-**Membership precondition:** both the read and edit routes MUST
-first assert `(workspace_id, agent_id)` is a valid `workspace_members` row before touching the
-capability set. Otherwise a workspace member could query or edit a capability set for an agent that
-isn't a member of that workspace (reading/writing a phantom set). Invalid pair → 404, before the
-capability lookup.
+**Ordering (edit route):** workspace 404 → **authorization** (`canEditAgentCapabilities`) → pair 404 →
+write. Authorization runs BEFORE the `(workspace_id, agent_id)` membership 404 so that a caller who is
+neither admin nor the agent's creator cannot use the 403-vs-404 difference to probe whether a pair
+exists; only an authorized caller ever learns an invalid pair (then 404, before any capability write).
+The GET route stays viewer-gated then pair-404. Either way the pair 404 precedes touching the set, so
+no phantom set is ever read or written.
+
+**Freshness (explicit, #task:1777):** there is **no realtime cross-device editor sync**. Enforcement is
+always live — `canAgentUseCapability` reads the DB per request, so the security boundary is never stale.
+The editor is authoritative on fetch (GET open) and on its own PUT response (returns the full set). A
+second co-editor's already-open page may be stale and its submit is last-write-wins — the accepted
+single-layer concurrency contract, not a bug. `replaceSet` therefore publishes no invalidation event by
+design; adding one would be the only way to converge two open editors, and v1 deliberately does not.
 
 ---
 
@@ -389,10 +412,11 @@ The matrix plus explicit "one axis doesn't move the other":
 1. workspace owner, not agent creator → mutate workspace/members; **cannot** edit agent profile, and
    **cannot** enroll someone else's agent — while it CAN remove one from the roster. The role governs
    the roster; ownership governs enrollment (#task:1683, verb-asymmetric on purpose).
-2. agent creator who is an **ordinary workspace member** (not admin/owner) → edit agent, and place /
-   retract THAT agent on the workspace roster and in channels they belong to; **cannot**
-   archive/delete/rename workspace, add humans, touch someone else's agents, or edit capabilities
-   (those are admin+ per §1.1).
+2. agent creator who is an **ordinary workspace member** (not admin/owner) → edit agent, place /
+   retract THAT agent on the workspace roster and in channels they belong to, **and edit THAT agent's
+   capability set** (co-editor arm, §2.4, #task:1777); **cannot** archive/delete/rename workspace, add
+   humans, touch someone else's agents, or edit **another** agent's capabilities (those need admin+ per
+   §1.1).
 3. plain member → view/post (subject to membership); no destructive/admin; no agent edit. Owning an
    agent grants no roster write in a conversation they are not a member of — the conversation floor is
    membership, and no factor substitutes for it.
@@ -429,11 +453,16 @@ deliberately absent (see the per-bullet contracts below).
   groups cover exactly the 11 keys, no miss/dup). Save is **replace-set**: the full target set is sent
   in one PUT; failure (403 role gate / 400 unknown bucket / network) rolls back the local draft,
   refetches, and shows an error toast. "Cancel" discards the draft.
-- **Role gate + members-response contract.** The editor is editable
-  only for `owner`/`admin`; a `member` sees a **read-only** matrix (switches disabled, **not** hidden)
-  plus a notice. The viewer's role is read from `GET /api/workspaces/:id/members`, which returns
-  **two layers of role, single-sourced** through one `workspaceRole()/getUserRole()` path (no second
-  truth, no independent recompute):
+- **Edit gate — per selected agent (#task:1777).** Editability is recomputed for the *selected* agent,
+  mirroring the backend `canEditAgentCapabilities`: editable when the viewer is `owner`/`admin`, OR a
+  workspace `member` who is that agent's creator (`AgentDto.created_by_user_id` === viewer). A viewer who
+  is neither sees a **read-only** matrix (switches disabled, **not** hidden) plus a notice; the read-only
+  vs editable state can differ from one selected agent to the next. The creator arm carries the
+  `member(ws)` floor: a `viewer_role: null` viewer (non-member, or role not yet hydrated) is never
+  editable — fail-closed, and the backend remains the sole authorization boundary (a stale editable
+  affordance still gets a 403 on PUT, which rolls back). The viewer's role is read from
+  `GET /api/workspaces/:id/members`, single-sourced through one `workspaceRole()/getUserRole()` path
+  (no second truth, no independent recompute):
   - `viewer_role: 'owner' | 'admin' | 'member' | null` — request-scoped **derived sugar** for the gate;
     lives on the members-response envelope, **not** on the persistent `WorkspaceDto`.
   - `human_members[]` carries UserDto display fields **plus** membership

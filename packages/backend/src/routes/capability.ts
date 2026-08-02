@@ -1,7 +1,7 @@
 // Capability surface, owning both the management routes and the cross-cutting
 // enforcement guard:
-//   - GET /api/workspaces/:id/members/:agentId/capabilities  (createWorkspaceCapabilityApp; viewer-gated)
-//   - PUT /api/workspaces/:id/members/:agentId/capabilities  (createWorkspaceCapabilityApp; admin-gated)
+//   - GET /api/workspaces/:id/agents/:agentId/capabilities  (createWorkspaceCapabilityApp; viewer-gated)
+//   - PUT /api/workspaces/:id/agents/:agentId/capabilities  (createWorkspaceCapabilityApp; admin-or-creator-gated)
 //   - requireAgentCapability — the enforcement guard used across the internal
 //     router and injected into the membership internal add as the
 //     `RequireAgentCapability` port. This module is the port's provider side;
@@ -15,7 +15,7 @@ import { apiPaths, UpdateAgentCapabilitiesInputSchema, type AgentCapability } fr
 import type { BackendContext } from '../context.js';
 import type { AppEnv, Principal } from '../auth/principal.js';
 import { getUserPrincipal } from '../auth/principal.js';
-import { canAgentUseCapability, canGovernWorkspace, canViewWorkspace } from '../permissions.js';
+import { canAgentUseCapability, canEditAgentCapabilities, canViewWorkspace } from '../permissions.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { AgentCapabilityRepo } from '../repos/agent-capability-repo.js';
 
@@ -66,10 +66,21 @@ export interface CapabilityRouteDeps {
 /**
  * Workspace-agent capability management surface (api router): GET view + PUT
  * replace-set, as a mountable sub-app. GET is viewer-gated (`canViewWorkspace`):
- * any workspace viewer may see what an agent is allowed to do. PUT is admin-gated
- * (`canGovernWorkspace 'admin'`): replace-set. Both assert the (workspace, agent)
- * pair is a real `workspace_members` row FIRST (404) — otherwise a viewer could
- * read/write a phantom cap set for a non-member agent.
+ * any workspace viewer may see what an agent is allowed to do. PUT is gated by
+ * `canEditAgentCapabilities` (#task:1777): workspace `admin` (governs the whole
+ * roster's caps) OR a workspace `member` who CREATED the target agent — the same
+ * single-layer co-editor authority as enrollment (approved #1775 option A). Both
+ * assert the (workspace, agent) pair is a real `workspace_members` row — but
+ * AFTER authorization, never before (a phantom-pair 404 must not leak roster
+ * membership to a caller who isn't admin/creator; see the ordering note on PUT).
+ *
+ * Freshness (explicit, #task:1777): there is NO realtime cross-device editor
+ * sync. Enforcement is always live — `canAgentUseCapability` reads the DB per
+ * request, so the security boundary is never stale. The editor is authoritative
+ * on fetch (GET) and on its own PUT response (returns the full set). A second
+ * co-editor's open page may be stale and its submit is last-write-wins — the
+ * accepted single-layer concurrency contract, NOT a bug. `replaceSet` therefore
+ * publishes no event by design.
  */
 export function createWorkspaceCapabilityApp(
   deps: CapabilityRouteDeps,
@@ -103,7 +114,11 @@ export function createWorkspaceCapabilityApp(
     }
     const workspace = workspaces.get(id);
     if (!workspace) return c.json({ error: 'workspace not found' }, 404);
-    if (!canGovernWorkspace(ctx, getUserPrincipal(c), workspace.id, 'admin')) {
+    // Authorize BEFORE the membership 404 (#task:1777): admin OR the agent's
+    // creator (both must be workspace members). Ordering is deliberate — a
+    // membership-first 404 would leak whether the pair exists to any authed
+    // caller; only an authorized caller ever learns the pair is invalid.
+    if (!canEditAgentCapabilities(ctx, getUserPrincipal(c), workspace.id, agentId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
     if (!workspaces.isMember(workspace.id, agentId)) {

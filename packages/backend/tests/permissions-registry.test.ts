@@ -97,6 +97,7 @@ describe('permissions registry — drift protection (v40 Layer A)', () => {
     const MEMBER_FLOOR_PROBES = [
       'POST /api/workspaces/:id/members',
       'DELETE /api/workspaces/:id/members/:agentId',
+      'PUT /api/workspaces/:id/agents/:agentId/capabilities',
       'POST /api/conversations/:id/members',
       'DELETE /api/conversations/:id/members/agents/:agentId',
     ];
@@ -159,6 +160,20 @@ describe('permissions registry — drift protection (v40 Layer A)', () => {
         (await http(t).post(
           `/api/conversations/${channelId}/members`,
           { kind: 'agent', agent_id: mine },
+          { headers: stranger },
+        )).status,
+      ).toBe(403);
+
+      // Capability edit (#task:1777): a plain member who CREATED `mine` may
+      // replace its cap set (floor-legal); a workspace non-member may not.
+      const capEdit = await http(t).put(`/api/workspaces/${ws}/agents/${mine}/capabilities`, {
+        capabilities: ['read_messages'],
+      });
+      expect(capEdit.status).toBe(200);
+      expect(
+        (await http(t).put(
+          `/api/workspaces/${ws}/agents/${mine}/capabilities`,
+          { capabilities: ['read_messages'] },
           { headers: stranger },
         )).status,
       ).toBe(403);
