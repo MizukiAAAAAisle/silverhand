@@ -302,9 +302,18 @@ function ActiveChannelView({
   // summary no longer carries unread. Gated OFF for a non-member (reading
   // per-viewer unread state is a member effect) — the hook disables its query +
   // WS interest when passed a null id.
-  const threadUnreadByRoot = useConversationUnread(
+  const conversationUnread = useConversationUnread(
     gate.allowMemberEffects ? conversation.id : null,
-  ).data?.threads;
+  ).data;
+  const threadUnreadByRoot = conversationUnread?.threads;
+  // #task:1773: header attention dot — lit while any FOLLOWED thread in this
+  // channel is unread (`followed ∩ unread`). Server-owned boolean carried on the
+  // same `/unread` response, so it lights on reply / clears on observe with zero
+  // new wiring. This flag and the panel's filtered Unread list are two
+  // independent reads over one predicate → eventual convergence, so we render it
+  // verbatim (never derive it from a list, never suppress it on a momentarily
+  // empty list). A false-by-default (missing key) reads as "no attention".
+  const hasFollowedThreadUnread = conversationUnread?.followed_thread_unread ?? false;
 
   // Advance the message read cursor as the visible mainline tail advances
   // (#task:1255 P1c). ChannelView is rendered only when the channel is visible,
@@ -694,17 +703,26 @@ function ActiveChannelView({
             <button
               type="button"
               onClick={onToggleThreadsList}
-              aria-label="Threads"
+              aria-label={hasFollowedThreadUnread ? 'Threads (unread)' : 'Threads'}
               aria-pressed={threadsListActive}
               title="Threads"
               className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
+                'relative flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
                 (threadsListActive
                   ? 'bg-bg-hover text-text-primary'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
               }
             >
               <ThreadIcon className="size-3.5" />
+              {hasFollowedThreadUnread ? (
+                // #task:1773: ambient attention dot (same recipe as the NavRail
+                // unread dot). Decorative — the unread state is already in the
+                // aria-label — so pointer-events-none and aria-hidden.
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-accent"
+                />
+              ) : null}
             </button>
           ) : null}
           {onToggleFilesList && gate.allowMemberEffects ? (

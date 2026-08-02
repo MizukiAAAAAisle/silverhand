@@ -35,7 +35,7 @@ import {
 } from '@/lib/attachment-blob-cache';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { taskDetailKey } from '@/features/tasks/taskDetail';
-import { channelThreadsKey } from '@/features/channels/useChannelThreads';
+import { channelThreadsKey, channelThreadsUnreadKey } from '@/features/channels/useChannelThreads';
 import {
   channelAttachmentsKey,
   channelAttachmentSendersKey,
@@ -1496,20 +1496,28 @@ describe('ingestConversationFrame — S1 threads_list_entry projection merge (#t
     channelId: string,
     rows: { rootId: string; lastReplyAt: number; replyCount: number }[],
   ): void {
+    // Single-page InfiniteData — the on-mount shape of `useChannelThreads`
+    // (#task:1773 cursor pagination). The S1 merge only ever touches page 0.
     qc.setQueryData(channelThreadsKey(channelId), {
-      threads: rows.map(r => ({
-        ...invariantEntry(r.rootId, r.lastReplyAt, r.replyCount),
-        viewer_following: false,
-      })),
-      next_cursor: null,
+      pages: [
+        {
+          threads: rows.map(r => ({
+            ...invariantEntry(r.rootId, r.lastReplyAt, r.replyCount),
+            viewer_following: false,
+          })),
+          next_cursor: null,
+        },
+      ],
+      pageParams: [null],
     });
   }
   const listRow = (qc: QueryClient, channelId: string, rootId: string) =>
     qc
-      .getQueryData<{ threads: { root_message_id: string; reply_count: number }[] }>(
-        channelThreadsKey(channelId),
-      )
-      ?.threads.find(t => t.root_message_id === rootId);
+      .getQueryData<{
+        pages: { threads: { root_message_id: string; reply_count: number }[] }[];
+      }>(channelThreadsKey(channelId))
+      ?.pages.flatMap(p => p.threads)
+      .find(t => t.root_message_id === rootId);
 
   it('merges + repositions a held row in place — NO threads-list refetch, markSatisfied once', async () => {
     const qc = new QueryClient();
@@ -1528,8 +1536,10 @@ describe('ingestConversationFrame — S1 threads_list_entry projection merge (#t
     expect(listRow(qc, 'c1', 'root1')?.reply_count).toBe(5);
     expect(
       qc
-        .getQueryData<{ threads: { root_message_id: string }[] }>(channelThreadsKey('c1'))
-        ?.threads.map(t => t.root_message_id),
+        .getQueryData<{ pages: { threads: { root_message_id: string }[] }[] }>(
+          channelThreadsKey('c1'),
+        )
+        ?.pages.flatMap(p => p.threads.map(t => t.root_message_id)),
     ).toEqual(['root1', 'root2']);
     // ...WITHOUT invalidating the threads list (the #1278 amplification kill).
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: channelThreadsKey('c1') });
@@ -1587,6 +1597,51 @@ describe('ingestConversationFrame — S1 threads_list_entry projection merge (#t
     commit();
     await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
     expect(listRow(qc, 'c1', 'rootB')?.reply_count).toBe(1);
+    unsub();
+  });
+
+  // #task:1773 — the `followed ∩ unread` filtered dataset is a CHILD of the All
+  // key and is NEVER merged locally (its membership is viewer-specific and
+  // server-authoritative). On the MERGE path the All list takes the in-place
+  // patch INSTEAD of a blanket invalidate, so the filtered sibling would go
+  // stale unless it is explicitly invalidated. This pins that seam.
+  it('merge path (#task:1773): invalidates the filtered sibling key, NOT the exact All key', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelThreadsKey('c1'));
+    seedThreadsList(qc, 'c1', [
+      { rootId: 'root2', lastReplyAt: 200, replyCount: 1 },
+      { rootId: 'root1', lastReplyAt: 100, replyCount: 1 },
+    ]);
+    const invalidate = vi.spyOn(qc, 'invalidateQueries');
+
+    ingestConversationFrame(qc, threadsListPatchFrame('c1', 'root1', 300, 5, 6));
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
+
+    // Filtered child refetched (it was not merged)...
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: channelThreadsUnreadKey('c1') });
+    // ...while the exact All key is NOT invalidated (it took the in-place merge).
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: channelThreadsKey('c1') });
+    unsub();
+  });
+
+  it('off-page fallback (#task:1773): the filtered child stays covered by the family prefix-invalidate', async () => {
+    const qc = new QueryClient();
+    const unsub = mountReader(qc, channelThreadsKey('c1'));
+    seedThreadsList(qc, 'c1', [{ rootId: 'other', lastReplyAt: 200, replyCount: 1 }]);
+    let commit!: () => void;
+    const invalidate = vi
+      .spyOn(qc, 'invalidateQueries')
+      .mockReturnValue(new Promise<void>(resolve => (commit = () => resolve())));
+
+    ingestConversationFrame(qc, threadsListPatchFrame('c1', 'root1', 300, 5, 6));
+    await flush();
+
+    // Off-page falls back to the blanket family invalidate, whose prefix
+    // (channelThreadsKey) already refreshes the filtered child — so the Unread
+    // view never goes stale even when the replied-to root isn't on the held page.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: channelThreadsKey('c1') });
+    commit();
+    await vi.waitFor(() => expect(markSatisfied).toHaveBeenCalledTimes(1));
     unsub();
   });
 });

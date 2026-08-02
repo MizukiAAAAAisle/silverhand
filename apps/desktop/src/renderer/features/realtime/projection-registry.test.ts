@@ -236,16 +236,22 @@ function threadEntry(rootId: string, lastReplyAt = 300): ThreadSummaryInvariant 
   };
 }
 function seedThreadsList(qc: QueryClient, rootId: string): void {
+  // Single-page InfiniteData (#task:1773) — the S1 merge only touches page 0.
   qc.setQueryData(channelThreadsKey('c1'), {
-    threads: [
+    pages: [
       {
-        ...threadEntry(rootId, 100),
-        reply_count: 1,
-        last_reply_message_id: `lr-${rootId}-100`,
-        viewer_following: false,
+        threads: [
+          {
+            ...threadEntry(rootId, 100),
+            reply_count: 1,
+            last_reply_message_id: `lr-${rootId}-100`,
+            viewer_following: false,
+          },
+        ],
+        next_cursor: null,
       },
     ],
-    next_cursor: null,
+    pageParams: [null],
   });
 }
 
@@ -325,8 +331,10 @@ describe('validateMessageProjections — threads_list_entry root-match (#task:12
     // rootB row untouched (its seeded reply_count stays 1, not 5).
     expect(
       qc
-        .getQueryData<{ threads: { reply_count: number }[] }>(channelThreadsKey('c1'))
-        ?.threads[0]?.reply_count,
+        .getQueryData<{ pages: { threads: { reply_count: number }[] }[] }>(
+          channelThreadsKey('c1'),
+        )
+        ?.pages[0]?.threads[0]?.reply_count,
     ).toBe(1);
     unsub();
   });

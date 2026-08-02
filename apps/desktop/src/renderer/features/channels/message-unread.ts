@@ -18,6 +18,11 @@ import {
   subscribeViewerScope,
   isCurrentViewerScope,
 } from '@/lib/ws-client';
+// #task:1773: the filtered `followed ∩ unread` threads dataset is a child key of
+// the All threads list. A viewer `unread_updated` (or a viewer-scope
+// `snapshot_required`) is the only remote signal for its membership changing, so
+// this module invalidates it alongside the unread badge caches.
+import { channelThreadsUnreadKey } from '@/features/channels/useChannelThreads';
 
 /** Debounced invalidate of every message-unread badge query (per-workspace
  *  `by_conversation` maps + the global `by_workspace` summary). The legacy
@@ -446,6 +451,13 @@ export function useConversationUnread(conversationId: string | null) {
       if (frame.type === 'snapshot_required') {
         if (!isCurrentViewerScope(frame.scope)) return;
         void qc.invalidateQueries({ queryKey });
+        // #task:1773: the `followed ∩ unread` threads dataset's membership is a
+        // function of THIS viewer's unread + follow state, so a viewer-scope
+        // reconcile must refetch it alongside the unread read-model. The header
+        // dot boolean rides this same read-model; the filtered list is a separate
+        // read over the same predicate → both settle from one signal (Cindy gate:
+        // freshness signals refetch BOTH authorities, no boolean/rows cross-derive).
+        void qc.invalidateQueries({ queryKey: channelThreadsUnreadKey(conversationId) });
         return;
       }
       if (frame.type !== 'event') return;
@@ -458,6 +470,16 @@ export function useConversationUnread(conversationId: string | null) {
       const payload = frame.payload as { conversation_id?: unknown };
       if (payload.conversation_id !== conversationId) return;
       void qc.invalidateQueries({ queryKey });
+      // #task:1773: a viewer `unread_updated` for this conversation is the ONLY
+      // remote signal for two membership-changing events of the filtered set —
+      // another device clearing a followed thread's unread (observe), and this
+      // viewer follow/unfollowing on another device (backend publishes
+      // `unread_updated` on a real follow change, `conversation-message-service`).
+      // Neither rides a conversation message frame, so refetch the filtered
+      // sibling here. NOT the exact All key: All membership/order is unread- AND
+      // follow-agnostic (`lr.created_at DESC, root.seq DESC`), so a viewer unread
+      // signal must not refetch it.
+      void qc.invalidateQueries({ queryKey: channelThreadsUnreadKey(conversationId) });
     });
     return () => {
       sub.unsubscribe();

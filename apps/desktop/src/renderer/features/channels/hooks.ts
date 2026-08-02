@@ -43,6 +43,7 @@ import {
 } from '@/features/channels/pending-message';
 import { api, ApiError, apiUpload } from '@/lib/api';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
+import { conversationUnreadKey } from '@/features/channels/message-unread';
 import { getCurrentUserId } from '@/lib/current-user';
 import { useInterest } from '@/features/realtime/interest-registry';
 import { applyCommittedMessage } from '@/features/realtime/conversation-ingestor';
@@ -726,6 +727,16 @@ export function useFollowThread(
       void qc.invalidateQueries({
         queryKey: threadFollowersKey(channelId, rootMessageId),
       });
+      // #task:1773: (un)following changes `followed ∩ unread` membership. The
+      // backend publishes a viewer `unread_updated` on a real follow change
+      // (`conversation-message-service` follow/unfollow wrappers), so the filtered
+      // list + header dot also converge via that WS event (the eventual path,
+      // shared with remote devices). This local invalidate is the ACK-side
+      // IMMEDIATE path — it converges this device before the event round-trips and
+      // even if the WS is disconnected. `channelThreadsKey` is a prefix-invalidate
+      // (reaches the filtered child); `conversationUnreadKey` refreshes the dot.
+      void qc.invalidateQueries({ queryKey: conversationUnreadKey(channelId) });
+      void qc.invalidateQueries({ queryKey: channelThreadsKey(channelId) });
     },
     onError: () => {
       toast.error("Couldn't follow the thread. Try again.");
@@ -754,6 +765,16 @@ export function useUnfollowThread(
       void qc.invalidateQueries({
         queryKey: threadFollowersKey(channelId, rootMessageId),
       });
+      // #task:1773: unfollow drops this root out of `followed ∩ unread`. The
+      // backend publishes a viewer `unread_updated` on a real follow change
+      // (`conversation-message-service` follow/unfollow wrappers), so the filtered
+      // list + header dot also converge via that WS event (the eventual path,
+      // shared with remote devices). This local invalidate is the ACK-side
+      // IMMEDIATE path — it converges this device before the event round-trips and
+      // even if the WS is disconnected. `channelThreadsKey` is a prefix-invalidate
+      // (reaches the filtered child); `conversationUnreadKey` refreshes the dot.
+      void qc.invalidateQueries({ queryKey: conversationUnreadKey(channelId) });
+      void qc.invalidateQueries({ queryKey: channelThreadsKey(channelId) });
     },
     onError: () => {
       toast.error("Couldn't unfollow the thread. Try again.");

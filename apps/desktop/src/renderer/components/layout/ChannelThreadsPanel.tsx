@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import {
@@ -15,6 +16,7 @@ import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useConversationUnread } from '@/features/channels/hooks';
 import {
   useChannelThreads,
+  type ChannelThreadsFilter,
   type ThreadSummary,
 } from '@/features/channels/useChannelThreads';
 
@@ -30,6 +32,14 @@ interface ChannelThreadsPanelProps {
 }
 
 type Author = ThreadSummary['root_author'];
+
+// Unread-first so a dot-driven open reads left-to-right as "the reason you're
+// here, then everything". Labels stay one word — the panel title already says
+// "Threads".
+const THREAD_TABS: { key: ChannelThreadsFilter; label: string }[] = [
+  { key: 'followed-unread', label: 'Unread' },
+  { key: 'all', label: 'All' },
+];
 
 /**
  * Right-pane index of every reply-cluster in one channel (#task:1073, P2).
@@ -49,11 +59,65 @@ export function ChannelThreadsPanel({
   onClose,
   onOpenThread,
 }: ChannelThreadsPanelProps): JSX.Element {
-  const { threads, isLoading, isError } = useChannelThreads(channelId);
-  // Per-viewer server-scored unread, read from the SAME read-model the reply
-  // chip reads (#task:1226) — one source of truth, no second unread fact on
-  // `ThreadSummary`. Sparse: only roots with unread > 0 appear (absent ⇒ 0).
-  const unreadByRoot = useConversationUnread(channelId).data?.threads;
+  // Two independent datasets (#task:1773), NOT one list re-sorted: `all` is the
+  // full follow-agnostic channel index; `unread` is the server's `followed ∩
+  // unread` subset. Mount BOTH so the exact All key always has a reader — that
+  // keeps `hasActiveChannelThreadsReader` true so the central ingestor's
+  // in-place merge / invalidate keeps firing — and so switching tabs is instant
+  // (both stay warm).
+  const all = useChannelThreads(channelId);
+  const unread = useChannelThreads(channelId, 'followed-unread');
+  // The per-stream unread read-model, shared by two consumers here: (1) the
+  // `followed_thread_unread` boolean (same predicate the header dot reads — one
+  // source, independent reads → eventual convergence; used ONLY for the initial
+  // tab, never to synthesize rows) and (2) the sparse per-root unread counts the
+  // rows render. Reading from `useConversationUnread` (#task:1226) keeps a single
+  // source of truth — no second unread fact on `ThreadSummary`.
+  const conversationUnread = useConversationUnread(channelId).data;
+  const followedThreadUnread = conversationUnread?.followed_thread_unread ?? false;
+  // Sparse: only roots with unread > 0 appear (absent ⇒ 0).
+  const unreadByRoot = conversationUnread?.threads;
+
+  // Open on Unread when the header dot lit this panel, so a dot-driven open
+  // always lands on a non-empty target (fixes the off-page dead-end); otherwise
+  // start on All. This is a ONE-TIME initial view choice read from the warm
+  // cached boolean — NOT an ongoing derivation of the list from the boolean.
+  const [tab, setTab] = useState<ChannelThreadsFilter>(() =>
+    followedThreadUnread ? 'followed-unread' : 'all',
+  );
+
+  const active = tab === 'followed-unread' ? unread : all;
+  const { threads, isLoading, isError, hasNextPage, isFetchingNextPage, fetchNextPage } =
+    active;
+
+  // Infinite scroll for the active dataset. The sentinel sits at the tail of the
+  // scroll container; when it nears view we pull the next keyset page. Root is the
+  // panel's own scroll div (NOT the viewport) so an ancestor's overflow clip is
+  // respected — a viewport-rooted observer would mis-fire on a row scrolled out of
+  // the container. `fetchNextPage` self-guards on hasNextPage/isFetchingNextPage,
+  // so a stale closure can't double-fetch; a ref keeps the latest without
+  // re-subscribing the observer every render. Re-subscribes when the tab flips
+  // (the active dataset changes) or a page lands (list grows → sentinel may still
+  // be in view → chain the next page).
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLLIElement | null>(null);
+  const fetchNextPageRef = useRef(fetchNextPage);
+  fetchNextPageRef.current = fetchNextPage;
+  useEffect(() => {
+    if (!hasNextPage) return;
+    const root = scrollRef.current;
+    const sentinel = sentinelRef.current;
+    if (!root || !sentinel) return;
+    const io = new IntersectionObserver(
+      entries => {
+        if (entries.some(e => e.isIntersecting)) fetchNextPageRef.current();
+      },
+      { root, rootMargin: '120px' },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hasNextPage, tab, threads.length]);
+
   // Same author-resolution maps the message panes use, so an author renders
   // identically here and in the stream.
   const { agentsById, humansById, humanAvatarUrls } = useMessageRenderContext(
@@ -113,16 +177,41 @@ export function ChannelThreadsPanel({
         <SidePanelHeaderTitle
           icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
           title="Threads"
-          subtitle={
-            <>
-              {parentTitle ? `#${parentTitle} · ` : ''}
-              {threads.length} {threads.length === 1 ? 'thread' : 'threads'}
-            </>
-          }
+          subtitle={parentTitle ? `#${parentTitle}` : undefined}
         />
       </SidePanelHeader>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+      {/* Unread / All segmented filter. Selected chip uses the theme selection
+          token, never a semantic hue — it must not steal the rows' unread-dot
+          volume budget (mirrors ActivityView's filter chips). Counts are each
+          dataset's own loaded length; a momentary 0 during a filtered load is a
+          normal loading state, not a contradiction of the header dot (the two
+          are independent reads that converge). */}
+      <div className="flex shrink-0 items-center gap-1.5 px-2.5 py-2">
+        {THREAD_TABS.map(t => {
+          const on = t.key === tab;
+          const count = t.key === 'followed-unread' ? unread.threads.length : all.threads.length;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              aria-pressed={on}
+              className={
+                'inline-flex items-center gap-1.5 border-[length:var(--control-border-width)] rounded-[var(--chip-radius)] px-2.5 py-1 text-xs font-medium transition-colors ' +
+                (on
+                  ? 'border-[color:var(--border-control-hover)] bg-[var(--bg-row-selected)] text-text-primary'
+                  : 'border-border bg-bg-floating text-text-muted hover:border-[color:var(--border-control-hover)] hover:text-text-primary')
+              }
+            >
+              {t.label}
+              <span className={on ? 'opacity-100' : 'opacity-60'}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {isLoading ? (
           <div className="flex h-full items-center justify-center text-text-muted">
             <Loader2 className="size-4 animate-spin" />
@@ -135,13 +224,23 @@ export function ChannelThreadsPanel({
             </p>
           </div>
         ) : threads.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-            <ThreadIcon className="size-6 text-text-muted/50" />
-            <p className="text-sm text-text-primary">No threads yet</p>
-            <p className="text-xs text-text-muted">
-              Reply to a message to start a thread — it’ll show up here.
-            </p>
-          </div>
+          tab === 'followed-unread' ? (
+            <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
+              <ThreadIcon className="size-6 text-text-muted/50" />
+              <p className="text-sm text-text-primary">All caught up</p>
+              <p className="text-xs text-text-muted">
+                Threads you follow have no unread replies.
+              </p>
+            </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
+              <ThreadIcon className="size-6 text-text-muted/50" />
+              <p className="text-sm text-text-primary">No threads yet</p>
+              <p className="text-xs text-text-muted">
+                Reply to a message to start a thread — it’ll show up here.
+              </p>
+            </div>
+          )
         ) : (
           <ul className="flex flex-col gap-1.5">
             {threads.map(t => (
@@ -154,6 +253,15 @@ export function ChannelThreadsPanel({
                 onOpen={() => onOpenThread(t.root_message_id)}
               />
             ))}
+            {/* Keyset-pagination tail: the sentinel drives fetchNextPage via the
+                IntersectionObserver above; the spinner shows only while a next
+                page is in flight, so a fully-loaded list carries no chrome. */}
+            {hasNextPage ? <li ref={sentinelRef} aria-hidden className="h-px" /> : null}
+            {isFetchingNextPage ? (
+              <li className="flex items-center justify-center py-3 text-text-muted">
+                <Loader2 className="size-4 animate-spin" />
+              </li>
+            ) : null}
           </ul>
         )}
       </div>

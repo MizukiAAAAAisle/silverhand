@@ -37,6 +37,7 @@ import {
 import {
   hasActiveChannelThreadsReader,
   invalidateChannelThreadsList,
+  invalidateChannelThreadsUnread,
 } from '@/features/channels/useChannelThreads';
 import {
   hasActiveChannelAttachmentsReader,
@@ -460,6 +461,14 @@ function committedMessageEffects(
   }
   if (hasActiveChannelThreadsReader(qc, channelId)) {
     if (!isPatchedThreadsList) push(invalidateChannelThreadsList(qc, channelId));
+    // #task:1773: the `followed ∩ unread` filtered sibling is NEVER merged in
+    // place (its membership is viewer-specific), so when the All list took the
+    // S1 `threads_list_entry` merge INSTEAD of a blanket invalidate, the filtered
+    // view must still refetch. The non-patched branch already reached it via the
+    // family prefix-invalidate above; this narrow invalidate covers only the
+    // merge case. (Reader-gate proxy: the panel mounts BOTH datasets, so an active
+    // All reader implies the filtered reader is mounted too.)
+    else push(invalidateChannelThreadsUnread(qc, channelId));
   }
 
   // ATTACHMENTS-LIST — message-derived read model. A row is
