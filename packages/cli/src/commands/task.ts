@@ -2,6 +2,7 @@
  * `silverhand task` — list, create, claim, unclaim, status, edit, detail.
  */
 import type { MessageSendTarget, TaskStatus } from '@silverhand/shared';
+import { TASK_CONTENT_MAX_LEN, TaskBodySchema } from '@silverhand/shared';
 import { CliError } from '../errors.js';
 import {
   flagBool,
@@ -15,6 +16,18 @@ import { decodeStdinUtf8, readAllStdin } from '../stdin.js';
 import type { Command } from './index.js';
 
 /**
+ * Byte ceiling for a piped task body. A body of at most
+ * `TASK_CONTENT_MAX_LEN` UTF-16 code units encodes to at most 3 UTF-8 bytes
+ * per code unit (BMP chars are ≤3 bytes/unit; astral chars are 4 bytes over
+ * 2 units = 2 bytes/unit), so any VALID body fits under `3 × MAX`. Conversely
+ * more than `3 × MAX` bytes is provably more than `MAX` code units and can be
+ * rejected without decoding. This bounds `readAllStdin` memory to ~30 KB so a
+ * `cat huge_file |` can't OOM the CLI before the exact length check runs; it
+ * is DERIVED from the shared cap, not an independent magic number.
+ */
+const MAX_TASK_BODY_BYTES = TASK_CONTENT_MAX_LEN * 3;
+
+/**
  * Resolve the `--body` switch into the wire body for `task create` / `task
  * edit`. `--body` is VALUE-LESS: the Markdown body is read from stdin
  * (heredoc/pipe), never from an inline argument. This mirrors `message send`
@@ -26,10 +39,14 @@ import type { Command } from './index.js';
  *   --body + empty pipe       → ''          (clears the body)
  *   --body <string> / =string → CliError    (the removed inline form)
  *   --body on a TTY           → CliError     (forgot to pipe)
+ *   --body over the size cap  → CliError     (bounded read, then exact check)
  *
  * All the throwing branches run BEFORE the blocking `readAllStdin()` so an
  * inline value / TTY / (upstream) missing required flag fails fast instead of
- * hanging on a read whose EOF never comes.
+ * hanging on a read whose EOF never comes. The read itself is bounded
+ * (`MAX_TASK_BODY_BYTES`) so a pathologically large pipe is rejected mid-read;
+ * a within-bound body is then length-checked EXACTLY against `TaskBodySchema`
+ * (UTF-16 code units) — the same authority the backend enforces.
  */
 async function resolveBodySwitch(args: ParsedArgs): Promise<string | undefined> {
   const raw = args.flags['body'];
@@ -62,7 +79,23 @@ async function resolveBodySwitch(args: ParsedArgs): Promise<string | undefined> 
     });
   }
   // Empty pipe → '' → an explicit clear (edit) / empty description (create).
-  return decodeStdinUtf8(await readAllStdin(), 'task body');
+  // The read is bounded first (memory guard); the decoded string is then
+  // checked EXACTLY against the shared length cap so an over-limit body is
+  // rejected client-side with the precise UTF-16 count rather than deferred.
+  const body = decodeStdinUtf8(await readAllStdin(MAX_TASK_BODY_BYTES), 'task body');
+  const parsed = TaskBodySchema.safeParse(body);
+  if (!parsed.success) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'content_too_long',
+      message:
+        `task body is ${body.length} characters, over the maximum of ` +
+        `${TASK_CONTENT_MAX_LEN}. Shorten it and pipe it again.`,
+      retriable: false,
+      details: { max_length: TASK_CONTENT_MAX_LEN, length: body.length },
+    });
+  }
+  return parsed.data;
 }
 
 const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done', 'closed'];

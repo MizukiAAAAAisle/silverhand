@@ -11,11 +11,33 @@ import { CliError } from './errors.js';
 /** Read every byte off `process.stdin` into a single Buffer. Does NOT set
  *  an encoding — chunks stay raw `Buffer`s, so multi-byte UTF-8 sequences
  *  crossing chunk boundaries are preserved bit-for-bit. Returns an empty
- *  Buffer on EOF without bytes (each caller decides what empty means). */
-export async function readAllStdin(): Promise<Buffer> {
+ *  Buffer on EOF without bytes (each caller decides what empty means).
+ *
+ *  `maxBytes` bounds memory: once the running total EXCEEDS it, the read
+ *  aborts and throws `content_too_long` instead of accumulating to EOF. A
+ *  piped body has no `ARG_MAX` ceiling (unlike the removed inline argument),
+ *  so a caller with a domain size cap MUST pass a byte bound derived from it
+ *  — otherwise `cat huge_file |` drives the CLI to OOM before any
+ *  downstream length check can reject it. Callers with no size cap (e.g.
+ *  `message send`) omit `maxBytes` and read unbounded, unchanged. */
+export async function readAllStdin(maxBytes = Infinity): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buf.length;
+    if (total > maxBytes) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'content_too_long',
+        message:
+          'piped input exceeds the maximum size and was rejected without ' +
+          'reading it all into memory. Shorten the body and pipe it again.',
+        retriable: false,
+        details: { max_bytes: maxBytes },
+      });
+    }
+    chunks.push(buf);
   }
   return Buffer.concat(chunks);
 }

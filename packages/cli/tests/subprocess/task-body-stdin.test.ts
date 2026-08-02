@@ -134,6 +134,10 @@ function runTask(opts: {
       resolvePromise({ code, stdout, stderr, killedByWatchdog });
     });
     if (!opts.withTty) {
+      // A bounded read (over-cap body) makes the CLI exit mid-stream, so the
+      // remaining write races a closed pipe — swallow the expected EPIPE
+      // instead of surfacing it as an unhandled error.
+      child.stdin!.on('error', () => {});
       if (opts.keepStdinOpen) {
         watchdog = setTimeout(() => {
           killedByWatchdog = true;
@@ -168,6 +172,13 @@ function parseStderrJson(stderr: string): {
 
 function lastRequestJson<T>(): T {
   return JSON.parse(captured.at(-1)!.bodyBytes.toString('utf8')) as T;
+}
+
+/** Requests to the actual task endpoints — excludes the `cli-trace` ping the
+ *  CLI fires on any error BEFORE a business request (which carries no body
+ *  content). A rejected --body must produce zero of these. */
+function businessRequests(): CapturedRequest[] {
+  return captured.filter(r => !r.path.includes('/cli-trace'));
 }
 
 describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_000 }, () => {
@@ -273,6 +284,86 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     expect(body.error.message).toContain('valid UTF-8');
     const details = (body.error as { details?: Record<string, unknown> }).details;
     expect(details).toEqual({ encoding: 'utf8' });
+  });
+
+  // TASK_CONTENT_MAX_LEN authority = 10000 UTF-16 code units (mirrored from
+  // @silverhand/shared). The byte ceiling 3×MAX = 30000 bounds the read.
+  const MAX_LEN = 10_000;
+
+  it('task edit: accepts a body exactly at the length cap (10000 ASCII)', async () => {
+    captured.length = 0;
+    const at = 'a'.repeat(MAX_LEN);
+    const r = await runTask({
+      verb: 'edit',
+      argv: ['--task-number', '5', '--body'],
+      stdin: at,
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastRequestJson<{ body: string }>().body.length).toBe(MAX_LEN);
+  });
+
+  it('task edit: accepts a max-length multibyte body (10000 CJK = 30000 bytes, at the byte ceiling)', async () => {
+    captured.length = 0;
+    // 好 = U+597D = 3 UTF-8 bytes, 1 UTF-16 code unit. 10000 of them is exactly
+    // MAX×3 bytes: the byte ceiling must NOT falsely reject a valid max body.
+    const cjk = '好'.repeat(MAX_LEN);
+    const r = await runTask({
+      verb: 'edit',
+      argv: ['--task-number', '5', '--body'],
+      stdin: cjk,
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(lastRequestJson<{ body: string }>().body.length).toBe(MAX_LEN);
+  });
+
+  it('task edit: rejects a body one code unit over the cap (10001 ASCII) with the exact count, no request', async () => {
+    // 10001 bytes < the 30000-byte ceiling, so this passes the read guard and
+    // is rejected by the EXACT length check after decode — proving the schema
+    // check, not just the byte bound.
+    captured.length = 0;
+    const over = 'a'.repeat(MAX_LEN + 1);
+    const r = await runTask({
+      verb: 'edit',
+      argv: ['--task-number', '5', '--body'],
+      stdin: over,
+    });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('content_too_long');
+    expect(body.error.message).toContain(String(MAX_LEN + 1));
+    expect(body.error.message).toContain(String(MAX_LEN));
+    // Never reached the wire — an over-limit body must not be sent.
+    expect(businessRequests().length, 'over-limit body still sent a task request').toBe(0);
+  });
+
+  it('task edit: rejects a pathologically large pipe via the bounded read, no unbounded accumulation, no request', async () => {
+    // 400_000 bytes ≫ the 30000-byte ceiling: the read must abort mid-stream
+    // (memory guard) rather than buffer it all, and no request is sent.
+    captured.length = 0;
+    const huge = 'a'.repeat(400_000);
+    const r = await runTask({
+      verb: 'edit',
+      argv: ['--task-number', '5', '--body'],
+      stdin: huge,
+    });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('content_too_long');
+    const details = (body.error as { details?: Record<string, unknown> }).details;
+    expect(details).toEqual({ max_bytes: MAX_LEN * 3 });
+    expect(businessRequests().length, 'huge body still sent a task request').toBe(0);
+  });
+
+  it('task create: rejects an over-cap body (10001 ASCII) as content_too_long, no request', async () => {
+    captured.length = 0;
+    const r = await runTask({
+      verb: 'create',
+      argv: ['--title', 'x', '--body'],
+      stdin: 'a'.repeat(MAX_LEN + 1),
+    });
+    expect(r.code).toBe(1);
+    expect(parseStderrJson(r.stderr).error.subkind).toBe('content_too_long');
+    expect(businessRequests().length).toBe(0);
   });
 
   it('task create: piped stdin becomes the new task body', async () => {

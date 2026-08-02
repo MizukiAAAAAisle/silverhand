@@ -164,6 +164,7 @@ Pre-flight failures (exit 1, code `validation_error`):
 | `stdin_is_tty` | A command that reads its body from stdin (`message send`, or `task create`/`task edit` under `--body`) ran with `process.stdin.isTTY` true and no attachment — i.e. nothing was piped. |
 | `empty_stdin` | Stdin closed with 0 bytes and no attachment was supplied. |
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
+| `content_too_long` | A piped body exceeds a domain size cap. `task create`/`task edit` bound the read at `TASK_CONTENT_MAX_LEN × 3` bytes (memory guard; `details.max_bytes`) and, after decode, reject anything over `TASK_CONTENT_MAX_LEN` UTF-16 code units exactly (`details.max_length` + `length`). The over-limit body is never sent. |
 | `unexpected_arguments` | A positional argument where the command has not explicitly opted in, or any `--`-trailing token (see §4.1). |
 
 Freshness conflict (exit 1, code `conflict`):
@@ -792,6 +793,7 @@ Current `subkind` values (CLI-side enum is the source of truth):
 - `stdin_is_tty` — a stdin-body command (`message send`, or `task create`/`task edit` under `--body`) ran with a TTY on stdin and nothing piped.
 - `empty_stdin` — `silverhand message send` invoked with 0-byte stdin and no attachment.
 - `invalid_utf8` — a stdin-body command received non-UTF-8 bytes on stdin.
+- `content_too_long` — a piped `task` body exceeds `TASK_CONTENT_MAX_LEN`; the read is bounded (`3×` bytes) and the exact UTF-16 length is enforced after decode, so an over-limit body is rejected without being sent.
 
 `subkind` and `details` are stderr-only. The fire-and-forget
 `cli-trace` reporter never carries `details` (or any raw value-bearing

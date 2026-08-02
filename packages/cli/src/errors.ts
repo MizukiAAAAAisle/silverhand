@@ -64,6 +64,11 @@ export type ErrorSubkind =
    *  now comes only from stdin (a value-less `--body` switch), so the removed
    *  `--body <string>` form is refused before any stdin read. */
   | 'body_requires_stdin'
+  /** Piped stdin exceeds a domain size cap. Raised early (during the read)
+   *  as a memory bound when the byte total blows past the cap, and again as
+   *  an exact check after decode (e.g. `task` body vs `TASK_CONTENT_MAX_LEN`
+   *  UTF-16 code units). `details` carries `max_bytes` or `max_length`. */
+  | 'content_too_long'
   | 'unknown_flag'
   | 'enum_invalid'
   | 'mutually_exclusive'
