@@ -339,10 +339,12 @@
   --radius-xl: 20px;
 
   /* ── Fonts ──
-     全 sans（原则 1）。`--font-serif` 仍然声明，因为它是跨主题 token（别的
-     主题 / 组件可能 `var(--font-serif)`），但这个主题不主动用它。 */
+     全 sans（原则 1）。`--font-serif` 是跨主题 token（Tailwind `font-serif`
+     utility 映到它，全 app heading 都用），但本主题 sans-first，所以把它设成
+     sans——heading 在此解析成 sans，跟 slack-dark / forza6 一致。别放真衬线
+     （曾是 New York，全主题 heading 因此衬线化，shiki #task:1780 改掉）。 */
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
-  --font-serif: 'New York', 'Charter', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+  --font-serif: var(--font-sans);
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 
   /* ── Markdown body defaults (consumed by `.markdown-body`) ──
