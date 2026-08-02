@@ -257,9 +257,10 @@ describe('SystemMessage channel refs', () => {
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared="1"');
-    // Actor + agent + session-id passthrough (data, not copy).
-    expect(html).toContain('@you');
-    expect(html).toContain('@Alice');
+    // Actor + agent + session-id passthrough (data, not copy). Names are
+    // bare recognition labels, no leading `@` (#task:1768).
+    expect(html).toContain('>you</span>');
+    expect(html).toContain('>Alice</span>');
     expect(html).toContain('fbe21c8a');
   });
 
@@ -297,7 +298,7 @@ describe('SystemMessage channel refs', () => {
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-session-cleared="1"');
     expect(html).toContain('data-session-cleared-actor="unknown"');
-    expect(html).not.toContain('@you');
+    expect(html).not.toContain('>you</span>');
   });
 
   it('session_cleared with no metadata falls back to legacy audit row + RotateCcw', () => {
@@ -479,8 +480,9 @@ describe('SystemMessage channel refs', () => {
     expect(html).toContain('data-context-card="spawned"');
     expect(html).toContain('data-conversation-ref="conv-source"');
     expect(html).toContain('>version3<');
-    // Creator agent name is passthrough data (drop the "by " connector face).
-    expect(html).toContain('@Cindy');
+    // Creator agent name is passthrough data, a bare label with no
+    // leading `@` (#task:1768).
+    expect(html).toContain('by Cindy');
     expect(html).toContain('data-context-toggle="expand"');
   });
 
@@ -789,7 +791,7 @@ describe('SystemMessage task event rows (PR-2)', () => {
   it('task_create renders actor + verb + chip with title + todo dot', () => {
     const msg = makeSystemMessage('task_create', fullMeta({}));
     const html = renderTaskEvent(msg, () => undefined, [seededTask()]);
-    expect(html).toContain('@Alice');
+    expect(html).toContain('>Alice</span>');
     expect(html).toContain('data-task-event-dot="todo"');
     // PR-7: chip is now TaskRef. Resolved+handler state → label
     // `#42 · wire registry`, attribute `data-task-ref-state="resolved"`.
@@ -823,26 +825,26 @@ describe('SystemMessage task event rows (PR-2)', () => {
     expect(html).toContain('data-task-ref="42"');
   });
 
-  it('task_status renders @actor moved chip → status pill (PR-9 actor-first)', () => {
+  it('task_status renders actor moved chip → status pill (PR-9 actor-first)', () => {
     const msg = makeSystemMessage('task_status', fullMeta({ task_status: 'in_review' }));
     const html = renderTaskEvent(msg, () => undefined, [
       seededTask({ status: 'in_review' }),
     ]);
-    expect(html).toContain('@Alice');
+    expect(html).toContain('>Alice</span>');
     expect(html).toContain('data-task-ref="42"');
     expect(html).toContain('data-task-event-status="in_review"');
-    // PR-9: actor is now the first text node, NOT a "by @actor"
+    // PR-9: actor is now the first text node, NOT a "by <actor>"
     // suffix. Verify we don't accidentally re-introduce the old form.
-    expect(html).not.toContain('by @Alice');
-    // Reading order: @actor → task-ref chip → status marker. Keyed on
+    expect(html).not.toContain('by Alice');
+    // Reading order: actor → task-ref chip → status marker. Keyed on
     // stable nodes, not the connecting verb (which is copy).
-    expect(html.indexOf('@Alice')).toBeLessThan(html.indexOf('data-task-ref="42"'));
+    expect(html.indexOf('>Alice</span>')).toBeLessThan(html.indexOf('data-task-ref="42"'));
     expect(html.indexOf('data-task-ref="42"')).toBeLessThan(
       html.indexOf('data-task-event-status="in_review"'),
     );
   });
 
-  it('user actor renders the viewer-friendly @you handle for current user', () => {
+  it('user actor renders the viewer-friendly "you" label for current user', () => {
     const msg = makeSystemMessage(
       'task_status',
       fullMeta({
@@ -858,9 +860,10 @@ describe('SystemMessage task event rows (PR-2)', () => {
       seededTask({ status: 'done' }),
     ]);
     expect(html).toContain('data-task-event-status="done"');
-    // PR-9 actor-first: `@you moved ... → DONE`, not `... by @you`.
-    expect(html).toContain('@you');
-    expect(html).not.toContain('by @you');
+    // PR-9 actor-first: `you moved ... → DONE`, not `... by you`. The
+    // viewer's own id renders the friendly bare `you` label (#task:1768).
+    expect(html).toContain('>you</span>');
+    expect(html).not.toContain('by you');
   });
 
   it('chip is inert (no click handler) when no onOpenTask handler is supplied', () => {
