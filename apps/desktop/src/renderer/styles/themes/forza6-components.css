@@ -458,6 +458,12 @@
   background: transparent;
   border: none;
   color: var(--text-muted);
+  /* No hover fill here — the marker rides the label span — so the tile
+     padding the base cluster rule reserves is dead box. Zero it (and the
+     paired negative margin) so this chip sits as bare inline text, matching
+     the prose chip (#task:1776). */
+  padding-inline: 0;
+  margin-inline: 0;
 }
 [data-theme='forza6'] .system-activity-cluster [data-task-ref] > span {
   background-image: linear-gradient(

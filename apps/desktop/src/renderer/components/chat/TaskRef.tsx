@@ -228,6 +228,13 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // gone it would instead pull the chip 2px into its neighbours. Dropping both
   // lets the link sit as plain inline text — the hover marker/underline rides
   // the label span, which already hugs the words (shiki, #task:1770).
+  //
+  // The one surface that DOES fill on hover — the non-forza6
+  // system-activity-cluster (accent tile, global.css
+  // `.system-activity-cluster [data-task-ref]:hover`) — reintroduces the
+  // horizontal padding in CSS, not here: padding belongs to the filled
+  // surface, not the shared component, so a fill-less surface never pays for
+  // it. forza6's cluster is a bare marker and zeroes it back out (#task:1776).
   const interactiveChip = (
     <span
       role="button"
