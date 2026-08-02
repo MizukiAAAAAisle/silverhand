@@ -337,8 +337,18 @@ export const ConversationStreamUnreadDtoSchema = z.object({
   /** Mainline (non-thread) unread for the viewer. */
   mainline: StreamUnreadDtoSchema,
   /** Per-reply-cluster unread keyed by root message id. Sparse — only roots
-   *  with unread > 0 appear; absent root ⇒ 0 unread. */
+   *  with unread > 0 appear; absent root ⇒ 0 unread. FOLLOW-AGNOSTIC: this
+   *  includes unfollowed threads (drives their in-list soft dot); it is NOT the
+   *  header-dot authority. */
   threads: z.record(z.string(), StreamUnreadDtoSchema),
+  /** Channel-header Threads-icon dot (#task:1774): true iff the viewer has any
+   *  unread reply in a thread they FOLLOW (`followed ∩ unread`). FOLLOW-GATED and
+   *  mainline-excluded — distinct from `threads` above, which is follow-agnostic.
+   *  A boolean, not a count: the dot is a binary attention cue. Shares one server
+   *  predicate with the `?filter=followed-unread` threads view, but the two are
+   *  independent reads that converge via the same `unread_updated` invalidation —
+   *  never derive list rows from this flag, nor overwrite it from an empty list. */
+  followed_thread_unread: z.boolean(),
 });
 export type ConversationStreamUnreadDto = z.infer<
   typeof ConversationStreamUnreadDtoSchema

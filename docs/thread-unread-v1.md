@@ -170,6 +170,22 @@ channel_unread(C, user) = mainline_unread(C, user)
 - **行为变更(显式声明):** 旧 `unreadCountForConversation` 计「主线 + 所有 thread」(单游标);新语义 = 「主线 + followed thread」。非 followed thread 的未读因此**退出** channel/sidebar count。这是有意的降噪,不是回归。
 - workspace 级 / sidebar 聚合(`unreadCountsByConversationForWorkspace`、`unreadCountsByWorkspaceSidebar`、`unreadCountsByWorkspace`)按同一 roll-up 重算。
 
+### 3.5.1 channel-header Threads 图标红点(followed ∩ unread,#task:1774)
+
+channel header 的 Threads 图标红点 = **该 channel 存在「viewer followed 且未读」的 thread**。这是 §3.5 roll-up 的 **followed-thread 分支单独 > 0**(剥掉 mainline 分支):
+
+```
+followed_thread_unread(C, user)
+  = EXISTS(R in followed_threads(C, user) : thread_unread(R, user) > 0)
+```
+
+- **只 EXISTS、不给 count**:红点是二元 attention 提示,count 在此是多余全扫。
+- **mainline 未读绝不点亮此红点**:header Threads 图标只表达 thread 维度的 attention；主线未读走 sidebar count(§3.5),两者正交。**故绝不能直接复用 §3.5 的 `channel_unread`**(它含 mainline,mainline-only 未读时会误亮)。
+- **非 followed thread 的未读不点亮 header**(与 §3.5 降噪一致);它只在 Threads list 出行内弱 dot(§5.2)供 discovery。shiki 2026-08-02 裁定:header = followed∩unread,unfollowed 未读留在 All 行内、不进 header attention。
+- **谓词单一真相**:此 EXISTS 与 §5.4 的 `?filter=followed-unread` Threads 视图**共用同一条 SQL 谓词**(`FOLLOWED_THREAD_UNREAD`,`packages/backend/src/repos/unread-predicates.ts`——即 roll-up 的 followed-thread 分支 + 同一组 archived/非本人/非 system 守卫),红点与列表因此不可能对「哪些 thread 属 followed∩unread」各执一词。
+
+`ROLLUP_UNREAD`(mainline + followed-thread)与 `FOLLOWED_THREAD_UNREAD`(仅 followed-thread)同源于该模块的分支片段:roll-up = 守卫 AND (mainline 分支 OR followed-thread 分支);header/filter = 守卫 AND followed-thread 分支。
+
 ### 3.6 first-unread(供「跳 first unread」)
 
 ```
@@ -202,7 +218,8 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 
 **修正:把未读从乐观缓存里抽出来,做成单一读模型。**
 
-- **DTO:** `StreamUnreadDto { unread_count, first_unread_message_id, first_unread_seq }` + `ConversationStreamUnreadDto { mainline: StreamUnreadDto, threads: Record<rootId, StreamUnreadDto> }`(`message.ts`)。`threads` **稀疏**——只含 unread>0 的 root(缺失 = 0)。
+- **DTO:** `StreamUnreadDto { unread_count, first_unread_message_id, first_unread_seq }` + `ConversationStreamUnreadDto { mainline: StreamUnreadDto, threads: Record<rootId, StreamUnreadDto>, followed_thread_unread: boolean }`(`message.ts`)。`threads` **稀疏**——只含 unread>0 的 root(缺失 = 0)且**follow-agnostic**(含非 followed thread,驱动其行内弱 dot)。`followed_thread_unread` = §5.4 channel-header Threads 图标红点信号(#task:1774),见 §3.5.1。
+
 - **端点:** `GET /api/conversations/:id/unread`(`canViewConversation` gate,`requireViewerUserId`)→ `ConversationReadRepo.streamUnreadForConversation(conversationId, viewerUserId)`,单条 CTE window-function 查询(同 §3.3 过滤 + per-stream 游标),一次返回主线 + 全部有未读的 thread。
 - **唯一真相,两个消费者:** reply chip(主线 root 行内联)与 Threads list 都从这个读模型按 root 取未读,**同一服务端事实只下发一次**,不再随消息窗口 / Threads 列表行漂移。
 - **客户端缓存边界:** 未读读模型 key = `['conversation', id, 'unread']`,**只由 viewer-scoped `unread_updated` WS 信号失效**,**绝不**进乐观补丁路径。`ReplyBadgeSummary` / `ThreadSummary` 退回只携带乐观可维护的事实(reply_count / last_reply / repliers / viewer_following)。
@@ -217,6 +234,10 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 1. **Sidebar**:**单一** channel count = §3.5 的 `channel_unread`(主线 + followed thread)。**不放第二个 dot/数字。**
 2. **Threads list**:followed thread 未读带数字;**非 followed 有新 reply → 弱 dot(降透明度)**。followed/all 区分只在这一层。未读数来自 §4.2 conversation-unread 读模型(按 root),**不**来自 `ThreadSummary` 行。
 3. **Reply chip(root 行 inline)**:未读态 `3 replies · 2 new`,点击跳 §3.6 的 first-unread。数据源 = §4.2 conversation-unread 读模型 `threads[rootId]` 的 `unread_count` + `first_unread_message_id`(**不再**读 `reply_summaries_by_root[rootId]`)。点击=打开该 thread 窗口→用窗口响应 `stream_head_seq` 作为 observe `at_seq` 的 open-time snapshot(§3.4),不在行级或 mark 时另取 head。
+4. **channel-header Threads 图标红点 + 面板 Unread/All(#task:1774)**:header Threads 图标在 `followed_thread_unread`(§3.5.1)为真时点亮红点(视觉形态归 renderer)。数据契约:
+   - 红点信号 = §4.2 的 `followed_thread_unread` 布尔,搭现有 `useConversationUnread` 缓存(key `['conversation', id, 'unread']`)+ `unread_updated` 失效链,**零新增 fetch/订阅**。
+   - Threads 面板分 **Unread / All 两视图**,同一 collection/投影/keyset cursor(§附:`(last_reply_at DESC, root_seq DESC)`),仅 viewer-scoped filter 不同——**非独立 endpoint**:`GET /api/conversations/:id/threads?filter=followed-unread`(缺省=`all`)。Unread 视图行 `viewer_following=true`,narrowed 到 followed∩unread root,与红点共用 `FOLLOWED_THREAD_UNREAD` 谓词。`filter` 非法值 → 400 `invalid_filter`。
+   - **两份独立读模型,最终收敛(renderer 纪律)**:header 布尔与 Unread 列表是**两次独立 HTTP read**,只共享同一谓词 + 同一失效来源(`unread_updated`),响应可乱序、**不保证同 tick**。故:① Unread 视图的 loading 与真实 caught-up 空态都是正常态,各自渲染;② **绝不**拿 header 布尔给列表补行,也**绝不**因列表暂空回写 header 布尔;③ 收敛只靠同一 freshness 信号分别 refetch 两份权威读模型。renderer 半 = #task:1773。
 
 ## 6. mark-read 触发纪律
 

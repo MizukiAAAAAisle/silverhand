@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { testWorkspacePath } from '../utils/db.js';
 import type { Database as Db } from 'better-sqlite3';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import {
   InvalidThreadsCursorError,
@@ -173,6 +174,149 @@ describe('MessageRepo.listChannelThreads', () => {
     ).run(root.id, channel.id, 'local', Date.now());
     const t2 = repo.listChannelThreads(channel.id, 'local', {}).threads[0]!;
     expect(t2.viewer_following).toBe(true);
+  });
+
+  it('filter=followed-unread narrows to followed ∩ unread roots, sharing the header predicate (#task:1774)', () => {
+    const { db, channel, agentId, repo } = bootstrap();
+    const reads = new ConversationReadRepo(db);
+
+    const mkRootWithReply = (label: string) => {
+      const root = repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: `${label} root`,
+      });
+      const reply = repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'agent',
+        fromAgentId: agentId,
+        threadRootId: root.id,
+        content: `${label} reply`,
+      });
+      return { root, reply };
+    };
+    const follow = (rootId: string) =>
+      db
+        .prepare(
+          `INSERT INTO thread_followers
+             (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+           VALUES (?, ?, 'human', ?, ?, 'manual')`,
+        )
+        .run(rootId, channel.id, 'local', Date.now());
+
+    const followedUnread = mkRootWithReply('followed-unread');
+    const unfollowedUnread = mkRootWithReply('unfollowed-unread');
+    const followedCaughtUp = mkRootWithReply('followed-caughtup');
+
+    follow(followedUnread.root.id);
+    follow(followedCaughtUp.root.id);
+    // Caught up on the third followed thread → excluded despite following, so the
+    // list filter is gated on the SAME per-thread cursor as the header dot.
+    reads.markRead({
+      viewerUserId: 'local',
+      conversationId: channel.id,
+      threadRootId: followedCaughtUp.root.id,
+      seq: followedCaughtUp.reply.seq,
+    });
+
+    // "All" is unchanged — every reply-cluster, regardless of follow / unread.
+    const all = repo.listChannelThreads(channel.id, 'local', {});
+    expect(all.threads.map(t => t.root_message_id).sort()).toEqual(
+      [
+        followedUnread.root.id,
+        unfollowedUnread.root.id,
+        followedCaughtUp.root.id,
+      ].sort(),
+    );
+
+    // "Unread" = only the followed thread with unread replies; unfollowed-unread
+    // and followed-but-caught-up are both excluded. Rows are viewer_following.
+    const unread = repo.listChannelThreads(channel.id, 'local', {
+      filter: 'followed-unread',
+    });
+    expect(unread.threads.map(t => t.root_message_id)).toEqual([
+      followedUnread.root.id,
+    ]);
+    expect(unread.threads[0]!.viewer_following).toBe(true);
+    expect(unread.next_cursor).toBeNull();
+
+    // Explicit `filter: 'all'` is identical to the default.
+    const allExplicit = repo.listChannelThreads(channel.id, 'local', {
+      filter: 'all',
+    });
+    expect(allExplicit.threads.map(t => t.root_message_id)).toEqual(
+      all.threads.map(t => t.root_message_id),
+    );
+  });
+
+  it('filter=followed-unread keyset-paginates its OWN dataset across same-timestamp neighbours (#task:1774)', () => {
+    const { db, channel, agentId, repo } = bootstrap();
+
+    // The whole point of the filter is that a followed-unread cluster may sit
+    // BELOW the All first page, so the filtered dataset must page through by
+    // itself — never skip a same-timestamp neighbour, never leak an unfollowed
+    // cluster interleaved between the followed ones, and carry the filter onto
+    // the next page. Interleave noise so the followed roots are non-contiguous
+    // in root seq, and give every reply an IDENTICAL last_reply_at so ordering
+    // falls back to root seq DESC and the cursor is exercised on the tie-break.
+    const mk = (label: string) => {
+      const root = repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: `${label} root`,
+      });
+      const reply = repo.insertForConversation({
+        conversationId: channel.id,
+        fromKind: 'agent',
+        fromAgentId: agentId,
+        threadRootId: root.id,
+        content: `${label} reply`,
+      });
+      setCreatedAt(db, reply.id, 1000);
+      return root;
+    };
+    const follow = (rootId: string) =>
+      db
+        .prepare(
+          `INSERT INTO thread_followers
+             (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+           VALUES (?, ?, 'human', 'local', ?, 'manual')`,
+        )
+        .run(rootId, channel.id, Date.now());
+
+    const fu0 = mk('fu0');
+    mk('noise0'); // unfollowed → must never appear on either page
+    const fu1 = mk('fu1');
+    mk('noise1');
+    const fu2 = mk('fu2');
+    [fu0, fu1, fu2].forEach(r => follow(r.id));
+
+    // root seq DESC over the FILTERED set: fu2, fu1, fu0 (noise excluded).
+    const p1 = repo.listChannelThreads(channel.id, 'local', {
+      filter: 'followed-unread',
+      limit: 2,
+    });
+    expect(p1.threads.map(t => t.root_message_id)).toEqual([fu2.id, fu1.id]);
+    expect(p1.next_cursor).not.toBeNull();
+
+    // Second page MUST keep the same filter, resume exactly at fu0 (no repeat of
+    // fu1, no dropped neighbour), and close out.
+    const p2 = repo.listChannelThreads(channel.id, 'local', {
+      filter: 'followed-unread',
+      limit: 2,
+      cursor: p1.next_cursor,
+    });
+    expect(p2.threads.map(t => t.root_message_id)).toEqual([fu0.id]);
+    expect(p2.next_cursor).toBeNull();
+
+    // Union of the two pages = the whole filtered set, in order, no dup/gap.
+    expect([...p1.threads, ...p2.threads].map(t => t.root_message_id)).toEqual([
+      fu2.id,
+      fu1.id,
+      fu0.id,
+    ]);
   });
 
   it('keyset-paginates without dropping same-timestamp clusters', () => {

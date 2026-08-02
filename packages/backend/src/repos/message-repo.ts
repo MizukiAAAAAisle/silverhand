@@ -29,6 +29,7 @@ import {
   type WindowScope,
   type WindowScopeMode,
 } from './message-stream-scope.js';
+import { FOLLOWED_THREAD_UNREAD } from './unread-predicates.js';
 import { prepareObserved } from '../observability/observed-statement.js';
 
 function newId(): string {
@@ -123,6 +124,11 @@ export interface ChannelThreadsPage {
   threads: ThreadSummary[];
   next_cursor: string | null;
 }
+
+/** Threads-list scope (#task:1774). `'all'` (default) is every reply-cluster;
+ *  `'followed-unread'` narrows to roots the viewer FOLLOWS and has unread replies
+ *  in — the panel's "Unread" tab, sharing the header dot's predicate. */
+export type ThreadsListFilter = 'all' | 'followed-unread';
 
 /** Raw joined row backing one Threads-list entry (root fields + the
  *  aggregated last-reply identity). */
@@ -756,19 +762,43 @@ export class MessageRepo {
   listChannelThreads(
     conversationId: string,
     viewerUserId: string,
-    opts: { limit?: number; cursor?: string | null } = {},
+    opts: { limit?: number; cursor?: string | null; filter?: ThreadsListFilter } = {},
   ): ChannelThreadsPage {
     const limit = Math.min(50, Math.max(1, opts.limit ?? 30));
     const cursor = opts.cursor ? decodeThreadsCursor(opts.cursor) : null;
+    const followedUnreadOnly = opts.filter === 'followed-unread';
+
+    // `?filter=followed-unread` (#task:1774): the SAME collection / projection /
+    // keyset as the default "All" list, narrowed to roots the viewer FOLLOWS and
+    // has unread replies in. Expressed as ONE extra correlated EXISTS on the
+    // SHARED predicate (byte-identical to the header Threads dot), so All vs
+    // Unread differ by exactly this clause — the ORDER BY / keyset below stay
+    // identical for both, and the two datasets can never disagree about what
+    // "followed ∩ unread" means. All rows here have `viewer_following = true`.
+    const filterClause = followedUnreadOnly
+      ? `AND EXISTS (
+                 SELECT 1 FROM messages m
+                  WHERE m.thread_root_id = root.id AND ${FOLLOWED_THREAD_UNREAD}
+               )`
+      : '';
 
     // Fetch one extra row to decide whether a next page exists without a
     // second COUNT query.
     const rows = prepareObserved<
-        [string, string, string, number, number, number, number, number],
+        {
+          conv: string;
+          hasCursor: number;
+          cursorAt: number;
+          cursorSeq: number;
+          limit: number;
+          viewer?: string;
+        },
         ThreadRootRow
       >(
         this.db,
-        'messages.list_channel_threads',
+        followedUnreadOnly
+          ? 'messages.list_channel_threads.followed_unread'
+          : 'messages.list_channel_threads',
         `SELECT
            root.id            AS root_message_id,
            root.from_kind     AS root_from_kind,
@@ -785,39 +815,40 @@ export class MessageRepo {
                   COUNT(*)       AS reply_count,
                   MAX(seq)       AS last_reply_seq
              FROM messages
-            WHERE conversation_id = ?
+            WHERE conversation_id = @conv
               AND thread_root_id IS NOT NULL
               AND from_kind != 'system'
             GROUP BY thread_root_id
          ) agg
          JOIN messages lr
-           ON lr.conversation_id = ?
+           ON lr.conversation_id = @conv
           AND lr.thread_root_id = agg.root_id
           AND lr.seq = agg.last_reply_seq
          JOIN messages root
            ON root.id = agg.root_id
-          AND root.conversation_id = ?
+          AND root.conversation_id = @conv
          WHERE (
-                 ? = 0
-                 OR lr.created_at < ?
-                 OR (lr.created_at = ? AND root.seq < ?)
+                 @hasCursor = 0
+                 OR lr.created_at < @cursorAt
+                 OR (lr.created_at = @cursorAt AND root.seq < @cursorSeq)
                )
+               ${filterClause}
          ORDER BY lr.created_at DESC, root.seq DESC
          -- SOURCE-FENCE (#task:1279): this total order is the AUTHORITY. The client
          -- mirror is compareThreadSummary (apps/desktop .../useChannelThreads.ts) --
          -- keep the two byte-identical: (last_reply_at DESC, root_seq DESC).
-         LIMIT ?`,
+         LIMIT @limit`,
       )
-      .all(
-        conversationId,
-        conversationId,
-        conversationId,
-        cursor ? 1 : 0,
-        cursor?.at ?? 0,
-        cursor?.at ?? 0,
-        cursor?.seq ?? 0,
-        limit + 1,
-      );
+      .all({
+        conv: conversationId,
+        hasCursor: cursor ? 1 : 0,
+        cursorAt: cursor?.at ?? 0,
+        cursorSeq: cursor?.seq ?? 0,
+        limit: limit + 1,
+        // Bound ONLY when the filter clause references @viewer — better-sqlite3
+        // rejects a named param the prepared SQL does not use.
+        ...(followedUnreadOnly ? { viewer: viewerUserId } : {}),
+      });
 
     const hasMore = rows.length > limit;
     const pageRows = hasMore ? rows.slice(0, limit) : rows;

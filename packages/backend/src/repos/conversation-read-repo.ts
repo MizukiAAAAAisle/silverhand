@@ -7,6 +7,7 @@ import type {
   StreamUnreadDto,
 } from '@silverhand/shared';
 import { prepareObserved } from '../observability/observed-statement.js';
+import { FOLLOWED_THREAD_UNREAD, ROLLUP_UNREAD } from './unread-predicates.js';
 
 export interface MessageUnreadByConversation {
   by_conversation: Record<string, number>;
@@ -264,7 +265,32 @@ export class ConversationReadRepo {
         threads[row.root] = entry;
       }
     }
-    return { mainline, threads };
+    return {
+      mainline,
+      threads,
+      followed_thread_unread: this.hasFollowedThreadUnread(conversationId, viewerUserId),
+    };
+  }
+
+  /** Header Threads-icon dot signal (#task:1774): does the viewer have ANY unread
+   *  reply in a thread they FOLLOW? EXISTS (boolean), not a count — the dot is a
+   *  binary attention cue and a count here would be a needless full scan.
+   *
+   *  Uses {@link FOLLOWED_THREAD_UNREAD}, the SAME predicate the
+   *  `?filter=followed-unread` threads view filters on, so the dot and the list
+   *  can never disagree about which threads are "followed ∩ unread". Deliberately
+   *  the followed-thread branch ONLY — mainline unread must not light this dot. */
+  hasFollowedThreadUnread(conversationId: string, viewerUserId: string): boolean {
+    const row = prepareObserved<{ conv: string; viewer: string }, { e: number }>(
+        this.db,
+        'reads.has_followed_thread_unread',
+        `SELECT EXISTS (
+           SELECT 1 FROM messages m
+            WHERE m.conversation_id = @conv AND ${FOLLOWED_THREAD_UNREAD}
+         ) AS e`,
+      )
+      .get({ conv: conversationId, viewer: viewerUserId });
+    return (row?.e ?? 0) === 1;
   }
 
   unreadCountsByConversationForWorkspace(
@@ -439,62 +465,6 @@ export class ConversationReadRepo {
   }
 }
 
-/**
- * Roll-up unread predicate (#task:1226 §3.5). A message `m` is unread for
- * `@viewer` when it is neither a system message nor the viewer's own, AND its
- * conversation is not ARCHIVED, AND either:
- *   - it is a MAINLINE message past the viewer's mainline cursor, OR
- *   - it is a reply in a thread the viewer FOLLOWS (`thread_followers`,
- *     principal_kind='human'), past that thread's own cursor.
- *
- * Each branch qualifies the cursor lookup by its own stream — there is no single
- * per-conversation cursor any more. References `m.conversation_id` and `@viewer`,
- * so every caller must alias the messages table `m` and bind `@viewer`.
- *
- * ARCHIVED EXCLUSION (#task:1403): archiving a channel ends its lifecycle — it is
- * no longer visible, so its unread must not count toward ANY badge (sidebar /
- * workspace / global). Baked into the predicate itself (not each caller) so all
- * consumers — the workspace-scoped aggregates, the per-conversation counts, and
- * the favorites row — agree by construction that "unread" excludes archived
- * conversations; there is no second place to keep in sync. `setArchived` emits a
- * viewer-scoped `unread_updated` so already-cached badges drop in place without a
- * refetch (both archive AND unarchive — the predicate re-includes on restore).
- *
- * NOTE: `thread_followers` is the DELIVERY / agent-wake subscription contract
- * (#task:1226 invariant 4). It is only READ here to derive the followed/all
- * distinction; this module never writes it.
- */
-const ROLLUP_UNREAD = `
-  NOT EXISTS (
-    SELECT 1 FROM conversations arch
-     WHERE arch.id = m.conversation_id AND arch.archived_at IS NOT NULL
-  )
-  AND m.from_kind != 'system'
-  AND NOT (m.from_kind = 'user' AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
-  AND (
-    (
-      m.thread_root_id IS NULL
-      AND m.seq > COALESCE(
-        (SELECT cr.last_read_seq FROM conversation_reads cr
-          WHERE cr.user_id = @viewer AND cr.conversation_id = m.conversation_id
-            AND cr.thread_root_id IS NULL),
-        0
-      )
-    )
-    OR
-    (
-      m.thread_root_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1 FROM thread_followers tf
-         WHERE tf.thread_root_id = m.thread_root_id
-           AND tf.principal_kind = 'human'
-           AND tf.principal_id = @viewer
-      )
-      AND m.seq > COALESCE(
-        (SELECT cr.last_read_seq FROM conversation_reads cr
-          WHERE cr.user_id = @viewer AND cr.conversation_id = m.conversation_id
-            AND cr.thread_root_id = m.thread_root_id),
-        0
-      )
-    )
-  )`;
+// The unread predicates (roll-up + followed-thread-only) live in one shared
+// module so every read-model — this repo's aggregates/counts, the header Threads
+// dot, and the Unread threads view — embeds the SAME SQL (#task:1774).

@@ -128,6 +128,58 @@ describe('GET /api/conversations/:id/threads', () => {
     );
     expect(badCursor.status).toBe(400);
     expect(((await badCursor.json()) as any).code).toBe('invalid_cursor');
+
+    const badFilter = await http(t).get(
+      `${threadsPath(channelId)}?filter=bogus`,
+    );
+    expect(badFilter.status).toBe(400);
+    expect(((await badFilter.json()) as any).code).toBe('invalid_filter');
+  });
+
+  it('filter=followed-unread returns only followed ∩ unread clusters (#task:1774)', async () => {
+    t = buildTestApp();
+    const { channelId, agentId } = await createChannel(t);
+    const messages = new MessageRepo(t.ctx.db);
+
+    const mkRootWithReply = (label: string) => {
+      const root = messages.insertForConversation({
+        conversationId: channelId,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: `${label} root`,
+      });
+      messages.insertForConversation({
+        conversationId: channelId,
+        fromKind: 'agent',
+        fromAgentId: agentId,
+        threadRootId: root.id,
+        content: `${label} reply`,
+      });
+      return root;
+    };
+    const followed = mkRootWithReply('followed');
+    const unfollowed = mkRootWithReply('unfollowed');
+    // The default HTTP viewer is 'local'; follow only one cluster.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO thread_followers
+           (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+         VALUES (?, ?, 'human', 'local', ?, 'manual')`,
+      )
+      .run(followed.id, channelId, Date.now());
+
+    const all = (await (await http(t).get(threadsPath(channelId))).json()) as any;
+    expect(all.threads.map((x: any) => x.root_message_id).sort()).toEqual(
+      [followed.id, unfollowed.id].sort(),
+    );
+
+    const unread = (await (
+      await http(t).get(`${threadsPath(channelId)}?filter=followed-unread`)
+    ).json()) as any;
+    expect(unread.threads.map((x: any) => x.root_message_id)).toEqual([
+      followed.id,
+    ]);
+    expect(unread.threads[0].viewer_following).toBe(true);
   });
 
   it('returns 404 for a missing channel', async () => {

@@ -85,6 +85,41 @@ describe('GET /api/conversations/:id/unread', () => {
     expect(after.threads[root.id]).toBeUndefined();
   });
 
+  it('carries the followed_thread_unread header-dot signal (#task:1774)', async () => {
+    t = buildTestApp();
+    const { channelId, agentId } = await createChannel(t);
+    const messages = new MessageRepo(t.ctx.db);
+
+    const root = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      content: 'root',
+    });
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: agentId,
+      threadRootId: root.id,
+      content: 'unread reply',
+    });
+
+    // Unread reply exists but the viewer does NOT follow the thread → dot off.
+    const before = (await (await http(t).get(unreadPath(channelId))).json()) as any;
+    expect(before.followed_thread_unread).toBe(false);
+
+    // Following the thread flips the header dot on for the same unread reply.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO thread_followers
+           (thread_root_id, conversation_id, principal_kind, principal_id, followed_at, source)
+         VALUES (?, ?, 'human', 'local', ?, 'manual')`,
+      )
+      .run(root.id, channelId, Date.now());
+    const after = (await (await http(t).get(unreadPath(channelId))).json()) as any;
+    expect(after.followed_thread_unread).toBe(true);
+  });
+
   it('404s for an unknown conversation', async () => {
     t = buildTestApp();
     await createChannel(t);

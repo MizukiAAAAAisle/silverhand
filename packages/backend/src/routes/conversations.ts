@@ -539,12 +539,25 @@ export function createConversationMessagingApp(
     }
     const cursor = c.req.query('cursor') ?? null;
 
+    // Threads scope (#task:1774): default "All" (every reply-cluster) vs the
+    // viewer's "Unread" tab (`followed ∩ unread`). Same collection / projection /
+    // keyset — a viewer-scoped filter, NOT a separate resource — so only these
+    // two values are accepted.
+    const filterRaw = c.req.query('filter');
+    let filter: 'all' | 'followed-unread' = 'all';
+    if (filterRaw !== undefined) {
+      if (filterRaw !== 'all' && filterRaw !== 'followed-unread') {
+        return c.json({ error: 'invalid filter', code: 'invalid_filter' }, 400);
+      }
+      filter = filterRaw;
+    }
+
     try {
       const page = timedRouteSpan(
         ctx,
         'conversation.threads.list',
-        { conversationId: channel.id, kind: channel.kind, limit },
-        () => messages.listChannelThreads(channel.id, viewerUserId, { limit, cursor }),
+        { conversationId: channel.id, kind: channel.kind, limit, filter },
+        () => messages.listChannelThreads(channel.id, viewerUserId, { limit, cursor, filter }),
         result => ({
           threadCount: result.threads.length,
           hasMore: result.next_cursor != null,
@@ -585,6 +598,7 @@ export function createConversationMessagingApp(
       result => ({
         mainlineUnread: result.mainline.unread_count,
         threadCount: Object.keys(result.threads).length,
+        followedThreadUnread: result.followed_thread_unread,
       }),
     );
     return c.json(unread);

@@ -3,6 +3,7 @@ import { testWorkspacePath } from '../utils/db.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { openTestDb } from '../utils/db.js';
 
@@ -483,5 +484,87 @@ describe('ConversationReadRepo', () => {
       first_unread_seq: null,
     });
     expect(after.threads[root.id]?.unread_count).toBe(1);
+  });
+
+  it('hasFollowedThreadUnread lights ONLY on followed ∩ unread (mainline / unfollowed excluded)', () => {
+    const { db, messages, reads, channel } = bootstrap();
+    const followers = new ThreadFollowerRepo(db);
+
+    // Cell 1 — mainline-only unread: an agent message on the mainline does NOT
+    // light the Threads dot (mainline is deliberately excluded here).
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'mainline unread',
+    });
+    expect(reads.hasFollowedThreadUnread(channel.id, 'local')).toBe(false);
+    expect(
+      reads.streamUnreadForConversation(channel.id, 'local').followed_thread_unread,
+    ).toBe(false);
+
+    // Cell 2 — unfollowed thread with unread: a reply in a thread the viewer does
+    // NOT follow stays out of the header dot (it surfaces only as the in-list soft
+    // dot). The follow-agnostic per-thread map still carries it.
+    const root = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      content: 'thread root',
+    });
+    const reply = messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      threadRootId: root.id,
+      content: 'unread reply',
+    });
+    expect(reads.hasFollowedThreadUnread(channel.id, 'local')).toBe(false);
+    expect(reads.streamUnreadForConversation(channel.id, 'local').threads[root.id])
+      .toBeDefined();
+
+    // Cell 3 — followed thread with unread: following the root flips the dot on.
+    followers.upsert({
+      threadRootId: root.id,
+      conversationId: channel.id,
+      principalKind: 'human',
+      principalId: 'local',
+      source: 'manual',
+    });
+    expect(reads.hasFollowedThreadUnread(channel.id, 'local')).toBe(true);
+    expect(
+      reads.streamUnreadForConversation(channel.id, 'local').followed_thread_unread,
+    ).toBe(true);
+
+    // Reading the followed thread to its head clears the dot — it is gated on the
+    // per-thread cursor, not merely on following.
+    reads.markRead({
+      viewerUserId: 'local',
+      conversationId: channel.id,
+      threadRootId: root.id,
+      seq: reply.seq,
+    });
+    expect(reads.hasFollowedThreadUnread(channel.id, 'local')).toBe(false);
+
+    // Guards apply to the followed branch too: neither a system reply nor the
+    // viewer's OWN reply relights the dot; a fresh agent reply does.
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'system',
+      threadRootId: root.id,
+      content: 'system reply',
+    });
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'user',
+      fromUserId: 'local',
+      threadRootId: root.id,
+      content: 'my own reply',
+    });
+    expect(reads.hasFollowedThreadUnread(channel.id, 'local')).toBe(false);
+    messages.insertForConversation({
+      conversationId: channel.id,
+      fromKind: 'agent',
+      threadRootId: root.id,
+      content: 'fresh unread reply',
+    });
+    expect(reads.hasFollowedThreadUnread(channel.id, 'local')).toBe(true);
   });
 });
