@@ -2,8 +2,9 @@ import { useState } from 'react';
 import * as Select from '@radix-ui/react-select';
 import { AlertCircle, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
-import type { AgentCapability, AgentDto, WorkspaceRole } from '@silverhand/shared';
+import type { AgentCapability, AgentDto } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
+import { getCurrentUserId } from '@/lib/current-user';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -12,6 +13,7 @@ import { primaryAction, primaryCancel } from '@/features/common/PrimaryAction';
 import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/cn';
 import { buildCapabilityGroups, CAPABILITY_COUNT } from './capability-meta';
+import { canEditAgentCapabilities } from './agent-permissions';
 import {
   useAgentCapabilities,
   useUpdateAgentCapabilities,
@@ -30,26 +32,13 @@ function setEq(a: Set<string>, b: Set<string>): boolean {
   return true;
 }
 
-function roleLabel(role: WorkspaceRole | null | undefined): string {
-  switch (role) {
-    case 'owner':
-      return 'owner';
-    case 'admin':
-      return 'admin';
-    case 'member':
-      return 'member';
-    default:
-      return 'non-member';
-  }
-}
-
 /** Turn a PUT failure into an operator-facing message. The backend gates
  *  edits on the human role (403) and rejects unknown buckets via the enum
  *  (400) — both must be visible even though the front-end also gates. */
 function describeSaveError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.kind === 'backend_unreachable') return 'Save failed: cannot reach backend';
-    if (err.status === 403) return "You don't have edit permission (owner / admin required)";
+    if (err.status === 403) return "You don't have edit permission for this agent";
     if (err.status === 400) return 'Save failed: submitted an unknown capability';
     return `Save failed (${err.status})`;
   }
@@ -74,7 +63,6 @@ export function AgentPermissionsPanel({
   const membersQuery = useWorkspaceMemberLists(workspaceId);
   const agents = membersQuery.data?.agents ?? EMPTY_AGENTS;
   const viewerRole = membersQuery.data?.viewerRole;
-  const canEdit = viewerRole === 'owner' || viewerRole === 'admin';
 
   const [picked, setPicked] = useState<string | null>(focusAgentId ?? null);
   const avatarUrls = useAgentAvatarObjectUrls(agents);
@@ -82,6 +70,19 @@ export function AgentPermissionsPanel({
   const selectedId =
     picked && agents.some(a => a.id === picked) ? picked : agents[0]?.id ?? null;
   const selectedAgent = agents.find(a => a.id === selectedId) ?? null;
+
+  // Per-agent edit gate (#task:1778): a workspace governor (owner|admin) edits
+  // any agent; everyone else edits ONLY the agent they created. Derived from
+  // viewer_role + THIS agent's created_by_user_id, fail-closed while either is
+  // unresolved (see canEditAgentCapabilities). Backend #task:1777 is the
+  // boundary; this only mirrors it so no read-only viewer sees a Save that 403s.
+  const canEdit = selectedAgent
+    ? canEditAgentCapabilities({
+        viewerRole,
+        viewerUserId: getCurrentUserId(),
+        agentCreatedByUserId: selectedAgent.created_by_user_id,
+      })
+    : false;
 
   if (membersQuery.isLoading) {
     return <PanelSkeleton />;
@@ -107,16 +108,6 @@ export function AgentPermissionsPanel({
 
   return (
     <div className="flex flex-col gap-4">
-      {!canEdit ? (
-        <div className="flex items-start gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
-          <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-          <span>
-            You are {roleLabel(viewerRole)} in this workspace — you can view agent
-            permissions, but editing requires owner / admin.
-          </span>
-        </div>
-      ) : null}
-
       <AgentSelect
         agents={agents}
         value={selectedId}
@@ -125,13 +116,27 @@ export function AgentPermissionsPanel({
       />
 
       {selectedAgent ? (
-        <AgentCapabilityEditor
-          key={selectedAgent.id}
-          workspaceId={workspaceId!}
-          agent={selectedAgent}
-          canEdit={canEdit}
-          highlightCapability={highlightCapability ?? null}
-        />
+        <>
+          {/* Read-only notice is per selected agent (the gate is per-agent now):
+              it explains why THIS agent's editor is read-only, so it sits with
+              the editor below the picker, not above it. */}
+          {!canEdit ? (
+            <div className="flex items-start gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
+              <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+              <span>
+                You can view this agent's permissions; editing requires owner /
+                admin, or being the agent's creator.
+              </span>
+            </div>
+          ) : null}
+          <AgentCapabilityEditor
+            key={selectedAgent.id}
+            workspaceId={workspaceId!}
+            agent={selectedAgent}
+            canEdit={canEdit}
+            highlightCapability={highlightCapability ?? null}
+          />
+        </>
       ) : null}
     </div>
   );
