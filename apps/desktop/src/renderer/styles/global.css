@@ -192,12 +192,18 @@ html, body, #root {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--bg-active); }
 
-/* Task filter-bar dropdowns: the global thumb reads `--bg-hover`, which
-   in forza6 is a lime tile colour and looked like a "green scrollbar"
-   inside these popovers (shiki feedback). Scope them to a neutral
-   subtle thumb instead — the panels carry `data-task-filter-panel`. */
+/* Info-framed popovers & dialogs: the global thumb reads `--bg-hover`,
+   which in forza6 is a lime tile colour and looked like a "green scrollbar"
+   inside these panels (shiki feedback, task-filter dropdowns then the members
+   modal's add-member picker #task:1785). A scrollbar is a utility surface, so
+   it takes the neutral `--border` ink here rather than a saturated tile hue.
+   `data-popover-frame="info"` is the shared info-frame skin worn by every
+   info popover and dialog (pickers, info cards, the members modal), so all of
+   them get the neutral thumb — not just the surface that surfaced the bug. */
 [data-task-filter-panel]::-webkit-scrollbar-thumb,
-[data-task-filter-panel] ::-webkit-scrollbar-thumb {
+[data-task-filter-panel] ::-webkit-scrollbar-thumb,
+[data-popover-frame]::-webkit-scrollbar-thumb,
+[data-popover-frame] ::-webkit-scrollbar-thumb {
   background: var(--border);
 }
 

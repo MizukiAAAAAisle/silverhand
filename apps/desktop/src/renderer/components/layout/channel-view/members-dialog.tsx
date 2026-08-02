@@ -572,6 +572,10 @@ export function ChannelMembersDialog({
                 workspaceId={addMemberWorkspaceId}
                 conversationId={channelId}
                 align="center"
+                // Opened from inside this Dialog: the Dialog's scroll-lock would
+                // otherwise block wheel scroll on the portaled candidate list, so
+                // the picker opens modal to reclaim it (#task:1785).
+                modal
                 trigger={
                   <Button size="sm" {...primaryAction('w-full')}>
                     <Plus className="size-4" aria-hidden />

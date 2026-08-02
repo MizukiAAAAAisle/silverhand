@@ -38,6 +38,16 @@ interface AddConversationMemberPopoverOptions
    *  (shiki 2026-07-28), without this file or the caller restating the dialog's
    *  padding. */
   align?: 'start' | 'center' | 'end';
+  /** Open as a MODAL popover. Needed when the trigger lives inside a Radix
+   *  Dialog (the members modal): the Dialog wraps its content in
+   *  `react-remove-scroll`, which blocks wheel/touch scroll everywhere OUTSIDE
+   *  its subtree — and this panel is PORTALED to the body, so its candidate
+   *  list could not be scrolled with a wheel/trackpad (#task:1785). A modal
+   *  popover puts its own content on top of the scroll-lock stack, so the list
+   *  scrolls again. The header `+` opens the panel outside any dialog, where no
+   *  lock exists, so it stays non-modal to avoid locking page scroll for a
+   *  low-key affordance. */
+  modal?: boolean;
 }
 
 /**
@@ -90,9 +100,10 @@ export function AddConversationMemberPopover({
   conversationId,
   trigger,
   align = 'end',
+  modal = false,
 }: AddConversationMemberPopoverOptions): JSX.Element {
   return (
-    <Popover.Root>
+    <Popover.Root modal={modal}>
       <Popover.Trigger asChild>
         {trigger ?? (
           <button
