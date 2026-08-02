@@ -11,7 +11,59 @@ import {
   flagStringArray,
   type ParsedArgs,
 } from '../parse.js';
+import { decodeStdinUtf8, readAllStdin } from '../stdin.js';
 import type { Command } from './index.js';
+
+/**
+ * Resolve the `--body` switch into the wire body for `task create` / `task
+ * edit`. `--body` is VALUE-LESS: the Markdown body is read from stdin
+ * (heredoc/pipe), never from an inline argument. This mirrors `message send`
+ * and removes the shell-quoting footgun where `--body "line1\nline2"` stored
+ * a literal backslash-n instead of a newline.
+ *
+ *   --body omitted           → undefined  (create: empty body; edit: unchanged)
+ *   --body + piped bytes      → the decoded UTF-8 string
+ *   --body + empty pipe       → ''          (clears the body)
+ *   --body <string> / =string → CliError    (the removed inline form)
+ *   --body on a TTY           → CliError     (forgot to pipe)
+ *
+ * All the throwing branches run BEFORE the blocking `readAllStdin()` so an
+ * inline value / TTY / (upstream) missing required flag fails fast instead of
+ * hanging on a read whose EOF never comes.
+ */
+async function resolveBodySwitch(args: ParsedArgs): Promise<string | undefined> {
+  const raw = args.flags['body'];
+  if (raw === undefined) return undefined;
+  // The parser binds any inline token (`--body text` / `--body=text`, and a
+  // repeated flag → array) directly to `body`. A value-less switch parses to
+  // boolean `true`; anything else is the removed inline form.
+  if (raw !== true) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'body_requires_stdin',
+      message:
+        '--body no longer takes an inline value; it reads the Markdown body from stdin. ' +
+        "Pipe it with a heredoc — e.g. `silverhand task edit --task-number N --body <<'SILVERHAND_EOF'\n" +
+        '...\nSILVERHAND_EOF`. Omit --body to leave the body unchanged; ' +
+        '`--body </dev/null` clears it.',
+      retriable: false,
+      details: { flag: 'body' },
+    });
+  }
+  if (process.stdin.isTTY) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'stdin_is_tty',
+      message:
+        '--body reads the body from stdin, but stdin is a TTY. ' +
+        "Pipe it — e.g. `silverhand task edit --task-number N --body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`, " +
+        'or `--body </dev/null` to clear the body.',
+      retriable: false,
+    });
+  }
+  // Empty pipe → '' → an explicit clear (edit) / empty description (create).
+  return decodeStdinUtf8(await readAllStdin(), 'task body');
+}
 
 const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done', 'closed'];
 const VALID_UPDATE_STATUSES: readonly TaskStatus[] = [
@@ -192,15 +244,22 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
 const createCommand: Command = {
   verb: 'create',
   summary: 'Create one task (optionally self-claim).',
-  help: `silverhand task create --title <title> [--body <body>]
+  help: `silverhand task create --title <title> [--body]
                          [--source-message-id <id>]
                          [--claim]
                          [--target channel|thread:<message_id>]
                          [--conversation-id <id>]
 
-Create ONE task in the current conversation. --title is required; --body is
-optional (an omitted body stores an empty description — the title is NOT
-duplicated into the body). To create several tasks, call this once per task.
+Create ONE task in the current conversation. --title is required. --body is a
+value-less switch: when present, the Markdown body is read from STDIN (pipe or
+heredoc) — it never takes an inline argument. Omit --body and the task stores an
+empty description (the title is NOT duplicated into the body). To create several
+tasks, call this once per task.
+
+  silverhand task create --title "Fix login" --body <<'SILVERHAND_EOF'
+  ## Context
+  Multi-line Markdown with $vars and \`backticks\` is safe under a heredoc.
+  SILVERHAND_EOF
 
 --conversation-id <id> (optional) files the task in ANOTHER conversation
 instead of the current one — the cross-conversation case: you finish a
@@ -242,7 +301,8 @@ thread root or any reply in it; the task is anchored to the cluster's root.
 Pre-flight failures (exit 1):
   --title not supplied  → missing_required_flag (use the minimal call
                           shown above)
-  --message was supplied → flag_removed (use --title / --body)
+  --message was supplied → flag_removed (use --title, pipe body via --body)
+  --body given a value   → body_requires_stdin (drop the value; pipe the body)
 
 Create failures (exit 1, structured stderr — NOT printed as success):
   source_conflict              → code=conflict, details.existing_task
@@ -267,8 +327,8 @@ stdout (success only): CreateTasksResult JSON.`,
     message: {
       replacement: 'title+body',
       hint:
-        'silverhand task create takes --title (required) and --body (optional), ' +
-        'one task per call: `silverhand task create --title "..." --body "..."`.',
+        'silverhand task create takes --title (required); the body is read from ' +
+        "stdin via the value-less --body switch: `silverhand task create --title \"...\" --body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`.",
     },
   },
   async run({ client, args }) {
@@ -283,7 +343,9 @@ stdout (success only): CreateTasksResult JSON.`,
         subkind: 'missing_required_flag',
         message:
           'silverhand task create requires --title. ' +
-          'Minimal call: `silverhand task create --title "..." --body "..."`. ' +
+          'Minimal call: `silverhand task create --title "..."`. ' +
+          'Add a Markdown body by piping stdin through the value-less --body ' +
+          "switch: `--body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`. " +
           'To create a task from an existing message and start it in one ' +
           'call, use `silverhand task create --title "..." ' +
           '--source-message-id <id> --claim`.',
@@ -291,7 +353,7 @@ stdout (success only): CreateTasksResult JSON.`,
         details: { command: 'task create', flag: 'title' },
       });
     }
-    const body = flagString(args, 'body');
+    const body = await resolveBodySwitch(args);
     const sourceMessageId = flagString(args, 'source-message-id');
     const target = parseTaskCreateTarget(
       flagString(args, 'target'),
@@ -618,12 +680,21 @@ const editCommand: Command = {
   verb: 'edit',
   summary: "Edit a task's title and/or content (last-write-wins).",
   help: `silverhand task edit --task-number N
-                        [--title <title>] [--body <body>]
+                        [--title <title>] [--body]
                         [--workspace-id <id> | --workspace <name>]
 
 Edit the current definition (title and/or content) of an existing task.
-Provide at least one of --title / --body. --body sets the full content;
-pass --body "" to clear it. Fields you omit are left unchanged.
+Provide at least one of --title / --body. --body is a value-less switch that
+reads the full new content from STDIN (pipe or heredoc) — it never takes an
+inline argument. An EMPTY stdin under --body clears the content. Omit --body
+(and any field) to leave it unchanged.
+
+  silverhand task edit --task-number 42 --body <<'SILVERHAND_EOF'
+  ## Acceptance
+  Multi-line Markdown with $vars and \`backticks\` is safe under a heredoc.
+  SILVERHAND_EOF
+
+  silverhand task edit --task-number 42 --body </dev/null   # clears the body
 
 Last-write-wins: the edit is applied directly and the most recent
 successful write wins — there is no concurrency check. It never changes
@@ -651,8 +722,9 @@ stdout: TaskEditResult JSON.`,
       });
     }
     const title = flagString(args, 'title');
-    const body = flagString(args, 'body');
-    if (title === undefined && body === undefined) {
+    // Presence check on the raw flag (NOT the resolved body) so a title-less,
+    // body-less edit fails fast — before `resolveBodySwitch` blocks on stdin.
+    if (title === undefined && args.flags['body'] === undefined) {
       throw new CliError({
         code: 'validation_error',
         subkind: 'missing_required_flag',
@@ -661,6 +733,7 @@ stdout: TaskEditResult JSON.`,
         details: { command: 'task edit' },
       });
     }
+    const body = await resolveBodySwitch(args);
     const selector = resolveWorkspaceSelector(args);
     return client.editTask({
       task_number: taskNumber,

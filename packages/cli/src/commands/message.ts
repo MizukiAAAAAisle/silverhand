@@ -30,6 +30,7 @@ import {
   flagString,
   flagStringArray,
 } from '../parse.js';
+import { decodeStdinUtf8, readAllStdin } from '../stdin.js';
 import type { Command } from './index.js';
 
 const sendCommand: Command = {
@@ -198,31 +199,12 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
         });
       }
 
-      // UTF-8 decode + zero normalization. `Buffer.toString('utf8')`
-      // does NOT strip a BOM; does NOT translate CR/LF; does NOT trim.
-      // The backend / DB stores the bytes the agent wrote, period.
-      content = buffer.toString('utf8');
-
-      // Round-trip sanity. `toString('utf8')` silently substitutes any
-      // invalid byte sequence with U+FFFD (REPLACEMENT CHARACTER); if
-      // we accepted that, the DB would store a string whose bytes do
-      // NOT equal the agent's input — exactly the silent-corruption
-      // failure mode this command's stdin-only design exists to
-      // prevent. Reject explicitly so the agent re-encodes upstream.
-      // `details` is bytes-free (Cindy review): `{encoding: 'utf8'}`
-      // is enough context, raw bytes never enter stderr or cli-trace.
-      if (!Buffer.from(content, 'utf8').equals(buffer)) {
-        throw new CliError({
-          code: 'validation_error',
-          subkind: 'invalid_utf8',
-          message:
-            'message body must be valid UTF-8 ' +
-            '(stdin contained byte sequences that are not a UTF-8 string). ' +
-            'Re-encode your input as UTF-8 before piping.',
-          retriable: false,
-          details: { encoding: 'utf8' },
-        });
-      }
+      // UTF-8 decode + zero normalization. Strict round-trip: any byte
+      // sequence that is not valid UTF-8 is rejected (never silently
+      // substituted with U+FFFD), so the bytes the backend/DB stores always
+      // equal what the agent piped. No BOM strip, no CR/LF translation, no
+      // trim — see `decodeStdinUtf8`.
+      content = decodeStdinUtf8(buffer, 'message body');
 
       // Oversized bodies never enter the message pipeline (they would be
       // rejected by the backend's content byte cap, and multi-MB text
@@ -857,19 +839,6 @@ async function staleReceiveViaDaemon(
   } finally {
     await host.close().catch(() => undefined);
   }
-}
-
-/** Read every byte off `process.stdin` into a single Buffer. Does NOT
- *  set an encoding — chunks are raw `Buffer`s, so multi-byte UTF-8
- *  sequences crossing chunk boundaries are preserved bit-for-bit.
- *  Returns an empty Buffer on EOF without bytes (the empty-stdin
- *  preflight in `send` decides how to react). */
-async function readAllStdin(): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
 }
 
 /** Spool an oversized stdin body to a temp file and upload it as a

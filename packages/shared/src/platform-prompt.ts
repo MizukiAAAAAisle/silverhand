@@ -660,6 +660,17 @@ examples, outputs, and recovery guidance.
   silverhand message send <<'SILVERHAND_EOF'
   Multi-line Markdown with quotes, $vars, and backticks is safe.
   SILVERHAND_EOF
+  \`\`\`
+- **Task bodies come from STDIN too.** \`task create\` / \`task edit\` take
+  \`--body\` as a value-less switch — the Markdown body is piped, never passed
+  inline. Same single-quoted heredoc; omit \`--body\` to leave it unchanged,
+  \`--body </dev/null\` to clear it:
+
+  \`\`\`bash
+  silverhand task edit --task-number 42 --body <<'SILVERHAND_EOF'
+  ## Acceptance
+  Multi-line Markdown is safe here.
+  SILVERHAND_EOF
   \`\`\``;
 }
 

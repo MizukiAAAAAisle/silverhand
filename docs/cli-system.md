@@ -63,11 +63,11 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (mutually exclusive). |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
-| `silverhand task create` | Create one task (`--title` + optional `--body`) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task; `--conversation-id <id>` files it in another conversation (cross-conversation, §3.4) instead of the current one. See §3.4. |
+| `silverhand task create` | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task; `--conversation-id <id>` files it in another conversation (cross-conversation, §3.4) instead of the current one. See §3.4. |
 | `silverhand task claim` | Claim an existing task by task number (to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
 | `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
 | `silverhand task status` | Move a task to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
-| `silverhand task edit` | Edit a task's title/content by `--task-number` (last-write-wins; the most recent successful edit wins, no concurrency check). Never touches status/assignee. See §3.4. |
+| `silverhand task edit` | Edit a task's title/content by `--task-number` (last-write-wins; the most recent successful edit wins, no concurrency check). `--body` is a value-less switch reading the new content from stdin/heredoc; empty stdin clears it, omit to leave unchanged (§3.4). Never touches status/assignee. See §3.4. |
 | `silverhand task detail` | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`) by `--task-number`. |
 | `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). |
 | `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). |
@@ -160,7 +160,8 @@ Pre-flight failures (exit 1, code `validation_error`):
 | `subkind` | When |
 |---|---|
 | `flag_removed` | A command-specific removed/disallowed flag was supplied, such as `message send --content` / `--text` / `--message` or `task create --message`. |
-| `stdin_is_tty` | `process.stdin.isTTY` is true and no attachment was supplied. |
+| `body_requires_stdin` | `task create` / `task edit` `--body` was given an inline value (`--body <text>` / `--body=<text>`). `--body` is a value-less switch; pipe the body on stdin instead. |
+| `stdin_is_tty` | A command that reads its body from stdin (`message send`, or `task create`/`task edit` under `--body`) ran with `process.stdin.isTTY` true and no attachment — i.e. nothing was piped. |
 | `empty_stdin` | Stdin closed with 0 bytes and no attachment was supplied. |
 | `invalid_utf8` | Stdin contained byte sequences that are not valid UTF-8. The CLI does NOT silently substitute U+FFFD — re-encode upstream and retry. |
 | `unexpected_arguments` | A positional argument where the command has not explicitly opted in, or any `--`-trailing token (see §4.1). |
@@ -377,7 +378,11 @@ unassigned tasks always require the agent to claim first; the
 
 #### Create provenance + `--claim`
 
-`task create` creates one task per call and accepts an optional
+`task create` creates one task per call. `--title` is required; `--body` is a
+**value-less switch** that reads the Markdown body from STDIN (pipe or heredoc)
+— never an inline argument (an inline `--body <value>` is rejected with
+`body_requires_stdin`). Omit `--body` and the task stores an empty description.
+It also accepts an optional
 `--source-message-id <id>` that records the message that
 prompted the task. This is a **permanent 1:1 provenance link**: a message
 backs at most one task for its entire lifetime, regardless of that task's
@@ -430,8 +435,11 @@ origin→destination mapping lives only in the backend restricted audit log.
 `task edit` changes a task's current title/content (never status or
 assignee). Use it when later instructions materially change the task's
 objective or scope; workflow state and ownership belong to `task status` /
-`task claim`. Provide at least one of `--title` / `--body` (`--body ""`
-clears the content; omitted fields are left unchanged). The edit is a plain
+`task claim`. Provide at least one of `--title` / `--body`. `--body` is a
+**value-less switch**: the new content is read from STDIN (pipe or heredoc),
+never from an inline argument — an inline `--body <value>` is rejected with
+`body_requires_stdin`. An **empty** stdin under `--body` clears the content;
+omitted fields (including `--body` itself) are left unchanged. The edit is a plain
 last-write-wins UPDATE by task id: the most recent successful write wins,
 with **no** optimistic-concurrency guard (no `--expected-revision`, no
 `revision` token, no `conflict` result) — task edits are low-contention and
@@ -780,9 +788,10 @@ Current `subkind` values (CLI-side enum is the source of truth):
 - `unexpected_arguments` — a positional argument where the command has
   not explicitly opted in, too many positionals for an opted-in
   command, or any `--`-trailing token.
-- `stdin_is_tty` — `silverhand message send` invoked without a piped body or attachment.
+- `body_requires_stdin` — `task create` / `task edit` `--body` was given an inline value; it is a value-less switch and reads the body from stdin.
+- `stdin_is_tty` — a stdin-body command (`message send`, or `task create`/`task edit` under `--body`) ran with a TTY on stdin and nothing piped.
 - `empty_stdin` — `silverhand message send` invoked with 0-byte stdin and no attachment.
-- `invalid_utf8` — `silverhand message send` stdin contained non-UTF-8 bytes.
+- `invalid_utf8` — a stdin-body command received non-UTF-8 bytes on stdin.
 
 `subkind` and `details` are stderr-only. The fire-and-forget
 `cli-trace` reporter never carries `details` (or any raw value-bearing

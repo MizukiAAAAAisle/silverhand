@@ -40,7 +40,7 @@ describe('task edit guards + wire mapping', () => {
   const edit = findCommand('task', 'edit');
   if (!edit) throw new Error('task edit command missing');
 
-  it('maps task-number + title/body to the wire shape', async () => {
+  it('maps task-number + title to the wire shape (body omitted, unchanged)', async () => {
     const { client, capture } = fakeEditClient();
     await edit.run({
       env,
@@ -49,25 +49,26 @@ describe('task edit guards + wire mapping', () => {
       args: parsedFlags({
         'task-number': '5',
         title: 'new',
-        body: 'body',
       }),
     });
     expect(capture()).toEqual({
       task_number: 5,
       title: 'new',
-      body: 'body',
     });
   });
 
-  it('passes an explicit empty --body through (clears content)', async () => {
-    const { client, capture } = fakeEditClient();
-    await edit.run({
-      env,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      client: client as any,
-      args: parsedFlags({ 'task-number': '7', body: '' }),
-    });
-    expect(capture()).toEqual({ task_number: 7, body: '' });
+  it('rejects an inline --body value as body_requires_stdin (the removed form)', async () => {
+    // `--body <text>` / `--body=<text>` bind a string to the flag; the body
+    // now comes only from stdin, so the inline form is refused before any
+    // stdin read. Empty-stdin clearing is exercised in the subprocess suite.
+    await expect(
+      edit.run({
+        env,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        client: {} as any,
+        args: parsedFlags({ 'task-number': '7', body: 'inline body' }),
+      }),
+    ).rejects.toMatchObject({ subkind: 'body_requires_stdin' });
   });
 
   it('rejects a missing --task-number', async () => {

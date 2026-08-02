@@ -60,6 +60,10 @@ export type ErrorSubkind =
   | 'stdin_is_tty'
   | 'empty_stdin'
   | 'invalid_utf8'
+  /** `task create/edit --body` was given an inline value. The Markdown body
+   *  now comes only from stdin (a value-less `--body` switch), so the removed
+   *  `--body <string>` form is refused before any stdin read. */
+  | 'body_requires_stdin'
   | 'unknown_flag'
   | 'enum_invalid'
   | 'mutually_exclusive'
