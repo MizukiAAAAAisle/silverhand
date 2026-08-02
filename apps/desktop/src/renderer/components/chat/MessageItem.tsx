@@ -1239,7 +1239,7 @@ function AuthorLabel({
            *  the design deliberately rejects. */
           data-message-author
           data-author-kind="agent"
-          className="rounded font-medium text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
         >
           {displayLabel}
         </button>
@@ -1262,7 +1262,7 @@ function AuthorLabel({
           }}
           data-message-author
           data-author-kind="human"
-          className="rounded font-medium text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
         >
           {displayLabel}
         </button>
@@ -1273,7 +1273,7 @@ function AuthorLabel({
     <span
       data-message-author
       data-author-kind={isUser ? 'human' : 'agent'}
-      className="font-medium text-text-primary"
+      className="font-bold text-text-primary"
     >
       {displayLabel}
     </span>
