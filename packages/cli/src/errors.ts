@@ -58,6 +58,11 @@ export type ErrorSubkind =
   | 'missing_required_flag'
   | 'unexpected_arguments'
   | 'stdin_is_tty'
+  /** Stdin closed with 0 bytes where content was required. `message send`
+   *  with no body and no attachment; and `task create/edit --body` with an
+   *  EMPTY pipe — which is fail-closed (writes nothing), NOT a silent clear,
+   *  so a forgotten heredoc cannot wipe a task description. Clearing a task
+   *  body is the explicit, separate `task edit --clear-body`. */
   | 'empty_stdin'
   | 'invalid_utf8'
   /** `task create/edit --body` was given an inline value. The Markdown body

@@ -34,21 +34,31 @@ const MAX_TASK_BODY_BYTES = TASK_CONTENT_MAX_LEN * 3;
  * and removes the shell-quoting footgun where `--body "line1\nline2"` stored
  * a literal backslash-n instead of a newline.
  *
- *   --body omitted           → undefined  (create: empty body; edit: unchanged)
+ *   --body omitted            → undefined  (create: empty body; edit: unchanged)
  *   --body + piped bytes      → the decoded UTF-8 string
- *   --body + empty pipe       → ''          (clears the body)
+ *   --body + EMPTY pipe       → CliError `empty_stdin` — fail-closed, writes
+ *                               NOTHING. An empty pipe is almost always a
+ *                               forgotten heredoc, and silently clearing a
+ *                               task's description on that mistake is data loss
+ *                               the agent cannot detect. Clearing is a separate,
+ *                               EXPLICIT intent: `task edit --clear-body`.
  *   --body <string> / =string → CliError    (the removed inline form)
  *   --body on a TTY           → CliError     (forgot to pipe)
  *   --body over the size cap  → CliError     (bounded read, then exact check)
  *
- * All the throwing branches run BEFORE the blocking `readAllStdin()` so an
- * inline value / TTY / (upstream) missing required flag fails fast instead of
- * hanging on a read whose EOF never comes. The read itself is bounded
- * (`MAX_TASK_BODY_BYTES`) so a pathologically large pipe is rejected mid-read;
- * a within-bound body is then length-checked EXACTLY against `TaskBodySchema`
- * (UTF-16 code units) — the same authority the backend enforces.
+ * All the branches that don't need stdin throw BEFORE the blocking
+ * `readAllStdin()` so an inline value / TTY / (upstream) missing required flag
+ * fails fast instead of hanging on a read whose EOF never comes. The read
+ * itself is bounded (`MAX_TASK_BODY_BYTES`) so a pathologically large pipe is
+ * rejected mid-read; a within-bound body is then length-checked EXACTLY against
+ * `TaskBodySchema` (UTF-16 code units) — the same authority the backend
+ * enforces. `verb` only tailors the `empty_stdin` guidance (create has no body
+ * to clear; edit points at `--clear-body`).
  */
-async function resolveBodySwitch(args: ParsedArgs): Promise<string | undefined> {
+async function resolveBodySwitch(
+  args: ParsedArgs,
+  verb: 'create' | 'edit',
+): Promise<string | undefined> {
   const raw = args.flags['body'];
   if (raw === undefined) return undefined;
   // The parser binds any inline token (`--body text` / `--body=text`, and a
@@ -62,7 +72,7 @@ async function resolveBodySwitch(args: ParsedArgs): Promise<string | undefined> 
         '--body no longer takes an inline value; it reads the Markdown body from stdin. ' +
         "Pipe it with a heredoc — e.g. `silverhand task edit --task-number N --body <<'SILVERHAND_EOF'\n" +
         '...\nSILVERHAND_EOF`. Omit --body to leave the body unchanged; ' +
-        '`--body </dev/null` clears it.',
+        'use `task edit --clear-body` to clear it.',
       retriable: false,
       details: { flag: 'body' },
     });
@@ -74,15 +84,34 @@ async function resolveBodySwitch(args: ParsedArgs): Promise<string | undefined> 
       message:
         '--body reads the body from stdin, but stdin is a TTY. ' +
         "Pipe it — e.g. `silverhand task edit --task-number N --body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`, " +
-        'or `--body </dev/null` to clear the body.',
+        'or use `task edit --clear-body` to clear the body.',
       retriable: false,
     });
   }
-  // Empty pipe → '' → an explicit clear (edit) / empty description (create).
   // The read is bounded first (memory guard); the decoded string is then
   // checked EXACTLY against the shared length cap so an over-limit body is
   // rejected client-side with the precise UTF-16 count rather than deferred.
   const body = decodeStdinUtf8(await readAllStdin(MAX_TASK_BODY_BYTES), 'task body');
+  if (body === '') {
+    // Fail-closed on an empty pipe — NEVER a silent clear. A forgotten heredoc
+    // must not wipe a real description with the agent none the wiser; emptying
+    // is the explicit, separate `--clear-body` intent (edit only).
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'empty_stdin',
+      message:
+        verb === 'edit'
+          ? '--body read an empty stdin and will NOT clear the body (a forgotten ' +
+            'heredoc must never silently wipe a task description). To clear it, use ' +
+            '`silverhand task edit --task-number N --clear-body`; to leave it ' +
+            'unchanged, omit --body; otherwise pipe non-empty Markdown.'
+          : '--body read an empty stdin. Omit --body to create the task with an empty ' +
+            'description, or pipe non-empty Markdown. (An empty pipe is refused so a ' +
+            'forgotten heredoc cannot silently create an empty body.)',
+      retriable: false,
+      details: { flag: 'body' },
+    });
+  }
   const parsed = TaskBodySchema.safeParse(body);
   if (!parsed.success) {
     throw new CliError({
@@ -336,6 +365,8 @@ Pre-flight failures (exit 1):
                           shown above)
   --message was supplied → flag_removed (use --title, pipe body via --body)
   --body given a value   → body_requires_stdin (drop the value; pipe the body)
+  --body + empty stdin   → empty_stdin (omit --body for an empty description;
+                           an empty pipe is refused, never a silent empty body)
 
 Create failures (exit 1, structured stderr — NOT printed as success):
   source_conflict              → code=conflict, details.existing_task
@@ -386,7 +417,7 @@ stdout (success only): CreateTasksResult JSON.`,
         details: { command: 'task create', flag: 'title' },
       });
     }
-    const body = await resolveBodySwitch(args);
+    const body = await resolveBodySwitch(args, 'create');
     const sourceMessageId = flagString(args, 'source-message-id');
     const target = parseTaskCreateTarget(
       flagString(args, 'target'),
@@ -713,21 +744,23 @@ const editCommand: Command = {
   verb: 'edit',
   summary: "Edit a task's title and/or content (last-write-wins).",
   help: `silverhand task edit --task-number N
-                        [--title <title>] [--body]
+                        [--title <title>] [--body | --clear-body]
                         [--workspace-id <id> | --workspace <name>]
 
 Edit the current definition (title and/or content) of an existing task.
-Provide at least one of --title / --body. --body is a value-less switch that
-reads the full new content from STDIN (pipe or heredoc) — it never takes an
-inline argument. An EMPTY stdin under --body clears the content. Omit --body
-(and any field) to leave it unchanged.
+Provide at least one of --title / --body / --clear-body. --body is a value-less
+switch that reads the full new content from STDIN (pipe or heredoc) — it never
+takes an inline argument, and an EMPTY stdin is REFUSED (empty_stdin) rather
+than silently clearing the body (a forgotten heredoc must never wipe a
+description). To clear the content, pass --clear-body (mutually exclusive with
+--body). Omit all of them to leave a field unchanged.
 
   silverhand task edit --task-number 42 --body <<'SILVERHAND_EOF'
   ## Acceptance
   Multi-line Markdown with $vars and \`backticks\` is safe under a heredoc.
   SILVERHAND_EOF
 
-  silverhand task edit --task-number 42 --body </dev/null   # clears the body
+  silverhand task edit --task-number 42 --clear-body   # clears the body
 
 Last-write-wins: the edit is applied directly and the most recent
 successful write wins — there is no concurrency check. It never changes
@@ -743,6 +776,7 @@ stdout: TaskEditResult JSON.`,
     'workspace-id',
     'workspace',
   ] as const,
+  booleanFlags: ['clear-body'] as const,
   async run({ client, args }) {
     const taskNumber = flagNumber(args, 'task-number');
     if (taskNumber === undefined) {
@@ -755,18 +789,36 @@ stdout: TaskEditResult JSON.`,
       });
     }
     const title = flagString(args, 'title');
-    // Presence check on the raw flag (NOT the resolved body) so a title-less,
-    // body-less edit fails fast — before `resolveBodySwitch` blocks on stdin.
-    if (title === undefined && args.flags['body'] === undefined) {
+    const clearBody = flagBool(args, 'clear-body') === true;
+    const hasBodyFlag = args.flags['body'] !== undefined;
+    // --clear-body is the ONLY way to empty a body; it is destructive and must
+    // be unambiguous, so it cannot ride alongside --body (which SETS a body).
+    if (clearBody && hasBodyFlag) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'mutually_exclusive',
+        message:
+          '--body and --clear-body are mutually exclusive: --body SETS the body ' +
+          'from stdin, --clear-body empties it. Pick one.',
+        retriable: false,
+        details: { flags: ['body', 'clear-body'] },
+      });
+    }
+    // Presence check on the RAW flags (NOT the resolved body) so a no-op edit
+    // fails fast — before `resolveBodySwitch` blocks on stdin.
+    if (title === undefined && !hasBodyFlag && !clearBody) {
       throw new CliError({
         code: 'validation_error',
         subkind: 'missing_required_flag',
-        message: 'task edit requires at least one of --title or --body',
+        message: 'task edit requires at least one of --title, --body, or --clear-body',
         retriable: false,
         details: { command: 'task edit' },
       });
     }
-    const body = await resolveBodySwitch(args);
+    // --clear-body is the explicit empty; otherwise resolve stdin (which itself
+    // refuses an empty pipe). Either yields the wire body (or undefined = leave
+    // unchanged when --body is absent).
+    const body = clearBody ? '' : await resolveBodySwitch(args, 'edit');
     const selector = resolveWorkspaceSelector(args);
     return client.editTask({
       task_number: taskNumber,

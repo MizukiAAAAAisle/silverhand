@@ -60,7 +60,8 @@ describe('task edit guards + wire mapping', () => {
   it('rejects an inline --body value as body_requires_stdin (the removed form)', async () => {
     // `--body <text>` / `--body=<text>` bind a string to the flag; the body
     // now comes only from stdin, so the inline form is refused before any
-    // stdin read. Empty-stdin clearing is exercised in the subprocess suite.
+    // stdin read. Empty-stdin is REFUSED (not a clear) in the subprocess
+    // suite; clearing is the explicit `--clear-body`.
     await expect(
       edit.run({
         env,
@@ -69,6 +70,36 @@ describe('task edit guards + wire mapping', () => {
         args: parsedFlags({ 'task-number': '7', body: 'inline body' }),
       }),
     ).rejects.toMatchObject({ subkind: 'body_requires_stdin' });
+  });
+
+  it('maps --clear-body to an empty body (explicit clear, no stdin read)', async () => {
+    const { client, capture } = fakeEditClient();
+    await edit.run({
+      env,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      client: client as any,
+      args: {
+        flags: { 'task-number': '5', 'clear-body': true },
+        positional: [],
+        rest: [],
+      } as ParsedArgs,
+    });
+    expect(capture()).toEqual({ task_number: 5, body: '' });
+  });
+
+  it('rejects --body + --clear-body as mutually_exclusive', async () => {
+    await expect(
+      edit.run({
+        env,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        client: {} as any,
+        args: {
+          flags: { 'task-number': '5', body: true, 'clear-body': true },
+          positional: [],
+          rest: [],
+        } as ParsedArgs,
+      }),
+    ).rejects.toMatchObject({ subkind: 'mutually_exclusive' });
   });
 
   it('rejects a missing --task-number', async () => {

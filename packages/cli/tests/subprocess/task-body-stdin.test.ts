@@ -4,8 +4,10 @@
  *
  * Scope:
  *   - `--body` is a value-less switch: bytes piped on stdin become the body,
- *   - an EMPTY stdin pipe under `--body` clears the body (edit) / stores an
- *     empty description (create),
+ *   - an EMPTY stdin pipe under `--body` is REFUSED (`empty_stdin`) and writes
+ *     NOTHING — a forgotten heredoc must never silently clear a task body,
+ *   - clearing a body is the explicit `task edit --clear-body`, which is
+ *     mutually exclusive with `--body` (`mutually_exclusive`),
  *   - an INLINE `--body <value>` / `--body=<value>` is rejected as
  *     `body_requires_stdin` — and that rejection is fail-fast (never blocks
  *     on a read),
@@ -196,17 +198,50 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     expect(req.title).toBeUndefined();
   });
 
-  it('task edit: empty stdin under --body clears the body', async () => {
+  it('task edit: empty stdin under --body is REFUSED (empty_stdin) and clears NOTHING', async () => {
+    // The core data-loss falsifier: a bare `--body` whose stdin closes with 0
+    // bytes (a forgotten heredoc) must NOT clear the body. It fails closed with
+    // `empty_stdin` and sends no request — the description is left untouched.
     captured.length = 0;
     const r = await runTask({
       verb: 'edit',
       argv: ['--task-number', '5', '--body'],
       stdin: '',
     });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('empty_stdin');
+    expect(businessRequests().length, 'empty --body still sent a task edit').toBe(0);
+  });
+
+  it('task edit: --clear-body is the explicit clear (sends body: "")', async () => {
+    captured.length = 0;
+    const r = await runTask({
+      verb: 'edit',
+      argv: ['--task-number', '5', '--clear-body'],
+      // --clear-body never reads stdin; leaving the pipe open must not hang it.
+      keepStdinOpen: true,
+    });
+    expect(r.killedByWatchdog, '--clear-body blocked on stdin').toBe(false);
     expect(r.code, r.stderr).toBe(0);
     const req = lastRequestJson<{ task_number: number; body?: string }>();
     expect(req.task_number).toBe(5);
     expect(req.body).toBe('');
+  });
+
+  it('task edit: --body + --clear-body is rejected as mutually_exclusive, fail-fast', async () => {
+    // Both a set and a clear intent: refuse before any read.
+    captured.length = 0;
+    const r = await runTask({
+      verb: 'edit',
+      argv: ['--task-number', '5', '--body', '--clear-body'],
+      keepStdinOpen: true,
+    });
+    expect(r.killedByWatchdog, 'blocked on stdin before rejecting the flag combo').toBe(false);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('mutually_exclusive');
+    expect(businessRequests().length).toBe(0);
   });
 
   it('task edit: omitting --body sends no body field and never reads stdin', async () => {
@@ -400,6 +435,20 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     });
     expect(r.code).toBe(1);
     expect(parseStderrJson(r.stderr).error.subkind).toBe('body_requires_stdin');
+  });
+
+  it('task create: empty stdin under --body is refused (empty_stdin), no request', async () => {
+    // Consistent with edit: a forgotten heredoc must not silently create an
+    // empty body. Omitting --body is the way to an empty description.
+    captured.length = 0;
+    const r = await runTask({
+      verb: 'create',
+      argv: ['--title', 'x', '--body'],
+      stdin: '',
+    });
+    expect(r.code).toBe(1);
+    expect(parseStderrJson(r.stderr).error.subkind).toBe('empty_stdin');
+    expect(businessRequests().length).toBe(0);
   });
 
   // macOS-only: BSD `script -q /dev/null` provides a pty (same rationale as

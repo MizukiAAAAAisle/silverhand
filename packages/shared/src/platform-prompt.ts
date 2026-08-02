@@ -663,8 +663,9 @@ examples, outputs, and recovery guidance.
   \`\`\`
 - **Task bodies come from STDIN too.** \`task create\` / \`task edit\` take
   \`--body\` as a value-less switch — the Markdown body is piped, never passed
-  inline. Same single-quoted heredoc; omit \`--body\` to leave it unchanged,
-  \`--body </dev/null\` to clear it:
+  inline. Same single-quoted heredoc; omit \`--body\` to leave it unchanged. An
+  EMPTY pipe is refused (never a silent clear); to clear a body use
+  \`task edit --clear-body\`:
 
   \`\`\`bash
   silverhand task edit --task-number 42 --body <<'SILVERHAND_EOF'
