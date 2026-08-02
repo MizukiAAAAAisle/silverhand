@@ -243,26 +243,36 @@ describe('agent capability storage (graded-permissions cut 2)', () => {
     const OWNER = 'teammate';
     const CREATOR = 'other';
     const UNRELATED = 'someone';
+    const ADMIN = 'carol';
     const asOwner = { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(OWNER) };
     const asCreator = { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(CREATOR) };
     const asUnrelated = { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(UNRELATED) };
+    const asAdmin = { [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader(ADMIN) };
 
     /**
-     * OWNER owns `ws`; CREATOR and UNRELATED are invited plain `member`s. CREATOR
-     * creates `mine` and enrolls it through the production route, so
-     * `mine.created_by_user_id === CREATOR` and `mine` is a real member. No
-     * fixture memberships (permission-boundary test): every row is production.
+     * OWNER owns `ws`; CREATOR and UNRELATED are invited plain `member`s; ADMIN is
+     * an invited member promoted to the exact `admin` role (distinct from OWNER,
+     * whose `owner` role outranks admin) so the admin arm of the escalation is
+     * isolated by a real `admin`, not an owner. CREATOR creates `mine` and enrolls
+     * it through the production route, so `mine.created_by_user_id === CREATOR` and
+     * `mine` is a real member. No fixture memberships (permission-boundary test):
+     * every row is production.
      */
     async function scenario(t: TestApp): Promise<{ ws: string; mine: string }> {
       const ws = ((await (
         await http(t).post('/api/workspaces', { name: 'gate', member_agent_ids: [] }, { headers: asOwner })
       ).json()) as any).workspace.id as string;
-      for (const user of [CREATOR, UNRELATED]) {
+      for (const user of [CREATOR, UNRELATED, ADMIN]) {
         expect(
           (await http(t).post(`/api/workspaces/${ws}/members`, { kind: 'human', user_id: user }, { headers: asOwner }))
             .status,
         ).toBe(201);
       }
+      // Promote ADMIN to the exact `admin` governance role (setUserRole is the
+      // authoritative writer; it refuses `owner`, so this is a true admin, not the
+      // owner). This isolates the escalation's admin arm from the owner path.
+      const promoted = new WorkspaceRepo(t.ctx.db).setUserRole(ws, ADMIN, 'admin');
+      expect(promoted?.role).toBe('admin');
       const mine = ((await (
         await http(t).post('/api/agents', { name: 'gated-agent', runtime: 'claude' }, { headers: asCreator })
       ).json()) as any).agent.id as string;
@@ -274,12 +284,24 @@ describe('agent capability storage (graded-permissions cut 2)', () => {
       return { ws, mine };
     }
 
-    it('admin (non-creator) may edit — role governs the whole roster', async () => {
+    it('the workspace owner (outranks admin, non-creator) may edit — role governs the whole roster', async () => {
       t = buildTestApp({ seedAllFixtureMemberships: false });
       const { ws, mine } = await scenario(t);
       const res = await http(t).put(capsPath(ws, mine), { capabilities: ['read_messages'] }, { headers: asOwner });
       expect(res.status).toBe(200);
       expect(new AgentCapabilityRepo(t.ctx.db).list(ws, mine)).toEqual(['read_messages']);
+    });
+
+    it('a distinct admin-role member (non-creator) may edit — isolates the escalation admin arm', async () => {
+      t = buildTestApp({ seedAllFixtureMemberships: false });
+      const { ws, mine } = await scenario(t);
+      // ADMIN holds the exact `admin` role and did not create `mine`, so a 200
+      // here proves the inner escalation genuinely admits admin — the arm the
+      // owner case (owner outranks admin) cannot isolate now that the registry
+      // floor has dropped from admin to member.
+      const res = await http(t).put(capsPath(ws, mine), { capabilities: ['read_tasks'] }, { headers: asAdmin });
+      expect(res.status).toBe(200);
+      expect(new AgentCapabilityRepo(t.ctx.db).list(ws, mine)).toEqual(['read_tasks']);
     });
 
     it('a plain member who CREATED the agent may edit it', async () => {
