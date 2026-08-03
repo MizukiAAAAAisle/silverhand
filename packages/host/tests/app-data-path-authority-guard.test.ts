@@ -232,8 +232,15 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     file: 'packages/host/src/daemon/connect-command.ts',
     token: 'homedir()',
     line: 'sessionStoreHome: homedir(),',
-    reason: 'connect preflight: third-party session STORE home (not app-data), same seam as the desktop engine — passed to BOTH the convergence pass (#task:1608) and the relocation facet (#task:1805)',
-    count: 2,
+    reason: 'connect preflight: third-party session STORE home (not app-data), passed into the shared startup preflight (#task:1608/#task:1805)',
+    count: 1,
+  },
+  {
+    file: 'packages/host/src/daemon/direct-startup-preflight.ts',
+    token: 'homedir()',
+    line: 'sessionStoreHome: opts.sessionStoreHome ?? homedir(),',
+    reason: 'direct-daemon preflight: third-party session STORE home (not app-data), passed into the same shared startup preflight as connect (#task:1806)',
+    count: 1,
   },
   {
     file: 'packages/host/src/daemon/workspace-registry/convergence-pass.ts',

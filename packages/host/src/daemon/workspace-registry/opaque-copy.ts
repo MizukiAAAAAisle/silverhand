@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import {
   chmodSync,
   closeSync,
+  constants,
   copyFileSync,
   lstatSync,
   mkdirSync,
@@ -284,12 +286,34 @@ export function stageTree(source: string, staging: string): void {
     // prior run (this is a reserved single-writer namespace), so reclaim it
     // rather than wedging on EEXIST when a reused PID reproduces the name.
     if (probe(staging) !== 'absent') removeStaging(staging);
-    mkdirSync(staging);
-    mirrorTree(source, staging);
-    // Clamp the staging root to the source mode LAST. A read-only source dir
-    // (e.g. 0555) must not become the copy's mode before its own children are
-    // written, or writing them would EACCES.
-    chmodSync(staging, permBits(rootStat.mode));
+    if (process.platform === 'darwin') {
+      // Node's COPYFILE_FICLONE is not wired to APFS clonefile(2) on macOS
+      // (the FORCE variant returns ENOSYS). BSD cp -c is the supported native
+      // interface: it clones on APFS and falls back to copyfile(2) across
+      // filesystems or on volumes without cloning. -R -P preserves the opaque
+      // tree and symlinks without following them. `staging` must not exist.
+      const copied = spawnSync(
+        '/bin/cp',
+        ['-c', '-R', '-P', source, staging],
+        { encoding: 'utf8', maxBuffer: 64 * 1024 },
+      );
+      if (copied.error || copied.status !== 0) {
+        const detail =
+          copied.error?.message ??
+          (copied.stderr.trim() || `exit ${copied.status}`);
+        throw new RelocationError(
+          'relocation_move_failed',
+          `APFS clone/copy staging ${source} failed (${detail})`,
+        );
+      }
+    } else {
+      mkdirSync(staging);
+      mirrorTree(source, staging);
+      // Clamp the staging root to the source mode LAST. A read-only source dir
+      // (e.g. 0555) must not become the copy's mode before its own children are
+      // written, or writing them would EACCES.
+      chmodSync(staging, permBits(rootStat.mode));
+    }
   } catch (err) {
     if (err instanceof RelocationError) throw err;
     throw new RelocationError(
@@ -311,7 +335,11 @@ function mirrorTree(srcDir: string, dstDir: string): void {
       // are written, so a read-only source dir never blocks its own copy.
       chmodSync(dst, permBits(stat.mode));
     } else if (stat.isFile()) {
-      copyFileSync(src, dst);
+      // Non-macOS filesystems get Node's reflink hint. It preserves independent
+      // files and transparently falls back to an ordinary copy when unsupported.
+      // macOS takes the whole-tree `/bin/cp -c` path in stageTree instead,
+      // because Node does not bridge this flag to APFS clonefile(2).
+      copyFileSync(src, dst, constants.COPYFILE_FICLONE);
       chmodSync(dst, permBits(stat.mode));
     } else if (stat.isSymbolicLink()) {
       symlinkSync(readlinkSync(src), dst);

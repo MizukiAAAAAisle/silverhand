@@ -56,7 +56,9 @@ import {
   HostClient,
   OUTBOUND_PROTOCOL_VERSION,
   spawnDaemonChild,
+  spawnWorkspaceStartupPreflight,
   type DaemonHandle,
+  type RegistryBinding,
 } from '@silverhand/host';
 import { prepareDesktopDataLayout } from './layout-migration/prepare.js';
 import { reportLayoutMigrationFailures } from './layout-migration/report-failures.js';
@@ -631,6 +633,31 @@ function daemonPaths(): DaemonPaths {
     legacyProxyConfigPath: paths.legacyLocalComputer.proxyConfig,
     controlPlaneServerUrlPath: paths.run.controlPlaneServerUrl,
     localOutboundSocketPath: paths.run.outboundSocket,
+  };
+}
+
+/** Resolve the existing desktop computer binding into the exact registry
+ * identity the one-shot host preflight must migrate before daemon spawn. This mirrors the
+ * layout engine's binding classifier: loopback profiles own the
+ * `local-embedded` registry namespace; remote profiles own their URL origin.
+ * No host token crosses into the daemon argv. */
+function workspaceRelocationBindingForPreflight(): RegistryBinding | null {
+  const config = readDaemonHostConfig(desktopAppPaths().desktop.computerBinding);
+  if (config === null) return null;
+  const classified = classifyServerUrl(config.server_url, {
+    allowInsecureRemote: true,
+  });
+  if (!classified.ok) {
+    throw new Error(
+      `computer binding cannot identify its workspace registry: ${classified.message}`,
+    );
+  }
+  return {
+    host_id: config.host_id,
+    server_origin:
+      classified.kind === 'loopback'
+        ? 'local-embedded'
+        : classified.url.origin,
   };
 }
 
@@ -2337,8 +2364,22 @@ async function bootstrap(): Promise<void> {
     // in-process ConversationManager runtime, Commit C removed the
     // env switch). Recovery is fixing the daemon spawn / socket.
     const paths = daemonPaths();
+    const workspaceRelocationBinding = workspaceRelocationBindingForPreflight();
+    const daemonLauncher = resolveDaemonLauncher();
+    const daemonLayoutMigrationOutcome =
+      workspaceRelocationBinding === null
+        ? layoutMigrationOutcome
+        : await spawnWorkspaceStartupPreflight({
+            launcher: daemonLauncher,
+            logDir: paths.logDir,
+            computersRootDir: paths.computersRootDir,
+            silverhandStateRootDir: paths.silverhandStateRootDir,
+            binding: workspaceRelocationBinding,
+            layoutMigrationOutcome,
+            alsoStderr: !app.isPackaged,
+          });
     daemon = await spawnDaemonChild({
-      launcher: resolveDaemonLauncher(),
+      launcher: daemonLauncher,
       socketPath: paths.socketPath,
       pidFilePath: paths.pidFilePath,
       logDir: paths.logDir,
@@ -2346,7 +2387,11 @@ async function bootstrap(): Promise<void> {
       computersRootDir: paths.computersRootDir,
       silverhandStateRootDir: paths.silverhandStateRootDir,
       daemonIdentityPath: paths.daemonIdentityPath,
-      layoutMigrationOutcome,
+      layoutMigrationOutcome: daemonLayoutMigrationOutcome,
+      // The data-sized relocation already completed in the one-shot preflight
+      // child. This is only the ordinary daemon ready deadline; 30s tolerates
+      // slower machines while retaining a finite stuck-start boundary.
+      readyTimeoutMs: 30_000,
       proxyConfigPath: null,
       legacyProxyConfigPath: paths.legacyProxyConfigPath,
       controlPlaneServerUrlPath:

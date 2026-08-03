@@ -39,11 +39,13 @@ import {
  * new distinct cwd — verbatim, opaquely, fail-closed, idempotently.
  *
  * This is a NEW facet composed from the shipped machinery per the reuse map
- * (§4): it runs inside the same connect-command preflight as
+ * (§4): it runs inside the shared daemon startup preflight as
  * `runWorkspaceDataConvergencePass`, AFTER it (the flatten must settle the
- * registry to the flat raw-id layout first), and it is enabled ONLY at that
- * connect composition entry — the desktop sibling neither enables the facet nor
- * writes the marker (Cindy org ruling). It reuses the registry inventory, the
+ * registry to the flat raw-id layout first). Both daemon launch forms —
+ * standalone `connect` and Electron's one-shot daemon-binary preflight child —
+ * invoke that same unit before binding any socket; host code remains the only
+ * marker writer. The supervised daemon starts only after the one-shot exits.
+ * It reuses the registry inventory, the
  * cwd-slug computation, the `isSlugVerifiableCwd` charset gate, the config-dir
  * override normalization, and the fail-closed typed-error discipline; it does
  * NOT reuse the rename-based physical move (cross-fs copy instead) nor the

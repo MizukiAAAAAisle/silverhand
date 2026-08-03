@@ -83,10 +83,13 @@ shim:**
    resolver; there is no second, legacy runtime resolution path. The legacy
    registry is read *exclusively inside the migration preflight* as inventory
    (MEDIUM 1, round 2).
-3. **One migration owner for this facet.** All product users are remote, so the
-   **daemon** owns this facet's migration and its completion marker (§5). The
-   desktop engine is a sibling entry that may reuse the same unit, but it is out
-   of scope here and must not become a second authority proving half the state.
+3. **One migration owner for this facet.** Host/daemon code owns this facet's
+   migration and completion marker (§5) in both launch forms. Standalone
+   `connect` invokes the ordered preflight directly; Electron launches the same
+   daemon binary in a one-shot `preflight` mode and waits for it to exit before
+   spawning the supervised daemon. Desktop main only passes the existing
+   computer binding and never moves bytes or writes the marker. Data-sized work
+   therefore sits outside the supervised daemon's ready-handshake deadline.
 4. **A single completion marker gates startup admission.** The migration runs as
    a daemon **startup preflight**, before any registry or data-plane surface
    exists (as the existing convergence pass already does, fail-closed). The
@@ -274,10 +277,12 @@ letting the user hand-pick a path to repair system state. That diagnostic is
 ## 4. Reuse map (extend the shipped machinery — and where it does NOT apply)
 
 The relocation runs as a **new facet on the daemon's existing one-time startup
-migration**, driven by `runWorkspaceDataConvergencePass`
-(`packages/host/src/daemon/workspace-registry/convergence-pass.ts`, invoked at
-`connect-command.ts` after the binding is resolved and BEFORE any registry or
-data-plane surface exists, fail-closed: the daemon does not start on a migration
+migration**, driven by the shared `runWorkspaceStartupPreflight`
+(`packages/host/src/daemon/workspace-registry/convergence-pass.ts`). Standalone
+`connect` invokes it after resolving the binding; Electron passes its existing
+binding to a one-shot daemon-binary child, which invokes the same unit and exits
+before the supervised daemon is spawned. Both happen BEFORE any registry or
+data-plane surface exists (fail-closed: the daemon does not start on a migration
 error). Reuse the composition-entry shape, the runtime inventory
 (`CWD_SCOPED_SESSION_RUNTIMES = ['claude','qoder']`, Codex/opencode/cursor/gemini
 no-op, exhaustive `RuntimeKind` switch), the slug computation
@@ -299,9 +304,14 @@ corrected three false reuse claims:
   **distinct** new cwd. So the facet **copies the entire old bucket verbatim,
   opaquely, into each new agent-workspace cwd namespace** that needs continuity
   (1→N). Each agent resumes its own `cli_session_id` from its own copy; the other
-  sessions carried along are inert. This accepts a bounded N× storage
-  amplification — acceptable because all copies live under the same OS user on
-  the same machine, introducing no new visibility boundary. The fan-out uses the
+  sessions carried along are inert. Regular files request filesystem
+  copy-on-write clones first (macOS: `/bin/cp -c`, backed by APFS
+  `clonefile(2)`; other platforms: Node's `COPYFILE_FICLONE` hint), so
+  same-volume copies initially share physical blocks and diverge only when
+  written. Both mechanisms transparently fall back to an ordinary copy when
+  cloning is unsupported or the copy crosses filesystems. This preserves
+  independent real destination trees without eager N× physical-byte
+  amplification for the primary macOS user base. The fan-out uses the
   **same staging + stable-snapshot manifest + publish classifier** as the L2 copy
   (§5), and its destination census is the same filesystem `.silverhand/agents/*`
   child set the L2 inventory enumerates — never a DB `cli_session_id` query.
@@ -320,11 +330,14 @@ corrected three false reuse claims:
 
 ## 5. Migration: same-computer, in-place upgrade
 
-**Owner & trigger.** The **daemon** owns this facet (all product users are
-remote). It runs as a daemon **startup preflight** on the *original* computer via
-`runWorkspaceDataConvergencePass`, after the computer binding is resolved and
-BEFORE any registry/data-plane surface exists, with the old daemon/runtimes
-already stopped. Preflight failure aborts daemon startup (invariant #4).
+**Owner & trigger.** Host/daemon code owns this facet. It runs the shared daemon
+**startup preflight** on the *original* computer after the computer binding is
+resolved and BEFORE any registry/data-plane surface exists, with the old
+daemon/runtimes already stopped. Standalone `connect` invokes it directly;
+Electron runs a one-shot daemon-binary preflight child, awaits successful exit,
+then starts the supervised daemon under its ordinary 30-second ready deadline.
+The migration child itself has no fixed duration timeout because work scales
+with retained bytes. Preflight failure aborts daemon startup (invariant #4).
 
 **Completion marker — the SSOT (BLOCKER 3, rounds 1+2).** The daemon convergence
 pass has no completion marker today; it uses the flat registry as its resume
@@ -346,11 +359,11 @@ concrete, computer-local marker:
   **startup fail-closed**, never reinterpreted as v1; a **lower known** version
   routes to its explicit upgrade arm (v1 is the first, so none exists below it
   yet — but the arm is named, not lumped into "unknown").
-- **Writer** — written by the daemon convergence pass **only**, **last**, after
+- **Writer** — written by the shared daemon startup preflight **only**, **last**, after
   both L2 relocation and session fan-out verify. Single writer; atomic
   temp-file-plus-`rename` within the same directory (never a partial in-place
-  write). No other process writes it; the desktop engine is out of scope here
-  and must not write this marker.
+  write). No other process writes it; desktop main may pass a binding to its
+  child but must not write this marker.
 - **Semantics** — marker present ⇒ deterministic resolver authoritative,
   registry never consulted at runtime; marker absent/corrupt ⇒ preflight
   (re-)runs and, if it cannot verify, startup aborts.

@@ -5,6 +5,10 @@ import {
 } from './flatten-layout.js';
 import type { RegistryBinding } from './registry.js';
 import {
+  runWorkspaceLayoutRelocation,
+  type RelocationResult,
+} from './layout-relocation.js';
+import {
   runSessionRenamePass,
   runSessionSlugRepairPass,
   type MigrationLogger,
@@ -73,4 +77,54 @@ export function runWorkspaceDataConvergencePass(opts: {
     );
   }
   return { renamed, status: outcome.status };
+}
+
+export interface WorkspaceStartupPreflightOptions {
+  workspaceDataRootDir: string;
+  agentHomeRootDir: string;
+  currentBinding: RegistryBinding;
+  sessionStoreHome: string;
+  env: SessionStoreEnv;
+  logger: MigrationLogger;
+}
+
+export interface WorkspaceStartupPreflightResult {
+  convergence: ReturnType<typeof runWorkspaceDataConvergencePass>;
+  relocation: RelocationResult;
+  migrated: boolean;
+}
+
+/**
+ * The ONE ordered startup preflight shared by both daemon launch forms:
+ * standalone `connect` and the desktop-spawned direct daemon. Flattening must
+ * settle the registry before relocation reads it as inventory; keeping that
+ * ordering here prevents either composition entry from enabling the terminal
+ * resolver over legacy bytes without first running the relocation facet.
+ */
+export function runWorkspaceStartupPreflight(
+  opts: WorkspaceStartupPreflightOptions,
+): WorkspaceStartupPreflightResult {
+  const convergence = runWorkspaceDataConvergencePass({
+    workspaceDataRoot: opts.workspaceDataRootDir,
+    currentBinding: opts.currentBinding,
+    sessionStoreHome: opts.sessionStoreHome,
+    env: opts.env,
+    logger: opts.logger,
+  });
+  const relocation = runWorkspaceLayoutRelocation({
+    workspaceDataRootDir: opts.workspaceDataRootDir,
+    agentHomeRootDir: opts.agentHomeRootDir,
+    currentBinding: opts.currentBinding,
+    sessionStoreHome: opts.sessionStoreHome,
+    env: opts.env,
+    logger: opts.logger,
+  });
+  return {
+    convergence,
+    relocation,
+    migrated:
+      convergence.status === 'flattened' ||
+      convergence.renamed > 0 ||
+      relocation.moved,
+  };
 }

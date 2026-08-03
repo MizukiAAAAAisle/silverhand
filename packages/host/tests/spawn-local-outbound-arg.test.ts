@@ -249,4 +249,5 @@ describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', (
     const nullArgs = await captureSpawnArgs({ layoutMigrationOutcome: null });
     expect(nullArgs).not.toContain('--layout-migration-outcome');
   });
+
 });

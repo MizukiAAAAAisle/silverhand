@@ -39,16 +39,26 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { resolveComputerSlotFromComputersRoot } from '@silverhand/shared/app-data-layout';
 import { spawnDaemonChild, type DaemonHandle } from '../src/spawn.js';
+import { spawnWorkspaceStartupPreflight } from '../src/preflight-spawn.js';
 import { HostClient } from '../src/client/index.js';
+import { resolveAgentWorkspaceBundleDir } from '../src/daemon/agent-materialize/handler.js';
+import {
+  WorkspaceRegistry,
+  type RegistryBinding,
+} from '../src/daemon/workspace-registry/registry.js';
+import { cwdSessionSlug } from '../src/daemon/workspace-registry/session-migration.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolve(HERE, '..');
@@ -101,14 +111,61 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
     const pidFilePath = join(dir, 'daemon.pid');
     const logDir = join(dir, 'logs');
     const homeDir = join(dir, 'home');
+    const computersRootDir = join(dir, 'computers');
+    const silverhandStateRootDir = join(dir, 'state');
+    const binding: RegistryBinding = {
+      host_id: 'computer-1',
+      server_origin: 'local-embedded',
+    };
+    const slot = resolveComputerSlotFromComputersRoot(
+      computersRootDir,
+      binding.host_id,
+    );
+    const workspaceId = 'workspace-1';
+    const agentId = 'agent-1';
+    const legacyWorkspace = join(dir, 'legacy-workspace');
+    mkdirSync(slot.workspaceData, { recursive: true });
+    mkdirSync(legacyWorkspace, { recursive: true });
+    new WorkspaceRegistry({
+      stateDir: slot.workspaceData,
+      binding,
+    }).provision(workspaceId, legacyWorkspace);
+    const oldL2 = join(
+      legacyWorkspace,
+      '.silverhand',
+      'agents',
+      agentId,
+    );
+    mkdirSync(oldL2, { recursive: true });
+    writeFileSync(join(oldL2, 'MEMORY.md'), 'entry migration proof');
+    const oldSession = join(
+      homeDir,
+      '.claude',
+      'projects',
+      cwdSessionSlug(legacyWorkspace),
+    );
+    mkdirSync(oldSession, { recursive: true });
+    writeFileSync(join(oldSession, 'session.jsonl'), '{"entry":true}\n');
+
+    const launcher = {
+      command: TSX_BIN,
+      args: [DAEMON_ENTRY],
+      env: { HOME: homeDir },
+    };
+    const relocationOutcome = await spawnWorkspaceStartupPreflight({
+      launcher,
+      logDir,
+      computersRootDir,
+      silverhandStateRootDir,
+      binding,
+      layoutMigrationOutcome: 'already_current',
+      alsoStderr: false,
+    });
+    expect(relocationOutcome).toBe('migrated');
 
     let handle: DaemonHandle | null = null;
     handle = await spawnDaemonChild({
-      launcher: {
-        command: TSX_BIN,
-        args: [DAEMON_ENTRY],
-        env: { HOME: homeDir },
-      },
+      launcher,
       socketPath,
       pidFilePath,
       logDir,
@@ -116,12 +173,41 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
       // coordinate survives spawn → argv → entry → runDaemon (no sibling
       // derivation left to fall back on).
       daemonIdentityPath: join(dir, 'run', 'identity.json'),
+      computersRootDir,
+      silverhandStateRootDir,
+      layoutMigrationOutcome: relocationOutcome,
       alsoStderr: false,
       maxRestarts: 0,
       restartWindowMs: 1_000,
       readyTimeoutMs: 10_000,
     });
     cleanup.push(() => handle!.kill());
+
+    // Production-entry proof for #task:1806: the one-shot preflight exits only
+    // after migration, then the ordinary daemon starts under its unchanged
+    // short ready deadline. It cannot expose the terminal resolver over legacy
+    // bytes or be killed merely because data-sized migration exceeds 10s.
+    const newL2 = resolveAgentWorkspaceBundleDir(agentId, workspaceId, {
+      agentHomeRootDir: slot.agents,
+    });
+    expect(readFileSync(join(newL2, 'MEMORY.md'), 'utf8')).toBe(
+      'entry migration proof',
+    );
+    expect(
+      readFileSync(
+        join(
+          homeDir,
+          '.claude',
+          'projects',
+          cwdSessionSlug(newL2),
+          'session.jsonl',
+        ),
+        'utf8',
+      ),
+    ).toBe('{"entry":true}\n');
+    expect(
+      existsSync(join(slot.workspaceData, 'relocation-v1.marker.json')),
+    ).toBe(true);
 
     const client = new HostClient({ socketPath });
     cleanup.push(() => client.close());

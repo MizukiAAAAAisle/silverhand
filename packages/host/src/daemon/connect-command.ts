@@ -40,9 +40,8 @@ import type { LayoutMigrationOutcome } from '../protocol.js';
 // below: never the public barrel.
 import { recordLayoutMigrationFailure } from '../diagnostics/layout-migration-breadcrumb.js';
 // #task:1608 (Cindy R4 P2-4) — sibling imports, never the public barrel.
-import { runWorkspaceDataConvergencePass } from './workspace-registry/convergence-pass.js';
+import { runWorkspaceStartupPreflight } from './workspace-registry/convergence-pass.js';
 import { FlattenLayoutError } from './workspace-registry/flatten-layout.js';
-import { runWorkspaceLayoutRelocation } from './workspace-registry/layout-relocation.js';
 import { RelocationError } from './workspace-registry/relocation-error.js';
 import {
   SessionMigrationError,
@@ -329,8 +328,9 @@ export async function runConnectCommand(
       process.stderr.write(`silverhand-daemon connect: ${m}\n`),
   };
   try {
-    const convergence = runWorkspaceDataConvergencePass({
-      workspaceDataRoot: paths.workspaceDataRootDir,
+    const preflight = runWorkspaceStartupPreflight({
+      workspaceDataRootDir: paths.workspaceDataRootDir,
+      agentHomeRootDir: paths.agentHomeRootDir,
       currentBinding,
       sessionStoreHome: homedir(),
       env: sessionEnv,
@@ -339,27 +339,9 @@ export async function runConnectCommand(
     // #task:1613/#task:1663 — the observation token for the backend log:
     // either flattening or a released session-slug repair moved migration
     // bytes. A pass with no rename is already final.
-    layoutMigrationOutcome =
-      convergence.status === 'flattened' || convergence.renamed > 0
-        ? 'migrated'
-        : 'already_current';
-    // #task:1805 relocation-v1 §5 — the L2-relocation facet runs as a SIBLING
-    // step of the same connect preflight, AFTER convergence has settled the
-    // registry to the flat raw-id layout. This connect composition entry is the
-    // facet's SOLE enabler and marker writer (Cindy org ruling); the desktop
-    // sibling does not run it. Fail-closed identically: a RelocationError below
-    // aborts startup with every source byte preserved for the next retry.
-    const relocation = runWorkspaceLayoutRelocation({
-      workspaceDataRootDir: paths.workspaceDataRootDir,
-      agentHomeRootDir: paths.agentHomeRootDir,
-      currentBinding,
-      sessionStoreHome: homedir(),
-      env: sessionEnv,
-      logger: migrationLogger,
-    });
-    if (relocation.moved) {
-      layoutMigrationOutcome = 'migrated';
-    }
+    layoutMigrationOutcome = preflight.migrated
+      ? 'migrated'
+      : 'already_current';
   } catch (err) {
     if (
       err instanceof FlattenLayoutError ||

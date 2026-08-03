@@ -41,7 +41,12 @@ export {
   executeWorkspaceDataConvergence,
   planWorkspaceDataConvergence,
 } from './daemon/workspace-registry/flatten-layout.js';
-export { runWorkspaceDataConvergencePass } from './daemon/workspace-registry/convergence-pass.js';
+export {
+  runWorkspaceDataConvergencePass,
+  runWorkspaceStartupPreflight,
+  type WorkspaceStartupPreflightOptions,
+  type WorkspaceStartupPreflightResult,
+} from './daemon/workspace-registry/convergence-pass.js';
 // #task:1664 — the local failure-breadcrumb store for layout-v2 migration
 // diagnostics. Written by both failing components, consumed by the desktop
 // reporter; host owns local-filesystem authority.
@@ -82,6 +87,10 @@ export {
   type DaemonGenerationInfo,
   type SpawnDaemonOptions,
 } from './spawn.js';
+export {
+  spawnWorkspaceStartupPreflight,
+  type SpawnWorkspacePreflightOptions,
+} from './preflight-spawn.js';
 export {
   AnyFrameSchema,
   EventFrameSchema,

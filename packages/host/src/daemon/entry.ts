@@ -47,10 +47,20 @@
  *                         capability token for the backend observation log.
  *   --stderr              optional; mirror log lines to stderr too
  *
+ * One-shot preflight mode (desktop runs this BEFORE spawning the supervised
+ * daemon, so data-sized migration is outside the ready-handshake timeout):
+ *
+ *   silverhand-daemon preflight
+ *     --log-dir <abs>
+ *     --computers-root-dir <abs>
+ *     --workspace-relocation-host-id <id>
+ *     --workspace-relocation-server-origin <origin|local-embedded>
+ *
  * Stdout:
- *   one NDJSON line on successful bind:
+ *   normal daemon: one NDJSON line on successful bind:
  *     {"event":"ready","socket_path":"...","daemon_pid":...,...}
  *   followed by nothing — stdout is reserved for the handshake.
+ *   preflight: one result line followed by process exit.
  *
  * Stderr:
  *   parse errors before bind; nothing else unless `--stderr` is set.
@@ -71,6 +81,7 @@ import type { LayoutMigrationOutcome } from '../protocol.js';
 import { Supervisor } from './supervisor/index.js';
 import { runConnectCommand, runStopCommand } from './connect-command.js';
 import { enableNodeSystemCa } from '../node-system-ca.js';
+import { runDirectStartupPreflightCommand } from './direct-startup-preflight.js';
 
 enableNodeSystemCa();
 
@@ -230,6 +241,10 @@ async function main(): Promise<void> {
   if (argv[0] === 'stop') {
     const exitCode = await runStopCommand(argv.slice(1));
     process.exit(exitCode);
+  }
+  if (argv[0] === 'preflight') {
+    process.exitCode = await runDirectStartupPreflightCommand(argv.slice(1));
+    return; // let stdout drain before the one-shot process exits
   }
   const parsed = parseArgv(argv);
   if ('error' in parsed) {
