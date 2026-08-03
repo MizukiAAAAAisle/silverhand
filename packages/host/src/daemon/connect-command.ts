@@ -42,6 +42,8 @@ import { recordLayoutMigrationFailure } from '../diagnostics/layout-migration-br
 // #task:1608 (Cindy R4 P2-4) — sibling imports, never the public barrel.
 import { runWorkspaceDataConvergencePass } from './workspace-registry/convergence-pass.js';
 import { FlattenLayoutError } from './workspace-registry/flatten-layout.js';
+import { runWorkspaceLayoutRelocation } from './workspace-registry/layout-relocation.js';
+import { RelocationError } from './workspace-registry/relocation-error.js';
 import {
   SessionMigrationError,
   type SessionStoreEnv,
@@ -307,27 +309,32 @@ export async function runConnectCommand(
   // directory. Failure is fail-closed: the daemon does not start, no new
   // resolver coordinates are materialized.
   let layoutMigrationOutcome: LayoutMigrationOutcome;
+  // The ONE binding a connect daemon can own: its full runtime binding
+  // (Cindy R4 P0-1 — never a bare host id). Shared by the convergence pass
+  // and the relocation facet (both are inventory-scoped to it).
+  const currentBinding = {
+    server_origin: new URL(parsed.options.serverUrl).origin,
+    host_id: hostId,
+  };
+  // The same effective env the daemon (and its runtime children) inherit —
+  // never a fresh process.env read (Cindy R4 P2-4).
+  const sessionEnv = env as SessionStoreEnv;
+  const migrationLogger = {
+    info: (_f: Record<string, unknown>, m: string) => {
+      if (parsed.options.alsoStderr) {
+        process.stderr.write(`silverhand-daemon connect: ${m}\n`);
+      }
+    },
+    warn: (_f: Record<string, unknown>, m: string) =>
+      process.stderr.write(`silverhand-daemon connect: ${m}\n`),
+  };
   try {
     const convergence = runWorkspaceDataConvergencePass({
       workspaceDataRoot: paths.workspaceDataRootDir,
-      // The ONE binding a connect daemon can own: its full runtime
-      // binding (Cindy R4 P0-1 — never a bare host id).
-      currentBinding: {
-        server_origin: new URL(parsed.options.serverUrl).origin,
-        host_id: hostId,
-      },
+      currentBinding,
       sessionStoreHome: homedir(),
-      // The same effective env the daemon (and its runtime children)
-      // inherit — never a fresh process.env read (Cindy R4 P2-4).
-      env: env as SessionStoreEnv,
-      logger: {
-        info: (_f, m) => {
-          if (parsed.options.alsoStderr) {
-            process.stderr.write(`silverhand-daemon connect: ${m}\n`);
-          }
-        },
-        warn: (_f, m) => process.stderr.write(`silverhand-daemon connect: ${m}\n`),
-      },
+      env: sessionEnv,
+      logger: migrationLogger,
     });
     // #task:1613/#task:1663 — the observation token for the backend log:
     // either flattening or a released session-slug repair moved migration
@@ -336,12 +343,37 @@ export async function runConnectCommand(
       convergence.status === 'flattened' || convergence.renamed > 0
         ? 'migrated'
         : 'already_current';
+    // #task:1805 relocation-v1 §5 — the L2-relocation facet runs as a SIBLING
+    // step of the same connect preflight, AFTER convergence has settled the
+    // registry to the flat raw-id layout. This connect composition entry is the
+    // facet's SOLE enabler and marker writer (Cindy org ruling); the desktop
+    // sibling does not run it. Fail-closed identically: a RelocationError below
+    // aborts startup with every source byte preserved for the next retry.
+    const relocation = runWorkspaceLayoutRelocation({
+      workspaceDataRootDir: paths.workspaceDataRootDir,
+      agentHomeRootDir: paths.agentHomeRootDir,
+      currentBinding,
+      sessionStoreHome: homedir(),
+      env: sessionEnv,
+      logger: migrationLogger,
+    });
+    if (relocation.moved) {
+      layoutMigrationOutcome = 'migrated';
+    }
   } catch (err) {
-    if (err instanceof FlattenLayoutError || err instanceof SessionMigrationError) {
+    if (
+      err instanceof FlattenLayoutError ||
+      err instanceof SessionMigrationError ||
+      err instanceof RelocationError
+    ) {
       // #task:1613 — pre-connection failure: the backend is unreachable by
       // construction, so this daemon-local structured line (typed code,
       // versions, hostId) IS the failure evidence. stderr keeps the
       // operator-facing text.
+      const stage =
+        err instanceof RelocationError
+          ? 'workspace_layout_relocation'
+          : 'workspace_data_convergence';
       const code = daemonLayoutMigrationCode(err.code);
       const failureLogger = createDaemonLogger({
         dir: paths.logDir,
@@ -351,13 +383,15 @@ export async function runConnectCommand(
       failureLogger.error(
         {
           action: 'layout_v2_migration_failed',
-          stage: 'workspace_data_convergence',
+          stage,
           code,
           layoutVersion: 2,
           daemonVersion: DAEMON_VERSION,
           hostId,
         },
-        'layout-v2 workspace-data convergence failed; daemon not started',
+        err instanceof RelocationError
+          ? 'workspace-layout relocation failed; daemon not started'
+          : 'layout-v2 workspace-data convergence failed; daemon not started',
       );
       // #task:1664 — drop the closed-payload breadcrumb the next authenticated
       // desktop start reports. ONLY under the default profile: the breadcrumb
@@ -372,7 +406,7 @@ export async function runConnectCommand(
           fact: {
             component: 'daemon',
             daemon_version: DAEMON_VERSION,
-            stage: 'workspace_data_convergence',
+            stage,
             code,
             layout_version: 2,
           },
@@ -381,7 +415,11 @@ export async function runConnectCommand(
       }
       await failureLogger.close();
       process.stderr.write(
-        `silverhand-daemon connect: workspace-data migration failed (${err.code}): ${err.message}\n`,
+        `silverhand-daemon connect: ${
+          err instanceof RelocationError
+            ? 'workspace-layout relocation'
+            : 'workspace-data migration'
+        } failed (${err.code}): ${err.message}\n`,
       );
       return 1;
     }

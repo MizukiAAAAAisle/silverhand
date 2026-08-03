@@ -131,6 +131,23 @@ function storeRootOverrideFor(
     : (['QODER_CONFIG_DIR', qoderOverrideValue(env)] as const);
 }
 
+/**
+ * Whether the session store root for a cwd-scoped runtime can be located from
+ * the given env. `sessionNamespaceFor` SILENTLY falls back to the default root
+ * on an unverifiable override (it never throws), so any caller that will trust
+ * its namespace path before mutating bytes must gate on this first. Reuses
+ * `storeRootOverrideFor` so the qoder empty-string special-case lives in ONE
+ * place; a non-cwd-scoped runtime has no store root to verify → always true.
+ */
+export function isSessionStoreRootVerifiable(
+  kind: RuntimeKind,
+  env: SessionStoreEnv,
+): boolean {
+  if (kind !== 'claude' && kind !== 'qoder') return true;
+  const [, value] = storeRootOverrideFor(kind, env);
+  return normalizeStoreRootOverride(value).kind !== 'unverifiable';
+}
+
 function sessionStoreRootFor(
   kind: (typeof CWD_SCOPED_SESSION_RUNTIMES)[number],
   sessionStoreHome: string,

@@ -95,22 +95,29 @@ export type DesktopLayoutMigrationCode = z.infer<
 >;
 
 /**
- * The daemon has exactly one migration stage today (the workspace-data
- * convergence pass in `silverhand-daemon connect`). It is a schema literal
- * rather than "whatever string the call site passes" so a second stage has to
- * be added here deliberately.
+ * The daemon's migration stages: the shipped workspace-data convergence pass in
+ * `silverhand-daemon connect`, and the workspace-layout relocation facet
+ * (#task:1805, relocation-v1 §5) that runs as a sibling step in the same connect
+ * preflight. A closed enum (not "whatever string the call site passes") so a new
+ * stage has to be added here deliberately; extended ADDITIVELY — a member is
+ * only ever appended, and an old server strict-drops an unknown member to
+ * `invalid` rather than misattributing it (the epoch gate blocks incompatible
+ * desktop↔server pairs, and diagnostics is best-effort).
  */
-export const DaemonLayoutMigrationStageSchema = z.literal(
+export const DaemonLayoutMigrationStageSchema = z.enum([
   'workspace_data_convergence',
-);
+  'workspace_layout_relocation',
+]);
 export type DaemonLayoutMigrationStage = z.infer<
   typeof DaemonLayoutMigrationStageSchema
 >;
 
 /**
  * Closed set of daemon failure codes = `FlattenLayoutError` ∪
- * `SessionMigrationError` codes (disjoint prefixes, so no collision), plus
- * `'unknown'`.
+ * `SessionMigrationError` ∪ `RelocationError` codes (disjoint prefixes —
+ * `flatten_` / `layout_` / `relocation_` — so no collision), plus `'unknown'`.
+ * The `relocation_` codes (#task:1805) mirror `RelocationError` 1:1 and are
+ * appended additively (see the stage schema note above).
  */
 export const DaemonLayoutMigrationCodeSchema = z.enum([
   'flatten_conflict',
@@ -121,6 +128,13 @@ export const DaemonLayoutMigrationCodeSchema = z.enum([
   'layout_unreadable',
   'layout_special_file',
   'layout_move_failed',
+  'relocation_conflict',
+  'relocation_unreadable',
+  'relocation_special_file',
+  'relocation_unstable',
+  'relocation_move_failed',
+  'relocation_unverifiable',
+  'relocation_marker_unsupported',
   'unknown',
 ]);
 export type DaemonLayoutMigrationCode = z.infer<

@@ -232,8 +232,8 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     file: 'packages/host/src/daemon/connect-command.ts',
     token: 'homedir()',
     line: 'sessionStoreHome: homedir(),',
-    reason: 'connect convergence entry: third-party session STORE home (not app-data), same seam as the desktop engine (#task:1608)',
-    count: 1,
+    reason: 'connect preflight: third-party session STORE home (not app-data), same seam as the desktop engine — passed to BOTH the convergence pass (#task:1608) and the relocation facet (#task:1805)',
+    count: 2,
   },
   {
     file: 'packages/host/src/daemon/workspace-registry/convergence-pass.ts',
@@ -366,6 +366,22 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     token: 'app-data dir join',
     line: 'const v2Exact = join(v2WorkspaceData, ns, \'workspaces\', managedWorkspaceSlug(workspaceId));',
     reason: 'migration engine: exact-provenance registry rewrite coordinate (#task:1603, §6.1)',
+    count: 1,
+  },
+  {
+    file: 'packages/host/src/daemon/workspace-registry/layout-relocation.ts',
+    token: '.silverhand',
+    line: "const agentsDir = join(oldRoot, '.silverhand', 'agents');",
+    reason:
+      'relocation-v1 facet: the workspace-LOCAL .silverhand/agents/* legacy layout is the migration SOURCE this facet reads and copies FROM; the destination bundle comes from the resolver (#task:1805, §5)',
+    count: 1,
+  },
+  {
+    file: 'packages/host/src/daemon/workspace-registry/layout-relocation.ts',
+    token: '.silverhand',
+    line: "const source = join(entry.path, '.silverhand', 'agents', agentId);",
+    reason:
+      'relocation-v1 facet: the per-agent workspace-LOCAL .silverhand/agents/<id> legacy subtree is the migration SOURCE coordinate copied to the resolver-computed bundle destination (#task:1805, §5)',
     count: 1,
   },
 ];
