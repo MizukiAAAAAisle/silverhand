@@ -287,7 +287,11 @@ describe('MessageScreenshotView — non-interactive contract', () => {
       ]),
     });
     expect(html).toContain('data-task-ref="42"');
-    expect(html).toContain('data-task-ref-state="static-resolved"');
+    // Resolved static chip shares the live `resolved` state so both the base
+    // accent-link and forza6's ink+gold-marker override apply to the export
+    // (#task:1803) — the old export-only `static-resolved` matched neither and
+    // rendered forza6's chip as festive pink.
+    expect(html).toContain('data-task-ref-state="resolved"');
     expect(html).toContain('#42');
     expect(html).toContain('Thread screenshot polish');
     expect(html).not.toContain('#task:42');

@@ -28,32 +28,56 @@ export interface StaticTaskRefSummary {
 /**
  * Static, non-interactive `#task:<n>` chip for surfaces that must not
  * mount the live `TaskRef` hook/query stack (PNG export, screenshot
- * contracts). It intentionally carries the same `[data-task-ref]` chrome
- * hook as live chips so theme styling stays consistent.
+ * contracts). It carries the same `[data-task-ref]` chrome hook AND the
+ * same `data-task-ref-state` as the live chip, so every theme paints it
+ * identically to the interactive row — the export is a snapshot, not a
+ * second styling axis.
+ *
+ * A RESOLVED ref mirrors the live `interactiveChip` (below) byte for byte
+ * on the visual axis: `data-task-ref-state='resolved'` + a borderless
+ * `text-accent` link with NO fill and NO `px-1.5 -mx-0.5` padding. Both the
+ * shared base (`.markdown-body [data-task-ref][data-task-ref-state='resolved']`,
+ * global.css — accent link) and forza6's override (ink text + gold 记号笔,
+ * forza6-components.css) key EXACTLY on `state='resolved'`; the old
+ * `static-resolved` matched neither, so the export fell back to bare
+ * `text-accent` and rendered forza6's task-ref as festive pink instead of the
+ * live ink+marker (#task:1803). Keeping the state in lockstep closes that
+ * drift structurally — a future task-ref restyle propagates to the export for
+ * free. The only live bits dropped are interaction-only (role / tabIndex /
+ * handlers / cursor / focus ring), which paint nothing in a static image.
+ *
+ * An UNRESOLVED ref stays the muted `bg-bg-elevated` pill (state `static`),
+ * matching the live no-context / missing chips: a fill-bearing surface that
+ * legitimately keeps its side padding.
  */
 export function TaskRefStaticChip({
   taskNumber,
   task,
 }: TaskRefProps & { task?: StaticTaskRefSummary | null }): JSX.Element {
   const inertLabel = `#task:${taskNumber}`;
-  const label = task ? `#${task.task_number} · ${task.title}` : inertLabel;
+  if (!task) {
+    return (
+      <span
+        className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] bg-bg-elevated px-1.5 -mx-0.5 font-medium text-text-muted"
+        title={`Task ${inertLabel}`}
+        data-task-ref={String(taskNumber)}
+        data-task-ref-state="static"
+      >
+        <span className="truncate">{inertLabel}</span>
+      </span>
+    );
+  }
+  // Same silhouette as the live `interactiveChip`: borderless accent link, no
+  // fill, no dead side padding. forza6 repaints it to ink + gold marker via the
+  // shared `state='resolved'` hook — no export-specific styling exists.
   return (
     <span
-      className={
-        'inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] px-1.5 -mx-0.5 font-medium' +
-        (task
-          ? ' text-accent'
-          : ' bg-bg-elevated text-text-muted')
-      }
-      title={`Task ${label}`}
+      className="inline-flex max-w-[220px] items-center gap-1 rounded-[var(--chip-radius)] font-medium text-accent"
+      title={`Task #${task.task_number} · ${task.title}`}
       data-task-ref={String(taskNumber)}
-      data-task-ref-state={task ? 'static-resolved' : 'static'}
+      data-task-ref-state="resolved"
     >
-      {task ? (
-        <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
-      ) : (
-        <span className="truncate">{inertLabel}</span>
-      )}
+      <span className="truncate"><span data-task-ref-num>#{task.task_number}</span> {task.title}</span>
     </span>
   );
 }
