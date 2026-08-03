@@ -30,8 +30,12 @@
  *
  * # Break conditions (all four must hold to continue a group)
  *
- *  - Same author. Identity is `kind:id`, so a human and an agent that share a
- *    display name never merge.
+ *  - Same author. Identity is the server-authoritative `author` DTO's stable
+ *    key (`kind:id`, via {@link isSameAuthorGroup}), so a human and an agent
+ *    that share a display name never merge. A now-deleted actor's rows all
+ *    resolve to the same `deleted` snapshot id and so still group under one
+ *    byline, while an `unresolved` author (no recoverable id) NEVER groups —
+ *    two lost actors are not provably one.
  *  - Within `AUTHOR_GROUP_GAP_MS` of the PREVIOUS row (chained, as in Slack —
  *    each row is measured against the one directly above it, so a steady
  *    trickle legitimately stays one group).
@@ -57,6 +61,10 @@
  * real nodes for both slots, which is an explicit choice, not a forgotten one.
  */
 import type { CachedMessage } from '@/features/channels/pending-message';
+import {
+  authorGroupKey as authorDtoGroupKey,
+  isSameAuthorGroup,
+} from './author-presentation';
 import type { StreamItem } from './groupMessages';
 
 /** How long after the previous row a message may still join its group.
@@ -67,22 +75,12 @@ import type { StreamItem } from './groupMessages';
 export const AUTHOR_GROUP_GAP_MS = 5 * 60 * 1000;
 
 /** Stable author identity for grouping, or `null` when the row has no
- *  groupable author (system rows — they own the activity-cluster treatment
- *  instead, and must break a surrounding author run).
- *
- *  Keyed by `kind:id` rather than the display name: two distinct principals
- *  that happen to share a label must never collapse into one group. A real row
- *  missing its author id also returns `null` (it cannot be proven same-author,
- *  so it stays a full row). */
+ *  groupable author. Delegates to the {@link authorDtoGroupKey} seam over the
+ *  server-authoritative `author` DTO: system rows (`author === null`) and
+ *  `unresolved` authors (no recoverable id) return `null` and stay full rows;
+ *  `active`/`deleted` authors key by their stable `kind:id`. */
 export function authorGroupKey(m: CachedMessage): string | null {
-  switch (m.from_kind) {
-    case 'agent':
-      return m.from_agent_id === null ? null : `agent:${m.from_agent_id}`;
-    case 'user':
-      return m.from_user_id === null ? null : `user:${m.from_user_id}`;
-    default:
-      return null;
-  }
+  return authorDtoGroupKey(m.author);
 }
 
 /** Whether `current` continues the author group that `previous` belongs to —
@@ -97,9 +95,8 @@ export function continuesAuthorGroup(
   current: CachedMessage,
   previous: CachedMessage,
 ): boolean {
-  const key = authorGroupKey(current);
-  if (key === null) return false;
-  if (key !== authorGroupKey(previous)) return false;
+  // `isSameAuthorGroup` already encodes "unresolved / system never merges".
+  if (!isSameAuthorGroup(current.author, previous.author)) return false;
   const delta = current.created_at - previous.created_at;
   if (delta < 0 || delta > AUTHOR_GROUP_GAP_MS) return false;
   return isSameLocalDay(current.created_at, previous.created_at);

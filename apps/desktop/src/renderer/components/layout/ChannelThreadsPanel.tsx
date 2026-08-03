@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import {
@@ -7,12 +7,14 @@ import {
 } from '@/components/layout/SidePanelHeader';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import type { StreamUnreadDto } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
+import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
+import {
+  authorGroupKey,
+  authorStateLabel,
+  presentAuthor,
+} from '@/components/chat/author-presentation';
+import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
 import { useRelativeTime } from '@/components/chat/useRelativeTime';
-import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useConversationUnread } from '@/features/channels/hooks';
 import {
   useChannelThreads,
@@ -22,7 +24,6 @@ import {
 
 interface ChannelThreadsPanelProps {
   channelId: string;
-  workspaceId: string;
   /** Parent channel title, shown in the header. */
   parentTitle?: string | null;
   onClose: () => void;
@@ -54,7 +55,6 @@ const THREAD_TABS: { key: ChannelThreadsFilter; label: string }[] = [
  */
 export function ChannelThreadsPanel({
   channelId,
-  workspaceId,
   parentTitle,
   onClose,
   onOpenThread,
@@ -118,52 +118,50 @@ export function ChannelThreadsPanel({
     return () => io.disconnect();
   }, [hasNextPage, tab, threads.length]);
 
-  // Same author-resolution maps the message panes use, so an author renders
-  // identically here and in the stream.
-  const { agentsById, humansById, humanAvatarUrls } = useMessageRenderContext(
-    workspaceId,
-    channelId,
+  // Byline + replier avatar bytes come STRICTLY from each thread summary's own
+  // author DTOs (#task:1792 B2) — root author + stacked repliers — never a live
+  // directory join, so a summary whose author is outside the loaded directory
+  // (or deleted) still renders its own avatar. This surface renders only DTO
+  // authors (no @-mention pills, no sender facets), so the directory is not
+  // consulted at all here.
+  const authors = useMemo(
+    () => threads.flatMap(t => [t.root_author, ...t.repliers]),
+    [threads],
   );
-  const { data: agents = [] } = useAgents();
-  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const { agentAvatarUrls, humanAvatarUrls } = useAuthorAvatarObjectUrls(authors);
 
-  const authorName = (author: Author): string => {
-    if (author.kind === 'agent') {
-      const a = agentsById.get(author.id);
-      return a?.display_name?.trim() || a?.name || 'agent';
-    }
-    if (author.kind === 'human') {
-      return humansById.get(author.id)?.name || 'Someone';
-    }
-    return 'System';
-  };
+  // Author identity flows through the ONE shared seam (#task:1792): the
+  // server-authoritative {@link MessageAuthorDto} → `presentAuthor`, so a
+  // deleted root author keeps its snapshot name + neutral avatar and an
+  // unresolved one degrades to "Unknown …" here exactly as in the stream. A
+  // system thread root (`root_author === null`) is not an actor — it reads as
+  // "System" with a neutral person square.
+  const renderAuthorName = (author: Author): JSX.Element =>
+    author === null ? (
+      <span className="font-semibold">System</span>
+    ) : (
+      // The name carries its deleted state through the ONE shared primitive
+      // (#task:1792 B3) — this compact surface can't drift from the stream / saved
+      // rows on how a deleted author reads.
+      <AuthorName
+        presentation={presentAuthor(author)}
+        className="font-semibold"
+      />
+    );
 
   const renderAvatar = (author: Author, size: number): JSX.Element => {
-    const label = authorName(author);
-    if (author.kind === 'agent') {
-      const a = agentsById.get(author.id);
-      if (a) {
-        return (
-          <AgentAvatar
-            runtime={a.runtime}
-            size={size}
-            avatarObjectUrl={agentAvatarUrls.get(a.id) ?? null}
-            alt={label}
-            title={label}
-          />
-        );
-      }
-    }
+    const p = author ? presentAuthor(author) : null;
     return (
-      <UserAvatar
+      <AuthorAvatarView
+        avatar={p?.avatar ?? { variant: 'neutral-user' }}
         size={size}
-        avatarObjectUrl={
-          author.kind === 'human'
-            ? humanAvatarUrls.get(author.id) ?? null
-            : null
-        }
-        alt={label}
-        title={label}
+        // Avatar-only face: the deleted state has no room for the visual marker,
+        // so it rides the `title`/`alt` via the shared `authorStateLabel`
+        // (#task:1792 B3) — a deleted replier here reads "(deleted account)" on
+        // hover exactly as the byline shows the marker, never a bare name.
+        label={p ? authorStateLabel(p) : 'System'}
+        agentAvatarUrls={agentAvatarUrls}
+        humanAvatarUrls={humanAvatarUrls}
       />
     );
   };
@@ -248,7 +246,7 @@ export function ChannelThreadsPanel({
                 key={t.root_message_id}
                 summary={t}
                 unread={unreadByRoot?.[t.root_message_id]}
-                authorName={authorName}
+                renderAuthorName={renderAuthorName}
                 renderAvatar={renderAvatar}
                 onOpen={() => onOpenThread(t.root_message_id)}
               />
@@ -274,7 +272,7 @@ interface ThreadRowProps {
   /** Per-viewer unread for this root, from `useConversationUnread` (#task:1226).
    *  The single source of "N new" — NOT `summary.unread_count`. Absent ⇒ 0. */
   unread?: StreamUnreadDto;
-  authorName: (author: Author) => string;
+  renderAuthorName: (author: Author) => JSX.Element;
   renderAvatar: (author: Author, size: number) => JSX.Element;
   onOpen: () => void;
 }
@@ -282,7 +280,7 @@ interface ThreadRowProps {
 function ThreadRow({
   summary,
   unread,
-  authorName,
+  renderAuthorName,
   renderAvatar,
   onOpen,
 }: ThreadRowProps): JSX.Element {
@@ -314,9 +312,8 @@ function ThreadRow({
             {renderAvatar(summary.root_author, 20)}
           </span>
           <span className="line-clamp-2 break-words text-sm text-text-primary">
-            <span className="font-semibold">
-              {authorName(summary.root_author)}:{' '}
-            </span>
+            {renderAuthorName(summary.root_author)}
+            <span className="font-semibold">{': '}</span>
             {summary.root_preview}
           </span>
         </span>
@@ -329,8 +326,14 @@ function ThreadRow({
           <span className="flex w-full items-center gap-2 border-t border-border px-2.5 py-1.5">
             {summary.repliers.length > 0 ? (
               <span className="flex items-center gap-[3px]">
-                {summary.repliers.map(r => (
-                  <span key={`${r.kind}:${r.id}`} className="flex shrink-0">
+                {summary.repliers.map((r, i) => (
+                  // `unresolved` repliers have no id (never aggregate), so fall
+                  // back to a positional key — never collapse two lost actors
+                  // onto one React key.
+                  <span
+                    key={authorGroupKey(r) ?? `unresolved:${i}`}
+                    className="flex shrink-0"
+                  >
                     {renderAvatar(r, 18)}
                   </span>
                 ))}

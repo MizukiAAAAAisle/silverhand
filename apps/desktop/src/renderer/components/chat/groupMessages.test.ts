@@ -16,12 +16,35 @@ function makeMsg(opts: {
   subtype?: string;
   createdAt?: number;
 }): MessageDto {
+  const fromKind = opts.fromKind ?? 'system';
   return {
     id: opts.id,
     conversation_id: 'conv-1',
-    from_kind: opts.fromKind ?? 'system',
+    from_kind: fromKind,
     from_agent_id: null,
     from_user_id: null,
+    author:
+      fromKind === 'system'
+        ? null
+        : fromKind === 'agent'
+          ? {
+              status: 'active',
+              kind: 'agent',
+              id: 'a1',
+              name: 'Agent',
+              display_name: 'Agent',
+              avatar_url: null,
+              runtime: 'claude',
+            }
+          : {
+              status: 'active',
+              kind: 'user',
+              id: 'u1',
+              name: 'User',
+              display_name: 'User',
+              avatar_url: null,
+              runtime: null,
+            },
     content: '',
     metadata: opts.subtype ? { subtype: opts.subtype } : null,
     attachments: null,

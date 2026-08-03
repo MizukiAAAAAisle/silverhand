@@ -1864,7 +1864,6 @@ function RegisteredAppShell(): JSX.Element {
     secondaryView = (
       <ChannelThreadsPanel
         channelId={selectedChannelId}
-        workspaceId={selectedWorkspaceId}
         parentTitle={selectedChannel?.title ?? null}
         onClose={nav.closeThreadsList}
         onOpenThread={nav.openThread}

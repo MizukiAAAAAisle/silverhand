@@ -4,8 +4,46 @@ import { messageReactorsKeyPrefix } from '@/features/channels/reaction-hooks';
 import { CONVERSATION_MEMBERS_KEY_PREFIX } from '@/features/conversations/useConversationMembers';
 import { favoritesKey } from '@/features/favorites/hooks';
 import { hostResourcesKeyPrefix, hostStatusKeyPrefix } from '@/features/hosts/hooks';
+import { savedKey } from '@/features/saved/hooks';
+import { searchKey } from '@/features/search/hooks';
 import { usersKey } from '@/features/users/hooks';
 import { isWorkspaceMembersQueryKey } from '@/features/workspaces/hooks';
+
+/**
+ * The channel-scoped read models whose cached rows now embed a send-time
+ * {@link MessageAuthorDto} snapshot (`display_name` + the `?v=updated_at` avatar
+ * url), so a rename / avatar change / hard-delete must reseat them (#task:1792):
+ *   - `['channels', cid, 'messages']`            mainline window (+ its inline
+ *                                                `reply_previews_by_root` authors)
+ *   - `['channels', cid, 'cluster', root, …]`    one reply cluster's window
+ *   - `['channels', cid, 'thread-root', root]`   the thread pane's root row
+ *   - `['channels', cid, 'threads-list', …]`     Threads All + followed-unread
+ *                                                (root_author + repliers)
+ *   - `['channels', cid, 'attachments-list', …]` attachment source author
+ *
+ * A structural match rather than a factory import because the channel families
+ * vary by `cid` (no static left-anchored prefix reaches them). The boundary
+ * test builds every key from its real factory (`messagesKey` / `clusterMessagesKey`
+ * / `threadRootKey` / `channelThreadsKey` / `channelAttachmentsKey`), so a segment
+ * rename fails the test instead of silently dropping a family. The cluster arm
+ * matches only its `…, root, 'messages'` window, NOT the `fetch-epoch` / `live-gap`
+ * siblings that share the `'cluster'` segment; other non-author channel caches
+ * (`agents` / `thread-followers` / mainline `live-gap`) carry no snapshot.
+ */
+export function isChannelAuthorCarrierKey(key: readonly unknown[]): boolean {
+  if (key[0] !== 'channels') return false;
+  const family = key[2];
+  // The cluster window is `['channels', cid, 'cluster', rootId, 'messages']`;
+  // its `fetch-epoch` / `live-gap` siblings share the `'cluster'` segment but
+  // carry no author, so gate on the trailing `'messages'`.
+  if (family === 'cluster') return key[4] === 'messages';
+  return (
+    family === 'messages' ||
+    family === 'thread-root' ||
+    family === 'threads-list' ||
+    family === 'attachments-list'
+  );
+}
 
 /**
  * Whose profile changed. The two actor kinds are isomorphic in the domain but
@@ -55,11 +93,11 @@ interface IdentityCarrier {
  *     reseats main's snapshot on its way through the proxy —
  *     `main/profile-session-sync.ts`). Local writes already reseat both
  *     (#task:1701); only a REMOTE edit needs that read (#task:1702).
- *   - message authors — chat resolves them by id from the `['agents']` /
- *     `['users']` directories (`useMessageRenderContext`), so they converge
- *     with the directory rather than carrying a snapshot.
- *   - `SavedMessageDto.agent_name` — the backend joins the IMMUTABLE `@handle`
- *     (`a.name`), not `display_name`, so a rename cannot stale it.
+ *   - `SavedMessageDto.agent_name` / `SearchResultDto.agent_name` — the backend
+ *     joins the IMMUTABLE `@handle` (`a.name`), not `display_name`, so that
+ *     field alone cannot stale. (The rows STILL carry a mutable `message.author`
+ *     snapshot, so Saved / Search are registered below via their message payload,
+ *     not this handle.)
  *   - history `system_message` metadata and notification `trigger_name` —
  *     event-time snapshots by design; they must keep reading as of the event.
  */
@@ -86,6 +124,31 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     id: 'activity',
     kinds: ['agent', 'human'],
     filter: { queryKey: activityKey() },
+  },
+  {
+    // Every channel-scoped read model that embeds a `MessageAuthorDto` snapshot
+    // (see {@link isChannelAuthorCarrierKey}): mainline + reply previews, reply
+    // clusters, the thread-pane root row, the Threads list, and the attachments
+    // list. The snapshot outlives the actor (`author_id` has no FK), so a rename
+    // / avatar / hard-delete only reflects on these cached authors by refetch.
+    id: 'channel-author-projections',
+    kinds: ['agent', 'human'],
+    filter: { predicate: q => isChannelAuthorCarrierKey(q.queryKey) },
+  },
+  {
+    // `SavedMessageDto.message.author` — the saved row embeds the whole message,
+    // so it carries the same mutable author snapshot as the byline. (Its own
+    // `agent_name` is the immutable @handle; the mutable part is the author dto.)
+    id: 'saved',
+    kinds: ['agent', 'human'],
+    filter: { queryKey: savedKey },
+  },
+  {
+    // `SearchResultDto.message.author` — a message hit embeds the full message,
+    // hence the same author snapshot. Workspace-global key, so a plain prefix.
+    id: 'search',
+    kinds: ['agent', 'human'],
+    filter: { queryKey: searchKey },
   },
   {
     // `ReactionReactorDto.display_name`. Fetched only while a chip is hovered,

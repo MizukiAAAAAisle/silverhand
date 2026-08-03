@@ -19,6 +19,15 @@ function replyMsg(rootId: string): MessageDto {
     from_kind: 'user',
     from_agent_id: null,
     from_user_id: 'u1',
+    author: {
+      status: 'active',
+      kind: 'user',
+      id: 'u1',
+      name: 'User',
+      display_name: 'User',
+      avatar_url: null,
+      runtime: null,
+    },
     content: 'body',
     metadata: null,
     attachments: null,
@@ -224,14 +233,32 @@ describe('validateMessageProjections — single-point root-match validation (#ta
 function threadEntry(rootId: string, lastReplyAt = 300): ThreadSummaryInvariant {
   return {
     root_message_id: rootId,
-    root_author: { kind: 'human', id: 'u1' },
+    root_author: {
+      status: 'active',
+      kind: 'user',
+      id: 'u1',
+      name: 'User',
+      display_name: 'User',
+      avatar_url: null,
+      runtime: null,
+    },
     root_preview: `root ${rootId}`,
     root_created_at: 0,
     root_seq: decodeMessageSeq(2),
     reply_count: 5,
     last_reply_at: lastReplyAt,
     last_reply_message_id: `lr-${rootId}-${lastReplyAt}`,
-    repliers: [{ kind: 'human', id: 'u1' }],
+    repliers: [
+      {
+        status: 'active',
+        kind: 'user',
+        id: 'u1',
+        name: 'User',
+        display_name: 'User',
+        avatar_url: null,
+        runtime: null,
+      },
+    ],
     replier_total: 1,
   };
 }

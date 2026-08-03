@@ -224,6 +224,31 @@ export function isUpdateRequired(body: ViewerState): body is UpdateRequired {
 }
 
 /**
+ * The current viewer as a fully-hydrated {@link UserDto}, read SYNCHRONOUSLY
+ * from the `['me']` cache, or `null` when the auth-state query has not resolved
+ * to an authenticated user (setup / backend-unreachable / update-required, or
+ * not yet fetched).
+ *
+ * For non-hook callers that need the viewer identity carrier WITHOUT
+ * subscribing — the optimistic-send `onMutate` builds the pending row's
+ * `active` author from it (see `optimisticSelfAuthor`) and must fail closed if
+ * the viewer has not hydrated. `useViewerUser()` is the subscribing read; this
+ * is the same `['me']` carrier those hooks populate, so the two never diverge.
+ */
+export function getHydratedViewer(qc: QueryClient): UserDto | null {
+  const state = qc.getQueryData<ViewerState>(meKey);
+  if (!state) return null;
+  if (
+    isRegistrationRequired(state)
+    || isBackendUnreachable(state)
+    || isUpdateRequired(state)
+  ) {
+    return null;
+  }
+  return state;
+}
+
+/**
  * D4.a Commit 6 (2) — pure mapping from the main-process IPC arm to
  * the renderer's `ViewerState` union. Extracted out of `useViewerUser`
  * so the three-way IPC → renderer mapping is testable without

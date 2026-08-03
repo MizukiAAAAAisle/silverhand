@@ -24,6 +24,7 @@ function makeSystemMessage(
     from_kind: 'system',
     from_agent_id: null,
     from_user_id: null,
+    author: null,
     content: '',
     metadata: { subtype, ...metadata },
     attachments: null,

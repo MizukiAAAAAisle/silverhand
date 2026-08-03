@@ -197,12 +197,13 @@ export function ImagePreviewModal({
   messages,
   workspaceId,
   channelTitle,
-  agentsById,
   agentsByName,
   humansByName,
   channelsByName,
   conversationRefsById,
   agentAvatarUrls,
+  authorAgentAvatarUrls,
+  authorUserAvatarUrls,
   viewer,
   viewerAvatarObjectUrl,
 }: {
@@ -217,12 +218,17 @@ export function ImagePreviewModal({
   messages: readonly MessageDto[];
   workspaceId?: string | null;
   channelTitle: string | null;
-  agentsById: ReadonlyMap<string, AgentDto>;
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
   conversationRefsById?: ReadonlyMap<string, ConversationReference>;
+  /** Directory avatar batch — feeds only the Markdown body's inline
+   *  @-mention pills (a separate axis from the row's own author). */
   agentAvatarUrls?: ReadonlyMap<string, string | null>;
+  /** Byline avatar bytes derived from each row's own author DTO
+   *  (#task:1792 B2), split by kind. */
+  authorAgentAvatarUrls?: ReadonlyMap<string, string | null>;
+  authorUserAvatarUrls?: ReadonlyMap<string, string | null>;
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
 }): JSX.Element {
@@ -468,13 +474,14 @@ export function ImagePreviewModal({
               <MessageScreenshotView
                 messages={messages}
                 channelTitle={channelTitle}
-                agentsById={agentsById}
                 agentsByName={agentsByName}
                 humansByName={humansByName}
                 channelsByName={channelsByName}
                 conversationRefsById={conversationRefsById}
                 taskRefsByNumber={taskRefsByNumber}
                 agentAvatarUrls={agentAvatarUrls}
+                authorAgentAvatarUrls={authorAgentAvatarUrls}
+                authorUserAvatarUrls={authorUserAvatarUrls}
                 attachmentImageUrls={attachmentImageUrls}
                 viewer={viewer}
                 viewerAvatarObjectUrl={viewerAvatarObjectUrl}

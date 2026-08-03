@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
+import type { MessageDto } from '@silverhand/shared';
 import {
   useMessageSelection,
   type MessageSelectionHook,
@@ -64,9 +64,6 @@ export function useMessageActionSurface(deps: {
   /** Selection-clearing signal: bump on any disjoint window replacement. */
   windowResetVersion: number;
   jumpToMessageId: string | null;
-  /** For the multi-message transcript export (sender labels). */
-  agentsById: ReadonlyMap<string, AgentDto>;
-  viewer: UserDto | undefined;
   /** Whether save/unsave (收藏) is permitted. Defaults to `true`. `false` for a
    *  non-member browsing a public channel — save is a member
    *  mutation, so `onSave` is withheld (undefined) and the Save affordance is
@@ -77,8 +74,6 @@ export function useMessageActionSurface(deps: {
     channelId,
     windowResetVersion,
     jumpToMessageId,
-    agentsById,
-    viewer,
     canSave = true,
   } = deps;
   const savedIds = useSavedMessageIds();
@@ -152,7 +147,7 @@ export function useMessageActionSurface(deps: {
   const handleCopyMarkdownTranscript = useCallback(async (): Promise<void> => {
     const snapshots = selection.selectedSorted();
     if (snapshots.length === 0) return;
-    const text = buildMarkdownTranscript(snapshots, { agentsById, viewer });
+    const text = buildMarkdownTranscript(snapshots);
     try {
       await navigator.clipboard.writeText(text);
       toast.success(`Copied ${snapshots.length} messages`);
@@ -162,7 +157,7 @@ export function useMessageActionSurface(deps: {
         "Couldn't copy: " + (err instanceof Error ? err.message : String(err)),
       );
     }
-  }, [selection, agentsById, viewer]);
+  }, [selection]);
   const handleSaveImage = useCallback(() => {
     if (selection.count === 0) return;
     setImagePreviewOpen(true);

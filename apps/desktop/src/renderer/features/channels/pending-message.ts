@@ -17,7 +17,12 @@
 // that must never be ordered against a real MessageSeq would invite the exact
 // mix the split removes.
 
-import type { MessageDto, MessageSeq } from '@silverhand/shared';
+import type {
+  MessageAuthorDto,
+  MessageDto,
+  MessageSeq,
+  UserDto,
+} from '@silverhand/shared';
 
 /**
  * An optimistic message shown immediately on send, before the server ack. Has
@@ -41,6 +46,44 @@ export const isPendingMessage = (m: CachedMessage): m is PendingMessage =>
 /** Narrow to the committed side (has a `MessageSeq`). */
 export const isCommittedMessage = (m: CachedMessage): m is MessageDto =>
   !isPendingMessage(m);
+
+/**
+ * The author of an optimistic self-send: the CURRENT VIEWER, projected into a
+ * `status:'active'` {@link MessageAuthorDto} straight from the hydrated viewer
+ * carrier. The viewer sending the message IS that active actor, so this is a
+ * known-true identity, not a client fabricating a server fact — the
+ * server-authoritative part of the DTO is the active/deleted/unresolved
+ * ADJUDICATION, which is untouched: an optimistic row may only ever be `active`
+ * (Alice/Cindy contract 2026-08-03). On ACK the authoritative committed row
+ * replaces this whole author (see `replacePendingMessageInCache`), so a
+ * locally-stale name / avatar / runtime can never linger past commit.
+ *
+ * FAIL-CLOSED (Cindy gate 1): returns `null` when the viewer carrier has not
+ * hydrated into a full {@link UserDto}. The caller then skips the optimistic
+ * insert entirely rather than stitch a plausible-but-fake active author out of
+ * a raw id + a literal name fallback — the message still sends and its row
+ * appears on the ACK read. This is the one construction point for a pending
+ * author, so `PendingMessage.author` being required (nullable) is what keeps a
+ * future edit from silently re-dropping it.
+ *
+ * Desktop's send face is always a human viewer, so this builds the
+ * `kind:'user', runtime:null` arm. An agent viewer would take the agent arm,
+ * but that branch is unreachable on this surface and deliberately not modelled.
+ */
+export function optimisticSelfAuthor(
+  viewer: UserDto | null,
+): MessageAuthorDto | null {
+  if (!viewer) return null;
+  return {
+    status: 'active',
+    kind: 'user',
+    id: viewer.id,
+    name: viewer.name,
+    display_name: viewer.display_name,
+    avatar_url: viewer.avatar_url,
+    runtime: null,
+  };
+}
 
 /** The seq of the newest committed row, scanning from the tail; `null` if the
  *  window holds no committed message. Pending rows are skipped — they have no

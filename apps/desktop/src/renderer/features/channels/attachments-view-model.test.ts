@@ -9,7 +9,6 @@ import type {
 import { decodeMessageSeq } from '@silverhand/shared';
 import {
   groupAttachmentsByDay,
-  resolveAttachmentSender,
   resolveSenderIdentity,
 } from './attachments-view-model';
 
@@ -21,17 +20,40 @@ const NOW = new Date(2026, 6, 13, 15, 0, 0).getTime();
 function source(
   overrides: Partial<AttachmentListItemSource> = {},
 ): AttachmentListItemSource {
-  return {
+  const base = {
     message_id: 'm1',
     conversation_id: 'c1',
     thread_root_id: null,
     message_seq: decodeMessageSeq(1),
-    from_kind: 'user',
-    from_user_id: 'u1',
-    from_agent_id: null,
+    from_kind: 'user' as 'user' | 'agent' | 'system',
+    from_user_id: 'u1' as string | null,
+    from_agent_id: null as string | null,
     appeared_at: NOW,
     ...overrides,
   };
+  const author: AttachmentListItemSource['author'] =
+    base.from_kind === 'system'
+      ? null
+      : base.from_kind === 'agent'
+        ? {
+            status: 'active',
+            kind: 'agent',
+            id: base.from_agent_id ?? 'a1',
+            name: 'Agent',
+            display_name: 'Agent',
+            avatar_url: null,
+            runtime: 'claude',
+          }
+        : {
+            status: 'active',
+            kind: 'user',
+            id: base.from_user_id ?? 'u1',
+            name: 'User',
+            display_name: 'User',
+            avatar_url: null,
+            runtime: null,
+          };
+  return { ...base, author };
 }
 
 function attachment(overrides: Partial<AttachmentDto> = {}): AttachmentDto {
@@ -73,13 +95,13 @@ const USER_ONE = {
   display_name: 'Shiki the Human',
 } as unknown as UserDto;
 
-describe('resolveAttachmentSender', () => {
+describe('resolveSenderIdentity on a source-shaped actor', () => {
   it('prefers a trimmed agent display_name over agent.name', () => {
     const agentsById = new Map([[AGENT_ONE.id, AGENT_ONE]]);
     const humansById = new Map<string, UserDto>();
     const src = source({ from_kind: 'agent', from_agent_id: 'a1', from_user_id: null });
 
-    const result = resolveAttachmentSender(src, { agentsById, humansById });
+    const result = resolveSenderIdentity(src, { agentsById, humansById });
 
     expect(result.label).toBe('Alice the Engineer');
     expect(result.kind).toBe('agent');
@@ -93,7 +115,7 @@ describe('resolveAttachmentSender', () => {
     const humansById = new Map<string, UserDto>();
     const src = source({ from_kind: 'agent', from_agent_id: 'a1', from_user_id: null });
 
-    const result = resolveAttachmentSender(src, { agentsById, humansById });
+    const result = resolveSenderIdentity(src, { agentsById, humansById });
 
     expect(result.label).toBe('Alice');
   });
@@ -103,7 +125,7 @@ describe('resolveAttachmentSender', () => {
     const humansById = new Map([[USER_ONE.id, USER_ONE]]);
     const src = source({ from_kind: 'user', from_user_id: 'u1' });
 
-    const result = resolveAttachmentSender(src, { agentsById, humansById });
+    const result = resolveSenderIdentity(src, { agentsById, humansById });
 
     expect(result.label).toBe('Shiki the Human');
     expect(result.kind).toBe('user');
@@ -115,13 +137,13 @@ describe('resolveAttachmentSender', () => {
     const agentsById = new Map<string, AgentDto>();
     const humansById = new Map<string, UserDto>();
 
-    const gone = resolveAttachmentSender(
+    const gone = resolveSenderIdentity(
       source({ from_kind: 'agent', from_agent_id: 'a_deleted', from_user_id: null }),
       { agentsById, humansById },
     );
     expect(gone.label).toBe('a_deleted');
 
-    const goneHuman = resolveAttachmentSender(
+    const goneHuman = resolveSenderIdentity(
       source({ from_kind: 'user', from_user_id: 'u_deleted' }),
       { agentsById, humansById },
     );
@@ -133,7 +155,7 @@ describe('resolveAttachmentSender', () => {
     const humansById = new Map<string, UserDto>();
     const src = source({ from_kind: 'system', from_user_id: null, from_agent_id: null });
 
-    const result = resolveAttachmentSender(src, { agentsById, humansById });
+    const result = resolveSenderIdentity(src, { agentsById, humansById });
 
     expect(result.label).toBeNull();
     expect(result.kind).toBe('system');

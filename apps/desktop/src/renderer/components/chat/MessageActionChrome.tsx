@@ -1,6 +1,7 @@
-import type { ReactElement } from 'react';
+import { useMemo, type ReactElement } from 'react';
 import { SelectionToolbar } from '@/components/chat/SelectionToolbar';
 import { ImagePreviewModal } from '@/components/chat/ImagePreviewModal';
+import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
 import type { MessageActionSurface } from '@/components/chat/useMessageActionSurface';
 import type { MessageRenderContext } from '@/components/chat/useMessageRenderContext';
 import type { ConversationReference } from './ConversationRef';
@@ -10,7 +11,6 @@ import type { ConversationReference } from './ConversationRef';
  *  so authors / member chips / activity strip share one fetch). */
 export type MessageActionChromeRenderContext = Pick<
   MessageRenderContext,
-  | 'agentsById'
   | 'agentsByName'
   | 'humansByName'
   | 'channelsByName'
@@ -39,6 +39,19 @@ export function MessageActionChrome({
   workspaceId: string | null;
   channelTitle: string | null;
 }): ReactElement {
+  // The screenshot byline resolves each selected author's avatar bytes STRICTLY
+  // from its own `MessageAuthorDto` (#task:1792 B2) — never the live directory.
+  // The directory batch (`renderCtx.agentAvatarUrls`) stays for the Markdown
+  // body's inline @-mention pills, a separate axis. Active authors already
+  // resolved in the live view are session-cached by url, so this is a hit.
+  const previewAuthors = useMemo(
+    () => surface.previewSnapshots.map(m => m.author),
+    [surface.previewSnapshots],
+  );
+  const {
+    agentAvatarUrls: authorAgentAvatarUrls,
+    humanAvatarUrls: authorUserAvatarUrls,
+  } = useAuthorAvatarObjectUrls(previewAuthors);
   return (
     <>
       {surface.selection.active ? (
@@ -56,12 +69,13 @@ export function MessageActionChrome({
         messages={surface.previewSnapshots}
         workspaceId={workspaceId}
         channelTitle={channelTitle}
-        agentsById={renderCtx.agentsById}
         agentsByName={renderCtx.agentsByName}
         humansByName={renderCtx.humansByName}
         channelsByName={renderCtx.channelsByName}
         conversationRefsById={renderCtx.conversationRefsById}
         agentAvatarUrls={renderCtx.agentAvatarUrls}
+        authorAgentAvatarUrls={authorAgentAvatarUrls}
+        authorUserAvatarUrls={authorUserAvatarUrls}
         viewer={renderCtx.viewer}
         viewerAvatarObjectUrl={renderCtx.viewerAvatarObjectUrl}
       />

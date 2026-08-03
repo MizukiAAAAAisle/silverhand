@@ -5,13 +5,13 @@ import {
   Check,
   MessageCircle,
 } from 'lucide-react';
-import type { ActivityItemDto, ActivityPreviewSender, AgentDto } from '@silverhand/shared';
+import type { ActivityItemDto, MessageAuthorDto, AgentDto } from '@silverhand/shared';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
+import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
+import { presentAuthor } from '@/components/chat/author-presentation';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import type { AgentAvatarSource } from '@/features/agents/avatar-hooks';
@@ -79,12 +79,12 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'thread', label: 'Threads' },
 ];
 
-/** Namespaced key for a sender's avatar object-url map. `preview_sender`'s
- *  identity is `{kind, id}` — users and agents are separate tables, so a bare
- *  `id` could collide and cross-wire two avatars. Runtime lookup in
- *  `agentsById` still uses the raw agent id (that map is agent-only). */
-function senderKey(s: { kind: 'user' | 'agent'; id: string }): string {
-  return `${s.kind}:${s.id}`;
+/** Namespaced key for a sender's avatar object-url map. A sender's identity is
+ *  `{kind, id}` — users and agents are separate tables, so a bare `id` could
+ *  collide and cross-wire two avatars. `null` when the sender has no stable id
+ *  (an `unresolved` author): it carries no avatar and is never batched. */
+function senderKey(s: MessageAuthorDto): string | null {
+  return s.id === null ? null : `${s.kind}:${s.id}`;
 }
 
 function matchesFilter(item: ActivityItemDto, key: FilterKey): boolean {
@@ -121,40 +121,28 @@ function ChannelGlyph({ item }: { item: ActivityItemDto }): JSX.Element {
   return <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />;
 }
 
-/** The sender's avatar for a message line. The DTO gives a resolved
- *  `{kind, id, display_name, avatar_url}`; the renderer only picks the avatar
- *  component by `kind` and never re-infers identity:
- *    - an uploaded avatar (`avatar_url` → resolved object URL) renders as the
- *      image in either component (both are square, object-cover).
- *    - no image → user falls back to the neutral person glyph; an agent falls
- *      back to its runtime BRAND tile (claude/codex/…), so it reads the same as
- *      everywhere else in the app. Runtime comes from the GLOBAL agent map (by
- *      the explicit sender id), not from a per-workspace member cache; an agent
- *      missing there (or no runtime) degrades to the neutral glyph. */
+/** The sender's avatar for a message line, drawn through the ONE shared author
+ *  seam (#task:1792): the server-authoritative {@link MessageAuthorDto} →
+ *  `presentAuthor` → {@link AuthorAvatarView}. An active agent carries its own
+ *  runtime in the DTO (no roster lookup), a deleted / unresolved sender gets the
+ *  kind-generic neutral square. The object URL comes from Activity's own
+ *  namespaced batch, so it is fed as an override rather than through the seam's
+ *  plain-id maps. */
 function SenderAvatar({
   sender,
   objectUrl,
-  agentsById,
 }: {
-  sender: ActivityPreviewSender;
+  sender: MessageAuthorDto;
   objectUrl: string | null;
-  agentsById: ReadonlyMap<string, AgentDto>;
 }): JSX.Element {
-  if (sender.kind === 'agent') {
-    const runtime = agentsById.get(sender.id)?.runtime;
-    if (runtime) {
-      return (
-        <AgentAvatar
-          runtime={runtime}
-          size={AVATAR_PX.xs}
-          avatarObjectUrl={objectUrl}
-          alt={sender.display_name}
-        />
-      );
-    }
-  }
+  const p = presentAuthor(sender);
   return (
-    <UserAvatar size={AVATAR_PX.xs} avatarObjectUrl={objectUrl} alt={sender.display_name} />
+    <AuthorAvatarView
+      avatar={p.avatar}
+      size={AVATAR_PX.xs}
+      label={p.label}
+      objectUrlOverride={objectUrl}
+    />
   );
 }
 
@@ -162,32 +150,35 @@ function SenderAvatar({
  *  prefix is shown only when `sender` is present (NULL for `agent_failed` /
  *  system) — then the line is just the content. The name is body-scale + muted
  *  (a subordinate label, never a heading) so it doesn't steal the content's role
- *  as subject. */
+ *  as subject. A deleted sender keeps its snapshot name; an unresolved one reads
+ *  "Unknown …" — both via `presentAuthor`, the same label the byline shows. */
 function SenderMessageLine({
   sender,
   objectUrl,
-  agentsById,
   content,
   className,
 }: {
-  sender: ActivityPreviewSender | null;
+  sender: MessageAuthorDto | null;
   objectUrl: string | null;
-  agentsById: ReadonlyMap<string, AgentDto>;
   content: string | null;
   className?: string;
 }): JSX.Element {
+  const presentation = sender ? presentAuthor(sender) : null;
   return (
     <div className={'mt-1 flex items-center gap-2 ' + (className ?? '')}>
       <div className="flex min-w-0 flex-1 items-center gap-1.5">
-        {sender ? (
+        {sender && presentation ? (
           <>
-            <SenderAvatar
-              sender={sender}
-              objectUrl={objectUrl}
-              agentsById={agentsById}
-            />
-            <span className="min-w-0 max-w-[45%] shrink-0 truncate text-sm font-normal text-text-secondary">
-              {sender.display_name}:
+            <SenderAvatar sender={sender} objectUrl={objectUrl} />
+            {/* The name carries its deleted state through the ONE shared
+                primitive (#task:1792 B3) — a deleted sender reads with the quiet
+                marker here exactly as in the byline. */}
+            <span className="flex min-w-0 max-w-[45%] shrink-0 items-baseline gap-1.5">
+              <AuthorName
+                presentation={presentation}
+                className="text-sm font-normal text-text-secondary"
+              />
+              <span className="text-sm font-normal text-text-secondary">:</span>
             </span>
           </>
         ) : null}
@@ -253,11 +244,17 @@ export function ActivityView({
     () =>
       items
         .map(it => it.preview_sender)
-        .filter((s): s is ActivityPreviewSender => s != null)
+        .filter((s): s is MessageAuthorDto => s != null)
         // Namespace the key by {kind, id} so a user/agent id collision can't
-        // cross-wire avatars. The hook keys its result map by the
-        // `id` we pass, so we pass the namespaced key here AND look up by it.
-        .map(s => ({ id: senderKey(s), avatar_url: s.avatar_url })),
+        // cross-wire avatars. The hook keys its result map by the `id` we pass,
+        // so we pass the namespaced key here AND look up by it. Senders with no
+        // stable id (`unresolved`) carry no avatar and drop out of the batch.
+        .map(s => ({ key: senderKey(s), avatar_url: s.avatar_url }))
+        .filter(
+          (x): x is { key: string; avatar_url: string | null } =>
+            x.key !== null,
+        )
+        .map(x => ({ id: x.key, avatar_url: x.avatar_url })),
     [items],
   );
   const senderAvatarUrls = useAgentAvatarObjectUrls(senderSources);
@@ -479,8 +476,9 @@ function ActivityRow({
   // Server-resolved fields only, never a client-stitched message cache.
   const hasRootLine = isThread && item.thread_root_preview != null;
   const sender = item.preview_sender;
-  const senderObjectUrl = sender
-    ? senderAvatarUrls.get(senderKey(sender)) ?? null
+  const senderKeyValue = sender ? senderKey(sender) : null;
+  const senderObjectUrl = senderKeyValue
+    ? senderAvatarUrls.get(senderKeyValue) ?? null
     : null;
   // The §5.3 source_ref-out for this item, resolved through the single routing
   // chokepoint (`activityItemSource`, keyed on KIND not salience):
@@ -587,7 +585,6 @@ function ActivityRow({
             <SenderMessageLine
               sender={sender}
               objectUrl={senderObjectUrl}
-              agentsById={agentsById}
               content={item.preview ?? item.title}
             />
           )}
@@ -598,7 +595,6 @@ function ActivityRow({
             <SenderMessageLine
               sender={sender}
               objectUrl={senderObjectUrl}
-              agentsById={agentsById}
               content={item.preview}
               className="mt-0.5"
             />

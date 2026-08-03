@@ -81,16 +81,6 @@ export function resolveSenderIdentity(
   return { label: null, kind: actor.from_kind, agentId: null, userId: null };
 }
 
-/** Resolve a list row's source actor. Thin alias over
- *  {@link resolveSenderIdentity} — the source carries the same actor axis
- *  plus message/time fields the resolver ignores. */
-export function resolveAttachmentSender(
-  source: AttachmentListItemSource,
-  maps: { agentsById: Map<string, AgentDto>; humansById: Map<string, UserDto> },
-): AttachmentSenderIdentity {
-  return resolveSenderIdentity(source, maps);
-}
-
 // ── By-day grouping ──────────────────────────────────────────────────────
 
 export interface AttachmentDayGroup {

@@ -11,6 +11,8 @@ import {
   useQuery,
   useQueryClient,
   type InfiniteData,
+  type QueryClient,
+  type QueryKey,
 } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
@@ -40,11 +42,13 @@ import {
 import {
   type PendingMessage,
   isCommittedMessage,
+  optimisticSelfAuthor,
 } from '@/features/channels/pending-message';
 import { api, ApiError, apiUpload } from '@/lib/api';
 import { channelThreadsKey } from '@/features/channels/useChannelThreads';
 import { conversationUnreadKey } from '@/features/channels/message-unread';
 import { getCurrentUserId } from '@/lib/current-user';
+import { getHydratedViewer } from '@/features/me/hooks';
 import { useInterest } from '@/features/realtime/interest-registry';
 import { applyCommittedMessage } from '@/features/realtime/conversation-ingestor';
 import {
@@ -947,6 +951,31 @@ export interface SendMessageInput {
   attachments?: Array<AttachmentDto & { label?: string }>;
 }
 
+/**
+ * The onMutate → onSuccess/onError hand-off for a send. The three optimistic
+ * fields are grouped into ONE optional object so they are present all-together
+ * or not-at-all: an optimistic row was inserted, or it was not. This split is
+ * what lets the Gate 1 fail-closed path (viewer carrier not hydrated → no
+ * optimistic row, #task:1792) still carry the mutation's ACK follow-up —
+ * `applyCommittedMessage` must converge the committed row + projections whether
+ * or not a temp row exists; only the temp-row REPLACE (onSuccess) and the error
+ * ROLLBACK (onError) are conditional on one having been written. A `undefined`
+ * context means "no channel", the only genuinely-no-work case.
+ */
+interface SendMutationContext {
+  optimistic?: {
+    /** Temp id of the optimistic row, for the ACK swap. */
+    tempId: string;
+    /** The pre-send window snapshot, restored on error when nothing concurrent
+     *  landed meanwhile. */
+    prevWindow: MessagesCache | undefined;
+    /** The exact post-write cache reference — the mutation-local CAS token
+     *  `rollbackOptimisticSend` compares against to tell "nothing landed since
+     *  our write" from "a committed/concurrent fact arrived". */
+    writtenRef: MessagesCache | undefined;
+  };
+}
+
 export function useSendMessage(
   channelId: string | null,
   /** When set, the message is a reply into this root's cluster: the
@@ -986,8 +1015,23 @@ export function useSendMessage(
     // the HTTP response arrives. The temp message uses a `pending-` id;
     // onSuccess replaces it with the real row (live de-dupe prevents a
     // second append when the event arrives after onSuccess).
-    onMutate: async (input: SendMessageInput) => {
+    onMutate: async (
+      input: SendMessageInput,
+    ): Promise<SendMutationContext | undefined> => {
       if (!channelId || !targetKey) return undefined;
+      // Gate 1 — fail-closed optimistic author. The pending row's author is the
+      // current viewer, built COMPLETELY from the hydrated `['me']` carrier (a
+      // known-true identity, only ever `active`). If the viewer has not
+      // hydrated yet, insert NO optimistic row rather than stitch a
+      // plausible-but-fake author from a raw id + a literal fallback. Return an
+      // empty context (NOT undefined): the send still fires and onSuccess must
+      // still converge the committed row + projections — undefined would make
+      // onSuccess's guard skip that too, degrading a flaky connection to no
+      // feedback at all (Cindy #task:1792). In every real send this branch is
+      // unreached — the composer only exists inside the authenticated shell,
+      // which mounts on a resolved viewer.
+      const author = optimisticSelfAuthor(getHydratedViewer(qc));
+      if (!author) return {};
       const key = targetKey;
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<MessagesCache>(key);
@@ -1041,6 +1085,11 @@ export function useSendMessage(
         from_kind: 'user',
         from_agent_id: null,
         from_user_id: getCurrentUserId(),
+        // Resolved display projection of the raw provenance above. Built from
+        // the hydrated viewer (Gate 1) and replaced wholesale by the committed
+        // row's authoritative author on ACK (Gate 2), so a locally-stale name /
+        // avatar cannot outlive the commit.
+        author,
         content: input.content,
         metadata: null,
         attachments: snapshots,
@@ -1064,42 +1113,63 @@ export function useSendMessage(
       // window) from "a committed/concurrent fact arrived" (must not clobber
       // it — remove only our temp row). No persistent coordination state.
       const optimistic = qc.getQueryData<MessagesCache>(key);
-      return { prev, tempId, optimistic };
+      return { optimistic: { tempId, prevWindow: prev, writtenRef: optimistic } };
     },
     onSuccess: (committed, _input, ctx) => {
-      if (!channelId || !ctx) return;
-      const { message, projections } = committed;
-      // Swap the optimistic row to the committed one first — this removes the
-      // temp id AND any row a WS echo already appended (replacePendingMessage
-      // filters both), so ACK↔WS in either order converges to a single row.
-      if (targetKey) {
-        qc.setQueryData<MessagesCache | undefined>(targetKey, cur =>
-          replacePendingMessageInCache(cur, ctx.tempId, message),
-        );
-      }
-      // Then run the SHARED committed-message apply seam: the root's reply count,
-      // preview tail, and threads-list converge immediately, independent of WS
-      // echo timing (#task:1749). No once-only guard: the effects are
-      // data-idempotent (by-id/absolute writes), so this plane and the WS echo
-      // may each apply the same committed message safely; only invalidate-only
-      // effects may refetch once more (accepted best-effort). Writes no transport
-      // water, so the settles are voided (satisfaction is the WS wrapper's job).
-      void applyCommittedMessage(qc, channelId, message, projections);
+      if (!channelId) return;
+      applySendSuccess(qc, channelId, targetKey, committed, ctx);
     },
     onError: (_err, _input, ctx) => {
-      if (!targetKey || !ctx) return;
+      // Roll back ONLY when this mutation actually wrote an optimistic row; the
+      // fail-closed path wrote none, so there is nothing to undo.
+      if (!targetKey || !ctx?.optimistic) return;
+      const { tempId, prevWindow, writtenRef } = ctx.optimistic;
       // An HTTP error is an AMBIGUOUS result, not proof the send did not
       // commit: rollback must undo ONLY this mutation's optimistic temp fact,
       // never overwrite committed/concurrent facts that arrived after onMutate.
       // The mutation-local CAS lives in `rollbackOptimisticSend` (see its
-      // contract) — `ctx.optimistic` is the reference we wrote in onMutate.
+      // contract) — `writtenRef` is the reference we wrote in onMutate.
       const current = qc.getQueryData<MessagesCache>(targetKey);
       qc.setQueryData<MessagesCache | undefined>(
         targetKey,
-        rollbackOptimisticSend(current, ctx.prev, ctx.optimistic, ctx.tempId),
+        rollbackOptimisticSend(current, prevWindow, writtenRef, tempId),
       );
     },
   });
+}
+
+/**
+ * The onSuccess seam for a send. Extracted (and exported) so the contract Cindy
+ * flagged (#task:1792) is testable without a rendered hook: the committed
+ * apply must run WHETHER OR NOT an optimistic row was inserted. Only the
+ * temp-row swap is conditional on `ctx.optimistic` — the Gate 1 fail-closed
+ * path (viewer not hydrated) writes no temp row but its HTTP ACK still has to
+ * converge the committed row + projections, or a flaky connection degrades to
+ * no immediate feedback.
+ *
+ * The swap removes the temp id AND any row a WS echo already appended
+ * (`replacePendingMessageInCache` filters both), so ACK↔WS in either order
+ * converges to a single row. The shared apply seam has no once-only guard: its
+ * effects are data-idempotent (by-id/absolute writes), so this plane and the WS
+ * echo may each apply the same committed message safely; only invalidate-only
+ * effects may refetch once more (accepted best-effort). It writes no transport
+ * water, so the settles are voided (satisfaction is the WS wrapper's job).
+ */
+export function applySendSuccess(
+  qc: QueryClient,
+  channelId: string,
+  targetKey: QueryKey | null,
+  committed: MessageEventPayload,
+  ctx: SendMutationContext | undefined,
+): void {
+  const { message, projections } = committed;
+  if (targetKey && ctx?.optimistic) {
+    const { tempId } = ctx.optimistic;
+    qc.setQueryData<MessagesCache | undefined>(targetKey, cur =>
+      replacePendingMessageInCache(cur, tempId, message),
+    );
+  }
+  void applyCommittedMessage(qc, channelId, message, projections);
 }
 
 /** Upload the final oversized draft as a `text/plain` attachment in the

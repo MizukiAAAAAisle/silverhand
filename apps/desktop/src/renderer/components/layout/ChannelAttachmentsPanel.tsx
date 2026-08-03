@@ -24,6 +24,12 @@ import type {
 } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { UserAvatar } from '@/components/UserAvatar';
+import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
+import {
+  presentAuthor,
+  type AuthorPresentation,
+} from '@/components/chat/author-presentation';
+import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
 import {
   SidePanelHeader,
@@ -46,7 +52,6 @@ import {
 } from '@/features/channels/useChannelAttachments';
 import {
   groupAttachmentsByDay,
-  resolveAttachmentSender,
   resolveSenderIdentity,
   type AttachmentSenderActor,
   type AttachmentSenderIdentity,
@@ -138,12 +143,16 @@ export function ChannelAttachmentsPanel({
     fetchNextPage,
   } = useChannelAttachments(channelId, filter, { nowMs });
 
+  // The directory maps drive only the sender-FILTER facet options (an
+  // independent axis — an arbitrary distinct-senders list resolved by id, not
+  // the rows' own authors).
   const { agentsById, humansById, humanAvatarUrls } = useMessageRenderContext(
     workspaceId,
     channelId,
   );
   const { data: agents = [] } = useAgents();
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+
 
   const {
     senders: senderFacets,
@@ -164,6 +173,18 @@ export function ChannelAttachmentsPanel({
   );
   const groupCounts = useMemo(() => groups.map(g => g.items.length), [groups]);
   const flatItems = useMemo(() => groups.flatMap(g => g.items), [groups]);
+
+  // Each row's byline avatar bytes come STRICTLY from its own source author DTO
+  // (#task:1792 B2), never a directory join — so an attachment whose author is
+  // outside the loaded directory (or deleted) still renders its own avatar.
+  const sourceAuthors = useMemo(
+    () => flatItems.map(i => i.source.author),
+    [flatItems],
+  );
+  const {
+    agentAvatarUrls: authorAgentAvatarUrls,
+    humanAvatarUrls: authorHumanAvatarUrls,
+  } = useAuthorAvatarObjectUrls(sourceAuthors);
 
   // Keep the reader's scroll stable across two DISTINCT axes without conflating
   // them (see `reduceAttachmentsWindow`): a query-session change (different
@@ -292,22 +313,24 @@ export function ChannelAttachmentsPanel({
               // every row resolve to `undefined` → blank list.
               const item = flatItems[index - attachWindow.firstItemIndex];
               if (!item) return null;
-              const identity = resolveAttachmentSender(item.source, {
-                agentsById,
-                humansById,
-              });
+              // Author identity via the ONE shared seam (#task:1792): the
+              // source's server-authoritative `MessageAuthorDto` → `presentAuthor`,
+              // never a live `from_*_id` directory re-join. Deleted → snapshot
+              // name + neutral avatar; unresolved → "Unknown …"; a system-authored
+              // attachment source (`author === null`) reads "System". (The sender
+              // FILTER facet below is a separate axis — a distinct-senders list
+              // with no per-row author — so it keeps its own resolver.)
+              const presentation = item.source.author
+                ? presentAuthor(item.source.author)
+                : null;
               return (
                 <div className="px-2 py-[3px]">
                   <AttachmentRow
                     key={item.attachment.id}
                     item={item}
-                    identity={identity}
-                    avatarProps={pickAvatarProps(
-                      identity,
-                      agentsById,
-                      agentAvatarUrls,
-                      humanAvatarUrls,
-                    )}
+                    presentation={presentation}
+                    authorAgentAvatarUrls={authorAgentAvatarUrls}
+                    authorHumanAvatarUrls={authorHumanAvatarUrls}
                     onJump={() =>
                       onJumpToMessage({
                         workspaceId,
@@ -561,8 +584,11 @@ function SenderFilterSelect({
 
 interface AttachmentRowProps {
   item: AttachmentListItem;
-  identity: AttachmentSenderIdentity;
-  avatarProps: AvatarProps;
+  presentation: AuthorPresentation | null;
+  /** Byline avatars derived from each row's own source author DTO
+   *  (#task:1792 B2) — not a directory join. */
+  authorAgentAvatarUrls: Map<string, string | null>;
+  authorHumanAvatarUrls: Map<string, string | null>;
   onJump: () => void;
 }
 
@@ -579,15 +605,16 @@ interface AttachmentRowProps {
  */
 function AttachmentRow({
   item,
-  identity,
-  avatarProps,
+  presentation,
+  authorAgentAvatarUrls,
+  authorHumanAvatarUrls,
   onJump,
 }: AttachmentRowProps): JSX.Element {
   const { attachment, source } = item;
   const isImage = attachment.content_type.startsWith('image/');
   const appeared = dayjs(source.appeared_at);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const senderLabel = identity.label ?? 'System';
+  const senderLabel = presentation?.label ?? 'System';
 
   // Image click flow — prefetch the blob URL BEFORE opening Lightbox so a
   // failed fetch surfaces as a toast (not a silently-closed modal). Only
@@ -627,9 +654,22 @@ function AttachmentRow({
             <span className="flex min-w-0 items-center gap-2 text-xs text-text-muted">
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="flex shrink-0">
-                  <SenderAvatar avatar={avatarProps} size={16} />
+                  <AuthorAvatarView
+                    avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
+                    size={16}
+                    label={senderLabel}
+                    agentAvatarUrls={authorAgentAvatarUrls}
+                    humanAvatarUrls={authorHumanAvatarUrls}
+                  />
                 </span>
-                <span className="truncate">{senderLabel}</span>
+                {/* Author name carries its deleted state through the ONE shared
+                    primitive (#task:1792 B3); a system-authored source has no
+                    author DTO and reads "System". */}
+                {presentation ? (
+                  <AuthorName presentation={presentation} className="truncate" />
+                ) : (
+                  <span className="truncate">{senderLabel}</span>
+                )}
               </span>
               <span className="shrink-0">{formatBytes(attachment.size)}</span>
               <time

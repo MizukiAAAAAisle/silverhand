@@ -4,6 +4,7 @@ import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { authorGroupContinuations } from '@/components/chat/authorGrouping';
 import { groupMessages } from '@/components/chat/groupMessages';
 import { MessageItem } from '@/components/chat/MessageItem';
+import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
 import { InlineFindBar } from './InlineFindBar';
 import {
   useInlineFindController,
@@ -219,7 +220,6 @@ export function ThreadPanel({
     humansById,
     humansByName,
     channelsByName,
-    humanAvatarUrls,
     viewerAvatarObjectUrl,
     viewer,
     userResolver,
@@ -228,6 +228,13 @@ export function ThreadPanel({
   } = useMessageRenderContext(workspaceId, channelId, canParticipate);
   const { data: agents = [] } = useAgents();
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  // Byline avatar bytes come STRICTLY from each rendered row's own author DTO
+  // (#task:1792 B2) — the pinned root + every reply in this cluster — never the
+  // workspace directory, so a deleted / departed author still renders its own
+  // snapshot avatar or a neutral glyph. `agentAvatarUrls` (directory) stays the
+  // source for the independent axis of inline `@handle` mention pills.
+  const { agentAvatarUrls: authorAgentAvatarUrls, humanAvatarUrls: authorUserAvatarUrls } =
+    useAuthorAvatarObjectUrls(messages.map(m => (isCommittedMessage(m) ? m.author : null)));
 
   // ── Message actions (copy / share / multi-select export) ──────────────
   // Shared action surface — identical wiring to the channel pane
@@ -242,8 +249,6 @@ export function ThreadPanel({
     channelId,
     windowResetVersion: selectionResetKey,
     jumpToMessageId: jumpMessageId ?? null,
-    agentsById,
-    viewer,
     canSave: canParticipate,
   });
 
@@ -788,7 +793,8 @@ export function ThreadPanel({
         onOpenConversationRef={onOpenConversationRef}
         viewerAvatarObjectUrl={viewerAvatarObjectUrl}
         viewer={viewer}
-        humanAvatarUrls={humanAvatarUrls}
+        authorAgentAvatarUrls={authorAgentAvatarUrls}
+        authorUserAvatarUrls={authorUserAvatarUrls}
         agentAvatarUrls={agentAvatarUrls}
         userResolver={userResolver}
         searchQuery={find.highlightQuery}
@@ -907,7 +913,6 @@ export function ThreadPanel({
           <MessageActionChrome
             surface={actions}
             renderCtx={{
-              agentsById,
               agentsByName,
               humansByName,
               channelsByName,

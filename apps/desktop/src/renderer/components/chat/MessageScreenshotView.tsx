@@ -5,10 +5,12 @@ import type {
   UserDto,
 } from '@silverhand/shared';
 import { resolveAttachmentLabels } from '@silverhand/shared';
-import { FileText, Hash, User } from 'lucide-react';
-import { AgentAvatar } from '@/components/AgentAvatar';
+import { FileText, Hash } from 'lucide-react';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
+import { AuthorAvatarView } from './author-avatar-view';
+import { presentAuthor } from './author-presentation';
+import { formatSenderLabel } from './markdownTranscript';
 import { Markdown } from './Markdown';
 import { MessageRowContent } from './MessageRowContent';
 import { ReactionChipRow } from './ReactionChipRow';
@@ -27,11 +29,16 @@ import type { StaticTaskRefSummary } from './TaskRef';
  * deterministic, can't trip over a stray `<button>` portal, and the
  * captured image is identical run-to-run.
  *
- * Per Cindy's review #6: lookup maps (agentsById, viewer,
+ * Per Cindy's review #6: lookup maps (agentsByName, viewer,
  * channelsByName, etc.) are passed in EXPLICITLY rather than reaching
  * into hooks, so the screenshot view's dependencies are obvious and
  * an offscreen render in a different React tree still resolves
- * names/avatars consistently.
+ * names/avatars consistently. Author identity (byline label + avatar
+ * variant) comes from the ONE `MessageAuthorDto` seam (#task:1792) via
+ * `presentAuthor` — never a live `from_*_id` directory re-join — so a
+ * hard-deleted author keeps its snapshot name and neutral avatar here too.
+ * The `agentsByName` / `humansByName` maps that remain feed only the
+ * inline @-mention pills inside the Markdown body, a separate axis.
  *
  * What we render per row (per @shiki spec): avatar + display name +
  * absolute time + markdown body + attachment chips + reaction chips.
@@ -44,13 +51,14 @@ import type { StaticTaskRefSummary } from './TaskRef';
  */
 export function MessageScreenshotView({
   messages,
-  agentsById,
   agentsByName,
   humansByName,
   channelsByName,
   conversationRefsById,
   taskRefsByNumber,
   agentAvatarUrls,
+  authorAgentAvatarUrls,
+  authorUserAvatarUrls,
   attachmentImageUrls,
   viewer,
   viewerAvatarObjectUrl,
@@ -58,13 +66,18 @@ export function MessageScreenshotView({
   mermaidSvgByCode,
 }: {
   messages: readonly MessageDto[];
-  agentsById: ReadonlyMap<string, AgentDto>;
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
   conversationRefsById?: ReadonlyMap<string, ConversationReference>;
   taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
+  /** Directory batch — feeds only the inline @-mention pills in the Markdown
+   *  body, a separate axis from the row's own author. */
   agentAvatarUrls?: ReadonlyMap<string, string | null>;
+  /** Byline avatar bytes, derived from each row's own author DTO
+   *  (#task:1792 B2) — never a directory join. Split by kind. */
+  authorAgentAvatarUrls?: ReadonlyMap<string, string | null>;
+  authorUserAvatarUrls?: ReadonlyMap<string, string | null>;
   attachmentImageUrls?: ReadonlyMap<string, string>;
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
@@ -105,13 +118,14 @@ export function MessageScreenshotView({
         <ScreenshotRow
           key={m.id}
           message={m}
-          agentsById={agentsById}
           agentsByName={agentsByName}
           humansByName={humansByName}
           channelsByName={channelsByName}
           conversationRefsById={conversationRefsById}
           taskRefsByNumber={taskRefsByNumber}
           agentAvatarUrls={agentAvatarUrls}
+          authorAgentAvatarUrls={authorAgentAvatarUrls}
+          authorUserAvatarUrls={authorUserAvatarUrls}
           attachmentImageUrls={attachmentImageUrls}
           viewer={viewer}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
@@ -124,56 +138,63 @@ export function MessageScreenshotView({
 
 function ScreenshotRow({
   message,
-  agentsById,
   agentsByName,
   humansByName,
   channelsByName,
   conversationRefsById,
   taskRefsByNumber,
   agentAvatarUrls,
+  authorAgentAvatarUrls,
+  authorUserAvatarUrls,
   attachmentImageUrls,
   viewer,
   viewerAvatarObjectUrl,
   mermaidSvgByCode,
 }: {
   message: MessageDto;
-  agentsById: ReadonlyMap<string, AgentDto>;
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
   conversationRefsById?: ReadonlyMap<string, ConversationReference>;
   taskRefsByNumber?: ReadonlyMap<number, StaticTaskRefSummary>;
   agentAvatarUrls?: ReadonlyMap<string, string | null>;
+  authorAgentAvatarUrls?: ReadonlyMap<string, string | null>;
+  authorUserAvatarUrls?: ReadonlyMap<string, string | null>;
   attachmentImageUrls?: ReadonlyMap<string, string>;
   viewer?: UserDto;
   viewerAvatarObjectUrl?: string | null;
   mermaidSvgByCode?: ReadonlyMap<string, string>;
 }): JSX.Element {
-  const isUser = message.from_kind === 'user';
-  const agent = !isUser && message.from_agent_id
-    ? agentsById.get(message.from_agent_id)
-    : undefined;
-  const isViewer = isUser && viewer && message.from_user_id === viewer.id;
-  const senderName = sanitizeScreenshotText(
-    isUser
-      ? isViewer
-        ? viewer.display_name?.trim() || viewer.name
-        : message.from_user_id ?? 'user'
-      : `@${agent?.display_name?.trim() || agent?.name || 'agent'}`,
-  );
+  // Identity comes from the ONE author seam, not a `from_*_id` directory join.
+  // The label keeps the export's `@`-for-agent decoration (via the shared
+  // `formatSenderLabel` — plain images still lean on it to read agent vs human
+  // at a glance) on top of the seam's snapshot name.
+  const presentation = message.author ? presentAuthor(message.author) : null;
+  const senderName = sanitizeScreenshotText(formatSenderLabel(message));
+  const isAgent = presentation?.kind === 'agent';
+  // Feed the viewer's own already-resolved avatar blob when they authored the
+  // row (active user matching the viewer's id); every other active author pulls
+  // its bytes from the author-DTO-derived batch (#task:1792 B2 — not the
+  // directory), and deleted/unresolved render a neutral square.
+  const viewerAvatarOverride =
+    presentation?.avatar.variant === 'user' &&
+    viewer != null &&
+    presentation.avatar.id === viewer.id
+      ? viewerAvatarObjectUrl ?? null
+      : null;
   const time = formatExportTime(message.created_at);
   const content = sanitizeScreenshotText(message.content);
 
   return (
     <div className="flex items-start gap-3">
-      <ScreenshotAvatar
-        isUser={!!isUser}
-        isViewer={!!isViewer}
-        agent={agent}
-        agentAvatarObjectUrl={
-          agent ? agentAvatarUrls?.get(agent.id) ?? null : null
-        }
-        viewerAvatarObjectUrl={viewerAvatarObjectUrl ?? null}
+      <AuthorAvatarView
+        avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
+        size={AVATAR_PX.lg}
+        label={senderName}
+        className="border-[length:var(--border-avatar-width)] border-border-avatar"
+        agentAvatarUrls={authorAgentAvatarUrls}
+        humanAvatarUrls={authorUserAvatarUrls}
+        objectUrlOverride={viewerAvatarOverride}
       />
       {/* Shared content layer (#task:1173 P1). The export fills each required
           slot with a STATIC node and passes `null` for the live-only
@@ -186,7 +207,7 @@ function ScreenshotRow({
         author={
           <span
             className={
-              'font-medium ' + (isUser ? 'text-text-primary' : 'text-accent')
+              'font-medium ' + (isAgent ? 'text-accent' : 'text-text-primary')
             }
           >
             {senderName}
@@ -309,69 +330,6 @@ function ScreenshotAttachmentTile({
       </div>
       {labelBadge}
     </div>
-  );
-}
-
-function ScreenshotAvatar({
-  isUser,
-  isViewer,
-  agent,
-  agentAvatarObjectUrl,
-  viewerAvatarObjectUrl,
-}: {
-  isUser: boolean;
-  isViewer: boolean;
-  agent: AgentDto | undefined;
-  agentAvatarObjectUrl: string | null;
-  viewerAvatarObjectUrl: string | null;
-}): JSX.Element {
-  if (isUser) {
-    if (isViewer && viewerAvatarObjectUrl) {
-      return (
-        <span
-          data-avatar-ground
-          className="inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar"
-          aria-hidden
-        >
-          {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
-          <img
-            src={viewerAvatarObjectUrl}
-            alt="avatar"
-            className="size-full object-cover"
-            draggable={false}
-          />
-        </span>
-      );
-    }
-    return (
-      <span
-        data-avatar-ground
-        className="inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
-        aria-hidden
-      >
-        <User className="size-4" />
-      </span>
-    );
-  }
-  if (agent) {
-    return (
-      <AgentAvatar
-        runtime={agent.runtime}
-        size={AVATAR_PX.lg}
-        className="border-[length:var(--border-avatar-width)] border-border-avatar"
-        avatarObjectUrl={agentAvatarObjectUrl}
-        alt={sanitizeScreenshotText(agent.display_name || agent.name)}
-      />
-    );
-  }
-  return (
-    <span
-      data-avatar-ground
-      className="inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
-      aria-hidden
-    >
-      <User className="size-4" />
-    </span>
   );
 }
 

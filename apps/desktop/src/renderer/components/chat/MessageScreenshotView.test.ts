@@ -78,12 +78,34 @@ function msg(
     reactions?: ReactionAggregateDto[] | null;
   } = {},
 ): MessageDto {
+  const fromKind = partial.from_kind ?? 'agent';
+  const fromAgentId = partial.from_agent_id ?? 'a1';
   return {
     id,
     conversation_id: 'c1',
-    from_kind: partial.from_kind ?? 'agent',
-    from_agent_id: partial.from_agent_id ?? 'a1',
+    from_kind: fromKind,
+    from_agent_id: fromAgentId,
     from_user_id: null,
+    author:
+      fromKind === 'agent'
+        ? {
+            status: 'active',
+            kind: 'agent',
+            id: fromAgentId ?? 'a1',
+            name: 'Agent',
+            display_name: 'Agent',
+            avatar_url: null,
+            runtime: 'claude',
+          }
+        : {
+            status: 'active',
+            kind: 'user',
+            id: 'u1',
+            name: 'User',
+            display_name: 'User',
+            avatar_url: null,
+            runtime: null,
+          },
     content,
     metadata: null,
     attachments: partial.attachments ?? null,
@@ -108,15 +130,18 @@ function render(
   } = {},
 ): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const agentsById = new Map([['a1', agent('a1', { display_name: 'Alice' })]]);
-  const agentsByName = options.agentsByName ?? agentsById;
+  // Author identity now comes from each message's `MessageAuthorDto` (built in
+  // the `msg` fixture), not a `from_*_id` directory join. This map only backs
+  // the inline @-mention pills' default (`agentsByName`).
+  const agentsByName =
+    options.agentsByName ??
+    new Map([['a1', agent('a1', { display_name: 'Alice' })]]);
   return renderToStaticMarkup(
     React.createElement(
       QueryClientProvider,
       { client: qc },
       React.createElement(MessageScreenshotView, {
         messages,
-        agentsById,
         agentsByName,
         humansByName: options.humansByName,
         channelsByName: options.channelsByName,

@@ -25,6 +25,9 @@ import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { ChannelIcon } from '@/components/ChannelIcon';
 import { UserAvatar } from '@/components/UserAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
+import { AuthorAvatarView, AuthorName } from '@/components/chat/author-avatar-view';
+import { presentAuthor } from '@/components/chat/author-presentation';
+import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
@@ -131,12 +134,6 @@ export function SearchPanel({
   // the raw uuid (multi-human audit 2026-06-03 #task:857 P0.10).
   const usersById = useUsersById();
   const userResolver = useMemo(() => makeUserNameResolver(usersById), [usersById]);
-  // Batch avatar-url resolvers (shared session cache — no per-row fetch): feed
-  // message result rows so the sender segment shows the real agent/user avatar
-  // instead of a bare name (#task:1336). Keyed by (id, avatar_url) so reordering
-  // results never re-runs the effect.
-  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
-  const userAvatarUrls = useUserAvatarObjectUrls(users);
 
   const channelQuery = useMemo(
     () => parseWorkspaceFilter(workspaceFilter),
@@ -174,6 +171,16 @@ export function SearchPanel({
     timeRange !== 'all';
   const { data, isFetching, isLoading } = useMessageSearch(filters);
   const results = data?.results ?? [];
+  // The sender byline avatar's bytes come STRICTLY from each message hit's own
+  // author DTO (#task:1792 B2) — never a directory join — so a match whose
+  // author is deleted or outside the loaded directory still renders correctly.
+  const messageAuthors = useMemo(
+    () =>
+      results.flatMap(r => (r.type === 'message' ? [r.message.author] : [])),
+    [results],
+  );
+  const { agentAvatarUrls, humanAvatarUrls } =
+    useAuthorAvatarObjectUrls(messageAuthors);
   const agentsById = useMemo(
     () => new Map(agents.map(agent => [agent.id, agent])),
     [agents],
@@ -292,10 +299,8 @@ export function SearchPanel({
                       key={resultKey(result)}
                       result={result}
                       query={query}
-                      agentsById={agentsById}
                       agentAvatarUrls={agentAvatarUrls}
-                      userAvatarUrls={userAvatarUrls}
-                      userResolver={userResolver}
+                      userAvatarUrls={humanAvatarUrls}
                       onClick={() => {
                         if (result.type === 'workspace') {
                           onOpenWorkspace(result.workspace.id);
@@ -600,18 +605,14 @@ function TimeRangeSelect({
 function SearchResultRow({
   result,
   query,
-  agentsById,
   agentAvatarUrls,
   userAvatarUrls,
-  userResolver,
   onClick,
 }: {
   result: SearchResultDto;
   query: string;
-  agentsById: Map<string, AgentDto>;
   agentAvatarUrls: Map<string, string | null>;
   userAvatarUrls: Map<string, string | null>;
-  userResolver: UserNameResolver;
   onClick: () => void;
 }): JSX.Element {
   const isMessage = result.type === 'message';
@@ -636,10 +637,8 @@ function SearchResultRow({
           {isMessage ? (
             <MessageResultHeader
               result={result}
-              agentsById={agentsById}
               agentAvatarUrls={agentAvatarUrls}
               userAvatarUrls={userAvatarUrls}
-              userResolver={userResolver}
             />
           ) : (
             <>
@@ -682,18 +681,22 @@ function SearchResultRow({
  */
 function MessageResultHeader({
   result,
-  agentsById,
   agentAvatarUrls,
   userAvatarUrls,
-  userResolver,
 }: {
   result: Extract<SearchResultDto, { type: 'message' }>;
-  agentsById: Map<string, AgentDto>;
   agentAvatarUrls: Map<string, string | null>;
   userAvatarUrls: Map<string, string | null>;
-  userResolver: UserNameResolver;
 }): JSX.Element {
-  const senderName = messageSenderName(result, agentsById, userResolver);
+  // Author identity via the ONE shared seam (#task:1792): the server-
+  // authoritative `MessageAuthorDto` → `presentAuthor`, never a live `from_*_id`
+  // directory re-join. Deleted → snapshot name + neutral avatar; unresolved →
+  // "Unknown …"; a matched system message (`author === null`) reads "System"
+  // with a neutral person square (the left type icon already carries the kind).
+  const presentation = result.message.author
+    ? presentAuthor(result.message.author)
+    : null;
+  const senderName = presentation?.label ?? 'System';
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
       <span className="flex min-w-0 items-center gap-1">
@@ -717,8 +720,20 @@ function MessageResultHeader({
         <span className="truncate">{result.conversation.title}</span>
       </span>
       <span className="flex min-w-0 items-center gap-1">
-        {messageSenderAvatar(result, agentsById, agentAvatarUrls, userAvatarUrls)}
-        <span className="truncate">{senderName}</span>
+        <AuthorAvatarView
+          avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
+          size={AVATAR_PX.xs}
+          label={senderName}
+          agentAvatarUrls={agentAvatarUrls}
+          humanAvatarUrls={userAvatarUrls}
+        />
+        {/* Author name carries its deleted state through the shared primitive
+            (#task:1792 B3); a matched system message has no author DTO. */}
+        {presentation ? (
+          <AuthorName presentation={presentation} className="truncate" />
+        ) : (
+          <span className="truncate">{senderName}</span>
+        )}
       </span>
       <span className="flex shrink-0 items-center gap-1 tabular-nums">
         <Clock aria-hidden className="size-3.5 shrink-0" />
@@ -726,64 +741,6 @@ function MessageResultHeader({
       </span>
     </span>
   );
-}
-
-/** Sender display name for a message result — the SAME resolution the panel
- *  uses everywhere (agents via `agentsById`/`agent_name`, humans via the
- *  resolver), so the header never introduces a second metadata source. */
-function messageSenderName(
-  result: Extract<SearchResultDto, { type: 'message' }>,
-  agentsById: Map<string, AgentDto>,
-  userResolver: UserNameResolver,
-): string {
-  const { message } = result;
-  if (message.from_kind === 'agent') {
-    return formatAgentName(message.from_agent_id, result.agent_name, agentsById);
-  }
-  if (message.from_kind === 'user') {
-    return formatUserDisplayName(message.from_user_id, userResolver);
-  }
-  return 'system';
-}
-
-/** Sender avatar glyph for a message result: the agent's runtime/uploaded
- *  avatar, the human's uploaded avatar, or nothing for system (the left type
- *  icon already reads "system"). All bytes come from the shared avatar-url
- *  caches — this component never fetches. */
-function messageSenderAvatar(
-  result: Extract<SearchResultDto, { type: 'message' }>,
-  agentsById: Map<string, AgentDto>,
-  agentAvatarUrls: Map<string, string | null>,
-  userAvatarUrls: Map<string, string | null>,
-): JSX.Element | null {
-  const { message } = result;
-  if (message.from_kind === 'agent') {
-    const agent = message.from_agent_id
-      ? agentsById.get(message.from_agent_id)
-      : undefined;
-    if (!agent) return <Bot className="size-4 shrink-0 text-text-muted" />;
-    return (
-      <AgentAvatar
-        runtime={agent.runtime}
-        size={AVATAR_PX.xs}
-        avatarObjectUrl={agentAvatarUrls.get(agent.id) ?? null}
-        alt={agent.display_name?.trim() || agent.name}
-      />
-    );
-  }
-  if (message.from_kind === 'user') {
-    return (
-      <UserAvatar
-        size={AVATAR_PX.xs}
-        avatarObjectUrl={
-          message.from_user_id
-            ? userAvatarUrls.get(message.from_user_id) ?? null
-            : null
-        }
-      />
-    );
-  }
-  return null;
 }
 
 function EmptyState({
@@ -895,16 +852,6 @@ function resultKey(result: SearchResultDto): string {
     return `conversation:${result.conversation.id}`;
   }
   return `message:${result.message.id}`;
-}
-
-function formatAgentName(
-  agentId: string | null,
-  fallback: string | null,
-  agentsById: Map<string, AgentDto>,
-): string {
-  if (!agentId) return '@agent';
-  const agent = agentsById.get(agentId);
-  return `@${agent?.display_name?.trim() || fallback || agentId}`;
 }
 
 function buildExcerpt(content: string, query: string): string {

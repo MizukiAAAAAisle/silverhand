@@ -896,15 +896,24 @@ export function threadReplyPreviewRowFromMessage(
 ): ThreadReplyPreviewRow | null {
   if (msg.from_kind === 'system') return null;
   const snapshots = msg.attachments ?? [];
+  // Carry the server-authoritative author DTO straight through (#task:1792) —
+  // the preview row's identity is the SAME resolved author the byline uses, so a
+  // deleted replier keeps its snapshot name and an unresolved one degrades to
+  // "Unknown …". A non-system message always resolves an author server-side; a
+  // null here is a degraded frame, so it falls back to the non-aggregating
+  // `unresolved` author rather than fabricating one from the (nulled) FK.
+  const author: ThreadReplyPreviewRow['author'] = msg.author ?? {
+    kind: msg.from_kind === 'agent' ? 'agent' : 'user',
+    status: 'unresolved',
+    id: null,
+    name: null,
+    display_name: null,
+    avatar_url: null,
+  };
   return {
     message_id: msg.id,
     seq: msg.seq,
-    author: {
-      kind: msg.from_kind === 'agent' ? 'agent' : 'human',
-      // A null actor id still counts as a reply, so it stays in the tail and
-      // degrades to the generic avatar — identical to the read model's rule.
-      id: (msg.from_kind === 'agent' ? msg.from_agent_id : msg.from_user_id) ?? '',
-    },
+    author,
     preview: normalizeThreadPreviewExcerpt(msg.content),
     attachment_count: snapshots.length,
     first_attachment_label:

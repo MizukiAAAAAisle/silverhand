@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { MessageDto } from '@silverhand/shared';
+import type { MessageAuthorDto, MessageDto, UserDto } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import type { PendingMessage } from './pending-message';
+import { optimisticSelfAuthor } from './pending-message';
 import {
   appendMessageToCache,
   appendPendingMessage,
@@ -16,13 +17,35 @@ import {
 // authoritative — never re-position or clobber them. The optimistic temp row
 // is the ONLY fact this mutation owns.
 
-function committed(id: string, seq: number): MessageDto {
+/** An `active` user author (the only arm an optimistic self-send may wear, and
+ *  what a committed self-send row carries back). */
+function userAuthor(
+  display_name: string,
+  avatar_url: string | null = null,
+): MessageAuthorDto {
+  return {
+    status: 'active',
+    kind: 'user',
+    id: 'u1',
+    name: 'u1',
+    display_name,
+    avatar_url,
+    runtime: null,
+  };
+}
+
+function committed(
+  id: string,
+  seq: number,
+  author: MessageAuthorDto = userAuthor('User One'),
+): MessageDto {
   return {
     id,
     conversation_id: 'c1',
     from_kind: 'user',
     from_agent_id: null,
     from_user_id: 'u1',
+    author,
     content: id,
     metadata: null,
     attachments: null,
@@ -34,13 +57,17 @@ function committed(id: string, seq: number): MessageDto {
   };
 }
 
-function pending(tempId: string): PendingMessage {
+function pending(
+  tempId: string,
+  author: MessageAuthorDto = userAuthor('User One'),
+): PendingMessage {
   return {
     id: tempId,
     conversation_id: 'c1',
     from_kind: 'user',
     from_agent_id: null,
     from_user_id: 'u1',
+    author,
     content: 'draft',
     metadata: null,
     attachments: null,
@@ -172,5 +199,66 @@ describe('rollbackOptimisticSend — undo only the temp fact, never clobber comm
     const rolledBack = rollbackOptimisticSend(optimistic, undefined, optimistic, tempId);
 
     expect(ids(rolledBack)).toEqual([]);
+  });
+});
+
+// The optimistic self-send author (#task:1792). The pending row's author is the
+// current viewer, built as a `status:'active'` MessageAuthorDto straight from
+// the hydrated viewer carrier — the two gates the reviewers locked (Alice/Cindy
+// 2026-08-03): (1) fail closed when the carrier has not hydrated, never a
+// raw-id + literal-fallback fake; (2) the ACK's authoritative author replaces
+// it wholesale so a locally-stale name/avatar cannot linger past commit.
+
+const VIEWER: UserDto = {
+  id: 'u1',
+  name: 'norman',
+  display_name: 'Norman',
+  avatar_url: '/api/users/u1/avatar?v=7',
+  created_at: 0,
+  updated_at: 0,
+};
+
+describe('optimisticSelfAuthor — Gate 1: complete from the hydrated viewer, else fail closed', () => {
+  it('builds the active-user arm from the viewer carrier (never a snapshot / other status)', () => {
+    expect(optimisticSelfAuthor(VIEWER)).toEqual({
+      status: 'active',
+      kind: 'user',
+      id: 'u1',
+      name: 'norman',
+      display_name: 'Norman',
+      avatar_url: '/api/users/u1/avatar?v=7',
+      runtime: null,
+    });
+  });
+
+  it('carries a null avatar through verbatim rather than inventing one', () => {
+    expect(optimisticSelfAuthor({ ...VIEWER, avatar_url: null })?.avatar_url).toBe(
+      null,
+    );
+  });
+
+  it('fails closed to null when the viewer has not hydrated (no id+fallback fake)', () => {
+    expect(optimisticSelfAuthor(null)).toBe(null);
+  });
+});
+
+describe('replacePendingMessageInCache — Gate 2: the committed author replaces the optimistic one wholesale', () => {
+  it('a locally-stale display name / avatar does not survive the ACK swap', () => {
+    const tempId = 'pending-1';
+    // Optimistic row stamped with the viewer's at-send display/avatar.
+    const stale = pending(tempId, userAuthor('Old Name', '/api/users/u1/avatar?v=1'));
+    const cache = appendPendingMessage(undefined, stale);
+    // The authoritative committed row carries the server's fresh author.
+    const fresh = committed('m10', 10, userAuthor('New Name', '/api/users/u1/avatar?v=2'));
+
+    const converged = replacePendingMessageInCache(cache, tempId, fresh);
+    const row = (converged?.pages ?? [])
+      .flatMap(p => p.messages)
+      .find(m => m.id === 'm10');
+
+    expect(row?.author).toEqual(fresh.author);
+    // The stale fields are gone, not merged — the whole author is replaced.
+    expect(row?.author).not.toMatchObject({ display_name: 'Old Name' });
+    expect(ids(converged)).toEqual(['m10']);
   });
 });

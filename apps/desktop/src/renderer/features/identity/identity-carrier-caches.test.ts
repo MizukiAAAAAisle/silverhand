@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import {
+  agentsKey,
+  clusterFetchEpochKey,
+  clusterMessagesKey,
+  mainlineLiveGapKey,
+  messagesKey,
+  threadFollowersKey,
+  threadRootKey,
+} from '@/features/channels/message-cache-core';
+import {
+  channelThreadsKey,
+  channelThreadsUnreadKey,
+} from '@/features/channels/useChannelThreads';
+import { channelAttachmentsKey } from '@/features/channels/useChannelAttachments';
+import { savedKey } from '@/features/saved/hooks';
+import { searchKey } from '@/features/search/hooks';
+import {
   identityCarrierIdsFor,
   invalidateIdentityCarrierCaches,
 } from './identity-carrier-caches';
@@ -20,7 +36,7 @@ describe('identity-carrier caches', () => {
   /** Keys marked stale by an invalidation of `kind`. */
   const stalePaths = (kind: 'agent' | 'human'): string[] => {
     const qc = new QueryClient();
-    const keys: readonly unknown[][] = [
+    const keys: readonly (readonly unknown[])[] = [
       ['conversation-members', 'c1'],
       ['workspaces', 'w1', 'members'],
       ['workspaces', 'w1', 'channels'],
@@ -35,6 +51,24 @@ describe('identity-carrier caches', () => {
       ['host-resources', 'h1'],
       ['hosts'],
       ['users'],
+      // #task:1792 — every channel-scoped read model that now embeds a
+      // `MessageAuthorDto` snapshot, built from its REAL factory so a segment
+      // rename breaks this test rather than silently dropping a family.
+      messagesKey('c1'),
+      clusterMessagesKey('c1', 'root1'),
+      threadRootKey('c1', 'root1'),
+      channelThreadsKey('c1'),
+      channelThreadsUnreadKey('c1'),
+      channelAttachmentsKey('c1'),
+      savedKey,
+      searchKey,
+      // Non-author channel caches that share the `['channels', cid, …]` prefix
+      // (and, for the cluster arm, the `'cluster'` segment) — they must NOT be
+      // reseated by an identity change.
+      agentsKey('c1'),
+      mainlineLiveGapKey('c1'),
+      threadFollowersKey('c1', 'root1'),
+      clusterFetchEpochKey('c1', 'root1'),
     ];
     for (const k of keys) seed(qc, k);
     invalidateIdentityCarrierCaches(qc, kind);
@@ -57,6 +91,40 @@ describe('identity-carrier caches', () => {
     ];
     for (const kind of ['agent', 'human'] as const) {
       expect(stalePaths(kind)).toEqual(expect.arrayContaining(shared));
+    }
+  });
+
+  it('reseats every embedded-author read model, both kinds (#task:1792)', () => {
+    // A hard-deleted actor's snapshot, a rename, and an avatar swap all only
+    // reflect on these caches by refetch — none is keyed by the actor id.
+    const authorCarriers = [
+      JSON.stringify(messagesKey('c1')),
+      JSON.stringify(clusterMessagesKey('c1', 'root1')),
+      JSON.stringify(threadRootKey('c1', 'root1')),
+      JSON.stringify(channelThreadsKey('c1')),
+      JSON.stringify(channelThreadsUnreadKey('c1')),
+      JSON.stringify(channelAttachmentsKey('c1')),
+      JSON.stringify(savedKey),
+      JSON.stringify(searchKey),
+    ];
+    for (const kind of ['agent', 'human'] as const) {
+      expect(stalePaths(kind)).toEqual(expect.arrayContaining(authorCarriers));
+    }
+  });
+
+  it('does NOT reseat non-author channel caches sharing the prefix (#task:1792)', () => {
+    // The cluster arm matches only `…, root, 'messages'`; `fetch-epoch` shares
+    // the `'cluster'` segment but carries no author. `agents` / mainline
+    // `live-gap` / `thread-followers` are pure affordance/roster caches.
+    const nonAuthor = [
+      JSON.stringify(agentsKey('c1')),
+      JSON.stringify(mainlineLiveGapKey('c1')),
+      JSON.stringify(threadFollowersKey('c1', 'root1')),
+      JSON.stringify(clusterFetchEpochKey('c1', 'root1')),
+    ];
+    for (const kind of ['agent', 'human'] as const) {
+      const stale = stalePaths(kind);
+      for (const key of nonAuthor) expect(stale).not.toContain(key);
     }
   });
 
@@ -97,5 +165,15 @@ describe('identity-carrier caches', () => {
     expect(identityCarrierIdsFor('human')).not.toContain('favorites');
     expect(identityCarrierIdsFor('agent')).toContain('favorites');
     expect(identityCarrierIdsFor('agent')).not.toContain('users');
+    // The embedded-author families are both-kind carriers (#task:1792).
+    for (const kind of ['agent', 'human'] as const) {
+      expect(identityCarrierIdsFor(kind)).toEqual(
+        expect.arrayContaining([
+          'channel-author-projections',
+          'saved',
+          'search',
+        ]),
+      );
+    }
   });
 });

@@ -11,12 +11,14 @@ import {
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import { ArrowDown } from 'lucide-react';
 import type {
+  MessageAuthorDto,
   ReplyBadgeSummary,
   StreamUnreadDto,
   ThreadReplyPreviewRow,
 } from '@silverhand/shared';
 import { ChannelMessageItem } from '@/components/chat/ChannelMessageItem';
 import { useMessageRenderContext } from '@/components/chat/useMessageRenderContext';
+import { useAuthorAvatarObjectUrls } from '@/components/chat/author-avatar-hooks';
 import { SystemMessage } from '@/components/chat/SystemMessage';
 import { SystemActivityCluster } from '@/components/chat/SystemActivityCluster';
 import { authorGroupContinuations } from '@/components/chat/authorGrouping';
@@ -177,7 +179,6 @@ export function MessageList({
     humansById,
     humansByName,
     channelsByName,
-    humanAvatarUrls,
     viewerAvatarObjectUrl,
     viewer,
     userResolver,
@@ -246,6 +247,33 @@ export function MessageList({
     [items],
   );
 
+  // Byline + stacked-replier avatar bytes come STRICTLY from each rendered row's
+  // own author DTO (#task:1792 B2) — committed messages' `author` plus every
+  // reply-badge summary's `repliers` — never the workspace directory. So an
+  // active author whose account has left the loaded directory still renders its
+  // own snapshot avatar, and a deleted / unresolved author draws a neutral glyph
+  // with no fetch. The directory batch (`agentAvatarUrls`, lifted in
+  // ActiveChannelView) stays the source for the INDEPENDENT axis of inline
+  // `@handle` mention pills inside each message body. Pending optimistic rows
+  // have no server author; they are the viewer's own send and resolve their
+  // byline from `viewerAvatarObjectUrl`, so they need not enter this batch.
+  const bylineAuthors = useMemo(() => {
+    const authors: (MessageAuthorDto | null)[] = [];
+    for (const m of messages) {
+      if (isCommittedMessage(m)) authors.push(m.author);
+    }
+    if (replySummariesByRoot) {
+      for (const summary of Object.values(replySummariesByRoot)) {
+        for (const r of summary.repliers) authors.push(r);
+      }
+    }
+    return authors;
+  }, [messages, replySummariesByRoot]);
+  const {
+    agentAvatarUrls: authorAgentAvatarUrls,
+    humanAvatarUrls: authorUserAvatarUrls,
+  } = useAuthorAvatarObjectUrls(bylineAuthors);
+
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
@@ -288,8 +316,6 @@ export function MessageList({
     channelId,
     windowResetVersion,
     jumpToMessageId,
-    agentsById,
-    viewer,
     canSave,
   });
   // Channel title/kind — surfaced in the screenshot header and used as the
@@ -663,7 +689,8 @@ export function MessageList({
           threadReplyPreviews={replyPreviewsByRoot?.[m.id]}
           viewerAvatarObjectUrl={viewerAvatarObjectUrl}
           viewer={viewer}
-          humanAvatarUrls={humanAvatarUrls}
+          authorAgentAvatarUrls={authorAgentAvatarUrls}
+          authorUserAvatarUrls={authorUserAvatarUrls}
           agentAvatarUrls={agentAvatarUrls}
           highlighted={
             highlightedMessageId != null && m.id === highlightedMessageId
@@ -697,6 +724,8 @@ export function MessageList({
       replyPreviewsByRoot,
       viewerAvatarObjectUrl,
       viewer,
+      authorAgentAvatarUrls,
+      authorUserAvatarUrls,
       agentAvatarUrls,
       highlightedMessageId,
       flashedMessageId,
@@ -712,7 +741,6 @@ export function MessageList({
       <MessageActionChrome
         surface={actions}
         renderCtx={{
-          agentsById,
           agentsByName,
           humansByName,
           channelsByName,

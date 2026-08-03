@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { ThreadReplyPreviewRow, ThreadReplier } from '@silverhand/shared';
+import type { MessageAuthorDto, ThreadReplyPreviewRow } from '@silverhand/shared';
 import { Paperclip } from 'lucide-react';
 
 /**
@@ -78,17 +78,19 @@ interface ThreadReplyPreviewProps {
    *  stacked avatars make), so this block stays purely presentational and every
    *  surface keeps ONE avatar path — including its miss behaviour. */
   renderAuthorAvatar: (
-    author: ThreadReplier,
+    author: MessageAuthorDto,
     size: number,
     key: string,
   ) => ReactNode;
-  /** The author's display name, resolved by the SAME owner as the avatar so
-   *  identity is one lookup, not two (`MessageItem`: `display_name` → `name` →
-   *  the shared fallback, no `@` for either actor kind). A line states WHO said
-   *  it, not only whose face it was (shiki 2026-07-31) — an avatar alone is
-   *  recognizable in a 3-line block but not readable, and the faces already
-   *  degrade to a generic avatar on a lookup miss. */
-  resolveAuthorName: (author: ThreadReplier) => string;
+  /** The author's display NAME NODE, resolved by the SAME owner as the avatar so
+   *  identity is one lookup, not two. It arrives as a node (not a bare string)
+   *  because a visible text author name MUST carry its deleted state through the
+   *  shared `AuthorName` primitive (#task:1792 B3) — a deleted replier shows the
+   *  quiet marker beside its snapshot name here exactly as in the byline, never
+   *  a bare label whose only deleted hint is the avatar tooltip. `active` /
+   *  `unresolved` render the plain label (no `@` for either actor kind). This
+   *  block owns the width cap; the node owns weight / color / the marker. */
+  renderAuthorName: (author: MessageAuthorDto) => ReactNode;
 }
 
 /**
@@ -133,7 +135,7 @@ export function ThreadReplyPreview({
   title,
   onOpen,
   renderAuthorAvatar,
-  resolveAuthorName,
+  renderAuthorName,
 }: ThreadReplyPreviewProps): JSX.Element {
   return (
     // Not a button: it holds the badge button, and nesting buttons is invalid.
@@ -214,14 +216,14 @@ export function ThreadReplyPreview({
           {/* WHO said it: the mainline's own name rule, with no `@` for either
               actor kind (shiki 2026-07-31) — the avatar directly to its left
               already identifies the actor, and an `@` would read as a mention.
-              Slightly stronger ink than the reply text and no colon
-              separator — the weight step already reads as "name, then what they
-              said", and a separator would add punctuation to every line for
-              nothing. It never grows past 40% and never shrinks to an ellipsis
-              stub: a truncated name identifies nobody, so the reply text keeps
-              shrink priority and the name simply caps. */}
-          <span className="max-w-[40%] shrink-0 truncate font-medium text-text-secondary">
-            {resolveAuthorName(row.author)}
+              The name node carries its deleted state (the shared `AuthorName`
+              marker, #task:1792 B3) so a deleted replier reads the same here as
+              in the byline, not only in the avatar tooltip. It never grows past
+              40% and truncates rather than shrinking to an ellipsis stub — the
+              reply text keeps shrink priority and the name simply caps, while
+              the deleted marker (shrink-0) stays visible past the truncation. */}
+          <span className="flex max-w-[40%] shrink-0 items-baseline">
+            {renderAuthorName(row.author)}
           </span>
           {/* Shrinks and truncates but never GROWS: a short reply must not
               stretch its line and push the attachment label out to the far

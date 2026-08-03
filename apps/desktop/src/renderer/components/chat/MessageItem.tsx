@@ -1,10 +1,11 @@
 import { type FocusEvent, useCallback, useEffect, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { Bookmark, Check, Clock, Download, FileText, SmilePlus, User } from 'lucide-react';
+import { Bookmark, Check, Clock, Download, FileText, SmilePlus } from 'lucide-react';
 import type {
   AgentDto,
   AttachmentSnapshot,
+  MessageAuthorDto,
   ReplyBadgeSummary,
   StreamUnreadDto,
   TaskAssigneeDto,
@@ -12,8 +13,6 @@ import type {
   UserDto,
 } from '@silverhand/shared';
 import { resolveAttachmentLabels } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
 import { ThreadIcon } from '@/components/icons/conversation-icons';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { AgentInfoPopover } from '@/components/AgentInfoPopover';
@@ -33,6 +32,8 @@ import { Lightbox } from './Lightbox';
 import { saveAttachmentToDisk } from './save-attachment';
 import { openAttachmentExternally } from './open-attachment';
 import { Markdown } from './Markdown';
+import { presentAuthor, authorStateLabel, classifyRowAuthor, type AuthorPresentation } from './author-presentation';
+import { AuthorAvatarView, AuthorName } from './author-avatar-view';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
 import { MessageContextMenu } from './MessageContextMenu';
@@ -145,12 +146,18 @@ export interface MessageItemProps {
    *  not complete or still loading; the row falls back to the bare
    *  avatar/label. */
   viewer?: UserDto;
-  /** Object-URL map keyed by human user id. */
-  humanAvatarUrls?: Map<string, string | null>;
-  /** Object-URL map keyed by agent id. The parent pane runs a single
-   *  `useAgentAvatarObjectUrls` over the workspace agent list so every
-   *  authored message reuses the same blob URL instead of N independent
-   *  fetches. Missing entries / `null` fall back to the runtime icon. */
+  /** Byline + thread-replier avatar bytes, derived by the parent pane STRICTLY
+   *  from the rendered rows' own `MessageAuthorDto`s (#task:1792 B2) via
+   *  `useAuthorAvatarObjectUrls` — never a live-directory join. Split by kind.
+   *  Only the active author arm carries `avatar_url`, so a deleted / unresolved
+   *  author draws its neutral glyph with no lookup and an active author whose
+   *  account has left the directory still renders its own snapshot avatar. */
+  authorAgentAvatarUrls?: Map<string, string | null>;
+  authorUserAvatarUrls?: Map<string, string | null>;
+  /** Directory-backed agent avatar batch (workspace `useAgents`), for the
+   *  INDEPENDENT axis of inline `@handle` mention pills inside the Markdown
+   *  body — a different actor reference than the row's own author. Missing
+   *  entries / `null` fall back to the runtime icon. */
   agentAvatarUrls?: Map<string, string | null>;
   /** Persistently render the hover frame around this row — used by the
    *  parent pane to mark "the message a thread is anchored to" while
@@ -237,8 +244,75 @@ export interface MessageItemProps {
  * current user's messages flush right; in `'all-left'` everything is
  * left-aligned.
  */
-export function MessageItem({
+/**
+ * The message row's HOOKS-FREE classifier boundary (#task:1792, Cindy). It runs
+ * NO hooks and switches on the actor-row classification, so the actor arm mounts
+ * a distinct component (`ActorMessageItem`) that always runs a fixed hook set. A
+ * carrier that hydrates `null → actor` for the same message key is then a clean
+ * unmount→mount across component TYPES — never a changing hook count on one
+ * instance (which React rejects with "Rendered more hooks than during the
+ * previous render"). A conditional early-return inside the hook-bearing body
+ * could not give that guarantee once `missing` (carrier absent) is reachable.
+ *
+ *  - `actor`   → the full row.
+ *  - `system`  → nothing. The list/thread parents already route `from_kind ===
+ *                'system'` to SystemMessage, so this arm is unreachable here; it
+ *                stays inert rather than inventing a system byline.
+ *  - `missing` → a fail-closed diagnostic (carrier absent, or a raw-vs-DTO kind
+ *                mismatch). Never fabricates an identity, and is not the actor
+ *                hook lifecycle.
+ */
+export function MessageItem(props: MessageItemProps): JSX.Element | null {
+  const rowAuthor = classifyRowAuthor(
+    props.message.from_kind,
+    props.message.author,
+  );
+  if (rowAuthor.kind === 'actor') {
+    return <ActorMessageItem {...props} author={rowAuthor.author} />;
+  }
+  if (rowAuthor.kind === 'missing') {
+    return <MissingAuthorRow message={props.message} reason={rowAuthor.reason} />;
+  }
+  return null; // 'system' — parents route these to SystemMessage.
+}
+
+/**
+ * The fail-closed path for a row whose author carrier is a data-contract breach
+ * — absent for a non-system row, or a `from_kind`/`author.kind` mismatch
+ * (#task:1792, Alice + Cindy). Neither is reachable on a healthy path (the
+ * resolver derives `author.kind` from `from_kind`, and every non-system message
+ * carries a resolved author), so this is a defensive surface, not a display
+ * state. It is its OWN component so it never shares `ActorMessageItem`'s hook
+ * lifecycle, and it makes the breach OBSERVABLE at the boundary (a logged
+ * contract violation) instead of hiding the row as a silent gap — while still
+ * refusing to fabricate the name / avatar the removed `?? unresolvedAuthorFor`
+ * used to invent. There is deliberately no user-facing identity for an
+ * unreachable corruption state; the signal is for whoever broke the contract.
+ */
+function MissingAuthorRow({
   message,
+  reason,
+}: {
+  message: CachedMessage;
+  reason: 'absent' | 'kind-mismatch';
+}): null {
+  useEffect(() => {
+    console.error(
+      `[MessageItem] actor row ${message.id} has no presentable author ` +
+        `(${reason}); rendered inert. from_kind=${message.from_kind}`,
+    );
+  }, [message.id, message.from_kind, reason]);
+  return null;
+}
+
+/** The actor-row author + all shared props. `author` is the NON-NULL resolved
+ *  DTO the wrapper narrowed to (active / deleted / unresolved); this component
+ *  never sees `null`, so it runs a FIXED hook set unconditionally. */
+type ActorMessageItemProps = MessageItemProps & { author: MessageAuthorDto };
+
+function ActorMessageItem({
+  message,
+  author,
   conversationId,
   agentsById,
   agentsByName,
@@ -263,7 +337,8 @@ export function MessageItem({
   jumpFlash = false,
   viewerAvatarObjectUrl = null,
   viewer,
-  humanAvatarUrls,
+  authorAgentAvatarUrls,
+  authorUserAvatarUrls,
   agentAvatarUrls,
   selectionMode = false,
   selected = false,
@@ -274,7 +349,7 @@ export function MessageItem({
   userResolver,
   searchQuery,
   searchActive = false,
-}: MessageItemProps): JSX.Element {
+}: ActorMessageItemProps): JSX.Element {
   const isUser = message.from_kind === 'user';
   // A pending optimistic row has no server id/seq: every action that needs a
   // real server row (reaction, thread, save, share, copy, select) is not just
@@ -286,44 +361,40 @@ export function MessageItem({
   const isCurrentUser = isUser && isCurrentUserId(message.from_user_id);
   const mode = useMessageLayoutMode();
   const alignRight = mode === 'user-right' && isCurrentUser;
-  const agent = !isUser && message.from_agent_id
-    ? agentsById.get(message.from_agent_id)
-    : undefined;
-  const messageHuman = isUser && message.from_user_id
-    ? humansById?.get(message.from_user_id)
-    : undefined;
-  const human = isUser && isCurrentUser
-    ? viewer ?? messageHuman
-    : messageHuman;
-  // Author avatar URL resolved by the parent's batch hook. `undefined`
-  // means the parent didn't thread the map (legacy / non-channel
-  // surfaces) — pass `undefined` straight through so AgentInfoPopover
-  // falls back to its own single-agent fetch. `null` means the agent
-  // simply has no avatar (or it's still loading); render the runtime
-  // tint, no fetch.
-  const agentAvatarObjectUrl =
-    agent && agentAvatarUrls
-      ? agentAvatarUrls.get(agent.id) ?? null
+  // Identity / label / avatar all read the server-authoritative author DTO
+  // (#task:1792) — NEVER a live-directory re-join by `from_*_id`, which loses a
+  // hard-deleted actor's name and would guess "deleted" from a roster miss. The
+  // DTO carries a send-time snapshot, so a deleted author stays named + marked;
+  // an `unresolved` author (no FK, no snapshot) is a neutral "Unknown …". Raw
+  // provenance (`from_user_id`) still drives viewer→"you" alignment above — that
+  // is about the CURRENT viewer, not the author's display identity.
+  const presentation = presentAuthor(author);
+  // The live actor row is looked up ONLY for an active author's hover popover
+  // (presence + retry need the full dto). A deleted / unresolved author has no
+  // live row and no profile to open, so neither is fetched. The viewer's own
+  // row wins for a self-send so the popover matches the member chip.
+  const liveAgent =
+    presentation.status === 'active' && presentation.kind === 'agent'
+      ? agentsById.get(presentation.navigableId ?? '')
       : undefined;
-  const humanAvatarObjectUrl = human
-    ? (
-        isCurrentUser && viewerAvatarObjectUrl
-          ? viewerAvatarObjectUrl
-          : humanAvatarUrls?.get(human.id) ?? null
-      )
-    : null;
-  const name = isUser
-    ? human?.name ?? formatUserDisplayName(message.from_user_id, userResolver)
-    : agent?.name ?? 'agent';
-  // Author label is a recognition surface (who spoke), not a mention — so it
-  // shows the plain display name for BOTH kinds, no leading `@`. Agents stay
-  // distinguishable via `data-author-kind` + the accent color below; the `@`
-  // is reserved for handle/mention contexts (mention pills, composer, board
-  // assignee). Branching `@` on kind here read as "agent = handle, human =
-  // person" and broke actor isomorphism (shiki 2026-08-01).
-  const displayLabel = isUser
-    ? human?.display_name?.trim() || name
-    : agent?.display_name?.trim() || name;
+  const liveHuman =
+    presentation.status === 'active' && presentation.kind === 'user'
+      ? isCurrentUser
+        ? viewer ?? humansById?.get(presentation.navigableId ?? '')
+        : humansById?.get(presentation.navigableId ?? '')
+      : undefined;
+  // The byline avatar's bytes come from the author-DTO-derived batch (#task:1792
+  // B2 — keyed by the active author's own id, never the live directory), and a
+  // self-send prefers the viewer's resolved blob so it matches the composer.
+  // Neutral arms (deleted / unresolved) fetch nothing.
+  const viewerAvatarOverride =
+    isCurrentUser && viewerAvatarObjectUrl ? viewerAvatarObjectUrl : undefined;
+  const bylineAvatarUrl =
+    presentation.avatar.variant === 'agent'
+      ? authorAgentAvatarUrls?.get(presentation.avatar.id) ?? null
+      : presentation.avatar.variant === 'user'
+        ? viewerAvatarOverride ?? authorUserAvatarUrls?.get(presentation.avatar.id) ?? null
+        : null;
   // Absolute time stamp (shiki #task:918): the header shows the literal
   // wall-clock value (`MM/DD HH:mm`) instead of "3 分钟前", and the
   // tooltip carries the fuller `YYYY-MM-DD HH:mm:ss` for precise
@@ -439,69 +510,40 @@ export function MessageItem({
       : enrichedReply
         ? `${replyBadgeLabel} · last reply ${replyRelativeTime}`
         : replyBadgeLabel;
+  // Thread repliers now arrive as the SAME server-authoritative
+  // {@link MessageAuthorDto} the byline uses (#task:1791/#task:1792), so their
+  // face + name flow through the ONE seam — a deleted replier keeps its snapshot
+  // name + neutral avatar, an unresolved one degrades to "Unknown …", and no
+  // surface re-joins the directory by a raw id.
   const renderReplierAvatar = (
-    replier: { kind: 'agent' | 'human'; id: string },
+    author: MessageAuthorDto,
     size: number,
     key: string,
   ): JSX.Element => {
-    if (replier.kind === 'agent') {
-      const a = agentsById.get(replier.id);
-      if (a) {
-        return (
-          <AgentAvatar
-            key={key}
-            runtime={a.runtime}
-            size={size}
-            avatarObjectUrl={agentAvatarUrls?.get(a.id) ?? null}
-            alt={a.display_name || a.name}
-            title={a.display_name || a.name}
-          />
-        );
-      }
-    }
-    const u = replier.kind === 'human' ? humansById?.get(replier.id) : undefined;
+    const p = presentAuthor(author);
     return (
-      <UserAvatar
+      <AuthorAvatarView
         key={key}
+        avatar={p.avatar}
         size={size}
-        avatarObjectUrl={
-          replier.kind === 'human'
-            ? humanAvatarUrls?.get(replier.id) ?? null
-            : null
-        }
-        alt={u?.name}
-        title={u?.name}
+        label={authorStateLabel(p)}
+        agentAvatarUrls={authorAgentAvatarUrls}
+        humanAvatarUrls={authorUserAvatarUrls}
       />
     );
   };
 
-  // The SAME name rule the message header uses (`displayLabel` above):
-  // `display_name` → `name` → the shared fallback. No `@` for either actor kind
-  // (shiki 2026-07-31): here the avatar sits immediately left of the name, so it
-  // already says which actor this is — an `@` would be a second, redundant
-  // identity marker, and it reads as a mention where nothing is being mentioned.
-  // Kept next to `renderReplierAvatar` so one owner resolves both halves of a
-  // replier's identity — a face and a name that disagree would be worse than
-  // either alone. A lookup miss degrades exactly as the mainline does: the
-  // avatar falls back to the generic one, an agent to `agent`, and a human
-  // through the shared `formatUserDisplayName` chain — whose last step is the
-  // raw id, deliberately (an id makes a directory miss debuggable where a
-  // placeholder would hide it).
-  const resolveReplierName = (replier: {
-    kind: 'agent' | 'human';
-    id: string;
-  }): string => {
-    if (replier.kind === 'agent') {
-      const a = agentsById.get(replier.id);
-      return a?.display_name?.trim() || a?.name || 'agent';
-    }
-    const u = humansById?.get(replier.id);
-    return (
-      u?.display_name?.trim() ||
-      u?.name ||
-      formatUserDisplayName(replier.id, userResolver)
-    );
-  };
+  // The reply-preview replier NAME carries its deleted state through the ONE
+  // shared primitive (#task:1792 B3) — same marker the byline shows — so a
+  // visible text name in the preview never drops the state to the avatar
+  // tooltip alone. The preview block owns the width cap; this node owns weight /
+  // color / marker.
+  const renderReplierName = (author: MessageAuthorDto): JSX.Element => (
+    <AuthorName
+      presentation={presentAuthor(author)}
+      className="font-medium text-text-secondary"
+    />
+  );
 
   // ── MessageRowContent slot nodes ────────────────────────────────────────
   // The shared content layer owns section order + layout; MessageItem fills
@@ -511,13 +553,11 @@ export function MessageItem({
   // live-only adornments; the export passes `null` for them explicitly.
   const authorNode = (
     <AuthorLabel
-      isUser={isUser}
-      human={human}
-      agent={agent}
+      presentation={presentation}
       conversationId={conversationId}
-      agentAvatarObjectUrl={agentAvatarObjectUrl}
-      humanAvatarObjectUrl={humanAvatarObjectUrl}
-      displayLabel={displayLabel}
+      liveAgent={liveAgent}
+      liveHuman={liveHuman}
+      avatarObjectUrl={bylineAvatarUrl}
       onNavigateAgent={navigateToAgent}
       onNavigateHuman={navigateToHuman}
     />
@@ -700,7 +740,7 @@ export function MessageItem({
       title={replyBadgeTitle}
       onOpen={() => onStartThread?.(message, threadFirstUnreadId ?? undefined)}
       renderAuthorAvatar={renderReplierAvatar}
-      resolveAuthorName={resolveReplierName}
+      renderAuthorName={renderReplierName}
     />
   ) : null;
 
@@ -789,13 +829,10 @@ export function MessageItem({
         </time>
       ) : (
         <Avatar
-          isUser={isUser}
-          human={human}
-          humanAvatarObjectUrl={humanAvatarObjectUrl}
-          agent={agent}
-          agentAvatarObjectUrl={
-            agent ? agentAvatarUrls?.get(agent.id) ?? null : null
-          }
+          presentation={presentation}
+          avatarObjectUrl={bylineAvatarUrl}
+          liveAgent={liveAgent}
+          liveHuman={liveHuman}
           conversationId={conversationId}
           onNavigateAgent={navigateToAgent}
           onNavigateHuman={navigateToHuman}
@@ -1067,215 +1104,180 @@ function formatTaskAssignee(
 }
 
 function Avatar({
-  isUser,
-  human,
-  humanAvatarObjectUrl,
-  agent,
-  agentAvatarObjectUrl,
+  presentation,
+  avatarObjectUrl,
+  liveAgent,
+  liveHuman,
   conversationId,
   onNavigateAgent,
   onNavigateHuman,
 }: {
-  isUser: boolean;
-  /** Resolved human author row. When present, the avatar is wrapped in
-   *  a `HumanInfoPopover` so hover gives the same identity card as the
-   *  member chip / `@mention` surfaces. */
-  human: UserDto | undefined;
-  humanAvatarObjectUrl: string | null;
-  agent: AgentDto | undefined;
-  /** This message's authoring-agent avatar object URL, looked up by the
-   *  parent from the workspace-wide `agentAvatarUrls` map. `null` falls
-   *  back to the runtime icon. */
-  agentAvatarObjectUrl: string | null;
+  presentation: AuthorPresentation;
+  /** The author's resolved avatar bytes (active arms only); neutral arms ignore
+   *  it and draw the runtime-free placeholder. */
+  avatarObjectUrl: string | null;
+  /** Live actor rows, present only for an active author — they wrap the avatar
+   *  in the hover identity card. A deleted / unresolved author renders the bare
+   *  neutral square: there is no profile to open. */
+  liveAgent: AgentDto | undefined;
+  liveHuman: UserDto | undefined;
   conversationId: string;
   onNavigateAgent: (agentId: string) => void;
   onNavigateHuman: (userId: string) => void;
 }): JSX.Element {
-  if (isUser) {
-    // Make the avatar's outermost element (button when wrapped, span
-    // when not) carry an explicit size-8 box. Earlier the size lived
-    // on the inner span only, so the wrapping <button> auto-sized
-    // from its child and the focus ring rendered as a 32×34 rectangle
-    // (@shiki feedback `4TU4EBHr70R-YMgc` + follow-up
-    // `osrdZIlji8lBfdiv`). With size on the outermost element the
-    // box stays square regardless of the avatar image's natural
-    // aspect ratio (`object-cover` already crops the image to fill).
-    if (human) {
-      return (
-        <HumanInfoPopover
-          human={human}
-          userId={human.id}
-          trigger="hover"
-          avatarObjectUrl={humanAvatarObjectUrl}
-        >
-          <button
-            type="button"
-            aria-label={`@${human.name}`}
-            onClick={event => {
-              event.preventDefault();
-              onNavigateHuman(human.id);
-            }}
-            data-avatar-ground
-            className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
-          >
-            {humanAvatarObjectUrl ? (
-              /* eslint-disable-next-line jsx-a11y/img-redundant-alt */
-              <img
-                src={humanAvatarObjectUrl}
-                alt=""
-                className="size-full object-cover"
-                draggable={false}
-              />
-            ) : (
-              <User className="size-4" />
-            )}
-          </button>
-        </HumanInfoPopover>
-      );
-    }
-    // Unwrapped path (user row not yet resolved):
-    // span carries both the size and the mt-0.5 offset directly.
-    return (
-      <span
-        data-avatar-ground
-        className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
-        aria-hidden
-      >
-        <User className="size-4" />
-      </span>
-    );
-  }
-  if (agent) {
+  // Make the avatar's outermost element (button when wrapped, span when not)
+  // carry the explicit size box so the focus ring stays square regardless of the
+  // image's natural aspect ratio (@shiki `4TU4EBHr70R-YMgc`).
+  const avatar = (
+    <AuthorAvatarView
+      avatar={presentation.avatar}
+      size={AVATAR_PX.lg}
+      label={presentation.label}
+      className="border-[length:var(--border-avatar-width)] border-border-avatar"
+      objectUrlOverride={avatarObjectUrl}
+    />
+  );
+  if (presentation.status === 'active' && liveAgent) {
     return (
       <AgentInfoPopover
-        agent={agent}
+        agent={liveAgent}
         conversationId={conversationId}
         trigger="hover"
-        avatarObjectUrl={agentAvatarObjectUrl}
+        avatarObjectUrl={avatarObjectUrl}
       >
         <button
           type="button"
-          aria-label={`@${agent.name}`}
+          aria-label={`@${liveAgent.name}`}
           onClick={event => {
             event.preventDefault();
-            onNavigateAgent(agent.id);
+            onNavigateAgent(liveAgent.id);
           }}
           className="mt-0.5 rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
         >
-          <AgentAvatar
-            runtime={agent.runtime}
-            size={AVATAR_PX.lg}
-            className="border-[length:var(--border-avatar-width)] border-border-avatar"
-            avatarObjectUrl={agentAvatarObjectUrl}
-            alt={agent.display_name || agent.name}
-          />
+          {avatar}
         </button>
       </AgentInfoPopover>
     );
   }
-  return (
-    <span
-      data-avatar-ground
-      className="mt-0.5 inline-flex size-8 shrink-0 items-center justify-center rounded-none border-[length:var(--border-avatar-width)] border-border-avatar text-text-muted"
-      aria-hidden
-    >
-      <User className="size-4" />
-    </span>
-  );
-}
-
-/**
- * Header author label. Renders display name + the right popover trigger:
- * - agent → `<AgentInfoPopover>` (existing behavior)
- * - resolved user message →
- *   `<HumanInfoPopover>` so hover reveals the same identity card the
- *   member chip / `@mention` surfaces show
- * - everything else → plain span (legacy null-author rows / unresolved users)
- */
-function AuthorLabel({
-  isUser,
-  human,
-  agent,
-  conversationId,
-  agentAvatarObjectUrl,
-  humanAvatarObjectUrl,
-  displayLabel,
-  onNavigateAgent,
-  onNavigateHuman,
-}: {
-  isUser: boolean;
-  human: UserDto | undefined;
-  agent: AgentDto | undefined;
-  conversationId: string;
-  agentAvatarObjectUrl: string | null | undefined;
-  humanAvatarObjectUrl: string | null;
-  displayLabel: string;
-  onNavigateAgent: (agentId: string) => void;
-  onNavigateHuman: (userId: string) => void;
-}): JSX.Element {
-  if (agent) {
-    return (
-      <AgentInfoPopover
-        agent={agent}
-        conversationId={conversationId}
-        trigger="hover"
-        avatarObjectUrl={agentAvatarObjectUrl}
-      >
-        <button
-          type="button"
-          onClick={event => {
-            event.preventDefault();
-            onNavigateAgent(agent.id);
-          }}
-          /* `data-message-author` + `data-author-kind` are theme-neutral
-           *  identity hooks: the author name is the one place per message
-           *  group that says "who". Size / weight / colour live here, and
-           *  BOTH kinds take `text-text-primary` in EVERY theme — the label
-           *  is a recognition surface, not a status signal, and agent and
-           *  human are isomorphic actors, so they must read the same to
-           *  signal equal identity (shiki 2026-08-02). `data-author-kind`
-           *  stays as neutral metadata; a theme must not repaint the author
-           *  name by kind — that would re-introduce a "which actor" hierarchy
-           *  the design deliberately rejects. */
-          data-message-author
-          data-author-kind="agent"
-          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
-        >
-          {displayLabel}
-        </button>
-      </AgentInfoPopover>
-    );
-  }
-  if (isUser && human) {
+  if (presentation.status === 'active' && liveHuman) {
     return (
       <HumanInfoPopover
-        human={human}
-        userId={human.id}
+        human={liveHuman}
+        userId={liveHuman.id}
         trigger="hover"
-        avatarObjectUrl={humanAvatarObjectUrl}
+        avatarObjectUrl={avatarObjectUrl}
       >
         <button
           type="button"
+          aria-label={`@${liveHuman.name}`}
           onClick={event => {
             event.preventDefault();
-            onNavigateHuman(human.id);
+            onNavigateHuman(liveHuman.id);
           }}
-          data-message-author
-          data-author-kind="human"
-          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="mt-0.5 rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
         >
-          {displayLabel}
+          {avatar}
         </button>
       </HumanInfoPopover>
     );
   }
+  // Deleted / unresolved (or an active author whose live row hasn't loaded):
+  // the neutral / snapshot avatar, non-navigable.
+  return <span className="mt-0.5 inline-flex">{avatar}</span>;
+}
+
+/**
+ * Header author label, driven by the resolved {@link AuthorPresentation}:
+ * - active agent (live row present) → `<AgentInfoPopover>` + navigable button
+ * - active user (live row present) → `<HumanInfoPopover>` + navigable button
+ * - deleted → the snapshot name + a quiet "deleted" marker, non-navigable
+ * - unresolved / active-without-live-row → the plain label, non-navigable
+ */
+function AuthorLabel({
+  presentation,
+  conversationId,
+  liveAgent,
+  liveHuman,
+  avatarObjectUrl,
+  onNavigateAgent,
+  onNavigateHuman,
+}: {
+  presentation: AuthorPresentation;
+  conversationId: string;
+  liveAgent: AgentDto | undefined;
+  liveHuman: UserDto | undefined;
+  avatarObjectUrl: string | null;
+  onNavigateAgent: (agentId: string) => void;
+  onNavigateHuman: (userId: string) => void;
+}): JSX.Element {
+  const label = presentation.label;
+  if (presentation.status === 'active' && liveAgent) {
+    return (
+      <AgentInfoPopover
+        agent={liveAgent}
+        conversationId={conversationId}
+        trigger="hover"
+        avatarObjectUrl={avatarObjectUrl}
+      >
+        <button
+          type="button"
+          onClick={event => {
+            event.preventDefault();
+            onNavigateAgent(liveAgent.id);
+          }}
+          /* `data-message-author` + `data-author-kind` are theme-neutral
+           *  identity hooks. BOTH kinds take `text-text-primary` in EVERY theme:
+           *  the label is a recognition surface, not a status signal, and agent
+           *  and human are isomorphic actors (shiki 2026-08-02). A theme must
+           *  not repaint the author name by kind. */
+          data-message-author
+          data-author-kind="agent"
+          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        >
+          {label}
+        </button>
+      </AgentInfoPopover>
+    );
+  }
+  if (presentation.status === 'active' && liveHuman) {
+    return (
+      <HumanInfoPopover
+        human={liveHuman}
+        userId={liveHuman.id}
+        trigger="hover"
+        avatarObjectUrl={avatarObjectUrl}
+      >
+        <button
+          type="button"
+          onClick={event => {
+            event.preventDefault();
+            onNavigateHuman(liveHuman.id);
+          }}
+          data-message-author
+          data-author-kind="user"
+          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        >
+          {label}
+        </button>
+      </HumanInfoPopover>
+    );
+  }
+  // Deleted / unresolved (or active-without-live-row): a non-navigable label.
+  // Deleted keeps its snapshot name + the quiet marker; unresolved shows the
+  // neutral "Unknown …" the seam already resolved. No popover — there is no
+  // profile to open. The name + deleted marker go through the shared
+  // `AuthorName` primitive so this surface can't drift from the list / export
+  // surfaces on how a deleted author reads.
   return (
     <span
       data-message-author
-      data-author-kind={isUser ? 'human' : 'agent'}
-      className="font-bold text-text-primary"
+      data-author-kind={presentation.kind}
+      className="inline-flex items-baseline gap-1.5"
     >
-      {displayLabel}
+      <AuthorName
+        presentation={presentation}
+        className="font-bold text-text-primary"
+      />
     </span>
   );
 }

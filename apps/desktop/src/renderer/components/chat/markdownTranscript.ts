@@ -1,4 +1,5 @@
-import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
+import type { MessageDto } from '@silverhand/shared';
+import { authorStateLabel, presentAuthor } from './author-presentation';
 
 /**
  * Build a markdown transcript from a list of selected messages.
@@ -23,11 +24,21 @@ import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
  * single-message context-menu Copy markdown action when you actually
  * want raw content with no header.
  *
- * Display label rules match the in-channel render:
- *   - agent: `@<display_name|name>`
- *   - user (viewer): `<display_name|name>` (no leading `@`)
- *   - user (other / unresolved): falls back to the from_user_id
- *   - unresolved agent: falls back to `@<id>`
+ * Display label comes from the ONE shared author seam (#task:1792) — the
+ * server-authoritative `MessageAuthorDto`, never a live `from_*_id` directory
+ * re-join — so a hard-deleted author keeps its snapshot name here instead of
+ * degrading to a raw id. This text format is the one surface that keeps the
+ * `@` handle decoration for agents (there is no avatar or color to tell an
+ * agent from a human in plain text), applied on TOP of the seam's identity.
+ * A frozen export has no hover to recover the deleted state, so the label also
+ * carries the `(deleted account)` suffix from its ONE home (`authorStateLabel`)
+ * (#task:1792 B3):
+ *   - agent (active):    `@<label>`                    (`display_name || name`)
+ *   - agent (deleted):   `@<label> (deleted account)`
+ *   - agent (unresolved):`Unknown agent`               (no handle to prefix)
+ *   - user (active):     `<label>`                     (no leading `@`)
+ *   - user (deleted):    `<label> (deleted account)`
+ *   - system:            `system`
  *
  * Sort order: ASCENDING by `MessageDto.seq`. Callers MUST pass already
  * sorted messages — the function does not re-sort because in production
@@ -35,19 +46,17 @@ import type { AgentDto, MessageDto, UserDto } from '@silverhand/shared';
  */
 export function buildMarkdownTranscript(
   messages: readonly MessageDto[],
-  ctx: {
-    agentsById: ReadonlyMap<string, AgentDto>;
-    viewer?: UserDto;
+  opts: {
     /** Optional override for the time formatter; defaults to ISO 8601
      *  (e.g. `2026-05-25T00:30:00.000Z`). The default keeps tests
      *  deterministic without relying on local timezone. */
     formatTime?: (epochMs: number) => string;
-  },
+  } = {},
 ): string {
-  const formatTime = ctx.formatTime ?? defaultFormatTime;
+  const formatTime = opts.formatTime ?? defaultFormatTime;
 
   const blocks = messages.map(m => {
-    const sender = formatSenderLabel(m, ctx);
+    const sender = formatSenderLabel(m);
     const time = formatTime(m.created_at);
     const header = `## ${sender} · ${time}`;
     return `${header}\n\n${m.content}`;
@@ -61,28 +70,21 @@ export function buildMarkdownTranscript(
   return blocks.join('\n\n\n') + '\n';
 }
 
-export function formatSenderLabel(
-  m: MessageDto,
-  ctx: {
-    agentsById: ReadonlyMap<string, AgentDto>;
-    viewer?: UserDto;
-  },
-): string {
-  if (m.from_kind === 'agent') {
-    if (!m.from_agent_id) return '@agent';
-    const agent = ctx.agentsById.get(m.from_agent_id);
-    const name = (agent?.display_name?.trim() ?? '') || agent?.name?.trim();
-    return `@${name ?? m.from_agent_id}`;
-  }
-  if (m.from_kind === 'user') {
-    if (ctx.viewer && m.from_user_id === ctx.viewer.id) {
-      const v = ctx.viewer;
-      const name = (v.display_name?.trim() ?? '') || v.name.trim();
-      return name || v.id;
-    }
-    return m.from_user_id ?? 'user';
-  }
-  return 'system';
+export function formatSenderLabel(m: MessageDto): string {
+  const { author } = m;
+  if (author === null) return 'system';
+  const p = presentAuthor(author);
+  // Carry the deleted state into this frozen export (#task:1792 B3): there is
+  // no hover or color here to recover it later, so the label appends the
+  // `(deleted account)` suffix from its ONE home. `active`/`unresolved` read as
+  // their plain label.
+  const decorated = authorStateLabel(p);
+  // Agents keep the transcript's `@handle` decoration, but only when the seam
+  // resolved a real handle — an `unresolved` agent has no name to prefix, so
+  // its "Unknown agent" placeholder stands alone.
+  return p.kind === 'agent' && p.status !== 'unresolved'
+    ? `@${decorated}`
+    : decorated;
 }
 
 function defaultFormatTime(epochMs: number): string {
