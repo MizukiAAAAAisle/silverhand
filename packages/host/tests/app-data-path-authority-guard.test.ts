@@ -118,9 +118,9 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
   {
     file: 'packages/host/src/daemon/agent-materialize/handler.ts',
     token: 'app-data dir join',
-    line: "return join(resolveAgentDir(agentId, deps), 'workspaces', workspaceId);",
+    line: 'return join(',
     reason:
-      'the deterministic (agent, regular-workspace) L2 bundle resolver: the agent-home subtree layout already lives in this file (computeAgentDir/resolveAgentDir), and this extends it with the id-keyed `workspaces/<id>` bundle root — the SOLE runtime path authority for regular workspaces (relocation-v1 §3.2/§7 task 1)',
+      'the deterministic (agent, regular-workspace) L2 bundle resolver: the agent-home subtree layout already lives in this file (computeAgentDir/resolveAgentDir), and this extends it with the id-keyed `workspaces/<id>` bundle root (id validated via `assertSafeWorkspaceIdSegment` before it becomes a path segment) — the SOLE runtime path authority for regular workspaces (relocation-v1 §3.2/§7 task 1)',
     count: 1,
   },
   {

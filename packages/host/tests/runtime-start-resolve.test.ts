@@ -11,6 +11,7 @@ import {
   computeAgentDirFromRoot,
   resolveAgentWorkspaceBundleDir,
 } from '../src/daemon/agent-materialize/handler.js';
+import { WorkspaceRegistryError } from '../src/daemon/workspace-registry/registry.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
 import type { StartOptions } from '../src/protocol.js';
 
@@ -251,5 +252,44 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
         }),
       ),
     ).toThrow(RuntimeStartResolveError);
+  });
+});
+
+describe('resolveAgentWorkspaceBundleDir — sole path authority self-validates', () => {
+  // relocation-v1 §7 task 1 — the bundle resolver is now the single path
+  // authority for a regular workspace L2/cwd, and the workspace id is a raw
+  // path SEGMENT (`<agent home>/workspaces/<id>`). Defense-in-depth: even if a
+  // caller bypasses the registry establishment gate (which validates first),
+  // the resolver itself must fail closed on an unsafe id and NEVER return a
+  // path that escapes the agent home — no traversal, no absolute, no empty.
+  const ESCAPES = [
+    '../escape',
+    'a/b',
+    '/abs',
+    '..',
+    '../../etc/passwd',
+    'x/../../y',
+    '',
+    'a'.repeat(65),
+    'dot.dot',
+  ];
+
+  for (const id of ESCAPES) {
+    it(`throws invalid_path and never resolves an escaping path for ${JSON.stringify(id)}`, () => {
+      let thrown: unknown;
+      try {
+        resolveAgentWorkspaceBundleDir('a1', id, { homeDir: HOME });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(WorkspaceRegistryError);
+      expect((thrown as WorkspaceRegistryError).code).toBe('invalid_path');
+    });
+  }
+
+  it('a conforming id resolves under the agent home', () => {
+    const path = resolveAgentWorkspaceBundleDir('a1', 'ws1', { homeDir: HOME });
+    expect(path).toBe(bundle('a1', 'ws1'));
+    expect(path.startsWith(computeAgentDir('a1', HOME))).toBe(true);
   });
 });

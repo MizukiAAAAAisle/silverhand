@@ -6,8 +6,11 @@
  * `id`/`name`/`kind`, never a host path). The daemon is the sole authority
  * for host-local paths, so it resolves every absolute path here, reusing
  * the exact same single sources as the other D4.e intents:
- *   - `regular` workspaces → the daemon workspace registry
- *     (`registry.resolve(id)`), fail-closed when unbound;
+ *   - `regular` workspaces → the establishment gate stays the daemon
+ *     workspace registry (`registry.resolve(id)`, fail-closed when unbound),
+ *     but the resolved L2/cwd PATH is the deterministic agent-centric bundle
+ *     root (`resolveAgentWorkspaceBundleDir`), NOT the registry's old shared
+ *     managed path (relocation-v1 §7 task 1; registry demotion is §7 task 4);
  *   - `agent_home` → daemon-local agent home root + agent id
  *     (never registry-backed), identical to `agent_materialize` /
  *     `agent_workspace_tree`.

@@ -146,6 +146,34 @@ describe('WorkspaceRegistry — managed path safety (no traversal)', () => {
     }
   });
 
+  it('resolve() fails closed on an unsafe id BEFORE any lookup — the id is now a downstream path SEGMENT (relocation-v1 §7 task 1)', () => {
+    const reg = makeRegistry(STANDALONE);
+    reg.provision('ws_1');
+    for (const id of ESCAPES) {
+      try {
+        reg.resolve(id);
+        throw new Error(`expected throw for ${JSON.stringify(id)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WorkspaceRegistryError);
+        expect((err as WorkspaceRegistryError).code).toBe('invalid_path');
+      }
+    }
+  });
+
+  it('provision(requestedPath) also fails closed on an unsafe id — the requested-path arm used to validate the PATH but not the ID (Cindy #1804 R1)', () => {
+    const reg = makeRegistry(STANDALONE);
+    for (const id of ESCAPES) {
+      try {
+        reg.provision(id, '/Users/someone/custom');
+        throw new Error(`expected throw for ${JSON.stringify(id)}`);
+      } catch (err) {
+        expect(err).toBeInstanceOf(WorkspaceRegistryError);
+        expect((err as WorkspaceRegistryError).code).toBe('invalid_path');
+      }
+      expect(reg.has(id)).toBe(false);
+    }
+  });
+
   it('a conforming id round-trips: provision → resolve by raw id', () => {
     const reg = makeRegistry(STANDALONE);
     const { path } = reg.provision('r6Cb5cuDnS2hAP9l');

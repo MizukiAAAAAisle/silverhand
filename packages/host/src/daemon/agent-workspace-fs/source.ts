@@ -65,7 +65,14 @@ export function resolveAgentWorkspaceBaseDir(
           `workspace ${workspaceId} is not provisioned; cannot resolve agent workspace`,
         );
       }
-      if (err.code === 'registry_foreign' || err.code === 'registry_corrupt') {
+      if (
+        err.code === 'registry_foreign' ||
+        err.code === 'registry_corrupt' ||
+        // relocation-v1 §7 task 1 — an unsafe id segment is a corrupt/unusable
+        // registry entry for this workspace; fail closed rather than let it
+        // reach the path resolver.
+        err.code === 'invalid_path'
+      ) {
         throw new AgentWorkspaceFsError('registry_unavailable', err.message);
       }
     }

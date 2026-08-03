@@ -76,7 +76,10 @@ export async function indexAgentWorkspaces(
           continue;
         }
         if (err.code === 'registry_foreign' ||
-        err.code === 'registry_corrupt') {
+        err.code === 'registry_corrupt' ||
+        // relocation-v1 §7 task 1 — an unsafe id segment is a corrupt/unusable
+        // registry entry; fail the whole call (typed) rather than resolve it.
+        err.code === 'invalid_path') {
           // Whole-registry failure → fail the call (typed).
           throw new AgentWorkspaceIndexError('registry_unavailable', err.message);
         }

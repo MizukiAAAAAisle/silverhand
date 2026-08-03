@@ -61,6 +61,7 @@ import {
   writeSentinelAtomic,
 } from './sentinel.js';
 import { DaemonTypedError } from '../typed-error.js';
+import { assertSafeWorkspaceIdSegment } from '../workspace-registry/registry.js';
 
 /**
  * Typed handler failure. Thrown by `materializeAgent` and
@@ -154,8 +155,14 @@ export function resolveAgentDir(
  * no `.silverhand/agents/<id>` sub-path any more): MEMORY.md sits at the root,
  * notes/ beside it. It is the SOLE runtime path authority for regular
  * workspaces, replacing `registry.resolve(workspace_id)` as the path source
- * (relocation-v1 §7 task 1). Pure: a function of the ids + the home-root seam,
- * so it never fails — establishment ("is this workspace realized on this
+ * (relocation-v1 §7 task 1). As the sole path authority it self-validates the
+ * id before making it a path SEGMENT — `assertSafeWorkspaceIdSegment` (the
+ * registry's single id-safety predicate, reused rather than duplicated) throws
+ * a typed `WorkspaceRegistryError('invalid_path')` on an unsafe id so a
+ * traversal segment can never escape the agent home. This is defense-in-depth:
+ * every production caller already fails closed at the registry establishment
+ * gate (which now validates too), but the path authority must not trust its
+ * input regardless. Establishment ("is this workspace realized on this
  * computer?") remains a separate registry gate at the call sites until the
  * registry is demoted (§7 task 4).
  */
@@ -164,7 +171,11 @@ export function resolveAgentWorkspaceBundleDir(
   workspaceId: string,
   deps: Pick<MaterializeAgentDeps, 'homeDir' | 'agentHomeRootDir'> = {},
 ): string {
-  return join(resolveAgentDir(agentId, deps), 'workspaces', workspaceId);
+  return join(
+    resolveAgentDir(agentId, deps),
+    'workspaces',
+    assertSafeWorkspaceIdSegment(workspaceId),
+  );
 }
 
 /**

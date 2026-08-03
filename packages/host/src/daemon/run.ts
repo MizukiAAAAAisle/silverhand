@@ -771,15 +771,17 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     return targetPath;
   };
   // D4.e-6 — runtime_start path resolution deps. The wire options are
-  // semantic-only; the supervisor resolves regular-workspace paths via the
-  // registry here (fail-closed) and agent-home via `computeAgentDir` (inside
-  // `resolveRuntimeStartPaths`). Built lazily per start so the standalone
-  // binding (known only post-attach) is current — same pattern as the
-  // data-plane handlers below. A `WorkspaceRegistryError` is mapped to the
-  // typed runtime_start taxonomy: `not_provisioned` → typed
+  // semantic-only; the supervisor uses the registry here only as the
+  // establishment GATE for regular workspaces (fail-closed), while the L2/cwd
+  // PATH is the deterministic agent-centric bundle root inside
+  // `resolveRuntimeStartPaths` (agent-home via `computeAgentDir`)
+  // (relocation-v1 §7 task 1; registry demotion is §7 task 4). Built lazily
+  // per start so the standalone binding (known only post-attach) is current —
+  // same pattern as the data-plane handlers below. A `WorkspaceRegistryError`
+  // is mapped to the typed runtime_start taxonomy: `not_provisioned` → typed
   // `workspace_not_provisioned` (never established on this computer); a
-  // foreign / corrupt registry, or no binding at all, → hard
-  // `registry_unavailable`.
+  // foreign / corrupt registry, an unsafe id path segment (`invalid_path`), or
+  // no binding at all, → hard `registry_unavailable`.
   const runtimeStartResolveDeps = {
     homeDir: opts.testHooks?.agentMaterializeHomeDir,
     // Generation-scoped (#task:1608): reads the FROZEN context at spawn

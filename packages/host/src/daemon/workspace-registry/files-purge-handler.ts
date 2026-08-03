@@ -20,10 +20,11 @@ import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
  * itself — no fs path crosses the wire (I1).
  *
  * Semantics (design §3.3 fail-fast commit boundary; relocation-v1 §3.2):
- *   - `scope:'all'` → purge the agent home tree
- *     (`<agent home>` = L1 + every nested `workspaces/<id>` L2 bundle). One
- *     `rm -rf` of the home is the agent's complete footprint, so `workspace_ids`
- *     is ignored and the registry is NOT consulted (see the handler body).
+ *   - `scope:'all'` → purge the agent's TERMINAL MANAGED footprint: the agent
+ *     home tree (`<agent home>` = L1 + every nested `workspaces/<id>` L2
+ *     bundle). One `rm -rf` of the home removes all of it, so `workspace_ids`
+ *     is not needed to enumerate managed L2 and the registry is NOT consulted
+ *     for it.
  *   - `scope:'l2'`  → purge only the listed workspaces' L2 bundles (L1 and
  *     unlisted workspaces untouched).
  *   - Idempotent: a target already gone (ENOENT) is success, not failure,
@@ -34,6 +35,17 @@ import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
  *     managed L2 dir to purge → counted in `skipped_unprovisioned`, never
  *     silently dropped; whole-registry failure (foreign/corrupt) →
  *     `registry_unavailable`.
+ *
+ * LEGACY RELOCATION SOURCE IS DELIBERATELY OUT OF SCOPE — PRODUCT-DECIDED
+ * (shiki, relocation-v1). The task-2 migration COPIES each old disjoint
+ * `<workspace>/.silverhand/agents/<agent_id>` L2 into the new bundle and
+ * RETAINS the source (terminal, inert). shiki has ruled that this retained
+ * source is PERMANENTLY kept as an orphan even across a user hard-delete of
+ * the agent: Silverhand never touches it again. So `scope:'all'` cleaning ONLY
+ * the terminal managed footprint (new agent home) is intentional and complete
+ * for what Silverhand manages — it is NOT the agent's entire on-disk footprint,
+ * and the surviving legacy L2 is a sanctioned data-retention outcome, NOT a
+ * cleanup gap. Do not "fix" it by re-adding deletion of the legacy source.
  */
 
 export class AgentFilesPurgeError extends DaemonTypedError {
@@ -64,16 +76,20 @@ export async function purgeAgentFiles(
   let skippedUnprovisioned = 0;
 
   if (params.scope === 'all') {
-    // The agent's ENTIRE host-local footprint is now a single tree: the agent
-    // home holds L1 AND every per-workspace L2 bundle, nested at
+    // The agent's TERMINAL MANAGED footprint is a single tree: the agent home
+    // holds L1 AND every per-workspace L2 bundle, nested at
     // `<home>/workspaces/<workspace_id>` (relocation-v1 §3.2). Removing the
-    // home removes them all, so `scope:'all'` no longer enumerates per-
-    // workspace targets or consults the registry: the pre-relocation per-
-    // workspace establishment gate would only spuriously fail-close a delete
-    // whose cleanup already fully succeeded (an unbound membership used to mean
-    // "its disjoint L2 tree is unreachable → orphan risk"; there is no disjoint
-    // L2 tree anymore). `workspace_ids` is ignored for `scope:'all'` and
-    // `skipped_unprovisioned` stays 0. (Registry demotion overall is §7 task 4.)
+    // home removes all of it, so `scope:'all'` does not enumerate per-workspace
+    // targets or consult the registry: an unbound membership can no longer
+    // strand a disjoint managed L2 tree (there is none anymore), so the pre-
+    // relocation per-workspace establishment gate would only spuriously fail-
+    // close a delete whose managed cleanup already fully succeeded.
+    // `workspace_ids` is ignored for `scope:'all'` and `skipped_unprovisioned`
+    // stays 0. The legacy relocation SOURCE (`<workspace>/.silverhand/agents/
+    // <id>`, copied+retained by the task-2 migration) is DELIBERATELY not
+    // touched — shiki ruled it a permanent orphan even across hard-delete (see
+    // the file docblock); it is out of scope by product decision, not an
+    // omission. (Registry demotion overall is §7 task 4.)
     targets.push(resolveAgentDir(params.agent_id, deps));
   } else {
     // `scope:'l2'` — remove only the listed workspaces' L2 bundles, keeping L1

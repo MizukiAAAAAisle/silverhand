@@ -162,10 +162,17 @@ export async function deleteAgent(
 
   // 2. Purge the agent's host-local files on the OWNING daemon BEFORE any DB
   //    mutation. §3.3 fail-fast commit boundary: DB rows are NOT deleted until
-  //    the purge acks. The daemon resolves each regular workspace from its
-  //    registry alone; a membership it never provisioned comes back as
-  //    `skipped_unprovisioned`, which fails the delete closed instead of
-  //    silently leaving an L2 tree on disk while we delete the DB row.
+  //    the purge acks. This uses `scope:'all'`, which (relocation-v1 §3.2) now
+  //    removes the agent's TERMINAL MANAGED footprint in one shot — the agent
+  //    home tree (L1 + every nested `workspaces/<id>` L2 bundle) — so it does
+  //    NOT enumerate per-workspace targets and `skipped_unprovisioned` is 0 by
+  //    construction (the skipped fail-close below is retained for defense /
+  //    `scope:'l2'`, but inert here). The legacy relocation SOURCE that the
+  //    task-2 migration copies+retains (`<workspace>/.silverhand/agents/<id>`)
+  //    is DELIBERATELY not deleted: shiki ruled it a permanent orphan even
+  //    across hard-delete (relocation-v1), so a surviving legacy L2 after this
+  //    delete is a sanctioned data-retention outcome, NOT a leak — do not
+  //    "fix" it by re-adding legacy-source deletion.
   const purge = await purgeAgentHostLocalFiles(deps, agent, impact);
   if (purge.kind === 'failClosed') return purge;
 

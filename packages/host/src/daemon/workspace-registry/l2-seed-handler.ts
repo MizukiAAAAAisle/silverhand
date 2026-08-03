@@ -13,15 +13,18 @@ import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
  * D4.e-3 daemon handler for `agent_l2_seed` — seeds a member agent's L2
  * (per-workspace) memory dir on the OWNING host. Replaces backend
  * `seedAgentL2` (gap G1): the backend forwards only `{ agent_id,
- * workspace_id, template_choice }`, the daemon resolves the workspace's
- * host-local path from its registry and writes
- * `<workspace>/.silverhand/agents/<agent_id>/{MEMORY.md, notes/…}`.
+ * workspace_id, template_choice }`, the daemon uses its registry only as the
+ * establishment gate (fail-closed when the workspace was never realized here)
+ * and writes the agent-centric bundle root
+ * `<agent home>/workspaces/<workspace_id>/{MEMORY.md, notes/…}`
+ * (relocation-v1 §3.2/§7 task 1) — no `<workspace>/.silverhand/...` sub-path.
  *
  * Regular-only: agent-home L2 == L1 and is already materialized by
  * `agent_materialize`, so it is never seeded here. The handler does NOT
- * take a `kind` — it relies on `registry.resolve`, which only knows
- * regular bindings; an agent-home id has no binding → fail-closed
- * `workspace_not_provisioned` (the backend never sends a path or kind).
+ * take a `kind` — it relies on `registry.resolve` as the establishment gate,
+ * which only knows regular bindings; an agent-home id has no binding →
+ * fail-closed `workspace_not_provisioned` (the backend never sends a path
+ * or kind).
  *
  * `system_prompt.md` is L1-only and is NEVER written to L2
  * ({@link getAgentL2Template} drops it). Idempotent: existing files are
@@ -74,7 +77,10 @@ export async function seedAgentL2(
         );
       }
       if (err.code === 'registry_foreign' ||
-        err.code === 'registry_corrupt') {
+        err.code === 'registry_corrupt' ||
+        // relocation-v1 §7 task 1 — an unsafe id segment is a corrupt/unusable
+        // registry entry; fail closed before it reaches the L2 path resolver.
+        err.code === 'invalid_path') {
         throw new AgentL2SeedError('registry_unavailable', err.message);
       }
     }

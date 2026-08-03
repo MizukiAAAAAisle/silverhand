@@ -322,6 +322,14 @@ export class WorkspaceRegistry {
    * record provisioning.
    */
   resolve(workspaceId: string): string {
+    // #task:1608 / relocation-v1 §7 task 1 — the id now becomes a path
+    // SEGMENT (`resolveAgentWorkspaceBundleDir`), not just a map key, so the
+    // registry's documented security boundary (a server-supplied id crosses
+    // into a path component ONLY after structural validation) must hold at the
+    // READ gate too: an already-persisted / corrupt entry keyed by an unsafe
+    // id (e.g. a pre-validation requested-path binding) fails closed here
+    // rather than resolving a traversal target for a downstream consumer.
+    assertSafeWorkspaceIdSegment(workspaceId);
     const file = this.loadForRead();
     const entry = file.workspaces[workspaceId];
     if (!entry) {
@@ -372,6 +380,13 @@ export class WorkspaceRegistry {
    * A foreign/corrupt registry throws and is NOT clobbered.
    */
   provision(workspaceId: string, requestedPath?: string): ProvisionResult {
+    // #task:1608 / relocation-v1 §7 task 1 — validate the id BEFORE it is
+    // persisted as a registry key, because that key is now also a path
+    // segment downstream. The managed-path arm below already validated it;
+    // the requested-path arm did NOT, so an unsafe id bound to a
+    // caller-proposed path used to slip through (safe only while the id was a
+    // pure map key). Fail closed at the write gate for BOTH regimes.
+    assertSafeWorkspaceIdSegment(workspaceId);
     const file = this.loadOrInit();
     const existing = file.workspaces[workspaceId];
     if (existing) {
@@ -402,10 +417,10 @@ export class WorkspaceRegistry {
 
     let path: string;
     if (requestedPath === undefined) {
-      // #task:1608 — the managed dir IS the validated raw workspace id
-      // (fail closed on an unsafe id), directly under the workspace-data
-      // root's workspaces/ dir.
-      path = join(this.managedRoot, assertSafeWorkspaceIdSegment(workspaceId));
+      // #task:1608 — the managed dir IS the (already validated at the top)
+      // raw workspace id, directly under the workspace-data root's
+      // workspaces/ dir.
+      path = join(this.managedRoot, workspaceId);
     } else {
       path = this.validateRequestedPath(requestedPath);
     }
