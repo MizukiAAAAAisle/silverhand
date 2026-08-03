@@ -1072,7 +1072,13 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
         ctx,
         m => new AgentL2SeedError('registry_unavailable', m),
       );
-      return seedAgentL2(params, { registry });
+      return seedAgentL2(params, {
+        registry,
+        homeDir: opts.testHooks?.agentMaterializeHomeDir,
+        agentHomeRootDir: agentsRootFor(
+          m => new AgentL2SeedError('registry_unavailable', m),
+        ),
+      });
     },
     // D4.e-4 — agent_files_purge: remove an agent's host-local L1/L2 files
     // on the owning host. L1 resolves from the daemon's homedir (test

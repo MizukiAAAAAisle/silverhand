@@ -440,7 +440,9 @@ export function registerParityPhases(getRig: () => ParityRig): void {
 
     // ── 3) agent_workspace_index over the SAME live daemon registry:
     //    a provisioned regular id resolves to a daemon-stamped `agent_dir`
-    //    under the bound path; a never-provisioned id comes back fail-closed
+    //    at the deterministic agent-centric bundle root (relocation-v1 §3.2:
+    //    `<agent home>/workspaces/<workspace_id>`, NOT under the bound
+    //    workspace path); a never-provisioned id comes back fail-closed
     //    in `unresolved` (the backend must NOT synthesize a path for it).
     //
     //    This true-daemon `unresolved` lives at the DIRECT adapter layer on
@@ -464,7 +466,11 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     expect(index.entries).toEqual([
       {
         workspace_id: workspaceId,
-        agent_dir: join(boundPath, '.silverhand', 'agents', agentId),
+        agent_dir: join(
+          agentL1Dir(rig.agentHomeDir, agentId),
+          'workspaces',
+          workspaceId,
+        ),
       },
     ]);
     expect(index.unresolved).toEqual([neverId]);
@@ -495,7 +501,6 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     };
     expect(createRes.status, JSON.stringify(createBody)).toBe(201);
     const workspaceId = createBody.workspace!.id;
-    const boundPath = createBody.workspace!.workspace_path;
 
     const adapter = rig.adapter();
     const conn = adapter.connectionIdForHost(rig.hostId) ?? undefined;
@@ -511,9 +516,15 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     )) as { ok: true; seeded: boolean; l2_present: boolean };
     expect(seed).toMatchObject({ ok: true, seeded: true, l2_present: true });
 
-    // The daemon wrote its OWN host-local L2 under the bound workspace path:
-    // MEMORY.md + notes/, NEVER L1 system_prompt.md.
-    const l2 = join(boundPath, '.silverhand', 'agents', agentId);
+    // The daemon wrote its OWN host-local L2 at the deterministic bundle
+    // root (relocation-v1 §3.2: `<agent home>/workspaces/<id>`, no longer a
+    // `.silverhand/agents/<id>` sub-path under the workspace): MEMORY.md +
+    // notes/, NEVER L1 system_prompt.md.
+    const l2 = join(
+      agentL1Dir(rig.agentHomeDir, agentId),
+      'workspaces',
+      workspaceId,
+    );
     expect(existsSync(join(l2, 'MEMORY.md'))).toBe(true);
     expect(existsSync(join(l2, 'system_prompt.md'))).toBe(false);
     expect(existsSync(join(l2, 'notes'))).toBe(true);
@@ -569,7 +580,6 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     };
     expect(createRes.status, JSON.stringify(createBody)).toBe(201);
     const workspaceId = createBody.workspace!.id;
-    const boundPath = createBody.workspace!.workspace_path;
 
     const adapter = rig.adapter();
     const conn = adapter.connectionIdForHost(rig.hostId) ?? undefined;
@@ -582,12 +592,18 @@ export function registerParityPhases(getRig: () => ParityRig): void {
       { agent_id: agentId, workspace_id: workspaceId, template_choice: 'default' },
       { expectedConnectionId: conn, timeoutMs: 5_000 },
     );
-    const l2 = join(boundPath, '.silverhand', 'agents', agentId);
+    const l2 = join(
+      agentL1Dir(rig.agentHomeDir, agentId),
+      'workspaces',
+      workspaceId,
+    );
     expect(existsSync(l2)).toBe(true);
 
-    // ── 1) PURGE scope:'all' — removes the L2 dir (the agent's L1 home was
-    //    never materialized in this rig, so it is a missing target that
-    //    tolerates ENOENT and is simply not counted).
+    // ── 1) PURGE scope:'all' — relocation-v1 §3.2 nests every per-workspace
+    //    L2 bundle UNDER the agent home, so `scope:'all'` now removes the
+    //    single agent-home tree (which the seed above materialized) rather
+    //    than enumerating per-workspace targets or consulting the registry;
+    //    `workspace_ids` is ignored and `skipped_unprovisioned` stays 0.
     const purge = (await adapter.sendCommand(
       rig.hostId,
       'agent_files_purge',

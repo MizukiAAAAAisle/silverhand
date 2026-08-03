@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { isAgentHomeWorkspaceId } from '@silverhand/shared';
 import type {
   AgentWorkspaceIndexErrorCode,
@@ -6,7 +5,10 @@ import type {
   AgentWorkspaceIndexResult,
 } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
-import { resolveAgentDir } from '../agent-materialize/index.js';
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceBundleDir,
+} from '../agent-materialize/index.js';
 import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
 
 /**
@@ -58,10 +60,12 @@ export async function indexAgentWorkspaces(
       continue;
     }
 
-    // Regular workspace: resolve via the registry (fail-closed).
-    let workspacePath: string;
+    // Regular workspace: registry stays the establishment gate (fail-closed /
+    // unresolved), but the resolved `agent_dir` is now the deterministic
+    // agent-centric bundle root, not the registry's old shared path
+    // (relocation-v1 §7 task 1; registry demotion is §7 task 4).
     try {
-      workspacePath = deps.registry.resolve(workspaceId);
+      deps.registry.resolve(workspaceId);
     } catch (err) {
       if (err instanceof WorkspaceRegistryError) {
         if (err.code === 'not_provisioned') {
@@ -85,7 +89,7 @@ export async function indexAgentWorkspaces(
 
     entries.push({
       workspace_id: workspaceId,
-      agent_dir: join(workspacePath, '.silverhand', 'agents', params.agent_id),
+      agent_dir: resolveAgentWorkspaceBundleDir(params.agent_id, workspaceId, deps),
     });
   }
 

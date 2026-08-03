@@ -69,10 +69,10 @@ Key model:
   applies in every workspace. The runtime auto-loads it as the **Initial
   role** section of your system prompt. Do not reconstruct this path from
   an app-root layout convention.
-- **Workspace memory is local.**
-  \`<workspace>/.silverhand/agents/<id>/MEMORY.md\` (auto-loaded as
+- **Workspace memory is local.** This workspace's MEMORY.md (auto-loaded as
   **Active Workspace Memory**) plus \`notes/\` describe what is true in
-  one workspace.
+  one workspace. The daemon-resolved profile dir shown in the platform prompt
+  is where they live; do not reconstruct that path from a layout convention.
 - **Write by scope.** Global identity / role / working-style guidance from
   the user → update L1 \`system_prompt.md\`. Guidance about this workspace's
   collaboration, tasks, project facts, or work logs → update L2 (MEMORY.md

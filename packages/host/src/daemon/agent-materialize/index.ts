@@ -11,6 +11,7 @@ export {
   computeAgentDirFromRoot,
   materializeAgent,
   resolveAgentDir,
+  resolveAgentWorkspaceBundleDir,
   type MaterializeAgentDeps,
 } from './handler.js';
 export {

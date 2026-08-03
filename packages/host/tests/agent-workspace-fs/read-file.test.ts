@@ -55,8 +55,11 @@ function makeRegistry(): WorkspaceRegistry {
   });
 }
 function l2AgentDir(registry: WorkspaceRegistry, workspaceId = 'ws_1'): string {
-  const workspaceDir = registry.provision(workspaceId).path;
-  return join(workspaceDir, '.silverhand', 'agents', AGENT_ID);
+  // Establishment gate: the workspace must be realized here for the read to
+  // resolve. The L2 base is now the agent-centric bundle dir under the agent
+  // home (relocation-v1 §3.2), no longer under the registry workspace path.
+  registry.provision(workspaceId);
+  return join(agentDir(), 'workspaces', workspaceId);
 }
 
 describe('readAgentWorkspaceFile', () => {

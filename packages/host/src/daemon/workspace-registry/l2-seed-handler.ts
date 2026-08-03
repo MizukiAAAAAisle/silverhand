@@ -6,7 +6,7 @@ import type {
   AgentL2SeedResult,
 } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
-import { getAgentL2Template } from '../agent-materialize/index.js';
+import { getAgentL2Template, resolveAgentWorkspaceBundleDir } from '../agent-materialize/index.js';
 import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
 
 /**
@@ -40,6 +40,10 @@ export class AgentL2SeedError extends DaemonTypedError {
 
 export interface SeedAgentL2Deps {
   registry: WorkspaceRegistry;
+  /** Parent dir for the agent-centric bundle root. Default: daemon's homedir. */
+  homeDir?: string;
+  /** Exact agent-home root. Takes precedence over homeDir. */
+  agentHomeRootDir?: string;
 }
 
 export async function seedAgentL2(
@@ -54,12 +58,13 @@ export async function seedAgentL2(
     );
   }
 
-  // Resolve the workspace's host-local path from the registry (fail-closed,
-  // never from a backend-supplied path). Regular-only: an agent-home id has
-  // no registry binding and lands in the `not_provisioned` arm.
-  let workspacePath: string;
+  // Establishment gate (relocation-v1 §7 task 1): the registry must still
+  // throw fail-closed when this workspace was never realized on this computer
+  // (regular-only — an agent-home id has no binding → `not_provisioned`). Its
+  // returned old-shared path is no longer used; the L2 dir is now the
+  // deterministic agent-centric bundle root. Registry demotion is §7 task 4.
   try {
-    workspacePath = deps.registry.resolve(params.workspace_id);
+    deps.registry.resolve(params.workspace_id);
   } catch (err) {
     if (err instanceof WorkspaceRegistryError) {
       if (err.code === 'not_provisioned') {
@@ -78,7 +83,11 @@ export async function seedAgentL2(
       err instanceof Error ? err.message : String(err),
     );
   }
-  const l2Dir = join(workspacePath, '.silverhand', 'agents', params.agent_id);
+  const l2Dir = resolveAgentWorkspaceBundleDir(
+    params.agent_id,
+    params.workspace_id,
+    deps,
+  );
   try {
     let seeded = false;
     await fs.mkdir(l2Dir, { recursive: true });

@@ -22,6 +22,7 @@ import {
   type RegistryBinding,
 } from '../../src/daemon/workspace-registry/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
+import { resolveAgentWorkspaceBundleDir } from '../../src/daemon/agent-materialize/index.js';
 import { chmodSync, mkdirSync, readdirSync } from 'node:fs';
 
 /**
@@ -31,8 +32,10 @@ import { chmodSync, mkdirSync, readdirSync } from 'node:fs';
  *   - provision creates the `.silverhand/` skeleton at the managed path
  *     and reports `provisioned` (created) idempotently;
  *   - provision rejects `agent_home` with `unsupported_kind` (no fs write);
- *   - index resolves agent-home from `homeDir`, regular from the registry,
- *     and pushes never-provisioned ids to `unresolved` (read fail-closed).
+ *   - index resolves agent-home from `homeDir`, a regular workspace to its
+ *     deterministic agent-centric bundle dir (registry kept as the
+ *     establishment gate), and pushes never-provisioned ids to `unresolved`
+ *     (read fail-closed).
  */
 
 const STANDALONE: RegistryBinding = {
@@ -55,6 +58,17 @@ afterEach(() => {
 
 function makeRegistry(binding: RegistryBinding = STANDALONE) {
   return new WorkspaceRegistry({ stateDir, binding, now: () => 1_700_000_000_000 });
+}
+
+/**
+ * The deterministic agent-centric L2 bundle dir a regular workspace resolves
+ * to now (relocation-v1 §3.2): `<agent home>/workspaces/<workspace_id>`, no
+ * longer `<registry ws path>/.silverhand/agents/<agent>`. Pinned against the
+ * real resolver so a layout change is caught here. `homeDir` is read at call
+ * time (set per-test in beforeEach).
+ */
+function bundleDir(agentId: string, workspaceId: string): string {
+  return resolveAgentWorkspaceBundleDir(agentId, workspaceId, { homeDir });
 }
 
 describe('provisionWorkspace', () => {
@@ -181,10 +195,9 @@ describe('indexAgentWorkspaces', () => {
     });
   });
 
-  it('resolves a provisioned regular workspace to <ws>/.silverhand/agents/<agent_id>', async () => {
+  it('resolves a provisioned regular workspace to its agent-centric bundle dir', async () => {
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const wsPath = registry.resolve('ws_1');
 
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: ['ws_1'] },
@@ -193,7 +206,7 @@ describe('indexAgentWorkspaces', () => {
     expect(r.unresolved).toEqual([]);
     expect(r.entries[0]).toEqual({
       workspace_id: 'ws_1',
-      agent_dir: join(wsPath, '.silverhand', 'agents', 'aid_x'),
+      agent_dir: bundleDir('aid_x', 'ws_1'),
     });
   });
 
@@ -480,8 +493,10 @@ describe('provisionWorkspace — skeleton-failure compensation', () => {
 
 // D4.e-3 slice handler unit tests for `seedAgentL2` — the daemon-owned L2
 // (per-workspace) memory seeder that replaces backend `seedAgentL2` (gap
-// G1). The daemon resolves the workspace's host-local path from its own
-// registry and writes `<ws>/.silverhand/agents/<agent>/{MEMORY.md,notes/…}`.
+// G1). The daemon uses its registry as the establishment gate, then writes
+// the deterministic agent-centric bundle dir
+// `<agent home>/workspaces/<workspace_id>/{MEMORY.md,notes/…}` (relocation-v1
+// §3.2).
 // Cindy D4.e-3 review focuses:
 //   #2 regular-only — agent-home / unprovisioned id fails closed
 //      (workspace_not_provisioned) purely via registry.resolve, no `kind`;
@@ -490,22 +505,21 @@ describe('provisionWorkspace — skeleton-failure compensation', () => {
 describe('seedAgentL2', () => {
   const AGENT_ID = 'aid_member';
 
-  function l2DirFor(wsPath: string): string {
-    return join(wsPath, '.silverhand', 'agents', AGENT_ID);
+  function l2DirFor(workspaceId: string): string {
+    return bundleDir(AGENT_ID, workspaceId);
   }
 
   it('seeds MEMORY.md + notes/ but NEVER system_prompt.md (L1-only)', async () => {
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const wsPath = registry.resolve('ws_1');
 
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry },
+      { registry, homeDir },
     );
     expect(r).toEqual({ ok: true, seeded: true, l2_present: true });
 
-    const l2 = l2DirFor(wsPath);
+    const l2 = l2DirFor('ws_1');
     // L1 identity must NOT leak into L2.
     expect(existsSync(join(l2, 'system_prompt.md'))).toBe(false);
     // L2 carries MEMORY.md + notes/.
@@ -522,12 +536,11 @@ describe('seedAgentL2', () => {
   it('is idempotent: re-seed reports seeded=false and preserves edited content', async () => {
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const wsPath = registry.resolve('ws_1');
-    const l2 = l2DirFor(wsPath);
+    const l2 = l2DirFor('ws_1');
 
     await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry },
+      { registry, homeDir },
     );
     // An agent edits its MEMORY.md after the first seed.
     const memPath = join(l2, 'MEMORY.md');
@@ -535,7 +548,7 @@ describe('seedAgentL2', () => {
 
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry },
+      { registry, homeDir },
     );
     // Nothing new written; the edit survives (no clobber).
     expect(r).toEqual({ ok: true, seeded: false, l2_present: true });
@@ -546,7 +559,7 @@ describe('seedAgentL2', () => {
     const registry = makeRegistry();
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_missing', template_choice: 'default' },
-      { registry },
+      { registry, homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('workspace_not_provisioned');
@@ -564,7 +577,7 @@ describe('seedAgentL2', () => {
         workspace_id: agentHomeWorkspaceId(AGENT_ID),
         template_choice: 'default',
       },
-      { registry },
+      { registry, homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('workspace_not_provisioned');
@@ -573,15 +586,14 @@ describe('seedAgentL2', () => {
   it('rejects an unsupported template_choice with unsupported_template (no fs write)', async () => {
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const wsPath = registry.resolve('ws_1');
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'minimal' },
-      { registry },
+      { registry, homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('unsupported_template');
     // Template is validated before any path is touched → no L2 dir created.
-    expect(existsSync(l2DirFor(wsPath))).toBe(false);
+    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
   });
 
   it('maps a registry_corrupt resolve to registry_unavailable (whole-registry failure)', async () => {
@@ -591,31 +603,31 @@ describe('seedAgentL2', () => {
     writeFileSync(registry.registryFilePath(), '{ not valid json', 'utf-8');
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry },
+      { registry, homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('registry_unavailable');
   });
 
   it('fails closed with fs_unavailable on a HARD fs write error', async () => {
-    // chmod 000 on the workspace's `.silverhand/agents` dir makes the
-    // l2Dir mkdir throw EACCES — a hard write error must surface as the
-    // typed fs_unavailable (fail-closed), never a silent success.
+    // chmod 000 on the agent home dir makes the l2Dir mkdir (of its
+    // `workspaces/<id>` child) throw EACCES — a hard write error must surface
+    // as the typed fs_unavailable (fail-closed), never a silent success.
     if (process.getuid?.() === 0) return; // root bypasses perms — skip
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const wsPath = registry.resolve('ws_1');
-    const agentsDir = join(wsPath, '.silverhand', 'agents');
-    chmodSync(agentsDir, 0o000);
+    const agentHomeDir = join(homeDir, '.silverhand', 'agents', AGENT_ID);
+    mkdirSync(agentHomeDir, { recursive: true });
+    chmodSync(agentHomeDir, 0o000);
     try {
       const err = await seedAgentL2(
         { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-        { registry },
+        { registry, homeDir },
       ).catch(e => e);
       expect(err).toBeInstanceOf(AgentL2SeedError);
       expect((err as AgentL2SeedError).code).toBe('fs_unavailable');
     } finally {
-      chmodSync(agentsDir, 0o755);
+      chmodSync(agentHomeDir, 0o755);
     }
   });
 });
@@ -626,8 +638,8 @@ describe('purgeAgentFiles', () => {
   function l1Dir(): string {
     return join(homeDir, '.silverhand', 'agents', AGENT_ID);
   }
-  function l2DirFor(wsPath: string): string {
-    return join(wsPath, '.silverhand', 'agents', AGENT_ID);
+  function l2DirFor(workspaceId: string): string {
+    return bundleDir(AGENT_ID, workspaceId);
   }
   // Materialize an L1 + a per-workspace L2 dir with a marker file so we can
   // assert removal.
@@ -636,32 +648,31 @@ describe('purgeAgentFiles', () => {
     writeFileSync(join(dir, 'MEMORY.md'), '# marker\n', 'utf-8');
   }
 
-  it("scope:'all' removes L1 + every listed workspace L2 and counts them", async () => {
+  it("scope:'all' removes the whole agent home (L1 + all nested L2) as one target", async () => {
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
     await provisionWorkspace({ workspace_id: 'ws_2', kind: 'regular' }, { registry });
-    const ws1 = registry.resolve('ws_1');
-    const ws2 = registry.resolve('ws_2');
     seedDir(l1Dir());
-    seedDir(l2DirFor(ws1));
-    seedDir(l2DirFor(ws2));
+    seedDir(l2DirFor('ws_1'));
+    seedDir(l2DirFor('ws_2'));
 
     const r = await purgeAgentFiles(
       { agent_id: AGENT_ID, scope: 'all', workspace_ids: ['ws_1', 'ws_2'] },
       { registry, homeDir },
     );
-    expect(r).toEqual({ ok: true, purged_count: 3, skipped_unprovisioned: 0 });
+    // One rm of the agent home subsumes L1 and every nested L2 bundle
+    // (relocation-v1 §3.2), so exactly one target is counted.
+    expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 0 });
     expect(existsSync(l1Dir())).toBe(false);
-    expect(existsSync(l2DirFor(ws1))).toBe(false);
-    expect(existsSync(l2DirFor(ws2))).toBe(false);
+    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
+    expect(existsSync(l2DirFor('ws_2'))).toBe(false);
   });
 
   it("scope:'l2' removes only the listed L2 dirs and preserves L1", async () => {
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const ws1 = registry.resolve('ws_1');
     seedDir(l1Dir());
-    seedDir(l2DirFor(ws1));
+    seedDir(l2DirFor('ws_1'));
 
     const r = await purgeAgentFiles(
       { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1'] },
@@ -670,7 +681,7 @@ describe('purgeAgentFiles', () => {
     expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 0 });
     // L1 is NOT a target under scope:'l2'.
     expect(existsSync(l1Dir())).toBe(true);
-    expect(existsSync(l2DirFor(ws1))).toBe(false);
+    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
   });
 
   it('is idempotent: purging already-gone targets succeeds with purged_count=0 (ENOENT not a failure)', async () => {
@@ -684,29 +695,49 @@ describe('purgeAgentFiles', () => {
     expect(r).toEqual({ ok: true, purged_count: 0, skipped_unprovisioned: 0 });
   });
 
-  it('counts an unprovisioned workspace in skipped_unprovisioned (no daemon-managed L2) without failing', async () => {
+  it("scope:'all' ignores workspace_ids and NEVER skip-counts (home removal is complete cleanup)", async () => {
+    // Regression guard for the relocation: since all L2 nest under the agent
+    // home, an unprovisioned membership no longer leaves an orphan L2 tree, so
+    // scope:'all' must not consult the registry nor report skipped_unprovisioned
+    // — otherwise delete-agent (which fails closed on skipped>0) would spuriously
+    // block a delete whose cleanup fully succeeded.
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const ws1 = registry.resolve('ws_1');
     seedDir(l1Dir());
-    seedDir(l2DirFor(ws1));
+    seedDir(l2DirFor('ws_1'));
 
     const r = await purgeAgentFiles(
-      // ws_missing has no registry binding → reported, not an error.
       { agent_id: AGENT_ID, scope: 'all', workspace_ids: ['ws_1', 'ws_missing'] },
       { registry, homeDir },
     );
-    expect(r).toEqual({ ok: true, purged_count: 2, skipped_unprovisioned: 1 });
+    expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 0 });
     expect(existsSync(l1Dir())).toBe(false);
-    expect(existsSync(l2DirFor(ws1))).toBe(false);
+    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
   });
 
-  it('maps a registry_corrupt resolve to registry_unavailable (whole-registry failure)', async () => {
+  it("scope:'l2' counts an unprovisioned workspace in skipped_unprovisioned without failing", async () => {
+    const registry = makeRegistry();
+    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
+    seedDir(l1Dir());
+    seedDir(l2DirFor('ws_1'));
+
+    const r = await purgeAgentFiles(
+      // ws_missing has no registry binding → reported, not an error.
+      { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1', 'ws_missing'] },
+      { registry, homeDir },
+    );
+    expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 1 });
+    // L1 preserved under scope:'l2'; only ws_1's bundle removed.
+    expect(existsSync(l1Dir())).toBe(true);
+    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
+  });
+
+  it("scope:'l2' maps a registry_corrupt resolve to registry_unavailable (whole-registry failure)", async () => {
     const registry = makeRegistry();
     registry.provision('ws_1');
     writeFileSync(registry.registryFilePath(), '{ not valid json', 'utf-8');
     const err = await purgeAgentFiles(
-      { agent_id: AGENT_ID, scope: 'all', workspace_ids: ['ws_1'] },
+      { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1'] },
       { registry, homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentFilesPurgeError);
@@ -714,16 +745,15 @@ describe('purgeAgentFiles', () => {
   });
 
   it('fails closed with partial_purge on a HARD fs removal error', async () => {
-    // chmod 000 on the L2 parent dir (`.silverhand/agents`) makes the rm of
-    // the child l2Dir throw EACCES — a hard error must surface as the typed
+    // chmod 000 on the L2 parent dir (`<agent home>/workspaces`) makes the rm
+    // of the child l2Dir throw EACCES — a hard error must surface as the typed
     // partial_purge (fail-closed), never a silent success.
     if (process.getuid?.() === 0) return; // root bypasses perms — skip
     const registry = makeRegistry();
     await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const ws1 = registry.resolve('ws_1');
-    seedDir(l2DirFor(ws1));
-    const agentsDir = join(ws1, '.silverhand', 'agents');
-    chmodSync(agentsDir, 0o000);
+    seedDir(l2DirFor('ws_1'));
+    const workspacesDir = join(l1Dir(), 'workspaces');
+    chmodSync(workspacesDir, 0o000);
     try {
       const err = await purgeAgentFiles(
         { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1'] },
@@ -732,7 +762,7 @@ describe('purgeAgentFiles', () => {
       expect(err).toBeInstanceOf(AgentFilesPurgeError);
       expect((err as AgentFilesPurgeError).code).toBe('partial_purge');
     } finally {
-      chmodSync(agentsDir, 0o755);
+      chmodSync(workspacesDir, 0o755);
     }
   });
 });

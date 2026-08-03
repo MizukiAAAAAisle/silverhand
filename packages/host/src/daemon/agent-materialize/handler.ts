@@ -144,6 +144,30 @@ export function resolveAgentDir(
 }
 
 /**
+ * The deterministic, id-derived L2 bundle root for a (agent, regular
+ * workspace) pair — `computers/<computer_id>/agents/<agent_id>/workspaces/
+ * <workspace_id>/` (relocation-v1 §3.2/§3.3). `computer_id` is already folded
+ * into the agent-home root (the computer slot's `agents` dir), so it is
+ * inherited via `resolveAgentDir` rather than taken as a separate argument.
+ *
+ * This bundle root IS the agent's spawn cwd and IS its L2 memory dir (there is
+ * no `.silverhand/agents/<id>` sub-path any more): MEMORY.md sits at the root,
+ * notes/ beside it. It is the SOLE runtime path authority for regular
+ * workspaces, replacing `registry.resolve(workspace_id)` as the path source
+ * (relocation-v1 §7 task 1). Pure: a function of the ids + the home-root seam,
+ * so it never fails — establishment ("is this workspace realized on this
+ * computer?") remains a separate registry gate at the call sites until the
+ * registry is demoted (§7 task 4).
+ */
+export function resolveAgentWorkspaceBundleDir(
+  agentId: string,
+  workspaceId: string,
+  deps: Pick<MaterializeAgentDeps, 'homeDir' | 'agentHomeRootDir'> = {},
+): string {
+  return join(resolveAgentDir(agentId, deps), 'workspaces', workspaceId);
+}
+
+/**
  * Run the §4.6 decision tree and return a typed result.
  *
  * Two outcomes: an `AgentMaterializeResult` (ok:true) or a thrown

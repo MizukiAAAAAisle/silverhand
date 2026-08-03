@@ -9,19 +9,26 @@ import {
 import {
   computeAgentDir,
   computeAgentDirFromRoot,
+  resolveAgentWorkspaceBundleDir,
 } from '../src/daemon/agent-materialize/handler.js';
 import { testStartOptions } from './_helpers/runtime-start-options.js';
 import type { StartOptions } from '../src/protocol.js';
 
 /**
  * D4.e-6 — daemon resolves `runtime_start` host paths from SEMANTIC wire
- * refs. These pin: regular → injected registry resolver; agent_home +
- * agent.home_dir → `computeAgentDir`; the memory index resolves per-kind;
- * and a regular resolution failure surfaces fail-closed as a typed
- * `RuntimeStartResolveError`.
+ * refs. These pin: regular → deterministic agent-centric bundle dir, with
+ * the injected registry resolver kept as the establishment gate (fail-closed
+ * / call-recorded); agent_home + agent.home_dir → `computeAgentDir`; the
+ * memory index resolves per-kind; and a regular resolution failure surfaces
+ * fail-closed as a typed `RuntimeStartResolveError`.
  */
 
 const HOME = '/tmp/d4e6-home';
+
+/** The deterministic regular-workspace L2/cwd path (relocation-v1 §3.2). */
+function bundle(agentId: string, workspaceId: string, homeDir = HOME): string {
+  return resolveAgentWorkspaceBundleDir(agentId, workspaceId, { homeDir });
+}
 
 function depsWith(
   resolveRegularWorkspacePath: (id: string) => string,
@@ -35,7 +42,7 @@ function depsWith(
 }
 
 describe('resolveRuntimeStartPaths — regular workspace', () => {
-  it('resolves agent.home_dir + workspace.path + memory index via the deps', () => {
+  it('resolves agent.home_dir via computeAgentDir + workspace.path/memory index to the bundle dir, consulting the deps as the establishment gate', () => {
     const options = testStartOptions({ agentId: 'a1', workspaceKind: 'regular' });
     const calls: string[] = [];
     const resolved = resolveRuntimeStartPaths(
@@ -46,9 +53,10 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
       }),
     );
     expect(resolved.agent.home_dir).toBe(computeAgentDir('a1', HOME));
-    expect(resolved.workspace.path).toBe('/host/ws/ws1');
-    expect(resolved.workspace_memory_index[0]!.path).toBe('/host/ws/ws1');
-    // The registry resolver is the only source of the regular path.
+    expect(resolved.workspace.path).toBe(bundle('a1', 'ws1'));
+    expect(resolved.workspace_memory_index[0]!.path).toBe(bundle('a1', 'ws1'));
+    // The registry resolver stays the establishment gate (still consulted),
+    // but no longer supplies the path — that is the deterministic bundle dir.
     expect(calls).toContain('ws1');
     // Semantic fields are preserved.
     expect(resolved.workspace.id).toBe('ws1');
@@ -190,9 +198,9 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
       depsWith(id => `/host/ws/${id}`),
     );
     expect(resolved.workspace_memory_index.map(w => w.path)).toEqual([
-      '/host/ws/ws1',
+      bundle('a1', 'ws1'),
       computeAgentDir('a1', HOME),
-      '/host/ws/ws2',
+      bundle('a1', 'ws2'),
     ]);
   });
 
@@ -221,9 +229,9 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
         return `/host/ws/${id}`;
       }),
     );
-    expect(resolved.workspace.path).toBe('/host/ws/ws1');
+    expect(resolved.workspace.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index).toEqual([
-      { id: 'ws1', name: 'primary', kind: 'regular', path: '/host/ws/ws1' },
+      { id: 'ws1', name: 'primary', kind: 'regular', path: bundle('a1', 'ws1') },
       { id: 'ws_peer_unbound', name: 'peer', kind: 'regular', path: null },
     ]);
 

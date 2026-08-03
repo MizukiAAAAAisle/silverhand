@@ -1,6 +1,8 @@
-import { join } from 'node:path';
 import { isAgentHomeWorkspaceId } from '@silverhand/shared';
-import { resolveAgentDir } from '../agent-materialize/index.js';
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceBundleDir,
+} from '../agent-materialize/index.js';
 import {
   type WorkspaceRegistry,
   WorkspaceRegistryError,
@@ -22,8 +24,10 @@ export interface ResolveAgentWorkspaceBaseDeps {
  * Omitted `workspace_id` preserves the original #task:811 meaning: the agent
  * home/L1 dir. Present `workspace_id` means "the agent's memory dir for this
  * workspace"; agent-home/DM ids intentionally resolve to the same home dir,
- * while regular workspace ids resolve through the daemon registry to
- * `<workspace>/.silverhand/agents/<agent_id>`.
+ * while regular workspace ids resolve to the deterministic agent-centric
+ * bundle root (`computers/<cid>/agents/<agent_id>/workspaces/<workspace_id>/`,
+ * relocation-v1 §3.2) — the registry is consulted only as the establishment
+ * gate (fail-closed when the workspace was never realized here).
  *
  * The backend must already have done authz/membership gates. This helper is
  * intentionally path-only and still never accepts a server-supplied path.
@@ -47,9 +51,12 @@ export function resolveAgentWorkspaceBaseDir(
     );
   }
 
+  // Establishment gate stays with the registry (fail-closed when the
+  // workspace was never realized here); the resolved base is now the
+  // deterministic agent-centric bundle root, not the registry's old shared
+  // path (relocation-v1 §7 task 1; registry demotion is §7 task 4).
   try {
-    const workspacePath = deps.registry.resolve(workspaceId);
-    return join(workspacePath, '.silverhand', 'agents', params.agent_id);
+    deps.registry.resolve(workspaceId);
   } catch (err) {
     if (err instanceof WorkspaceRegistryError) {
       if (err.code === 'not_provisioned') {
@@ -67,4 +74,5 @@ export function resolveAgentWorkspaceBaseDir(
       err instanceof Error ? err.message : String(err),
     );
   }
+  return resolveAgentWorkspaceBundleDir(params.agent_id, workspaceId, deps);
 }

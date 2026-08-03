@@ -31,7 +31,10 @@
  */
 import type { RuntimeStartErrorCode, StartOptions } from '../protocol.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
-import { resolveAgentDir } from './agent-materialize/handler.js';
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceBundleDir,
+} from './agent-materialize/handler.js';
 import { DaemonTypedError } from './typed-error.js';
 
 /** A workspace ref with the daemon-resolved absolute `path` attached. */
@@ -171,7 +174,18 @@ export function resolveRuntimeStartPaths(
       }
       return { ...workspace, path: homeDir };
     }
-    return { ...workspace, path: deps.resolveRegularWorkspacePath(workspace.id) };
+    // relocation-v1 §7 task 1 — split the two roles `registry.resolve` used to
+    // conflate. The registry stays the ESTABLISHMENT GATE: it must still throw
+    // (fail-closed) when this workspace was never realized on this computer, so
+    // a runtime never spawns against an unrealized workspace (#task:1612).
+    // But the L2/cwd PATH is now the deterministic agent-centric bundle root,
+    // not the registry's old (shared) managed path. Demoting the registry to a
+    // migration-only reader is §7 task 4.
+    deps.resolveRegularWorkspacePath(workspace.id);
+    return {
+      ...workspace,
+      path: resolveAgentWorkspaceBundleDir(agentId, workspace.id, deps),
+    };
   };
 
   // The ACTIVE workspace fails closed — a runtime must never spawn against

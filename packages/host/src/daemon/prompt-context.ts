@@ -50,7 +50,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
     () => '',
   );
 
-  const currentMemoryDir = memoryDirFor(options.workspace, options.agent.id);
+  const currentMemoryDir = memoryDirFor(options.workspace);
   const currentMemory = await readFileWithCap(
     join(currentMemoryDir, 'MEMORY.md'),
     MEMORY_INJECT_CAP_BYTES,
@@ -60,7 +60,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
   return {
     agentId: options.agent.id,
     agentName: options.agent.name,
-    activeProfileDir: activeProfilePromptDir(options.workspace, options.agent.id),
+    activeProfileDir: activeProfilePromptDir(options.workspace),
     roleSystemPrompt,
     roleSystemPromptPath,
     currentMemory,
@@ -98,25 +98,25 @@ export function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
         workspace.path === null
           ? null
           : join(
-              memoryDirFor({ ...workspace, path: workspace.path }, options.agent.id),
+              memoryDirFor({ ...workspace, path: workspace.path }),
               'MEMORY.md',
             ),
     };
   });
 }
 
-function activeProfilePromptDir(
-  workspace: ResolvedWorkspaceRef,
-  agentId: string,
-): string {
-  if (workspace.kind === 'agent_home') return '.';
-  return `./.silverhand/agents/${agentId}`;
+function activeProfilePromptDir(workspace: ResolvedWorkspaceRef): string {
+  // relocation-v1 §7 task 1 — the agent cwd IS its L2 root for BOTH kinds now
+  // (regular = the workspace bundle root; agent_home = the L1 home), so the
+  // prompt's profile dir is always `.` (MEMORY.md at `./MEMORY.md`, notes at
+  // `./notes/`). The old `./.silverhand/agents/<id>` sub-path is gone.
+  void workspace;
+  return '.';
 }
 
-function memoryDirFor(
-  workspace: ResolvedWorkspaceRef,
-  agentId: string,
-): string {
-  if (workspace.kind === 'agent_home') return workspace.path;
-  return join(workspace.path, '.silverhand', 'agents', agentId);
+function memoryDirFor(workspace: ResolvedWorkspaceRef): string {
+  // The absolute L2 memory dir == the resolved cwd for both kinds (see
+  // `activeProfilePromptDir`): the regular workspace bundle root or the
+  // agent_home L1 home. No per-agent `.silverhand/agents/<id>` sub-path.
+  return workspace.path;
 }

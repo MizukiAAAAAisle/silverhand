@@ -116,10 +116,11 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     count: 1,
   },
   {
-    file: 'packages/host/src/daemon/agent-workspace-fs/source.ts',
-    token: '.silverhand',
-    line: "return join(workspacePath, '.silverhand', 'agents', params.agent_id);",
-    reason: 'workspace-LOCAL .silverhand convention (per-workspace L2), not app-root data',
+    file: 'packages/host/src/daemon/agent-materialize/handler.ts',
+    token: 'app-data dir join',
+    line: "return join(resolveAgentDir(agentId, deps), 'workspaces', workspaceId);",
+    reason:
+      'the deterministic (agent, regular-workspace) L2 bundle resolver: the agent-home subtree layout already lives in this file (computeAgentDir/resolveAgentDir), and this extends it with the id-keyed `workspaces/<id>` bundle root — the SOLE runtime path authority for regular workspaces (relocation-v1 §3.2/§7 task 1)',
     count: 1,
   },
   {
@@ -127,34 +128,6 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     token: 'homedir()',
     line: 'export function deriveLocalOutboundFrameSocketPath(home = homedir()): string {',
     reason: 'historical test seam signature; the body delegates to the resolver',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/prompt-context.ts',
-    token: '.silverhand',
-    line: "return join(workspace.path, '.silverhand', 'agents', agentId);",
-    reason: 'workspace-LOCAL .silverhand convention (per-workspace L2), not app-root data',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/files-purge-handler.ts',
-    token: '.silverhand',
-    line: "targets.push(join(workspacePath, '.silverhand', 'agents', params.agent_id));",
-    reason: 'workspace-LOCAL .silverhand convention (per-workspace L2), not app-root data',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/index-handler.ts',
-    token: '.silverhand',
-    line: "agent_dir: join(workspacePath, '.silverhand', 'agents', params.agent_id),",
-    reason: 'workspace-LOCAL .silverhand convention (per-workspace L2), not app-root data',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/workspace-registry/l2-seed-handler.ts',
-    token: '.silverhand',
-    line: "const l2Dir = join(workspacePath, '.silverhand', 'agents', params.agent_id);",
-    reason: 'workspace-LOCAL .silverhand convention (per-workspace L2), not app-root data',
     count: 1,
   },
   {
