@@ -4,7 +4,6 @@ import { z } from 'zod';
 import {
   ConversationKindSchema,
   ConversationVisibilitySchema,
-  FromKindSchema,
   WorkspaceKindSchema,
 } from '../db/schema.js';
 import {
@@ -13,6 +12,7 @@ import {
   hasMessagePayload,
 } from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
+import type { MessageAuthorDto } from './message-author.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
 
 export const MessageSendTargetSchema = z.union([
@@ -223,13 +223,71 @@ export const MessageRefSchema = z.object({
 });
 export type MessageRef = z.infer<typeof MessageRefSchema>;
 
-export const MessageSenderRefSchema = z.object({
-  kind: FromKindSchema,
-  agent_id: z.string().nullable(),
-  user_id: z.string().nullable(),
-  display_name: z.string().nullable(),
-});
+/** Agent-facing author carrier for `message history` / `message search` output
+ *  (#task:1793). A PURE thin projection of {@link MessageAuthorDto}: the SAME
+ *  resolver (`resolveMessageAuthor`) decides active/deleted/unresolved/system,
+ *  and this carrier is that result with the renderer-only fields dropped —
+ *  `avatar_url` (a per-row cache-busted API URL) and `runtime` (a byline glyph
+ *  hint) are never consumed by an agent reader, and this output lands directly
+ *  in agent context (up to 100 rows per read), so carrying them is a pure token
+ *  tax, not a free superset. A `null` sender means `from_kind='system'` (system
+ *  is not an actor — mirrors `MessageAuthorDto`), so the reader tells system
+ *  messages apart by a null sender rather than a magic `kind`.
+ *
+ *  Same discriminator discipline as the source DTO — `status` locks the valid
+ *  field combinations at the schema layer, never inferred from which fields are
+ *  null. The source's two `active` arms (split only to pin `runtime`) collapse
+ *  to one here once `runtime` is dropped:
+ *   - `active` / `deleted` — a stable `id` + `name` (handle) + `display_name`
+ *     (all non-null); `deleted`'s values are the send-time snapshot. Only these
+ *     carry a stable `id` and aggregate by it.
+ *   - `unresolved` — everything null and non-aggregating (`id=null`): the
+ *     identity is unrecoverable, NOT asserted deleted. `kind` survives so the
+ *     reader can still say "Unknown agent" vs "Unknown user". */
+const ResolvedSenderRefFields = {
+  kind: z.enum(['agent', 'user']),
+  id: z.string(),
+  name: z.string(),
+  display_name: z.string(),
+} as const;
+export const MessageSenderRefSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('active'), ...ResolvedSenderRefFields }),
+  z.object({ status: z.literal('deleted'), ...ResolvedSenderRefFields }),
+  z.object({
+    status: z.literal('unresolved'),
+    kind: z.enum(['agent', 'user']),
+    id: z.null(),
+    name: z.null(),
+    display_name: z.null(),
+  }),
+]);
 export type MessageSenderRef = z.infer<typeof MessageSenderRefSchema>;
+
+/** Pure projection from the resolved {@link MessageAuthorDto} to the agent-facing
+ *  {@link MessageSenderRef}. No re-adjudication: `status` / `kind` / `id` are
+ *  taken verbatim from the single resolver's result — only the renderer-only
+ *  fields are dropped. `null` in ⇒ `null` out (system). */
+export function senderRefFromAuthor(
+  author: MessageAuthorDto | null,
+): MessageSenderRef | null {
+  if (author === null) return null;
+  if (author.status === 'unresolved') {
+    return {
+      status: 'unresolved',
+      kind: author.kind,
+      id: null,
+      name: null,
+      display_name: null,
+    };
+  }
+  return {
+    status: author.status, // 'active' | 'deleted'
+    kind: author.kind,
+    id: author.id,
+    name: author.name,
+    display_name: author.display_name,
+  };
+}
 
 export const ReadHistoryTargetRefSchema = z.object({
   conversation_id: z.string(),
@@ -248,7 +306,7 @@ export type ReadHistoryTargetRef = z.infer<typeof ReadHistoryTargetRefSchema>;
 
 export const ReadHistoryMessageSchema = z.object({
   message_ref: MessageRefSchema,
-  sender: MessageSenderRefSchema,
+  sender: MessageSenderRefSchema.nullable(),
   snippet: z.string(),
   metadata: z.record(z.unknown()).nullable(),
   attachments: z.array(AttachmentSnapshotSchema).nullable(),
@@ -384,7 +442,7 @@ export type AgentSearchMessagesInput = z.infer<
 
 export const AgentSearchMessageHitSchema = z.object({
   message_ref: MessageRefSchema,
-  sender: MessageSenderRefSchema,
+  sender: MessageSenderRefSchema.nullable(),
   excerpt: z.string(),
   match_offset: z.number().int().nonnegative(),
 });

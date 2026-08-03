@@ -18,6 +18,7 @@
 // module-private.
 import type { BackendContext } from '../context.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
+import { loadMessageAuthors } from '../repos/message-author.js';
 import {
   LINKED_TASK_JOINS,
   LINKED_TASK_SELECT,
@@ -29,15 +30,16 @@ import {
   loadReactionAggregates,
   type ReactionViewer,
 } from './message-reactions.js';
+import { senderRefFromAuthor } from '@silverhand/shared';
 import type {
   AgentListChannelsDto,
   AgentListedChannel,
   AgentReadHistoryDto,
   AgentSearchMessageHit,
   AgentSearchMessagesDto,
+  MessageAuthorDto,
   MessageRef,
   MessageRow,
-  MessageSenderRef,
   ReactionAggregateDto,
   ReadHistoryMessage,
   ReadHistoryTarget,
@@ -50,9 +52,7 @@ const SEARCH_EXCERPT_CONTEXT_CHARS = 80;
 
 type ConversationDto = NonNullable<ReturnType<ConversationRepo['get']>>;
 
-type HistoryMessageRow = MessageRow & LinkedTaskProjectionRow & {
-  sender_agent_name: string | null;
-};
+type HistoryMessageRow = MessageRow & LinkedTaskProjectionRow;
 
 type AgentSearchMessageRow = HistoryMessageRow & {
   workspace_id: string;
@@ -200,20 +200,6 @@ function messageRef(row: MessageRow, target: ReadHistoryTargetRef): MessageRef {
   };
 }
 
-function senderRef(row: HistoryMessageRow): MessageSenderRef {
-  return {
-    kind: row.from_kind,
-    agent_id: row.from_agent_id,
-    user_id: row.from_user_id,
-    display_name:
-      row.from_kind === 'agent'
-        ? row.sender_agent_name ?? row.from_agent_id
-        : row.from_kind === 'user'
-          ? row.from_user_id
-          : null,
-  };
-}
-
 function snippetFor(content: string): string {
   const compact = content.replace(/\s+/g, ' ').trim();
   if (compact.length <= READ_HISTORY_SNIPPET_MAX_CHARS) return compact;
@@ -233,21 +219,22 @@ function historyRowToMessage(
   target: ReadHistoryTargetRef,
   includeContent: boolean,
   reactions: ReactionAggregateDto[] | null,
+  author: MessageAuthorDto | null,
 ): ReadHistoryMessage {
-  // This agent-facing read projects authorship via `senderRef` (its own
-  // MessageSenderRef shape); the MessageDto here is used only for
-  // content/metadata/attachments, so `author` is intentionally not resolved
-  // (avoids a per-row live lookup for a discarded field). NOTE: `senderRef`
-  // has the same latent deleted-actor degradation as the renderer surfaces,
-  // but it is a separate agent-facing projection outside #task:1791's locked
-  // scope — tracked by #task:1793 for a follow-up decision.
+  // Agent-facing authorship rides the SAME server-authoritative resolver as the
+  // renderer (`loadMessageAuthors` → `resolveMessageAuthor`); `senderRefFromAuthor`
+  // then takes a PURE, no-re-judgement thin projection of that result — no
+  // avatar_url/runtime (renderer-only presentation fields that would be a
+  // per-row token tax on this stdout surface, up to 100 rows/read). `sender` is
+  // null iff the author is null (from_kind='system'). The MessageDto built here
+  // is used only for content/metadata/attachments, so its `author` stays null.
   const dto = messageRowToDto(row, {
     author: null,
     linkedTask: linkedTaskFromRow(row),
   });
   return {
     message_ref: messageRef(row, target),
-    sender: senderRef(row),
+    sender: senderRefFromAuthor(author),
     snippet: snippetFor(dto.content),
     metadata: dto.metadata,
     attachments: dto.attachments,
@@ -280,11 +267,9 @@ function threadScopeParams(threadRootId: string | null): string[] {
 function historySelectSql(whereSql: string, orderSql: string, limitSql = 'LIMIT ?'): string {
   return `SELECT
             m.*,
-            ${LINKED_TASK_SELECT},
-            sender.display_name AS sender_agent_name
+            ${LINKED_TASK_SELECT}
           FROM messages m
           ${LINKED_TASK_JOINS}
-          LEFT JOIN agents sender ON sender.id = m.from_agent_id
          WHERE ${whereSql}
          ${orderSql}
          ${limitSql}`;
@@ -552,6 +537,10 @@ export function buildReadHistoryDto(
     rows.map(row => row.id),
     viewer,
   );
+  // One batch author-resolve for the whole window (two queries, no N+1) via the
+  // single server-authoritative resolver; each row's thin sender projection is
+  // taken from this map (system rows resolve to null → sender null).
+  const authors = loadMessageAuthors(ctx.db, rows);
   return {
     target,
     anchor,
@@ -564,6 +553,7 @@ export function buildReadHistoryDto(
         target,
         input.include_content,
         aggregates.get(row.id) ?? null,
+        authors.get(row) ?? null,
       ),
     ),
     has_more_before:
@@ -774,7 +764,6 @@ export function buildAgentSearchMessagesDto(
       `SELECT
           m.*,
           ${LINKED_TASK_SELECT},
-          sender.display_name AS sender_agent_name,
           conv.workspace_id AS workspace_id,
           conv.kind AS conversation_kind,
           conv.id AS channel_id
@@ -784,13 +773,13 @@ export function buildAgentSearchMessagesDto(
            ON ca.conversation_id = conv.id
           AND ca.agent_id = ?
          ${LINKED_TASK_JOINS}
-         LEFT JOIN agents sender ON sender.id = m.from_agent_id
         WHERE ${where.join(' AND ')}
         ORDER BY m.created_at DESC, m.seq DESC
         LIMIT ?`,
     )
     .all(...sqlParams);
 
+  const authors = loadMessageAuthors(ctx.db, rows);
   return {
     ok: true,
     dto: {
@@ -804,7 +793,7 @@ export function buildAgentSearchMessagesDto(
         const excerpt = searchExcerptFor(row.content, input.q);
         return {
           message_ref: searchMessageRef(row),
-          sender: senderRef(row),
+          sender: senderRefFromAuthor(authors.get(row) ?? null),
           excerpt: excerpt.excerpt,
           match_offset: excerpt.match_offset,
         };

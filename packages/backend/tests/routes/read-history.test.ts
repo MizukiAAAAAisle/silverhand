@@ -148,8 +148,9 @@ describe('POST /internal/.../read-history', () => {
     expect(body.messages[0].snippet).toBe('first visible message');
     expect(body.messages[0]).not.toHaveProperty('content');
     expect(body.messages[1].sender).toMatchObject({
+      status: 'active',
       kind: 'agent',
-      agent_id: aliceId,
+      id: aliceId,
     });
 
     const inbox = t.ctx.db
@@ -194,7 +195,71 @@ describe('POST /internal/.../read-history', () => {
       after.id,
     ]);
     expect(body.messages[0].content).toBe('anchor body');
-    expect(body.messages.every((m: any) => m.sender.kind !== 'system')).toBe(true);
+    expect(body.messages.every((m: any) => m.sender !== null)).toBe(true);
+  });
+
+  it('projects sender via the shared author resolver: system→null, deleted snapshot, thin shape', async () => {
+    t = buildTestApp();
+    const { channelId, agentIds } = await createWorkspaceChannel(t, ['alice', 'del']);
+    const aliceId = agentIds.alice!;
+    const delId = agentIds.del!;
+    const messages = new MessageRepo(t.ctx.db);
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'system',
+      content: 'system bookkeeping event',
+    });
+    const byAlice = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: aliceId,
+      content: 'authored by alice',
+    });
+    const byDel = messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'agent',
+      fromAgentId: delId,
+      content: 'authored by del before deletion',
+    });
+    // Hard-delete `del`: ON DELETE SET NULL nulls the FK while the send-time
+    // snapshot survives → the agent-facing sender must flip to `deleted` with the
+    // snapshot handle, not degrade to a directory miss.
+    t.ctx.db.prepare(`DELETE FROM agents WHERE id = ?`).run(delId);
+
+    const res = await http(t).post(readHistoryPath(channelId, aliceId), {
+      include_system: true,
+      limit: 10,
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const byId = new Map<string, any>(
+      body.messages.map((m: any) => [m.message_ref.id, m]),
+    );
+
+    // system is not an actor → sender is null (never a synthesized tombstone).
+    const sys = body.messages.find((m: any) => m.snippet === 'system bookkeeping event');
+    expect(sys.sender).toBeNull();
+
+    // active agent → thin projection carrying ONLY the resolved identity fields;
+    // the renderer-only avatar_url / runtime must NOT leak onto this surface.
+    const alice = byId.get(byAlice.id);
+    expect(alice.sender).toEqual({
+      status: 'active',
+      kind: 'agent',
+      id: aliceId,
+      name: 'alice',
+      display_name: 'alice',
+    });
+
+    // hard-deleted agent → deleted snapshot (same handle), still no avatar/runtime.
+    const del = byId.get(byDel.id);
+    expect(del.sender).toEqual({
+      status: 'deleted',
+      kind: 'agent',
+      id: delId,
+      name: 'del',
+      display_name: 'del',
+    });
   });
 
   // Characterization for the read-model SQL extraction (#task:980, Slice B):

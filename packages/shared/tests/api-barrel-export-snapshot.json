@@ -333,6 +333,7 @@
   "probePaths",
   "resolveAttachmentLabels",
   "resolveMessageAuthor",
+  "senderRefFromAuthor",
   "validateAvatarFile",
   "validateReactionEmoji"
 ]

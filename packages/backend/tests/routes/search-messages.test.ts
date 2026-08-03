@@ -273,8 +273,50 @@ describe('agent list_channels / search_messages routes', () => {
     const body = await res.json() as any;
     expect(body.hits.map((h: any) => h.message_ref.id)).toEqual([visible.id]);
     expect(body.hits[0].sender).toMatchObject({
+      status: 'active',
       kind: 'agent',
-      agent_id: aliceId,
+      id: aliceId,
+    });
+  });
+
+  it('search sender flips to the deleted snapshot after the author is hard-deleted', async () => {
+    t = buildTestApp();
+    const { workspaceId, channelId, agentIds } = await createWorkspaceChannel(t, [
+      'alice',
+      'del',
+    ]);
+    const aliceId = agentIds.alice!;
+    const delId = agentIds.del!;
+    // A channel both can see, so alice's search reaches del's message.
+    const shared = await createChannel(t, workspaceId, 'shared', [aliceId, delId]);
+    const messages = new MessageRepo(t.ctx.db);
+    const authored = messages.insertForConversation({
+      conversationId: shared,
+      fromKind: 'agent',
+      fromAgentId: delId,
+      content: 'zqvq needle authored by del',
+    });
+    // Hard-delete the author: ON DELETE SET NULL nulls from_agent_id while the
+    // send-time snapshot survives. Search is an independent SQL + mapping path
+    // from read-history, so it must be proven separately (task promises both).
+    t.ctx.db.prepare(`DELETE FROM agents WHERE id = ?`).run(delId);
+
+    const res = await http(t).post(searchMessagesPath(channelId, aliceId), {
+      q: 'zqvq',
+      scope: 'workspace',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const hit = body.hits.find((h: any) => h.message_ref.id === authored.id);
+    expect(hit).toBeTruthy();
+    // Deleted snapshot preserved via the shared resolver; thin projection carries
+    // ONLY the resolved identity — no renderer-only avatar_url / runtime.
+    expect(hit.sender).toEqual({
+      status: 'deleted',
+      kind: 'agent',
+      id: delId,
+      name: 'del',
+      display_name: 'del',
     });
   });
 
