@@ -379,7 +379,7 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
   {
     file: 'packages/host/src/daemon/workspace-registry/layout-relocation.ts',
     token: '.silverhand',
-    line: "const source = join(entry.path, '.silverhand', 'agents', agentId);",
+    line: "source: join(entry.path, '.silverhand', 'agents', agentId),",
     reason:
       'relocation-v1 facet: the per-agent workspace-LOCAL .silverhand/agents/<id> legacy subtree is the migration SOURCE coordinate copied to the resolver-computed bundle destination (#task:1805, §5)',
     count: 1,

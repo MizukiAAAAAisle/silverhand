@@ -26,6 +26,7 @@ import {
   runWorkspaceLayoutRelocation,
   __test_enumerateAgentCensus as enumerateAgentCensus,
   __test_fanOutOneBucket as fanOutOneBucket,
+  __test_planSessionFanOut as planSessionFanOut,
   __test_readRelocationMarker as readRelocationMarker,
   __test_relocateSingleTree as relocateSingleTree,
 } from '../../src/daemon/workspace-registry/layout-relocation.js';
@@ -178,6 +179,56 @@ describe('opaque-copy — stable-snapshot copy invariants (§5 step 1–4)', () 
     expect(manifestsEqual(buildManifest(a), buildManifest(a))).toBe(true);
     expect(manifestsEqual(buildManifest(a), buildManifest(b))).toBe(false);
   });
+
+  it('copies a read-only (0555) tree — root AND nested dirs — without EACCES, preserving modes (§5 B4)', () => {
+    const src = join(scratch, 'ro-src');
+    const dst = join(scratch, 'ro-dst');
+    // Build writable, populate, THEN clamp the nested dir and the root to 0555.
+    // The copy must create its dirs writable and clamp their mode only after
+    // writing children, or a 0555 dir would block writing its own contents.
+    mkdirSync(join(src, 'nested'), { recursive: true });
+    writeFileSync(join(src, 'top.txt'), 'top');
+    writeFileSync(join(src, 'nested', 'inner.txt'), 'inner');
+    chmodSync(join(src, 'nested'), 0o555);
+    chmodSync(src, 0o555);
+    try {
+      copyTreeStable(src, dst);
+      expect(readFileSync(join(dst, 'top.txt'), 'utf-8')).toBe('top');
+      expect(readFileSync(join(dst, 'nested', 'inner.txt'), 'utf-8')).toBe('inner');
+      expect(statSync(dst).mode & 0o777).toBe(0o555);
+      expect(statSync(join(dst, 'nested')).mode & 0o777).toBe(0o555);
+    } finally {
+      // Restore writability so afterEach's recursive rm can unlink children.
+      for (const p of [src, join(src, 'nested'), dst, join(dst, 'nested')]) {
+        try {
+          chmodSync(p, 0o755);
+        } catch {
+          // best-effort; the tree may be partial if the copy threw
+        }
+      }
+    }
+  });
+
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  (isRoot ? it.skip : it)(
+    'buildManifest fails closed as relocation_unreadable on an unreadable file (§5 B3)',
+    () => {
+      const src = join(scratch, 'noread');
+      makeTree(src, { 'secret.txt': 'shh' });
+      chmodSync(join(src, 'secret.txt'), 0o000);
+      try {
+        expect(() => buildManifest(src)).toThrow(
+          expect.objectContaining({ code: 'relocation_unreadable' }),
+        );
+      } finally {
+        try {
+          chmodSync(join(src, 'secret.txt'), 0o644);
+        } catch {
+          // best-effort restore for cleanup
+        }
+      }
+    },
+  );
 });
 
 describe('relocateSingleTree — the one publish classifier (§5 five rows)', () => {
@@ -239,8 +290,15 @@ describe('fanOutOneBucket — 1→N opaque fan-out under one batch snapshot (§5
       }),
     ).toThrow(expect.objectContaining({ code: 'relocation_unstable' }));
     // No destination gets a torn or half-batch publish.
-    expect(probe(dests[0])).toBe('absent');
-    expect(probe(dests[1])).toBe('absent');
+    for (const d of dests) expect(probe(d)).toBe('absent');
+    // MEDIUM (§5, Cindy): a failed fan-out leaves NO staging residue beside any
+    // destination — every staging path is registered for cleanup the instant it
+    // is chosen, before the copy runs.
+    for (const d of dests) {
+      expect(
+        readdirSync(dirname(d)).some(n => n.startsWith('.relocation-staging.')),
+      ).toBe(false);
+    }
   });
 
   it('source present + one destination already-equivalent → replays only the missing ones', () => {
@@ -271,6 +329,103 @@ describe('fanOutOneBucket — 1→N opaque fan-out under one batch snapshot (§5
     makeTree(dest, { 'sess.jsonl': 'orphan' });
     expect(() => fanOutOneBucket(join(scratch, 'missing'), [dest])).toThrow(
       expect.objectContaining({ code: 'relocation_conflict' }),
+    );
+  });
+});
+
+describe('planSessionFanOut — whole-inventory session plan (§5 B2)', () => {
+  const deps = () => ({
+    workspaceDataRootDir: join(scratch, 'wdr'),
+    agentHomeRootDir: join(scratch, 'agents-home'),
+    currentBinding: BINDING,
+    sessionStoreHome: join(scratch, 'home'),
+    env: {},
+    logger: silentLogger,
+  });
+
+  it('collapses same-source aliasing destinations to ONE publish target', () => {
+    // Two agent ids that differ only by `_` vs `-` resolve to bundle cwds whose
+    // vendor slugs collide; from the SAME source bucket they must dedupe to one.
+    const steps = planSessionFanOut(
+      [
+        {
+          entry: { workspace_id: 'ws_1', path: join(scratch, 'checkout'), provisioned_at: 1 },
+          census: ['a_x', 'a-x'],
+        },
+      ],
+      deps(),
+    );
+    expect(steps.length).toBeGreaterThan(0);
+    for (const step of steps) expect(step.dests).toHaveLength(1);
+  });
+
+  it('raises a typed conflict when two distinct sources claim one destination', () => {
+    // Same agent id in two workspaces whose ids differ only by `_`/`-`: the new
+    // bundle cwds slug-collide, but the source buckets differ ⇒ a merge of
+    // distinct histories, refused before any publish.
+    expect(() =>
+      planSessionFanOut(
+        [
+          {
+            entry: { workspace_id: 'w_1', path: join(scratch, 'checkoutA'), provisioned_at: 1 },
+            census: ['ax'],
+          },
+          {
+            entry: { workspace_id: 'w-1', path: join(scratch, 'checkoutB'), provisioned_at: 1 },
+            census: ['ax'],
+          },
+        ],
+        deps(),
+      ),
+    ).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+  });
+});
+
+describe('readInventory — boundary validation fails closed as typed error (§5 B3)', () => {
+  function writeFlatRegistry(
+    wdr: string,
+    workspaces: Record<string, { path: string; provisioned_at: number }>,
+  ): void {
+    mkdirSync(wdr, { recursive: true });
+    writeFileSync(
+      join(wdr, 'workspace-registry.json'),
+      JSON.stringify({ schema_version: 1, binding: BINDING, workspaces }),
+    );
+  }
+  function runReloc(wdr: string) {
+    return runWorkspaceLayoutRelocation({
+      workspaceDataRootDir: wdr,
+      agentHomeRootDir: join(scratch, 'agents-home'),
+      currentBinding: BINDING,
+      sessionStoreHome: join(scratch, 'home'),
+      env: {},
+      logger: silentLogger,
+    });
+  }
+
+  it('a non-canonical registry path → relocation_unverifiable', () => {
+    const wdr = join(scratch, 'wdr');
+    writeFlatRegistry(wdr, { ws_1: { path: '/a/b/../c', provisioned_at: 1 } });
+    expect(() => runReloc(wdr)).toThrow(
+      expect.objectContaining({ code: 'relocation_unverifiable' }),
+    );
+  });
+
+  it('a relative registry path → relocation_unverifiable', () => {
+    const wdr = join(scratch, 'wdr');
+    writeFlatRegistry(wdr, { ws_1: { path: 'relative/checkout', provisioned_at: 1 } });
+    expect(() => runReloc(wdr)).toThrow(
+      expect.objectContaining({ code: 'relocation_unverifiable' }),
+    );
+  });
+
+  it('an unsafe registry workspace id → relocation_unverifiable', () => {
+    const wdr = join(scratch, 'wdr');
+    writeFlatRegistry(wdr, {
+      'has space': { path: join(scratch, 'checkout'), provisioned_at: 1 },
+    });
+    expect(() => runReloc(wdr)).toThrow(
+      expect.objectContaining({ code: 'relocation_unverifiable' }),
     );
   });
 });
@@ -452,5 +607,90 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     expect(retry).toMatchObject({ status: 'migrated', moved: true });
     expect(readFileSync(join(fx.claudeDest, 'sess.jsonl'), 'utf-8')).toBe('{"turn":1}\n');
     expect(probe(markerPath)).toBe('file');
+  });
+
+  it('same-source aliasing agents collapse to ONE session publish; L2 stays per-agent (§5 B2 dedup)', () => {
+    const workspaceDataRootDir = join(scratch, 'wdr');
+    const agentHomeRootDir = join(scratch, 'agents-home');
+    const sessionHome = join(scratch, 'home');
+    const oldRoot = join(scratch, 'checkout');
+    const workspaceId = 'ws_1';
+    mkdirSync(workspaceDataRootDir, { recursive: true });
+    new WorkspaceRegistry({ stateDir: workspaceDataRootDir, binding: BINDING }).provision(
+      workspaceId,
+      oldRoot,
+    );
+    // Two agents whose new bundle cwds slug-collide (`a_x` vs `a-x`).
+    makeTree(oldRoot, {
+      '.silverhand/agents/a_x/MEMORY.md': 'mem-underscore',
+      '.silverhand/agents/a-x/MEMORY.md': 'mem-hyphen',
+    });
+    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRoot)), {
+      'sess.jsonl': '{"t":1}\n',
+    });
+
+    const res = runWorkspaceLayoutRelocation({
+      workspaceDataRootDir,
+      agentHomeRootDir,
+      currentBinding: BINDING,
+      sessionStoreHome: sessionHome,
+      env: {},
+      logger: silentLogger,
+    });
+    expect(res).toMatchObject({ status: 'migrated', workspaces: 1, agents: 2 });
+
+    const cwdUnderscore = resolveAgentWorkspaceBundleDir('a_x', workspaceId, { agentHomeRootDir });
+    const cwdHyphen = resolveAgentWorkspaceBundleDir('a-x', workspaceId, { agentHomeRootDir });
+    // L2 stays per-agent, distinct destinations.
+    expect(readFileSync(join(cwdUnderscore, 'MEMORY.md'), 'utf-8')).toBe('mem-underscore');
+    expect(readFileSync(join(cwdHyphen, 'MEMORY.md'), 'utf-8')).toBe('mem-hyphen');
+    // The two new cwds slug-collide → ONE shared session namespace, published once.
+    const destUnderscore = join(sessionHome, '.claude', 'projects', cwdSessionSlug(cwdUnderscore));
+    const destHyphen = join(sessionHome, '.claude', 'projects', cwdSessionSlug(cwdHyphen));
+    expect(destUnderscore).toBe(destHyphen); // guard: the alias really collides
+    expect(readFileSync(join(destUnderscore, 'sess.jsonl'), 'utf-8')).toBe('{"t":1}\n');
+  });
+
+  it('cross-source collision on one session destination fails closed BEFORE any publish (§5 B2 conflict)', () => {
+    const workspaceDataRootDir = join(scratch, 'wdr');
+    const agentHomeRootDir = join(scratch, 'agents-home');
+    const sessionHome = join(scratch, 'home');
+    const oldRootA = join(scratch, 'checkoutA');
+    const oldRootB = join(scratch, 'checkoutB');
+    mkdirSync(workspaceDataRootDir, { recursive: true });
+    const reg = new WorkspaceRegistry({ stateDir: workspaceDataRootDir, binding: BINDING });
+    // Two workspaces whose ids differ only by `_`/`-`, same agent id in both:
+    // their new bundle cwds slug-collide, but the source buckets differ.
+    reg.provision('w_1', oldRootA);
+    reg.provision('w-1', oldRootB);
+    makeTree(oldRootA, { '.silverhand/agents/ax/MEMORY.md': 'A' });
+    makeTree(oldRootB, { '.silverhand/agents/ax/MEMORY.md': 'B' });
+    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRootA)), {
+      'sess.jsonl': 'A\n',
+    });
+    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRootB)), {
+      'sess.jsonl': 'B\n',
+    });
+
+    expect(() =>
+      runWorkspaceLayoutRelocation({
+        workspaceDataRootDir,
+        agentHomeRootDir,
+        currentBinding: BINDING,
+        sessionStoreHome: sessionHome,
+        env: {},
+        logger: silentLogger,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+
+    // Detected in the plan phase: NO marker, and EVERY destination still absent
+    // — both the shared session namespace AND both L2 bundles.
+    expect(probe(join(workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
+    const cwdA = resolveAgentWorkspaceBundleDir('ax', 'w_1', { agentHomeRootDir });
+    const cwdB = resolveAgentWorkspaceBundleDir('ax', 'w-1', { agentHomeRootDir });
+    expect(cwdSessionSlug(cwdA)).toBe(cwdSessionSlug(cwdB)); // guard: they really collide
+    expect(probe(join(sessionHome, '.claude', 'projects', cwdSessionSlug(cwdA)))).toBe('absent');
+    expect(probe(cwdA)).toBe('absent');
+    expect(probe(cwdB)).toBe('absent');
   });
 });

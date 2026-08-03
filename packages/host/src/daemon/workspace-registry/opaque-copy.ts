@@ -71,18 +71,39 @@ export type Manifest = Map<string, ManifestEntry>;
 
 const HASH_CHUNK = 1 << 16;
 
-/** Streaming sha256 so a large vendor `.jsonl` is never buffered whole. */
+/** Streaming sha256 so a large vendor `.jsonl` is never buffered whole. Every
+ *  descriptor operation is wrapped so an EACCES/EIO on an unreadable source file
+ *  surfaces as a typed `relocation_unreadable`, never a raw errno escaping the
+ *  opaque-copy boundary. */
 function hashFile(path: string): string {
   const hash = createHash('sha256');
-  const fd = openSync(path, 'r');
+  let fd: number;
+  try {
+    fd = openSync(path, 'r');
+  } catch (err) {
+    throw new RelocationError(
+      'relocation_unreadable',
+      `cannot open ${path} for hashing (${(err as NodeJS.ErrnoException).code ?? 'fs error'})`,
+    );
+  }
   try {
     const buf = Buffer.allocUnsafe(HASH_CHUNK);
     let read: number;
     while ((read = readSync(fd, buf, 0, HASH_CHUNK, null)) > 0) {
       hash.update(buf.subarray(0, read));
     }
+  } catch (err) {
+    throw new RelocationError(
+      'relocation_unreadable',
+      `cannot read ${path} while hashing (${(err as NodeJS.ErrnoException).code ?? 'fs error'})`,
+    );
   } finally {
-    closeSync(fd);
+    try {
+      closeSync(fd);
+    } catch {
+      // The digest is already computed or an error is already in flight; a
+      // failed close of a spent descriptor must not mask either.
+    }
   }
   return hash.digest('hex');
 }
@@ -225,8 +246,11 @@ export function stageTree(source: string, staging: string): void {
       );
     }
     mkdirSync(staging);
-    chmodSync(staging, permBits(rootStat.mode));
     mirrorTree(source, staging);
+    // Clamp the staging root to the source mode LAST. A read-only source dir
+    // (e.g. 0555) must not become the copy's mode before its own children are
+    // written, or writing them would EACCES.
+    chmodSync(staging, permBits(rootStat.mode));
   } catch (err) {
     if (err instanceof RelocationError) throw err;
     throw new RelocationError(
@@ -243,8 +267,10 @@ function mirrorTree(srcDir: string, dstDir: string): void {
     const stat = lstatSync(src);
     if (stat.isDirectory()) {
       mkdirSync(dst);
-      chmodSync(dst, permBits(stat.mode));
       mirrorTree(src, dst);
+      // Bottom-up: clamp each dir to its source mode only after its children
+      // are written, so a read-only source dir never blocks its own copy.
+      chmodSync(dst, permBits(stat.mode));
     } else if (stat.isFile()) {
       copyFileSync(src, dst);
       chmodSync(dst, permBits(stat.mode));

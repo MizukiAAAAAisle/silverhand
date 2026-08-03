@@ -1,5 +1,5 @@
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveAgentWorkspaceBundleDir } from '../agent-materialize/handler.js';
 import {
@@ -15,6 +15,7 @@ import {
 } from './opaque-copy.js';
 import { RelocationError } from './relocation-error.js';
 import {
+  assertSafeWorkspaceIdSegment,
   WorkspaceRegistry,
   WorkspaceRegistryError,
   type RegistryBinding,
@@ -178,14 +179,20 @@ function readRelocationMarker(markerPath: string): MarkerRouting {
 /** Read the retained registry as the migration inventory (§5) under the current
  *  binding. Absent registry → empty inventory (nothing to relocate). Any
  *  read/parse/foreign failure fails closed as unreadable — the migration never
- *  runs against a registry it cannot fully trust. */
+ *  runs against a registry it cannot fully trust. Every entry is validated at
+ *  this boundary: its `workspace_id` must be an fs-safe path segment (it becomes
+ *  a destination segment) and its `path` must be absolute and already canonical,
+ *  so a bare `WorkspaceRegistryError('invalid_path')` can never escape untyped
+ *  from the downstream bundle-dir resolution, and no `..`/relative root is ever
+ *  fed to a copy. */
 function readInventory(deps: RelocationDeps): WorkspaceRegistryEntry[] {
   const registry = new WorkspaceRegistry({
     stateDir: deps.workspaceDataRootDir,
     binding: deps.currentBinding,
   });
+  let entries: WorkspaceRegistryEntry[];
   try {
-    return registry.list();
+    entries = registry.list();
   } catch (err) {
     if (err instanceof WorkspaceRegistryError) {
       throw new RelocationError(
@@ -195,6 +202,23 @@ function readInventory(deps: RelocationDeps): WorkspaceRegistryEntry[] {
     }
     throw err;
   }
+  for (const entry of entries) {
+    try {
+      assertSafeWorkspaceIdSegment(entry.workspace_id);
+    } catch (err) {
+      throw new RelocationError(
+        'relocation_unverifiable',
+        `registry inventory workspace id ${JSON.stringify(entry.workspace_id)} is not a safe path segment (${err instanceof WorkspaceRegistryError ? err.code : 'invalid'})`,
+      );
+    }
+    if (!isAbsolute(entry.path) || resolve(entry.path) !== entry.path) {
+      throw new RelocationError(
+        'relocation_unverifiable',
+        `registry inventory path ${JSON.stringify(entry.path)} for workspace ${entry.workspace_id} is not an absolute, canonical path`,
+      );
+    }
+  }
+  return entries;
 }
 
 /** The `.silverhand/agents/*` direct-child agent-id set under a workspace's old
@@ -323,12 +347,17 @@ function fanOutOneBucket(
   }
 
   const before = buildManifest(source);
-  const staged: Array<{ staging: string; dest: string }> = [];
+  const toPublish: Array<{ staging: string; dest: string }> = [];
+  // Every staging path is registered for cleanup the instant it is chosen —
+  // BEFORE `stageTree` runs — so a mid-stage failure (a torn copy, a special
+  // file discovered deep in the tree) still leaves no staging residue.
+  const stagings: string[] = [];
   try {
     for (const dest of dests) {
       const d = probe(dest);
       if (d === 'absent') {
         const staging = freshStagingPath(dest);
+        stagings.push(staging);
         stageTree(source, staging);
         if (!manifestsEqual(buildManifest(staging), before)) {
           throw new RelocationError(
@@ -336,7 +365,7 @@ function fanOutOneBucket(
             `staged session copy for ${dest} diverged from the batch source snapshot`,
           );
         }
-        staged.push({ staging, dest });
+        toPublish.push({ staging, dest });
       } else if (d === 'dir') {
         if (!manifestsEqual(buildManifest(dest), before)) {
           throw new RelocationError(
@@ -359,52 +388,106 @@ function fanOutOneBucket(
         `session source bucket ${source} changed during the fan-out; refusing to publish a torn batch`,
       );
     }
-    for (const { staging, dest } of staged) {
+    for (const { staging, dest } of toPublish) {
       publishStaged(staging, dest);
     }
   } catch (err) {
-    for (const { staging } of staged) removeStaging(staging);
+    for (const staging of stagings) removeStaging(staging);
     throw err;
   }
-  return staged.length;
+  return toPublish.length;
 }
 
-/** Fan each cwd-scoped runtime's shared bucket out to the census's new bundle
- *  cwds. Codex/opencode/cursor/gemini are no-ops (not in the frozen set). */
-function fanOutSessions(
-  oldRoot: string,
-  workspaceId: string,
-  census: readonly string[],
+type CwdScopedSessionRuntime = (typeof CWD_SCOPED_SESSION_RUNTIMES)[number];
+
+/** A census entry: a workspace's retained inventory row paired with its
+ *  `.silverhand/agents/*` census, enumerated ONCE and reused by both the L2
+ *  moves and the session plan. */
+interface CensusedWorkspace {
+  entry: WorkspaceRegistryEntry;
+  census: readonly string[];
+}
+
+/** One planned session fan-out: a single shared source bucket and the deduped
+ *  set of physical destination namespaces it publishes to. */
+interface SessionFanOutStep {
+  kind: CwdScopedSessionRuntime;
+  source: string;
+  dests: string[];
+}
+
+/**
+ * Plan every cwd-scoped runtime's session fan-out across the WHOLE inventory
+ * BEFORE any publish (§5, Cindy 2026-08-04). The vendor cwd-slug is
+ * non-injective (`/._` all fold to `-`), so two distinct new bundle cwds can
+ * resolve to the same physical session namespace. This planner is the one place
+ * that reconciles the collapse:
+ *
+ * - two destinations from the SAME source bucket (aliasing agents) collapse to
+ *   one publish — the agents stay separated at runtime by their `cli_session_id`
+ *   inside the shared bucket, exactly as the prior cwd-slug migration
+ *   (#task:1663) established;
+ * - one destination claimed by TWO DIFFERENT source buckets is an ambiguous
+ *   merge of distinct histories — a typed `relocation_conflict` raised HERE,
+ *   before L2 or session has published anything, so a colliding inventory aborts
+ *   the whole preflight with every destination still absent.
+ *
+ * A workspace with a live source bucket but zero census yields a `source → ∅`
+ * step so the executor's `fanOutOneBucket` fails closed on the orphan rather
+ * than silently dropping it.
+ */
+function planSessionFanOut(
+  workspaces: readonly CensusedWorkspace[],
   deps: RelocationDeps,
-): void {
+): SessionFanOutStep[] {
+  const steps: SessionFanOutStep[] = [];
   for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
-    if (!isSlugVerifiableCwd(oldRoot)) {
-      throw new RelocationError(
-        'relocation_unverifiable',
-        `workspace cwd ${oldRoot} is outside the verified session-slug charset`,
-      );
-    }
-    if (!isSessionStoreRootVerifiable(kind, deps.env)) {
-      throw new RelocationError(
-        'relocation_unverifiable',
-        `${kind} session store root is unverifiable from the environment`,
-      );
-    }
-    const source = sessionNamespaceFor(kind, oldRoot, deps.sessionStoreHome, deps.env)!;
-    const dests = census.map(agentId => {
-      const newCwd = resolveAgentWorkspaceBundleDir(agentId, workspaceId, {
-        agentHomeRootDir: deps.agentHomeRootDir,
-      });
-      if (!isSlugVerifiableCwd(newCwd)) {
+    const destOwner = new Map<string, string>(); // physical destination → owning source namespace
+    const bySource = new Map<string, Set<string>>(); // source namespace → deduped destinations
+    for (const { entry, census } of workspaces) {
+      const oldRoot = entry.path;
+      if (!isSlugVerifiableCwd(oldRoot)) {
         throw new RelocationError(
           'relocation_unverifiable',
-          `new bundle cwd ${newCwd} is outside the verified session-slug charset`,
+          `workspace cwd ${oldRoot} is outside the verified session-slug charset`,
         );
       }
-      return sessionNamespaceFor(kind, newCwd, deps.sessionStoreHome, deps.env)!;
-    });
-    fanOutOneBucket(source, dests);
+      if (!isSessionStoreRootVerifiable(kind, deps.env)) {
+        throw new RelocationError(
+          'relocation_unverifiable',
+          `${kind} session store root is unverifiable from the environment`,
+        );
+      }
+      const source = sessionNamespaceFor(kind, oldRoot, deps.sessionStoreHome, deps.env)!;
+      if (!bySource.has(source)) bySource.set(source, new Set());
+      const bucket = bySource.get(source)!;
+      for (const agentId of census) {
+        const newCwd = resolveAgentWorkspaceBundleDir(agentId, entry.workspace_id, {
+          agentHomeRootDir: deps.agentHomeRootDir,
+        });
+        if (!isSlugVerifiableCwd(newCwd)) {
+          throw new RelocationError(
+            'relocation_unverifiable',
+            `new bundle cwd ${newCwd} is outside the verified session-slug charset`,
+          );
+        }
+        const dest = sessionNamespaceFor(kind, newCwd, deps.sessionStoreHome, deps.env)!;
+        const owner = destOwner.get(dest);
+        if (owner !== undefined && owner !== source) {
+          throw new RelocationError(
+            'relocation_conflict',
+            `session destination ${dest} is claimed by two distinct source buckets (${owner} and ${source}); refusing to merge distinct histories`,
+          );
+        }
+        destOwner.set(dest, source);
+        bucket.add(dest);
+      }
+    }
+    for (const [source, dests] of bySource) {
+      steps.push({ kind, source, dests: [...dests] });
+    }
   }
+  return steps;
 }
 
 /** Write the completion marker LAST, atomically (§5): temp-file + same-dir
@@ -458,29 +541,51 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
   }
 
   const inventory = readInventory(deps);
-  let agents = 0;
-  for (const entry of inventory) {
-    const census = enumerateAgentCensus(entry.path);
+
+  // Phase 1 — enumerate every workspace's census ONCE (shared by L2 + session).
+  const workspaces: CensusedWorkspace[] = inventory.map(entry => ({
+    entry,
+    census: enumerateAgentCensus(entry.path),
+  }));
+
+  // Phase 2 — PLAN, no writes. The L2 destination is injective in
+  // `(agentId, workspaceId)` so it cannot cross-collide, but the session
+  // namespace CAN (the cwd-slug is non-injective), so the whole-inventory
+  // session plan is computed and its cross-source collisions raised HERE,
+  // before any publish. A conflict aborts with every destination still absent.
+  const l2Moves: Array<{ source: string; dest: string }> = [];
+  for (const { entry, census } of workspaces) {
     for (const agentId of census) {
-      const source = join(entry.path, '.silverhand', 'agents', agentId);
-      const dest = resolveAgentWorkspaceBundleDir(agentId, entry.workspace_id, {
-        agentHomeRootDir: deps.agentHomeRootDir,
+      l2Moves.push({
+        source: join(entry.path, '.silverhand', 'agents', agentId),
+        dest: resolveAgentWorkspaceBundleDir(agentId, entry.workspace_id, {
+          agentHomeRootDir: deps.agentHomeRootDir,
+        }),
       });
-      relocateSingleTree(source, dest);
-      agents += 1;
     }
-    // Session fan-out runs even for an empty census so a live bucket with no
-    // agents fails closed rather than being silently orphaned.
-    fanOutSessions(entry.path, entry.workspace_id, census, deps);
+  }
+  const sessionSteps = planSessionFanOut(workspaces, deps);
+
+  // Phase 3 — EXECUTE the validated plan. L2 first, then the session fan-out.
+  for (const { source, dest } of l2Moves) {
+    relocateSingleTree(source, dest);
+  }
+  for (const step of sessionSteps) {
+    fanOutOneBucket(step.source, step.dests);
   }
 
-  const migrated = { workspaces: inventory.length, agents };
+  const migrated = { workspaces: inventory.length, agents: l2Moves.length };
   writeRelocationMarkerAtomic(markerPath, migrated, deps.now ?? Date.now);
   deps.logger.info(
     { action: 'workspace_layout_relocation_completed', ...migrated },
     'workspace-layout relocation completed; per-agent L2 bundles and session buckets published',
   );
-  return { status: 'migrated', workspaces: inventory.length, agents, moved: true };
+  return {
+    status: 'migrated',
+    workspaces: inventory.length,
+    agents: l2Moves.length,
+    moved: true,
+  };
 }
 
 // Re-exported for the falsifier tests that exercise the batch fan-out and the
@@ -488,6 +593,7 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
 export {
   enumerateAgentCensus as __test_enumerateAgentCensus,
   fanOutOneBucket as __test_fanOutOneBucket,
+  planSessionFanOut as __test_planSessionFanOut,
   readRelocationMarker as __test_readRelocationMarker,
   relocateSingleTree as __test_relocateSingleTree,
 };
