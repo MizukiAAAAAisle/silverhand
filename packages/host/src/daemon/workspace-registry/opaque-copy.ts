@@ -13,7 +13,7 @@ import {
   rmSync,
   symlinkSync,
 } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { RelocationError } from './relocation-error.js';
 
 /**
@@ -58,62 +58,6 @@ export function probe(path: string): FsNodeKind {
   if (stat.isFile()) return 'file';
   if (stat.isSymbolicLink()) return 'symlink';
   return 'special';
-}
-
-function assertRealDirIfPresent(path: string, target: string): void {
-  const kind = probe(path);
-  if (kind === 'absent' || kind === 'dir') return; // absent → mkdir creates a real dir
-  if (kind === 'symlink') {
-    throw new RelocationError(
-      'relocation_conflict',
-      `ancestor ${path} of destination ${target} is a symlink; refusing to follow it out of the trusted root`,
-    );
-  }
-  if (kind === 'unreadable') {
-    throw new RelocationError(
-      'relocation_unreadable',
-      `ancestor ${path} of destination ${target} is unreadable`,
-    );
-  }
-  throw new RelocationError(
-    kind === 'special' ? 'relocation_special_file' : 'relocation_conflict',
-    `ancestor ${path} of destination ${target} is a ${kind}, not a directory`,
-  );
-}
-
-/**
- * Assert that every EXISTING ancestor of `target` from the trusted `root` down
- * to and including `dirname(target)` is a REAL directory — never a symlink,
- * special file, or unreadable node. Absent ancestors are fine (a later
- * `mkdirSync(recursive)` materializes real dirs). This closes the managed
- * path-authority escape where an intermediate symlink would make the recursive
- * mkdir / publish land OUTSIDE the trusted root: `app-data-layout-v2.md`
- * ("traversing [a symlink] can escape the app root"). The target LEAF itself is
- * NOT inspected here — its occupancy is the caller's own publish classifier.
- * `target` must lie under `root`.
- */
-export function assertTrustedDirAncestors(root: string, target: string): void {
-  const rootResolved = resolve(root);
-  const targetResolved = resolve(target);
-  if (
-    targetResolved !== rootResolved &&
-    !targetResolved.startsWith(rootResolved + sep)
-  ) {
-    throw new RelocationError(
-      'relocation_unverifiable',
-      `destination ${target} is not under the trusted root ${root}`,
-    );
-  }
-  const rel = relative(rootResolved, targetResolved);
-  const segments = rel === '' ? [] : rel.split(sep);
-  // The trusted root itself, then each intermediate ancestor up to
-  // dirname(target); the last segment (the target leaf) is left to the caller.
-  let current = rootResolved;
-  assertRealDirIfPresent(current, target);
-  for (let i = 0; i < segments.length - 1; i++) {
-    current = join(current, segments[i]!);
-    assertRealDirIfPresent(current, target);
-  }
 }
 
 export type ManifestEntry =

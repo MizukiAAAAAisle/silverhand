@@ -3,7 +3,6 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveAgentWorkspaceBundleDir } from '../agent-materialize/handler.js';
 import {
-  assertTrustedDirAncestors,
   buildManifest,
   freshStagingPath,
   manifestsEqual,
@@ -17,7 +16,6 @@ import {
 import { RelocationError } from './relocation-error.js';
 import {
   assertSafeWorkspaceIdSegment,
-  findCaseFoldCollision,
   WorkspaceRegistry,
   WorkspaceRegistryError,
   type RegistryBinding,
@@ -550,28 +548,18 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
     census: enumerateAgentCensus(entry.path),
   }));
 
-  // Phase 2 — PLAN, no writes. Two collision classes are raised HERE, before
-  // any publish, so a poisoned inventory aborts the whole preflight with every
-  // destination still absent:
-  //   (a) the vendor cwd-slug is non-injective, so two distinct new bundle cwds
-  //       can fold to one session namespace — reconciled in `planSessionFanOut`;
-  //   (b) the L2 destination is injective in `(agentId, workspaceId)` at the
-  //       STRING layer, but a default case-insensitive destination volume folds
-  //       `AgentA`/`agenta` onto the same physical agent-home — the case-fold
-  //       guard #task:1608 established for workspace ids, reused for agent ids
-  //       (same id across workspaces is fine; two ids differing only by case are
-  //       an alias of distinct actors' L1 homes).
-  const distinctAgentIds = [
-    ...new Set(workspaces.flatMap(w => [...w.census])),
-  ];
-  const idCollision = findCaseFoldCollision(distinctAgentIds);
-  if (idCollision !== null) {
-    throw new RelocationError(
-      'relocation_conflict',
-      `agent ids ${idCollision.a} and ${idCollision.b} collide case-insensitively; their agent-home bundles would alias on a case-insensitive destination volume`,
-    );
-  }
-
+  // Phase 2 — PLAN, no writes. The vendor cwd-slug is non-injective, so two
+  // distinct new bundle cwds can fold to one session namespace; that collision
+  // class is reconciled in `planSessionFanOut`, which raises a typed conflict
+  // before any publish so a poisoned inventory aborts the whole preflight with
+  // every destination still absent.
+  //
+  // Two adjacent collision classes are KNOWINGLY not gated here (@shiki
+  // 2026-08-04, accepted low-probability residual risk; see task body): a
+  // destination-ancestor symlink escaping the managed root, and agent ids that
+  // differ only by case aliasing on a case-insensitive destination volume. If
+  // either is ever hit in the field it is handled manually per the concrete
+  // disk state, not by a preflight gate.
   const l2Moves: Array<{ source: string; dest: string }> = [];
   for (const { entry, census } of workspaces) {
     for (const agentId of census) {
@@ -582,14 +570,6 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
         }),
       });
     }
-  }
-  // Every existing ancestor from the trusted agent-home root down to each L2
-  // destination's parent must be a REAL directory: an intermediate symlink
-  // would make `copyTreeStable`'s recursive mkdir / publish escape the managed
-  // root (app-data-layout-v2 symlink-traversal boundary). Validated for the
-  // whole batch before any publish.
-  for (const { dest } of l2Moves) {
-    assertTrustedDirAncestors(deps.agentHomeRootDir, dest);
   }
   const sessionSteps = planSessionFanOut(workspaces, deps);
 
