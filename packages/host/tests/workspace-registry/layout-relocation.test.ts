@@ -229,6 +229,46 @@ describe('opaque-copy — stable-snapshot copy invariants (§5 step 1–4)', () 
       }
     },
   );
+
+  it('discards staging even when its dirs were clamped read-only (0555) — no residue after an unstable failure (§5 MEDIUM)', () => {
+    const src = join(scratch, 'ro-unstable-src');
+    const dst = join(scratch, 'ro-unstable-out', 'dst');
+    // A 0555 source ⇒ the staged copy's dirs are clamped 0555 too. A prior
+    // `removeStaging` (plain recursive rm) could not empty those read-only dirs
+    // and leaked the staging tree; cleanup must reopen them first.
+    mkdirSync(join(src, 'nested'), { recursive: true });
+    writeFileSync(join(src, 'top.txt'), 'v1______');
+    writeFileSync(join(src, 'nested', 'inner.txt'), 'inner');
+    chmodSync(join(src, 'nested'), 0o555);
+    chmodSync(src, 0o555);
+    try {
+      expect(() =>
+        copyTreeStable(src, dst, {
+          onStaged: () => {
+            // Rewrite the source under the copy (same length) so source-after ≠
+            // source-before ⇒ relocation_unstable AFTER the staging dirs are
+            // already clamped 0555. Reopen the 0555 root to mutate, then re-clamp.
+            chmodSync(src, 0o755);
+            writeFileSync(join(src, 'top.txt'), 'v2______');
+            chmodSync(src, 0o555);
+          },
+        }),
+      ).toThrow(expect.objectContaining({ code: 'relocation_unstable' }));
+      // The read-only staged tree must be fully removed — no residue.
+      expect(
+        readdirSync(dirname(dst)).some(n => n.startsWith('.relocation-staging.')),
+      ).toBe(false);
+      expect(probe(dst)).toBe('absent');
+    } finally {
+      for (const p of [join(src, 'nested'), src]) {
+        try {
+          chmodSync(p, 0o755);
+        } catch {
+          // best-effort restore for cleanup
+        }
+      }
+    }
+  });
 });
 
 describe('relocateSingleTree — the one publish classifier (§5 five rows)', () => {
@@ -692,5 +732,83 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     expect(probe(join(sessionHome, '.claude', 'projects', cwdSessionSlug(cwdA)))).toBe('absent');
     expect(probe(cwdA)).toBe('absent');
     expect(probe(cwdB)).toBe('absent');
+  });
+
+  it('an agent-dir ancestor symlink cannot write the L2 bundle OUTSIDE the managed root (§5 B1)', () => {
+    const fx = setUp();
+    // A hostile ancestor: the agent-home subdir is a symlink pointing OUT of the
+    // managed root. copyTreeStable's recursive mkdir would follow it and land
+    // outside; the plan-phase ancestor guard must fail closed first.
+    const outside = join(scratch, 'outside');
+    makeTree(outside, { 'sentinel.txt': 'do-not-touch' });
+    mkdirSync(fx.agentHomeRootDir, { recursive: true });
+    symlinkSync(outside, join(fx.agentHomeRootDir, fx.agentId));
+
+    expect(() => run(fx)).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+
+    // Nothing escaped: outside is byte-for-byte unchanged (no `workspaces/`),
+    // the marker is absent, and the session destination is absent.
+    expect(readdirSync(outside).sort()).toEqual(['sentinel.txt']);
+    expect(readFileSync(join(outside, 'sentinel.txt'), 'utf-8')).toBe('do-not-touch');
+    expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
+    expect(probe(fx.claudeDest)).toBe('absent');
+  });
+
+  it('a `workspaces` child ancestor symlink cannot escape the managed root either (§5 B1)', () => {
+    const fx = setUp();
+    const outside = join(scratch, 'outside');
+    makeTree(outside, { 'sentinel.txt': 'do-not-touch' });
+    // The agent dir is a REAL directory, but its `workspaces` child (dirname of
+    // the L2 destination) is the escaping symlink.
+    const agentDir = join(fx.agentHomeRootDir, fx.agentId);
+    mkdirSync(agentDir, { recursive: true });
+    symlinkSync(outside, join(agentDir, 'workspaces'));
+
+    expect(() => run(fx)).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+
+    expect(readdirSync(outside).sort()).toEqual(['sentinel.txt']);
+    expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
+    expect(probe(fx.claudeDest)).toBe('absent');
+  });
+
+  it('agent ids differing only by case fail closed BEFORE any publish (§5 B2 case-fold)', () => {
+    // Two DISTINCT workspaces (distinct real cwds, so both subtrees exist on a
+    // case-insensitive volume) whose agent ids fold together: `AgentA`/`agenta`.
+    // Their agent-home bundles would alias on the default case-insensitive
+    // destination volume — the case-fold guard #task:1608 built for workspace
+    // ids, reused for agent ids. A synthetic census suffices; no case-sensitive
+    // mount required.
+    const workspaceDataRootDir = join(scratch, 'wdr');
+    const agentHomeRootDir = join(scratch, 'agents-home');
+    const sessionHome = join(scratch, 'home');
+    const oldRootA = join(scratch, 'checkoutA');
+    const oldRootB = join(scratch, 'checkoutB');
+    mkdirSync(workspaceDataRootDir, { recursive: true });
+    const reg = new WorkspaceRegistry({ stateDir: workspaceDataRootDir, binding: BINDING });
+    reg.provision('wsA', oldRootA);
+    reg.provision('wsB', oldRootB);
+    makeTree(oldRootA, { '.silverhand/agents/AgentA/MEMORY.md': 'A' });
+    makeTree(oldRootB, { '.silverhand/agents/agenta/MEMORY.md': 'B' });
+
+    expect(() =>
+      runWorkspaceLayoutRelocation({
+        workspaceDataRootDir,
+        agentHomeRootDir,
+        currentBinding: BINDING,
+        sessionStoreHome: sessionHome,
+        env: {},
+        logger: silentLogger,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+
+    // Plan-phase failure: NO marker and NEITHER L2 bundle materialized (their
+    // physical parent would be shared on a case-insensitive volume).
+    expect(probe(join(workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
+    expect(probe(resolveAgentWorkspaceBundleDir('AgentA', 'wsA', { agentHomeRootDir }))).toBe(
+      'absent',
+    );
+    expect(probe(resolveAgentWorkspaceBundleDir('agenta', 'wsB', { agentHomeRootDir }))).toBe(
+      'absent',
+    );
   });
 });

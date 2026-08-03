@@ -3,6 +3,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveAgentWorkspaceBundleDir } from '../agent-materialize/handler.js';
 import {
+  assertTrustedDirAncestors,
   buildManifest,
   freshStagingPath,
   manifestsEqual,
@@ -16,6 +17,7 @@ import {
 import { RelocationError } from './relocation-error.js';
 import {
   assertSafeWorkspaceIdSegment,
+  findCaseFoldCollision,
   WorkspaceRegistry,
   WorkspaceRegistryError,
   type RegistryBinding,
@@ -548,11 +550,28 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
     census: enumerateAgentCensus(entry.path),
   }));
 
-  // Phase 2 — PLAN, no writes. The L2 destination is injective in
-  // `(agentId, workspaceId)` so it cannot cross-collide, but the session
-  // namespace CAN (the cwd-slug is non-injective), so the whole-inventory
-  // session plan is computed and its cross-source collisions raised HERE,
-  // before any publish. A conflict aborts with every destination still absent.
+  // Phase 2 — PLAN, no writes. Two collision classes are raised HERE, before
+  // any publish, so a poisoned inventory aborts the whole preflight with every
+  // destination still absent:
+  //   (a) the vendor cwd-slug is non-injective, so two distinct new bundle cwds
+  //       can fold to one session namespace — reconciled in `planSessionFanOut`;
+  //   (b) the L2 destination is injective in `(agentId, workspaceId)` at the
+  //       STRING layer, but a default case-insensitive destination volume folds
+  //       `AgentA`/`agenta` onto the same physical agent-home — the case-fold
+  //       guard #task:1608 established for workspace ids, reused for agent ids
+  //       (same id across workspaces is fine; two ids differing only by case are
+  //       an alias of distinct actors' L1 homes).
+  const distinctAgentIds = [
+    ...new Set(workspaces.flatMap(w => [...w.census])),
+  ];
+  const idCollision = findCaseFoldCollision(distinctAgentIds);
+  if (idCollision !== null) {
+    throw new RelocationError(
+      'relocation_conflict',
+      `agent ids ${idCollision.a} and ${idCollision.b} collide case-insensitively; their agent-home bundles would alias on a case-insensitive destination volume`,
+    );
+  }
+
   const l2Moves: Array<{ source: string; dest: string }> = [];
   for (const { entry, census } of workspaces) {
     for (const agentId of census) {
@@ -563,6 +582,14 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
         }),
       });
     }
+  }
+  // Every existing ancestor from the trusted agent-home root down to each L2
+  // destination's parent must be a REAL directory: an intermediate symlink
+  // would make `copyTreeStable`'s recursive mkdir / publish escape the managed
+  // root (app-data-layout-v2 symlink-traversal boundary). Validated for the
+  // whole batch before any publish.
+  for (const { dest } of l2Moves) {
+    assertTrustedDirAncestors(deps.agentHomeRootDir, dest);
   }
   const sessionSteps = planSessionFanOut(workspaces, deps);
 

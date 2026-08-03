@@ -13,7 +13,7 @@ import {
   rmSync,
   symlinkSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { RelocationError } from './relocation-error.js';
 
 /**
@@ -58,6 +58,62 @@ export function probe(path: string): FsNodeKind {
   if (stat.isFile()) return 'file';
   if (stat.isSymbolicLink()) return 'symlink';
   return 'special';
+}
+
+function assertRealDirIfPresent(path: string, target: string): void {
+  const kind = probe(path);
+  if (kind === 'absent' || kind === 'dir') return; // absent → mkdir creates a real dir
+  if (kind === 'symlink') {
+    throw new RelocationError(
+      'relocation_conflict',
+      `ancestor ${path} of destination ${target} is a symlink; refusing to follow it out of the trusted root`,
+    );
+  }
+  if (kind === 'unreadable') {
+    throw new RelocationError(
+      'relocation_unreadable',
+      `ancestor ${path} of destination ${target} is unreadable`,
+    );
+  }
+  throw new RelocationError(
+    kind === 'special' ? 'relocation_special_file' : 'relocation_conflict',
+    `ancestor ${path} of destination ${target} is a ${kind}, not a directory`,
+  );
+}
+
+/**
+ * Assert that every EXISTING ancestor of `target` from the trusted `root` down
+ * to and including `dirname(target)` is a REAL directory — never a symlink,
+ * special file, or unreadable node. Absent ancestors are fine (a later
+ * `mkdirSync(recursive)` materializes real dirs). This closes the managed
+ * path-authority escape where an intermediate symlink would make the recursive
+ * mkdir / publish land OUTSIDE the trusted root: `app-data-layout-v2.md`
+ * ("traversing [a symlink] can escape the app root"). The target LEAF itself is
+ * NOT inspected here — its occupancy is the caller's own publish classifier.
+ * `target` must lie under `root`.
+ */
+export function assertTrustedDirAncestors(root: string, target: string): void {
+  const rootResolved = resolve(root);
+  const targetResolved = resolve(target);
+  if (
+    targetResolved !== rootResolved &&
+    !targetResolved.startsWith(rootResolved + sep)
+  ) {
+    throw new RelocationError(
+      'relocation_unverifiable',
+      `destination ${target} is not under the trusted root ${root}`,
+    );
+  }
+  const rel = relative(rootResolved, targetResolved);
+  const segments = rel === '' ? [] : rel.split(sep);
+  // The trusted root itself, then each intermediate ancestor up to
+  // dirname(target); the last segment (the target leaf) is left to the caller.
+  let current = rootResolved;
+  assertRealDirIfPresent(current, target);
+  for (let i = 0; i < segments.length - 1; i++) {
+    current = join(current, segments[i]!);
+    assertRealDirIfPresent(current, target);
+  }
 }
 
 export type ManifestEntry =
@@ -213,16 +269,51 @@ let stagingCounter = 0;
 
 /** A fresh staging directory beside `dest`, hence on the SAME filesystem — so
  *  the publish is a same-fs rename even when the SOURCE is on another volume.
- *  The pid+counter name never collides within or across daemon starts, so a
- *  crash leaves an inert orphan the next run ignores (it never enumerates or
- *  adopts arbitrary directories). */
+ *  The pid+counter name is unique WITHIN a daemon start. Across starts a PID is
+ *  reused, so a crash CAN leave an inert orphan at a path a later run selects
+ *  again — the name is NOT a forever-unique token. Two invariants make that
+ *  safe rather than a wedge: `stageTree` reclaims a pre-existing orphan in this
+ *  reserved single-writer namespace instead of failing on `EEXIST`, and
+ *  `removeStaging` can always delete a staged tree even after its dirs were
+ *  clamped read-only. The name is never enumerated or adopted as data. */
 export function freshStagingPath(dest: string): string {
   return join(dirname(dest), `.relocation-staging.${process.pid}.${stagingCounter++}`);
 }
 
+/** Restore owner traversal+write on every REAL directory in a tree so a
+ *  subsequent recursive delete can unlink children, WITHOUT following symlinks
+ *  (a symlinked entry is left for its parent's unlink to remove). A staged tree
+ *  may have had its dirs clamped to a read-only source mode (e.g. 0555), which
+ *  would otherwise make `rmSync` fail to empty them. */
+function makeTreeRemovable(path: string): void {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch {
+    return; // absent or already gone — nothing to unlock
+  }
+  if (stat.isSymbolicLink()) return; // never follow; the parent unlink removes the link
+  if (stat.isDirectory()) {
+    try {
+      chmodSync(path, 0o700);
+    } catch {
+      // best effort; rmSync below will still try
+    }
+    let names: string[];
+    try {
+      names = readdirSync(path);
+    } catch {
+      return;
+    }
+    for (const name of names) makeTreeRemovable(join(path, name));
+  }
+}
+
 /** Best-effort removal of a staged tree after a failed copy; a leftover is
- *  inert (source untouched, destination unpublished). */
+ *  inert (source untouched, destination unpublished). Read-only staged dirs are
+ *  made writable first so the delete actually empties them. */
 export function removeStaging(staging: string): void {
+  makeTreeRemovable(staging);
   try {
     rmSync(staging, { recursive: true, force: true });
   } catch {
@@ -245,6 +336,10 @@ export function stageTree(source: string, staging: string): void {
         `stage source ${source} is not a directory`,
       );
     }
+    // A pre-existing staging path can only be an inert orphan from a crashed
+    // prior run (this is a reserved single-writer namespace), so reclaim it
+    // rather than wedging on EEXIST when a reused PID reproduces the name.
+    if (probe(staging) !== 'absent') removeStaging(staging);
     mkdirSync(staging);
     mirrorTree(source, staging);
     // Clamp the staging root to the source mode LAST. A read-only source dir
