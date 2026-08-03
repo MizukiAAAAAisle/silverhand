@@ -109,7 +109,15 @@ export async function purgeAgentFiles(
             skippedUnprovisioned += 1;
             continue;
           }
-          if (err.code === 'registry_foreign' || err.code === 'registry_corrupt') {
+          if (
+            err.code === 'registry_foreign' ||
+            err.code === 'registry_corrupt' ||
+            // relocation-v1 §7 task 1 — an unsafe id segment is a
+            // corrupt/unusable registry entry; map it to the same
+            // registry_unavailable as the other consumers (l2-seed / index /
+            // agent-workspace-fs) rather than letting it fall to internal_error.
+            err.code === 'invalid_path'
+          ) {
             throw new AgentFilesPurgeError('registry_unavailable', err.message);
           }
         }

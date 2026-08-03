@@ -230,12 +230,17 @@ export async function purgeAgentHostLocalFiles(
   | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus }
 > {
   const { ctx } = deps;
-  // #task:1612 — the purge performs NO workspace provision: the registry
-  // is the sole authority, and the daemon's agent_files_purge already
-  // reports an unbound workspace as skipped_unprovisioned (typed), which
-  // keeps the DB rows and fails the delete closed. The retired pre-purge
-  // backfill would have MINTED an empty root on the agent's computer just
-  // to delete it.
+  // #task:1612 — the purge performs NO workspace provision (the retired
+  // pre-purge backfill would have MINTED an empty root on the agent's computer
+  // just to delete it). relocation-v1 §3.2: this dispatches `scope:'all'`,
+  // which removes the agent's TERMINAL MANAGED footprint — the whole agent
+  // home tree (L1 + every nested `workspaces/<id>` L2) in one rm — so the
+  // daemon does NOT consult the registry or enumerate per-workspace targets and
+  // `skipped_unprovisioned` is 0 by construction. `workspace_ids` is still sent
+  // (harmless: the handler ignores it for `scope:'all'`), and the
+  // `skipped_unprovisioned > 0` fail-close below is retained for defense /
+  // `scope:'l2'` but is inert here. (The retained legacy relocation source is a
+  // product-decided permanent orphan; see step 2's comment above.)
   const outbound = resolveOutboundForHost(
     ctx.outboundFrameAdapter?.() ?? null,
     agent.host_id,

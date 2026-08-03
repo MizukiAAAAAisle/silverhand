@@ -744,6 +744,20 @@ describe('purgeAgentFiles', () => {
     expect((err as AgentFilesPurgeError).code).toBe('registry_unavailable');
   });
 
+  it("scope:'l2' maps an unsafe-id resolve (invalid_path) to registry_unavailable", async () => {
+    // relocation-v1 §7 task 1 — an unsafe workspace id fails closed at the
+    // registry read gate (`resolve` validates the segment) and the handler
+    // maps `invalid_path` to the SAME registry_unavailable as the other
+    // consumers, never falling through to internal_error.
+    const registry = makeRegistry();
+    const err = await purgeAgentFiles(
+      { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['../../escape'] },
+      { registry, homeDir },
+    ).catch(e => e);
+    expect(err).toBeInstanceOf(AgentFilesPurgeError);
+    expect((err as AgentFilesPurgeError).code).toBe('registry_unavailable');
+  });
+
   it('fails closed with partial_purge on a HARD fs removal error', async () => {
     // chmod 000 on the L2 parent dir (`<agent home>/workspaces`) makes the rm
     // of the child l2Dir throw EACCES — a hard error must surface as the typed
