@@ -17,6 +17,8 @@ import {
 import { useMessage } from '@/features/messages/hooks';
 import { formatUserDisplayName } from '@/lib/current-user';
 import { Markdown } from '@/components/chat/Markdown';
+import { presentAuthor } from '@/components/chat/author-presentation';
+import { AuthorName } from '@/components/chat/author-avatar-view';
 import {
   type RendererProps,
   GenericNarrationFallback,
@@ -75,13 +77,30 @@ export function MentionCcCard({
   const { data: fetched } = useMessage(inlineOriginal ? null : sourceMessageId);
   const original = inlineOriginal ?? fetched?.message.content ?? null;
   const userResolver = useUserResolver();
-  const sourceUserLabel =
+  // Source author through the ONE author-presentation seam (#task:1795 fixes a
+  // literal `'user'` hardcode here; seam is #task:1792). When the source message
+  // is available its authoritative `author` DTO renders like every other byline
+  // (snapshot name + quiet `deleted` marker). But this is an EVENT-TIME context
+  // card ("who mentioned you, where, then") — NOT a live byline: the common
+  // cross-workspace path carries only inline metadata (`source_from_kind`, +
+  // `source_from_user_id` for users), no agent name and no author snapshot, so
+  // an agent source degrades to a neutral "an agent" — never mislabeled a user,
+  // never guessing deleted. By product decision (shiki 2026-08-03) the card does
+  // NOT track the source account's later deletion; that would require a backend
+  // read-time author resolve this historical card is deliberately not worth. Do
+  // not "upgrade" this into a dynamic deleted-tracking read-model.
+  const sourcePresentation = fetched?.message.author
+    ? presentAuthor(fetched.message.author)
+    : null;
+  const sourceFallbackLabel =
     sourceFromKind === 'user' || fetched?.message.from_kind === 'user'
       ? formatUserDisplayName(
           sourceFromUserId ?? fetched?.message.from_user_id,
           userResolver,
         )
-      : 'user';
+      : sourceFromKind === 'agent' || fetched?.message.from_kind === 'agent'
+        ? 'an agent'
+        : 'someone';
 
   // Secondary nav affordance: after the D-flip, the `mention_external`
   // notification primary-jumps to this local DM (where we are right
@@ -106,7 +125,14 @@ export function MentionCcCard({
         <AtSign className="size-3.5" />
         <span>
           mentioned by{' '}
-          <span className="text-text-secondary">{sourceUserLabel}</span>
+          {sourcePresentation ? (
+            <AuthorName
+              presentation={sourcePresentation}
+              className="text-text-secondary"
+            />
+          ) : (
+            <span className="text-text-secondary">{sourceFallbackLabel}</span>
+          )}
           {sourceLocationLabel ? (
             <>
               {' in '}
