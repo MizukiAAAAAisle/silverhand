@@ -74,16 +74,25 @@ export function AuthorAvatarView({
   }
 }
 
-/** A quiet, non-loud marker that an author's account was deleted (#task:1792).
- *  Muted metadata text — NOT a saturated status chip: the deletion is a fact
- *  about the byline, not a signal competing for the row's attention budget.
- *  The ONE deleted-state visual, shared by every surface that shows a text
- *  author name (byline, activity, saved / search / attachment rows, thread
- *  summaries, screenshot) so the state can never be dropped on one of them. */
+/** A quiet chip marking that an author's account was deleted (#task:1792,
+ *  #task:1797). A **neutral fill** chip — NOT a saturated status pill: the
+ *  deletion is a fact about the byline, not a signal competing for the row's
+ *  attention budget. The fill (not color, not weight) is what does the work:
+ *  as plain muted text the marker sat on the header line next to the timestamp
+ *  and read as just another meta field (shiki 2026-08-03); a neutral `bg`
+ *  container makes it a discrete token that's distinguishable from flowing meta
+ *  without raising its loudness. Deliberately flat — one neutral fill, no border
+ *  and no shadow (utility/state stays in the ink vocabulary). Its corner radius
+ *  rides the per-theme `--chip-radius` token (forza6 hard-cuts to 0, the hairline
+ *  themes round to 4px) so the chip speaks each theme's shape language instead of
+ *  a hardcoded `rounded` that split across them (shiki 2026-08-03). The ONE
+ *  deleted-state visual, shared by every surface that shows a text author name
+ *  (byline, activity, saved / search / attachment rows, thread summaries) so the
+ *  state can never be dropped on one of them. */
 export function DeletedActorMarker(): JSX.Element {
   return (
     <span
-      className="text-[10px] font-normal uppercase tracking-wide text-text-muted"
+      className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-px text-[10px] font-medium uppercase tracking-wide text-text-muted"
       title="This account was deleted"
     >
       deleted
