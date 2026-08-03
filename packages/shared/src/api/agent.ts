@@ -216,7 +216,7 @@ export type UpdateProfileInput = z.infer<typeof UpdateProfileInputSchema>;
 /**
  * `agent_changed` — WS event on the **`app`** scope, published by the
  * backend on any identity write that changes what the agent directory
- * shows, both UPDATE and CREATION:
+ * shows — UPDATE, CREATION, and DELETION:
  *   - update: human `PATCH /api/agents/:id`, human avatar upload/delete,
  *     the agent's own `silverhand profile update` (display_name /
  *     description / avatar), and a completed runtime transition — the
@@ -225,6 +225,15 @@ export type UpdateProfileInput = z.infer<typeof UpdateProfileInputSchema>;
  *     post-commit effect of `createAgent`'s `created` result (after the
  *     dependent-row commit). An idempotent echo or a failed materialization
  *     builds no such effect, so it publishes nothing.
+ *   - delete: a hard delete's terminal identity change, published as a
+ *     post-commit effect of `deleteAgent` / the `deleteComputer` cascade
+ *     (`AgentService.publishDeleted`) once the `agents` row is gone. A
+ *     refused/rolled-back delete publishes nothing, so clients are never told
+ *     "deleted" for an agent that still exists. On this signal the historical
+ *     message/thread/saved/search/activity author carriers refetch and resolve
+ *     the author to its server-authoritative `deleted` snapshot (#task:1791)
+ *     instead of collapsing to a directory miss; a direct AgentDto refetch 404s
+ *     and the roster simply drops the id.
  * `user_changed` has the same create+update producer boundary (#task:1707).
  *
  * Clients treat it as an invalidation signal and reseat every cache that

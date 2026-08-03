@@ -4,6 +4,7 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
+import { HostWsCommandResponseError } from '../../src/ws/host-ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
@@ -43,6 +44,20 @@ function setStatus(t: TestApp, agentId: string, status: string) {
 
 function purgeCallCount(t: TestApp): number {
   return t.fakeHostWs!.calls.filter(c => c.kind === 'agent_files_purge').length;
+}
+
+/** Capture `agent_changed` ids published on the `app` scope from the moment of
+ *  subscription. Delete reuses `agent_changed` as its terminal identity-change
+ *  signal (#task:1791) — the post-commit freshness effect that lets every
+ *  historical-author carrier reconcile to the `deleted` snapshot. Without it the
+ *  author carrier stays `active` forever, so this signal firing exactly on a
+ *  committed delete (and NEVER on a refusal/fail-closed) is load-bearing. */
+function captureAgentChanged(t: TestApp): string[] {
+  const ids: string[] = [];
+  t.ctx.events.subscribeScope('app', e => {
+    if (e.kind === 'agent_changed') ids.push((e.payload as any).agent_id);
+  });
+  return ids;
 }
 
 describe('deleteAgent use case', () => {
@@ -132,5 +147,103 @@ describe('deleteAgent use case', () => {
       .prepare('SELECT COUNT(*) AS n FROM workspace_members WHERE agent_id = ?')
       .get(agentId) as { n: number };
     expect(member.n).toBe(0);
+  });
+
+  // #task:1791 — the post-commit freshness signal. `deleteAgent` publishes the
+  // terminal `agent_changed` EXACTLY on a committed delete (both the failed-row
+  // and the active branch) and NEVER on a refusal or a fail-closed purge. A
+  // false negative strands the author carrier at `active`; a false positive
+  // tells clients an agent is gone while its row (and files) still exist.
+  describe('post-commit identity-change publish (agent_changed)', () => {
+    it('failed-row delete success → publishes agent_changed once for that id', async () => {
+      t = buildTestApp();
+      const agentId = await makeActiveAgent(t, 'faily');
+      setStatus(t, agentId, 'failed');
+      const changed = captureAgentChanged(t);
+
+      const result = await deleteAgent(depsFor(t), {
+        agentId,
+        requesterUserId: t.viewerUserId,
+        body: {},
+      });
+      expect(result).toEqual({ kind: 'deleted' });
+      expect(changed).toEqual([agentId]);
+    });
+
+    it('active delete success → publishes agent_changed once for that id', async () => {
+      t = buildTestApp();
+      const agentId = await makeActiveAgent(t, 'happy');
+      await http(t).post('/api/workspaces', {
+        name: 'engineering',
+        member_agent_ids: [agentId],
+      });
+      const changed = captureAgentChanged(t);
+
+      const result = await deleteAgent(depsFor(t), {
+        agentId,
+        requesterUserId: t.viewerUserId,
+        body: { confirm: true },
+      });
+      expect(result).toEqual({ kind: 'deleted' });
+      expect(changed).toEqual([agentId]);
+    });
+
+    it('fail-closed purge → NO agent_changed (identity never told to change while the row survives)', async () => {
+      t = buildTestApp();
+      const agentId = await makeActiveAgent(t, 'bob');
+      await http(t).post('/api/workspaces', {
+        name: 'engineering',
+        member_agent_ids: [agentId],
+      });
+      t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
+        throw new HostWsCommandResponseError(
+          'partial_purge' as never,
+          'failed to remove 1 target(s): EACCES',
+          { hostId: 'local', commandKind: 'agent_files_purge', requestId: 'r' },
+        );
+      };
+      const changed = captureAgentChanged(t);
+
+      const result = await deleteAgent(depsFor(t), {
+        agentId,
+        requesterUserId: t.viewerUserId,
+        body: { confirm: true },
+      });
+      expect(result.kind).toBe('failClosed');
+      expect(new AgentRepo(t.ctx.db).get(agentId)).not.toBeNull();
+      expect(changed).toEqual([]);
+    });
+
+    it('refusals (pendingInFlight / confirmRequired / notFound) → NO agent_changed', async () => {
+      t = buildTestApp();
+      const pending = await makeActiveAgent(t, 'pendy');
+      setStatus(t, pending, 'pending_materialization');
+      const active = await makeActiveAgent(t, 'activy');
+      const changed = captureAgentChanged(t);
+
+      expect(
+        (await deleteAgent(depsFor(t), {
+          agentId: pending,
+          requesterUserId: t.viewerUserId,
+          body: { confirm: true },
+        })).kind,
+      ).toBe('pendingInFlight');
+      expect(
+        (await deleteAgent(depsFor(t), {
+          agentId: active,
+          requesterUserId: t.viewerUserId,
+          body: {},
+        })).kind,
+      ).toBe('confirmRequired');
+      expect(
+        (await deleteAgent(depsFor(t), {
+          agentId: 'no-such-agent',
+          requesterUserId: t.viewerUserId,
+          body: { confirm: true },
+        })).kind,
+      ).toBe('notFound');
+
+      expect(changed).toEqual([]);
+    });
   });
 });

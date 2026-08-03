@@ -906,6 +906,63 @@ export const migrations: Migration[] = [
       ALTER TABLE attachments ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 1;
     `,
   },
+  {
+    version: 63,
+    name: 'message_author_snapshot',
+    up: `
+      -- #task:1791 — messages.from_agent_id / from_user_id are ON DELETE SET
+      -- NULL, so hard-deleting an actor wipes the id the renderer joins on and
+      -- every historical message by that actor degrades to a generic "@agent".
+      -- These columns are a SEND-TIME author snapshot that OUTLIVES the actor:
+      --
+      --   author_id            — the authoring actor's id, WITH NO FOREIGN KEY.
+      --                          It must NOT be nulled when the actor row is
+      --                          deleted; it is the stable, non-collapsing
+      --                          aggregation key that lets the server render an
+      --                          identifiable, explicitly-"deleted" byline
+      --                          instead of a generic one.
+      --   author_name          — the actor's @handle at send time.
+      --   author_display_name  — the actor's display name at send time.
+      --
+      -- No avatar bytes are snapshotted (a deleted author renders a neutral
+      -- avatar). Server resolution (MessageAuthorDto):
+      --   from_*_id NOT NULL            -> 'active'     (FK intact ⇔ actor lives;
+      --                                                  read CURRENT name/avatar)
+      --   from_*_id NULL + author_id     -> 'deleted'   (snapshot names it)
+      --   from_*_id NULL + no author_id  -> 'unresolved'(legacy row whose actor
+      --                                                  was deleted before this
+      --                                                  snapshot existed; never
+      --                                                  guessed as 'deleted')
+      ALTER TABLE messages ADD COLUMN author_id           TEXT;
+      ALTER TABLE messages ADD COLUMN author_name         TEXT;
+      ALTER TABLE messages ADD COLUMN author_display_name TEXT;
+
+      -- Backfill still-resolvable history from the live authority so a message
+      -- whose actor still exists gets a snapshot now (and flips from 'active' to
+      -- 'deleted' cleanly if that actor is later deleted). NOTE the fidelity
+      -- boundary: for messages sent from v63 onward the snapshot is captured at
+      -- SEND time (the actor's identity at the moment the row was written); this
+      -- one-time backfill instead captures each surviving actor's CURRENT identity
+      -- at MIGRATION time — a best-effort reconstruction, since no send-time value
+      -- was ever recorded for pre-v63 rows. Rows whose actor was ALREADY
+      -- hard-deleted have from_*_id = NULL and nothing to copy from → author_id
+      -- stays NULL → 'unresolved' (we cannot fabricate an identity that was never
+      -- captured). System rows keep all three NULL. agents.name / users.name /
+      -- display_name are all NOT NULL, so a matched actor always yields non-null
+      -- author_name / author_display_name.
+      UPDATE messages
+        SET author_id           = from_agent_id,
+            author_name         = (SELECT a.name         FROM agents a WHERE a.id = messages.from_agent_id),
+            author_display_name = (SELECT a.display_name FROM agents a WHERE a.id = messages.from_agent_id)
+        WHERE from_kind = 'agent' AND from_agent_id IS NOT NULL;
+
+      UPDATE messages
+        SET author_id           = from_user_id,
+            author_name         = (SELECT u.name         FROM users u WHERE u.id = messages.from_user_id),
+            author_display_name = (SELECT u.display_name FROM users u WHERE u.id = messages.from_user_id)
+        WHERE from_kind = 'user' AND from_user_id IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

@@ -66,9 +66,30 @@ describe('GET /api/conversations/:id/threads', () => {
     expect(body.threads).toHaveLength(1);
     expect(body.threads[0].root_message_id).toBe(root.id);
     expect(body.threads[0].reply_count).toBe(1);
-    expect(body.threads[0].root_author).toEqual({ kind: 'human', id: 'local' });
+    // #task:1791: root_author / repliers are the full server-authoritative
+    // MessageAuthorDto — an `active` actor carries its live name/display_name and
+    // a null avatar (no fixture avatar bytes). `kind` is 'user' | 'agent'.
+    expect(body.threads[0].root_author).toEqual({
+      kind: 'user',
+      status: 'active',
+      id: 'local',
+      name: 'local-test',
+      display_name: 'Local Test User',
+      avatar_url: null,
+      // active-user arm has no runtime → pinned null.
+      runtime: null,
+    });
     expect(body.threads[0].repliers).toEqual([
-      { kind: 'agent', id: agentId },
+      {
+        kind: 'agent',
+        status: 'active',
+        id: agentId,
+        name: 'alice',
+        display_name: 'alice',
+        avatar_url: null,
+        // active-agent arm carries the CURRENT runtime (option (b)).
+        runtime: 'claude',
+      },
     ]);
   });
 

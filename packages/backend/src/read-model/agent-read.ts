@@ -234,7 +234,17 @@ function historyRowToMessage(
   includeContent: boolean,
   reactions: ReactionAggregateDto[] | null,
 ): ReadHistoryMessage {
-  const dto = messageRowToDto(row, { linkedTask: linkedTaskFromRow(row) });
+  // This agent-facing read projects authorship via `senderRef` (its own
+  // MessageSenderRef shape); the MessageDto here is used only for
+  // content/metadata/attachments, so `author` is intentionally not resolved
+  // (avoids a per-row live lookup for a discarded field). NOTE: `senderRef`
+  // has the same latent deleted-actor degradation as the renderer surfaces,
+  // but it is a separate agent-facing projection outside #task:1791's locked
+  // scope — tracked by #task:1793 for a follow-up decision.
+  const dto = messageRowToDto(row, {
+    author: null,
+    linkedTask: linkedTaskFromRow(row),
+  });
   return {
     message_ref: messageRef(row, target),
     sender: senderRef(row),

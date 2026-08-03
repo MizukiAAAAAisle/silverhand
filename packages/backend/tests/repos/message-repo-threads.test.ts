@@ -42,6 +42,39 @@ function setCreatedAt(db: Db, id: string, ts: number): void {
   db.prepare(`UPDATE messages SET created_at = ? WHERE id = ?`).run(ts, id);
 }
 
+// #task:1791: root_author / repliers / reply-preview author are now the full
+// server-authoritative MessageAuthorDto, not the old { kind, id } stub. For a
+// live fixture actor that means an `active` author carrying its current
+// name/display_name and a null avatar (no fixture avatar bytes). `kind` is the
+// domain vocabulary `'user' | 'agent'` (NOT the old 'human'). These shorthands
+// keep the fixture actors' expected DTOs in one place.
+const userAuthor = (id: string, name: string, display_name: string) => ({
+  kind: 'user' as const,
+  status: 'active' as const,
+  id,
+  name,
+  display_name,
+  avatar_url: null,
+  // active-user arm has no runtime → pinned null (#task:1791, option (b)).
+  runtime: null,
+});
+// bootstrap()'s only agent is created as `{ name: 'a', runtime: 'claude' }` →
+// display_name 'a', runtime 'claude'.
+const agentAuthor = (id: string) => ({
+  kind: 'agent' as const,
+  status: 'active' as const,
+  id,
+  name: 'a',
+  display_name: 'a',
+  avatar_url: null,
+  // active-agent arm carries the CURRENT runtime.
+  runtime: 'claude' as const,
+});
+// The seeded fixture users (see tests/utils/db.ts).
+const localAuthor = () => userAuthor('local', 'local-test', 'Local Test User');
+const aliceAuthor = () => userAuthor('alice', 'alice-test', 'Alice Test User');
+const bobAuthor = () => userAuthor('bob', 'bob-test', 'Bob Test User');
+
 describe('MessageRepo.listChannelThreads', () => {
   it('aggregates reply-clusters, sorts newest-activity-first, excludes non-threads', () => {
     const { db, channel, agentId, repo } = bootstrap();
@@ -125,21 +158,18 @@ describe('MessageRepo.listChannelThreads', () => {
     expect(tA.reply_count).toBe(2); // a1 + a2, system excluded
     expect(tA.last_reply_message_id).toBe(a2.id);
     expect(tA.last_reply_at).toBe(5000);
-    expect(tA.root_author).toEqual({ kind: 'human', id: 'local' });
+    expect(tA.root_author).toEqual(localAuthor());
     expect(tA.root_preview).toHaveLength(160);
     // Most-recent first: a2 (agent) then a1 (human u2).
-    expect(tA.repliers).toEqual([
-      { kind: 'agent', id: agentId },
-      { kind: 'human', id: 'alice' },
-    ]);
+    expect(tA.repliers).toEqual([agentAuthor(agentId), aliceAuthor()]);
     expect(tA.replier_total).toBe(2);
     // P2 (§6): root_seq is exposed as the keyset tie-break half.
     expect(tA.root_seq).toBe(rootA.seq);
 
     const tB = page.threads[1]!;
     expect(tB.reply_count).toBe(1);
-    expect(tB.root_author).toEqual({ kind: 'agent', id: agentId });
-    expect(tB.repliers).toEqual([{ kind: 'human', id: 'bob' }]);
+    expect(tB.root_author).toEqual(agentAuthor(agentId));
+    expect(tB.repliers).toEqual([bobAuthor()]);
   });
 
   it('fills viewer_following (read-only follow projection) (#task:1226)', () => {
@@ -469,11 +499,11 @@ describe('MessageRepo.replyBadgeSummariesByRoot (P1)', () => {
     expect(sums[rootA.id]!.reply_count).toBe(2); // system excluded
     expect(sums[rootA.id]!.last_reply_at).toBe(7000); // max-seq reply (a2)
     expect(sums[rootA.id]!.repliers).toEqual([
-      { kind: 'agent', id: agentId },
-      { kind: 'human', id: 'alice' },
+      agentAuthor(agentId),
+      aliceAuthor(),
     ]);
     expect(sums[rootA.id]!.replier_total).toBe(2);
-    expect(sums[rootB.id]!.repliers).toEqual([{ kind: 'human', id: 'bob' }]);
+    expect(sums[rootB.id]!.repliers).toEqual([bobAuthor()]);
   });
 
   it('returns an empty record for no roots', () => {
@@ -579,10 +609,10 @@ describe('MessageRepo.replyPreviewsByRoot (#task:1746)', () => {
     // Not a1 (dropped past the tail).
     expect(previews[rootA.id]!.some(p => p.message_id === a1.id)).toBe(false);
 
-    // Author reuses the ThreadReplier shape: user→human, agent→agent, id from
-    // the matching actor column.
+    // Author is the full server-authoritative MessageAuthorDto (#task:1791):
+    // user→'user', agent→'agent', with the live name/display_name.
     expect(previews[rootA.id]![0]).toMatchObject({
-      author: { kind: 'agent', id: agentId },
+      author: agentAuthor(agentId),
       preview: 'a2',
       attachment_count: 0,
       first_attachment_label: null,
@@ -590,7 +620,7 @@ describe('MessageRepo.replyPreviewsByRoot (#task:1746)', () => {
     // Preview is server-truncated to <= 160 chars (a3 is 200 chars).
     const a3Preview = previews[rootA.id]!.find(p => p.message_id === a3.id)!;
     expect(a3Preview.preview).toBe('C'.repeat(160));
-    expect(a3Preview.author).toEqual({ kind: 'human', id: 'alice' });
+    expect(a3Preview.author).toEqual(aliceAuthor());
 
     // rootB's single reply carries attachments → label metadata only (count +
     // first canonical label), never bytes. Two unlabeled attachments (image +
@@ -599,7 +629,7 @@ describe('MessageRepo.replyPreviewsByRoot (#task:1746)', () => {
     expect(previews[rootB.id]).toHaveLength(1);
     expect(previews[rootB.id]![0]).toMatchObject({
       message_id: b1.id,
-      author: { kind: 'human', id: 'bob' },
+      author: bobAuthor(),
       attachment_count: 2,
       first_attachment_label: 'Image #1',
     });
@@ -688,17 +718,14 @@ describe('MessageRepo.threadListEntryForRoot (P2)', () => {
     // Invariant fields mirror the list row.
     expect(entry).toEqual({
       root_message_id: root.id,
-      root_author: { kind: 'human', id: 'local' },
+      root_author: localAuthor(),
       root_preview: 'R'.repeat(160),
       root_created_at: root.created_at,
       root_seq: root.seq,
       reply_count: 2, // a1 + a2, system excluded
       last_reply_at: 9000,
       last_reply_message_id: a2.id,
-      repliers: [
-        { kind: 'agent', id: agentId },
-        { kind: 'human', id: 'alice' },
-      ],
+      repliers: [agentAuthor(agentId), aliceAuthor()],
       replier_total: 2,
     });
     // Structurally viewer-invariant: no per-viewer key leaks in.

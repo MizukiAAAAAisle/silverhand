@@ -657,7 +657,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     expect(failed!.preview_sender).toBeNull();
   });
 
-  it('preview_sender.display_name falls back to the agent handle when display_name is empty', async () => {
+  it('preview_sender passes display_name through raw + carries the handle in name (renderer owns the empty-label fallback)', async () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
@@ -667,8 +667,12 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       }
     ).name;
     // agents.display_name is NOT NULL DEFAULT '' — an empty label is a real
-    // schema state. The server must still return a non-empty label (renderer is
-    // barred from re-deriving it).
+    // schema state. Unlike the retired ActivityPreviewSender (which server-
+    // COALESCE'd to a non-empty label), the unified MessageAuthorDto mirrors
+    // AgentDto/UserDto: display_name is passed through RAW and the handle is
+    // always carried in `name`, so the renderer applies its ONE display
+    // fallback (display_name || name) uniformly across every author carrier
+    // (#task:1791).
     t.ctx.db.prepare(`UPDATE agents SET display_name = '' WHERE id = ?`).run(sender);
 
     const rootMsg = await sendAsAgent(t, channelId, sender, 'ROOT for empty-name');
@@ -686,12 +690,74 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       i => i.kind === 'unread' && i.message_id === replyMsg,
     );
     expect(thread).toBeTruthy();
-    expect(thread!.preview_sender).toMatchObject({ kind: 'agent', id: sender });
-    expect(thread!.preview_sender.display_name).toBe(agentName);
-    expect(thread!.preview_sender.display_name).not.toBe('');
+    expect(thread!.preview_sender).toEqual({
+      kind: 'agent',
+      status: 'active',
+      id: sender,
+      name: agentName,
+      display_name: '',
+      avatar_url: null,
+      runtime: 'claude',
+    });
   });
 
-  it('preview_sender.display_name falls back to the user name when display_name is empty', async () => {
+  it('preview_sender flips to a deleted snapshot after the author is hard-deleted (Activity is wired to the ONE author resolver) (#task:1791)', async () => {
+    t = buildTestApp();
+    const { channelId } = await createWorkspaceChannel(t);
+    const sender = (await firstChannelAgent(t, channelId))!;
+    const { name: agentName, display_name: agentDisplay } = t.ctx.db
+      .prepare(`SELECT name, display_name FROM agents WHERE id = ?`)
+      .get(sender) as { name: string; display_name: string };
+
+    // A thread reply the human follows → a stable Activity unread anchor.
+    const rootMsg = await sendAsAgent(t, channelId, sender, 'ROOT for delete-flip');
+    const replyMsg = await sendThreadReply(t, channelId, sender, rootMsg, 'reply body');
+    t.ctx.db
+      .prepare(
+        `INSERT INTO thread_followers
+           (thread_root_id, conversation_id, principal_kind, principal_id,
+            followed_at, source)
+         VALUES (?, ?, 'human', 'local', ?, 'manual')`,
+      )
+      .run(rootMsg, channelId, Date.now());
+
+    const app = t;
+    const findThread = async () =>
+      (await getActivity(app)).find(
+        i => i.kind === 'unread' && i.message_id === replyMsg,
+      );
+
+    // Before the delete: the live author resolves as `active` (with runtime).
+    const before = await findThread();
+    expect(before!.preview_sender).toEqual({
+      kind: 'agent',
+      status: 'active',
+      id: sender,
+      name: agentName,
+      display_name: agentDisplay,
+      avatar_url: null,
+      runtime: 'claude',
+    });
+
+    // Hard-delete the author: ON DELETE SET NULL wipes messages.from_agent_id, but
+    // the send-time snapshot survives.
+    t.ctx.db.prepare(`DELETE FROM agents WHERE id = ?`).run(sender);
+
+    // Same anchor, same id/name — but now `deleted` with a null avatar and NO
+    // runtime (never degrades to a generic "@agent", never leaks a runtime).
+    const after = await findThread();
+    expect(after!.preview_sender).toEqual({
+      kind: 'agent',
+      status: 'deleted',
+      id: sender,
+      name: agentName,
+      display_name: agentDisplay,
+      avatar_url: null,
+    });
+    expect(after!.preview_sender).not.toHaveProperty('runtime');
+  });
+
+  it('preview_sender passes a user empty display_name through raw + carries the name handle', async () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const now = Date.now();
@@ -723,8 +789,17 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       i => i.kind === 'mention' && i.message_id === 'm-bob',
     );
     expect(mention).toBeTruthy();
-    expect(mention!.preview_sender).toMatchObject({ kind: 'user', id: 'u-bob' });
-    expect(mention!.preview_sender.display_name).toBe('bob');
+    // Raw display_name ('') passed through; handle carried in `name` for the
+    // renderer's uniform fallback — no server-side COALESCE (#task:1791).
+    expect(mention!.preview_sender).toEqual({
+      kind: 'user',
+      status: 'active',
+      id: 'u-bob',
+      name: 'bob',
+      display_name: '',
+      avatar_url: null,
+      runtime: null,
+    });
   });
 });
 

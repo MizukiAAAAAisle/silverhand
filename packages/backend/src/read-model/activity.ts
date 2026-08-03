@@ -41,10 +41,13 @@ import { prepareObserved } from '../observability/observed-statement.js';
 import {
   apiPaths,
   DEFAULT_CHANNEL_ATTENTION_MODE,
+  resolveMessageAuthor,
   type ActivityItemDto,
-  type ActivityPreviewSender,
   type ActivitySalience,
   type ListActivityDto,
+  type MessageAuthorDto,
+  type MessageAuthorLiveActor,
+  type RuntimeKind,
 } from '@silverhand/shared';
 
 export interface ListActivityParams {
@@ -85,59 +88,95 @@ function preview(text: string | null | undefined): string | null {
 }
 
 /** Row fields carrying the anchor message's author, server-resolved so the
- *  global list never client-stitches a cross-workspace sender. Both queries
- *  resolve `sender_*` via CASE on the message `from_kind` (a `system` author or
- *  a missing anchor leaves `sender_kind` outside user/agent → NULL sender). */
+ *  global list never client-stitches a cross-workspace sender. Carries BOTH the
+ *  message's provenance FKs + send-time snapshot (the {@link MessageAuthorRow}
+ *  evidence) AND the joined LIVE actor columns, so {@link buildPreviewSender}
+ *  can feed the SAME pure {@link resolveMessageAuthor} the message/thread reads
+ *  use — a hard-deleted sender resolves to `deleted` (snapshot name) instead of
+ *  collapsing to a NULL byline. A `system` anchor or a missing anchor leaves
+ *  `from_kind` outside user/agent → NULL author. */
 interface SenderColumns {
-  sender_kind: string | null;
-  sender_id: string | null;
-  sender_display_name: string | null;
-  sender_avatar_key: string | null;
-  sender_updated_at: number | null;
+  from_kind: string | null;
+  from_user_id: string | null;
+  from_agent_id: string | null;
+  author_id: string | null;
+  author_name: string | null;
+  author_display_name: string | null;
+  /** LIVE actor columns (NULL once the FK is nulled by ON DELETE SET NULL). */
+  live_name: string | null;
+  live_display_name: string | null;
+  live_avatar_key: string | null;
+  live_updated_at: number | null;
+  /** LIVE agent runtime (NULL for a user actor or once the FK is nulled). */
+  live_runtime: string | null;
 }
 
-/** Build the display-only `preview_sender` from the resolved author columns.
- *  `avatar_url` mirrors `UserDto`/`AgentDto`: the relative avatar path with the
- *  `?v=updated_at` cache-buster, or NULL when the author has no avatar. */
-function buildPreviewSender(row: SenderColumns): ActivityPreviewSender | null {
-  if (row.sender_kind !== 'user' && row.sender_kind !== 'agent') return null;
-  if (!row.sender_id) return null;
-  const avatar_url = row.sender_avatar_key
-    ? `${
-        row.sender_kind === 'user'
-          ? apiPaths.userAvatar(row.sender_id)
-          : apiPaths.agentAvatar(row.sender_id)
-      }?v=${row.sender_updated_at ?? 0}`
-    : null;
-  return {
-    kind: row.sender_kind,
-    id: row.sender_id,
-    // SQL already resolved display_name → name (both NOT NULL); the final → id
-    // fallback only triggers on a join miss, so the label is never empty.
-    display_name: row.sender_display_name?.trim()
-      ? row.sender_display_name
-      : row.sender_id,
-    avatar_url,
-  };
+/** Build the item's `preview_sender` ({@link MessageAuthorDto}) from the resolved
+ *  author columns via the SAME pure resolver every author surface shares. The
+ *  live actor (name/display_name/avatar) is passed only when the provenance FK
+ *  still resolves; otherwise the resolver falls back to the send-time snapshot
+ *  (`deleted`) or, absent one, `unresolved`. `avatar_url` mirrors
+ *  `UserDto`/`AgentDto`: the relative avatar path with the `?v=updated_at`
+ *  cache-buster, or NULL when the actor has no avatar. */
+function buildPreviewSender(row: SenderColumns): MessageAuthorDto | null {
+  const fromKind = row.from_kind;
+  // system anchor / missing anchor (LEFT JOIN miss → NULL) has no author.
+  if (fromKind !== 'user' && fromKind !== 'agent') return null;
+  const fkId = fromKind === 'user' ? row.from_user_id : row.from_agent_id;
+  const live: MessageAuthorLiveActor | null =
+    fkId !== null && row.live_name !== null
+      ? {
+          name: row.live_name,
+          display_name: row.live_display_name ?? row.live_name,
+          avatar_url: row.live_avatar_key
+            ? `${
+                fromKind === 'user'
+                  ? apiPaths.userAvatar(fkId)
+                  : apiPaths.agentAvatar(fkId)
+              }?v=${row.live_updated_at ?? 0}`
+            : null,
+          // Agent → its current runtime (agents.runtime, NOT NULL); user → null.
+          // The DB value is a validated RuntimeKind; the resolver fails closed if
+          // an agent's runtime is somehow absent.
+          runtime: row.live_runtime as RuntimeKind | null,
+        }
+      : null;
+  return resolveMessageAuthor(
+    {
+      from_kind: fromKind,
+      from_user_id: row.from_user_id,
+      from_agent_id: row.from_agent_id,
+      author_id: row.author_id,
+      author_name: row.author_name,
+      author_display_name: row.author_display_name,
+    },
+    live,
+  );
 }
 
-/** SQL fragment resolving an anchor message `m`'s author into `sender_*`
- *  columns. Requires `LEFT JOIN users su ON su.id = m.from_user_id` and
- *  `LEFT JOIN agents sa ON sa.id = m.from_agent_id` in the same query.
- *  `sender_display_name` falls back display_name → name (both NOT NULL) so it is
- *  never an empty label — `agents.display_name` is `NOT NULL DEFAULT ''` and the
- *  renderer is barred from re-deriving the name; `buildPreviewSender` adds the
- *  final → id fallback for a join miss. */
+/** SQL fragment resolving an anchor message `m`'s author into the
+ *  {@link SenderColumns}. Requires `LEFT JOIN users su ON su.id = m.from_user_id`
+ *  and `LEFT JOIN agents sa ON sa.id = m.from_agent_id` in the same query. Emits
+ *  the message's provenance FKs + send-time snapshot + the joined LIVE actor
+ *  columns raw; {@link buildPreviewSender} discriminates active/deleted/unresolved
+ *  via the shared resolver (no COALESCE here — the renderer owns display
+ *  fallback uniformly across every `MessageAuthorDto` surface). */
 const SENDER_SELECT = `
-          m.from_kind                                                  AS sender_kind,
-          CASE m.from_kind WHEN 'user' THEN m.from_user_id
-                           WHEN 'agent' THEN m.from_agent_id END        AS sender_id,
-          CASE m.from_kind WHEN 'user' THEN COALESCE(NULLIF(su.display_name, ''), su.name)
-                           WHEN 'agent' THEN COALESCE(NULLIF(sa.display_name, ''), sa.name) END AS sender_display_name,
+          m.from_kind                                                  AS from_kind,
+          m.from_user_id                                               AS from_user_id,
+          m.from_agent_id                                              AS from_agent_id,
+          m.author_id                                                  AS author_id,
+          m.author_name                                                AS author_name,
+          m.author_display_name                                        AS author_display_name,
+          CASE m.from_kind WHEN 'user' THEN su.name
+                           WHEN 'agent' THEN sa.name END                AS live_name,
+          CASE m.from_kind WHEN 'user' THEN su.display_name
+                           WHEN 'agent' THEN sa.display_name END        AS live_display_name,
           CASE m.from_kind WHEN 'user' THEN su.avatar_storage_key
-                           WHEN 'agent' THEN sa.avatar_storage_key END  AS sender_avatar_key,
+                           WHEN 'agent' THEN sa.avatar_storage_key END  AS live_avatar_key,
           CASE m.from_kind WHEN 'user' THEN su.updated_at
-                           WHEN 'agent' THEN sa.updated_at END          AS sender_updated_at`;
+                           WHEN 'agent' THEN sa.updated_at END          AS live_updated_at,
+          CASE m.from_kind WHEN 'agent' THEN sa.runtime END             AS live_runtime`;
 
 interface DirectedNotificationRow extends SenderColumns {
   id: string;
@@ -367,6 +406,9 @@ const assemblePositionalStreams: ActivitySource = ac => {
            m.from_kind       AS from_kind,
            m.from_user_id    AS from_user_id,
            m.from_agent_id   AS from_agent_id,
+           m.author_id       AS author_id,
+           m.author_name     AS author_name,
+           m.author_display_name AS author_display_name,
            ROW_NUMBER() OVER (
              PARTITION BY m.conversation_id, m.thread_root_id ORDER BY m.seq ASC
            ) AS rn,
@@ -404,15 +446,21 @@ const assemblePositionalStreams: ActivitySource = ac => {
          vu.content                      AS first_unread_content,
          vu.created_at                   AS first_unread_created_at,
          vu.cnt                          AS unread_count,
-         vu.from_kind                                                  AS sender_kind,
-         CASE vu.from_kind WHEN 'user' THEN vu.from_user_id
-                           WHEN 'agent' THEN vu.from_agent_id END       AS sender_id,
-         CASE vu.from_kind WHEN 'user' THEN COALESCE(NULLIF(su.display_name, ''), su.name)
-                           WHEN 'agent' THEN COALESCE(NULLIF(sa.display_name, ''), sa.name) END AS sender_display_name,
+         vu.from_kind                                                  AS from_kind,
+         vu.from_user_id                                               AS from_user_id,
+         vu.from_agent_id                                              AS from_agent_id,
+         vu.author_id                                                  AS author_id,
+         vu.author_name                                                AS author_name,
+         vu.author_display_name                                        AS author_display_name,
+         CASE vu.from_kind WHEN 'user' THEN su.name
+                           WHEN 'agent' THEN sa.name END                AS live_name,
+         CASE vu.from_kind WHEN 'user' THEN su.display_name
+                           WHEN 'agent' THEN sa.display_name END        AS live_display_name,
          CASE vu.from_kind WHEN 'user' THEN su.avatar_storage_key
-                           WHEN 'agent' THEN sa.avatar_storage_key END  AS sender_avatar_key,
+                           WHEN 'agent' THEN sa.avatar_storage_key END  AS live_avatar_key,
          CASE vu.from_kind WHEN 'user' THEN su.updated_at
-                           WHEN 'agent' THEN sa.updated_at END          AS sender_updated_at
+                           WHEN 'agent' THEN sa.updated_at END          AS live_updated_at,
+         CASE vu.from_kind WHEN 'agent' THEN sa.runtime END             AS live_runtime
        FROM viewer_unread vu
        JOIN conversations c ON c.id = vu.conversation_id
        LEFT JOIN messages root ON root.id = vu.root

@@ -137,6 +137,29 @@ export class AgentService {
   }
 
   /**
+   * Broadcast the identity-change signal for a HARD-DELETED agent (#task:1791).
+   * Delete is the terminal `agent_changed`: the row is gone, so clients reseat
+   * every carrier that denormalized this id — rosters/workspace-members drop it,
+   * and the message/thread/saved/search/activity author carriers refetch and
+   * resolve the historical author to its server-authoritative `deleted` snapshot
+   * instead of a directory-miss guess.
+   *
+   * Reuses the SINGLE `agent_changed` seam rather than minting a parallel
+   * `agent_deleted` event: the payload (id only) and every consumer's reaction
+   * (invalidate + refetch; the roster no longer contains the id) are identical,
+   * so a second event would only be a divergent name for the same fact.
+   *
+   * MUST be called only AFTER the delete authority commit (the `agents` row is
+   * already gone) as a post-commit effect: a failed/rolled-back teardown never
+   * reaches here, so clients are never told "deleted" for an agent that still
+   * exists. Callers inside a `db.transaction` (the delete-computer cascade) defer
+   * this to their post-commit phase for the same reason.
+   */
+  publishDeleted(id: string): void {
+    this.publishChanged(id);
+  }
+
+  /**
    * Update an agent's stored fields (profile metadata + model/tuning)
    * and broadcast `agent_changed` on success. Returns null when the agent
    * does not exist (no event). This is the text/metadata counterpart of

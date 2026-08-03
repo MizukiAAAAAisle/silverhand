@@ -9,6 +9,7 @@ export * from './conversation.js';
 export * from './runtime.js';
 export * from './attachment.js';
 export * from './reactions.js';
+export * from './message-author.js';
 export * from './message.js';
 export * from './thread-summary.js';
 export * from './attention.js';

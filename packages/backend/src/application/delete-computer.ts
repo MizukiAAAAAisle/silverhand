@@ -317,6 +317,16 @@ export async function deleteComputer(
   }
 
   // ── phase 2: post-commit teardown (best-effort, capture-driven) ────
+  // Post-commit identity-change fan-out (#task:1791): the transaction deleted
+  // every `plan.hostAgents` row (active via teardown, failed via row-only), so
+  // publish the terminal `agent_changed` for each. Post-commit by construction —
+  // a rolled-back precondition returned above without reaching here, so clients
+  // are never told an agent is deleted while its row survives. Covers the
+  // failed-agent ids too (not in `agentTeardowns`), so no cascaded author is
+  // left stale.
+  for (const agent of plan.hostAgents) {
+    ctx.agentService.publishDeleted(agent.id);
+  }
   let blobsAttempted = 0;
   let blobsFailed = 0;
   // The two teardown authorities overlap on the MAIN path: an on-host agent that

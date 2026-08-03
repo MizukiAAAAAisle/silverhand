@@ -107,7 +107,16 @@ describe('GET /api/channels/:id/messages — reply_summaries_by_root (P1)', () =
     expect(summaries[root.id].reply_count).toBe(body.reply_counts_by_root[root.id]);
     expect(summaries[root.id].reply_count).toBe(1);
     expect(summaries[root.id].repliers).toEqual([
-      { kind: 'agent', id: agentIds.alice },
+      {
+        kind: 'agent',
+        status: 'active',
+        id: agentIds.alice,
+        name: 'alice',
+        display_name: 'alice',
+        avatar_url: null,
+        // active-agent arm carries the CURRENT runtime (#task:1791, option (b)).
+        runtime: 'claude',
+      },
     ]);
     expect(summaries[root.id].replier_total).toBe(1);
     expect(typeof summaries[root.id].last_reply_at).toBe('number');
@@ -179,7 +188,15 @@ describe('GET /api/channels/:id/messages — reply_previews_by_root (#task:1746)
     // Time-ASCending tail (both replies, oldest first).
     expect(previews[root.id].map((p: any) => p.message_id)).toEqual([r1.id, r2.id]);
     expect(previews[root.id][0]).toMatchObject({
-      author: { kind: 'agent', id: agentIds.alice },
+      author: {
+        kind: 'agent',
+        status: 'active',
+        id: agentIds.alice,
+        name: 'alice',
+        display_name: 'alice',
+        avatar_url: null,
+        runtime: 'claude',
+      },
       preview: 'first reply',
       attachment_count: 0,
       first_attachment_label: null,

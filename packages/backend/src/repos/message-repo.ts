@@ -13,16 +13,21 @@ import type {
   AttachmentSnapshot,
   FromKind,
   LinkedTaskDto,
+  MessageAuthorDto,
+  MessageAuthorRow,
   MessageDto,
   MessageRow,
   ReplyBadgeSummary,
   TaskAssigneeDto,
   TaskStatus,
-  ThreadReplier,
   ThreadReplyPreviewRow,
   ThreadSummary,
   ThreadSummaryInvariant,
 } from '@silverhand/shared';
+import {
+  loadMessageAuthors,
+  resolveOneMessageAuthor,
+} from './message-author.js';
 import {
   streamScopePredicate,
   streamScopeParams,
@@ -137,6 +142,11 @@ interface ThreadRootRow {
   root_from_kind: FromKind;
   root_from_agent_id: string | null;
   root_from_user_id: string | null;
+  // Send-time author snapshot (survives ON DELETE SET NULL) — resolves the root
+  // author to a stable identity even after the actor is hard-deleted (#task:1791).
+  root_author_id: string | null;
+  root_author_name: string | null;
+  root_author_display_name: string | null;
   root_content: string;
   root_created_at: number;
   root_seq: number;
@@ -145,41 +155,50 @@ interface ThreadRootRow {
   last_reply_at: number;
 }
 
-/** Storage `from_kind` → frontend author kind. 'user' is surfaced as
- *  'human' to match the principal-level vocabulary. */
-function mapAuthorKind(fromKind: FromKind): 'agent' | 'human' | 'system' {
-  if (fromKind === 'agent') return 'agent';
-  if (fromKind === 'system') return 'system';
-  return 'human';
-}
+/** The SELECT-list fragment projecting a root message's raw provenance + author
+ *  snapshot columns (aliased `root`). Pair with {@link rootAuthorRow} to resolve
+ *  the {@link MessageAuthorDto}. Kept as one constant so the two thread-root
+ *  queries (list + single-entry) can't drift in which columns they project. */
+const THREAD_ROOT_AUTHOR_SELECT = `root.from_kind     AS root_from_kind,
+           root.from_agent_id AS root_from_agent_id,
+           root.from_user_id  AS root_from_user_id,
+           root.author_id           AS root_author_id,
+           root.author_name         AS root_author_name,
+           root.author_display_name AS root_author_display_name`;
 
-function authorId(
-  fromKind: FromKind,
-  fromAgentId: string | null,
-  fromUserId: string | null,
-): string {
-  if (fromKind === 'agent') return fromAgentId ?? '';
-  return fromUserId ?? '';
+/** Adapt a {@link ThreadRootRow} into the {@link MessageAuthorRow} the shared
+ *  resolver consumes (root_* → the un-prefixed author-evidence fields). */
+function rootAuthorRow(row: ThreadRootRow): MessageAuthorRow {
+  return {
+    from_kind: row.root_from_kind,
+    from_agent_id: row.root_from_agent_id,
+    from_user_id: row.root_from_user_id,
+    author_id: row.root_author_id,
+    author_name: row.root_author_name,
+    author_display_name: row.root_author_display_name,
+  };
 }
 
 /** SINGLE-SOURCE row→ThreadSummary projection for the VIEWER-INVARIANT subset.
  *  Both {@link MessageRepo.listChannelThreads} (per page row) and
  *  {@link MessageRepo.threadListEntryForRoot} (single root, S1 P2) map a
- *  `ThreadRootRow` + its repliers into the same shape — keeping that in one place
- *  is the anti-drift guard: when `ThreadSummary` grows a viewer-invariant field it
- *  is added here once, and the two callers can't silently diverge. `viewer_following`
- *  is NOT set here — it is per-viewer (barred from the broadcast frame, S1 §3); the
- *  list layers it on top per viewer, the single-root entry omits it entirely. */
+ *  `ThreadRootRow` + its resolved author/repliers into the same shape — keeping
+ *  that in one place is the anti-drift guard: when `ThreadSummary` grows a
+ *  viewer-invariant field it is added here once, and the two callers can't
+ *  silently diverge. `rootAuthor` / `rep.repliers` are the SAME server-resolved
+ *  {@link MessageAuthorDto} as `MessageDto.author` (#task:1791) — the caller
+ *  resolves them (batch for the list, point for the single entry) so a
+ *  hard-deleted actor keeps its snapshot identity. `viewer_following` is NOT set
+ *  here — it is per-viewer (barred from the broadcast frame, S1 §3); the list
+ *  layers it on top per viewer, the single-root entry omits it entirely. */
 function rowToThreadSummaryInvariant(
   row: ThreadRootRow,
-  rep: { repliers: ThreadReplier[]; total: number },
+  rootAuthor: MessageAuthorDto | null,
+  rep: { repliers: MessageAuthorDto[]; total: number },
 ): ThreadSummaryInvariant {
   return {
     root_message_id: row.root_message_id,
-    root_author: {
-      kind: mapAuthorKind(row.root_from_kind),
-      id: authorId(row.root_from_kind, row.root_from_agent_id, row.root_from_user_id),
-    },
+    root_author: rootAuthor,
     root_preview: row.root_content.slice(0, THREAD_PREVIEW_MAX_CHARS),
     root_created_at: row.root_created_at,
     root_seq: decodeMessageSeq(row.root_seq),
@@ -272,13 +291,16 @@ export function linkedTaskFromRow(row: LinkedTaskProjectionRow): LinkedTaskDto |
   };
 }
 
-function messageRowWithLinkedTaskToDto(row: MessageRowWithLinkedTask): MessageDto {
-  return messageRowToDto(row, { linkedTask: linkedTaskFromRow(row) });
+function messageRowWithLinkedTaskToDto(
+  row: MessageRowWithLinkedTask,
+  author: MessageAuthorDto | null,
+): MessageDto {
+  return messageRowToDto(row, { author, linkedTask: linkedTaskFromRow(row) });
 }
 
 export function messageRowToDto(
   row: MessageRow,
-  opts?: { linkedTask?: LinkedTaskDto | null },
+  opts: { author: MessageAuthorDto | null; linkedTask?: LinkedTaskDto | null },
 ): MessageDto {
   const metadata = row.metadata
     ? (JSON.parse(row.metadata) as Record<string, unknown>)
@@ -289,6 +311,9 @@ export function messageRowToDto(
     from_kind: row.from_kind,
     from_agent_id: row.from_agent_id,
     from_user_id: row.from_user_id,
+    // Server-resolved display author (null for system rows). Raw provenance
+    // above is retained for self-identification / permission logic.
+    author: opts.author,
     content: row.content,
     metadata,
     attachments: extractAttachmentSnapshots(metadata),
@@ -529,8 +554,9 @@ export class MessageRepo {
         ? false
         : this.existsWithSeq(conversationId, '>', maxSeq, scope);
 
+    const authors = loadMessageAuthors(this.db, rows);
     return {
-      messages: rows.map(r => messageRowWithLinkedTaskToDto(r)),
+      messages: rows.map(r => messageRowWithLinkedTaskToDto(r, authors.get(r) ?? null)),
       reply_counts_by_root: {},
       has_more_before: hasMoreBefore,
       has_more_after: hasMoreAfter,
@@ -681,6 +707,9 @@ export class MessageRepo {
           from_kind: FromKind;
           from_agent_id: string | null;
           from_user_id: string | null;
+          author_id: string | null;
+          author_name: string | null;
+          author_display_name: string | null;
           content: string;
           metadata: string | null;
         }
@@ -690,7 +719,8 @@ export class MessageRepo {
         // ROW_NUMBER picks the 3 highest-seq (most-recent) replies per root; the
         // outer ORDER re-sorts them seq-ASC for time-ascending display.
         `SELECT root_id, message_id, seq, from_kind, from_agent_id,
-                from_user_id, content, metadata
+                from_user_id, author_id, author_name, author_display_name,
+                content, metadata
            FROM (
              SELECT thread_root_id AS root_id,
                     id             AS message_id,
@@ -698,6 +728,9 @@ export class MessageRepo {
                     from_kind      AS from_kind,
                     from_agent_id  AS from_agent_id,
                     from_user_id   AS from_user_id,
+                    author_id      AS author_id,
+                    author_name    AS author_name,
+                    author_display_name AS author_display_name,
                     content        AS content,
                     metadata       AS metadata,
                     ROW_NUMBER() OVER (
@@ -713,19 +746,30 @@ export class MessageRepo {
       )
       .all(conversationId, ...uniqueRootIds);
 
-    for (const row of rows) {
+    // Resolve each reply's author to the SAME MessageAuthorDto as MessageDto
+    // (#task:1791) in the shared two-query batch. These rows are non-system
+    // (WHERE above), so the resolver never returns null; a legacy row with no
+    // snapshot resolves to `unresolved` (id=null) — still a valid DTO the
+    // renderer shows as a neutral placeholder, keeping the preview set a subset
+    // of the reply count (no row is dropped for author reasons).
+    const authorRows: MessageAuthorRow[] = rows.map(row => ({
+      from_kind: row.from_kind,
+      from_agent_id: row.from_agent_id,
+      from_user_id: row.from_user_id,
+      author_id: row.author_id,
+      author_name: row.author_name,
+      author_display_name: row.author_display_name,
+    }));
+    const authors = loadMessageAuthors(this.db, authorRows);
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
       const snapshots = extractAttachmentSnapshotsFromRow(row);
       const preview: ThreadReplyPreviewRow = {
         message_id: row.message_id,
         seq: decodeMessageSeq(row.seq),
-        author: {
-          kind: row.from_kind === 'agent' ? 'agent' : 'human',
-          // A legacy row with a null actor id (pre-v26) still counts as a reply,
-          // so it stays in the tail to keep eligibility identical to the count;
-          // it degrades to a generic avatar on the client, exactly as the chip
-          // does on an unresolved identity.
-          id: (row.from_kind === 'agent' ? row.from_agent_id : row.from_user_id) ?? '',
-        },
+        // Non-system ⇒ never null (see the batch note above).
+        author: authors.get(authorRows[i]!)!,
         // Normalized Markdown SOURCE excerpt (Option A, ruled #task:1746) via
         // the shared `normalizeThreadPreviewExcerpt` SSOT — whitespace-compact +
         // trim + cap, shared byte-for-byte with the live WS-merge producer
@@ -801,9 +845,7 @@ export class MessageRepo {
           : 'messages.list_channel_threads',
         `SELECT
            root.id            AS root_message_id,
-           root.from_kind     AS root_from_kind,
-           root.from_agent_id AS root_from_agent_id,
-           root.from_user_id  AS root_from_user_id,
+           ${THREAD_ROOT_AUTHOR_SELECT},
            root.content       AS root_content,
            root.created_at    AS root_created_at,
            root.seq           AS root_seq,
@@ -867,13 +909,23 @@ export class MessageRepo {
     const rootIds = pageRows.map(r => r.root_message_id);
     const followedRoots = this.followedRootsForViewer(conversationId, rootIds, viewerUserId);
 
-    const threads: ThreadSummary[] = pageRows.map(r => {
+    // Resolve root authors in one batch (two queries total, shared with the
+    // reply-preview / repliers loaders below via `loadMessageAuthors`), so a
+    // hard-deleted root author still names itself from its snapshot.
+    const rootAuthorRows = pageRows.map(rootAuthorRow);
+    const rootAuthors = loadMessageAuthors(this.db, rootAuthorRows);
+
+    const threads: ThreadSummary[] = pageRows.map((r, i) => {
       const rep = repliersByRoot.get(r.root_message_id) ?? {
         repliers: [],
         total: 0,
       };
       return {
-        ...rowToThreadSummaryInvariant(r, rep),
+        ...rowToThreadSummaryInvariant(
+          r,
+          rootAuthors.get(rootAuthorRows[i]!) ?? null,
+          rep,
+        ),
         viewer_following: followedRoots.has(r.root_message_id),
       };
     });
@@ -911,9 +963,7 @@ export class MessageRepo {
         'messages.thread_list_entry_for_root',
         `SELECT
            root.id            AS root_message_id,
-           root.from_kind     AS root_from_kind,
-           root.from_agent_id AS root_from_agent_id,
-           root.from_user_id  AS root_from_user_id,
+           ${THREAD_ROOT_AUTHOR_SELECT},
            root.content       AS root_content,
            root.created_at    AS root_created_at,
            root.seq           AS root_seq,
@@ -945,22 +995,33 @@ export class MessageRepo {
       repliers: [],
       total: 0,
     };
-    return rowToThreadSummaryInvariant(row, rep);
+    return rowToThreadSummaryInvariant(
+      row,
+      resolveOneMessageAuthor(this.db, rootAuthorRow(row)),
+      rep,
+    );
   }
 
   /** Distinct repliers per root, most-recent first (up to 3) plus the full
-   *  distinct count. Distinct identity is (from_kind, actor id); ordering is
-   *  by the replier's most-recent reply (`MAX(seq)`). Legacy rows with no
-   *  resolvable actor id (pre-v26 null `from_user_id`) are skipped — they
-   *  can't render an avatar — so `replier_total` counts identifiable
-   *  repliers only. */
+   *  distinct count. Distinct identity is the STABLE snapshot `author_id`
+   *  (#task:1791) — NOT the live FK — so multiple hard-deleted repliers (whose
+   *  `from_agent_id`/`from_user_id` are all nulled by ON DELETE SET NULL) do NOT
+   *  collapse into one NULL byline; each keeps its own snapshot identity. Each
+   *  replier is the SAME server-resolved {@link MessageAuthorDto} as
+   *  `MessageDto.author`, resolved in the shared two-query batch. Ordering is by
+   *  the replier's most-recent reply (`MAX(seq)`), which — as SQLite's sole
+   *  min/max aggregate — also selects the bare columns (live FK + snapshot name)
+   *  from that most-recent row. Rows with no stable identity (legacy pre-snapshot
+   *  deleted actor → `author_id` null → resolver returns `unresolved`, `id=null`)
+   *  are skipped: they can't render an avatar and are non-aggregating, so
+   *  `replier_total` counts identifiable repliers only (unchanged semantics). */
   private repliersForRoots(
     conversationId: string,
     rootIds: readonly string[],
-  ): Map<string, { repliers: ThreadReplier[]; total: number }> {
+  ): Map<string, { repliers: MessageAuthorDto[]; total: number }> {
     const result = new Map<
       string,
-      { repliers: ThreadReplier[]; total: number }
+      { repliers: MessageAuthorDto[]; total: number }
     >();
     if (rootIds.length === 0) return result;
     const placeholders = rootIds.map(() => '?').join(', ');
@@ -969,29 +1030,58 @@ export class MessageRepo {
         {
           root_id: string;
           from_kind: FromKind;
-          actor_id: string | null;
+          from_agent_id: string | null;
+          from_user_id: string | null;
+          author_id: string | null;
+          author_name: string | null;
+          author_display_name: string | null;
           last_seq: number;
         }
       >(
         this.db,
         'messages.repliers_for_roots',
+        // Group by the STABLE author_id (survives delete); the bare live-FK and
+        // snapshot-name columns come from the MAX(seq) row (SQLite's documented
+        // "bare columns follow the single min/max aggregate" rule) so an active
+        // replier resolves to its CURRENT identity and a deleted one to its most
+        // recent send-time snapshot.
         `SELECT thread_root_id AS root_id,
                 from_kind      AS from_kind,
-                CASE from_kind WHEN 'agent' THEN from_agent_id ELSE from_user_id END AS actor_id,
+                from_agent_id  AS from_agent_id,
+                from_user_id   AS from_user_id,
+                author_id      AS author_id,
+                author_name    AS author_name,
+                author_display_name AS author_display_name,
                 MAX(seq)       AS last_seq
            FROM messages
           WHERE conversation_id = ?
             AND thread_root_id IN (${placeholders})
             AND from_kind != 'system'
-          GROUP BY thread_root_id, from_kind, actor_id
+          GROUP BY thread_root_id, from_kind, author_id
           ORDER BY last_seq DESC`,
       )
       .all(conversationId, ...rootIds);
 
+    // Resolve every distinct-replier group to a MessageAuthorDto in the shared
+    // batch (two queries total, deduped with the root/preview loaders).
+    const authorRows: MessageAuthorRow[] = rows.map(row => ({
+      from_kind: row.from_kind,
+      from_agent_id: row.from_agent_id,
+      from_user_id: row.from_user_id,
+      author_id: row.author_id,
+      author_name: row.author_name,
+      author_display_name: row.author_display_name,
+    }));
+    const authors = loadMessageAuthors(this.db, authorRows);
+
     // Rows arrive globally seq-DESC; per-root relative order is preserved, so
     // accumulating in iteration order yields most-recent-first repliers.
-    for (const row of rows) {
-      if (row.actor_id == null) continue;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
+      const author = authors.get(authorRows[i]!) ?? null;
+      // Skip unresolved (id=null): non-renderable + non-aggregating, matching
+      // the prior legacy null-actor skip.
+      if (!author || author.id === null) continue;
       let entry = result.get(row.root_id);
       if (!entry) {
         entry = { repliers: [], total: 0 };
@@ -999,10 +1089,7 @@ export class MessageRepo {
       }
       entry.total += 1;
       if (entry.repliers.length < 3) {
-        entry.repliers.push({
-          kind: row.from_kind === 'agent' ? 'agent' : 'human',
-          id: row.actor_id,
-        });
+        entry.repliers.push(author);
       }
     }
     return result;
@@ -1226,7 +1313,9 @@ export class MessageRepo {
           WHERE m.id = ?`,
       )
       .get(id);
-    return row ? messageRowWithLinkedTaskToDto(row) : null;
+    return row
+      ? messageRowWithLinkedTaskToDto(row, resolveOneMessageAuthor(this.db, row))
+      : null;
   }
 
   /**
@@ -1266,7 +1355,9 @@ export class MessageRepo {
           LIMIT 1`,
       )
       .get(conversationId, subtype);
-    return row ? messageRowWithLinkedTaskToDto(row) : null;
+    return row
+      ? messageRowWithLinkedTaskToDto(row, resolveOneMessageAuthor(this.db, row))
+      : null;
   }
 
   insertForConversation(params: {
@@ -1368,13 +1459,14 @@ export class MessageRepo {
     afterSeq: number,
     limit = 10,
   ): MessageDto[] {
-    return this.fetchAfterSeq(
+    const rows = this.fetchAfterSeq(
       conversationId,
       afterSeq,
       Math.max(1, limit),
       { mode: 'all' },
-    )
-      .map(messageRowWithLinkedTaskToDto);
+    );
+    const authors = loadMessageAuthors(this.db, rows);
+    return rows.map(r => messageRowWithLinkedTaskToDto(r, authors.get(r) ?? null));
   }
 
   /** Metadata-only stream window `(afterSeq, throughSeq]` (signal-only
@@ -1423,7 +1515,7 @@ export class MessageRepo {
     threadRootId: string,
     beforeSeq: number,
   ): MessageDto[] {
-    return prepareObserved<[string, string, number], MessageRowWithLinkedTask>(
+    const rows = prepareObserved<[string, string, number], MessageRowWithLinkedTask>(
         this.db,
         'messages.stream_below_seq',
         `SELECT m.*, ${LINKED_TASK_SELECT}
@@ -1434,8 +1526,9 @@ export class MessageRepo {
             AND m.seq < ?
           ORDER BY m.seq ASC`,
       )
-      .all(conversationId, threadRootId, beforeSeq)
-      .map(messageRowWithLinkedTaskToDto);
+      .all(conversationId, threadRootId, beforeSeq);
+    const authors = loadMessageAuthors(this.db, rows);
+    return rows.map(r => messageRowWithLinkedTaskToDto(r, authors.get(r) ?? null));
   }
 
   /** Fetch a message by id, scoped to one conversation. Returns null when
@@ -1446,7 +1539,9 @@ export class MessageRepo {
     messageId: string,
   ): MessageDto | null {
     const row = this.fetchById(conversationId, messageId, { mode: 'all' });
-    return row ? messageRowWithLinkedTaskToDto(row) : null;
+    return row
+      ? messageRowWithLinkedTaskToDto(row, resolveOneMessageAuthor(this.db, row))
+      : null;
   }
 
   private reserveNextSeq(conversationId: string): number {
@@ -1593,13 +1688,45 @@ export class MessageRepo {
       params.metadata ?? null,
       params.attachments ?? null,
     );
+    // Capture the send-time author snapshot from the live actor row so the
+    // author stays identifiable after a hard delete (author_id has no FK, so
+    // it survives ON DELETE SET NULL). System rows carry no snapshot.
+    let authorId: string | null = null;
+    let authorName: string | null = null;
+    let authorDisplayName: string | null = null;
+    if (params.fromKind === 'agent' && params.fromAgentId) {
+      const a = prepareObserved<[string], { name: string; display_name: string }>(
+          this.db,
+          'messages.insert_author_agent',
+          'SELECT name, display_name FROM agents WHERE id = ?',
+        )
+        .get(params.fromAgentId);
+      if (a) {
+        authorId = params.fromAgentId;
+        authorName = a.name;
+        authorDisplayName = a.display_name;
+      }
+    } else if (params.fromKind === 'user' && params.fromUserId) {
+      const u = prepareObserved<[string], { name: string; display_name: string }>(
+          this.db,
+          'messages.insert_author_user',
+          'SELECT name, display_name FROM users WHERE id = ?',
+        )
+        .get(params.fromUserId);
+      if (u) {
+        authorId = params.fromUserId;
+        authorName = u.name;
+        authorDisplayName = u.display_name;
+      }
+    }
     prepareObserved(
         this.db,
         'messages.insert_row',
         `INSERT INTO messages
          (id, conversation_id, from_kind, from_agent_id, from_user_id,
-          content, metadata, seq, created_at, thread_root_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          content, metadata, seq, created_at, thread_root_id,
+          author_id, author_name, author_display_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1612,6 +1739,9 @@ export class MessageRepo {
         seq,
         now,
         params.threadRootId ?? null,
+        authorId,
+        authorName,
+        authorDisplayName,
       );
     const row = prepareObserved<[string], MessageRow>(
         this.db,
@@ -1620,7 +1750,7 @@ export class MessageRepo {
       )
       .get(id);
     if (!row) throw new Error('message insert failed');
-    return messageRowToDto(row);
+    return messageRowToDto(row, { author: resolveOneMessageAuthor(this.db, row) });
   }
 }
 

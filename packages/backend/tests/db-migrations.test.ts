@@ -12,6 +12,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  resolveMessageAuthor,
+  type MessageAuthorRow,
+} from '@silverhand/shared';
+import {
   BASELINE_SCHEMA_SQL,
   BASELINE_SCHEMA_VERSION,
 } from '@silverhand/shared/db/baseline-schema';
@@ -1911,6 +1915,148 @@ describe('database migrations', () => {
           'agents_runtime_transition_pair_insert',
           'agents_runtime_transition_pair_update',
         ]);
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('v63 message_author_snapshot', () => {
+    // The backfill runs through the SAME production migration definition
+    // (`migrations` array, replayed by `applyMigrationsThrough`) as `runMigrations`
+    // — this drives the real `up` SQL, not a hand-copied version. NOTE the fidelity
+    // boundary: v63+ rows capture the author snapshot at SEND time, but this
+    // one-time backfill reconstructs each surviving actor's identity at MIGRATION
+    // time (best effort — no send-time value was ever recorded for pre-v63 rows).
+    // We prove the migration-time backfill populates the snapshot columns from the
+    // live authority for still-resolvable rows, leaves them NULL for system rows
+    // and rows whose actor was ALREADY hard-deleted before the column existed,
+    // and — critically — that the snapshot survives a LATER hard delete so the ONE
+    // server-authoritative resolver classifies the row as `deleted` (never a
+    // fabricated identity, never an "unresolved" regression).
+    function seedV62(db: Database.Database): { now: number } {
+      const now = 1_700_000_200_000;
+      db.exec(`
+        INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, created_at, updated_at, email, last_seen_at)
+        VALUES ('u1', 'u1', 'User One', NULL, NULL, ${now}, ${now}, NULL, NULL);
+
+        INSERT INTO hosts (id, name, kind, created_at, user_id, installation_id, last_seen_at, revoked_at, display_label)
+        VALUES ('h1', 'h1', 'local', ${now}, 'u1', NULL, ${now}, NULL, NULL);
+
+        INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id)
+        VALUES
+          ('a_kept', 'kept-agent', 'claude', 'h1', ${now}, ${now}, 'Kept Agent', 'u1'),
+          ('a_pre',  'pre-agent',  'codex',  'h1', ${now}, ${now}, 'Pre Agent',  'u1');
+
+        INSERT INTO workspaces (id, name, description, workspace_kind, workspace_path, workspace_host_id, owner_agent_id, created_at, updated_at)
+        VALUES ('w1', 'w1', NULL, 'regular', '/tmp/w1', 'h1', NULL, ${now}, ${now});
+
+        INSERT INTO conversations (id, workspace_id, workspace_path, kind, title, status, created_at, updated_at)
+        VALUES ('c1', 'w1', '/tmp/w1', 'channel', 'c1', 'open', ${now}, ${now});
+
+        -- Message by an agent that STAYS alive across the migration.
+        INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, from_user_id, content, seq, created_at)
+        VALUES ('m_agent', 'c1', 'agent', 'a_kept', NULL, 'by kept agent', 1, ${now});
+
+        -- Message by a live user.
+        INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, from_user_id, content, seq, created_at)
+        VALUES ('m_user', 'c1', 'user', NULL, 'u1', 'by user', 2, ${now});
+
+        -- System message: no author on either axis.
+        INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, from_user_id, content, seq, created_at)
+        VALUES ('m_system', 'c1', 'system', NULL, NULL, 'system notice', 3, ${now});
+
+        -- Message by an agent that is hard-deleted BEFORE the migration runs:
+        -- ON DELETE SET NULL wipes from_agent_id, leaving nothing to snapshot.
+        INSERT INTO messages (id, conversation_id, from_kind, from_agent_id, from_user_id, content, seq, created_at)
+        VALUES ('m_pre', 'c1', 'agent', 'a_pre', NULL, 'by pre-deleted agent', 4, ${now});
+      `);
+      // Hard-delete a_pre BEFORE the migration — its message loses the FK now.
+      db.prepare(`DELETE FROM agents WHERE id = 'a_pre'`).run();
+      return { now };
+    }
+
+    /** Read a message's author-bearing columns back as the resolver's row shape. */
+    function authorRow(db: Database.Database, id: string): MessageAuthorRow {
+      return db
+        .prepare<[string], MessageAuthorRow>(
+          `SELECT from_kind, from_agent_id, from_user_id,
+                  author_id, author_name, author_display_name
+             FROM messages WHERE id = ?`,
+        )
+        .get(id)!;
+    }
+
+    it('backfills the author snapshot from live authority at migration time (best effort), leaves system + already-deleted rows NULL, and the snapshot survives a later delete → resolver says deleted', () => {
+      const db = openDbAt(62);
+      try {
+        seedV62(db);
+
+        applyMigrationsThrough(db, 63);
+
+        // Live agent + live user rows are backfilled with a complete snapshot.
+        expect(authorRow(db, 'm_agent')).toEqual({
+          from_kind: 'agent',
+          from_agent_id: 'a_kept',
+          from_user_id: null,
+          author_id: 'a_kept',
+          author_name: 'kept-agent',
+          author_display_name: 'Kept Agent',
+        });
+        expect(authorRow(db, 'm_user')).toEqual({
+          from_kind: 'user',
+          from_agent_id: null,
+          from_user_id: 'u1',
+          author_id: 'u1',
+          author_name: 'u1',
+          author_display_name: 'User One',
+        });
+
+        // System row: all three snapshot columns stay NULL.
+        expect(authorRow(db, 'm_system')).toMatchObject({
+          author_id: null,
+          author_name: null,
+          author_display_name: null,
+        });
+
+        // Row whose actor was ALREADY deleted before the migration: FK was nulled,
+        // so the backfill has nothing to copy → snapshot stays NULL → unresolved
+        // (we NEVER fabricate an identity that was never captured).
+        const preRow = authorRow(db, 'm_pre');
+        expect(preRow).toMatchObject({
+          from_agent_id: null,
+          author_id: null,
+          author_name: null,
+          author_display_name: null,
+        });
+        expect(resolveMessageAuthor(preRow, null)).toEqual({
+          kind: 'agent',
+          status: 'unresolved',
+          id: null,
+          name: null,
+          display_name: null,
+          avatar_url: null,
+        });
+
+        // Now hard-delete the still-live agent AFTER the migration: ON DELETE SET
+        // NULL wipes the FK, but the backfilled snapshot survives → the resolver
+        // classifies the row as `deleted`, naming the gone actor from the snapshot.
+        db.prepare(`DELETE FROM agents WHERE id = 'a_kept'`).run();
+        const deletedRow = authorRow(db, 'm_agent');
+        expect(deletedRow).toMatchObject({
+          from_agent_id: null,
+          author_id: 'a_kept',
+          author_name: 'kept-agent',
+          author_display_name: 'Kept Agent',
+        });
+        expect(resolveMessageAuthor(deletedRow, null)).toEqual({
+          kind: 'agent',
+          status: 'deleted',
+          id: 'a_kept',
+          name: 'kept-agent',
+          display_name: 'Kept Agent',
+          avatar_url: null,
+        });
       } finally {
         db.close();
       }

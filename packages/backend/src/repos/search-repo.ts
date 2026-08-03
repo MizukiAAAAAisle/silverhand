@@ -8,6 +8,7 @@ import type {
   SearchWorkspaceRef,
 } from '@silverhand/shared';
 import { messageRowToDto } from './message-repo.js';
+import { loadMessageAuthors } from './message-author.js';
 import { likeNeedle } from './sql-like.js';
 import {
   streamScopePredicate,
@@ -339,12 +340,13 @@ export class SearchRepo {
       )
       .all(...params, limit) as MessageSearchRow[];
 
+    const authors = loadMessageAuthors(this.db, rows);
     return {
       results: rows.map(row => ({
         type: 'message',
         workspace: workspaceRef(row),
         conversation: conversationRef(row),
-        message: messageRowToDto(row),
+        message: messageRowToDto(row, { author: authors.get(row) ?? null }),
         agent_name: row.agent_name,
       })),
       total,

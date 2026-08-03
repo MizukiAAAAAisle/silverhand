@@ -5,6 +5,8 @@ import type {
   MessageRow,
   SavedMessageRow,
   SavedMessageDto,
+  MessageAuthorDto,
+  MessageAuthorRow,
 } from '@silverhand/shared';
 import {
   LINKED_TASK_JOINS,
@@ -12,6 +14,7 @@ import {
   linkedTaskFromRow,
   type LinkedTaskProjectionRow,
 } from './message-repo.js';
+import { loadMessageAuthors } from './message-author.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -24,6 +27,9 @@ interface JoinedRow extends SavedMessageRow, LinkedTaskProjectionRow {
   m_from_kind: MessageRow['from_kind'];
   m_from_agent_id: string | null;
   m_from_user_id: string | null;
+  m_author_id: string | null;
+  m_author_name: string | null;
+  m_author_display_name: string | null;
   m_content: string;
   m_metadata: string | null;
   m_seq: number;
@@ -35,7 +41,7 @@ interface JoinedRow extends SavedMessageRow, LinkedTaskProjectionRow {
   agent_name: string | null;
 }
 
-function rowToDto(row: JoinedRow): SavedMessageDto {
+function rowToDto(row: JoinedRow, author: MessageAuthorDto | null): SavedMessageDto {
   return {
     id: row.id,
     saved_at: row.saved_at,
@@ -51,6 +57,7 @@ function rowToDto(row: JoinedRow): SavedMessageDto {
       from_kind: row.m_from_kind,
       from_agent_id: row.m_from_agent_id,
       from_user_id: row.m_from_user_id,
+      author,
       content: row.m_content,
       metadata: row.m_metadata
         ? (JSON.parse(row.m_metadata) as Record<string, unknown>)
@@ -113,6 +120,9 @@ const SELECT_JOINED = `
     m.from_kind        AS m_from_kind,
     m.from_agent_id    AS m_from_agent_id,
     m.from_user_id     AS m_from_user_id,
+    m.author_id           AS m_author_id,
+    m.author_name         AS m_author_name,
+    m.author_display_name AS m_author_display_name,
     m.content          AS m_content,
     m.metadata         AS m_metadata,
     m.seq              AS m_seq,
@@ -134,6 +144,22 @@ const SELECT_JOINED = `
 export class SavedMessageRepo {
   constructor(private readonly db: Db) {}
 
+  /** Resolve `MessageAuthorDto` for each joined row (batch, two queries) and
+   *  return authors aligned to the input order, so callers can zip with
+   *  `rows.map((r, i) => rowToDto(r, authors[i]))`. */
+  private resolveAuthors(rows: JoinedRow[]): (MessageAuthorDto | null)[] {
+    const authorRows: MessageAuthorRow[] = rows.map(r => ({
+      from_kind: r.m_from_kind,
+      from_agent_id: r.m_from_agent_id,
+      from_user_id: r.m_from_user_id,
+      author_id: r.m_author_id,
+      author_name: r.m_author_name,
+      author_display_name: r.m_author_display_name,
+    }));
+    const map = loadMessageAuthors(this.db, authorRows);
+    return authorRows.map(ar => map.get(ar) ?? null);
+  }
+
   list(limit = 200): SavedMessageDto[] {
     const rows = this.db
       .prepare<[number], JoinedRow>(
@@ -142,7 +168,8 @@ export class SavedMessageRepo {
          LIMIT ?`,
       )
       .all(limit);
-    return rows.map(rowToDto);
+    const authors = this.resolveAuthors(rows);
+    return rows.map((r, i) => rowToDto(r, authors[i] ?? null));
   }
 
   /**
@@ -186,7 +213,8 @@ export class SavedMessageRepo {
          LIMIT ?`,
       )
       .all(...params);
-    return rows.map(rowToDto);
+    const authors = this.resolveAuthors(rows);
+    return rows.map((r, i) => rowToDto(r, authors[i] ?? null));
   }
 
 
@@ -239,7 +267,8 @@ export class SavedMessageRepo {
            AND sm.user_id = ?`,
       )
       .get(messageId, userId);
-    return row ? rowToDto(row) : null;
+    if (!row) return null;
+    return rowToDto(row, this.resolveAuthors([row])[0] ?? null);
   }
 
   /** Returns true when a row was deleted; false when nothing to unsave. */

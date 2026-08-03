@@ -7,6 +7,7 @@ import {
   StorageKindSchema,
 } from '../db/schema.js';
 import { MessageSeqSchema } from '../seq.js';
+import { MessageAuthorDtoSchema } from './message-author.js';
 
 //
 // Two shapes:
@@ -248,7 +249,11 @@ export type AttachmentLocateDto = z.infer<typeof AttachmentLocateDtoSchema>;
 // Source actor is the earliest reference message's sender, NOT the attachment
 // uploader — `AttachmentDto.created_by_*` is the blob's originator (may be an
 // agent that never sends the message), which is a separate axis. The panel row
-// renders sender identity from `source.from_*`, avoiding an N+1 lookup.
+// renders sender identity from `source.author` — the SAME server-authoritative
+// {@link MessageAuthorDto} as `MessageDto.author` (#task:1791), so a hard-deleted
+// sender still names itself via its send-time snapshot instead of collapsing to
+// a directory miss. `from_*` are retained as raw provenance for the jump target
+// and the sender FILTER facet (a wire-expressible actor id), NOT for rendering.
 
 /** Earliest persisted-message reference for an attachment in the channel. */
 export const AttachmentListItemSourceSchema = z.object({
@@ -258,6 +263,13 @@ export const AttachmentListItemSourceSchema = z.object({
   conversation_id: z.string(),
   thread_root_id: z.string().nullable(),
   message_seq: MessageSeqSchema,
+  /** Server-resolved author of the earliest reference message — the presentation
+   *  identity the panel row renders (active = live name/avatar; deleted = snapshot
+   *  name, neutral avatar; unresolved = "Unknown"). Null only when the reference
+   *  is a system message (system is not an actor). The raw `from_*` below stay as
+   *  provenance for jump + filter, but MUST NOT be used to render the byline (they
+   *  collapse to a directory miss once the actor is hard-deleted). */
+  author: MessageAuthorDtoSchema.nullable(),
   from_kind: FromKindSchema,
   from_user_id: z.string().nullable(),
   from_agent_id: z.string().nullable(),

@@ -121,6 +121,18 @@ function expectIntact(f: Fixture): void {
   expect(f.t.fake.stops).toEqual([]);
 }
 
+/** Capture `agent_changed` ids published on the `app` scope from the moment of
+ *  subscription. The cascade publishes this terminal identity-change signal
+ *  (#task:1791) in its post-commit phase, once per actually-deleted agent, so
+ *  every historical-author carrier reconciles to the `deleted` snapshot. */
+function captureAgentChanged(t: TestApp): string[] {
+  const ids: string[] = [];
+  t.ctx.events.subscribeScope('app', e => {
+    if (e.kind === 'agent_changed') ids.push((e.payload as any).agent_id);
+  });
+  return ids;
+}
+
 describe('deleteComputer destruction boundaries', () => {
   let t: TestApp | null = null;
 
@@ -304,5 +316,68 @@ describe('deleteComputer destruction boundaries', () => {
     // Atomicity: the workspace, its channel, the agent and the bytes are all
     // still there, and nothing crossed a process boundary.
     expectIntact(f);
+  });
+
+  // #task:1791 — the cascade's post-commit identity-change fan-out. A committed
+  // cascade publishes `agent_changed` exactly once per DELETED agent (active AND
+  // failed-row alike), and a rolled-back cascade publishes NOTHING — the signal
+  // is emitted only after the authority transaction lands, never for an agent
+  // whose row the rollback kept alive.
+  describe('post-commit identity-change publish (agent_changed)', () => {
+    it('commit → publishes agent_changed once per deleted agent, covering a cascaded failed-row agent', async () => {
+      t = buildTestApp();
+      const f = await setup(t);
+      // A second cascaded agent in the `failed` state: it is torn down row-only
+      // (no purge), but its author carrier must still be told to reconcile — the
+      // cascade covers failed ids too, exactly once.
+      const failed = new AgentRepo(t.ctx.db).create(
+        { name: 'faily', runtime: 'claude' },
+        f.hostId,
+        t.viewerUserId,
+      );
+      new WorkspaceRepo(t.ctx.db).insertMembership(f.workspaceId, failed.id);
+      t.ctx.db
+        .prepare(`UPDATE agents SET materialization_status = 'failed' WHERE id = ?`)
+        .run(failed.id);
+      const changed = captureAgentChanged(t);
+
+      const result = await deleteComputer(f.deps(), {
+        hostId: f.hostId,
+        requesterUserId: t.viewerUserId,
+        cascadeDependents: true,
+      });
+
+      expect(result).toEqual({ kind: 'deleted' });
+      // Exactly once each, no duplicate, no omission of the failed id.
+      expect([...changed].sort()).toEqual([f.agentId, failed.id].sort());
+      expect(changed).toHaveLength(2);
+    });
+
+    it('rollback → publishes NO agent_changed (never signals a delete the transaction undid)', async () => {
+      t = buildTestApp();
+      const f = await setup(t);
+      class RestrictingHostRepo extends HostRepo {
+        override deleteOwnedUserInvite(): boolean {
+          throw new Error('FOREIGN KEY constraint failed');
+        }
+      }
+      const changed = captureAgentChanged(t);
+
+      await expect(
+        deleteComputer(
+          { ...f.deps(), hosts: new RestrictingHostRepo(t.ctx.db) },
+          {
+            hostId: f.hostId,
+            requesterUserId: t.viewerUserId,
+            cascadeDependents: true,
+          },
+        ),
+      ).rejects.toThrow(/FOREIGN KEY constraint failed/);
+
+      // The agent row survived the rollback, so its identity must NOT have been
+      // announced as changed — the publish loop is strictly post-commit.
+      expect(changed).toEqual([]);
+      expectIntact(f);
+    });
   });
 });

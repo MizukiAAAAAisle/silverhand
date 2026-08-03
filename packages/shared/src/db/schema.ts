@@ -465,6 +465,16 @@ export interface MessageRow {
   metadata: string | null;
   seq: number;
   created_at: number;
+  /** Send-time author snapshot (v63, #task:1791). Survives the actor's hard
+   *  delete — `author_id` has NO FK, so it is retained when
+   *  `from_agent_id`/`from_user_id` are nulled by ON DELETE SET NULL. It is the
+   *  stable, non-collapsing aggregation key + the evidence that lets a resolver
+   *  render a "deleted" author. NULL for system rows and for legacy rows whose
+   *  actor was deleted before the snapshot existed (→ 'unresolved'). See
+   *  MessageAuthorDto. */
+  author_id: string | null;
+  author_name: string | null;
+  author_display_name: string | null;
   // ── DEAD MODEL RESIDUE (v60) ──────────────────────────────────────────
   // The columns below are from the retired "a message IS a task" model. As of
   // v60 a task is a first-class `tasks` aggregate (see TaskRow); these columns

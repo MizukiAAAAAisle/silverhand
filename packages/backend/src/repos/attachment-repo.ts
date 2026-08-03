@@ -9,9 +9,11 @@ import type {
   AttachmentSenderFacet,
   AttachmentSnapshot,
   FromKind,
+  MessageAuthorDto,
   StorageKind,
 } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
+import { loadMessageAuthors } from './message-author.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -92,6 +94,9 @@ interface ChannelAttachmentRefRow {
   from_kind: FromKind;
   from_user_id: string | null;
   from_agent_id: string | null;
+  author_id: string | null;
+  author_name: string | null;
+  author_display_name: string | null;
   appeared_at: number;
   a_id: string;
   a_channel_id: string;
@@ -106,7 +111,10 @@ interface ChannelAttachmentRefRow {
   a_created_at: number;
 }
 
-function refRowToListItem(row: ChannelAttachmentRefRow): AttachmentListItem {
+function refRowToListItem(
+  row: ChannelAttachmentRefRow,
+  author: MessageAuthorDto | null,
+): AttachmentListItem {
   const attachment: AttachmentDto = {
     id: row.a_id,
     channel_id: row.a_channel_id,
@@ -125,6 +133,7 @@ function refRowToListItem(row: ChannelAttachmentRefRow): AttachmentListItem {
     conversation_id: row.message_conversation_id,
     thread_root_id: row.thread_root_id,
     message_seq: decodeMessageSeq(row.message_seq),
+    author,
     from_kind: row.from_kind,
     from_user_id: row.from_user_id,
     from_agent_id: row.from_agent_id,
@@ -191,6 +200,9 @@ const CANONICAL_REFS_CTE = `raw AS (
              m.from_kind                     AS from_kind,
              m.from_user_id                  AS from_user_id,
              m.from_agent_id                 AS from_agent_id,
+             m.author_id                     AS author_id,
+             m.author_name                   AS author_name,
+             m.author_display_name           AS author_display_name,
              m.created_at                    AS appeared_at,
              CASE
                WHEN je.type = 'object'
@@ -214,7 +226,8 @@ const CANONICAL_REFS_CTE = `raw AS (
          refs AS (
            SELECT
              attachment_id, message_id, message_conversation_id, thread_root_id,
-             message_seq, from_kind, from_user_id, from_agent_id, appeared_at,
+             message_seq, from_kind, from_user_id, from_agent_id,
+             author_id, author_name, author_display_name, appeared_at,
              ROW_NUMBER() OVER (
                PARTITION BY attachment_id
                ORDER BY appeared_at ASC, message_id ASC
@@ -411,6 +424,9 @@ export class AttachmentRepo {
            r.from_kind               AS from_kind,
            r.from_user_id            AS from_user_id,
            r.from_agent_id           AS from_agent_id,
+           r.author_id               AS author_id,
+           r.author_name             AS author_name,
+           r.author_display_name     AS author_display_name,
            r.appeared_at             AS appeared_at,
            a.id                      AS a_id,
            a.channel_id              AS a_channel_id,
@@ -459,7 +475,14 @@ export class AttachmentRepo {
       });
     const hasMore = rows.length > limit;
     const trimmed = hasMore ? rows.slice(0, limit) : rows;
-    const items = trimmed.map(refRowToListItem);
+    // Resolve each canonical source's author server-side (active → live
+    // name/avatar; hard-deleted → send-time snapshot; legacy → unresolved), so
+    // a deleted sender still names itself instead of collapsing to a directory
+    // miss. Keyed by row reference — a batch load, not an N+1 per item.
+    const authors = loadMessageAuthors(this.db, trimmed);
+    const items = trimmed.map((row) =>
+      refRowToListItem(row, authors.get(row) ?? null),
+    );
     const tail = trimmed[trimmed.length - 1];
     const next_cursor: AttachmentListCursor | null =
       hasMore && tail

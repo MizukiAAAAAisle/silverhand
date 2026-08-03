@@ -14,7 +14,9 @@ import { AttachmentLabelSchema, AttachmentSnapshotSchema } from './attachment.js
 import { ReactionAggregateDtoSchema } from './reactions.js';
 import { LinkedTaskDtoSchema } from './task.js';
 import {
-  ThreadReplierSchema,
+  MessageAuthorDtoSchema,
+} from './message-author.js';
+import {
   ThreadSummaryInvariantSchema,
 } from './thread-summary.js';
 import { MessageSeqSchema } from '../seq.js';
@@ -25,6 +27,11 @@ export const MessageDtoSchema = z.object({
   from_kind: FromKindSchema,
   from_agent_id: z.string().nullable(),
   from_user_id: z.string().nullable(),
+  /** Server-resolved author presentation, or null for `from_kind='system'`.
+   *  The `from_kind`/`from_agent_id`/`from_user_id` above stay the RAW
+   *  provenance (self-identification, permission logic); `author` is the
+   *  resolved DISPLAY projection layered on top. See MessageAuthorDtoSchema. */
+  author: MessageAuthorDtoSchema.nullable(),
   content: z.string(),
   metadata: z.record(z.unknown()).nullable(),
   /** Attachment snapshots attached to this message (null when none).
@@ -122,13 +129,11 @@ export const ReplyBadgeSummarySchema = z.object({
   reply_count: z.number().int().nonnegative(),
   /** Epoch ms of the most recent non-system reply. */
   last_reply_at: z.number(),
-  /** Up to 3 distinct most-recent repliers, most-recent first. */
-  repliers: z.array(
-    z.object({
-      kind: z.enum(['agent', 'human']),
-      id: z.string(),
-    }),
-  ),
+  /** Up to 3 distinct most-recent repliers, most-recent first. Each is the SAME
+   *  server-resolved {@link MessageAuthorDto} as `MessageDto.author` (#task:1791)
+   *  so a hard-deleted replier keeps its snapshot identity; distinct by stable
+   *  `author.id`, `unresolved` (id=null) repliers omitted. */
+  repliers: z.array(MessageAuthorDtoSchema),
   /** Full distinct replier count (drives a "+N" overflow past the 3 shown). */
   replier_total: z.number().int().nonnegative(),
 });
@@ -154,11 +159,13 @@ export const ThreadReplyPreviewRowSchema = z.object({
    *  Payload freshness is handled by invalidate/refetch (see
    *  `reply_previews_by_root`), never by arbitrating seq. */
   seq: MessageSeqSchema,
-  /** Reply author — reuses `ThreadReplier` (kind ∈ {agent,human}; a cluster's
-   *  reply set is never system). The frontend resolves avatar/name from this
-   *  `{kind,id}` via the SAME batch avatar hooks as the reply chip's stacked
-   *  repliers — no avatar URL is inlined, no second identity projection. */
-  author: ThreadReplierSchema,
+  /** Reply author — the SAME server-authoritative {@link MessageAuthorDto} as
+   *  `MessageDto.author` (#task:1791). A cluster's reply set is never system, so
+   *  this is non-null; a hard-deleted replier still names itself via its
+   *  send-time snapshot (`status='deleted'`) instead of collapsing to a directory
+   *  miss. `unresolved` (legacy pre-snapshot deleted actor, `id=null`) is
+   *  non-aggregating and the renderer shows a neutral "Unknown" placeholder. */
+  author: MessageAuthorDtoSchema,
   /** A NORMALIZED MARKDOWN SOURCE EXCERPT of the reply — NOT semantically
    *  stripped plain text. Both producers route it through the shared
    *  {@link normalizeThreadPreviewExcerpt} SSOT: whitespace-compact (`\s+`→space)

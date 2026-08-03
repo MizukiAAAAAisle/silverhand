@@ -127,6 +127,12 @@ export async function deleteAgent(
   }
   if (agent.materialization_status === 'failed') {
     deleteFailedAgentRowOnly(ctx, agents, agent);
+    // Post-commit identity-change fan-out: the row is gone, so historical author
+    // carriers reconcile to the `deleted` snapshot (#task:1791). Single-agent
+    // path deletes inline (no outer tx), so this fires post-commit here; the
+    // delete-computer cascade calls deleteFailedAgentRowOnly INSIDE its tx and
+    // publishes in its own post-commit phase — that's why the helper stays pure.
+    ctx.agentService.publishDeleted(agent.id);
     return { kind: 'deleted' };
   }
 
@@ -169,6 +175,13 @@ export async function deleteAgent(
   //    when the daemon is permanently unreachable, but the DB teardown stays one
   //    source of truth.
   await teardownAgentControlPlane(deps, id, impact);
+
+  // Post-commit identity-change fan-out (#task:1791): the authority commit
+  // (`agents.delete`) has landed, so publish the terminal `agent_changed` and
+  // let every historical-author carrier reconcile to the server's `deleted`
+  // snapshot. After the teardown, never on a fail-closed purge above — a request
+  // that refused never tells clients the identity changed.
+  ctx.agentService.publishDeleted(id);
 
   ctx.logger.info(
     {
