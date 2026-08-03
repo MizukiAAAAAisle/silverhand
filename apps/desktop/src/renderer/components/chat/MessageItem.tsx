@@ -840,7 +840,15 @@ function ActorMessageItem({
       )}
       <MessageRowContent
         alignRight={alignRight}
-        columnClassName="min-w-0 max-w-[85%]"
+        // Hug-content bubble by default (`max-w-[85%]`, no grow). A root that
+        // heads a reply-preview block instead FILLS that 85% (`w-full`) so the
+        // cluster reads at one stable width across every root, rather than
+        // adapting to each root's own body width and rendering ragged (shiki).
+        // The blast radius is exactly the rows that show the block —
+        // reply-less messages keep hugging their content.
+        columnClassName={
+          'min-w-0 max-w-[85%]' + (badgeHeadsPreview ? ' w-full' : '')
+        }
         /* A continuation row states neither author nor time in the content
            column: the group head already named the author, and this row's own
            time sits in the hover rail beside it. Both null ⇒ MessageRowContent
