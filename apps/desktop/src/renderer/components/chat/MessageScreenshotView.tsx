@@ -8,9 +8,9 @@ import { resolveAttachmentLabels } from '@silverhand/shared';
 import { FileText, Hash } from 'lucide-react';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { getAttachmentBlobUrl } from '@/lib/attachment-blob-cache';
-import { AuthorAvatarView } from './author-avatar-view';
-import { presentAuthor } from './author-presentation';
-import { formatSenderLabel } from './markdownTranscript';
+import { AuthorAvatarView, AuthorName } from './author-avatar-view';
+import { authorStateLabel, presentAuthor } from './author-presentation';
+import { continuesAuthorGroup } from './authorGrouping';
 import { Markdown } from './Markdown';
 import { MessageRowContent } from './MessageRowContent';
 import { ReactionChipRow } from './ReactionChipRow';
@@ -40,11 +40,28 @@ import type { StaticTaskRefSummary } from './TaskRef';
  * The `agentsByName` / `humansByName` maps that remain feed only the
  * inline @-mention pills inside the Markdown body, a separate axis.
  *
+ * The byline NAME renders through the SAME shared `AuthorName` primitive as
+ * the live row (#task:1802): identical `font-bold` ink weight, a BARE name for
+ * both actor kinds (no `@` — recognition surfaces dropped it in #task:1768; the
+ * avatar carries agent-vs-human, and #task:1771 made the name read equal for
+ * both), and a deleted author shows the quiet `DeletedActorMarker` chip (a
+ * static badge, so it survives the no-hover export intact). The name is
+ * sanitized before it enters the primitive — same XML-control-char guard the
+ * body text gets. Nothing about the byline is hand-assembled here, so a future
+ * byline change (weight, color, deleted styling) propagates to the export for
+ * free rather than silently drifting. Timestamps match the live `MM/DD HH:mm`.
+ *
  * What we render per row (per @shiki spec): avatar + display name +
- * absolute time + markdown body + attachment chips + reaction chips.
+ * time + markdown body + attachment chips + reaction chips.
  * Reactions go through the SAME `ReactionChipRow` primitive as the live
  * row (#task:1173) — a static, button/hook/portal-free variant — so a
  * reaction visible in chat is always visible in the screenshot too.
+ * Consecutive same-author rows GROUP exactly as the live stream does
+ * (#task:1737 / #task:1802): the run's head keeps the full header, the rest
+ * drop avatar + name + time. The continuation predicate compares each row
+ * against the one directly ABOVE IT IN THE EXPORT (not the live stream), so a
+ * skip-selected excerpt can never hide a byline that mismatches its visible
+ * predecessor — the dropped name always equals the row above it.
  * NOT rendered (interactive affordances, not default-visible content):
  * saved indicator, hover bar, checkbox, thread-replies badge, task tag,
  * system rows.
@@ -114,30 +131,44 @@ export function MessageScreenshotView({
           </span>
         </div>
       ) : null}
-      {messages.map(m => (
-        <ScreenshotRow
-          key={m.id}
-          message={m}
-          agentsByName={agentsByName}
-          humansByName={humansByName}
-          channelsByName={channelsByName}
-          conversationRefsById={conversationRefsById}
-          taskRefsByNumber={taskRefsByNumber}
-          agentAvatarUrls={agentAvatarUrls}
-          authorAgentAvatarUrls={authorAgentAvatarUrls}
-          authorUserAvatarUrls={authorUserAvatarUrls}
-          attachmentImageUrls={attachmentImageUrls}
-          viewer={viewer}
-          viewerAvatarObjectUrl={viewerAvatarObjectUrl}
-          mermaidSvgByCode={mermaidSvgByCode}
-        />
-      ))}
+      {messages.map((m, i) => {
+        // Group a run of one author exactly as the live stream does, but measure
+        // against the PREVIOUS EXPORTED row rather than the live-stream
+        // predecessor. `messages` is `selectedSorted()` (seq-ascending) and a
+        // multi-select can skip rows, so the live-stream neighbour may be absent
+        // here; comparing against the row that will actually sit above this one
+        // keeps the collapse honest — the byline we drop always equals the
+        // visible row above, never a different author (#task:1802).
+        const previous = i > 0 ? messages[i - 1]! : null;
+        const continuesPrevious =
+          previous != null && continuesAuthorGroup(m, previous);
+        return (
+          <ScreenshotRow
+            key={m.id}
+            message={m}
+            continuesPrevious={continuesPrevious}
+            agentsByName={agentsByName}
+            humansByName={humansByName}
+            channelsByName={channelsByName}
+            conversationRefsById={conversationRefsById}
+            taskRefsByNumber={taskRefsByNumber}
+            agentAvatarUrls={agentAvatarUrls}
+            authorAgentAvatarUrls={authorAgentAvatarUrls}
+            authorUserAvatarUrls={authorUserAvatarUrls}
+            attachmentImageUrls={attachmentImageUrls}
+            viewer={viewer}
+            viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+            mermaidSvgByCode={mermaidSvgByCode}
+          />
+        );
+      })}
     </div>
   );
 }
 
 function ScreenshotRow({
   message,
+  continuesPrevious,
   agentsByName,
   humansByName,
   channelsByName,
@@ -152,6 +183,7 @@ function ScreenshotRow({
   mermaidSvgByCode,
 }: {
   message: MessageDto;
+  continuesPrevious: boolean;
   agentsByName: ReadonlyMap<string, AgentDto>;
   humansByName?: ReadonlyMap<string, UserDto>;
   channelsByName?: ReadonlyMap<string, ChannelReference | null>;
@@ -166,11 +198,19 @@ function ScreenshotRow({
   mermaidSvgByCode?: ReadonlyMap<string, string>;
 }): JSX.Element {
   // Identity comes from the ONE author seam, not a `from_*_id` directory join.
-  // The label keeps the export's `@`-for-agent decoration (via the shared
-  // `formatSenderLabel` — plain images still lean on it to read agent vs human
-  // at a glance) on top of the seam's snapshot name.
+  // The byline renders through the shared `AuthorName` primitive (below), so
+  // this file no longer hand-assembles the label — it only sanitizes the seam's
+  // snapshot name for the SVG serializer (a display name can carry the same
+  // XML-invalid control chars the body guards against). `authorStateLabel`
+  // gives the avatar its alt/title text; a system row (null author) has no
+  // presentation and falls back to a bare "system".
   const presentation = message.author ? presentAuthor(message.author) : null;
-  const senderName = sanitizeScreenshotText(formatSenderLabel(message));
+  const safePresentation = presentation
+    ? { ...presentation, label: sanitizeScreenshotText(presentation.label) }
+    : null;
+  const avatarLabel = safePresentation
+    ? authorStateLabel(safePresentation)
+    : 'system';
   // Feed the viewer's own already-resolved avatar blob when they authored the
   // row (active user matching the viewer's id); every other active author pulls
   // its bytes from the author-DTO-derived batch (#task:1792 B2 — not the
@@ -185,16 +225,27 @@ function ScreenshotRow({
   const content = sanitizeScreenshotText(message.content);
 
   return (
-    <div className="flex items-start gap-3">
-      <AuthorAvatarView
-        avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
-        size={AVATAR_PX.lg}
-        label={senderName}
-        className="border-[length:var(--border-avatar-width)] border-border-avatar"
-        agentAvatarUrls={authorAgentAvatarUrls}
-        humanAvatarUrls={authorUserAvatarUrls}
-        objectUrlOverride={viewerAvatarOverride}
-      />
+    // A grouped continuation pulls up toward its head (the parent's `gap-3`
+    // minus this) so a one-author run reads as one block, matching the live
+    // stream's tightening (#task:1737 / #task:1802).
+    <div className={'flex items-start gap-3' + (continuesPrevious ? ' -mt-2' : '')}>
+      {continuesPrevious ? (
+        // Continuation: no avatar, but hold the avatar column's WIDTH so every
+        // body in the run stays on the group head's text baseline. No hover
+        // rail here — a static export has nowhere to reveal the per-row time,
+        // and stamping it on every line would defeat the grouping.
+        <div className="w-8 shrink-0" aria-hidden />
+      ) : (
+        <AuthorAvatarView
+          avatar={presentation?.avatar ?? { variant: 'neutral-user' }}
+          size={AVATAR_PX.lg}
+          label={avatarLabel}
+          className="border-[length:var(--border-avatar-width)] border-border-avatar"
+          agentAvatarUrls={authorAgentAvatarUrls}
+          humanAvatarUrls={authorUserAvatarUrls}
+          objectUrlOverride={viewerAvatarOverride}
+        />
+      )}
       {/* Shared content layer (#task:1173 P1). The export fills each required
           slot with a STATIC node and passes `null` for the live-only
           adornments (header task tag, thread badge) — making its deliberate
@@ -203,12 +254,26 @@ function ScreenshotRow({
       <MessageRowContent
         alignRight={false}
         columnClassName="min-w-0 max-w-[640px] flex-1"
+        /* Byline through the shared `AuthorName` primitive — same `font-bold`
+           ink weight as the live row, a bare name for both actor kinds (no
+           `@`), and a deleted author's quiet chip. A continuation row states
+           neither author nor time: its group head already named the author
+           (#task:1802). A system row (no presentation) shows a bare "system". */
         author={
-          <span className="font-medium text-text-primary">
-            {senderName}
-          </span>
+          continuesPrevious ? null : safePresentation ? (
+            <AuthorName
+              presentation={safePresentation}
+              className="font-bold text-text-primary"
+            />
+          ) : (
+            <span className="font-bold text-text-primary">system</span>
+          )
         }
-        timestamp={<span className="text-[11px] text-text-muted">{time}</span>}
+        timestamp={
+          continuesPrevious ? null : (
+            <span className="text-[11px] text-text-muted">{time}</span>
+          )
+        }
         taskTag={null}
         body={
           /* Reuse Markdown renderer but omit every interaction callback.
@@ -328,14 +393,17 @@ function ScreenshotAttachmentTile({
   );
 }
 
+// Mirrors the live row's `MM/DD HH:mm` (MessageItem's `timeLabel`) so the
+// exported byline reads identically. Hand-rolled from local `Date` fields
+// rather than a dayjs pass so an offscreen render carries no formatter
+// dependency; the output string is the one to keep in step with live.
 function formatExportTime(epochMs: number): string {
   const d = new Date(epochMs);
-  const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   const hh = String(d.getHours()).padStart(2, '0');
   const mi = String(d.getMinutes()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+  return `${mm}/${dd} ${hh}:${mi}`;
 }
 
 // html-to-image serializes the offscreen DOM through an SVG foreignObject.

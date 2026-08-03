@@ -50,15 +50,23 @@
  * under a divider would look orphaned). No caller renders that separator today,
  * so this pass does not branch on it.
  *
- * # Why the screenshot export does NOT group
+ * # The screenshot export groups against its OWN predecessor
  *
- * `MessageScreenshotView` deliberately keeps every row's author + timestamp.
- * An export is a standalone quotable artifact: its reader has no surrounding
- * stream, and the selection can skip messages, so "this row continues the one
- * above" would be an outright false claim on a non-contiguous excerpt. Stating
- * the author every time is the correct redundancy there, not noise. This does
- * not weaken `MessageRowContent`'s anti-drift contract — the export supplies
- * real nodes for both slots, which is an explicit choice, not a forgotten one.
+ * `MessageScreenshotView` also collapses same-author runs (#task:1802), but it
+ * cannot reuse this whole-stream pass: a multi-select export can SKIP rows, so
+ * the live-stream neighbour of an exported row may be absent from the image.
+ * Grouping against the stream predecessor would then either compare against a
+ * row that is not shown — hiding a byline whose visible predecessor is a
+ * DIFFERENT author (an outright misattribution in a quotable artifact) — or
+ * miss a legitimate run. So the export runs {@link continuesAuthorGroup}
+ * pairwise against the row directly ABOVE IT IN THE EXPORT instead. That keeps
+ * the collapse honest by construction: the byline it drops always equals the
+ * visible row above it, so it can never claim the wrong author. The only thing
+ * lost on a skip-selected excerpt is temporal density (two grouped rows may not
+ * have been strictly back-to-back), already bounded by the same-author +
+ * 5-minute + same-day gate. This does not weaken `MessageRowContent`'s
+ * anti-drift contract — the export supplies real nodes for both slots, and a
+ * continuation supplies `null` for both, an explicit choice either way.
  */
 import type { CachedMessage } from '@/features/channels/pending-message';
 import {

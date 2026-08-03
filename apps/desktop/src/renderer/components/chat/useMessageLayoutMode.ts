@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react';
  * How chat messages are arranged horizontally.
  *
  * - `'user-right'`: current user's messages flush right, others left
- *   (Slack/iMessage convention). Default.
- * - `'all-left'`: every message left-aligned (Discord / log-style).
+ *   (Slack/iMessage convention).
+ * - `'all-left'`: every message left-aligned (Discord / log-style). Default —
+ *   the screenshot export also renders all-left, so a shared image reads as a
+ *   neutral log rather than baking in the exporter's personal alignment.
  *
  * Persisted to localStorage so the choice survives reloads. A real
  * Settings panel will own the toggle later; for now the only writer
