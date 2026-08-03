@@ -171,7 +171,6 @@ function ScreenshotRow({
   // at a glance) on top of the seam's snapshot name.
   const presentation = message.author ? presentAuthor(message.author) : null;
   const senderName = sanitizeScreenshotText(formatSenderLabel(message));
-  const isAgent = presentation?.kind === 'agent';
   // Feed the viewer's own already-resolved avatar blob when they authored the
   // row (active user matching the viewer's id); every other active author pulls
   // its bytes from the author-DTO-derived batch (#task:1792 B2 — not the
@@ -205,11 +204,7 @@ function ScreenshotRow({
         alignRight={false}
         columnClassName="min-w-0 max-w-[640px] flex-1"
         author={
-          <span
-            className={
-              'font-medium ' + (isAgent ? 'text-accent' : 'text-text-primary')
-            }
-          >
+          <span className="font-medium text-text-primary">
             {senderName}
           </span>
         }
