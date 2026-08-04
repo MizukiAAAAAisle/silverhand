@@ -161,97 +161,11 @@ export function runOutboundFrameAdapterContract(
     });
 
     // ── D4.e-1 ④/A3 — registry intents over the SAME envelope ────────────
-    // `workspace_provision` and `agent_workspace_index` are the D4.e-1
-    // additions. Both transports must round-trip their params/result AND
-    // honour per-command error scoping exactly like agent_materialize: a
-    // legal typed code rides through; a foreign code (one another command
-    // declares) is refused at the schema boundary, never surfaced.
-
-    it('round-trips workspace_provision command → bound-path result', async () => {
-      fx = await makeFixture();
-      const daemon = await fx.connectDaemon();
-
-      const pending = fx.adapter.sendCommand(
-        fx.hostId,
-        'workspace_provision',
-        { workspace_id: 'ws-1', kind: 'regular', requested_path: '/tmp/ws-1' },
-        { timeoutMs: 500 },
-      );
-      const cmd = await daemon.nextCommand();
-      expect(cmd.kind).toBe('workspace_provision');
-      expect(cmd.params).toMatchObject({
-        workspace_id: 'ws-1',
-        kind: 'regular',
-        requested_path: '/tmp/ws-1',
-      });
-
-      daemon.respondResult(cmd.id, 'workspace_provision', {
-        ok: true,
-        provisioned: true,
-        bound_workspace_path: '/tmp/ws-1',
-      });
-
-      await expect(pending).resolves.toMatchObject({
-        provisioned: true,
-        bound_workspace_path: '/tmp/ws-1',
-      });
-    });
-
-    it('passes through a legal workspace_provision typed error (path_conflict) with its code intact', async () => {
-      fx = await makeFixture();
-      const daemon = await fx.connectDaemon();
-
-      const pending = fx.adapter.sendCommand(
-        fx.hostId,
-        'workspace_provision',
-        { workspace_id: 'ws-1', kind: 'regular', requested_path: '/tmp/other' },
-        { timeoutMs: 500 },
-      );
-      const cmd = await daemon.nextCommand();
-      expect(cmd.kind).toBe('workspace_provision');
-
-      // `path_conflict` is declared by `workspace_provision`'s error arm — it
-      // rides the envelope and is NOT collapsed into a transport_* error.
-      daemon.respondError(cmd.id, 'workspace_provision', {
-        code: 'path_conflict',
-        message: 'workspace already bound to a different path',
-      });
-
-      await expect(pending).rejects.toMatchObject({ code: 'path_conflict' });
-    });
-
-    it('refuses a foreign typed error code on workspace_provision', async () => {
-      fx = await makeFixture();
-      const daemon = await fx.connectDaemon();
-
-      const pending = fx.adapter.sendCommand(
-        fx.hostId,
-        'workspace_provision',
-        { workspace_id: 'ws-1', kind: 'regular', requested_path: '/tmp/ws-1' },
-        { timeoutMs: 1000 },
-      );
-      const cmd = await daemon.nextCommand();
-      expect(cmd.kind).toBe('workspace_provision');
-
-      // `agent_dir_collision` belongs to `agent_materialize`, not
-      // `workspace_provision`. A response carrying it is an INVALID frame for
-      // this command: reject at the schema boundary, drop, surface a
-      // transport error — never the foreign code.
-      daemon.respondError(cmd.id, 'workspace_provision', {
-        code: 'agent_dir_collision',
-        message: 'foreign code must not be accepted on workspace_provision',
-      });
-
-      let err: { code?: string } | null = null;
-      try {
-        await pending;
-      } catch (e) {
-        err = e as { code?: string };
-      }
-      expect(err).not.toBeNull();
-      expect(err!.code).not.toBe('agent_dir_collision');
-      expect(err!.code).toBe('transport_disconnected');
-    });
+    // `agent_workspace_index` is the surviving D4.e-1 registry intent. The
+    // transport must round-trip its params/result AND honour per-command error
+    // scoping exactly like agent_materialize: a legal typed code rides through;
+    // a foreign code (one another command declares) is refused at the schema
+    // boundary, never surfaced.
 
     it('round-trips agent_workspace_index command → entries + unresolved result', async () => {
       fx = await makeFixture();
@@ -324,9 +238,9 @@ export function runOutboundFrameAdapterContract(
       const cmd = await daemon.nextCommand();
       expect(cmd.kind).toBe('agent_workspace_index');
 
-      // `path_conflict` is a `workspace_provision` code, not declared by
-      // `agent_workspace_index` (which scopes only whole-registry failures +
-      // generic transport codes). It must be refused, not surfaced.
+      // `path_conflict` is not declared by `agent_workspace_index` (which
+      // scopes only whole-registry failures + generic transport codes). A
+      // foreign code must be refused, not surfaced.
       daemon.respondError(cmd.id, 'agent_workspace_index', {
         code: 'path_conflict',
         message: 'foreign code must not be accepted on agent_workspace_index',
@@ -347,7 +261,7 @@ export function runOutboundFrameAdapterContract(
     // `agent_l2_seed` is the D4.e-3 member-add L2 seeder. It must round-trip
     // its `{ agent_id, workspace_id, template_choice }` param + `{ seeded,
     // l2_present }` result, and honour per-command error scoping: its own
-    // `workspace_not_provisioned` rides the envelope; a foreign code is refused.
+    // `fs_unavailable` rides the envelope; a foreign code is refused.
 
     it('round-trips agent_l2_seed command → seeded result', async () => {
       fx = await makeFixture();
@@ -380,7 +294,7 @@ export function runOutboundFrameAdapterContract(
       });
     });
 
-    it('passes through a legal agent_l2_seed typed error (workspace_not_provisioned) with its code intact', async () => {
+    it('passes through a legal agent_l2_seed typed error (fs_unavailable) with its code intact', async () => {
       fx = await makeFixture();
       const daemon = await fx.connectDaemon();
 
@@ -393,15 +307,16 @@ export function runOutboundFrameAdapterContract(
       const cmd = await daemon.nextCommand();
       expect(cmd.kind).toBe('agent_l2_seed');
 
-      // `workspace_not_provisioned` is declared by `agent_l2_seed`'s error arm —
-      // it rides the envelope and is NOT collapsed into a transport_* error.
+      // `fs_unavailable` is declared by `agent_l2_seed`'s error arm (a hard
+      // host-local fs write failure) — it rides the envelope and is NOT
+      // collapsed into a transport_* error.
       daemon.respondError(cmd.id, 'agent_l2_seed', {
-        code: 'workspace_not_provisioned',
-        message: 'workspace ws_unbound is not provisioned',
+        code: 'fs_unavailable',
+        message: 'EROFS: read-only file system',
       });
 
       await expect(pending).rejects.toMatchObject({
-        code: 'workspace_not_provisioned',
+        code: 'fs_unavailable',
       });
     });
 
@@ -418,8 +333,8 @@ export function runOutboundFrameAdapterContract(
       const cmd = await daemon.nextCommand();
       expect(cmd.kind).toBe('agent_l2_seed');
 
-      // `path_conflict` is a `workspace_provision` code, not declared by
-      // `agent_l2_seed`. It must be refused at the schema boundary.
+      // `path_conflict` is not declared by `agent_l2_seed`. A foreign code
+      // must be refused at the schema boundary.
       daemon.respondError(cmd.id, 'agent_l2_seed', {
         code: 'path_conflict',
         message: 'foreign code must not be accepted on agent_l2_seed',
@@ -437,9 +352,9 @@ export function runOutboundFrameAdapterContract(
     });
 
     // `agent_files_purge` is the D4.e-4 delete-path purger. It must round-trip
-    // its `{ agent_id, scope, workspace_ids }` param + `{ purged_count,
-    // skipped_unprovisioned }` result, and honour per-command error scoping:
-    // its own `partial_purge` rides the envelope; a foreign code is refused.
+    // its `{ agent_id }` param + `{ purged_count }` result, and honour
+    // per-command error scoping: its own `partial_purge` rides the envelope; a
+    // foreign code is refused.
 
     it('round-trips agent_files_purge command → purged result', async () => {
       fx = await makeFixture();
@@ -448,27 +363,21 @@ export function runOutboundFrameAdapterContract(
       const pending = fx.adapter.sendCommand(
         fx.hostId,
         'agent_files_purge',
-        { agent_id: 'a1', scope: 'all', workspace_ids: ['ws_1', 'ws_2'] },
+        { agent_id: 'a1' },
         { timeoutMs: 500 },
       );
       const cmd = await daemon.nextCommand();
       expect(cmd.kind).toBe('agent_files_purge');
-      // The backend forwards semantic ids + scope ONLY — no path crosses the wire.
-      expect(cmd.params).toEqual({
-        agent_id: 'a1',
-        scope: 'all',
-        workspace_ids: ['ws_1', 'ws_2'],
-      });
+      // The backend forwards the semantic agent id ONLY — no path crosses the wire.
+      expect(cmd.params).toEqual({ agent_id: 'a1' });
 
       daemon.respondResult(cmd.id, 'agent_files_purge', {
         ok: true,
         purged_count: 3,
-        skipped_unprovisioned: 0,
       });
 
       await expect(pending).resolves.toMatchObject({
         purged_count: 3,
-        skipped_unprovisioned: 0,
       });
     });
 
@@ -479,7 +388,7 @@ export function runOutboundFrameAdapterContract(
       const pending = fx.adapter.sendCommand(
         fx.hostId,
         'agent_files_purge',
-        { agent_id: 'a1', scope: 'all', workspace_ids: ['ws_1'] },
+        { agent_id: 'a1' },
         { timeoutMs: 500 },
       );
       const cmd = await daemon.nextCommand();
@@ -504,7 +413,7 @@ export function runOutboundFrameAdapterContract(
       const pending = fx.adapter.sendCommand(
         fx.hostId,
         'agent_files_purge',
-        { agent_id: 'a1', scope: 'all', workspace_ids: ['ws_1'] },
+        { agent_id: 'a1' },
         { timeoutMs: 1000 },
       );
       const cmd = await daemon.nextCommand();

@@ -38,7 +38,6 @@ function channel(
   return {
     id,
     workspace_id: 'w1',
-    workspace_path: '/tmp/w1',
     kind: 'channel',
     title: id,
     status: 'idle',

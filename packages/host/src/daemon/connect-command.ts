@@ -427,9 +427,11 @@ export async function runConnectCommand(
     logDir: paths.logDir,
     runtimePidRootDir: paths.runtimePidRootDir,
     agentHomeRootDir: paths.agentHomeRootDir,
-    workspaceDataRootDir: paths.workspaceDataRootDir,
-    // #task:1598 — the guard root stays the GLOBAL home root even for a
-    // custom data root (connect still reads global legacy namespaces).
+    // #task:1598 / relocation-v1 §7-4 — the state root stays the GLOBAL home
+    // root even for a custom data root: its live consumer is the per-computer
+    // proxy-config coordinate, which is global by design. The workspace-data
+    // root is deliberately NOT passed — the relocation preflight above is its
+    // only reader and takes it directly.
     silverhandStateRootDir: defaultSilverhandStateRoot(),
     proxyConfigPath: paths.proxyConfigPath,
     hostConfig,

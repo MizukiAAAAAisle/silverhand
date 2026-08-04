@@ -19,8 +19,6 @@ export const WorkspaceDtoSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   workspace_kind: WorkspaceKindSchema,
-  workspace_path: z.string(),
-  workspace_host_id: z.string(),
   owner_agent_id: z.string().nullable(),
   owner_user_id: z.string().nullable(),
   dm_channel_id: z.string().nullable(),
@@ -30,23 +28,6 @@ export const WorkspaceDtoSchema = z.object({
   updated_at: z.number(),
 });
 export type WorkspaceDto = z.infer<typeof WorkspaceDtoSchema>;
-
-/** Daemon-authoritative workspace roots visible to the current human viewer. */
-export const WorkspaceLocalPathEntrySchema = z.object({
-  workspace_id: z.string().min(1),
-  path: z.string().min(1),
-});
-export type WorkspaceLocalPathEntry = z.infer<
-  typeof WorkspaceLocalPathEntrySchema
->;
-
-export const WorkspaceLocalPathsResponseSchema = z.object({
-  entries: z.array(WorkspaceLocalPathEntrySchema),
-  unavailable_workspace_ids: z.array(z.string().min(1)),
-});
-export type WorkspaceLocalPathsResponse = z.infer<
-  typeof WorkspaceLocalPathsResponseSchema
->;
 
 export const WorkspaceMemberDtoSchema = z.object({
   workspace_id: z.string(),
@@ -111,8 +92,6 @@ export type UpdateAgentCapabilitiesInput = z.infer<typeof UpdateAgentCapabilitie
 export const CreateWorkspaceInputSchema = z.object({
   name: EntityNameSchema,
   description: z.string().optional(),
-  workspace_path: z.string().optional(),
-  workspace_host_id: z.string().optional(),
   member_agent_ids: z.array(z.string()).default([]),
   /** Initial human workspace members. The creator is always added
    *  separately; including them here is harmless (`INSERT OR IGNORE`). */

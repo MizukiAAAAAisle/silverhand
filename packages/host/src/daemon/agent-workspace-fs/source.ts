@@ -3,10 +3,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceBundleDir,
 } from '../agent-materialize/index.js';
-import {
-  type WorkspaceRegistry,
-  WorkspaceRegistryError,
-} from '../workspace-registry/index.js';
+import { WorkspaceIdSegmentError } from '../workspace-path-authority.js';
 import { AgentWorkspaceFsError } from './error.js';
 
 export interface ResolveAgentWorkspaceBaseDeps {
@@ -14,8 +11,6 @@ export interface ResolveAgentWorkspaceBaseDeps {
   homeDir?: string;
   /** Exact root for agent-home resolution. Takes precedence over homeDir. */
   agentHomeRootDir?: string;
-  /** Registry used only when `workspace_id` is a regular workspace id. */
-  registry?: WorkspaceRegistry;
 }
 
 /**
@@ -26,8 +21,17 @@ export interface ResolveAgentWorkspaceBaseDeps {
  * workspace"; agent-home/DM ids intentionally resolve to the same home dir,
  * while regular workspace ids resolve to the deterministic agent-centric
  * bundle root (`computers/<cid>/agents/<agent_id>/workspaces/<workspace_id>/`,
- * relocation-v1 §3.2) — the registry is consulted only as the establishment
- * gate (fail-closed when the workspace was never realized here).
+ * relocation-v1 §3.2/§3.4).
+ *
+ * relocation-v1 §7 task 4 (registry demotion): resolution is PURELY by the
+ * deterministic (computer, agent, workspace) coordinate — the registry is no
+ * longer a runtime establishment gate. A regular workspace whose bundle has
+ * not yet been materialized (its member agent has never spawned there) is NOT
+ * fail-closed here: the coordinate is always computable, and a not-yet-present
+ * bundle surfaces as an ordinary filesystem absence (`not_found`) downstream,
+ * never a `workspace_not_provisioned` refusal. The sole surviving registry
+ * reader is the marker-absent startup preflight, which reads the registry file
+ * directly and never dispatches through this data-plane resolver.
  *
  * The backend must already have done authz/membership gates. This helper is
  * intentionally path-only and still never accepts a server-supplied path.
@@ -37,49 +41,20 @@ export function resolveAgentWorkspaceBaseDir(
   deps: ResolveAgentWorkspaceBaseDeps = {},
 ): string {
   const workspaceId = params.workspace_id;
-  if (
-    !workspaceId ||
-    isAgentHomeWorkspaceId(workspaceId, params.agent_id)
-  ) {
+  if (!workspaceId || isAgentHomeWorkspaceId(workspaceId, params.agent_id)) {
     return resolveAgentDir(params.agent_id, deps);
   }
 
-  if (!deps.registry) {
-    throw new AgentWorkspaceFsError(
-      'registry_unavailable',
-      'workspace registry is not available for scoped agent workspace read',
-    );
-  }
-
-  // Establishment gate stays with the registry (fail-closed when the
-  // workspace was never realized here); the resolved base is now the
-  // deterministic agent-centric bundle root, not the registry's old shared
-  // path (relocation-v1 §7 task 1; registry demotion is §7 task 4).
+  // Deterministic agent-centric bundle root; NO registry lookup. The only
+  // failure mode is an unsafe id segment — a path-traversal guard baked into
+  // `resolveAgentWorkspaceBundleDir`, not an establishment gate — which we keep
+  // fail-closed as `forbidden_path` rather than let it leak as internal_error.
   try {
-    deps.registry.resolve(workspaceId);
+    return resolveAgentWorkspaceBundleDir(params.agent_id, workspaceId, deps);
   } catch (err) {
-    if (err instanceof WorkspaceRegistryError) {
-      if (err.code === 'not_provisioned') {
-        throw new AgentWorkspaceFsError(
-          'workspace_not_provisioned',
-          `workspace ${workspaceId} is not provisioned; cannot resolve agent workspace`,
-        );
-      }
-      if (
-        err.code === 'registry_foreign' ||
-        err.code === 'registry_corrupt' ||
-        // relocation-v1 §7 task 1 — an unsafe id segment is a corrupt/unusable
-        // registry entry for this workspace; fail closed rather than let it
-        // reach the path resolver.
-        err.code === 'invalid_path'
-      ) {
-        throw new AgentWorkspaceFsError('registry_unavailable', err.message);
-      }
+    if (err instanceof WorkspaceIdSegmentError) {
+      throw new AgentWorkspaceFsError('forbidden_path', err.message);
     }
-    throw new AgentWorkspaceFsError(
-      'internal_error',
-      err instanceof Error ? err.message : String(err),
-    );
+    throw err;
   }
-  return resolveAgentWorkspaceBundleDir(params.agent_id, workspaceId, deps);
 }

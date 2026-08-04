@@ -59,7 +59,7 @@ async function createWorkspace(
   name: string,
   memberAgentIds: string[] = [],
   headers?: Record<string, string>,
-): Promise<{ id: string; workspace_path: string }> {
+): Promise<{ id: string }> {
   const res = await http(t).post(
     '/api/workspaces',
     { name, member_agent_ids: memberAgentIds },
@@ -118,7 +118,7 @@ function memberAgentIds(t: TestApp, workspaceId: string): string[] {
 async function crossUserFixture(
   t: TestApp,
   name: string,
-): Promise<{ ws: { id: string; workspace_path: string }; theirAgent: string }> {
+): Promise<{ ws: { id: string }; theirAgent: string }> {
   const theirAgent = await makeAgent(t, `${name}-theirs`, teammateHeaders);
   const theirWs = await createWorkspace(t, `${name}-their-ws`, [], teammateHeaders);
   shareAgentIntoTeammateWorkspace(t, theirWs.id, theirAgent);
@@ -362,7 +362,6 @@ describe('#task:1681 — POST /api/workspaces initial members', () => {
       .prepare<[], { n: number }>(`SELECT COUNT(*) as n FROM workspaces WHERE name = 'create-gate'`)
       .get() as { n: number };
     expect(rows.n).toBe(0);
-    expect(t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision')).toEqual([]);
   });
 
   it('creates normally when every initial member is the creator’s own agent', async () => {

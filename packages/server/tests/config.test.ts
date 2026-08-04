@@ -3,7 +3,22 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { apiPaths, authPaths } from '@silverhand/shared';
+import {
+  apiPaths,
+  authPaths,
+  DESKTOP_API_EPOCH_HEADER,
+  DESKTOP_SERVER_API_EPOCH,
+} from '@silverhand/shared';
+
+/**
+ * relocation-v1 §6 raised `MINIMUM_CLIENT_API_EPOCH` to the current epoch, so
+ * every non-exempt `/api/*` request must stamp the admission header a real
+ * desktop stamps — an epoch-less caller is the refused pre-epoch generation
+ * (426) and never reaches the route semantics these tests pin.
+ */
+const CURRENT_DESKTOP_EPOCH_HEADERS: Record<string, string> = {
+  [DESKTOP_API_EPOCH_HEADER]: String(DESKTOP_SERVER_API_EPOCH),
+};
 import {
   DEFAULT_EMBEDDED_SILVERHAND_MIGRATE,
   DEFAULT_SILVERHAND_DATA_DIR,
@@ -183,7 +198,9 @@ describe('standalone server env config', () => {
         },
       });
 
-      await fetch(`${running.url}/api/hosts/some-host/status`);
+      await fetch(`${running.url}/api/hosts/some-host/status`, {
+        headers: { ...CURRENT_DESKTOP_EPOCH_HEADERS },
+      });
 
       expect(running.metricsUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
       const metrics = await fetch(`${running.metricsUrl}/metrics`);
@@ -211,19 +228,19 @@ describe('standalone server env config', () => {
     }
   });
 
-  // D4.c/D4.d/D4.e rewrite of the original D1/G1 test
-  // ("supports signup, workspace creation, and human messages without
-  //  a host runtime"). That story is obsolete: placement is now
-  // unified across deployment modes, so BOTH agent and workspace
-  // creation resolve an owning host first — and workspace creation is
-  // daemon-mediated (`workspace_provision` dispatched to the owning
-  // daemon). A bare standalone server with no claimed host (and no
-  // attached daemon) is therefore a pure auth/control surface: signup
-  // and runtime detection answer, but any resource that needs a host
-  // fails fast with a typed `local_host_unbound` 409. Human-message
-  // coverage moved to the backend e2e suites (which attach a daemon);
-  // it cannot exist here because there is no workspace to post into.
-  it('standalone server with no claimed host: signup answers; agent + workspace creation fail-fast typed', async () => {
+  // D4.c/D4.d/D4.e rewrite of the original D1/G1 test, re-split by
+  // relocation-v1 §7-4. Placement is unified across deployment modes, but the
+  // two resources no longer share a placement question:
+  //   - AGENT creation really does pick a computer, so with no claimed host it
+  //     still fails fast with a typed `local_host_unbound` 409;
+  //   - WORKSPACE creation resolves NO host at all — a regular workspace has no
+  //     owning computer and no daemon-mediated provision step — so on a bare
+  //     standalone server it SUCCEEDS. The old 409 here was placement debt, and
+  //     this is the network-level twin of the in-process pin in
+  //     `backend/tests/routes/workspace-placement-preflight.test.ts`.
+  // Human-message coverage moved to the backend e2e suites (which attach a
+  // daemon): a channel needs a member agent, which needs a computer.
+  it('standalone server with no claimed host: signup answers; AGENT creation fails fast typed, WORKSPACE creation succeeds (§7-4)', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'silverhand-server-test-'));
     tmpDirs.push(dataDir);
 
@@ -248,7 +265,10 @@ describe('standalone server env config', () => {
       const session = (await signup.json()) as { user_token: string };
 
       const runtimes = await fetch(`${running.url}${apiPaths.runtimes}`, {
-        headers: { authorization: `Bearer ${session.user_token}` },
+        headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
+          authorization: `Bearer ${session.user_token}`,
+        },
       });
       expect(runtimes.status).toBe(503);
       expect(await runtimes.json()).toMatchObject({
@@ -268,6 +288,7 @@ describe('standalone server env config', () => {
         method: 'POST',
         body: JSON.stringify({ name: 'standalone_agent', runtime: 'codex' }),
         headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
           authorization: `Bearer ${session.user_token}`,
           'content-type': 'application/json',
           'Idempotency-Key': 'config-test-standalone-agent',
@@ -278,24 +299,28 @@ describe('standalone server env config', () => {
         code: 'local_host_unbound',
       });
 
-      // D4.c C3: workspace creation runs the SAME unified placement
-      // (`resolveCreateHostId` → `resolveOwnedLocalForUser`). The
-      // pre-D4.c synthesized `STANDALONE_SERVER` placeholder host is
-      // gone, so with no claimed host this also fails fast typed —
-      // the old "control-plane builds a workspace without a host" 201
-      // is no longer reachable.
+      // relocation-v1 §7-4: workspace creation resolves no host, writes no host
+      // column and dispatches no provision command, so "no claimed host" is not
+      // a question it can fail on. Pinning the 201 here (not just in-process)
+      // is what proves the retirement holds through the real HTTP stack of a
+      // bare standalone server.
       const workspace = await fetch(`${running.url}${apiPaths.workspaces}`, {
         method: 'POST',
         body: JSON.stringify({ name: 'remote_control_plane' }),
         headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
           authorization: `Bearer ${session.user_token}`,
           'content-type': 'application/json',
         },
       });
-      expect(workspace.status).toBe(409);
-      expect(await workspace.json()).toMatchObject({
-        code: 'local_host_unbound',
-      });
+      expect(workspace.status).toBe(201);
+      const workspaceBody = (await workspace.json()) as {
+        workspace: Record<string, unknown>;
+      };
+      // No owning-computer pointer survives on the DTO (§7-3/§7-4 dropped both
+      // `workspace_path` and `workspace_host_id`).
+      expect('workspace_host_id' in workspaceBody.workspace).toBe(false);
+      expect('workspace_path' in workspaceBody.workspace).toBe(false);
     } finally {
       await running.close();
     }

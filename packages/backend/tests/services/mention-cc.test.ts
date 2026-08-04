@@ -62,12 +62,9 @@ function bootstrap() {
   const sourceWorkspace = workspaces.insert({
     name: 'eng',
     description: null,
-    workspacePath: tmp.workspacesRoot,
-    workspaceHostId: localHostId,
   });
   const sourceChannel = conversations.insertChannel({
     workspaceId: sourceWorkspace.id,
-    workspacePath: sourceWorkspace.workspace_path,
     title: 'general',
   });
 
@@ -76,12 +73,10 @@ function bootstrap() {
   // as the home for the new Mentions DM.
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   const aliceHome = workspaces.insertAgentHome({
-    agent: { id: alice.id, name: alice.name, host_id: alice.host_id },
-    workspacePath: tmp.workspacesRoot,
+    agent: { id: alice.id, name: alice.name },
   });
   const aliceDm = conversations.insertDmChannel({
     workspaceId: aliceHome.id,
-    workspacePath: aliceHome.workspace_path,
     title: 'Onboarding',
     agentId: alice.id,
   });

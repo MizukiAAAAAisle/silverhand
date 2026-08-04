@@ -359,71 +359,9 @@ const REQUESTS: WireFixture[] = [
     kind: { kind: 'request', intent: 'agent_materialize' },
   },
   {
-    name: 'request/workspace_provision-regular',
-    description:
-      'D4.e-1: server asks daemon to bind a regular workspace into its registry and create its .silverhand skeleton. NO requested_path → daemon self-picks a deterministic managed path (the zero-choice default). Only workspace_id + kind cross the wire. workspace_provision is server↔daemon data-plane semantics: the daemon is the sole authority for host-local workspace paths (invariant I1).',
-    frame: enc({
-      id: 'req-workspace-provision-1',
-      intent: 'workspace_provision',
-      params: {
-        workspace_id: 'ws_8K2nQ',
-        kind: 'regular',
-      },
-    }),
-    kind: { kind: 'request', intent: 'workspace_provision' },
-  },
-  {
-    name: 'request/workspace_path_index-mixed',
-    description:
-      '#task:1627: viewer-authorized workspace-root query. Backend sends semantic refs grouped by home computer; daemon resolves regular roots from its registry and agent-home roots from local L1.',
-    frame: enc({
-      id: 'req-workspace-path-index-1',
-      intent: 'workspace_path_index',
-      params: {
-        workspaces: [
-          {
-            workspace_id: 'ws_8K2nQ',
-            kind: 'regular',
-            owner_agent_id: null,
-          },
-          {
-            workspace_id: 'wsah_aid_FpzaAEM',
-            kind: 'agent_home',
-            owner_agent_id: 'aid_FpzaAEM',
-          },
-        ],
-      },
-    }),
-    kind: { kind: 'request', intent: 'workspace_path_index' },
-  },
-  {
-    name: 'request/workspace_unbind-batch',
-    description:
-      '#task:1719: registry-mapping removal for backend-deleted workspaces, batched per host. The daemon removes ONLY the workspace-registry.json mapping — never any directory or file contents (#1594).',
-    frame: enc({
-      id: 'req-workspace-unbind-1',
-      intent: 'workspace_unbind',
-      params: {
-        workspace_ids: ['ws_8K2nQ', 'ws_gone_already'],
-      },
-    }),
-    kind: { kind: 'request', intent: 'workspace_unbind' },
-  },
-  {
-    name: 'request/workspace_registry_ids',
-    description:
-      '#task:1719: ready-generation reconcile pull — empty strict params; the daemon answers with the ids currently bound in its registry (ids ONLY, never paths). Capability-gated on workspace.registry_reconcile.v1.',
-    frame: enc({
-      id: 'req-workspace-registry-ids-1',
-      intent: 'workspace_registry_ids',
-      params: {},
-    }),
-    kind: { kind: 'request', intent: 'workspace_registry_ids' },
-  },
-  {
     name: 'request/agent_workspace_index-mixed',
     description:
-      'D4.e-1: route-time agent_dir resolver. Backend sends only {agent_id, workspace_ids} (already ACL/DB-authorized) — no path, no kind. The daemon resolves each agent_dir host-side (agent-home → L1 dir; regular → registry), so the backend never assembles a path from workspace_path.',
+      'D4.e-1: route-time agent_dir resolver. Backend sends only {agent_id, workspace_ids} (already ACL/DB-authorized) — no path, no kind. The daemon computes each agent_dir host-side from the deterministic agent-centric coordinate (agent-home → L1 dir; regular → <agent home>/workspaces/<id>) and reports it only if it is a usable cwd right now (relocation-v1 §7-4: no registry binding, no DB column), so the backend never assembles a path.',
     frame: enc({
       id: 'req-agent-workspace-index-1',
       intent: 'agent_workspace_index',
@@ -464,7 +402,7 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_l2_seed',
     description:
-      "D4.e-3: seed a member agent's L2 (per-workspace) memory dir on the owning host. Backend sends ONLY {agent_id, workspace_id, template_choice} — no path, no kind. The daemon resolves the regular workspace's host-local path from its registry (fail-closed when not provisioned) and writes <workspace>/.silverhand/agents/<agent_id>/{MEMORY.md, notes/…} — the L1 template MINUS system_prompt.md (L1-only). Idempotent: existing files are preserved. Replaces backend seedAgentL2 (I1/I6).",
+      "D4.e-3: seed a member agent's L2 (per-workspace) memory dir on the owning host. Backend sends ONLY {agent_id, workspace_id, template_choice} — no path, no kind. The daemon writes the deterministic agent-centric bundle root <agent home>/workspaces/<workspace_id>/{MEMORY.md, notes/…} — the L1 template MINUS system_prompt.md (L1-only). relocation-v1 §7-4: seeding IS provisioning, so it fails closed only on the fs, never on a registry binding. Idempotent: existing files are preserved. Replaces backend seedAgentL2 (I1/I6).",
     frame: enc({
       id: 'req-agent-l2-seed-1',
       intent: 'agent_l2_seed',
@@ -479,14 +417,12 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_files_purge',
     description:
-      "D4.e-4: remove an agent's host-local files on the owning host. Backend sends ONLY {agent_id, scope, workspace_ids} — no path. The daemon resolves L1 (its homedir) and each L2 (workspace path from the registry) itself. scope:'all' purges L1 + the listed workspaces' L2; scope:'l2' only the L2. Replaces the backend DELETE fs.rm block (I1/I6).",
+      "relocation-v1 §7-4: remove an agent's terminal host-local footprint on the owning host. Backend sends ONLY {agent_id} — no path, no scope, no workspace_ids. The agent's whole managed footprint is a single home tree (L1 + every nested workspaces/<id> L2), so the daemon removes it in one rm and consults NO registry. Replaces the backend DELETE fs.rm block (I1/I6).",
     frame: enc({
       id: 'req-agent-files-purge-1',
       intent: 'agent_files_purge',
       params: {
         agent_id: 'aid_FpzaAEM',
-        scope: 'all',
-        workspace_ids: ['ws_custom_7', 'ws_custom_8'],
       },
     }),
     kind: { kind: 'request', intent: 'agent_files_purge' },
@@ -596,21 +532,6 @@ const REQUESTS: WireFixture[] = [
     }),
     kind: { kind: 'request', intent: 'agent_stale_receive' },
   },
-  {
-    name: 'request/workspace_provision-with-requested-path',
-    description:
-      'D4.e-1 (A — single intent): the SAME workspace_provision command, but carrying an OPTIONAL caller-proposed requested_path (M1 desktop folder picker / sandbox typed path unify here). The daemon RE-VALIDATES the path host-side (absolute / not root / not home / not inside the managed root / not already bound) before binding — it never blindly trusts the backend. The authoritative result is bound_workspace_path, not this field.',
-    frame: enc({
-      id: 'req-workspace-provision-2',
-      intent: 'workspace_provision',
-      params: {
-        workspace_id: 'ws_custom_7',
-        kind: 'regular',
-        requested_path: '/Users/alice/work/my-workspace',
-      },
-    }),
-    kind: { kind: 'request', intent: 'workspace_provision' },
-  },
 ];
 
 // ── Successful response fixtures ───────────────────────────────────
@@ -620,11 +541,11 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/hello',
     description:
-      'v8 hello result — protocol_version + daemon identity + capabilities.',
+      'v10 hello result — protocol_version + daemon identity + capabilities.',
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 9,
+        protocol_version: 10,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -1307,88 +1228,9 @@ const RESPONSES_SUCCESS: WireFixture[] = [
     kind: { kind: 'response_success', intent: 'agent_materialize' },
   },
   {
-    name: 'response/workspace_provision-ok',
-    description:
-      'D4.e-1: daemon bound the workspace (newly provisioned) and created its .silverhand skeleton. provisioned=true on first bind. bound_workspace_path is the daemon-authoritative path (here a managed default); it is a TRANSITIONAL seam the backend may cache into the legacy workspace_path column only — never interpret to assemble agent_dir.',
-    frame: enc({
-      id: 'req-workspace-provision-1',
-      result: {
-        ok: true,
-        provisioned: true,
-        bound_workspace_path:
-          '/home/silverhand/.silverhand/daemon/3b1c.../workspaces/9f2a...',
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_provision-with-path-ok',
-    description:
-      'D4.e-1 (A): daemon accepted+validated a caller-proposed requested_path and bound it. bound_workspace_path echoes the validated (resolved) path — the authoritative value the backend caches; the proposed input is never trusted as-is.',
-    frame: enc({
-      id: 'req-workspace-provision-2',
-      result: {
-        ok: true,
-        provisioned: true,
-        bound_workspace_path: '/Users/alice/work/my-workspace',
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_path_index-mixed',
-    description:
-      '#task:1627: daemon-stamped workspace roots. Unresolved ids have no binding/local directory and carry no fabricated server path.',
-    frame: enc({
-      id: 'req-workspace-path-index-1',
-      result: {
-        ok: true,
-        entries: [
-          {
-            workspace_id: 'ws_8K2nQ',
-            path: '/home/silverhand/workspaces/ws_8K2nQ',
-          },
-          {
-            workspace_id: 'wsah_aid_FpzaAEM',
-            path: '/home/silverhand/.silverhand/agents/aid_FpzaAEM',
-          },
-        ],
-        unresolved: ['ws_missing'],
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'workspace_path_index' },
-  },
-  {
-    name: 'response/workspace_unbind-mixed',
-    description:
-      '#task:1719: idempotent unbind verdict. `removed` mappings existed and are gone; `absent` ids were never bound / already unbound — SUCCESS, not error, so best-effort re-dispatch is always safe.',
-    frame: enc({
-      id: 'req-workspace-unbind-1',
-      result: {
-        ok: true,
-        removed: ['ws_8K2nQ'],
-        absent: ['ws_gone_already'],
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'workspace_unbind' },
-  },
-  {
-    name: 'response/workspace_registry_ids-ids-only',
-    description:
-      '#task:1719: reconcile pull answer — every id bound under the current control-plane binding, ids ONLY (paths never cross the wire). An absent/empty registry is the same shape with an empty array.',
-    frame: enc({
-      id: 'req-workspace-registry-ids-1',
-      result: {
-        ok: true,
-        workspace_ids: ['ws_8K2nQ', 'ws_ghost_1'],
-      },
-    }),
-    kind: { kind: 'response_success', intent: 'workspace_registry_ids' },
-  },
-  {
     name: 'response/agent_workspace_index-mixed',
     description:
-      'D4.e-1: daemon stamped each agent_dir host-side. agent-home resolves to the L1 dir; the provisioned regular workspace resolves under the managed root; the never-provisioned id comes back in unresolved (read fail-closed — the backend MUST NOT fall back to a workspace_path-derived path).',
+      'D4.e-1: daemon stamped each agent_dir host-side. agent-home resolves to the L1 dir; a regular workspace whose bundle coordinate is a usable cwd resolves under the agent home; an id with no usable dir yet (the legal lazy window before first spawn) comes back in unresolved → the backend renders agent_dir: null and MUST NOT fabricate a path.',
     frame: enc({
       id: 'req-agent-workspace-index-1',
       result: {
@@ -1401,7 +1243,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
           {
             workspace_id: 'ws_8K2nQ',
             agent_dir:
-              '/home/silverhand/.silverhand/daemon/3b1c.../workspaces/9f2a.../.silverhand/agents/aid_FpzaAEM',
+              '/home/silverhand/.silverhand/agents/aid_FpzaAEM/workspaces/ws_8K2nQ',
           },
         ],
         unresolved: ['ws_missing'],
@@ -1491,13 +1333,12 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/agent_files_purge',
     description:
-      'D4.e-4: daemon removed the agent L1 + listed L2 dirs and returned the outcome. purged_count = dirs that existed and were removed; skipped_unprovisioned = listed workspaces with no registry binding (no daemon-managed L2 dir to purge).',
+      'relocation-v1 §7-4: daemon removed the agent home tree (L1 + every nested workspaces/<id> L2) in one rm and returned the outcome. purged_count = 1 when the home tree existed and was removed, 0 when already absent (ENOENT is not a failure).',
     frame: enc({
       id: 'req-agent-files-purge-1',
       result: {
         ok: true,
-        purged_count: 3,
-        skipped_unprovisioned: 0,
+        purged_count: 1,
       },
     }),
     kind: { kind: 'response_success', intent: 'agent_files_purge' },
@@ -1743,213 +1584,20 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
   },
 ];
 
-// D4.e-1 workspace_provision typed errors — server↔daemon data-plane
-// formal error surface. One fixture per WorkspaceProvisionErrorCodeSchema
-// slot so cross-implementation byte pins exist (Cindy P1-2).
-const WORKSPACE_PROVISION_ERROR_FIXTURES: WireFixture[] = [
-  {
-    name: 'response/workspace_provision-error-unsupported_kind',
-    description:
-      'Backend routed a kind=agent_home workspace to workspace_provision. agent_home is materialized via agent_materialize (owns the L1 dir), never here — backend misuse, surfaced typed.',
-    frame: enc({
-      id: 'req-workspace-provision-1',
-      error: {
-        code: 'unsupported_kind',
-        message:
-          'agent_home workspaces are materialized via agent_materialize, not workspace_provision',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_provision-error-invalid_path',
-    description:
-      'A caller-supplied requested_path failed daemon-side validation (relative / root / home / inside the managed root). Cannot occur on the no-path default branch. The daemon never blindly trusts a backend path.',
-    frame: enc({
-      id: 'req-workspace-provision-2',
-      error: {
-        code: 'invalid_path',
-        message: 'requested path cannot be the home directory',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_provision-error-path_conflict',
-    description:
-      'Path-vs-id binding conflict: the id is already bound to a different path, OR the requested_path is already bound to another workspace. Refused, never silently overwritten (same id→same path is idempotent, not a conflict).',
-    frame: enc({
-      id: 'req-workspace-provision-2',
-      error: {
-        code: 'path_conflict',
-        message:
-          'path /Users/alice/work/my-workspace is already bound to workspace ws_other',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_provision-error-fs_quota_exceeded',
-    description:
-      'Recoverable fs failure during registry write or skeleton create — ENOSPC/EDQUOT mapped to fs_quota_exceeded (same classifier for both stages; Cindy P1-1).',
-    frame: enc({
-      id: 'req-workspace-provision-1',
-      error: {
-        code: 'fs_quota_exceeded',
-        message: 'ENOSPC: no space left on device, write registry tmp',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_provision-error-fs_unavailable',
-    description:
-      'Recoverable fs failure — EACCES/EPERM/EROFS/ENOENT mapped to fs_unavailable so the route layer can return 503 + retry-after.',
-    frame: enc({
-      id: 'req-workspace-provision-1',
-      error: {
-        code: 'fs_unavailable',
-        message: 'EACCES: permission denied, mkdir managed workspaces root',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_provision-error-registry_unavailable',
-    description:
-      'Daemon registry is foreign (bound to a different control plane) or corrupt — fail closed; the workspace is NOT bound.',
-    frame: enc({
-      id: 'req-workspace-provision-1',
-      error: {
-        code: 'registry_unavailable',
-        message:
-          'registry is bound to https://other.example.com/host_z, not the current binding',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
-  },
-  {
-    name: 'response/workspace_provision-error-internal_error',
-    description:
-      'Catch-all for an unrecognized errno (default arm of the shared fs classifier) or an unexpected registry invariant breach.',
-    frame: enc({
-      id: 'req-workspace-provision-1',
-      error: {
-        code: 'internal_error',
-        message: 'EIO: i/o error during registry rename',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_provision' },
-  },
-];
-
-const WORKSPACE_PATH_INDEX_ERROR_FIXTURES: WireFixture[] = [
-  {
-    name: 'response/workspace_path_index-error-registry_unavailable',
-    description:
-      '#task:1627: foreign/corrupt daemon registry fails the whole root snapshot.',
-    frame: enc({
-      id: 'req-workspace-path-index-1',
-      error: {
-        code: 'registry_unavailable',
-        message: 'registry file is bound to another control plane',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_path_index' },
-  },
-  {
-    name: 'response/workspace_path_index-error-internal_error',
-    description:
-      '#task:1627: unexpected local path resolver failure stays typed.',
-    frame: enc({
-      id: 'req-workspace-path-index-1',
-      error: {
-        code: 'internal_error',
-        message: 'unexpected workspace path resolver failure',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_path_index' },
-  },
-];
-
-// #task:1719 workspace_unbind typed errors. Note: an absent (never bound /
-// already unbound) id is NOT an error — it comes back in `result.absent`
-// (idempotent success). The only typed errors are whole-call failures.
-const WORKSPACE_UNBIND_ERROR_FIXTURES: WireFixture[] = [
-  {
-    name: 'response/workspace_unbind-error-registry_unavailable',
-    description:
-      '#task:1719: foreign/corrupt daemon registry fails the whole unbind closed — never guess about someone else\'s file.',
-    frame: enc({
-      id: 'req-workspace-unbind-1',
-      error: {
-        code: 'registry_unavailable',
-        message: 'registry file is bound to another control plane',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_unbind' },
-  },
-  {
-    name: 'response/workspace_unbind-error-internal_error',
-    description:
-      '#task:1719: unexpected local registry failure stays typed.',
-    frame: enc({
-      id: 'req-workspace-unbind-1',
-      error: {
-        code: 'internal_error',
-        message: 'unexpected workspace unbind failure',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_unbind' },
-  },
-];
-
-// #task:1719 workspace_registry_ids typed errors. An absent/empty registry is
-// NOT an error (result with `workspace_ids: []`); the only typed errors are
-// whole-call failures — reporting `[]` for a foreign/corrupt file would make
-// the backend treat every real binding as a ghost.
-const WORKSPACE_REGISTRY_IDS_ERROR_FIXTURES: WireFixture[] = [
-  {
-    name: 'response/workspace_registry_ids-error-registry_unavailable',
-    description:
-      '#task:1719: foreign/corrupt daemon registry fails the reconcile pull closed — never report an empty set for someone else\'s file.',
-    frame: enc({
-      id: 'req-workspace-registry-ids-1',
-      error: {
-        code: 'registry_unavailable',
-        message: 'registry file is bound to another control plane',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_registry_ids' },
-  },
-  {
-    name: 'response/workspace_registry_ids-error-internal_error',
-    description:
-      '#task:1719: unexpected local registry failure stays typed.',
-    frame: enc({
-      id: 'req-workspace-registry-ids-1',
-      error: {
-        code: 'internal_error',
-        message: 'unexpected workspace registry read failure',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'workspace_registry_ids' },
-  },
-];
-
-// D4.e-1 agent_workspace_index typed errors. Note: a never-provisioned
-// regular workspace is NOT an error — it comes back in `result.unresolved`
-// (read fail-closed). The only typed errors are whole-call failures.
+// D4.e-1 agent_workspace_index typed errors. Note: a regular workspace with
+// no usable bundle dir yet is NOT an error — it comes back in
+// `result.unresolved` (→ agent_dir null). The only typed errors are
+// whole-call failures.
 const AGENT_WORKSPACE_INDEX_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_workspace_index-error-registry_unavailable',
     description:
-      'Daemon registry foreign/corrupt — the whole index call fails typed (not a per-workspace unresolved entry).',
+      'The daemon has no attached computer yet, so there is no agents root to resolve against — the whole index call fails typed (not a per-workspace unresolved entry). relocation-v1 §7-4 kept the code name and re-stated its meaning: it is no longer about a registry file.',
     frame: enc({
       id: 'req-agent-workspace-index-1',
       error: {
         code: 'registry_unavailable',
-        message: 'registry file is corrupt: unexpected end of JSON input',
+        message: 'no attached computer: agents root unavailable',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_index' },
@@ -1967,14 +1615,17 @@ const AGENT_WORKSPACE_INDEX_ERROR_FIXTURES: WireFixture[] = [
 ];
 // #task:811 agent_workspace_tree typed errors. Same taxonomy as the
 // sibling agent_workspace_file_read intent (`AgentWorkspaceFsError`):
-// forbidden_path / not_found / workspace_not_provisioned /
-// registry_unavailable / fs_unavailable / internal_error. The two
-// registry codes (#task:1190) only fire for a scoped `workspace_id`;
-// the home (unscoped) tree never resolves a registry binding.
-// `forbidden_path` here is mostly defensive — the tree handler walks
-// from the agent home dir downward and never accepts a caller-supplied
-// path — but the wire taxonomy is shared so the renderer can write one
-// translation table for both intents.
+// forbidden_path / not_found / registry_unavailable / fs_unavailable /
+// internal_error. relocation-v1 §7 task 4 (registry demotion) removed
+// the `workspace_not_provisioned` refusal: a scoped `workspace_id`
+// resolves purely by its deterministic bundle coordinate, and a
+// not-yet-materialized bundle degrades to `not_found`, never a
+// provisioning gate. `registry_unavailable` survives but now means the
+// daemon has no attached computer yet (no agents root), NOT a registry
+// consult. `forbidden_path` here is mostly defensive — the tree handler
+// walks from the agent home dir downward and never accepts a
+// caller-supplied path — but the wire taxonomy is shared so the
+// renderer can write one translation table for both intents.
 const AGENT_WORKSPACE_TREE_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_workspace_tree-error-forbidden_path',
@@ -2000,27 +1651,15 @@ const AGENT_WORKSPACE_TREE_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
   },
   {
-    name: 'response/agent_workspace_tree-error-workspace_not_provisioned',
-    description:
-      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir. Surfaced when the tree is requested for a workspace_id this daemon has never provisioned (never established on this computer). Maps to HTTP 409 at the route layer.',
-    frame: enc({
-      id: 'req-agent-workspace-tree-1',
-      error: {
-        code: 'workspace_not_provisioned',
-        message: 'workspace is not provisioned on this daemon',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
-  },
-  {
     name: 'response/agent_workspace_tree-error-registry_unavailable',
     description:
-      'The daemon cannot consult its registry at all (missing control-plane binding, foreign/corrupt registry file) so it cannot resolve any workspace_id. Hard fail, distinct from workspace_not_provisioned (which is retryable). Maps to HTTP 503.',
+      'The daemon has no attached computer yet (the machine has not bound to a server) so its agents root — and any agent memory tree — is unavailable. Despite the legacy code name this is NOT a workspace-registry consult (relocation-v1 §7 task 4 demoted the registry); a scoped workspace_id resolves purely by its deterministic bundle coordinate. Retriable once attached. Maps to HTTP 503.',
     frame: enc({
       id: 'req-agent-workspace-tree-1',
       error: {
         code: 'registry_unavailable',
-        message: 'daemon registry is unavailable',
+        message:
+          'no computer is registered on this daemon yet; agent files are unavailable until the machine binds to a server',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
@@ -2084,30 +1723,15 @@ const AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES: WireFixture[] = [
     },
   },
   {
-    name: 'response/agent_workspace_file_read-error-workspace_not_provisioned',
-    description:
-      'A scoped regular workspace id has no daemon registry binding, so the daemon refuses to guess a path rather than silently fall back to the agent home dir (never established on this computer). Maps to HTTP 409 at the route layer.',
-    frame: enc({
-      id: 'req-agent-workspace-file-read-1',
-      error: {
-        code: 'workspace_not_provisioned',
-        message: 'workspace is not provisioned on this daemon',
-      },
-    }),
-    kind: {
-      kind: 'response_error_typed',
-      intent: 'agent_workspace_file_read',
-    },
-  },
-  {
     name: 'response/agent_workspace_file_read-error-registry_unavailable',
     description:
-      'The daemon cannot consult its registry at all (missing control-plane binding, foreign/corrupt registry file) so it cannot resolve any workspace_id. Hard fail, distinct from workspace_not_provisioned (which is retryable). Maps to HTTP 503.',
+      'The daemon has no attached computer yet (the machine has not bound to a server) so its agents root — and any agent memory file — is unavailable. Despite the legacy code name this is NOT a workspace-registry consult (relocation-v1 §7 task 4 demoted the registry); a scoped workspace_id resolves purely by its deterministic bundle coordinate. Retriable once attached. Maps to HTTP 503.',
     frame: enc({
       id: 'req-agent-workspace-file-read-1',
       error: {
         code: 'registry_unavailable',
-        message: 'daemon registry is unavailable',
+        message:
+          'no computer is registered on this daemon yet; agent files are unavailable until the machine binds to a server',
       },
     }),
     kind: {
@@ -2146,29 +1770,21 @@ const AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES: WireFixture[] = [
   },
 ];
 // D4.e-3 agent_l2_seed typed errors. One per AgentL2SeedErrorCode slot.
+// relocation-v1 §7-4 (U5) retired the `workspace_not_provisioned` slot from
+// this intent: the seed resolves `<agent home>/workspaces/<workspace_id>`
+// from `{agent_id, workspace_id}` alone, so there is no binding to be
+// missing. Seeding IS provisioning.
 const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
-  {
-    name: 'response/agent_l2_seed-error-workspace_not_provisioned',
-    description:
-      'The workspace has no registry binding (never provisioned / adopted) — fail-closed. The daemon never derives a path from a backend-supplied value, so the L2 seed cannot proceed.',
-    frame: enc({
-      id: 'req-agent-l2-seed-1',
-      error: {
-        code: 'workspace_not_provisioned',
-        message: 'workspace ws_custom_7 is not provisioned; cannot seed L2',
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
-  },
   {
     name: 'response/agent_l2_seed-error-registry_unavailable',
     description:
-      'Whole-registry failure: the registry file is foreign (identity mismatch) or corrupt.',
+      'Legacy name, two real producers: the daemon has no attached computer yet (no agents root), or the workspace id segment is unsafe and can never form a bundle coordinate. NOT a registry consult.',
     frame: enc({
       id: 'req-agent-l2-seed-1',
       error: {
         code: 'registry_unavailable',
-        message: 'registry identity mismatch; refusing foreign registry',
+        message:
+          'no computer is registered on this daemon yet; agent files are unavailable until the machine binds to a server',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
@@ -2215,26 +1831,13 @@ const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_files_purge-error-partial_purge',
     description:
-      'One or more target dirs could not be removed because of a HARD fs error (perm/IO/EROFS/ENOSPC — not ENOENT). Fail-closed (§3.3): the route keeps the DB row so a retry has its routing anchor.',
+      'The agent home tree could not be removed because of a HARD fs error (perm/IO/EROFS/ENOSPC — not ENOENT). Fail-closed (§3.3): the route keeps the DB row so a retry has its routing anchor.',
     frame: enc({
       id: 'req-agent-files-purge-1',
       error: {
         code: 'partial_purge',
         message:
-          "failed to remove 1 target(s): /home/.silverhand/agents/aid_FpzaAEM: EACCES: permission denied",
-      },
-    }),
-    kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
-  },
-  {
-    name: 'response/agent_files_purge-error-registry_unavailable',
-    description:
-      'Whole-registry failure: the registry file is foreign (identity mismatch) or corrupt, so no L2 path can be safely resolved.',
-    frame: enc({
-      id: 'req-agent-files-purge-1',
-      error: {
-        code: 'registry_unavailable',
-        message: 'registry identity mismatch; refusing foreign registry',
+          "failed to remove agent home tree /home/.silverhand/agents/aid_FpzaAEM: EACCES: permission denied",
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
@@ -2251,35 +1854,39 @@ const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
   },
 ];
 // D4.e-6 runtime_start typed errors. The carve-out that let host paths cross
-// the runtime_start wire is revoked; the daemon now resolves every host path
-// from its registry (regular) / computeAgentDir (agent_home) and fail-closes
-// with one of these typed codes when a regular workspace is not bound, a
-// resolved host-local path is missing, or the registry is unreadable. One
-// fixture per RuntimeStartErrorCode slot.
+// the runtime_start wire is revoked; the daemon resolves every host path from
+// the deterministic agent-centric bundle coordinate (regular) /
+// computeAgentDir (agent_home) and fail-closes with one of these typed codes.
+// relocation-v1 §7-4 (U5) producer map: `workspace_not_provisioned` = an
+// `agent_home` ref that does not belong to this agent; `workspace_bundle_missing`
+// = the session cwd could not be created/entered; `registry_unavailable` = no
+// attached computer, or an unsafe workspace id segment. One fixture per
+// RuntimeStartErrorCode slot.
 const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/runtime_start-error-workspace_not_provisioned',
     description:
-      'A regular workspace the start references has no registry binding (never established on this computer). The daemon fails closed rather than derive a path from a backend-supplied value; the backend keeps the delivery pending.',
+      'The start names an `agent_home` workspace ref that does not belong to the agent being started — an ownership boundary, not a provisioning gate. Legacy code name; near-unreachable from DB-minted refs (relocation-v1 §7-4).',
     frame: enc({
       id: 'req-runtime-start-1',
       error: {
         code: 'workspace_not_provisioned',
-        message: 'workspace ws_custom_7 is not provisioned on this host',
+        message:
+          "agent_home workspace ref 'agent-home:a2' does not belong to agent 'a1'",
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },
   },
   {
-    name: 'response/runtime_start-error-workspace_path_missing',
+    name: 'response/runtime_start-error-workspace_bundle_missing',
     description:
-      'A semantic workspace ref resolved on the daemon, but the host-local cwd no longer exists (for example an agent_home created under another SILVERHAND_DIR). The daemon fails before spawn so the user sees a concrete filesystem cause instead of a pid-less child.',
+      'Session-cwd admission failure: the daemon could not create or enter the working directory for this spawn. relocation-v1 §7 task 3 (Cindy nail 1): the wire message names only the semantic id + kind — the absolute host path is a host-only log diagnostic and never crosses the wire.',
     frame: enc({
       id: 'req-runtime-start-1',
       error: {
-        code: 'workspace_path_missing',
+        code: 'workspace_bundle_missing',
         message:
-          'runtime_start: resolved agent_home workspace "Cindy" (agent-home:a1) path does not exist: /tmp/local-silverhand/agents/a1',
+          'runtime_start: workspace files for agent_home workspace agent-home:a1 are not available on this computer',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },
@@ -2287,12 +1894,13 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/runtime_start-error-registry_unavailable',
     description:
-      'Whole-registry failure while resolving the start: the registry file is foreign (identity mismatch) or corrupt. Fail-closed.',
+      'Legacy name, two real producers: the daemon has no attached computer yet (so no agents root exists to resolve under), or the workspace id segment is unsafe. Fail-closed; NOT a registry consult.',
     frame: enc({
       id: 'req-runtime-start-1',
       error: {
         code: 'registry_unavailable',
-        message: 'registry identity mismatch; refusing foreign registry',
+        message:
+          'daemon not attached to a control plane; cannot resolve the authenticated computer id',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },
@@ -2306,26 +1914,27 @@ const RUNTIME_DELIVER_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/runtime_deliver-error-workspace_not_provisioned',
     description:
-      'The SPAWN arm references a regular workspace not bound in the daemon registry. The backend keeps delivery pending, re-provisions, and retries.',
+      'The SPAWN arm names an `agent_home` ref that does not belong to the agent being spawned — an ownership boundary. The backend surfaces it rather than retrying blindly.',
     frame: enc({
       id: 'req-runtime-deliver-1',
       error: {
         code: 'workspace_not_provisioned',
-        message: 'workspace ws_custom_7 is not provisioned on this host',
+        message:
+          "agent_home workspace ref 'agent-home:a2' does not belong to agent 'a1'",
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
   },
   {
-    name: 'response/runtime_deliver-error-workspace_path_missing',
+    name: 'response/runtime_deliver-error-workspace_bundle_missing',
     description:
-      'The SPAWN arm resolved a semantic workspace ref, but its host-local directory is missing.',
+      'The SPAWN arm could not create or enter the session cwd for this spawn. The wire message names only the semantic id + kind; the absolute path stays a host-only diagnostic (relocation-v1 §7 task 3).',
     frame: enc({
       id: 'req-runtime-deliver-1',
       error: {
-        code: 'workspace_path_missing',
+        code: 'workspace_bundle_missing',
         message:
-          'runtime_deliver: resolved workspace path does not exist: /tmp/missing',
+          'runtime_deliver: workspace files for regular workspace ws_custom_7 are not available on this computer',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
@@ -2333,12 +1942,13 @@ const RUNTIME_DELIVER_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/runtime_deliver-error-registry_unavailable',
     description:
-      'The SPAWN arm cannot consult the daemon registry and fails closed.',
+      'The SPAWN arm has no attached computer to resolve the agent-bundle coordinate under (or an unsafe id segment) and fails closed. Legacy code name; not a registry consult.',
     frame: enc({
       id: 'req-runtime-deliver-1',
       error: {
         code: 'registry_unavailable',
-        message: 'registry identity mismatch; refusing foreign registry',
+        message:
+          'daemon not attached to a control plane; cannot resolve the authenticated computer id',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
@@ -2431,10 +2041,6 @@ const MCP_PROBE_ERROR_FIXTURES: WireFixture[] = [
   },
 ];
 RESPONSES_ERROR_TYPED.push(
-  ...WORKSPACE_PROVISION_ERROR_FIXTURES,
-  ...WORKSPACE_PATH_INDEX_ERROR_FIXTURES,
-  ...WORKSPACE_UNBIND_ERROR_FIXTURES,
-  ...WORKSPACE_REGISTRY_IDS_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_INDEX_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_TREE_ERROR_FIXTURES,
   ...AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES,
@@ -2457,7 +2063,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 9,
+      protocol_version: 10,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',

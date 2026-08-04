@@ -616,13 +616,12 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
     t = null;
   });
 
+  /** relocation-v1 §7-4 — the use case takes the workspace's IDENTITY only: a
+   *  workspace carries no host binding, so there is nothing else to pass. Still
+   *  read through the repo so the ref is a real row, not a forged id. */
   function workspaceRow(t: TestApp, workspaceId: string) {
     const ws = new WorkspaceRepo(t.ctx.db).get(workspaceId)!;
-    return {
-      id: ws.id,
-      workspace_path: ws.workspace_path,
-      workspace_host_id: ws.workspace_host_id,
-    };
+    return { id: ws.id };
   }
 
   it('seeds the full default capability set in the same transaction on first add', async () => {
@@ -677,31 +676,13 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
     expect(result).toEqual({ ok: false, error: { code: 'agent_not_found' } });
   });
 
-  it('a host-divergent workspace ref is a legal GUEST add (#task:1600): membership lands via a pathless agent-host seed', async () => {
-    t = buildTestApp();
-    const alice = await makeAgent(t, 'alice');
-    const bob = await makeAgent(t, 'bob');
-    const ws = await createRegularWorkspace(t, 'placement', [alice]);
-    const deps = workspaceAgentDeps(t);
-    t.fakeHostWs!.calls.length = 0;
-    // The workspace claims another home computer; bob (on the local host)
-    // joins as a cross-computer guest — the retired gate used to 409 this.
-    const result = await addWorkspaceAgentMember(deps, {
-      principal: LOCAL_USER,
-      workspace: {
-        ...workspaceRow(t, ws),
-        workspace_host_id: 'some-other-host',
-      },
-      agentId: bob,
-    });
-
-    expect(result.ok).toBe(true);
-    expect(deps.workspaces.isMember(ws, bob)).toBe(true);
-    // Guest plan: the ensure ran on BOB's host without the home path.
-    const provision = t.fakeHostWs!.calls.find(
-      c => c.kind === 'workspace_provision',
-    );
-    expect(provision).toBeDefined();
-    expect('requested_path' in provision!.params).toBe(false);
-  });
+  /**
+   * relocation-v1 §7-4 (#task:1808) — the 'host-divergent workspace ref' guest
+   * add that lived here is GONE, not silently dropped: a workspace no longer
+   * has a `workspace_host_id`, so "the workspace claims another home computer"
+   * is unstateable — there is no divergence left to construct. The surviving
+   * cross-computer axis is the AGENT's computer, and that a guest add on
+   * another computer is a pure DB write with zero daemon dispatch is pinned in
+   * `tests/application/cross-computer-membership.test.ts`.
+   */
 });

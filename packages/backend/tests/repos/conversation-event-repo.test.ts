@@ -17,16 +17,12 @@ function bootstrap() {
     localHostId,
     'local',
   );
-  const workspacePath = join(tmp.workspacesRoot, 'activity');
   const workspace = workspaces.insert({
     name: 'activity',
     description: null,
-    workspacePath,
-    workspaceHostId: localHostId,
   });
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 'Activity',
   });
   conversations.addAgent(channel.id, agent.id);

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { testWorkspacePath } from '../utils/db.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import {
@@ -12,19 +11,15 @@ import { openTestDb } from '../utils/db.js';
 function bootstrapConversation() {
   const { db, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
-  const workspacePath = testWorkspacePath('msg-ws');
   const workspace = workspaces.insert({
     name: 'msg-ws',
     description: null,
-    workspacePath,
-    workspaceHostId: localHostId,
   });
   const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 't',
   });
   conversations.addAgent(channel.id, agent.id);
@@ -114,7 +109,6 @@ describe('MessageRepo', () => {
     const { db, workspace, channel, conversations } = bootstrapConversation();
     const channel2 = conversations.insertChannel({
       workspaceId: workspace.id,
-      workspacePath: workspace.workspace_path,
       title: 't2',
     });
     const repo = new MessageRepo(db);
@@ -282,7 +276,6 @@ describe('MessageRepo', () => {
     const { db, workspace, channel, conversations } = bootstrapConversation();
     const channel2 = conversations.insertChannel({
       workspaceId: workspace.id,
-      workspacePath: workspace.workspace_path,
       title: 't2',
     });
     const repo = new MessageRepo(db);
@@ -680,7 +673,6 @@ describe('v43 derived-table root-valid triggers', () => {
     const { db, workspace, channel, conversations } = bootstrapConversation();
     const channel2 = conversations.insertChannel({
       workspaceId: workspace.id,
-      workspacePath: workspace.workspace_path,
       title: 't2',
     });
     const repo = new MessageRepo(db);

@@ -30,7 +30,7 @@ import {
   __test_readRelocationMarker as readRelocationMarker,
   __test_relocateSingleTree as relocateSingleTree,
 } from '../../src/daemon/workspace-registry/layout-relocation.js';
-import { WorkspaceRegistry, type RegistryBinding } from '../../src/daemon/workspace-registry/registry.js';
+import type { RegistryBinding } from '../../src/daemon/workspace-registry/registry.js';
 import { cwdSessionSlug } from '../../src/daemon/workspace-registry/session-migration.js';
 
 /**
@@ -53,6 +53,31 @@ const silentLogger = {
   info: () => {},
   warn: () => {},
 };
+
+/**
+ * Seed the legacy registry inventory this migration reads. relocation-v1 §7-4
+ * (#task:1808) — the registry is a READ-ONLY reader, so the file is written
+ * directly: that is the only way it can exist (an older daemon wrote it), and a
+ * fixture routed through the retired `provision()` would exercise code that no
+ * longer ships.
+ */
+function seedLegacyInventory(
+  workspaceDataRootDir: string,
+  workspaces: Record<string, string>,
+  binding: RegistryBinding = BINDING,
+): void {
+  mkdirSync(workspaceDataRootDir, { recursive: true });
+  writeFileSync(
+    join(workspaceDataRootDir, 'workspace-registry.json'),
+    JSON.stringify({
+      schema_version: 1,
+      binding,
+      workspaces: Object.fromEntries(
+        Object.entries(workspaces).map(([id, path]) => [id, { path, provisioned_at: 1 }]),
+      ),
+    }),
+  );
+}
 
 let scratch: string;
 
@@ -556,10 +581,7 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     mkdirSync(workspaceDataRootDir, { recursive: true });
 
     // Retained registry inventory: workspace_id → old shared cwd.
-    new WorkspaceRegistry({ stateDir: workspaceDataRootDir, binding: BINDING }).provision(
-      workspaceId,
-      oldRoot,
-    );
+    seedLegacyInventory(workspaceDataRootDir, { [workspaceId]: oldRoot });
 
     // L2 subtree under the old shared cwd.
     makeTree(oldRoot, {
@@ -656,10 +678,7 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     const oldRoot = join(scratch, 'checkout');
     const workspaceId = 'ws_1';
     mkdirSync(workspaceDataRootDir, { recursive: true });
-    new WorkspaceRegistry({ stateDir: workspaceDataRootDir, binding: BINDING }).provision(
-      workspaceId,
-      oldRoot,
-    );
+    seedLegacyInventory(workspaceDataRootDir, { [workspaceId]: oldRoot });
     // Two agents whose new bundle cwds slug-collide (`a_x` vs `a-x`).
     makeTree(oldRoot, {
       '.silverhand/agents/a_x/MEMORY.md': 'mem-underscore',
@@ -698,11 +717,9 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     const oldRootA = join(scratch, 'checkoutA');
     const oldRootB = join(scratch, 'checkoutB');
     mkdirSync(workspaceDataRootDir, { recursive: true });
-    const reg = new WorkspaceRegistry({ stateDir: workspaceDataRootDir, binding: BINDING });
     // Two workspaces whose ids differ only by `_`/`-`, same agent id in both:
     // their new bundle cwds slug-collide, but the source buckets differ.
-    reg.provision('w_1', oldRootA);
-    reg.provision('w-1', oldRootB);
+    seedLegacyInventory(workspaceDataRootDir, { w_1: oldRootA, 'w-1': oldRootB });
     makeTree(oldRootA, { '.silverhand/agents/ax/MEMORY.md': 'A' });
     makeTree(oldRootB, { '.silverhand/agents/ax/MEMORY.md': 'B' });
     makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRootA)), {

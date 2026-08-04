@@ -14,10 +14,6 @@ import {
   listAgentWorkspaceTree,
   validateVirtualPathShape,
 } from '../../src/daemon/agent-workspace-fs/index.js';
-import {
-  WorkspaceRegistry,
-  type RegistryBinding,
-} from '../../src/daemon/workspace-registry/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 
 /**
@@ -33,43 +29,35 @@ import { agentHomeWorkspaceId } from '@silverhand/shared';
  *  - symlinks (intermediate or leaf) skipped.
  *  - directory-first ordering, alphabetic within a parent.
  *  - HARD fs failure (chmod 000 on a sub-dir) → typed `fs_unavailable`.
+ *
+ * relocation-v1 §7 task 4 (registry demotion): a regular workspace resolves
+ * PURELY by its deterministic agent-centric coordinate — no registry is
+ * constructed or consulted anywhere in this call chain (the deps type has no
+ * `registry` field at all). These tests never build a `WorkspaceRegistry`, so
+ * any accidental re-introduction of a registry lookup would fail-closed with
+ * no binding/file and break them.
  */
 
 const AGENT_ID = 'aid-tree';
-const BINDING: RegistryBinding = {
-  server_origin: 'test://agent-workspace-tree',
-  host_id: 'host_tree',
-};
 
 let homeDir = '';
-let stateDir = '';
 function agentDir(): string {
   return join(homeDir, '.silverhand', 'agents', AGENT_ID);
 }
-function makeRegistry(): WorkspaceRegistry {
-  return new WorkspaceRegistry({
-    stateDir,
-    binding: BINDING,
-    now: () => 1_700_000_000_000,
-  });
-}
-function l2AgentDir(registry: WorkspaceRegistry, workspaceId = 'ws_1'): string {
-  // Establishment gate: the workspace must be realized here for the read to
-  // resolve. The L2 base is now the agent-centric bundle dir under the agent
-  // home (relocation-v1 §3.2), no longer under the registry workspace path.
-  registry.provision(workspaceId);
+/** The deterministic agent-centric L2 bundle dir for a regular workspace —
+ *  `<agent home>/workspaces/<workspace_id>` (relocation-v1 §3.2). No registry
+ *  provision; the coordinate is always computable. */
+function l2BundleDir(workspaceId = 'ws_1'): string {
   return join(agentDir(), 'workspaces', workspaceId);
 }
 
 describe('listAgentWorkspaceTree', () => {
   beforeEach(() => {
     homeDir = mkdtempSync(join(tmpdir(), 'shtree-home-'));
-    stateDir = mkdtempSync(join(tmpdir(), 'shtree-state-'));
   });
   afterEach(() => {
     try {
       rmSync(homeDir, { recursive: true, force: true });
-      rmSync(stateDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
@@ -108,20 +96,21 @@ describe('listAgentWorkspaceTree', () => {
     ]);
   });
 
-  it('walks a scoped regular workspace L2 dir instead of the agent home', async () => {
+  it('walks a scoped regular workspace L2 bundle by deterministic coordinate — zero registry', async () => {
     const home = agentDir();
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'system_prompt.md'), 'l1');
 
-    const registry = makeRegistry();
-    const scoped = l2AgentDir(registry);
+    // Bundle materialized at the deterministic coordinate (as first spawn
+    // would do) — NO registry provision.
+    const scoped = l2BundleDir();
     mkdirSync(join(scoped, 'notes'), { recursive: true });
     writeFileSync(join(scoped, 'MEMORY.md'), 'l2');
     writeFileSync(join(scoped, 'notes', 'work.md'), 'work');
 
     const r = await listAgentWorkspaceTree(
       { agent_id: AGENT_ID, workspace_id: 'ws_1' },
-      { homeDir, registry },
+      { homeDir },
     );
     const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
     expect(paths).toEqual([
@@ -149,26 +138,34 @@ describe('listAgentWorkspaceTree', () => {
     expect(paths).toEqual(['MEMORY.md', 'system_prompt.md']);
   });
 
-  it('fails closed for a regular workspace id when no registry is available', async () => {
-    await expect(
-      listAgentWorkspaceTree(
-        { agent_id: AGENT_ID, workspace_id: 'ws_1' },
-        { homeDir },
-      ),
-    ).rejects.toMatchObject({
-      code: 'registry_unavailable',
-    });
+  it('resolves a regular workspace with ZERO registry — a pure-DB-created workspace whose bundle first-spawn materialized reads by coordinate (relocation-v1 §7-4 falsifier)', async () => {
+    // Model the U4 end-state: the workspace was created as a pure DB write
+    // (no `workspace_provision`, no registry binding anywhere), then its
+    // bundle was materialized at first spawn. The tree must resolve purely by
+    // the deterministic agent-centric coordinate. No registry is constructed;
+    // if the resolver still consulted one it would fail-closed here.
+    const scoped = l2BundleDir('ws_pure_db');
+    mkdirSync(scoped, { recursive: true });
+    writeFileSync(join(scoped, 'MEMORY.md'), 'l2');
+
+    const r = await listAgentWorkspaceTree(
+      { agent_id: AGENT_ID, workspace_id: 'ws_pure_db' },
+      { homeDir },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.tree.nodes.map(n => n.path)).toEqual(['MEMORY.md']);
   });
 
-  it('fails closed for a never-provisioned regular workspace id', async () => {
-    await expect(
-      listAgentWorkspaceTree(
-        { agent_id: AGENT_ID, workspace_id: 'ws_missing' },
-        { homeDir, registry: makeRegistry() },
-      ),
-    ).rejects.toMatchObject({
-      code: 'workspace_not_provisioned',
-    });
+  it('a never-materialized regular workspace degrades to an empty tree — NOT a workspace_not_provisioned refusal (relocation-v1 §7-4)', async () => {
+    // The coordinate is always computable; a bundle that was never spawned is
+    // an ordinary filesystem absence, so the tree is empty rather than
+    // fail-closed. No registry, no 409.
+    const r = await listAgentWorkspaceTree(
+      { agent_id: AGENT_ID, workspace_id: 'ws_never_spawned' },
+      { homeDir },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.tree.nodes).toEqual([]);
   });
 
   it('emits preorder across multi-level nesting (root: dirA, fileR; dirA: dirB, fileA; dirB: fileB)', async () => {

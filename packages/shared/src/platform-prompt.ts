@@ -76,11 +76,11 @@ export interface WorkspaceMemoryIndexEntry {
    *  with " (current)". */
   label: string;
   /** Absolute path to that workspace's MEMORY.md for this agent on THIS
-   *  computer, or `null` when the workspace has no local realization here
-   *  yet (cross-computer membership whose local root has not been
-   *  provisioned on this computer). A `null` entry renders "unavailable on
-   *  this computer" — never a fabricated path — and becomes available when
-   *  that workspace next runs on this computer. */
+   *  computer, or `null` when no readable L2 memory exists there yet (a
+   *  membership is a pure DB write until the agent first spawns in it, and
+   *  seeding is best-effort). A `null` entry renders "unavailable on this
+   *  computer" — never a fabricated path — and becomes available when that
+   *  workspace next runs on this computer. */
   memoryPath: string | null;
 }
 
@@ -113,8 +113,10 @@ export interface SessionContextInput {
   /** Workspace display name. Server-controlled text — rendered JSON-quoted
    *  (see `quotePromptValue`) so it cannot break the Context bullet list. */
   workspaceName: string;
-  /** Absolute local root of this workspace on THIS computer, as resolved by
-   *  the daemon (workspace registry for `regular`, agent L1 home for DM).
+  /** Absolute local root of this session on THIS computer, as resolved by the
+   *  daemon: the deterministic agent-centric bundle coordinate
+   *  `<agent home>/workspaces/<workspace_id>` for `regular`, the agent L1 home
+   *  for DM (relocation-v1 §3.2/§7 — no registry binding, no DB column).
    *  Never a foreign computer's path and never the server-side home path. */
   workspacePath: string;
   channelKind: WorkspaceUiKind;
@@ -151,8 +153,8 @@ export interface DriverPromptContext {
  * them.
  *
  * Keep paths relative to cwd. The runtime's working directory is the
- * conversation workspace_path snapshot, so relative paths point at the active
- * profile without exposing L1/L2 layering to the agent.
+ * daemon-resolved workspace bundle path for this agent, so relative paths
+ * point at the active profile without exposing L1/L2 layering to the agent.
  */
 export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const t = (name: ToolName): string => CLI_COMMANDS[name];

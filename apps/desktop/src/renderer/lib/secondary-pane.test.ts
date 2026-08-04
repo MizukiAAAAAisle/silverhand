@@ -5,7 +5,6 @@ import {
   selectFocusedConversation,
   selectSecondaryDescriptor,
   selectSecondaryViewInputs,
-  selectSecondaryWorkspaceContext,
   selectVisibleConversations,
   shouldSecondaryFullscreen,
   type SecondaryDescriptor,
@@ -24,7 +23,6 @@ const localChannelRef: ConversationRef = {
   title: 'planning',
   workspace_id: 'w-1',
   workspace_kind: 'regular',
-  workspace_path: '/tmp/w-1',
   closed_at: null,
   archived_at: null,
 };
@@ -35,7 +33,6 @@ const foreignChannelRef: ConversationRef = {
   title: 'team-y planning',
   workspace_id: 'w-2',
   workspace_kind: 'regular',
-  workspace_path: '/tmp/w-2',
   closed_at: null,
   archived_at: null,
 };
@@ -46,7 +43,6 @@ const foreignDmRef: ConversationRef = {
   title: 'dm-bob',
   workspace_id: 'w-bob-home',
   workspace_kind: 'dm',
-  workspace_path: '/tmp/w-bob-home',
   closed_at: null,
   archived_at: null,
 };
@@ -70,7 +66,6 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
       title: 'planning',
       workspaceId: 'w-1',
       workspaceKind: 'regular',
-      workspacePath: '/tmp/w-1',
       closedAt: null,
       archivedAt: null,
     });
@@ -89,7 +84,6 @@ describe('selectSecondaryDescriptor — URL × ref-hook matrix', () => {
       id: 'c-foreign',
       workspaceId: 'w-2',
       workspaceKind: 'regular',
-      workspacePath: '/tmp/w-2',
     });
   });
 
@@ -158,7 +152,6 @@ const sideChannelDescriptor: SecondaryDescriptor = {
   title: 'planning',
   workspaceId: 'w-1',
   workspaceKind: 'regular',
-  workspacePath: '/tmp/w-1',
   closedAt: null,
   archivedAt: null,
 };
@@ -172,7 +165,6 @@ const sideSecondDescriptor: SecondaryDescriptor = {
   title: 'investigations',
   workspaceId: 'w-1',
   workspaceKind: 'regular',
-  workspacePath: '/tmp/w-1',
   closedAt: null,
   archivedAt: null,
 };
@@ -184,7 +176,6 @@ const foreignSideDescriptor: SecondaryDescriptor = {
   title: 'team-y planning',
   workspaceId: 'w-2',
   workspaceKind: 'regular',
-  workspacePath: '/tmp/w-2',
   closedAt: null,
   archivedAt: null,
 };
@@ -203,26 +194,6 @@ const notFoundSide: SecondaryDescriptor = {
   status: 'not_found',
   id: 'c-foreign',
 };
-
-describe('selectSecondaryWorkspaceContext — workspace prop projection', () => {
-  it('returns null when there is no secondary', () => {
-    expect(selectSecondaryWorkspaceContext(null)).toBeNull();
-  });
-
-  it('returns null for non-resolved side (placeholder, no workspace yet)', () => {
-    expect(selectSecondaryWorkspaceContext(loadingSide)).toBeNull();
-    expect(selectSecondaryWorkspaceContext(unauthorizedSide)).toBeNull();
-    expect(selectSecondaryWorkspaceContext(notFoundSide)).toBeNull();
-  });
-
-  it('projects workspace id/kind/path for a resolved side descriptor', () => {
-    expect(selectSecondaryWorkspaceContext(foreignSideDescriptor)).toEqual({
-      workspaceId: 'w-2',
-      workspaceKind: 'regular',
-      workspacePath: '/tmp/w-2',
-    });
-  });
-});
 
 describe('selectVisibleConversations — read-cursor visibility matrix', () => {
   it('only primary visible when no secondary', () => {
@@ -463,7 +434,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       title: 'team-y planning',
       workspaceId: 'w-2',
       workspaceKind: 'regular',
-      workspacePath: '/tmp/w-2',
       closedAt: null,
       archivedAt: null,
     };
@@ -506,7 +476,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       title: 'dm-bob',
       workspaceId: 'w-bob-home',
       workspaceKind: 'dm',
-      workspacePath: '/tmp/w-bob-home',
       closedAt: null,
       archivedAt: null,
     };
@@ -532,7 +501,6 @@ describe('selectSecondaryViewInputs — full descriptor → ChannelView prop cha
       title: 'planning',
       workspaceId: 'w-1',
       workspaceKind: 'regular',
-      workspacePath: '/tmp/w-1',
       closedAt: null,
       archivedAt: null,
     };

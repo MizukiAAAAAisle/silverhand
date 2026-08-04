@@ -48,7 +48,6 @@ interface SidebarProps {
    *  on first paint (before the query resolves) so the badge stays
    *  hidden instead of flashing 0. */
   savedCount: number | undefined;
-  localWorkspacePaths: ReadonlyMap<string, string>;
 }
 
 /** The rail is one sortable list (`list_key='workspaces'`) with two live hard
@@ -235,7 +234,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <FavoritesGroup
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
-          localWorkspacePaths={props.localWorkspacePaths}
         />
         <WorkspaceGroup
           label="DM"
@@ -244,7 +242,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
-          localWorkspacePaths={props.localWorkspacePaths}
           emptyHint="Creating an agent opens a DM"
           agentsById={props.agentsById}
           dmAgentAvatarUrls={dmAgentAvatarUrls}
@@ -259,7 +256,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selectedWorkspaceId={workspaceHighlight}
           onSelectWorkspace={props.onSelectWorkspace}
           onStarWorkspace={props.onStarWorkspace}
-          localWorkspacePaths={props.localWorkspacePaths}
           headerAction={
             <span className="flex items-center">
               {sortMenuFor('regular')}
@@ -295,7 +291,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             workspaces={archived}
             selectedWorkspaceId={workspaceHighlight}
             onSelectWorkspace={props.onSelectWorkspace}
-            localWorkspacePaths={props.localWorkspacePaths}
             defaultExpanded={false}
             persistId="archived"
             agentsById={props.agentsById}

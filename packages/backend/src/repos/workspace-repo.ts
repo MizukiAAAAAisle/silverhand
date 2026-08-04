@@ -116,27 +116,6 @@ export class WorkspaceRepo {
     return row ? rowToDto(row) : null;
   }
 
-  /** Every `regular` workspace whose root lives on this computer — the delete
-   *  dependents of `DELETE /api/hosts/:id`, named rather than counted.
-   *
-   *  `agent_home` is excluded on purpose and is NOT a missing case: a home
-   *  workspace is owned by its agent (`owner_agent_id ON DELETE CASCADE`) and
-   *  its `workspace_host_id` is always the owner agent's `host_id`, so it
-   *  disappears with the agent cascade instead of needing its own confirmation.
-   */
-  listRegularByHost(hostId: string): WorkspaceDto[] {
-    return this.db
-      .prepare<[string], WorkspaceSelectRow>(
-        `${WORKSPACE_SELECT}
-         WHERE w.workspace_host_id = ?
-           AND w.workspace_kind = 'regular'
-         ORDER BY w.name ASC, w.created_at ASC`,
-      )
-      .all(hostId)
-      .map(rowToDto);
-  }
-
-
   getByName(name: string): WorkspaceDto | null {
     const row = this.db
       .prepare<[string], WorkspaceSelectRow>(
@@ -233,38 +212,27 @@ export class WorkspaceRepo {
     name: string;
     description: string | null;
     workspaceKind?: WorkspaceKind;
-    workspacePath: string;
-    workspaceHostId: string;
   }): WorkspaceDto {
     if (params.workspaceKind && params.workspaceKind !== 'regular') {
       throw new Error('use insertAgentHome for agent_home workspaces');
     }
-    // #task:1598 — the historical agent-home guard here derived the app
-    // root from the retired backend workspaces root (a layout inverse the
-    // v2 layout breaks; the whole backend workspaces-root contract is gone
-    // — #task:1608 rev 3). The AUTHORITATIVE check now lives daemon-side: every
-    // requested workspace path is validated at provision time against the
-    // registry's protectedRoots (agents / workspace-data / global root,
-    // #task:1596 rounds 3-5), and provision always precedes this insert in
-    // the creation flow.
-    // D4.e-1 3b: callers that must dispatch `workspace_provision` BEFORE the
-    // row exists (the registry keys by workspace_id) pre-generate the id via
-    // `newWorkspaceId()` and pass it here so the provision and the row agree.
+    // relocation-v1 §7 — a regular workspace no longer carries a host binding
+    // or a working directory. Its bundle resolves daemon-side to a terminal
+    // deterministic agent-centric coordinate at first spawn; the row is a pure
+    // DB write with no provisioning step preceding it.
     const id = params.id ?? newId();
     const now = Date.now();
     this.db
       .prepare(
         `INSERT INTO workspaces
-         (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+         (id, name, description, workspace_kind,
           owner_agent_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, 'regular', ?, ?, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, ?, 'regular', NULL, NULL, ?, ?)`,
       )
       .run(
         id,
         params.name,
         params.description,
-        params.workspacePath,
-        params.workspaceHostId,
         now,
         now,
       );
@@ -274,24 +242,21 @@ export class WorkspaceRepo {
   }
 
   insertAgentHome(params: {
-    agent: Pick<AgentDto, 'id' | 'name' | 'host_id'>;
-    workspacePath: string;
+    agent: Pick<AgentDto, 'id' | 'name'>;
   }): WorkspaceDto {
     const id = agentHomeWorkspaceId(params.agent.id);
     const now = Date.now();
     this.db
       .prepare(
         `INSERT INTO workspaces
-         (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+         (id, name, description, workspace_kind,
           owner_agent_id, archived_at, created_at, updated_at)
-         VALUES (?, ?, ?, 'agent_home', ?, ?, ?, NULL, ?, ?)`,
+         VALUES (?, ?, ?, 'agent_home', ?, NULL, ?, ?)`,
       )
       .run(
         id,
         params.agent.name,
         `Personal home workspace for ${params.agent.name}`,
-        params.workspacePath,
-        params.agent.host_id,
         params.agent.id,
         now,
         now,
@@ -416,27 +381,6 @@ export class WorkspaceRepo {
       )
       .all(workspaceId)
       .map(r => r.agent_id);
-  }
-
-  /**
-   * #task:1719 — every workspace id with at least ONE member agent living on
-   * `hostId` (`workspace_members` ⋈ `agents`). This is the authoritative
-   * GUEST-legality source for the registry reconciler: guest daemons
-   * provision their local realization at WORKSPACE membership establishment
-   * (#1594/#1600), not at conversation membership, so an id absent from both
-   * this set and the host's home set (`workspace_host_id`) is a ghost on
-   * that daemon.
-   */
-  listIdsWithMemberAgentOnHost(hostId: string): string[] {
-    return this.db
-      .prepare<[string], { workspace_id: string }>(
-        `SELECT DISTINCT wm.workspace_id
-           FROM workspace_members wm
-           JOIN agents a ON a.id = wm.agent_id
-          WHERE a.host_id = ?`,
-      )
-      .all(hostId)
-      .map(r => r.workspace_id);
   }
 
   listMembers(workspaceId: string): AgentDto[] {

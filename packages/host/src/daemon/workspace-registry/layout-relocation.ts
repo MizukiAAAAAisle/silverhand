@@ -16,6 +16,9 @@ import {
 import { RelocationError } from './relocation-error.js';
 import {
   assertSafeWorkspaceIdSegment,
+  WorkspaceIdSegmentError,
+} from '../workspace-path-authority.js';
+import {
   WorkspaceRegistry,
   WorkspaceRegistryError,
   type RegistryBinding,
@@ -184,7 +187,7 @@ function readRelocationMarker(markerPath: string): MarkerRouting {
  *  runs against a registry it cannot fully trust. Every entry is validated at
  *  this boundary: its `workspace_id` must be an fs-safe path segment (it becomes
  *  a destination segment) and its `path` must be absolute and already canonical,
- *  so a bare `WorkspaceRegistryError('invalid_path')` can never escape untyped
+ *  so a bare `WorkspaceIdSegmentError` can never escape untyped
  *  from the downstream bundle-dir resolution, and no `..`/relative root is ever
  *  fed to a copy. */
 function readInventory(deps: RelocationDeps): WorkspaceRegistryEntry[] {
@@ -210,7 +213,7 @@ function readInventory(deps: RelocationDeps): WorkspaceRegistryEntry[] {
     } catch (err) {
       throw new RelocationError(
         'relocation_unverifiable',
-        `registry inventory workspace id ${JSON.stringify(entry.workspace_id)} is not a safe path segment (${err instanceof WorkspaceRegistryError ? err.code : 'invalid'})`,
+        `registry inventory workspace id ${JSON.stringify(entry.workspace_id)} is not a safe path segment (${err instanceof WorkspaceIdSegmentError ? err.code : 'invalid'})`,
       );
     }
     if (!isAbsolute(entry.path) || resolve(entry.path) !== entry.path) {

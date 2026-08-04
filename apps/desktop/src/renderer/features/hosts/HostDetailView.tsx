@@ -84,13 +84,11 @@ import type {
   HostAdmissionFailure,
   HostAgentResource,
   HostDto,
-  HostWorkspaceResource,
   HostStatusResponse,
   RuntimeKind,
 } from '@silverhand/shared';
 import { RuntimeKindSchema, RUNTIME_ORDER_LIST, runtimeLabel } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
@@ -646,16 +644,16 @@ function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element {
  *   - **loading** — the standard confirm screen with Delete disabled. The impact
  *     must be on screen before the button can be pressed.
  *   - **confirm** — the impact is known: keeps the standard delete copy and adds
- *     one pale-amber block per kind (shiki's 2026-07-07 gate), then takes one
+ *     the agent block below it (shiki's 2026-07-07 gate), then takes one
  *     confirm. An EMPTY impact is a legitimate read (an empty computer), so it
- *     renders the same screen with no blocks — and still sends the same flag,
+ *     renders the same screen with no block — and still sends the same flag,
  *     because consent is over the computer, not over the rows that happened to be
  *     listed (Cindy: gating the flag on "preview was non-empty" would smuggle a
  *     1-bit staleness check back into the protocol).
  *   - **unavailable** — the read failed. Fail closed: no Delete at all, retry or
  *     cancel. "Couldn't check" must never render as "nothing on it".
- *   - **blocked** — the computer holds workspaces this user doesn't own, so the
- *     DELETE cannot succeed. Names them instead of offering a doomed confirm.
+ * The impact names agents only (#task:1809): shared workspaces are not rooted on
+ * a computer and survive it, so there is no unowned-workspace screen to reach.
  * Execution failures add to the current screen rather than replacing it, except
  * `pending` (an agent is still materializing — a transient wait-and-retry that
  * the preview deliberately does not predict).
@@ -745,31 +743,6 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
                 </Button>
               </DialogFooter>
             </>
-          ) : phase.kind === 'blocked' ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>
-                  {computerCopy.deleteUnauthorizedTitle}
-                </DialogTitle>
-                <DialogDescription>
-                  {computerCopy.deleteUnauthorizedBody}
-                </DialogDescription>
-              </DialogHeader>
-              <WorkspaceImpact
-                workspaces={phase.unauthorized}
-                title={computerCopy.deleteUnauthorizedTitle}
-              />
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setOpen(false)}
-                  data-host-action="neutral"
-                  className={HOST_MODAL_BUTTON}
-                >
-                  {computerCopy.deleteBlockedDismiss}
-                </Button>
-              </DialogFooter>
-            </>
           ) : phase.kind === 'unavailable' ? (
             <>
               <DialogHeader>
@@ -813,12 +786,6 @@ function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element {
               </DialogHeader>
               {phase.kind === 'confirm' && phase.agents.length > 0 ? (
                 <CascadeImpact agents={phase.agents} />
-              ) : null}
-              {phase.kind === 'confirm' && phase.workspaces.length > 0 ? (
-                <WorkspaceImpact
-                  workspaces={phase.workspaces}
-                  title={computerCopy.deleteWorkspaceImpactTitle}
-                />
               ) : null}
               {failure === 'generic' ? (
                 <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
@@ -915,54 +882,6 @@ function CascadeImpact({
             </li>
           );
         })}
-      </ul>
-    </div>
-  );
-}
-
-/**
- * #task:1618 — workspace impact block. Same pale-amber form as `CascadeImpact`
- * (one shared visual vocabulary for "here is what else goes"), listed beside it
- * rather than as a new interaction, so a computer holding both kinds reads as one
- * confirm with two consequences.
- *
- * Rows use the canonical `WorkspaceIcon` — the same identity primitive the rail
- * and every workspace filter render, so a workspace looks like a workspace here
- * too and each theme paints its own poster badge. A local `FolderOpen` in a grey
- * box was a second glyph for an entity that already has one (#task:1192 SSOT).
- *
- * Deliberately name-only, no `workspace_path`: the path is length-unbounded and
- * this dialog is `max-w-md`, so showing it would either wrap the block open or
- * truncate mid-path into something unreadable (shiki: 宁可砍内容, 也不要把长度不
- * 可控的字段塞进窄面板). Names truncate at one line.
- *
- * No scope prose. The block titles ("Workspaces will be deleted" / "Some
- * workspaces need their owner") plus the standard delete line above already
- * carry it; a sentence enumerating channels/messages/members only spent the
- * user's attention budget on what the confirm itself is saying (shiki
- * 2026-07-26).
- */
-function WorkspaceImpact({
-  workspaces,
-  title,
-}: {
-  workspaces: HostWorkspaceResource[];
-  title: string;
-}): JSX.Element {
-  return (
-    <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--warning)]">
-        {title}
-      </p>
-      <ul className="mt-2 flex flex-col gap-1.5" aria-label={title}>
-        {workspaces.map(ws => (
-          <li key={ws.id} className="flex items-center gap-2">
-            <WorkspaceIcon kind="regular" dmAgentId={null} size={AVATAR_PX.sm} />
-            <span className="min-w-0 flex-1 truncate text-sm text-text-primary">
-              {ws.name}
-            </span>
-          </li>
-        ))}
       </ul>
     </div>
   );
@@ -1490,8 +1409,8 @@ function SystemField({
  * a computer is **not** a banner — it is a notice placed on that
  * computer's page, pale-yellow fill + icon. So it reuses the established
  * caution-callout vocabulary of this file (`--warning-surface` fill +
- * `--control-radius`, the same form as `CascadeImpact` /
- * `WorkspaceImpact`) instead of the status `Banner`, and the status
+ * `--control-radius`, the same form as `CascadeImpact`) instead of the
+ * status `Banner`, and the status
  * chrome keeps saying plain "Offline" — one voice per question: the pill
  * answers "is it connected", this answers "what do I do about it".
  *

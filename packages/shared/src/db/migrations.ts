@@ -963,6 +963,122 @@ export const migrations: Migration[] = [
         WHERE from_kind = 'user' AND from_user_id IS NOT NULL;
     `,
   },
+  {
+    version: 64,
+    name: 'drop_workspace_local_binding_columns',
+    // relocation-v1 §6/§7 (#task:1807 + #task:1808) — retire BOTH columns that
+    // encoded a workspace's host-local binding: `workspace_path` (the legacy
+    // filesystem path, denormalized onto every conversation) and
+    // `workspaces.workspace_host_id` (the owning-host pointer). A regular
+    // workspace no longer owns a working directory OR a home host: its bundle
+    // resolves to a TERMINAL deterministic agent-centric coordinate
+    // (`<agent home>/workspaces/<workspace_id>`), computed the same way on every
+    // host. There is no DB column — and no registry lookup — the backend
+    // consults to derive a path or an owning host (invariant I1). Per §6 the two
+    // are ONE removal set landing in ONE release tree under ONE triple bump, so
+    // they retire in a SINGLE `workspaces` rebuild — never a v64(path)+v65(host)
+    // pair that rebuilds the parent twice and leaves an intermediate schema that
+    // was never a legal release.
+    //
+    // This migration is UNPUBLISHED — both drops were forward-fixed IN PLACE
+    // across #task:1807 (`workspace_path`) and #task:1808 (`workspace_host_id`)
+    // into this one rebuild; history was never amended and no sibling migration
+    // was appended. Any such staging marker stays in THIS comment, never inside
+    // the DDL string: a comment inside a CREATE TABLE is preserved verbatim in
+    // `sqlite_master.sql` and would corrupt the schema fingerprint.
+    //
+    // Two SQLite table rebuilds (the columns are NOT NULL and can't be dropped
+    // in place; template = v54 `drop_conversation_parent_column`): the child
+    // `conversations` is rebuilt first, then the parent `workspaces`. With
+    // `foreignKeyEscape` the runner disables `foreign_keys` around the whole
+    // migration and runs `foreign_key_check` afterward, so dropping the parent
+    // never cascade-deletes children and every surviving FK is re-validated.
+    // No precondition: we are discarding populated columns, not asserting
+    // emptiness. Every surviving column, constraint, and index is reproduced
+    // explicitly.
+    foreignKeyEscape: true,
+    up: `
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        kind                    TEXT NOT NULL CHECK (kind IN ('channel', 'dm_channel')),
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        visibility              TEXT NOT NULL DEFAULT 'private'
+          CHECK (
+            visibility IN ('private', 'public')
+            AND (visibility = 'private' OR kind = 'channel')
+          )
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id, kind, title, status,
+        spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq, visibility
+      )
+        SELECT
+          id, workspace_id, kind, title, status,
+          spawned_by_agent_id, closed_at, close_summary, pinned_at,
+          created_at, updated_at, archived_at, latest_message_seq, visibility
+        FROM conversations;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+
+      CREATE TABLE workspaces_new (
+        id                 TEXT PRIMARY KEY,
+        name               TEXT NOT NULL,
+        description        TEXT,
+        workspace_kind     TEXT NOT NULL
+          CHECK (workspace_kind IN ('regular', 'agent_home')),
+        owner_agent_id     TEXT UNIQUE REFERENCES agents(id) ON DELETE CASCADE,
+        archived_at        INTEGER,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL,
+        pinned_at          INTEGER,
+        owner_user_id      TEXT REFERENCES users(id),
+        CHECK (
+          (workspace_kind = 'agent_home' AND owner_agent_id IS NOT NULL)
+          OR
+          (workspace_kind = 'regular' AND owner_agent_id IS NULL)
+        )
+      );
+
+      INSERT INTO workspaces_new (
+        id, name, description, workspace_kind,
+        owner_agent_id, archived_at, created_at, updated_at, pinned_at,
+        owner_user_id
+      )
+        SELECT
+          id, name, description, workspace_kind,
+          owner_agent_id, archived_at, created_at, updated_at, pinned_at,
+          owner_user_id
+        FROM workspaces;
+
+      DROP TABLE workspaces;
+      ALTER TABLE workspaces_new RENAME TO workspaces;
+
+      CREATE UNIQUE INDEX workspaces_regular_name_unique
+        ON workspaces(name) WHERE workspace_kind = 'regular';
+      CREATE INDEX idx_workspaces_pinned_at
+        ON workspaces(workspace_kind, pinned_at) WHERE pinned_at IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

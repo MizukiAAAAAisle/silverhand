@@ -45,7 +45,6 @@ import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import { OutboundAgentRuntimeHost } from './runtime/outbound-agent-runtime-host.js';
 import { OutboundRuntimeEventFanout } from './runtime/outbound-event-fanout.js';
 import { HostStatusReadModel } from './runtime/host-status-read-model.js';
-import { WorkspaceRegistryReconciler } from './runtime/workspace-registry-reconcile.js';
 import {
   CompositeOutboundFrameAdapter,
   StandaloneOutboundFrameAdapter,
@@ -351,15 +350,6 @@ export async function startBackend(
   // close the connection it owns (the standalone adapter only *views* a
   // controller owned by the bootstrap, so it has nothing to close).
   let embeddedOutboundAdapter: EmbeddedUnixOutboundFrameAdapter | null = null;
-  // #task:1719 — ready-generation workspace-registry reconciler. Same
-  // late-bound `() => outboundAdapter` thunk pattern as the read model
-  // above; kicked from the fanout's `onHostReady` and consulted by the
-  // workspace_provision barrier in create-workspace / agent-l2-seed.
-  const workspaceRegistryReconciler = new WorkspaceRegistryReconciler({
-    db,
-    adapter: () => outboundAdapter,
-    logger,
-  });
   // D5.a-3 P1-1 (Cindy `KuHXrKuCv9nPU28M`) — the embedded adapter is
   // CONSTRUCTED synchronously after `serve()` returns (so `outboundAdapter`
   // is non-null before any route handler can run), but its `connect()` is
@@ -446,8 +436,6 @@ export async function startBackend(
     // ctx literal; the thunk resolves live.
     hostRuntimeView: hostId => outboundFanout?.hostRuntimeView(hostId) ?? null,
     hostStatusReadModel: () => hostStatusReadModel,
-    // #task:1719 — provision-barrier accessor (see context.ts doc).
-    workspaceProvisionBarrier: hostId => workspaceRegistryReconciler.barrier(hostId),
     // Filled immediately below when the daemon runtime host is constructed.
     runtimeHost: undefined as unknown as AgentRuntimeHost,
   };
@@ -668,10 +656,6 @@ export async function startBackend(
             // transports go away; a timer firing mid-teardown would
             // dispatch host_status into a closing daemon.
             hostStatusReadModel.close();
-            // #task:1719 — reject any provision barrier still waiting on a
-            // reconcile with the typed pending error (callers surface their
-            // retryable 503-class arm) instead of hanging into the drain.
-            workspaceRegistryReconciler.close();
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
             await Promise.all([eventWs?.close(), hostWs?.close()]);
@@ -739,9 +723,6 @@ export async function startBackend(
           ctx.events.publishToScope(`viewer:${ownerUserId}`, kind, payload),
         onHostReady: hostId => {
           hostStatusReadModel.seedEagerly(hostId);
-          // #task:1719 — every valid attachment (auth + protocol + ready)
-          // starts that generation's single-flight registry reconcile.
-          workspaceRegistryReconciler.onHostReady(hostId);
         },
       });
       ctx.readiness.outboundEventFanoutInstalled = true;

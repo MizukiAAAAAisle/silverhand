@@ -1,8 +1,4 @@
-import type {
-  HostAgentResource,
-  HostResourcesResponse,
-  HostWorkspaceResource,
-} from '@silverhand/shared';
+import type { HostAgentResource, HostResourcesResponse } from '@silverhand/shared';
 import { ComputerHasPendingAgentsError } from './hooks';
 
 /**
@@ -14,6 +10,15 @@ import { ComputerHasPendingAgentsError } from './hooks';
  * anything destructive is offered — which is why this function's input is query
  * state rather than an error.
  *
+ * The impact is AGENTS ONLY (#task:1809, shiki 2026-08-04). Deleting a computer
+ * destroys the agents that live on it — their homes and DM bytes — and nothing
+ * else; a workspace is not rooted on a computer, so shared workspaces, their
+ * channels, messages and attachments all survive, even when that leaves a
+ * workspace with no agent members. There is therefore no ownership dimension
+ * here anymore: every impact this read can name is cascade-able by definition,
+ * which is what retired the old `blocked` phase (it existed only to name
+ * workspaces the viewer did not own).
+ *
  * Phases:
  *  - `loading`     — a read is in flight (first open, OR a reopen still
  *                    refetching over last open's cached rows). The confirm exists
@@ -23,24 +28,14 @@ import { ComputerHasPendingAgentsError } from './hooks';
  *                    only retry/cancel. Empty and unknown are different facts and
  *                    must never render the same screen (an "assume empty"
  *                    fallback would silently delete a full computer).
- *  - `blocked`     — the computer holds workspaces this viewer does not own. The
- *                    DELETE would be refused wholesale, so we name them instead
- *                    of offering a confirm that cannot succeed. Naming is the
- *                    point: "blocked" without "by what" was the original
- *                    dead-end.
- *  - `confirm`     — the impact is known and cascade-able by this viewer. Lists
- *                    it (possibly nothing — an empty computer is a legitimate
- *                    read, not a missing one) and takes ONE confirm.
+ *  - `confirm`     — the impact is known. Lists it (possibly nothing — an empty
+ *                    computer is a legitimate read, not a missing one) and takes
+ *                    ONE confirm.
  */
 export type DeleteComputerPhase =
   | { kind: 'loading' }
   | { kind: 'unavailable' }
-  | { kind: 'blocked'; unauthorized: HostWorkspaceResource[] }
-  | {
-      kind: 'confirm';
-      agents: HostAgentResource[];
-      workspaces: HostWorkspaceResource[];
-    };
+  | { kind: 'confirm'; agents: HostAgentResource[] };
 
 export interface DeleteComputerPreviewState {
   /** React Query `isPending` — no settled data yet. */
@@ -54,13 +49,18 @@ export interface DeleteComputerPreviewState {
    * the dialog opens, the typical state is `data = last open's list`,
    * `isPending: false`, `isFetching: true` — and gating on `isPending` alone
    * would arm Delete against a list from the previous visit. A computer that was
-   * empty then and holds a workspace now would be destroyed from a screen showing
+   * empty then and holds an agent now would be destroyed from a screen showing
    * no impact at all, which is exactly the two-step contract being bypassed. This
    * is the ordinary reopen path, not a race.
    */
   isFetching: boolean;
   isError: boolean;
-  data: HostResourcesResponse | undefined;
+  /**
+   * Narrowed to the one dimension this dialog reads. The response still carries
+   * other fields; naming only `agents` keeps the retired workspace dimension out
+   * of the renderer entirely, so removing it from the DTO is a backend-only cut.
+   */
+  data: Pick<HostResourcesResponse, 'agents'> | undefined;
 }
 
 /**
@@ -72,11 +72,6 @@ export interface DeleteComputerPreviewState {
  * user would reasonably read as current. It is also checked FIRST so that
  * retrying from `unavailable` (error still set, `isFetching` true) keeps Delete
  * unavailable until the retry actually settles.
- *
- * Ownership is interpreted HERE, from the resource fact `viewer_role`. The read
- * model deliberately ships no `can_delete` action field (Cindy 2026-07-25), and
- * this renderer verdict is an affordance, not an authorization: the DELETE
- * re-checks every workspace's owner gate inside its own transaction.
  */
 export function resolveDeleteComputerPhase(
   preview: DeleteComputerPreviewState,
@@ -85,12 +80,7 @@ export function resolveDeleteComputerPhase(
   if (preview.isPending || preview.isFetching || !preview.data) {
     return { kind: 'loading' };
   }
-
-  const { agents, workspaces } = preview.data;
-  const unauthorized = workspaces.filter(ws => ws.viewer_role !== 'owner');
-  if (unauthorized.length > 0) return { kind: 'blocked', unauthorized };
-
-  return { kind: 'confirm', agents, workspaces };
+  return { kind: 'confirm', agents: preview.data.agents };
 }
 
 /**
@@ -101,10 +91,10 @@ export function resolveDeleteComputerPhase(
  *    because this is the ONLY path on which the user can learn that state; the
  *    preview does not predict it (a query lists objects, it does not forecast the
  *    command — shiki 2026-07-25).
- *  - `generic` — everything else, including `has_dependents` and
- *    `workspace_forbidden`. Those describe facts the preview already showed, so
- *    reaching them means drift or a caller that skipped the preview; a named
- *    screen for each would rebuild discovery-through-error.
+ *  - `generic` — everything else, including `has_dependents`. That describes a
+ *    fact the preview already showed, so reaching it means drift or a caller that
+ *    skipped the preview; a named screen for each would rebuild
+ *    discovery-through-error.
  */
 export type DeleteComputerFailure = 'pending' | 'generic';
 

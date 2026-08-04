@@ -6,11 +6,14 @@
  * `id`/`name`/`kind`, never a host path). The daemon is the sole authority
  * for host-local paths, so it resolves every absolute path here, reusing
  * the exact same single sources as the other D4.e intents:
- *   - `regular` workspaces → the establishment gate stays the daemon
- *     workspace registry (`registry.resolve(id)`, fail-closed when unbound),
- *     but the resolved L2/cwd PATH is the deterministic agent-centric bundle
- *     root (`resolveAgentWorkspaceBundleDir`), NOT the registry's old shared
- *     managed path (relocation-v1 §7 task 1; registry demotion is §7 task 4);
+ *   - `regular` workspaces → the deterministic agent-centric bundle root
+ *     (`resolveAgentWorkspaceBundleDir`). relocation-v1 §7 task 4: there is no
+ *     registry establishment gate any more — a workspace id maps to a UNIQUE
+ *     bundle COORDINATE. The active workspace resolves to that coordinate
+ *     unconditionally; whether its L2 MEMORY is materialized here is a separate
+ *     best-effort fact that governs only the prompt's memory index, NOT whether
+ *     the agent may spawn (`bundleL2Present`, the same MEMORY.md predicate the
+ *     seeder acks);
  *   - `agent_home` → daemon-local agent home root + agent id
  *     (never registry-backed), identical to `agent_materialize` /
  *     `agent_workspace_tree`.
@@ -20,24 +23,39 @@
  * StartOptions` and the spawn cwd. `spawn-env` keeps consuming the semantic
  * `StartOptions` (it never read a path).
  *
- * Fail-closed: when a regular workspace cannot be resolved the resolver
- * throws a `RuntimeStartResolveError` (a `DaemonTypedError`); the dispatcher
- * validates its code against the spawning intent's error schema
- * (`runtime_start` or `runtime_deliver`) and emits the typed wire code
- * (`workspace_not_provisioned` /
- * `workspace_path_missing` / `registry_unavailable`) instead of collapsing to
- * `internal_error`. This is the daemon-side final boundary and the ONLY
- * resolution: a workspace never established on this computer stays typed
- * fail-closed (#task:1612 — the backend's pre-dispatch lazy backfill is
- * retired; bindings are created at workspace creation / guest membership
- * establishment, never healed at spawn).
+ * cwd hard-ensure vs L1/L2 best-effort (relocation-v1 §3.3; shiki + Cindy
+ * 2026-08-04):
+ *   - the ACTIVE workspace resolves to its deterministic coordinate here; the
+ *     supervisor's `ensureRuntimeStartWorkspaceCwd` then HARD-ENSURES that cwd
+ *     (mkdir -p + require a usable/enterable directory). That is process
+ *     admission — it fails closed ONLY when the OS genuinely cannot spawn a
+ *     child there (path occupied by a non-dir file, or the dir cannot be
+ *     created/entered), NEVER because MEMORY.md is absent. A missing/half-seeded
+ *     L2 still spawns; the prompt simply omits the L2 memory section;
+ *   - a memory-INDEX entry fails soft: an unresolvable ref (foreign/corrupt
+ *     `agent_home`, unsafe id) OR a coordinate whose MEMORY.md is not readable
+ *     here (the legal lazy window where an agent added to a workspace has never
+ *     spawned there, or a half-seeded dir) resolves to `path: null` and renders
+ *     "unavailable on this computer" — never a fabricated path, never blocking
+ *     the spawn.
+ *
+ * Fail-closed: the active workspace's resolution throws a
+ * `RuntimeStartResolveError` (a `DaemonTypedError`) only for a foreign/corrupt
+ * `agent_home` ref (`workspace_not_provisioned`) or an unsafe id segment
+ * (`registry_unavailable`) — path safety / ownership boundaries, not L2 gates;
+ * the dispatcher validates its code against the spawning intent's error schema
+ * and emits the typed wire code instead of collapsing to `internal_error`. The
+ * unspawnable-cwd case surfaces as `workspace_bundle_missing` from the
+ * supervisor's post-resolve cwd hard-ensure.
  */
 import type { RuntimeStartErrorCode, StartOptions } from '../protocol.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 import {
+  bundleL2Present,
   resolveAgentDir,
   resolveAgentWorkspaceBundleDir,
 } from './agent-materialize/handler.js';
+import { WorkspaceIdSegmentError } from './workspace-path-authority.js';
 import { DaemonTypedError } from './typed-error.js';
 
 /** A workspace ref with the daemon-resolved absolute `path` attached. */
@@ -46,13 +64,17 @@ export type ResolvedWorkspaceRef = StartOptions['workspace'] & {
 };
 
 /**
- * A memory-index workspace ref after local resolution. `path: null` means
- * this workspace has no local realization on THIS computer (cross-computer
- * membership never established here, or a
- * foreign/corrupt ref) — the prompt renders it "unavailable on this
- * computer" instead of a fabricated path, and it never blocks the spawn.
- * It resolves once a member on this computer is established
- * (membership-time pathless provision, #task:1612).
+ * A memory-index workspace ref after local resolution. `path` is the memory
+ * path offered to the prompt's Workspace Memory Index, or `null` when no
+ * readable L2 memory exists here — either an unresolvable ref
+ * (cross-computer/foreign or corrupt) or a valid coordinate whose MEMORY.md is
+ * not readable here (the legal lazy window after a pure-DB membership add,
+ * before the agent has spawned in that workspace, a half-seeded dir, or an
+ * unreadable file). The prompt renders it "unavailable on this computer"
+ * instead of a fabricated path, and it never blocks the spawn. It resolves once
+ * the agent first spawns there and the best-effort seed writes MEMORY.md
+ * (relocation-v1 §3.3). This is a memory-path fact, NOT the cwd-usability fact
+ * `list_workspaces.agent_dir` reports.
  */
 export type ResolvedWorkspaceIndexRef = StartOptions['workspace'] & {
   path: string | null;
@@ -103,13 +125,14 @@ export interface RuntimeStartResolveDeps {
    */
   agentHomeRootDir?: string;
   /**
-   * Resolve a `regular` workspace id to its absolute host path. Production
-   * wires this to the registry (`registry.resolve(id)`), mapping any
-   * `WorkspaceRegistryError` / missing-binding into a
-   * `RuntimeStartResolveError` (fail-closed). It MUST throw — never return a
-   * guessed path — when the id is unbound.
+   * Memory-readable predicate for a resolved bundle coordinate — the SAME
+   * `bundleL2Present` (MEMORY.md readable) fact the seeder acks. Governs ONLY
+   * whether a memory-index entry offers a memory path; it is NOT a spawn gate
+   * (the active cwd is hard-ensured separately). Test seam only; production
+   * omits it and the real fs-backed predicate is used, keeping the resolver
+   * pure in unit tests that don't touch disk.
    */
-  resolveRegularWorkspacePath: (workspaceId: string) => string;
+  bundleL2Present?: (bundleDir: string) => Promise<boolean>;
   /**
    * Resolve the daemon's own authenticated computer id. Production wires
    * this to {@link resolveAuthenticatedComputerId} over the LIVE outbound
@@ -143,26 +166,36 @@ export function resolveAuthenticatedComputerId(
 
 /**
  * Resolve every host path a `runtime_start` needs from semantic refs.
- * Pure: all registry/error policy lives behind `deps.resolveRegular
- * WorkspacePath`. An `agent_home` ref resolves to the CURRENT agent's L1 dir,
- * but ONLY after its id is verified to be this agent's own home workspace id
- * (`agentHomeWorkspaceId(agentId)`, the shared single source). A foreign /
- * corrupt `agent_home` id is NOT silently normalized onto the current
- * agent's L1 (which would let host B's home, or another agent's, resolve
- * under host A): as the ACTIVE workspace it fails closed; as a memory-index
- * entry it degrades to `path: null` (unavailable on this computer).
+ * Pure aside from the injectable `bundleL2Present` fs probe. An `agent_home`
+ * ref resolves to the CURRENT agent's L1 dir, but ONLY after its id is verified
+ * to be this agent's own home workspace id (`agentHomeWorkspaceId(agentId)`,
+ * the shared single source). A foreign / corrupt `agent_home` id is NOT
+ * silently normalized onto the current agent's L1 (which would let host B's
+ * home, or another agent's, resolve under host A): as the ACTIVE workspace it
+ * fails closed; as a memory-index entry it degrades to `path: null`.
+ *
+ * cwd hard-ensure vs memory: the ACTIVE workspace resolves to its
+ * deterministic coordinate; the supervisor's `ensureRuntimeStartWorkspaceCwd`
+ * then hard-ensures that cwd right after (process admission, NOT an L2 gate). A
+ * memory-INDEX entry is checked here — a coordinate whose MEMORY.md is not
+ * readable (lazy window / half-seed / unreadable) degrades to `path: null` so
+ * the prompt offers no memory path, never a fabricated one. This is the
+ * memory-path decision only; it never blocks a spawn.
  */
-export function resolveRuntimeStartPaths(
+export async function resolveRuntimeStartPaths(
   options: StartOptions,
   deps: RuntimeStartResolveDeps,
-): ResolvedStartOptions {
+): Promise<ResolvedStartOptions> {
   const agentId = options.agent.id;
   const homeDir = resolveAgentDir(agentId, deps);
   const ownHomeWorkspaceId = agentHomeWorkspaceId(agentId);
+  const memoryReadable = deps.bundleL2Present ?? bundleL2Present;
 
-  const resolveWorkspace = (
-    workspace: StartOptions['workspace'],
-  ): ResolvedWorkspaceRef => {
+  // Deterministic path for a ref — no availability judgment (that is the
+  // caller's, and differs for the active workspace vs an index entry). Throws
+  // a typed `RuntimeStartResolveError` for a foreign/corrupt `agent_home` ref
+  // or an unsafe regular id segment.
+  const resolvePath = (workspace: StartOptions['workspace']): string => {
     if (workspace.kind === 'agent_home') {
       // I4 / single-source guard: an `agent_home` ref must be THIS agent's own
       // home workspace id. Never trust `kind` alone — a mismatched id is a
@@ -175,47 +208,58 @@ export function resolveRuntimeStartPaths(
             'resolve a foreign ref onto this agent\'s L1',
         );
       }
-      return { ...workspace, path: homeDir };
+      return homeDir;
     }
-    // relocation-v1 §7 task 1 — split the two roles `registry.resolve` used to
-    // conflate. The registry stays the ESTABLISHMENT GATE: it must still throw
-    // (fail-closed) when this workspace was never realized on this computer, so
-    // a runtime never spawns against an unrealized workspace (#task:1612).
-    // But the L2/cwd PATH is now the deterministic agent-centric bundle root,
-    // not the registry's old (shared) managed path. Demoting the registry to a
-    // migration-only reader is §7 task 4.
-    deps.resolveRegularWorkspacePath(workspace.id);
-    return {
-      ...workspace,
-      path: resolveAgentWorkspaceBundleDir(agentId, workspace.id, deps),
-    };
+    // relocation-v1 §7 task 4 — the L2/cwd PATH is the deterministic
+    // agent-centric bundle coordinate. No registry establishment gate; the
+    // coordinate self-validates the id segment (traversal-safe). Whether it is
+    // a usable cwd / has readable memory is a separate fact checked per role.
+    try {
+      return resolveAgentWorkspaceBundleDir(agentId, workspace.id, deps);
+    } catch (err) {
+      if (err instanceof WorkspaceIdSegmentError) {
+        throw new RuntimeStartResolveError('registry_unavailable', err.message);
+      }
+      throw err;
+    }
   };
 
-  // The ACTIVE workspace fails closed — a runtime must never spawn against
-  // an unresolved cwd. A memory-INDEX entry fails soft: an unresolvable
-  // entry (no local binding on this computer, or a foreign/corrupt
-  // agent_home ref) resolves to `path: null` and renders "unavailable on
-  // this computer" — it must never block the spawn nor resolve onto a
-  // guessed path.
-  const resolveIndexEntry = (
+  // The ACTIVE workspace resolves to its coordinate; the cwd is hard-ensured
+  // right after by the supervisor's `ensureRuntimeStartWorkspaceCwd`. No memory
+  // gate here — a missing/half-seeded L2 still spawns.
+  const resolveActive = (
     workspace: StartOptions['workspace'],
-  ): ResolvedWorkspaceIndexRef => {
+  ): ResolvedWorkspaceRef => ({ ...workspace, path: resolvePath(workspace) });
+
+  // A memory-INDEX entry offers a memory path only when MEMORY.md is readable.
+  // An unresolvable ref (foreign/corrupt agent_home, unsafe id) or a coordinate
+  // with no readable memory (lazy window / half-seed / unreadable) resolves to
+  // `path: null` — never a guessed path, never blocking the spawn.
+  const resolveIndexEntry = async (
+    workspace: StartOptions['workspace'],
+  ): Promise<ResolvedWorkspaceIndexRef> => {
+    let path: string;
     try {
-      return resolveWorkspace(workspace);
+      path = resolvePath(workspace);
     } catch (err) {
       if (err instanceof RuntimeStartResolveError) {
         return { ...workspace, path: null };
       }
       throw err;
     }
+    return {
+      ...workspace,
+      path: (await memoryReadable(path)) ? path : null,
+    };
   };
 
   return {
     ...options,
     agent: { ...options.agent, home_dir: homeDir },
-    workspace: resolveWorkspace(options.workspace),
-    workspace_memory_index:
+    workspace: resolveActive(options.workspace),
+    workspace_memory_index: await Promise.all(
       options.workspace_memory_index.map(resolveIndexEntry),
+    ),
     computer_id: deps.resolveComputerId(),
   };
 }

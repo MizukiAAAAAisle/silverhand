@@ -5,12 +5,12 @@
  *
  * Origin: D4.e-4. Pins (Cindy review focuses + design §3.3 commit
  * boundary):
- *   - happy: 204; `agent_files_purge` dispatched with `{agent_id,
- *     scope:'all', workspace_ids}` (the regular memberships); DB rows gone.
+ *   - happy: 204; `agent_files_purge` dispatched with `{ agent_id }`; DB rows
+ *     gone.
  *   - fail-closed: a typed purge failure returns the code and KEEPS the agent
  *     row + memberships (no DB delete) so a retry's impact still routes.
  *   - daemon offline: 503 host_attach_pending, row preserved.
- *   - no path crosses the wire: params carry only semantic ids + scope.
+ *   - no path crosses the wire: params carry only the semantic agent id.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
@@ -37,15 +37,13 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     });
   }
 
-  it('happy: 204, agent_files_purge dispatched with scope:all + regular memberships, rows gone', async () => {
+  it('happy: 204, agent_files_purge dispatched with { agent_id }, rows gone', async () => {
     t = buildTestApp();
     const agentId = await makeActiveAgent(t, 'alice');
-    const ws = (await (
-      await http(t).post('/api/workspaces', {
-        name: 'engineering',
-        member_agent_ids: [agentId],
-      })
-    ).json()) as any;
+    await http(t).post('/api/workspaces', {
+      name: 'engineering',
+      member_agent_ids: [agentId],
+    });
 
     t.fakeHostWs!.calls = [];
     const del = await delAgent(t, agentId);
@@ -53,12 +51,8 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
 
     const purgeCalls = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_files_purge');
     expect(purgeCalls).toHaveLength(1);
-    expect(purgeCalls[0]!.params).toEqual({
-      agent_id: agentId,
-      scope: 'all',
-      workspace_ids: [ws.workspace.id],
-    });
-    // No host-local fs path on the wire — only semantic ids + scope.
+    expect(purgeCalls[0]!.params).toEqual({ agent_id: agentId });
+    // No host-local fs path on the wire — only the semantic agent id.
     expect(JSON.stringify(purgeCalls[0]!.params)).not.toContain('/');
 
     // Agent row gone; workspace stays (agent removed from it).
@@ -114,63 +108,26 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     expect((await http(t).get(`/api/agents/${agentId}`)).status).toBe(200);
   });
 
-  // #task:1612 — DELETE performs NO provision: the registry is the sole
-  // authority and the workspace was realized at creation/membership time.
-  // (The retired pre-purge backfill would have minted an empty root just
-  // to delete it.) The purge dispatches directly and covers the
-  // membership's workspace.
-  it('purges directly with ZERO workspace_provision before the purge, then deletes', async () => {
+  // #task:1612 — DELETE performs no pre-purge backfill: L2 materializes
+  // lazily from the agent-centric coordinate, so there is nothing to mint
+  // before removal. The purge dispatches directly for the whole agent home
+  // tree, then the row is deleted.
+  it('purges directly, then deletes', async () => {
     t = buildTestApp();
     const agentId = await makeActiveAgent(t, 'dave');
-    const ws = (await (
-      await http(t).post('/api/workspaces', {
-        name: 'engineering',
-        member_agent_ids: [agentId],
-      })
-    ).json()) as any;
+    await http(t).post('/api/workspaces', {
+      name: 'engineering',
+      member_agent_ids: [agentId],
+    });
 
     t.fakeHostWs!.calls = [];
     const del = await delAgent(t, agentId);
     expect(del.status).toBe(204);
 
     const kinds = t.fakeHostWs!.calls.map(c => c.kind);
-    expect(kinds).not.toContain('workspace_provision');
     const purgeIdx = kinds.indexOf('agent_files_purge');
     expect(purgeIdx).toBeGreaterThanOrEqual(0);
     const purgeCall = t.fakeHostWs!.calls[purgeIdx]!;
-    expect((purgeCall.params as any).workspace_ids).toContain(ws.workspace.id);
-  });
-
-  // P1-1: an INCOMPLETE purge (daemon couldn't resolve a targeted workspace,
-  // skipped_unprovisioned > 0) is a failure, not a success — the L2 tree was
-  // not removed, so the agent + membership rows must survive for a retry.
-  it('purge ack skipped_unprovisioned:1 → 503 partial_purge, agent + membership preserved', async () => {
-    t = buildTestApp();
-    const agentId = await makeActiveAgent(t, 'erin');
-    const ws = (await (
-      await http(t).post('/api/workspaces', {
-        name: 'engineering',
-        member_agent_ids: [agentId],
-      })
-    ).json()) as any;
-
-    t.fakeHostWs!.agentFilesPurgeAckOverride = () => ({
-      ok: true as const,
-      purged_count: 0,
-      skipped_unprovisioned: 1,
-    });
-
-    const del = await delAgent(t, agentId);
-    expect(del.status).toBe(503);
-    expect(((await del.json()) as any).code).toBe('partial_purge');
-
-    // Row + membership preserved (retry anchor).
-    expect((await http(t).get(`/api/agents/${agentId}`)).status).toBe(200);
-    const member = t.ctx.db
-      .prepare(
-        'SELECT COUNT(*) as n FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
-      )
-      .get(ws.workspace.id, agentId) as { n: number };
-    expect(member.n).toBe(1);
+    expect((purgeCall.params as any).agent_id).toBe(agentId);
   });
 });

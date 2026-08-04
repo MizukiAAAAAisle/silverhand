@@ -108,9 +108,9 @@ export function computeDeleteImpact(
     dm_channel: dmChannel,
     regular_workspaces: regulars.map(c => ({ id: c.id, name: c.name })),
     regular_memberships: regulars.map(c => ({ id: c.id, name: c.name })),
-    // P1-2: explicitly map the owned-home window — NEVER spread the repo
-    // WorkspaceDto, which carries `workspace_path` (a host-local path that
-    // must not cross into the control-plane payload, I6).
+    // P1-2: explicitly project the owned-home window — NEVER spread the repo
+    // WorkspaceDto, so a future host-local or identity field added there can
+    // never silently cross into the control-plane payload (I6).
     owned_home: ownedHome
       ? {
           id: ownedHome.id,

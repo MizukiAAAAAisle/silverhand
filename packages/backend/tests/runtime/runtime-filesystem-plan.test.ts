@@ -10,8 +10,9 @@ import {
  *   - ONLY the active workspace is planned (peers never enter the spawn
  *     critical path — Cindy review round 1);
  *   - the spawn path plans NO provision and carries NO path: only the L2
- *     seed target (the registry is the sole authority; a missing binding
- *     surfaces as the seed's typed workspace_not_provisioned);
+ *     seed target, resolved daemon-side to the deterministic agent-centric
+ *     bundle coordinate (relocation-v1 §7 task 4 — no registry authority; a
+ *     hard fs failure surfaces as the seed's typed fs_unavailable);
  *   - agent_home never produces a seed target.
  */
 

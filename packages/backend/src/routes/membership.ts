@@ -455,8 +455,6 @@ export function createWorkspaceMembershipApp(
         principal,
         workspace: {
           id: workspace.id,
-          workspace_path: workspace.workspace_path,
-          workspace_host_id: workspace.workspace_host_id,
         },
         agentId: parsed.data.agent_id,
       },
@@ -473,11 +471,6 @@ export function createWorkspaceMembershipApp(
             code: 'agent_not_owned',
           },
           403,
-        );
-      case 'seed_failed':
-        return c.json(
-          { error: result.error.failure.message, code: result.error.failure.code },
-          result.error.failure.status,
         );
     }
   });

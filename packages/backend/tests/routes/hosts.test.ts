@@ -506,7 +506,7 @@ describe('host routes', () => {
   // is its first consumer, but nothing here is delete-shaped: no action fields,
   // no would-succeed prediction.
   describe('GET /api/hosts/:id/resources', () => {
-    it('lists the agents placed here and the regular workspaces rooted here, with the viewers role', async () => {
+    it('lists the agents placed here; NO workspace dimension exists whatever the viewers role (§7-4 + §6 cut)', async () => {
       t = buildTestApp({ seedAllFixtureMemberships: false });
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -528,28 +528,28 @@ describe('host routes', () => {
       const agent = new AgentRepo(t.ctx.db).get(agentId);
       const workspaces = new WorkspaceRepo(t.ctx.db);
       // Cascades with its owner agent, so it is not a separately listed resource.
-      workspaces.insertAgentHome({ agent: agent!, workspacePath: `/tmp/${agentId}` });
+      workspaces.insertAgentHome({ agent: agent! });
       const mine = workspaces.insert({
         name: 'Mine',
         description: null,
-        workspacePath: '/tmp/mine',
-        workspaceHostId: created.host_id,
       });
       workspaces.addUserMember(mine.id, t.viewerUserId, 'owner');
       const theirs = workspaces.insert({
         name: 'Theirs',
         description: null,
-        workspacePath: '/tmp/theirs',
-        workspaceHostId: created.host_id,
       });
       workspaces.addUserMember(theirs.id, t.viewerUserId, 'member');
-      // Rooted on the OTHER computer — never this computer's resource, even
-      // though the same user owns both.
+      // relocation-v1 §7-4 — a third workspace, distinguishable from the other
+      // two by nothing that matters any more: a `regular` workspace has no
+      // owning computer, so NONE of these can be this computer's resource. The
+      // three roles (owner / member / owner) are the falsifier — if the retired
+      // `listRegularByHost` projection ever came back, at least one of them
+      // would surface here. §6's atomic epoch cut then dropped the empty
+      // `workspaces` response shell too, so the dimension must be ABSENT, not
+      // present-and-empty.
       const elsewhere = workspaces.insert({
         name: 'Elsewhere',
         description: null,
-        workspacePath: '/tmp/elsewhere',
-        workspaceHostId: other.host_id,
       });
       workspaces.addUserMember(elsewhere.id, t.viewerUserId, 'owner');
 
@@ -562,20 +562,6 @@ describe('host routes', () => {
             name: 'resident-agent',
             display_name: 'Resident Agent',
             runtime: 'codex',
-          },
-        ],
-        workspaces: [
-          {
-            id: mine.id,
-            name: 'Mine',
-            workspace_path: '/tmp/mine',
-            viewer_role: 'owner',
-          },
-          {
-            id: theirs.id,
-            name: 'Theirs',
-            workspace_path: '/tmp/theirs',
-            viewer_role: 'member',
           },
         ],
       });
@@ -592,8 +578,9 @@ describe('host routes', () => {
       const body = await h.json<any>(h.get(apiPaths.hostResources(created.host_id)));
 
       // An empty result is a legal FACT here, not a failure to discover: this
-      // route is the only discovery path, so the caller may act on it.
-      expect(body).toEqual({ agents: [], workspaces: [] });
+      // route is the only discovery path, so the caller may act on it. The
+      // response carries the agent dimension only (§6 cut).
+      expect(body).toEqual({ agents: [] });
     });
 
     it('404s for another users computer and for an unknown id', async () => {
@@ -739,11 +726,14 @@ describe('host routes', () => {
         hostId: created.host_id,
       });
       const workspaces = new WorkspaceRepo(t.ctx.db);
+      // §7-4 falsifier: an owned `regular` workspace is NOT a dependent of any
+      // computer any more, so it must neither be counted nor listed — the AGENT
+      // alone is what this refusal names. §6's atomic epoch cut then removed the
+      // empty `workspaces` count/list shells from the payload as well, so the
+      // dimension is ABSENT here, not present-and-zero.
       const workspace = workspaces.insert({
         name: 'Dependent Workspace',
         description: null,
-        workspacePath: '/tmp/dependent-workspace',
-        workspaceHostId: created.host_id,
       });
       workspaces.addUserMember(workspace.id, t.viewerUserId, 'owner');
 
@@ -755,7 +745,6 @@ describe('host routes', () => {
         error_code: 'has_dependents',
         dependents: {
           agents: 1,
-          workspaces: 1,
         },
         agents: [
           {
@@ -763,14 +752,6 @@ describe('host routes', () => {
             name: 'agent-dependent',
             display_name: 'Agent Dependent',
             runtime: 'codex',
-          },
-        ],
-        workspaces: [
-          {
-            id: workspace.id,
-            name: 'Dependent Workspace',
-            workspace_path: '/tmp/dependent-workspace',
-            viewer_role: 'owner',
           },
         ],
       });
@@ -787,9 +768,9 @@ describe('host routes', () => {
       });
     });
 
-    it('reports the requesters role on each workspace it lists', async () => {
-      // Owner-gate boundary: the default fixture trigger seeds the viewer as
-      // `owner` on every workspace insert, which would mask the gate entirely.
+    it('a regular workspace is no dependent at all: an agent-free computer deletes with no confirmation (§7-4)', async () => {
+      // Explicit memberships only, so `member` really is `member`: the retired
+      // owner gate would have fired on exactly this row.
       t = buildTestApp({ seedAllFixtureMemberships: false });
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -803,30 +784,23 @@ describe('host routes', () => {
       const workspace = workspaces.insert({
         name: 'Someone Elses Workspace',
         description: null,
-        workspacePath: '/tmp/not-mine',
-        workspaceHostId: created.host_id,
       });
-      // Member, not owner — the delete needs the owner role.
+      // Member, not owner — under the retired projection this row both made the
+      // computer "have dependents" and demanded the owner role.
       workspaces.addUserMember(workspace.id, t.viewerUserId, 'member');
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id));
 
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        error_code: 'has_dependents',
-        // A resource fact, not a verdict: the dialog reads "not owner" as "this
-        // one needs its owner", and the DELETE re-checks the gate itself.
-        workspaces: [
-          {
-            id: workspace.id,
-            viewer_role: 'member',
-          },
-        ],
-      });
+      // Inverted pin (relocation-v1 §7-4): the computer has no agents and a
+      // workspace is not rooted on it, so there is nothing to confirm — the
+      // bare DELETE succeeds and the workspace is untouched. `viewer_role` has
+      // no reader left: the refusal that reported it cannot arise.
+      expect(res.status).toBe(200);
+      expect(repo.get(created.host_id)).toBeNull();
       expect(workspaces.get(workspace.id)).not.toBeNull();
     });
 
-    it('refuses with a named 403 when a workspace on the computer is not the requesters to delete', async () => {
+    it('deletes the computer even when the viewer is only a MEMBER of a workspace its agents belong to (workspace_forbidden retired, §7-4)', async () => {
       // See above: explicit memberships only, so `member` really is `member`.
       t = buildTestApp({ seedAllFixtureMemberships: false });
       const userToken = t.ctx.authSessions.issueSession({
@@ -841,30 +815,32 @@ describe('host routes', () => {
       const workspace = workspaces.insert({
         name: 'Someone Elses Workspace',
         description: null,
-        workspacePath: '/tmp/not-mine',
-        workspaceHostId: created.host_id,
       });
       workspaces.addUserMember(workspace.id, t.viewerUserId, 'member');
+      // An agent of the condemned computer is a MEMBER of that workspace, so the
+      // cascade really does touch its membership set — the case the retired 403
+      // guarded.
+      const agentId = insertTestAgent(t, {
+        name: 'member-agent',
+        displayName: 'Member Agent',
+        runtime: 'codex',
+        hostId: created.host_id,
+      });
+      workspaces.insertMembership(workspace.id, agentId);
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ cascade_dependents: true }),
       });
 
-      expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({
-        error: 'you are not an owner of every workspace on this computer',
-        error_code: 'workspace_forbidden',
-        workspaces: [
-          {
-            id: workspace.id,
-            name: 'Someone Elses Workspace',
-            workspace_path: '/tmp/not-mine',
-            viewer_role: 'member',
-          },
-        ],
-      });
-      expect(repo.get(created.host_id)).not.toBeNull();
+      // Inverted pin (relocation-v1 §7-4): the cascade destroys the computer's
+      // AGENTS, never a workspace — so no workspace owner's consent is at stake
+      // and the 403 `workspace_forbidden` arm is unreachable by construction.
+      // The workspace survives with one member fewer, exactly as it does when
+      // that agent is deleted on its own.
+      expect(res.status).toBe(200);
+      expect(repo.get(created.host_id)).toBeNull();
+      expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
       expect(workspaces.get(workspace.id)).not.toBeNull();
     });
 
@@ -888,7 +864,6 @@ describe('host routes', () => {
       expect(agent).not.toBeNull();
       new WorkspaceRepo(t.ctx.db).insertAgentHome({
         agent: agent!,
-        workspacePath: `/tmp/${agentId}`,
       });
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id));
@@ -902,7 +877,6 @@ describe('host routes', () => {
         error_code: 'has_dependents',
         dependents: {
           agents: 1,
-          workspaces: 0,
         },
         agents: [
           {
@@ -912,7 +886,6 @@ describe('host routes', () => {
             runtime: 'codex',
           },
         ],
-        workspaces: [],
       });
       expect(repo.get(created.host_id)).not.toBeNull();
     });
@@ -973,7 +946,6 @@ describe('host routes', () => {
       const workspaces = new WorkspaceRepo(t.ctx.db);
       const home = workspaces.insertAgentHome({
         agent: agent!,
-        workspacePath: `/tmp/${agentId}`,
       });
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {
@@ -997,14 +969,12 @@ describe('host routes', () => {
           kind: 'agent_files_purge',
           params: {
             agent_id: agentId,
-            scope: 'all',
-            workspace_ids: [],
           },
         },
       ]);
     });
 
-    it('cascades regular workspaces together with the computers agents', async () => {
+    it('deletes the computers agents and their homes, leaving every regular workspace and its channels intact (§7-4)', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -1024,19 +994,19 @@ describe('host routes', () => {
       const workspaces = new WorkspaceRepo(t.ctx.db);
       const home = workspaces.insertAgentHome({
         agent: agent!,
-        workspacePath: `/tmp/${agentId}`,
       });
+      // Owned by the viewer AND hosting a channel — under the retired cascade
+      // this whole tree died with the computer. It is DB-backed, computer-
+      // independent content now, so it must survive.
       const workspace = workspaces.insert({
-        name: 'Doomed Workspace',
+        name: 'Surviving Workspace',
         description: null,
-        workspacePath: '/tmp/doomed-workspace',
-        workspaceHostId: created.host_id,
       });
       workspaces.addUserMember(workspace.id, t.viewerUserId, 'owner');
+      workspaces.insertMembership(workspace.id, agentId);
       const conversations = new ConversationRepo(t.ctx.db);
       const channel = conversations.insertChannel({
         workspaceId: workspace.id,
-        workspacePath: '/tmp/doomed-workspace',
         title: 'general',
       });
 
@@ -1052,12 +1022,14 @@ describe('host routes', () => {
       });
       expect(repo.get(created.host_id)).toBeNull();
       expect(new AgentRepo(t.ctx.db).get(agentId)).toBeNull();
+      // The agent's OWN home still cascades with it (it is that agent's, not the
+      // computer's) — the regular workspace and its channel do not.
       expect(workspaces.get(home.id)).toBeNull();
-      expect(workspaces.get(workspace.id)).toBeNull();
-      expect(conversations.get(channel.id)).toBeNull();
+      expect(workspaces.get(workspace.id)).not.toBeNull();
+      expect(conversations.get(channel.id)).not.toBeNull();
     });
 
-    it('keeps a workspace rooted on another computer untouched', async () => {
+    it('keeps a regular workspace untouched when one member agents computer is deleted', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -1074,8 +1046,6 @@ describe('host routes', () => {
       const shared = workspaces.insert({
         name: 'Shared Workspace',
         description: null,
-        workspacePath: '/tmp/shared-workspace',
-        workspaceHostId: survivor.host_id,
       });
       workspaces.addUserMember(shared.id, t.viewerUserId, 'owner');
       const agentId = insertTestAgent(t, {
@@ -1084,9 +1054,10 @@ describe('host routes', () => {
         runtime: 'codex',
         hostId: doomed.host_id,
       });
-      // The doomed computer's agent is a MEMBER of a workspace rooted on the
-      // other computer: deleting its computer removes the agent, never the
-      // workspace (cross-computer membership, #task:1600).
+      // The doomed computer's agent is a MEMBER of a shared workspace. §7-4: a
+      // workspace is rooted on no computer at all, so the surviving computer is
+      // NOT its home either — what this pins is that deleting a member agent's
+      // computer removes the agent, never the workspace (#task:1600).
       workspaces.insertMembership(shared.id, agentId);
 
       const res = await h.del(apiPaths.hostCancelPending(doomed.host_id), {
@@ -1172,7 +1143,6 @@ describe('host routes', () => {
       const workspaces = new WorkspaceRepo(t.ctx.db);
       const home = workspaces.insertAgentHome({
         agent: agent!,
-        workspacePath: `/tmp/${agentId}`,
       });
 
       const res = await h.del(apiPaths.hostCancelPending(created.host_id), {

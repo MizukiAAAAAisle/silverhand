@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { testWorkspacePath } from '../utils/db.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -10,17 +9,13 @@ import { openTestDb } from '../utils/db.js';
 function bootstrap() {
   const { db, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
-  const workspacePath = testWorkspacePath('inbox-ws');
   const workspace = workspaces.insert({
     name: 'inbox-ws',
     description: null,
-    workspacePath,
-    workspaceHostId: localHostId,
   });
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 's',
   });
   const messages = new MessageRepo(db);

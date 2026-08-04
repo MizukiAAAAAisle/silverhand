@@ -30,17 +30,13 @@ describe('ConversationRepo canonical schema', () => {
     const t = bootstrap();
     try {
       const agent = t.agents.create({ name: 'alice', runtime: 'claude' }, t.localHostId, 'local');
-      const workspacePath = join(t.tmp.workspacesRoot, 'eng');
       const workspace = t.workspaces.insert({
         name: 'eng',
         description: 'Engineering',
-        workspacePath,
-        workspaceHostId: t.localHostId,
       });
       t.workspaces.insertMembership(workspace.id, agent.id);
       const channel = t.conversations.insertChannel({
         workspaceId: workspace.id,
-        workspacePath,
         title: 'Planning',
       });
       t.conversations.addAgent(channel.id, agent.id);
@@ -55,12 +51,10 @@ describe('ConversationRepo canonical schema', () => {
         id: workspace.id,
         name: 'eng',
         workspace_kind: 'regular',
-        workspace_path: workspacePath,
       });
       expect(t.conversations.getChannel(channel.id)).toMatchObject({
         id: channel.id,
         workspace_id: workspace.id,
-        workspace_path: workspacePath,
         kind: 'channel',
         title: 'Planning',
       });
@@ -93,21 +87,17 @@ describe('ConversationRepo canonical schema', () => {
     const t = bootstrap();
     try {
       const agent = t.agents.create({ name: 'cindy', runtime: 'codex' }, t.localHostId, 'local');
-      const agentWorkspacePath = join(t.tmp.silverhandDir, 'agents', agent.id);
       const home = t.workspaces.insertAgentHome({
         agent,
-        workspacePath: agentWorkspacePath,
       });
       const dm = t.conversations.insertDmChannel({
         workspaceId: home.id,
-        workspacePath: agentWorkspacePath,
         title: 'dm-cindy',
         agentId: agent.id,
       });
       t.conversations.addAgent(dm.id, agent.id);
       const mentions = t.conversations.insertDmChannel({
         workspaceId: home.id,
-        workspacePath: agentWorkspacePath,
         title: 'Mentions',
         agentId: agent.id,
       });
@@ -123,7 +113,6 @@ describe('ConversationRepo canonical schema', () => {
       expect(t.conversations.getDmChannel(dm.id)).toMatchObject({
         id: dm.id,
         workspace_id: home.id,
-        workspace_path: agentWorkspacePath,
         kind: 'dm_channel',
       });
     } finally {

@@ -380,7 +380,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
       deliver: () => {
         throw new RuntimeStartResolveError(
           'workspace_not_provisioned',
-          'workspace ws_1 is not provisioned on this host',
+          "agent_home workspace ref 'ws_1' does not belong to agent 'a1'",
         );
       },
     } as unknown as SupervisorContract;
@@ -404,7 +404,7 @@ describe('IntentDispatcher — runtime_* routing', () => {
       id: 'w-missing',
       error: {
         code: 'workspace_not_provisioned',
-        message: 'workspace ws_1 is not provisioned on this host',
+        message: "agent_home workspace ref 'ws_1' does not belong to agent 'a1'",
       },
     });
   });

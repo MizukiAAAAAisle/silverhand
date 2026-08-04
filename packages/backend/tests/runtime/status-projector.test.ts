@@ -46,8 +46,6 @@ function makeFixture(
   const ws = workspaces.insert({
     name: 'ws-proj',
     description: null,
-    workspacePath: `${workspacesRoot}/ws-proj`,
-    workspaceHostId: localHostId,
   });
   const agent = agents.create(
     { name: 'agent-proj', runtime: 'claude', host_id: localHostId },
@@ -56,7 +54,6 @@ function makeFixture(
   );
   const channel = conversations.insertChannel({
     workspaceId: ws.id,
-    workspacePath: ws.workspace_path,
     title: 'ws-proj',
     spawnedByAgentId: null,
   });

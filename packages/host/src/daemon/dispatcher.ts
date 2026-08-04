@@ -73,14 +73,6 @@ import {
   type RuntimeStatusParams,
   type RuntimeStopAllParams,
   type RuntimeStopParams,
-  type WorkspaceProvisionParams,
-  type WorkspaceProvisionResult,
-  type WorkspacePathIndexParams,
-  type WorkspacePathIndexResult,
-  type WorkspaceUnbindParams,
-  type WorkspaceUnbindResult,
-  type WorkspaceRegistryIdsParams,
-  type WorkspaceRegistryIdsResult,
 } from '../protocol.js';
 import { detectRuntimeCatalog } from '../runtimes.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
@@ -173,38 +165,13 @@ export interface DispatcherOptions {
    * surface stays decided by protocol schema, not the class. The
    * outbound layer's per-command error schema
    * (`AgentMaterializeWireErrorSchema`) already permits this widened
-   * code set; the D4.e workspace intents (`workspace_provision` /
-   * `agent_workspace_index`) are likewise typed, while
-   * runtime/default commands keep the narrow `ResponseError` enum.
+   * code set; the D4.e workspace intent `agent_workspace_index` is
+   * likewise typed, while runtime/default commands keep the narrow
+   * `ResponseError` enum.
    */
   agentMaterializeHandler?: (
     params: AgentMaterializeParams,
   ) => AgentMaterializeResult | Promise<AgentMaterializeResult>;
-  /**
-   * D4.e-1 — handler for `workspace_provision`. Like agent_materialize,
-   * this is server↔daemon formal data-plane semantics: the server asks
-   * the daemon to bind a regular workspace into its local registry and
-   * create the `.silverhand/` skeleton. Production wiring:
-   * `provisionWorkspace` from `./workspace-registry/`. Typed errors
-   * (`WorkspaceProvisionError`) are projected with their code by the
-   * catch arm after per-intent schema validation. `undefined` → the
-   * dispatcher throws (→ `internal_error`).
-   */
-  workspaceProvisionHandler?: (
-    params: WorkspaceProvisionParams,
-  ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult>;
-  /** #task:1627 — daemon-authoritative workspace-root snapshot. */
-  workspacePathIndexHandler?: (
-    params: WorkspacePathIndexParams,
-  ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult>;
-  /** #task:1719 — registry-mapping removal for backend-deleted workspaces. */
-  workspaceUnbindHandler?: (
-    params: WorkspaceUnbindParams,
-  ) => WorkspaceUnbindResult | Promise<WorkspaceUnbindResult>;
-  /** #task:1719 — ready-generation reconcile pull (ids ONLY, never paths). */
-  workspaceRegistryIdsHandler?: (
-    params: WorkspaceRegistryIdsParams,
-  ) => WorkspaceRegistryIdsResult | Promise<WorkspaceRegistryIdsResult>;
   /**
    * D4.e-1 — handler for `agent_workspace_index` (route-time `agent_dir`
    * resolver). Production wiring: `indexAgentWorkspaces`. Typed errors
@@ -311,26 +278,6 @@ export class IntentDispatcher {
         params: AgentMaterializeParams,
       ) => AgentMaterializeResult | Promise<AgentMaterializeResult>)
     | undefined;
-  private readonly workspaceProvisionHandler:
-    | ((
-        params: WorkspaceProvisionParams,
-      ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult>)
-    | undefined;
-  private readonly workspacePathIndexHandler:
-    | ((
-        params: WorkspacePathIndexParams,
-      ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult>)
-    | undefined;
-  private readonly workspaceUnbindHandler:
-    | ((
-        params: WorkspaceUnbindParams,
-      ) => WorkspaceUnbindResult | Promise<WorkspaceUnbindResult>)
-    | undefined;
-  private readonly workspaceRegistryIdsHandler:
-    | ((
-        params: WorkspaceRegistryIdsParams,
-      ) => WorkspaceRegistryIdsResult | Promise<WorkspaceRegistryIdsResult>)
-    | undefined;
   private readonly agentWorkspaceIndexHandler:
     | ((
         params: AgentWorkspaceIndexParams,
@@ -394,10 +341,6 @@ export class IntentDispatcher {
     this.hostProxyConfigGetHandler = opts.hostProxyConfigGetHandler;
     this.hostProxyConfigSetHandler = opts.hostProxyConfigSetHandler;
     this.agentMaterializeHandler = opts.agentMaterializeHandler;
-    this.workspaceProvisionHandler = opts.workspaceProvisionHandler;
-    this.workspacePathIndexHandler = opts.workspacePathIndexHandler;
-    this.workspaceUnbindHandler = opts.workspaceUnbindHandler;
-    this.workspaceRegistryIdsHandler = opts.workspaceRegistryIdsHandler;
     this.agentWorkspaceIndexHandler = opts.agentWorkspaceIndexHandler;
     this.agentWorkspaceTreeHandler = opts.agentWorkspaceTreeHandler;
     this.agentWorkspaceFileReadHandler = opts.agentWorkspaceFileReadHandler;
@@ -556,7 +499,7 @@ export class IntentDispatcher {
       // from reaching the wire as it did during the bare-cast era.
       // D4.d D2 / D4.e-1: preserve typed daemon-business errors thrown by
       // a handler (any `DaemonTypedError` subclass: AgentMaterializeError,
-      // WorkspaceProvisionError, AgentWorkspaceIndexError). Without this
+      // AgentWorkspaceIndexError). Without this
       // branch the generic catch below would squash the typed code into
       // `internal_error`, losing the recoverable / unrecoverable /
       // collision / unresolved distinctions the route layer needs.
@@ -566,7 +509,7 @@ export class IntentDispatcher {
       // before going on the wire, so a code that is not in the dispatching
       // intent's error taxonomy still collapses to `internal_error`. This
       // keeps the wire-error scope per-intent: only intents whose schema
-      // widens (agent_materialize / workspace_provision /
+      // widens (agent_materialize /
       // agent_workspace_index) can carry their typed codes; a runtime_*
       // non-spawning runtime intent (defaulting to the 5 generic codes)
       // rejects any foreign typed code here. `runtime_start` and
@@ -632,8 +575,7 @@ export class IntentDispatcher {
    * narrows `error.code` to the 5 generic codes; this helper
    * bypasses that narrowing so daemon-business typed codes
    * (the `AgentMaterializeErrorCode` values plus the D4.e
-   * `WorkspaceProvisionErrorCode` / `AgentWorkspaceIndexErrorCode`
-   * values) can travel through to:
+   * `AgentWorkspaceIndexErrorCode` values) can travel through to:
    *   - The outbound WS layer, which validates them against the
    *     wider per-command wire error schema for that intent.
    *   - The local IPC transport, which uses `LooseAnyFrameSchema`
@@ -864,29 +806,6 @@ export class IntentDispatcher {
         return this.requireAgentMaterializeHandler()(
           params as AgentMaterializeParams,
         );
-      case 'workspace_provision':
-        // D4.e-1 — server↔daemon data-plane. Slot wired by `runDaemon`
-        // to `provisionWorkspace`. Typed errors (WorkspaceProvisionError)
-        // are projected by the DaemonTypedError catch arm.
-        return this.requireWorkspaceProvisionHandler()(
-          params as WorkspaceProvisionParams,
-        );
-      case 'workspace_path_index':
-        return this.requireWorkspacePathIndexHandler()(
-          params as WorkspacePathIndexParams,
-        );
-      case 'workspace_unbind':
-        // #task:1719 — registry-mapping removal for backend-deleted
-        // workspaces. Mapping only; never touches directories.
-        return this.requireWorkspaceUnbindHandler()(
-          params as WorkspaceUnbindParams,
-        );
-      case 'workspace_registry_ids':
-        // #task:1719 — ready-generation reconcile pull. Read-only; ids
-        // only, never paths.
-        return this.requireWorkspaceRegistryIdsHandler()(
-          params as WorkspaceRegistryIdsParams,
-        );
       case 'agent_workspace_index':
         // D4.e-1 — route-time agent_dir resolver. Slot wired to
         // `indexAgentWorkspaces`.
@@ -1031,50 +950,6 @@ export class IntentDispatcher {
       );
     }
     return this.agentMaterializeHandler;
-  }
-
-  private requireWorkspaceProvisionHandler(): (
-    params: WorkspaceProvisionParams,
-  ) => WorkspaceProvisionResult | Promise<WorkspaceProvisionResult> {
-    if (!this.workspaceProvisionHandler) {
-      throw new Error(
-        'workspace_provision intent reached dispatcher with no handler wired',
-      );
-    }
-    return this.workspaceProvisionHandler;
-  }
-
-  private requireWorkspacePathIndexHandler(): (
-    params: WorkspacePathIndexParams,
-  ) => WorkspacePathIndexResult | Promise<WorkspacePathIndexResult> {
-    if (!this.workspacePathIndexHandler) {
-      throw new Error(
-        'workspace_path_index intent reached dispatcher with no handler wired',
-      );
-    }
-    return this.workspacePathIndexHandler;
-  }
-
-  private requireWorkspaceUnbindHandler(): (
-    params: WorkspaceUnbindParams,
-  ) => WorkspaceUnbindResult | Promise<WorkspaceUnbindResult> {
-    if (!this.workspaceUnbindHandler) {
-      throw new Error(
-        'workspace_unbind intent reached dispatcher with no handler wired',
-      );
-    }
-    return this.workspaceUnbindHandler;
-  }
-
-  private requireWorkspaceRegistryIdsHandler(): (
-    params: WorkspaceRegistryIdsParams,
-  ) => WorkspaceRegistryIdsResult | Promise<WorkspaceRegistryIdsResult> {
-    if (!this.workspaceRegistryIdsHandler) {
-      throw new Error(
-        'workspace_registry_ids intent reached dispatcher with no handler wired',
-      );
-    }
-    return this.workspaceRegistryIdsHandler;
   }
 
   private requireAgentWorkspaceIndexHandler(): (

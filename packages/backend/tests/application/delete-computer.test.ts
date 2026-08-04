@@ -11,7 +11,6 @@ import {
   type DeleteComputerDeps,
 } from '../../src/application/delete-computer.js';
 import { buildTestApp, type TestApp } from '../utils/app.js';
-import { testWorkspacePath } from '../utils/db.js';
 
 /**
  * Destruction boundaries for the computer-delete cascade (#task:1616).
@@ -19,11 +18,18 @@ import { testWorkspacePath } from '../utils/db.js';
  * Two things are worth proving at this layer, and the route suite
  * (`tests/routes/hosts.test.ts`) cannot prove either: (a) every refusal destroys
  * NOTHING — no DB row, no attachment blob, no daemon `agent_files_purge`; and
- * (b) the destructive half is atomic, so a failure that lands after the
- * workspace/agent rows are already deleted inside the transaction rolls all of
+ * (b) the destructive half is atomic, so a failure that lands after the agent
+ * rows and their homes are already deleted inside the transaction rolls all of
  * them back. (b) is the original bug this use case exists for: the old flow
  * deleted agents one at a time outside any transaction, so a late refusal left
  * some of them irreversibly gone while the computer stayed.
+ *
+ * relocation-v1 §7-4 — what the cascade REACHES shrank: a `regular` workspace is
+ * rooted on no computer, so only the computer's agents (and each agent's own
+ * `agent_home` with its DM bytes) are destroyed. The fixture therefore carries
+ * TWO attachments: one in the agent's DM (the destruction witness, captured
+ * inside the transaction) and one in a shared regular channel (the survival
+ * witness — computer-independent content the cascade must not touch).
  *
  * There is deliberately no "a dependency appeared after the snapshot" test any
  * more: the plan is read INSIDE the transaction, so there is no window between
@@ -36,8 +42,13 @@ interface Fixture {
   hostId: string;
   workspaceId: string;
   channelId: string;
+  homeId: string;
+  dmChannelId: string;
   agentId: string;
-  blobPath: string;
+  /** Attachment in the shared regular channel — must SURVIVE the cascade. */
+  sharedBlobPath: string;
+  /** Attachment in the agent's DM — destroyed with the agent's home. */
+  dmBlobPath: string;
   purgeCalls: () => number;
   deps: () => DeleteComputerDeps;
 }
@@ -49,12 +60,9 @@ async function setup(t: TestApp): Promise<Fixture> {
   hosts.markFinalized(host.id);
 
   const workspaces = new WorkspaceRepo(t.ctx.db);
-  const workspacePath = testWorkspacePath('cascade-ws');
   const workspace = workspaces.insert({
     name: 'Cascade Workspace',
     description: null,
-    workspacePath,
-    workspaceHostId: host.id,
   });
   const agent = new AgentRepo(t.ctx.db).create(
     { name: 'racer', runtime: 'claude' },
@@ -65,7 +73,6 @@ async function setup(t: TestApp): Promise<Fixture> {
   const conversations = new ConversationRepo(t.ctx.db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 'cascade channel',
   });
   conversations.addAgent(channel.id, agent.id);
@@ -73,28 +80,55 @@ async function setup(t: TestApp): Promise<Fixture> {
   // `computeDeleteImpact` only reports `starting` / `active` pairs.
   conversations.updateAgentRuntime(channel.id, agent.id, { status: 'active' });
 
-  // A real blob, so "the bytes survived a refusal" is a filesystem fact.
-  const uploaded = await t.ctx.attachmentService.upload({
+  // The agent's own home + DM: this is what the cascade destroys, and the only
+  // place it can capture blob refs from (`collectAgentDmBlobRefs` walks the
+  // owned home's DM channels).
+  const home = workspaces.insertAgentHome({ agent });
+  const dm = conversations.insertDmChannel({
+    workspaceId: home.id,
+    title: agent.name,
+    agentId: agent.id,
+  });
+  conversations.addAgent(dm.id, agent.id);
+
+  // Two real blobs, so both "survived a refusal" and "the shared channel's bytes
+  // are not this cascade's business" are filesystem facts.
+  const uploadedShared = await t.ctx.attachmentService.upload({
     sourceConversationId: channel.id,
-    filename: 'evidence.bin',
+    filename: 'shared-evidence.bin',
     contentType: 'application/octet-stream',
-    buffer: Buffer.from('evidence'),
+    buffer: Buffer.from('shared evidence'),
     createdByKind: 'user',
     createdById: t.viewerUserId,
   });
-  const refs = t.ctx.attachmentService.collectChannelBlobRefs([channel.id]);
-  expect(refs).toHaveLength(1);
-  const blobPath = join(t.silverhandDir, 'blobs', refs[0]!.storageKey);
-  expect(existsSync(blobPath)).toBe(true);
-  expect(uploaded.channel_id).toBe(channel.id);
+  await t.ctx.attachmentService.upload({
+    sourceConversationId: dm.id,
+    filename: 'dm-evidence.bin',
+    contentType: 'application/octet-stream',
+    buffer: Buffer.from('dm evidence'),
+    createdByKind: 'user',
+    createdById: t.viewerUserId,
+  });
+  const sharedRefs = t.ctx.attachmentService.collectChannelBlobRefs([channel.id]);
+  const dmRefs = t.ctx.attachmentService.collectChannelBlobRefs([dm.id]);
+  expect(sharedRefs).toHaveLength(1);
+  expect(dmRefs).toHaveLength(1);
+  const sharedBlobPath = join(t.silverhandDir, 'blobs', sharedRefs[0]!.storageKey);
+  const dmBlobPath = join(t.silverhandDir, 'blobs', dmRefs[0]!.storageKey);
+  expect(existsSync(sharedBlobPath)).toBe(true);
+  expect(existsSync(dmBlobPath)).toBe(true);
+  expect(uploadedShared.channel_id).toBe(channel.id);
 
   return {
     t,
     hostId: host.id,
     workspaceId: workspace.id,
     channelId: channel.id,
+    homeId: home.id,
+    dmChannelId: dm.id,
     agentId: agent.id,
-    blobPath,
+    sharedBlobPath,
+    dmBlobPath,
     purgeCalls: () =>
       (t.fakeHostWs?.calls ?? []).filter(
         call => call.kind === 'agent_files_purge',
@@ -114,9 +148,12 @@ async function setup(t: TestApp): Promise<Fixture> {
 function expectIntact(f: Fixture): void {
   expect(new HostRepo(f.t.ctx.db).get(f.hostId)).not.toBeNull();
   expect(new WorkspaceRepo(f.t.ctx.db).get(f.workspaceId)).not.toBeNull();
+  expect(new WorkspaceRepo(f.t.ctx.db).get(f.homeId)).not.toBeNull();
   expect(new AgentRepo(f.t.ctx.db).get(f.agentId)).not.toBeNull();
   expect(new ConversationRepo(f.t.ctx.db).get(f.channelId)).not.toBeNull();
-  expect(existsSync(f.blobPath)).toBe(true);
+  expect(new ConversationRepo(f.t.ctx.db).get(f.dmChannelId)).not.toBeNull();
+  expect(existsSync(f.sharedBlobPath)).toBe(true);
+  expect(existsSync(f.dmBlobPath)).toBe(true);
   expect(f.purgeCalls()).toBe(0);
   expect(f.t.fake.stops).toEqual([]);
 }
@@ -152,15 +189,27 @@ describe('deleteComputer destruction boundaries', () => {
     });
 
     // The guard for a caller that skipped the resources query. It still names
-    // the objects, so an API/CLI caller learns what the flag would destroy.
+    // the objects, so an API/CLI caller learns what the flag would destroy —
+    // and after relocation-v1 §7-4 that is AGENTS only. §6's atomic epoch cut
+    // then removed the empty `workspaces` shell from the payload outright, so
+    // the dimension is ABSENT rather than present-and-zero: a workspace is
+    // rooted on no computer, so deleting one can never name workspaces.
     expect(result).toMatchObject({
       kind: 'hasDependents',
       payload: {
-        dependents: { agents: 1, workspaces: 1 },
+        dependents: { agents: 1 },
         agents: [{ id: f.agentId }],
-        workspaces: [{ id: f.workspaceId, viewer_role: 'owner' }],
       },
     });
+    // `toMatchObject` is permissive about extra keys, so pin the removal
+    // itself: neither the payload nor its count object may carry the
+    // retired dimension back.
+    const payload = (result as unknown as { payload: Record<string, unknown> })
+      .payload;
+    expect('workspaces' in payload).toBe(false);
+    expect(
+      'workspaces' in (payload.dependents as Record<string, unknown>),
+    ).toBe(false);
     expectIntact(f);
   });
 
@@ -185,7 +234,7 @@ describe('deleteComputer destruction boundaries', () => {
     expectIntact(f);
   });
 
-  it('refuses and destroys nothing when the requester does not own a workspace on the computer', async () => {
+  it('a shared workspace is outside the cascade — its rows AND its bytes survive, whatever the requesters role in it', async () => {
     t = buildTestApp();
     const f = await setup(t);
     t.ctx.db
@@ -201,14 +250,20 @@ describe('deleteComputer destruction boundaries', () => {
       cascadeDependents: true,
     });
 
-    // Consent does not grant authority: the owner gate is re-evaluated against
-    // current state inside the transaction, and it names the workspaces that
-    // need their owner (`viewer_role` is the resource fact, not a verdict).
-    expect(result).toMatchObject({
-      kind: 'workspaceForbidden',
-      workspaces: [{ id: f.workspaceId, viewer_role: 'member' }],
-    });
-    expectIntact(f);
+    // Inverted pin (relocation-v1 §7-4): the retired `workspaceForbidden` arm
+    // existed because the cascade used to DESTROY the computer's workspaces, so
+    // a non-owner's consent was not enough. Nothing of the workspace is
+    // destroyed now — not the row, not its channel, not its attachment bytes —
+    // so there is no owner's authority to ask for and the role is irrelevant.
+    // Bytes are the sharp end: this layer is the only one that can prove the
+    // shared channel's blob was not swept along with the agent's DM.
+    expect(result).toEqual({ kind: 'deleted' });
+    expect(new WorkspaceRepo(t.ctx.db).get(f.workspaceId)).not.toBeNull();
+    expect(new ConversationRepo(t.ctx.db).get(f.channelId)).not.toBeNull();
+    expect(existsSync(f.sharedBlobPath)).toBe(true);
+    expect(
+      t.ctx.attachmentService.collectChannelBlobRefs([f.channelId]),
+    ).toHaveLength(1);
   });
 
   it('deletes the captured attachment blobs and routes every stop once the cascade commits', async () => {
@@ -223,31 +278,34 @@ describe('deleteComputer destruction boundaries', () => {
 
     expect(result).toEqual({ kind: 'deleted' });
     expect(new HostRepo(t.ctx.db).get(f.hostId)).toBeNull();
-    expect(new WorkspaceRepo(t.ctx.db).get(f.workspaceId)).toBeNull();
-    // The falsifier for the post-commit sweep: the rows are gone, so a sweep
+    // The agent's own home dies with it; the shared regular workspace does not
+    // (§7-4 — it is rooted on no computer).
+    expect(new WorkspaceRepo(t.ctx.db).get(f.homeId)).toBeNull();
+    expect(new WorkspaceRepo(t.ctx.db).get(f.workspaceId)).not.toBeNull();
+    // The falsifier for the post-commit sweep: the DM rows are gone, so a sweep
     // that re-queried `attachments` by channel would silently find nothing and
     // leak this file forever. It is deleted only because the storage refs were
     // captured inside the transaction.
-    expect(t.ctx.attachmentService.collectChannelBlobRefs([f.channelId])).toEqual([]);
-    expect(existsSync(f.blobPath)).toBe(false);
-    // And the purge still names the workspaces the agent belonged to — those
+    expect(t.ctx.attachmentService.collectChannelBlobRefs([f.dmChannelId])).toEqual([]);
+    expect(existsSync(f.dmBlobPath)).toBe(false);
+    expect(existsSync(f.sharedBlobPath)).toBe(true);
+    // And the purge names the agent whose whole home tree is removed — the
     // membership rows are also gone post-commit.
     const purge = (t.fakeHostWs?.calls ?? []).find(
       call => call.kind === 'agent_files_purge',
     );
     expect(purge?.params).toMatchObject({
       agent_id: f.agentId,
-      scope: 'all',
-      workspace_ids: [f.workspaceId],
     });
     // Every post-commit stop names the computer it must be routed to. Identity
     // alone is not enough: the production dispatcher resolves routing from
     // `agents.host_id` → `hosts`, rows this cascade has just deleted, so a stop
     // without the captured `hostId` throws and the daemon's child survives the
     // delete (see the falsifier pair in tests/runtime/outbound-event-fanout.test.ts).
-    // And EXACTLY ONE stop for this pair: the workspace plan's captured members
-    // and the agent teardown's live runs both name it, so the union must be
-    // deduped rather than dispatched twice across the process boundary.
+    // And EXACTLY ONE stop for this pair: `impact.running_conversation_agents`
+    // is the ONLY teardown authority since relocation-v1 §7-4 removed the
+    // workspace-cascade half, so an agent live in several conversations is
+    // stopped once PER PAIR and never twice for the same one.
     expect(t.fake.stops).toEqual([
       { conversationId: f.channelId, agentId: f.agentId, hostId: f.hostId },
     ]);
@@ -281,7 +339,7 @@ describe('deleteComputer destruction boundaries', () => {
     // swallowed each failure and the caller's `.catch` could never observe it,
     // so leaked bytes with no row left to name them were invisible.
     expect(result).toEqual({ kind: 'deleted' });
-    expect(existsSync(f.blobPath)).toBe(true);
+    expect(existsSync(f.dmBlobPath)).toBe(true);
     expect(
       warnings.some(msg => msg.includes('attachment sweep left blobs behind')),
     ).toBe(true);
@@ -293,7 +351,7 @@ describe('deleteComputer destruction boundaries', () => {
     class RestrictingHostRepo extends HostRepo {
       override deleteOwnedUserInvite(): boolean {
         // An unmodeled RESTRICT reference, i.e. schema drift or a bug. It fires
-        // AFTER the workspace and agent rows have been deleted inside the
+        // AFTER the agent rows and their homes have been deleted inside the
         // transaction, which is exactly the half-delete the old agent-by-agent
         // loop produced.
         throw new Error('FOREIGN KEY constraint failed');
@@ -313,8 +371,8 @@ describe('deleteComputer destruction boundaries', () => {
       // nothing left to remove, retry forever) and hide the invariant violation.
     ).rejects.toThrow(/FOREIGN KEY constraint failed/);
 
-    // Atomicity: the workspace, its channel, the agent and the bytes are all
-    // still there, and nothing crossed a process boundary.
+    // Atomicity: the agent, its home and DM, the shared channel and every byte
+    // are all still there, and nothing crossed a process boundary.
     expectIntact(f);
   });
 

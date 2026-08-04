@@ -14,6 +14,7 @@ import type {
 import {
   decodeUserPrincipalHeader,
   isAgentHomeWorkspaceId,
+  DESKTOP_API_EPOCH_HEADER,
   RUNTIME_CATALOG,
   X_SILVERHAND_LEGACY_USER_ID_HEADER as LEGACY_USER_ID_HEADER,
   X_SILVERHAND_PRINCIPAL_HEADER as PRINCIPAL_HEADER,
@@ -39,7 +40,6 @@ import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { HostStatusReadModel } from '../../src/runtime/host-status-read-model.js';
-import { WorkspaceRegistryReconciler } from '../../src/runtime/workspace-registry-reconcile.js';
 import { createApiRouter } from '../../src/routes.js';
 import { createInternalRouter } from '../../src/routes/internal-agent.js';
 import type {
@@ -85,8 +85,9 @@ import type {
   OutboundServerCommandParams,
   OutboundServerCommandResult,
 } from '@silverhand/host';
-import { ensureAgentL1Dir, initWorkspaceDir } from './embedded-seed-fixtures.js';
+import { ensureAgentL1Dir } from './embedded-seed-fixtures.js';
 import { join as joinPath } from 'node:path';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from './desktop-client-epoch.js';
 
 /**
  * Records every call routes / provision make into the runtime host.
@@ -269,12 +270,10 @@ export class FakeHostWsServerController implements HostWsServerController {
   }> = [];
   /** Inject an error from `sendCommand` (any kind). */
   sendCommandError: Error | null = null;
-  /** #task:1719 — when set, `sendCommandError` throws ONLY for these
-   *  command kinds. The required provision barrier means the reconcile
-   *  pull (`workspace_registry_ids`) now precedes every provision; a
-   *  blanket error would fail the barrier first and mask the arm a
-   *  test actually wants to exercise. `null` keeps the historical
-   *  throw-for-everything behavior. */
+  /** When set, `sendCommandError` throws ONLY for these command kinds. A
+   *  blanket error would fail whatever pre-spawn command runs first (e.g. the
+   *  L2 seed) and mask the arm a test actually wants to exercise. `null` keeps
+   *  the throw-for-everything behavior. */
   sendCommandErrorKinds: string[] | null = null;
   hostRuntimeCatalogAckOverride:
     | (() => OutboundServerCommandResult<'host_runtime_catalog'>)
@@ -289,46 +288,6 @@ export class FakeHostWsServerController implements HostWsServerController {
         agentId: string,
         agentHomeWorkspaceId: string,
       ) => OutboundServerCommandResult<'agent_materialize'>)
-    | null = null;
-  /**
-   * D4.e-1 3b — override the `workspace_provision` ack. Tests that want to
-   * exercise a specific `bound_workspace_path`, a provisioned=false
-   * idempotent re-bind, or skip skeleton creation can swap this.
-   */
-  workspaceProvisionAckOverride:
-    | ((
-        params: OutboundServerCommandParams<'workspace_provision'>,
-      ) => OutboundServerCommandResult<'workspace_provision'>)
-    | null = null;
-  workspacePathIndexAckOverride:
-    | ((
-        params: OutboundServerCommandParams<'workspace_path_index'>,
-      ) => OutboundServerCommandResult<'workspace_path_index'>)
-    | null = null;
-  /**
-   * #task:1719 — override the `workspace_unbind` ack. Default mirrors the
-   * daemon: delete the id from the fake in-memory registry map (mapping ONLY
-   * — no fs mutation), reporting `removed` vs `absent` (idempotent success).
-   * Tests swap this to surface typed errors (`registry_unavailable`).
-   */
-  workspaceUnbindAckOverride:
-    | ((
-        params: OutboundServerCommandParams<'workspace_unbind'>,
-      ) => OutboundServerCommandResult<'workspace_unbind'>)
-    | null = null;
-  /**
-   * #task:1719 — override the `workspace_registry_ids` ack. Default mirrors
-   * the daemon reconcile pull: the ids currently bound in the fake in-memory
-   * registry (`boundWorkspacePaths` keys — ids ONLY, never paths). Tests
-   * swap this to report ghosts or to surface typed errors / transport
-   * failures for the reconciler paths.
-   */
-  workspaceRegistryIdsAckOverride:
-    | ((
-        params: OutboundServerCommandParams<'workspace_registry_ids'>,
-      ) =>
-        | OutboundServerCommandResult<'workspace_registry_ids'>
-        | Promise<OutboundServerCommandResult<'workspace_registry_ids'>>)
     | null = null;
   /**
    * D4.e-1 3b — override the `agent_workspace_index` ack. Tests that want to
@@ -377,8 +336,9 @@ export class FakeHostWsServerController implements HostWsServerController {
   /**
    * D4.e-3 — override the `agent_l2_seed` ack. Tests that want to exercise a
    * specific `seeded`/`l2_present` result can swap this. Default seeds the
-   * member's L2 dir on the shared embedded test fs under the recorded
-   * `workspace_provision` bind (MEMORY.md + notes/, never system_prompt.md).
+   * member's L2 dir on the shared embedded test fs under the recorded bind
+   * (MEMORY.md + notes/, never system_prompt.md); regular workspaces are never
+   * recorded, so the default fails closed.
    */
   agentL2SeedAckOverride:
     | ((
@@ -387,10 +347,9 @@ export class FakeHostWsServerController implements HostWsServerController {
     | null = null;
   /**
    * D4.e-4 — override the `agent_files_purge` ack. Tests that want a typed
-   * failure (`partial_purge` / `registry_unavailable`) or a specific
-   * `purged_count` swap this. Default mirrors the daemon: rm L1 (scope:'all')
-   * + each resolvable workspace's L2 on the shared embedded test fs; an
-   * unbound workspace id is counted in `skipped_unprovisioned`.
+   * failure (`partial_purge`) or a specific `purged_count` swap this. Default
+   * mirrors the daemon: rm the agent's whole terminal home tree on the shared
+   * embedded test fs, consulting no registry.
    */
   agentFilesPurgeAckOverride:
     | ((
@@ -414,36 +373,28 @@ export class FakeHostWsServerController implements HostWsServerController {
         | Promise<OutboundServerCommandResult<'mcp_probe'>>)
     | null = null;
 
-  /**
-   * D4.e-1 3b P2 (Cindy) — a tiny in-memory stand-in for the daemon
-   * registry: `workspace_provision` records `workspace_id → bound path`, and
-   * `agent_workspace_index` resolves regular ids from it (missing → an
-   * `unresolved` entry, like a never-provisioned id). This makes list tests
-   * actually depend on creation-time provision having run with the right
-   * `requested_path` instead of the fake always succeeding.
-   */
-  private readonly boundWorkspacePaths = new Map<string, string>();
-
   constructor(private readonly silverhandDir: string) {}
 
-  private agentWorkspaceBaseDir(
-    params: { agent_id: string; workspace_id?: string },
-    hostId: string,
-    commandKind: OutboundServerCommandKind,
-  ): string {
+  /**
+   * relocation-v1 §7 task 4 — resolve the semantic agent-workspace source to a
+   * host-local base dir the SAME way the demoted daemon resolver does
+   * (`resolveAgentWorkspaceBaseDir`): agent-home / DM ids map to the agent's L1
+   * home; a regular workspace id maps to its DETERMINISTIC agent-centric bundle
+   * coordinate `<agent home>/workspaces/<wid>`. There is no registry, no
+   * provisioning gate, and no `workspace_not_provisioned` refusal — a
+   * not-yet-materialized bundle is an ordinary filesystem absence downstream
+   * (`tree` empty, `read` not_found), never an error code.
+   */
+  private agentWorkspaceBaseDir(params: {
+    agent_id: string;
+    workspace_id?: string;
+  }): string {
+    const agentHome = joinPath(this.silverhandDir, 'agents', params.agent_id);
     const workspaceId = params.workspace_id;
     if (!workspaceId || isAgentHomeWorkspaceId(workspaceId, params.agent_id)) {
-      return joinPath(this.silverhandDir, 'agents', params.agent_id);
+      return agentHome;
     }
-    const boundPath = this.boundWorkspacePaths.get(workspaceId);
-    if (!boundPath) {
-      throw new HostWsCommandResponseError(
-        'workspace_not_provisioned' as never,
-        `workspace ${workspaceId} is not provisioned; cannot resolve agent workspace`,
-        { hostId, commandKind, requestId: 'fake' },
-      );
-    }
-    return joinPath(boundPath, '.silverhand', 'agents', params.agent_id);
+    return joinPath(agentHome, 'workspaces', workspaceId);
   }
 
   activeConnectionCount(): number {
@@ -461,13 +412,12 @@ export class FakeHostWsServerController implements HostWsServerController {
   /** Test hook to simulate a detached host (resolveOutboundForHost → 503). */
   connectionIdForHostOverride: ((hostId: string) => string | null) | null = null;
   /**
-   * #task:1719 — capabilities the fake attachment advertises. Defaults to
-   * the full daemon set (mirrors `createDaemonHelloResult`), so the
-   * capability-gated `workspace_unbind` / `workspace_registry_ids` family
-   * keeps dispatching in legacy tests. A test simulating an OLD daemon
-   * strips the token:
+   * Capabilities the fake attachment advertises. Defaults to the full daemon
+   * set (mirrors `createDaemonHelloResult`) so capability-gated command
+   * families keep dispatching. A test simulating an OLD daemon strips a token,
+   * e.g.:
    *   `fake.attachmentCapabilities = fake.attachmentCapabilities.filter(
-   *      c => c !== 'workspace.registry_reconcile.v1')`.
+   *      c => c !== '<capability-token>')`.
    */
   attachmentCapabilities: string[] = [...KNOWN_CAPABILITIES_V1];
   getAttachment(hostId: string): HostWsAttachment | null {
@@ -541,41 +491,6 @@ export class FakeHostWsServerController implements HostWsServerController {
         materialized_at: Date.now(),
       } as OutboundServerCommandResult<K>;
     }
-    if (kind === 'workspace_provision') {
-      const p = params as OutboundServerCommandParams<'workspace_provision'>;
-      if (this.workspaceProvisionAckOverride) {
-        const ack = this.workspaceProvisionAckOverride(p);
-        // Keep the in-memory registry consistent even when a test customizes
-        // the ack: `agent_workspace_index` resolves regular ids from this map,
-        // so a custom `bound_workspace_path` MUST be recorded too — otherwise
-        // the override would ack a bind the fake registry never saw, and a
-        // follow-up list would spuriously report the id `unresolved`. A test
-        // that specifically wants "ack'd but registry empty" should drive that
-        // explicitly via `agentWorkspaceIndexAckOverride` → unresolved.
-        if (ack.ok) {
-          this.boundWorkspacePaths.set(p.workspace_id, ack.bound_workspace_path);
-        }
-        return ack as OutboundServerCommandResult<K>;
-      }
-      // Mirror the real daemon: bind to the caller-proposed path when
-      // present, else a deterministic managed default under silverhandDir,
-      // and create the `.silverhand/` skeleton so backend code that still
-      // reads the cached `workspace_path` (seed/channel) sees a real dir.
-      // The embedded test fs is shared, so this stands in for the daemon's
-      // `initWorkspaceSkeleton`.
-      const boundPath =
-        p.requested_path ??
-        joinPath(this.silverhandDir, 'workspaces', p.workspace_id);
-      await initWorkspaceDir(boundPath);
-      // Record the bind so `agent_workspace_index` resolves this id to the
-      // SAME path (mirrors the daemon registry; honours custom requested_path).
-      this.boundWorkspacePaths.set(p.workspace_id, boundPath);
-      return {
-        ok: true as const,
-        provisioned: true,
-        bound_workspace_path: boundPath,
-      } as OutboundServerCommandResult<K>;
-    }
     if (kind === 'agent_workspace_index') {
       const p = params as OutboundServerCommandParams<'agent_workspace_index'>;
       if (this.agentWorkspaceIndexAckOverride) {
@@ -583,118 +498,30 @@ export class FakeHostWsServerController implements HostWsServerController {
           p,
         ) as OutboundServerCommandResult<K>;
       }
-      // Default: resolve each requested id the way the real daemon would —
-      // agent_home (`wsah_<agent_id>`) from the homedir convention, regular
-      // from the recorded registry bind (`workspace_provision`). A regular id
-      // with NO recorded bind is `unresolved` (read fail-closed), so list
-      // tests must drive establishment-time provision rather than relying on
-      // the fake to always succeed.
+      // Mirror the demoted daemon resolver (`indexAgentWorkspaces`): each
+      // `agent_dir` is the deterministic coordinate (agent-home = L1 home,
+      // regular = `<agent home>/workspaces/<wid>`), reported ONLY when that dir
+      // is a usable cwd right now — the fake's `dirExists` stand-in for
+      // `bundleCwdUsable`. No registry map: a never-materialized regular bundle
+      // (the legal lazy window after a pure-DB membership add) degrades to
+      // `unresolved`; `agent_l2_seed` is what later makes it available.
       const entries: { workspace_id: string; agent_dir: string }[] = [];
       const unresolved: string[] = [];
       for (const workspace_id of p.workspace_ids) {
-        if (isAgentHomeWorkspaceId(workspace_id, p.agent_id)) {
-          entries.push({
-            workspace_id,
-            agent_dir: joinPath(this.silverhandDir, 'agents', p.agent_id),
-          });
-          continue;
-        }
-        const boundPath = this.boundWorkspacePaths.get(workspace_id);
-        if (!boundPath) {
-          unresolved.push(workspace_id);
-          continue;
-        }
-        entries.push({
+        const dir = this.agentWorkspaceBaseDir({
+          agent_id: p.agent_id,
           workspace_id,
-          agent_dir: joinPath(boundPath, '.silverhand', 'agents', p.agent_id),
         });
-      }
-      return {
-        ok: true as const,
-        entries,
-        unresolved,
-      } as OutboundServerCommandResult<K>;
-    }
-    if (kind === 'workspace_path_index') {
-      const p = params as OutboundServerCommandParams<'workspace_path_index'>;
-      if (this.workspacePathIndexAckOverride) {
-        return this.workspacePathIndexAckOverride(
-          p,
-        ) as OutboundServerCommandResult<K>;
-      }
-      const entries: { workspace_id: string; path: string }[] = [];
-      const unresolved: string[] = [];
-      for (const workspace of p.workspaces) {
-        if (
-          workspace.kind === 'agent_home' &&
-          workspace.owner_agent_id &&
-          isAgentHomeWorkspaceId(
-            workspace.workspace_id,
-            workspace.owner_agent_id,
-          )
-        ) {
-          entries.push({
-            workspace_id: workspace.workspace_id,
-            path: joinPath(
-              this.silverhandDir,
-              'agents',
-              workspace.owner_agent_id,
-            ),
-          });
-          continue;
-        }
-        const boundPath = this.boundWorkspacePaths.get(
-          workspace.workspace_id,
-        );
-        if (!boundPath) {
-          unresolved.push(workspace.workspace_id);
-          continue;
-        }
-        entries.push({ workspace_id: workspace.workspace_id, path: boundPath });
-      }
-      return {
-        ok: true as const,
-        entries,
-        unresolved,
-      } as OutboundServerCommandResult<K>;
-    }
-    if (kind === 'workspace_unbind') {
-      const p = params as OutboundServerCommandParams<'workspace_unbind'>;
-      if (this.workspaceUnbindAckOverride) {
-        return this.workspaceUnbindAckOverride(
-          p,
-        ) as OutboundServerCommandResult<K>;
-      }
-      // #task:1719 — mirror the daemon: remove ONLY the registry mapping
-      // (the shared embedded test fs is never touched — #1594). Absent ids
-      // (never bound / already unbound) are idempotent SUCCESS in `absent`.
-      const removed: string[] = [];
-      const absent: string[] = [];
-      for (const workspaceId of p.workspace_ids) {
-        if (this.boundWorkspacePaths.delete(workspaceId)) {
-          removed.push(workspaceId);
+        if (await fakeDirExists(dir)) {
+          entries.push({ workspace_id, agent_dir: dir });
         } else {
-          absent.push(workspaceId);
+          unresolved.push(workspace_id);
         }
       }
       return {
         ok: true as const,
-        removed,
-        absent,
-      } as OutboundServerCommandResult<K>;
-    }
-    if (kind === 'workspace_registry_ids') {
-      const p = params as OutboundServerCommandParams<'workspace_registry_ids'>;
-      if (this.workspaceRegistryIdsAckOverride) {
-        return (await this.workspaceRegistryIdsAckOverride(
-          p,
-        )) as OutboundServerCommandResult<K>;
-      }
-      // #task:1719 — mirror the daemon reconcile pull: every id currently
-      // bound in the fake in-memory registry, ids ONLY (never paths).
-      return {
-        ok: true as const,
-        workspace_ids: [...this.boundWorkspacePaths.keys()],
+        entries,
+        unresolved,
       } as OutboundServerCommandResult<K>;
     }
     if (kind === 'agent_workspace_tree') {
@@ -704,7 +531,7 @@ export class FakeHostWsServerController implements HostWsServerController {
           p,
         ) as OutboundServerCommandResult<K>;
       }
-      const dir = this.agentWorkspaceBaseDir(p, hostId, kind);
+      const dir = this.agentWorkspaceBaseDir(p);
       const tree = await listFakeAgentWorkspaceTree(dir);
       return { ok: true as const, tree } as OutboundServerCommandResult<K>;
     }
@@ -716,7 +543,7 @@ export class FakeHostWsServerController implements HostWsServerController {
           p,
         ) as OutboundServerCommandResult<K>;
       }
-      const dir = this.agentWorkspaceBaseDir(p, hostId, kind);
+      const dir = this.agentWorkspaceBaseDir(p);
       const file = await readFakeAgentWorkspaceFile(dir, p.path);
       if (!file) {
         throw new HostWsCommandResponseError(
@@ -795,23 +622,16 @@ export class FakeHostWsServerController implements HostWsServerController {
       if (this.agentL2SeedAckOverride) {
         return this.agentL2SeedAckOverride(p) as OutboundServerCommandResult<K>;
       }
-      // Mirror the daemon: resolve the workspace's host-local path from the
-      // recorded registry bind (`workspace_provision`) and seed the member's
-      // L2 dir there (MEMORY.md + notes/, NEVER L1 system_prompt.md). A
-      // never-provisioned id fails closed like the real daemon.
-      const boundPath = this.boundWorkspacePaths.get(p.workspace_id);
-      if (!boundPath) {
-        throw new HostWsCommandResponseError(
-          'workspace_not_provisioned' as never,
-          `workspace ${p.workspace_id} is not provisioned; cannot seed L2`,
-          {
-            hostId,
-            commandKind: 'agent_l2_seed',
-            requestId: 'fake',
-          },
-        );
-      }
-      const l2Dir = joinPath(boundPath, '.silverhand', 'agents', p.agent_id);
+      // Mirror the demoted daemon seeder (`seedAgentL2`): seeding IS what makes
+      // the deterministic bundle coordinate available — no registry, no
+      // provisioning gate. A regular workspace's L2 lives at
+      // `<agent home>/workspaces/<wid>` (MEMORY.md + notes/, NEVER L1
+      // system_prompt.md). After this, `agent_workspace_index` reports the
+      // coordinate and tree/read can see MEMORY.
+      const l2Dir = this.agentWorkspaceBaseDir({
+        agent_id: p.agent_id,
+        workspace_id: p.workspace_id,
+      });
       const seeded = await seedFakeAgentL2(l2Dir);
       return {
         ok: true as const,
@@ -826,37 +646,24 @@ export class FakeHostWsServerController implements HostWsServerController {
           p,
         )) as OutboundServerCommandResult<K>;
       }
-      // Mirror the daemon: rm L1 (scope:'all') + each resolvable workspace's
-      // L2 on the shared embedded test fs. ENOENT is not a failure; an unbound
-      // workspace id has no daemon-managed L2 dir → skipped_unprovisioned.
-      let purgedCount = 0;
-      let skippedUnprovisioned = 0;
-      const targets: string[] = [];
-      if (p.scope === 'all') {
-        targets.push(joinPath(this.silverhandDir, 'agents', p.agent_id));
+      // Mirror the daemon (relocation-v1 §7 task 4, files-purge-handler.ts):
+      // the agent's whole managed footprint is a SINGLE tree
+      // (`<home>/.silverhand/agents/<agent_id>` = L1 + every nested
+      // `workspaces/<wid>` L2 bundle), so purge is one rm — no registry, no
+      // workspace-id enumeration, no disjoint L2 map. ENOENT is success (not
+      // counted). Legacy pre-relocation sources are permanently retained per
+      // the product ruling and are never touched here.
+      const target = joinPath(this.silverhandDir, 'agents', p.agent_id);
+      let existed = true;
+      try {
+        await fsp.access(target);
+      } catch {
+        existed = false;
       }
-      for (const workspaceId of p.workspace_ids) {
-        const boundPath = this.boundWorkspacePaths.get(workspaceId);
-        if (!boundPath) {
-          skippedUnprovisioned += 1;
-          continue;
-        }
-        targets.push(joinPath(boundPath, '.silverhand', 'agents', p.agent_id));
-      }
-      for (const target of targets) {
-        let existed = true;
-        try {
-          await fsp.access(target);
-        } catch {
-          existed = false;
-        }
-        await fsp.rm(target, { recursive: true, force: true });
-        if (existed) purgedCount += 1;
-      }
+      await fsp.rm(target, { recursive: true, force: true });
       return {
         ok: true as const,
-        purged_count: purgedCount,
-        skipped_unprovisioned: skippedUnprovisioned,
+        purged_count: existed ? 1 : 0,
       } as OutboundServerCommandResult<K>;
     }
     return {} as OutboundServerCommandResult<K>;
@@ -874,6 +681,19 @@ const silentLogger: BackendLogger = {
   warn() {},
   error() {},
 };
+
+/**
+ * relocation-v1 §7 task 4 — the fake's stand-in for the daemon's
+ * `bundleCwdUsable`: a deterministic bundle coordinate is AVAILABLE iff its dir
+ * exists as a directory right now. Seeding (`agent_l2_seed`) or any prior spawn
+ * materializes it; before that a valid coordinate is simply an absent dir.
+ */
+async function fakeDirExists(dir: string): Promise<boolean> {
+  return fsp
+    .stat(dir)
+    .then(s => s.isDirectory())
+    .catch(() => false);
+}
 
 /**
  * D4.e-3 — the fake adapter's stand-in for the daemon's L2 seeder
@@ -1215,13 +1035,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     // steer the materialize path, preserving pre-D5.a semantics.
     outboundFrameAdapter: hostWsControllerFactory,
     runtimeHost: fake,
-    // #task:1719 (Cindy round-2 P1) — the provision barrier is a REQUIRED
-    // port: the harness provides a REAL reconciler over the fake transport
-    // (declared just below; the closure runs post-construction). Tests
-    // exercise barrier failure by making the fake's workspace_registry_ids
-    // arm fail — never by omitting the port.
-    workspaceProvisionBarrier: hostId =>
-      workspaceRegistryReconciler.barrier(hostId),
   };
   // #task:1588 — the /status route reads through the ctx-level read model
   // (memory-only; gate #4). Route tests seed it explicitly via
@@ -1232,11 +1045,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeView: hostId => ctx.hostRuntimeView?.(hostId) ?? null,
   });
   ctx.hostStatusReadModel = () => hostStatusReadModel;
-  const workspaceRegistryReconciler = new WorkspaceRegistryReconciler({
-    db,
-    adapter: () => ctx.outboundFrameAdapter?.() ?? null,
-    logger: silentLogger,
-  });
   ctx.channelService = new ChannelService({
     db,
     conversations: new ConversationRepo(db),
@@ -1336,7 +1144,6 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     legacyServerAuthToken,
     viewerUserId,
     cleanup: () => {
-      workspaceRegistryReconciler.close();
       hostStatusReadModel.close();
       ctx.scheduleService.stop();
       ctx.idleReaperService.stop();
@@ -1360,9 +1167,24 @@ export interface HttpHelper {
   json<T = any>(res: Promise<Response> | Response): Promise<T>;
 }
 
+/**
+ * Emulate a CURRENT desktop client, which stamps the admission epoch header on
+ * every request (`apps/desktop/src/main/index.ts`). relocation-v1 §6 raised
+ * `MINIMUM_CLIENT_API_EPOCH` to the current epoch, so a request without it is a
+ * pre-epoch generation and is refused at admission with 426 — exactly like the
+ * auto-injected session bearer and `Idempotency-Key` above, the harness speaks
+ * for the client generation the tests mean. Tests that exercise the gate itself
+ * pass `{ omitDesktopApiEpoch: true }` to emulate a pre-epoch desktop, or send
+ * their own header value.
+ */
+export interface HttpHelperOptions {
+  omitDesktopApiEpoch?: boolean;
+}
+
 export function http(
   target: Hono<AppEnv> | TestApp,
   defaultHeaders: Record<string, string> = {},
+  options: HttpHelperOptions = {},
 ): HttpHelper {
   const isTestApp = (value: unknown): value is TestApp =>
     typeof value === 'object' && value !== null && 'authToken' in value && 'app' in value;
@@ -1374,6 +1196,14 @@ export function http(
       ...headers,
       ...(init?.headers as Record<string, string> | undefined),
     };
+    if (
+      !options.omitDesktopApiEpoch &&
+      !Object.keys(mergedHeaders).some(
+        k => k.toLowerCase() === DESKTOP_API_EPOCH_HEADER,
+      )
+    ) {
+      Object.assign(mergedHeaders, CURRENT_DESKTOP_EPOCH_HEADERS);
+    }
     if (isTestApp(target)) {
       if (path.startsWith('/internal/')) {
         patchInternalAuthHeader(target, path, mergedHeaders);

@@ -37,6 +37,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { access, stat } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -61,7 +63,7 @@ import {
   writeSentinelAtomic,
 } from './sentinel.js';
 import { DaemonTypedError } from '../typed-error.js';
-import { assertSafeWorkspaceIdSegment } from '../workspace-registry/registry.js';
+import { assertSafeWorkspaceIdSegment } from '../workspace-path-authority.js';
 
 /**
  * Typed handler failure. Thrown by `materializeAgent` and
@@ -154,17 +156,16 @@ export function resolveAgentDir(
  * This bundle root IS the agent's spawn cwd and IS its L2 memory dir (there is
  * no `.silverhand/agents/<id>` sub-path any more): MEMORY.md sits at the root,
  * notes/ beside it. It is the SOLE runtime path authority for regular
- * workspaces, replacing `registry.resolve(workspace_id)` as the path source
- * (relocation-v1 §7 task 1). As the sole path authority it self-validates the
- * id before making it a path SEGMENT — `assertSafeWorkspaceIdSegment` (the
- * registry's single id-safety predicate, reused rather than duplicated) throws
- * a typed `WorkspaceRegistryError('invalid_path')` on an unsafe id so a
- * traversal segment can never escape the agent home. This is defense-in-depth:
- * every production caller already fails closed at the registry establishment
- * gate (which now validates too), but the path authority must not trust its
- * input regardless. Establishment ("is this workspace realized on this
- * computer?") remains a separate registry gate at the call sites until the
- * registry is demoted (§7 task 4).
+ * workspaces (relocation-v1 §7 task 1/4 — the registry is no longer a runtime
+ * path source). As the sole path authority it self-validates the id before
+ * making it a path SEGMENT — `assertSafeWorkspaceIdSegment` (the neutral
+ * `workspace-path-authority` module's single id-safety predicate, shared with
+ * the relocation reader, NOT the demoted registry) throws a typed
+ * `WorkspaceIdSegmentError` on an unsafe id so a traversal segment can never
+ * escape the agent home. The coordinate is always computable from
+ * `(computer, agent, workspace)`; whether it is a usable cwd / has readable
+ * memory is a SEPARATE fact checked per role, never a registry establishment
+ * gate.
  */
 export function resolveAgentWorkspaceBundleDir(
   agentId: string,
@@ -176,6 +177,70 @@ export function resolveAgentWorkspaceBundleDir(
     'workspaces',
     assertSafeWorkspaceIdSegment(workspaceId),
   );
+}
+
+/**
+ * Contract split (relocation-v1 §3.3; shiki + Cindy 2026-08-04): the session
+ * cwd is the ONLY hard-ensured runtime base; L1/L2 CONTENT is best-effort
+ * enrichment and never gates a spawn. That splits "is there a usable working
+ * directory here?" from "is memory materialized here?" into TWO predicates
+ * that must NOT be conflated:
+ *
+ *   - {@link bundleCwdUsable} — the CWD-usability fact. Answers `list_workspaces
+ *     .agent_dir` (is a working dir materialized AND enterable by this process?)
+ *     and underlies the supervisor's pre-spawn cwd hard-ensure. Deliberately the
+ *     SAME predicate on both sides so list never reports a dir usable that spawn
+ *     would then choke on.
+ *   - {@link bundleL2Present} (below) — the MEMORY.md-readable fact. Answers only
+ *     whether the prompt's Workspace Memory Index attaches a memory path, and is
+ *     the completion fact `agent_l2_seed` reports as `l2_present`.
+ *
+ * A never-spawned member workspace (lazy window after a pure-DB membership add)
+ * has neither; a half-seeded dir (mkdir succeeded, MEMORY.md not yet written)
+ * is a usable cwd but has no readable memory. Keeping the predicates separate
+ * lets the half-seeded dir be a valid, enterable cwd (the agent runs, just
+ * without L2) while the memory index correctly reports "no memory path yet".
+ *
+ * "Usable cwd" = an existing directory the current process can ENTER/traverse
+ * (search/execute permission), not merely one that exists. A `000` or otherwise
+ * non-traversable dir would let list report `agent_dir` usable while `spawn`
+ * fails on chdir — so this checks `X_OK`, matching what the OS requires of a cwd.
+ */
+export async function bundleCwdUsable(bundleDir: string): Promise<boolean> {
+  try {
+    if (!(await stat(bundleDir)).isDirectory()) return false;
+    await access(bundleDir, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The memory-materialized fact for a bundle: `MEMORY.md` present AND READABLE at
+ * the bundle root. This is the SAME fact the `agent_l2_seed` success contract
+ * reports as `l2_present` — factored here as the single source so the seeder's
+ * ack and the prompt's Workspace Memory Index agree by construction
+ * (relocation-v1 §3.3).
+ *
+ * SCOPE: this is NOT a runtime-admission predicate. L1/L2 content is best-effort
+ * enrichment — a missing/half-seeded/unreadable bundle must still spawn (shiki
+ * 2026-08-04), so the cwd hard-ensure uses {@link bundleCwdUsable}, never this.
+ * This predicate governs only whether a memory PATH is offered to the prompt: it
+ * requires MEMORY.md to be a regular FILE (not a directory that happens to be
+ * named `MEMORY.md`) that is readable (`R_OK`, not mere existence) — an
+ * existing-but-unreadable or non-file entry is reported as "no memory path yet"
+ * rather than handed over as a path the reader cannot open.
+ */
+export async function bundleL2Present(bundleDir: string): Promise<boolean> {
+  try {
+    const memoryFile = join(bundleDir, 'MEMORY.md');
+    if (!(await stat(memoryFile)).isFile()) return false;
+    await access(memoryFile, fsConstants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -1,161 +1,91 @@
 /**
- * Workspace-create → `workspace_provision` wiring.
+ * Workspace-create dispatches NO daemon data-plane traffic.
  *
- * Origin: D4.e-1 3b-1. The create route no longer does local fs
- * (validate / mkdir): it dispatches `workspace_provision` to the
- * owning daemon BEFORE inserting the row, and caches the daemon's
- * authoritative `bound_workspace_path` into the legacy
- * `workspace_path` column. Pins:
- *   1. no body path → provision dispatched with NO `requested_path` (daemon
- *      managed default); row caches the daemon-bound path.
- *   2. body `workspace_path` → forwarded verbatim as `requested_path`.
- *   3. daemon offline → 503 `host_attach_pending`, NO row inserted.
- *   4. typed daemon failure (`invalid_path`) → 400, NO row inserted.
- *   5. id agreement: the row id equals the `workspace_id` provisioned.
+ * relocation-v1 §3.4 / §7-4 — registry demotion. A regular workspace no longer
+ * owns a working directory and has no home computer, so create NO LONGER does
+ * provision-at-create: there is no `workspace_provision`, no reconcile barrier
+ * (`workspace_registry_ids`), and no eager member-L2 seed (`agent_l2_seed`).
+ * Creation is a pure set of DB writes; each agent materializes its own bundle
+ * lazily at first spawn.
+ *
+ * These pins are the INVERSE of the retired D4.e-1 provision wiring: they assert
+ * that create talks to no daemon at all and still succeeds. §7-3/§7-4 dropped
+ * both columns and §6's atomic epoch cut then dropped the create INPUTS
+ * (`workspace_path` / `workspace_host_id`) as well, so the only host axis left
+ * in these fixtures is the MEMBER agent's computer.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
-import {
-  HostWsCommandResponseError,
-  HostWsCommandTransportError,
-} from '../../src/ws/host-ws-server.js';
-import { WorkspaceRegistryReconciler } from '../../src/runtime/workspace-registry-reconcile.js';
+import { HostWsCommandResponseError } from '../../src/ws/host-ws-server.js';
 
-describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () => {
+const DAEMON_DATA_PLANE_KINDS = ['agent_l2_seed'] as const;
+
+function dataPlaneCalls(t: TestApp): { kind: string }[] {
+  return t.fakeHostWs!.calls.filter(c =>
+    (DAEMON_DATA_PLANE_KINDS as readonly string[]).includes(c.kind),
+  );
+}
+
+describe('relocation-v1 §7-4 — workspace-create dispatches no daemon provision', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('no body path → provision with NO requested_path; row caches daemon bound path', async () => {
+  it('no members → 201 with the row inserted and ZERO daemon data-plane traffic', async () => {
     t = buildTestApp();
     const res = await http(t).post('/api/workspaces', {
-      name: 'managed-default',
+      name: 'pure-db-write',
       member_agent_ids: [],
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as any;
 
-    const calls = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'workspace_provision',
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.params).toMatchObject({ kind: 'regular' });
-    expect('requested_path' in calls[0]!.params).toBe(false);
-    // Row id == provisioned workspace_id; column caches the bound path.
-    expect(calls[0]!.params.workspace_id).toBe(body.workspace.id);
-    expect(body.workspace.workspace_path).toContain(body.workspace.id);
+    // The whole registry data-plane family stays silent.
+    expect(dataPlaneCalls(t).map(c => c.kind)).toEqual([]);
+
+    const row = t.ctx.db
+      .prepare('SELECT COUNT(*) as n FROM workspaces WHERE id = ?')
+      .get(body.workspace.id) as { n: number };
+    expect(row.n).toBe(1);
   });
 
-  it('body workspace_path → forwarded verbatim as requested_path', async () => {
-    t = buildTestApp();
-    // The fake daemon mkdir's the bound path (it shares the test fs), so use
-    // a real creatable dir.
-    const base = mkdtempSync(join(tmpdir(), 'd4e1-custom-'));
-    const requested = join(base, 'ws');
-    try {
-      const res = await http(t).post('/api/workspaces', {
-        name: 'custom-path',
-        workspace_path: requested,
-        member_agent_ids: [],
-      });
-      expect(res.status).toBe(201);
-      const calls = t.fakeHostWs!.calls.filter(
-        c => c.kind === 'workspace_provision',
-      );
-      expect(calls[0]!.params).toMatchObject({
-        kind: 'regular',
-        requested_path: requested,
-      });
-      const body = (await res.json()) as any;
-      expect(body.workspace.workspace_path).toBe(requested);
-    } finally {
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
-  it('daemon offline → 503 host_attach_pending and NO row inserted', async () => {
+  it('daemon offline → still 201: create no longer depends on a live daemon', async () => {
+    // The old provision wiring returned 503 `host_attach_pending` here. Create
+    // is now a pure DB write over the DB-only placement resolver (liveness
+    // independent), so an offline daemon is irrelevant.
     t = buildTestApp({ hostWsController: () => null });
     const before = t.ctx.db
       .prepare('SELECT COUNT(*) as n FROM workspaces')
       .get() as { n: number };
     const res = await http(t).post('/api/workspaces', {
-      name: 'offline',
+      name: 'offline-ok',
       member_agent_ids: [],
     });
-    expect(res.status).toBe(503);
-    expect(((await res.json()) as any).code).toBe('host_attach_pending');
+    expect(res.status).toBe(201);
     const after = t.ctx.db
       .prepare('SELECT COUNT(*) as n FROM workspaces')
       .get() as { n: number };
-    expect(after.n).toBe(before.n);
+    expect(after.n).toBe(before.n + 1);
   });
 
-  it('typed daemon failure (invalid_path) → 400 and NO row inserted', async () => {
-    t = buildTestApp();
-    t.fakeHostWs!.sendCommandErrorKinds = ['workspace_provision'];
-    t.fakeHostWs!.sendCommandError = new HostWsCommandResponseError(
-      'invalid_path' as never,
-      'requested path must be absolute',
-      { hostId: 'local', commandKind: 'workspace_provision', requestId: 'r' },
-    );
-    const before = t.ctx.db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
-    const res = await http(t).post('/api/workspaces', {
-      name: 'bad-path',
-      workspace_path: 'relative/path',
-      member_agent_ids: [],
-    });
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as any).code).toBe('invalid_workspace_path');
-    const after = t.ctx.db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
-    expect(after.n).toBe(before.n);
-  });
-
-  it('transport timeout → 504 daemon_timeout (retriable), NO row inserted', async () => {
-    t = buildTestApp();
-    t.fakeHostWs!.sendCommandErrorKinds = ['workspace_provision'];
-    t.fakeHostWs!.sendCommandError = new HostWsCommandTransportError(
-      'transport_timeout',
-      'timed out',
-      { hostId: 'local', commandKind: 'workspace_provision', requestId: 'r' },
-    );
-    const res = await http(t).post('/api/workspaces', {
-      name: 'slow',
-      member_agent_ids: [],
-    });
-    expect(res.status).toBe(504);
-    expect(((await res.json()) as any).code).toBe('daemon_timeout');
-  });
-
-  it('embedded + owned REMOTE host + member → 201, daemon-mediated provision + agent_l2_seed, row + member persisted (D4.e-3 gate lifted)', async () => {
-    // D4.e-3 — the co-location gate is GONE. Pre-D4.e-3 this combo (embedded
-    // backend + a member on an owned REMOTE host) was refused 409 because the
-    // create route seeded agent L2 on the BACKEND disk, which would have
-    // written the remote daemon's path locally (I1 violation). Now L2 seeding
-    // is daemon-mediated (`agent_l2_seed`): the owning daemon writes its OWN
-    // host-local L2, so create-with-members is supported on every host. Cindy
-    // ordering: the membership row lands ONLY AFTER the daemon seed succeeds.
+  it('owned REMOTE host + member → 201, ZERO provision, ZERO eager seed, row + member persisted', async () => {
+    // relocation-v1 §7-4 completes the provisioning collapse: create-with-members
+    // is a pure DB write on any host — no home-computer `workspace_provision`, no
+    // member `agent_l2_seed`. Each member's L2 materializes lazily at first spawn.
     t = buildTestApp();
     const db = t.ctx.db;
     const userId = t.viewerUserId;
     const now = Date.now();
-    // An owned, active REMOTE host (passes assertOwnedActiveHost; kind!=local).
+    // An owned, active REMOTE host (passes assertOwnedActiveHost; kind!=local) —
+    // still resolvable purely as the TRANSIENT NOT-NULL column-filler host.
     db.prepare(
       `INSERT INTO hosts
         (id, name, kind, user_id, installation_id, last_seen_at, revoked_at, created_at, activated_at, finalized_at, provisioning_source)
         VALUES (?, ?, 'remote', ?, ?, ?, NULL, ?, ?, ?, 'user_invite')`,
     ).run('host-remote-1', 'remote-1', userId, 'inst-1', now, now, now, now);
-    // An agent on that remote host — survives the member filter + host-equality
-    // check, so the request reaches the daemon-mediated seed.
     const agentId = 'agent-on-remote';
     db.prepare(
       `INSERT INTO agents
@@ -165,26 +95,13 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
 
     const res = await http(t).post('/api/workspaces', {
       name: 'remote-with-member',
-      workspace_host_id: 'host-remote-1',
       member_agent_ids: [agentId],
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as any;
 
-    // Provision + seed both dispatched to the owning (remote) host.
-    const provisionCalls = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'workspace_provision',
-    );
-    expect(provisionCalls).toHaveLength(1);
-    const seedCalls = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed');
-    expect(seedCalls).toHaveLength(1);
-    expect(seedCalls[0]!.hostId).toBe('host-remote-1');
-    expect(seedCalls[0]!.params).toMatchObject({
-      agent_id: agentId,
-      workspace_id: body.workspace.id,
-    });
+    expect(dataPlaneCalls(t).map(c => c.kind)).toEqual([]);
 
-    // Row persisted + membership recorded.
     const row = db
       .prepare('SELECT COUNT(*) as n FROM workspaces WHERE id = ?')
       .get(body.workspace.id) as { n: number };
@@ -197,10 +114,10 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
     expect(member.n).toBe(1);
   });
 
-  it('member-seed failure → error and NO membership row (Cindy ordering red line)', async () => {
-    // The membership row must NEVER be inserted when the daemon L2 seed fails —
-    // no "member added but L2 not seeded" half-state. The workspace row may
-    // remain (no 2PC required), but the member must not.
+  it('a seed that WOULD fail never fires — membership lands on a pure DB write', async () => {
+    // The former "seed failure → no membership row" ordering red line is gone
+    // with the eager seed itself: create dispatches no `agent_l2_seed`, so a
+    // daemon that WOULD fail a seed is irrelevant and the membership lands.
     t = buildTestApp();
     const db = t.ctx.db;
     const userId = t.viewerUserId;
@@ -217,7 +134,7 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
         VALUES (?, ?, 'claude', ?, ?, ?, ?)`,
     ).run(agentId, 'failagent', 'host-remote-2', userId, now, now);
 
-    // Provision succeeds; the L2 seed fails with a typed daemon wire error.
+    // A seed that WOULD fail if dispatched — it must never fire.
     t.fakeHostWs!.agentL2SeedAckOverride = () => {
       throw new HostWsCommandResponseError(
         'fs_unavailable' as never,
@@ -228,28 +145,25 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
 
     const res = await http(t).post('/api/workspaces', {
       name: 'seed-fails',
-      workspace_host_id: 'host-remote-2',
       member_agent_ids: [agentId],
     });
-    expect(res.status).toBe(503);
-    expect(((await res.json()) as any).code).toBe('fs_unavailable');
+    expect(res.status).toBe(201);
 
-    // No membership row for the agent whose seed failed.
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed'),
+    ).toHaveLength(0);
     const member = db
       .prepare('SELECT COUNT(*) as n FROM workspace_members WHERE agent_id = ?')
       .get(agentId) as { n: number };
-    expect(member.n).toBe(0);
+    expect(member.n).toBe(1);
   });
 
-  it('embedded + owned SECOND local host (NOT co-located) + member → 201, daemon-mediated (D4.e-3 gate lifted)', async () => {
-    // D4.e-3 — pre-D4.e-3 a second owned `kind='local'` host (not the backend's
-    // co-located one) was refused 409 by the host-id co-location gate. With
-    // daemon-mediated seeding the owning daemon writes its OWN L2, so this now
-    // succeeds like any other host.
+  it('owned SECOND local host (not co-located) + member → 201, ZERO provision', async () => {
+    // D4.e-3 lifted the host-id co-location gate; §7-4 then removed provision +
+    // eager seed, so a second owned local host succeeds like any other with a
+    // pure-DB membership and no daemon traffic.
     t = buildTestApp();
     const hosts = new HostRepo(t.ctx.db);
-    // A second active local host owned by the viewer, distinct from the
-    // backend's co-located `ensureLocal()` host.
     const second = hosts.claimOrCreateLocal({
       userId: t.viewerUserId,
       installationId: 'second-desktop',
@@ -268,104 +182,16 @@ describe('D4.e-1 3b-1 — workspace-create dispatches workspace_provision', () =
 
     const res = await http(t).post('/api/workspaces', {
       name: 'second-local-with-member',
-      workspace_host_id: second.host.id,
       member_agent_ids: [agentId],
     });
     expect(res.status).toBe(201);
     const body = (await res.json()) as any;
-    expect(
-      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-    ).toHaveLength(1);
-    const seedCalls = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed');
-    expect(seedCalls).toHaveLength(1);
-    expect(seedCalls[0]!.hostId).toBe(second.host.id);
+    expect(dataPlaneCalls(t).map(c => c.kind)).toEqual([]);
     const member = db
       .prepare(
         'SELECT COUNT(*) as n FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
       )
       .get(body.workspace.id, agentId) as { n: number };
     expect(member.n).toBe(1);
-  });
-});
-
-// ── #task:1719 — provision barrier (ready-generation reconcile gate) ──
-//
-// The create saga awaits `ctx.workspaceProvisionBarrier(host)` (REQUIRED port)
-// BEFORE dispatching `workspace_provision`. A failed/pending reconcile maps
-// to the SAME retryable 503-class `transportFailed` arm the daemon-offline
-// path uses (code `registry_unavailable`, retriable) — no new HTTP wiring.
-describe('#task:1719 — workspace-create awaits the registry reconcile barrier', () => {
-  let t: TestApp | null = null;
-  let reconciler: WorkspaceRegistryReconciler | null = null;
-  afterEach(() => {
-    reconciler?.close();
-    reconciler = null;
-    t?.cleanup();
-    t = null;
-  });
-
-  function wireReconciler(app: TestApp): WorkspaceRegistryReconciler {
-    // #task:1719 (Cindy round-2 P1) — the port is REQUIRED on ctx; this
-    // helper swaps in a test-owned reconciler instance so the test can
-    // close it deterministically. It replaces (never removes) the barrier.
-    const built = new WorkspaceRegistryReconciler({
-      db: app.ctx.db,
-      adapter: () => app.ctx.outboundFrameAdapter?.() ?? null,
-      logger: app.ctx.logger,
-    });
-    app.ctx.workspaceProvisionBarrier = hostId => built.barrier(hostId);
-    return built;
-  }
-
-  it('reconcile failure → 503 registry_unavailable (retryable arm), NO provision dispatched, NO row inserted', async () => {
-    t = buildTestApp();
-    reconciler = wireReconciler(t);
-    // The reconcile PULL times out on this daemon generation → the barrier
-    // rejects with the typed pending error.
-    t.fakeHostWs!.workspaceRegistryIdsAckOverride = () => {
-      throw new HostWsCommandTransportError(
-        'transport_timeout',
-        'daemon did not answer the reconcile pull',
-        { hostId: 'local' },
-      );
-    };
-    const before = t.ctx.db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
-
-    const res = await http(t).post('/api/workspaces', {
-      name: 'barrier-blocked',
-      member_agent_ids: [],
-    });
-    expect(res.status).toBe(503);
-    expect(((await res.json()) as any).code).toBe('registry_unavailable');
-
-    // Fail-closed: the provision never raced the pending reconcile and no
-    // orphan row exists.
-    expect(
-      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-    ).toEqual([]);
-    const after = t.ctx.db
-      .prepare('SELECT COUNT(*) as n FROM workspaces')
-      .get() as { n: number };
-    expect(after.n).toBe(before.n);
-  });
-
-  it('reconcile success → provision proceeds (201) after the generation reconciled', async () => {
-    t = buildTestApp();
-    reconciler = wireReconciler(t);
-
-    const res = await http(t).post('/api/workspaces', {
-      name: 'barrier-passed',
-      member_agent_ids: [],
-    });
-    expect(res.status).toBe(201);
-
-    // The barrier ran THIS generation's reconcile pull before provisioning.
-    const kinds = t.fakeHostWs!.calls.map(c => c.kind);
-    expect(kinds.indexOf('workspace_registry_ids')).toBeGreaterThanOrEqual(0);
-    expect(kinds.indexOf('workspace_registry_ids')).toBeLessThan(
-      kinds.indexOf('workspace_provision'),
-    );
   });
 });

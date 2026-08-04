@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { FolderOpen } from 'lucide-react';
+import { useMemo, useState, type FormEvent } from 'react';
 import type { AgentDto, CreateWorkspaceInput, UserDto } from '@silverhand/shared';
 import {
   Dialog,
@@ -16,13 +15,6 @@ import {
   NameAvailabilityHint,
   useNameAvailability,
 } from '@/features/naming/useNameAvailability';
-import {
-  useHostAvailabilityMap,
-  useHostProvenanceGate,
-  useHostsQuery,
-} from '@/features/hosts/hooks';
-import { isComputerAvailable } from '@/features/hosts/host-display';
-import { ComputerPicker } from '@/features/hosts/ComputerPicker';
 import { useAgents } from '@/features/agents/hooks';
 import {
   isBackendUnreachable,
@@ -40,18 +32,28 @@ interface CreateWorkspaceDialogProps {
   onCreated?: (created: { workspaceId: string; channelId: string }) => void;
 }
 
+/**
+ * New Workspace — Name + initial members, and nothing else.
+ *
+ * A workspace is not stored on a computer (doc §3.5 / §7): it is an IM +
+ * memory unit whose per-agent bundle path is derived from ids, so there is no
+ * placement decision left for the user to make. That retires the whole
+ * host-placement half of this dialog — the Computer picker, the live
+ * availability probe, the "choose an online computer" submit gate and the
+ * `local_host_*` / `host_*` create refusals. It also retires the #task:1600
+ * candidate-filtering contract structurally rather than by a guard: with no
+ * host in this dialog at all, agents cannot be filtered or pruned by one.
+ * Members on other computers stay legal.
+ */
 export function CreateWorkspaceDialog({
   open,
   onOpenChange,
   onCreated,
 }: CreateWorkspaceDialogProps): JSX.Element {
   const [name, setName] = useState('');
-  const [workspacePath, setWorkspacePath] = useState('');
-  const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<string[]>([]);
   const [selectedHumans, setSelectedHumans] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const previousHostIdRef = useRef<string | null | undefined>(undefined);
 
   // Only the agents this viewer created: creating a workspace enrolls its
   // initial `member_agent_ids`, and enrollment is the creator's call
@@ -71,78 +73,9 @@ export function CreateWorkspaceDialog({
   // onBlur name validation — format (shared EntityNameSchema) + uniqueness
   // (regular workspaces, global; server probe). Mirrors CreateAgentDialog.
   const nameCheck = useNameAvailability('workspace', name);
-  const hostProvenance = useHostProvenanceGate();
-  const hostsQuery = useHostsQuery();
-
-  // Placement candidates come straight from the backend's `placeable`
-  // predicate — one kind-independent eligibility source (doc §5.4). The picker
-  // is a Select dropdown shown whenever any placeable computer exists.
-  const placeableHosts = useMemo(
-    () => (hostsQuery.data?.hosts ?? []).filter(host => host.placeable),
-    [hostsQuery.data],
-  );
-  const placeableHostIds = useMemo(
-    () => placeableHosts.map(host => host.id),
-    [placeableHosts],
-  );
-  // Second placement axis: a `placeable` computer can only store a workspace if
-  // its daemon is online right now. Probe live availability per candidate;
-  // offline/unreachable ones stay visible but disabled in the picker, and only
-  // `available` computers count toward the default + submit check (#task:1359).
-  const { availabilityById, allSettled } = useHostAvailabilityMap(placeableHostIds);
-  const availableHosts = useMemo(
-    () =>
-      placeableHosts.filter(host =>
-        isComputerAvailable(availabilityById.get(host.id)),
-      ),
-    [placeableHosts, availabilityById],
-  );
-  // The computer picker is always present (0 available → nothing to pick,
-  // 1 → preselected, several → no default so the user must choose). Gate the
-  // default on `allSettled` (Cindy P1): staggered probe resolution must not
-  // auto-select a transient single `available`.
-  const defaultHostId =
-    allSettled && availableHosts.length === 1
-      ? (availableHosts[0]?.id ?? null)
-      : null;
-
-  // The picker is the single source of the chosen host; when no placeable
-  // computer exists `selectedHostId` stays null and the backend resolves.
-  const effectiveHostId = selectedHostId;
-
-  // Local desktop host → the user can pick a real folder on this machine.
-  // Another host → no native picker; default to that daemon's managed path,
-  // with a typed override that the OWNING daemon validates.
-  const canPickLocalFolder = hostProvenance.canUseLocalHostPathFor(effectiveHostId);
-
-  useEffect(() => {
-    if (!open) {
-      setSelectedHostId(null);
-      previousHostIdRef.current = undefined;
-      return;
-    }
-    // Preselect the sole available host; drop a prior pick that dropped offline
-    // while the dialog is open, falling back to the default.
-    const availableIds = new Set(availableHosts.map(host => host.id));
-    setSelectedHostId(prev =>
-      prev && availableIds.has(prev) ? prev : defaultHostId,
-    );
-  }, [open, defaultHostId, availableHosts]);
-
-  useEffect(() => {
-    if (!open) return;
-    const previousHostId = previousHostIdRef.current;
-    previousHostIdRef.current = effectiveHostId;
-    if (previousHostId === undefined || previousHostId === effectiveHostId) {
-      return;
-    }
-    setWorkspacePath('');
-  }, [open, effectiveHostId]);
 
   const reset = () => {
     setName('');
-    setWorkspacePath('');
-    setSelectedHostId(null);
     setSelectedAgents([]);
     setSelectedHumans([]);
     setError(null);
@@ -150,7 +83,7 @@ export function CreateWorkspaceDialog({
 
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
     () => [
-      ...computeWorkspaceAgentCandidates(agents).map((agent: AgentDto) => ({
+      ...agents.map((agent: AgentDto) => ({
         kind: 'agent' as const,
         agent,
       })),
@@ -204,28 +137,12 @@ export function CreateWorkspaceDialog({
       nameCheck.markTouched();
       return;
     }
-    if (placeableHosts.length > 0) {
-      if (!allSettled) {
-        setError('Checking which computers are online…');
-        return;
-      }
-      if (availableHosts.length === 0) {
-        setError('No computer is online right now. Connect one and try again.');
-        return;
-      }
-      if (!selectedHostId || !availableHosts.some(h => h.id === selectedHostId)) {
-        setError('Please choose an online computer to store this workspace');
-        return;
-      }
-    }
     try {
       const input: CreateWorkspaceInput = {
         name: name.trim(),
-        workspace_path: workspacePath.trim() || undefined,
         member_agent_ids: selectedAgents,
         member_user_ids: selectedHumans,
       };
-      if (effectiveHostId) input.workspace_host_id = effectiveHostId;
       const res = await createWorkspace.mutateAsync(input);
       onCreated?.({
         workspaceId: res.workspace.id,
@@ -238,11 +155,6 @@ export function CreateWorkspaceDialog({
     }
   };
 
-  const pickDirectory = async () => {
-    const path = await window.silverhand.pickDirectory();
-    if (path) setWorkspacePath(path);
-  };
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined}>
@@ -251,20 +163,6 @@ export function CreateWorkspaceDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ch-host" required className="font-semibold">
-              Computer
-            </Label>
-            <ComputerPicker
-              id="ch-host"
-              hosts={placeableHosts}
-              availabilityById={availabilityById}
-              value={selectedHostId}
-              onChange={setSelectedHostId}
-              ariaLabel="Computer"
-            />
-          </div>
-
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-name" required className="font-semibold">
               Name
@@ -279,51 +177,6 @@ export function CreateWorkspaceDialog({
               autoFocus
             />
             <NameAvailabilityHint check={nameCheck} />
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ch-path" className="font-semibold">
-              Working directory
-            </Label>
-            {canPickLocalFolder ? (
-              // Local host: native folder picker is the primary affordance;
-              // the typed input mirrors the picked path and stays editable.
-              // The picker button is icon-only (shiki #task:920 D) — the
-              // FolderOpen glyph + tooltip is enough; freeing a label
-              // worth of width lets the typed path breathe.
-              <div className="flex gap-2">
-                <Input
-                  id="ch-path"
-                  value={workspacePath}
-                  onChange={e => setWorkspacePath(e.target.value)}
-                  placeholder="/path/to/project (optional)"
-                  className="font-mono text-xs"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="md"
-                  onClick={pickDirectory}
-                  aria-label="Browse"
-                  title="Browse"
-                  className="w-9 shrink-0 px-0"
-                >
-                  <FolderOpen className="size-4" />
-                </Button>
-              </div>
-            ) : (
-              // Remote / daemon computer: no native picker (browse is
-              // local-only, gated on the same placement eligibility
-              // predicate — never a kind branch). The typed override is
-              // shown directly; empty falls back to the daemon-managed path.
-              <Input
-                id="ch-path"
-                value={workspacePath}
-                onChange={e => setWorkspacePath(e.target.value)}
-                placeholder="/path/to/project (optional)"
-                className="font-mono text-xs"
-              />
-            )}
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -366,13 +219,7 @@ export function CreateWorkspaceDialog({
             </Button>
             <Button
               type="submit"
-              disabled={
-                createWorkspace.isPending
-                || hostsQuery.isLoading
-                || hostProvenance.isLoading
-                || (placeableHosts.length > 0 && !allSettled)
-                || nameCheck.blocking
-              }
+              disabled={createWorkspace.isPending || nameCheck.blocking}
               {...primaryAction()}
             >
               {createWorkspace.isPending ? 'Creating…' : 'Create'}
@@ -391,19 +238,10 @@ const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
   // line names the creator and no role (#task:1682).
   agent_not_owned:
     "You can only add agents you created. Someone else's can be brought in only by its creator.",
-  local_host_ambiguous: 'Choose which computer should store this workspace.',
-  local_host_unbound:
-    'No connected computer can store this workspace. Connect one and try again.',
-  host_revoked:
-    "That computer isn't available anymore. Pick another and try again.",
-  host_not_owned:
-    "That computer isn't available anymore. Pick another and try again.",
-  host_missing:
-    "That computer isn't available anymore. Pick another and try again.",
-  host_attach_pending:
-    'That computer is not connected yet. Try again in a moment.',
-  workspace_path_conflict:
-    'This folder is already used by another Silverhand workspace; choose a different folder.',
+  // No host-placement arms: a workspace is not stored on a computer, so create
+  // sends no computer and the route resolves none. The `local_host_*` / `host_*`
+  // refusals belong to create-AGENT, which keeps its own wording (an agent IS
+  // placed on a computer).
 };
 
 function friendlyCreateWorkspaceError(err: unknown): string {
@@ -414,21 +252,4 @@ function friendlyCreateWorkspaceError(err: unknown): string {
     fallbackMessage: "Couldn't create the workspace. Please try again.",
     knownCodeMessages: WORKSPACE_CREATE_ERROR_MESSAGES,
   });
-}
-
-/**
- * #task:1600 — cross-computer membership contract for the create dialog:
- * the storage computer decides ONLY where the workspace's home root lives.
- * It never filters agent candidates and never prunes a selection — which is
- * why this helper deliberately takes NO host argument. Members on other
- * computers are legal; their L2 seeds land on their own daemons.
- *
- * The pool it receives is already narrowed to the viewer's own agents by
- * `useAgents({ scope: 'owned' })` (#task:1681): enrollment authority is an
- * ownership rule the backend owns, so it is a query parameter, not a
- * client-side predicate duplicated here.
- * Falsifier-tested in `CreateWorkspaceDialog.test.ts`.
- */
-export function computeWorkspaceAgentCandidates(agents: AgentDto[]): AgentDto[] {
-  return agents;
 }

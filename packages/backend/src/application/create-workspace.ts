@@ -7,43 +7,35 @@ import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import { AgentCapabilityRepo } from '../repos/agent-capability-repo.js';
-import {
-  type DataPlaneFailure,
-  resolveOutboundForHost,
-  dispatchWorkspaceProvision,
-} from '../runtime/workspace-data-plane.js';
-import { WorkspaceRegistryReconcilePendingError } from '../runtime/workspace-registry-reconcile.js';
-import { seedMemberAgentL2 } from './agent-l2-seed.js';
 import { canEnrollAgent } from '../permissions.js';
 import { isWorkspaceNameAvailable } from './name-availability.js';
 
 /**
- * CreateWorkspace provisioning saga.
+ * CreateWorkspace saga.
  *
- * Owns the whole `POST /api/workspaces` orchestration that previously lived in
- * the route body: dup-name guard, home-computer placement resolution
- * (`assertOwnedActiveHost` / `resolveOwnedLocalForUser`; members join from
- * ANY computer — #task:1600), daemon `workspace_provision` BEFORE the row
- * insert (no orphan row), the workspace row + owner/member writes, the
- * L2-seed-all-before-any-agent-membership ordering red line (per-agent-host
- * seeds), the per-agent `insertMembership + seedDefaults` unit-of-work, and
- * the onboarding fan-out.
+ * Owns the whole `POST /api/workspaces` orchestration: dup-name guard,
+ * enrollment authority for initial member agents, the workspace row + owner/
+ * member writes, the per-agent `insertMembership + seedDefaults` unit-of-work,
+ * and the onboarding fan-out.
+ *
+ * relocation-v1 §3.4 / §7-4 — registry demotion: a regular workspace no longer
+ * owns a working directory and has no home computer, so create NO LONGER does
+ * provision-at-create. There is no workspace directory to provision — each
+ * agent materializes its own agent-centric bundle lazily at spawn time (the
+ * existing agent-materialize path); member L2 is seeded lazily at first spawn
+ * (`AgentL2SeedEnsurer`). Creation is therefore a pure set of DB writes: no
+ * daemon dispatch, no provision barrier, no path or host input to forward — the
+ * `workspace_path` / `workspace_host_id` / `requested_path` inputs are gone from
+ * the contract (§6 epoch cut), not merely ignored.
  *
  * HTTP-agnostic by construction (spec §1.1 / §4): it returns a typed
  * {@link CreateWorkspaceResult}; the route maps result kind → HTTP status +
- * body. It never imports Hono `Context` and never builds a `Response`. The
- * `transportFailed` arm carries the shared {@link DataPlaneFailure} triple
- * (`code` / `message` / `status`) verbatim — that `status` is owned by the
- * `workspace-data-plane` taxonomy (`mapDataPlaneError`), a transport-failure
- * render hint, NOT an HTTP policy this use case invents (spec §3.2, decision A).
+ * body. It never imports Hono `Context` and never builds a `Response`.
  *
  * This is NOT a single-commit use case: it is a multi-step saga with several
- * DB writes and explicit accepted residue (spec §2/§2.1). The transaction
- * granularity is preserved exactly — the workspace row + owner/user members are
- * written before the L2 seeds; a partial seed failure leaves them as accepted
- * residue with agent membership still at 0 and no onboarding; only after all
- * seeds succeed does each agent get its own `insertMembership + seedDefaults`
- * transaction. Nothing is collapsed into one big transaction.
+ * DB writes. The workspace row + owner/user members are written, then each
+ * agent gets its own `insertMembership + seedDefaults` transaction. Member L2
+ * memory is not part of this saga (materialized lazily at first spawn).
  *
  * The onboarding fan-out deliberately does NOT use the post-commit-effect
  * batch shape (spec §2.2): `deliverMessage` is `await`ed on the critical path
@@ -63,9 +55,6 @@ export type CreateWorkspaceDeps = {
 export type CreateWorkspaceCommand = {
   name: string;
   description: string | null;
-  /** Caller-PROPOSED root, forwarded verbatim as `requested_path`; never interpreted here. */
-  workspacePath?: string;
-  workspaceHostId?: string;
   memberAgentIds: string[];
   memberUserIds: string[];
   /**
@@ -97,9 +86,7 @@ export type CreateWorkspaceResult =
    * member-add doors; without this arm the popover gate would be trivially
    * bypassable by naming a teammate's agent at create time.
    */
-  | { kind: 'agentNotOwned'; agentIds: string[] }
-  | { kind: 'placementError'; err: unknown }
-  | { kind: 'transportFailed'; failure: DataPlaneFailure };
+  | { kind: 'agentNotOwned'; agentIds: string[] };
 
 export async function createWorkspace(
   deps: CreateWorkspaceDeps,
@@ -113,32 +100,14 @@ export async function createWorkspace(
     return { kind: 'nameTaken' };
   }
 
-  // The backend NEVER interprets a caller-proposed path (no validate / stat /
-  // mkdir): it forwards it verbatim as `requested_path`; the daemon binds it.
-  const requestedPath = cmd.workspacePath?.trim() || undefined;
-
-  // Placement (pure decision, may throw the placement layer's typed errors).
-  // Caller host → assertOwnedActiveHost; omitted → resolveOwnedReadyForPlacement
-  // (0/1/N policy across every ready computer). Member agents must all match the owning host. Order is
-  // load-bearing — keep the resolve → member-filter → assert sequence verbatim.
-  let workspaceHostId: string;
-  let memberAgents: AgentDto[];
-  let memberUserIds: string[];
-  try {
-    workspaceHostId = cmd.workspaceHostId
-      ? ctx.placement.assertOwnedActiveHost(cmd.workspaceHostId, cmd.principal.userId).id
-      : ctx.placement.resolveOwnedReadyForPlacement(cmd.principal.userId).id;
-    memberAgents = cmd.memberAgentIds
-      .map(id => agents.get(id))
-      .filter((agent): agent is AgentDto => agent !== null);
-    memberUserIds = cmd.memberUserIds.filter(id => users.get(id) !== null);
-    // #task:1600 final piece — the cross-computer PRODUCT ENTRY GATE #2 is
-    // lifted: initial members may live on any computer. The seed loop below
-    // already plans per agent host (guest members pathless-provision on
-    // their own daemon), so the lift is a pure gate removal.
-  } catch (err) {
-    return { kind: 'placementError', err };
-  }
+  // #task:1600 — initial members may live on any computer: membership is a
+  // pure DB write and each member materializes its own bundle lazily at first
+  // spawn, so there is no per-member host gate here. A regular workspace has no
+  // owning host (relocation-v1 §7-4), so there is no placement step at all.
+  const memberAgents = cmd.memberAgentIds
+    .map(id => agents.get(id))
+    .filter((agent): agent is AgentDto => agent !== null);
+  const memberUserIds = cmd.memberUserIds.filter(id => users.get(id) !== null);
 
   // Enrollment authority (#task:1681): the SAME rule the member-add doors
   // enforce — only an agent's creator may place it in a workspace. Rejected
@@ -147,67 +116,18 @@ export async function createWorkspace(
   // (Unknown ids stay silently filtered above — pre-existing behavior, and
   // "does not exist" carries no rule the caller could act on.)
   //
-  // Runs BEFORE the daemon provision + row insert, so a rejection leaves no
-  // workspace, no fs residue, and no membership.
+  // Runs BEFORE the row insert, so a rejection leaves no workspace and no
+  // membership.
   const notOwned = memberAgents.filter(agent => !canEnrollAgent(ctx, cmd.principal, agent.id));
   if (notOwned.length > 0) {
     return { kind: 'agentNotOwned', agentIds: notOwned.map(agent => agent.id) };
   }
 
-  // Provision the workspace fs on the owning daemon BEFORE inserting the row:
-  // pre-generate the id, persist only on a successful bind. Daemon offline /
-  // typed failure → fail fast, NO orphan row (spec §2.1).
-  const outbound = resolveOutboundForHost(
-    ctx.outboundFrameAdapter?.() ?? null,
-    workspaceHostId,
-  );
-  if (outbound.kind === 'failed') return { kind: 'transportFailed', failure: outbound };
-
   const workspaceId = workspaces.newWorkspaceId();
-  // #task:1719 — provision barrier: this generation's registry reconcile
-  // (ghost-entry sweep) must complete before path-overlap validation on the
-  // daemon can be trusted for a NEW bind. Same accessor style as
-  // `ctx.outboundFrameAdapter`; absent (route harness) → no barrier. A
-  // pending/failed reconcile maps to the SAME retryable-unavailability arm
-  // as a daemon-offline resolve (503-class `transportFailed`, retriable) —
-  // never a "computer offline" verdict, never a relaxation of overlap
-  // validation.
-  try {
-    await ctx.workspaceProvisionBarrier(workspaceHostId);
-  } catch (err) {
-    if (err instanceof WorkspaceRegistryReconcilePendingError) {
-      return {
-        kind: 'transportFailed',
-        failure: {
-          kind: 'failed',
-          code: 'registry_unavailable',
-          message:
-            'workspace registry reconcile is pending on the owning computer; retry shortly',
-          status: 503,
-          retriable: true,
-        },
-      };
-    }
-    throw err;
-  }
-  const provision = await dispatchWorkspaceProvision(
-    outbound.adapter,
-    workspaceHostId,
-    outbound.connectionId,
-    {
-      workspace_id: workspaceId,
-      kind: 'regular',
-      ...(requestedPath ? { requested_path: requestedPath } : {}),
-    },
-  );
-  if (provision.kind === 'failed') return { kind: 'transportFailed', failure: provision };
-
   const workspace = workspaces.insert({
     id: workspaceId,
     name: cmd.name,
     description: cmd.description,
-    workspacePath: provision.result.bound_workspace_path,
-    workspaceHostId,
   });
 
   // Graded-permissions (v40): the creator is the workspace OWNER; additional
@@ -219,29 +139,12 @@ export async function createWorkspace(
     workspaces.addUserMember(workspace.id, userId);
   }
 
-  // Ordering red line (spec §2.1): seed EVERY member's L2 BEFORE inserting
-  // ANY agent `workspace_members` row, so a late seed failure never leaves a
-  // PARTIAL set. On failure the workspace row + user members remain as
-  // accepted residue (no 2PC) and agent membership stays at 0.
-  // #task:1600 — each seed targets the AGENT's own computer: a same-host
-  // member reuses the home root provisioned above in THIS request (no
-  // re-ensure); a guest member's daemon first ensures a pathless local
-  // realization (#1596 plan — the home path never crosses machines), then
-  // seeds.
-  for (const agent of memberAgents) {
-    const seed = await seedMemberAgentL2(
-      ctx,
-      agent.host_id,
-      workspace.id,
-      agent.id,
-      // A same-host member reuses the home root provisioned above in THIS
-      // request; a guest member's daemon first establishes a pathless
-      // local realization (#task:1612 — no path parameter exists on this
-      // flow), then seeds.
-      { guestRealization: agent.host_id !== workspaceHostId },
-    );
-    if (seed.kind === 'failed') return { kind: 'transportFailed', failure: seed };
-  }
+  // Provisioning collapse (relocation-v1 §7 task 4): member L2 memory is NOT
+  // seeded here. Each member's L2 is materialized lazily at that member's first
+  // spawn (`AgentL2SeedEnsurer`), so membership below is a pure DB write and a
+  // member added-but-never-spawned is a legal no-dir/no-L2 state. Guest members
+  // (on another computer) get nothing on their daemon until they first spawn —
+  // symmetric with the member-add door, no eager guest realization.
 
   // Per-agent membership + capability default-seed as one unit-of-work. The
   // `created` flag preserves no-silent-re-widen; on create it is always true.
@@ -256,7 +159,6 @@ export async function createWorkspace(
 
   const onboarding = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath: workspace.workspace_path,
     title: 'Onboarding',
   });
   for (const userId of workspaces.listUserMemberIds(workspace.id)) {

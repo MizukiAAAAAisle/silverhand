@@ -45,11 +45,11 @@ describe('runDaemon wiring — resolveComputerId authority', () => {
     let deps: RuntimeStartResolveDeps | undefined;
     const daemon = await runDaemon({
       socketPath: join(dir, 'daemon.sock'),
-      workspaceDataRootDir: join(dir, 'workspace-data'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'runtime-pids'),
       daemonIdentityPath: join(dir, 'identity.json'),
+      agentHomeRootDir: join(dir, 'agents'),
       localOutboundSocketPath: join(dir, 'daemon-outbound.sock'),
       installSignals: false,
       writeStdoutHandshake: false,
@@ -132,11 +132,11 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
     const outboundSocketPath = join(dir, 'daemon-outbound.sock');
     const daemon = await runDaemon({
       socketPath: join(dir, 'daemon.sock'),
-      workspaceDataRootDir: join(dir, 'workspace-data'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'runtime-pids'),
       daemonIdentityPath: join(dir, 'identity.json'),
+      agentHomeRootDir: join(dir, 'agents'),
       localOutboundSocketPath: outboundSocketPath,
       installSignals: false,
       writeStdoutHandshake: false,
@@ -198,11 +198,11 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
     const outboundSocketPath = join(dir, 'daemon-outbound.sock');
     const daemon = await runDaemon({
       socketPath: join(dir, 'daemon.sock'),
-      workspaceDataRootDir: join(dir, 'workspace-data'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'runtime-pids'),
       daemonIdentityPath: join(dir, 'identity.json'),
+      agentHomeRootDir: join(dir, 'agents'),
       localOutboundSocketPath: outboundSocketPath,
       installSignals: false,
       writeStdoutHandshake: false,

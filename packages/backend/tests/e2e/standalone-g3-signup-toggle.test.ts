@@ -60,6 +60,7 @@ import {
 } from '../../src/index.js';
 import type { BackendLogger } from '../../src/context.js';
 import { HostTokenService, hashHostToken } from '../../src/auth/host-token.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 const silentBackendLogger: BackendLogger = {
   info: () => {},
@@ -132,7 +133,11 @@ async function postJson(
 ): Promise<JsonResponse> {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
+      'content-type': 'application/json',
+      ...headers,
+    },
     body: JSON.stringify(body),
   });
   const text = await res.text();
@@ -144,7 +149,10 @@ async function getJson(
   url: string,
   headers: Record<string, string> = {},
 ): Promise<JsonResponse> {
-  const res = await fetch(url, { method: 'GET', headers });
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { ...CURRENT_DESKTOP_EPOCH_HEADERS, ...headers },
+  });
   const text = await res.text();
   const parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
   return { status: res.status, body: parsed };

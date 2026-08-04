@@ -8,8 +8,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
+import { assertSafeWorkspaceIdSegment } from '../workspace-path-authority.js';
 import {
-  assertSafeWorkspaceIdSegment,
   bindingSlug,
   findCaseFoldCollision,
   managedWorkspaceSlug,

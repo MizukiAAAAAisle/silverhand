@@ -400,7 +400,6 @@ export function createConversationReadApp(
         workspace.workspace_kind === 'agent_home'
           ? ('dm' as const)
           : ('regular' as const),
-      workspace_path: conversation.workspace_path,
       closed_at: conversation.closed_at,
       archived_at: conversation.archived_at,
     };

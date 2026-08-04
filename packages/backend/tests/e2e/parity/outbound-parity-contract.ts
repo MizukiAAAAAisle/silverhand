@@ -44,6 +44,7 @@ import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/d
 import type { RunningBackend } from '../../../src/index.js';
 import type { OutboundFrameAdapter } from '../../../src/runtime/outbound-frame-adapter.js';
 import { ConversationInboxRepo } from '../../../src/repos/conversation-inbox-repo.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../../utils/desktop-client-epoch.js';
 
 /**
  * Real runtime fixture both rigs spawn (via the daemon supervisor) — the
@@ -113,7 +114,7 @@ export interface ParityRig {
   readonly hostId: string;
   /** Seeded user id (creator of seeded agents). */
   readonly userId: string;
-  /** Temp `.silverhand` root — used for real workspace_path dirs. */
+  /** Temp `.silverhand` root the rig's host-local dirs hang off. */
   readonly silverhandDir: string;
   /** Session id the daemon's parity driver emits (Phase A assertion). */
   readonly expectedSessionId: string;
@@ -176,10 +177,10 @@ async function seedRuntimePair(rig: ParityRig): Promise<SeededRuntimePair> {
 
   db.prepare(
     `INSERT INTO workspaces
-      (id, name, description, workspace_kind, workspace_path,
-       workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-      VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
-  ).run(workspaceId, `parity-ws-${suffix}`, workspacePath, rig.hostId, now, now);
+      (id, name, description, workspace_kind,
+       owner_agent_id, archived_at, created_at, updated_at)
+      VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+  ).run(workspaceId, `parity-ws-${suffix}`, now, now);
   db.prepare(
     `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
       VALUES (?, ?, ?)`,
@@ -198,12 +199,12 @@ async function seedRuntimePair(rig: ParityRig): Promise<SeededRuntimePair> {
   ).run(workspaceId, agentId, now);
   db.prepare(
     `INSERT INTO conversations
-      (id, workspace_id, workspace_path, kind,
+      (id, workspace_id, kind,
 title, status, spawned_by_agent_id, closed_at, close_summary,
        pinned_at, created_at, updated_at)
-      VALUES (?, ?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
+      VALUES (?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
               NULL, ?, ?)`,
-  ).run(conversationId, workspaceId, workspacePath, `parity-channel-${suffix}`, now, now);
+  ).run(conversationId, workspaceId, `parity-channel-${suffix}`, now, now);
   db.prepare(
     `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
       VALUES (?, ?, ?)`,
@@ -213,17 +214,6 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
       (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
       VALUES (?, ?, NULL, NULL, 'idle', ?)`,
   ).run(conversationId, agentId, now);
-
-  // #task:1612 — model creation-time realization on the real daemon (the
-  // spawn path no longer provisions); the rig's daemon is attached in
-  // beforeAll, so the dispatch mirrors the create-workspace flow.
-  await rig.backend.context
-    .outboundFrameAdapter!()!
-    .sendCommand(rig.hostId, 'workspace_provision', {
-      workspace_id: workspaceId,
-      kind: 'regular',
-      requested_path: workspacePath,
-    });
 
   const messageId = `msg-parity-${suffix}`;
   db.prepare(
@@ -247,6 +237,7 @@ async function postCreateAgent(
   const res = await fetch(`${baseUrl}/api/agents${qs}`, {
     method: 'POST',
     headers: {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
       'content-type': 'application/json',
       authorization: `Bearer ${bearer}`,
       'Idempotency-Key': idempotencyKey,
@@ -375,44 +366,39 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     expect(Array.isArray((result as { runtimes: unknown[] }).runtimes)).toBe(true);
   }, 20_000);
 
-  it('Phase D — workspace lifecycle: POST create → real workspace_provision bind; direct re-provision idempotent + index resolve/unresolved (same envelope)', async () => {
+  it('Phase D — workspace lifecycle: POST create → pure DB write (no daemon bind); index resolve/unresolved keys on bundle-dir existence, not registry (same envelope)', async () => {
     const rig = getRig();
     const now = Date.now();
     const suffix = `${rig.name}-${now}`;
 
-    // ── 1) CREATE via the real route → real adapter → REAL daemon
-    //    `workspace_provision` → real `WorkspaceRegistry` binds the path.
+    // ── 1) CREATE via the real route → pure DB write. relocation-v1 §7-4:
+    //    create NO LONGER dispatches any daemon command (registry demotion),
+    //    so nothing is bound on the daemon for the new id, and §6's atomic
+    //    epoch cut removed the caller-path input from the contract outright.
+    //    Resolution is coordinate-based and lazy — exercised via
+    //    `agent_workspace_index` below.
     //
-    // MEMBERLESS on purpose. The create-with-members seed path writes agent
-    // L1/L2 on the BACKEND disk and is gated to the backend's co-located
-    // host (D4.e-1 3b): standalone's `coLocatedHostId` is undefined, so a
-    // member create would 409 there and the two rigs could not run the SAME
-    // phase. Memberless create binds the workspace path in EVERY mode, which
-    // is exactly the envelope leg under test. Membership, when a later test
-    // needs it, is attached by direct `INSERT INTO workspace_members` — the
-    // supported post-3b path — never via this gated route.
-    const requestedPath = join(rig.silverhandDir, 'parity-prov', `ws-${suffix}`);
+    // MEMBERLESS on purpose: the phase runs identically in both rigs, and
+    // membership (when a later test needs it) is attached by direct
+    // `INSERT INTO workspace_members`, never via this route.
     const createRes = await fetch(`${rig.baseUrl}/api/workspaces`, {
       method: 'POST',
       headers: {
+        ...CURRENT_DESKTOP_EPOCH_HEADERS,
         'content-type': 'application/json',
         authorization: `Bearer ${rig.bearer}`,
       },
       body: JSON.stringify({
         name: `parity-prov-${suffix}`,
-        workspace_host_id: rig.hostId,
-        workspace_path: requestedPath,
       }),
     });
     const createBody = (await createRes.json()) as {
-      workspace?: { id: string; workspace_path: string };
+      workspace?: { id: string };
       error?: string;
       code?: string;
     };
     expect(createRes.status, JSON.stringify(createBody)).toBe(201);
     const workspaceId = createBody.workspace!.id;
-    const boundPath = createBody.workspace!.workspace_path;
-    expect(boundPath).toBeTruthy();
 
     const adapter = rig.adapter();
     const conn = adapter.connectionIdForHost(rig.hostId) ?? undefined;
@@ -421,39 +407,49 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     // in the first dispatch below.
     expect(conn, 'adapter must report a live connectionId for the local host').toBeTruthy();
 
-    // ── 2) IDEMPOTENT re-provision — proven by DIRECT dispatch, never a
-    //    second POST. POST /api/workspaces pre-generates a fresh
-    //    `workspace_id` every call, so it can NEVER exercise "same id +
-    //    same path → provisioned:false". Dispatching `workspace_provision`
-    //    straight to the live daemon with the bound id+path does: the
-    //    registry already holds that mapping → `created:false`.
-    const reprov = (await adapter.sendCommand(
-      rig.hostId,
-      'workspace_provision',
-      { workspace_id: workspaceId, kind: 'regular', requested_path: boundPath },
-      { expectedConnectionId: conn, timeoutMs: 5_000 },
-    )) as { provisioned: boolean; bound_workspace_path: string };
-    expect(reprov).toMatchObject({
-      provisioned: false,
-      bound_workspace_path: boundPath,
-    });
-
-    // ── 3) agent_workspace_index over the SAME live daemon registry:
-    //    a provisioned regular id resolves to a daemon-stamped `agent_dir`
-    //    at the deterministic agent-centric bundle root (relocation-v1 §3.2:
-    //    `<agent home>/workspaces/<workspace_id>`, NOT under the bound
-    //    workspace path); a never-provisioned id comes back fail-closed
-    //    in `unresolved` (the backend must NOT synthesize a path for it).
+    // ── 2) agent_workspace_index over the real daemon — a CWD fact keyed on
+    //    the deterministic agent-centric bundle COORDINATE, NOT on a registry
+    //    binding (relocation-v1 §7 task 4). An id resolves to a daemon-stamped
+    //    `agent_dir` (`<agent home>/workspaces/<workspace_id>`, NOT under the
+    //    bound workspace path) iff that bundle coordinate is a usable working
+    //    directory on this computer RIGHT NOW.
     //
-    //    This true-daemon `unresolved` lives at the DIRECT adapter layer on
-    //    purpose: post-3b the `list_workspaces` route first lazily
-    //    `workspace_provision(requested_path=workspace_path)`s every visible
-    //    regular row, so a never-provisioned id can never reach `index` via
-    //    the normal route — route-level fail-closed (503/409) stays covered
-    //    by the 3b fake-registry pins, and the genuine daemon `unresolved`
-    //    is asserted here against the real registry.
+    //    2a — BEFORE any materialization: neither id has a materialized bundle
+    //    dir yet, so both `workspaceId` and the never-seeded `neverId` come back
+    //    `unresolved`. This is the falsifier for the coordinate-vs-registry
+    //    decoupling — resolution keys on the bundle dir existing, never on a
+    //    registry binding: the legal lazy window after a pure-DB membership add
+    //    (member added, agent never spawned here). The daemon NEVER synthesizes
+    //    a path for a dir that does not exist (no eager guest realization after
+    //    the provisioning collapse).
     const agentId = `agent-prov-${suffix}`;
     const neverId = `ws-never-${suffix}`;
+    const bundleDir = join(
+      agentL1Dir(rig.agentHomeDir, agentId),
+      'workspaces',
+      workspaceId,
+    );
+    const preIndex = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_workspace_index',
+      { agent_id: agentId, workspace_ids: [workspaceId, neverId] },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { entries: unknown[]; unresolved: string[] };
+    expect(preIndex.entries).toEqual([]);
+    expect(preIndex.unresolved).toEqual([workspaceId, neverId]);
+
+    //    2b — materialize `workspaceId`'s bundle via `agent_l2_seed` (the write
+    //    half of the coordinate-vs-availability split — it mkdirs the coordinate
+    //    directly, no registry gate), then re-index: `workspaceId` now resolves
+    //    to its bundle dir while the still-unseeded `neverId` stays `unresolved`.
+    const seedForIndex = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_l2_seed',
+      { agent_id: agentId, workspace_id: workspaceId, template_choice: 'default' },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { ok: true; l2_present: boolean };
+    expect(seedForIndex).toMatchObject({ ok: true, l2_present: true });
+
     const index = (await adapter.sendCommand(
       rig.hostId,
       'agent_workspace_index',
@@ -464,40 +460,32 @@ export function registerParityPhases(getRig: () => ParityRig): void {
       unresolved: string[];
     };
     expect(index.entries).toEqual([
-      {
-        workspace_id: workspaceId,
-        agent_dir: join(
-          agentL1Dir(rig.agentHomeDir, agentId),
-          'workspaces',
-          workspaceId,
-        ),
-      },
+      { workspace_id: workspaceId, agent_dir: bundleDir },
     ]);
     expect(index.unresolved).toEqual([neverId]);
   }, 30_000);
 
-  it('Phase F — agent_l2_seed over the real daemon: seeds MEMORY.md + notes/ (NO system_prompt.md), idempotent, fail-closed on unprovisioned (same envelope)', async () => {
+  it('Phase F — agent_l2_seed over the real daemon: seeds MEMORY.md + notes/ (NO system_prompt.md), idempotent, coordinate-derived (seeds even a never-provisioned id, same envelope)', async () => {
     const rig = getRig();
     const now = Date.now();
     const suffix = `${rig.name}-${now}`;
 
-    // Create a real workspace so the live daemon registry has a binding to
-    // resolve the host-local L2 path from (mirrors Phase D's create leg).
-    const requestedPath = join(rig.silverhandDir, 'parity-l2', `ws-${suffix}`);
+    // Create a real workspace via the route (pure DB write; mirrors Phase D's
+    // create leg). The daemon resolves the host-local L2 coordinate from the
+    // ids alone — lazily, not from any registry binding.
     const createRes = await fetch(`${rig.baseUrl}/api/workspaces`, {
       method: 'POST',
       headers: {
+        ...CURRENT_DESKTOP_EPOCH_HEADERS,
         'content-type': 'application/json',
         authorization: `Bearer ${rig.bearer}`,
       },
       body: JSON.stringify({
         name: `parity-l2-${suffix}`,
-        workspace_host_id: rig.hostId,
-        workspace_path: requestedPath,
       }),
     });
     const createBody = (await createRes.json()) as {
-      workspace?: { id: string; workspace_path: string };
+      workspace?: { id: string };
     };
     expect(createRes.status, JSON.stringify(createBody)).toBe(201);
     const workspaceId = createBody.workspace!.id;
@@ -543,40 +531,52 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     expect(reseed).toMatchObject({ seeded: false, l2_present: true });
     expect(readFileSync(memPath, 'utf8')).toBe(edited);
 
-    // ── 3) FAIL-CLOSED: a never-provisioned workspace id has no registry
-    //    binding → typed workspace_not_provisioned (never a path guess).
-    await expect(
-      adapter.sendCommand(
-        rig.hostId,
-        'agent_l2_seed',
-        { agent_id: agentId, workspace_id: `ws-never-${suffix}`, template_choice: 'default' },
-        { expectedConnectionId: conn, timeoutMs: 5_000 },
-      ),
-    ).rejects.toMatchObject({ code: 'workspace_not_provisioned' });
+    // ── 3) COORDINATE-DERIVED, NOT registry-gated (relocation-v1 §7 task 4):
+    //    a workspace id that was NEVER provisioned in the registry still seeds
+    //    successfully — seeding IS what makes the deterministic coordinate
+    //    available, so the daemon mkdirs `<agent home>/workspaces/<id>` directly
+    //    from the id alone and fails closed only on the fs, never on a missing
+    //    registry binding. The old `workspace_not_provisioned` reject went away
+    //    with the establishment gate.
+    const neverId = `ws-never-${suffix}`;
+    const neverSeed = (await adapter.sendCommand(
+      rig.hostId,
+      'agent_l2_seed',
+      { agent_id: agentId, workspace_id: neverId, template_choice: 'default' },
+      { expectedConnectionId: conn, timeoutMs: 5_000 },
+    )) as { ok: true; seeded: boolean; l2_present: boolean };
+    expect(neverSeed).toMatchObject({ ok: true, seeded: true, l2_present: true });
+    // The coordinate was materialized from the id alone — no registry binding.
+    const neverL2 = join(
+      agentL1Dir(rig.agentHomeDir, agentId),
+      'workspaces',
+      neverId,
+    );
+    expect(existsSync(join(neverL2, 'MEMORY.md'))).toBe(true);
+    expect(existsSync(join(neverL2, 'system_prompt.md'))).toBe(false);
   }, 30_000);
 
-  it('Phase G — agent_files_purge over the real daemon: removes the host-local L2 (scope:all tolerates missing L1), idempotent, reports skipped_unprovisioned (same envelope)', async () => {
+  it('Phase G — agent_files_purge over the real daemon: removes the agent home tree, idempotent (same envelope)', async () => {
     const rig = getRig();
     const now = Date.now();
     const suffix = `${rig.name}-purge-${now}`;
 
     // Create a real workspace + seed an L2 dir so the daemon has something to
-    // remove (resolved from its OWN registry, not a backend-supplied path).
-    const requestedPath = join(rig.silverhandDir, 'parity-purge', `ws-${suffix}`);
+    // remove (the daemon resolves the L2 coordinate lazily from the ids, not
+    // from a backend-supplied path).
     const createRes = await fetch(`${rig.baseUrl}/api/workspaces`, {
       method: 'POST',
       headers: {
+        ...CURRENT_DESKTOP_EPOCH_HEADERS,
         'content-type': 'application/json',
         authorization: `Bearer ${rig.bearer}`,
       },
       body: JSON.stringify({
         name: `parity-purge-${suffix}`,
-        workspace_host_id: rig.hostId,
-        workspace_path: requestedPath,
       }),
     });
     const createBody = (await createRes.json()) as {
-      workspace?: { id: string; workspace_path: string };
+      workspace?: { id: string };
     };
     expect(createRes.status, JSON.stringify(createBody)).toBe(201);
     const workspaceId = createBody.workspace!.id;
@@ -599,39 +599,26 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     );
     expect(existsSync(l2)).toBe(true);
 
-    // ── 1) PURGE scope:'all' — relocation-v1 §3.2 nests every per-workspace
-    //    L2 bundle UNDER the agent home, so `scope:'all'` now removes the
-    //    single agent-home tree (which the seed above materialized) rather
-    //    than enumerating per-workspace targets or consulting the registry;
-    //    `workspace_ids` is ignored and `skipped_unprovisioned` stays 0.
+    // ── 1) PURGE — relocation-v1 §7 task 4 nests every per-workspace L2 bundle
+    //    UNDER the agent home, so the purge removes the single agent-home tree
+    //    (which the seed above materialized) in one rm, consulting no registry.
     const purge = (await adapter.sendCommand(
       rig.hostId,
       'agent_files_purge',
-      { agent_id: agentId, scope: 'all', workspace_ids: [workspaceId] },
+      { agent_id: agentId },
       { expectedConnectionId: conn, timeoutMs: 5_000 },
-    )) as { ok: true; purged_count: number; skipped_unprovisioned: number };
+    )) as { ok: true; purged_count: number };
     expect(purge.ok).toBe(true);
     expect(purge.purged_count).toBeGreaterThanOrEqual(1);
-    expect(purge.skipped_unprovisioned).toBe(0);
     expect(existsSync(l2)).toBe(false);
 
     // ── 2) IDEMPOTENT re-purge: targets already gone → purged_count 0, no error.
     const repurge = (await adapter.sendCommand(
       rig.hostId,
       'agent_files_purge',
-      { agent_id: agentId, scope: 'all', workspace_ids: [workspaceId] },
+      { agent_id: agentId },
       { expectedConnectionId: conn, timeoutMs: 5_000 },
-    )) as { ok: true; purged_count: number; skipped_unprovisioned: number };
-    expect(repurge).toMatchObject({ ok: true, purged_count: 0, skipped_unprovisioned: 0 });
-
-    // ── 3) A never-provisioned workspace id has no daemon-managed L2 dir →
-    //    reported in skipped_unprovisioned (never an error, never a path guess).
-    const skipped = (await adapter.sendCommand(
-      rig.hostId,
-      'agent_files_purge',
-      { agent_id: agentId, scope: 'l2', workspace_ids: [`ws-never-${suffix}`] },
-      { expectedConnectionId: conn, timeoutMs: 5_000 },
-    )) as { ok: true; purged_count: number; skipped_unprovisioned: number };
-    expect(skipped).toMatchObject({ ok: true, purged_count: 0, skipped_unprovisioned: 1 });
+    )) as { ok: true; purged_count: number };
+    expect(repurge).toMatchObject({ ok: true, purged_count: 0 });
   }, 30_000);
 }

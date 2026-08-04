@@ -209,6 +209,65 @@ describe('host outbound WebSocket server', () => {
     expect(server.controller.getAdmissionFailure(host.id)).toBeNull();
   });
 
+  // relocation-v1 §7-4 (#task:1808) B2 — the registry demotion is a SEMANTIC
+  // break with byte-identical frame shapes: an old daemon still DEPENDS on a
+  // provision-established registry binding to resolve a regular workspace, but
+  // a new backend no longer dispatches `workspace_provision`, so the peers
+  // would silently disagree at business time. The epoch bump converts that
+  // into a loud fail-at-attach. This pins the PRODUCTION admission gate: an old
+  // daemon's ready frame is refused AND no business event it sends behind that
+  // frame ever reaches a handler — the business plane is unreachable, not just
+  // "eventually inconsistent". Relative to the constant, so a future bump is
+  // zero-change here.
+  it('an old daemon (one epoch below) is refused at attach and its business events never reach a handler', async () => {
+    t = buildTestApp({ deploymentMode: 'standalone' });
+    const events: Array<{ hostId: string; kind: string }> = [];
+    server = await openServer(t, {
+      eventSink: {
+        onEvent: (hostId, event) => events.push({ hostId, kind: event.kind }),
+      },
+    });
+    const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: host.id,
+    });
+    const ws = await connectHost(server.url, issued.hostToken);
+    sockets.push(ws);
+
+    // Old daemon hello: correct shape, one epoch below the backend.
+    ws.send(
+      JSON.stringify({
+        ...(readyFrame({ hostName: 'Old Mac' }) as Record<string, unknown>),
+        protocol_version: OUTBOUND_PROTOCOL_VERSION - 1,
+      }),
+    );
+    // A business event queued immediately behind the refused hello — the
+    // thing an old daemon would actually try to do. It must be dropped, not
+    // dispatched.
+    ws.send(
+      JSON.stringify({
+        direction: 'daemon_to_server',
+        type: 'event',
+        kind: 'runtime_output_paused',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      }),
+    );
+
+    const closed = await waitForClose(ws);
+    expect(closed.code).toBe(1002);
+    // Never attached → server→daemon command dispatch can't target it either.
+    expect(server.controller.getAttachment(host.id)).toBeNull();
+    expect(server.controller.getAdmissionFailure(host.id)).toMatchObject({
+      kind: 'protocol_mismatch',
+      offeredProtocolVersion: OUTBOUND_PROTOCOL_VERSION - 1,
+      expectedProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+    });
+    // The business handler is unreachable: the refused connection's event
+    // never fanned out.
+    expect(events).toEqual([]);
+  });
+
   it('rejects missing, unknown, and revoked host tokens before upgrade', async () => {
     t = buildTestApp();
     server = await openServer(t);

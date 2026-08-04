@@ -5,9 +5,11 @@ import {
   X_SILVERHAND_LEGACY_USER_ID_HEADER,
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 function localViewerHeaders(t: TestApp): Record<string, string> {
   return {
+    ...CURRENT_DESKTOP_EPOCH_HEADERS,
     authorization: `Bearer ${t.authToken}`,
     [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'local',
   };

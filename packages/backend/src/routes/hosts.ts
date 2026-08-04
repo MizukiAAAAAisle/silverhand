@@ -4,7 +4,7 @@
 //   - GET  /api/hosts/connect-token/resolve daemon resolves copied token to host id
 //   - GET  /api/hosts/:id              owner-scoped host read (incl. setup draft)
 //   - DELETE /api/hosts/:id            delete user-managed computer + its dependents
-//   - GET  /api/hosts/:id/resources    agents + regular workspaces rooted here
+//   - GET  /api/hosts/:id/resources    agents rooted on this computer
 //   - POST /api/hosts/claim_or_create  desktop main registers + mints host_token
 //   - POST /api/hosts/:id/revoke       soft-delete (delegates to revokeHost use case)
 //   - POST /api/hosts/:id/rotate-token long-lived token rotation
@@ -227,21 +227,21 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     }
 
     const response: HostResourcesResponse = listHostResources(
-      { ctx, agents, workspaces },
+      { ctx, agents },
       hostId,
-      { kind: 'user', userId },
     );
     return c.json(response);
   });
 
   // DELETE /api/hosts/:id — delete a user-managed computer/setup together with
-  // everything rooted on it (its agents and its `regular` workspaces), once the
-  // user has confirmed the impact `GET /api/hosts/:id/resources` showed them.
+  // everything rooted on it (its agents; relocation-v1 §7-4 — a `regular`
+  // workspace is not rooted on a computer any more), once the user has confirmed
+  // the impact `GET /api/hosts/:id/resources` showed them.
   //
   // This is intentionally a hard-delete, not the normal revoke lifecycle. All
   // policy, atomicity and consent logic lives in the `deleteComputer` use case
   // (`application/delete-computer.ts`); this handler only maps its result kinds
-  // to HTTP. The DB's RESTRICT foreign keys from agents/workspaces to hosts stay
+  // to HTTP. The DB's RESTRICT foreign key from agents to hosts stays
   // as the second line of defense: the cascade deletes those rows inside its own
   // transaction, so a violation reaching here means a reference nobody modeled
   // and it fails loud rather than being dressed as a user-actionable 409.
@@ -299,15 +299,6 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
             ...result.payload,
           },
           409,
-        );
-      case 'workspaceForbidden':
-        return c.json(
-          {
-            error: 'you are not an owner of every workspace on this computer',
-            error_code: 'workspace_forbidden',
-            workspaces: result.workspaces,
-          },
-          403,
         );
       case 'deleted':
         break;
@@ -403,7 +394,7 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
   // revoke + credential sweep run as a single transaction; the post-commit
   // best-effort WS disconnect and all other orchestration live in the
   // `revokeHost` use case (`application/revoke-host.ts`). Does NOT cascade-
-  // delete agents / workspaces / conversations — runtime placement is the
+  // delete agents or conversations — runtime placement is the
   // boundary that fails closed afterwards. User-managed computers intentionally
   // do not expose a revoke half-state: rotate handles credential emergencies;
   // delete handles empty-computer removal and blocks when dependents exist.

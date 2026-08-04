@@ -118,11 +118,13 @@ export const computerCopy = {
    *  Availability wording belongs to Disconnect/Revoke, never here.
    *
    *  Wording is shiki's (2026-07-26). "Associated resources" stays generic on
-   *  purpose: the named impact blocks below list the agents and workspaces, so
-   *  restating those nouns here would duplicate them, and an empty computer
-   *  would be described by a list of things that aren't there. Irreversibility
-   *  rides on "permanently" — do not re-add a separate "This can't be undone."
-   *  sentence beside it. */
+   *  purpose: the named impact block below lists the agents, so restating that
+   *  noun here would duplicate it, and an empty computer would be described by
+   *  a list of things that aren't there. Irreversibility rides on
+   *  "permanently" — do not re-add a separate "This can't be undone."
+   *  sentence beside it. Still accurate after #task:1809: what goes with the
+   *  computer is its own agents (homes, DM bytes), and shared workspaces were
+   *  never its resources. */
   deleteConfirmBody:
     'This computer and its associated resources will be permanently deleted.',
   deleteConfirm: 'Delete',
@@ -138,27 +140,12 @@ export const computerCopy = {
    *  Naming the consequence + showing exactly who is affected carries the
    *  weight; no extra prose. */
   deleteCascadeImpactTitle: 'Agents will be removed',
-  /** #task:1618 — the parallel workspace impact block. Same pale-amber form as
-   *  the agent block, listed beside it rather than as a new interaction.
-   *  Title-only, no scope sentence: shiki 2026-07-26 cut the
-   *  "Their channels, messages, and members are deleted too" line — the title
-   *  plus the standard delete consequence above already say it, and the extra
-   *  prose only spent attention on what the confirm was already saying. */
-  deleteWorkspaceImpactTitle: 'Workspaces will be deleted',
   /** #task:1618 — the impact read (`GET /hosts/:id/resources`) failed. Fail
    *  closed: the dialog offers no Delete at all, because "we couldn't check" is
    *  not "there's nothing on it". Copy says which of the two it is, so the user
    *  doesn't read a missing impact list as an empty computer. */
   deleteImpactUnavailable:
     "Couldn't check what this computer holds, so it can't be deleted safely yet.",
-  /** #task:1618 — unowned-workspace block: the computer holds workspaces this
-   *  user doesn't own, so no confirm is offered. Names them so the user knows who
-   *  has to act — the whole point of this task was to stop saying "blocked"
-   *  without saying by what. */
-  deleteUnauthorizedTitle: 'Some workspaces need their owner',
-  deleteUnauthorizedBody:
-    "You don't own these workspaces, so they can't be deleted with this computer. Their owner can delete them, or transfer them to you.",
-  deleteBlockedDismiss: 'OK',
   /** Transient pending-agents block (#task:1380, backend `409
    *  has_pending_agents`). An agent on this computer is still being created —
    *  a state that clears on its own — so this is a wait-and-retry hint, NOT a

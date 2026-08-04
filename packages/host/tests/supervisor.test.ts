@@ -43,7 +43,6 @@ import {
   testStartOptions,
   testRuntimeStartResolveDeps,
 } from './_helpers/runtime-start-options.js';
-import { RuntimeStartResolveError } from '../src/daemon/runtime-start-resolve.js';
 
 const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
 /** 3c-b watchdog fixture — produces zero bytes until killed. See
@@ -56,23 +55,33 @@ const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
 const NO_OUTPUT_FIXTURE = join(__dirname, '_fixtures', 'no-output-runtime.cjs');
 
 /**
- * relocation-v1 §3.2 / §7 task 1: the daemon now resolves a regular
+ * relocation-v1 §3.2 / §7 task 4: the daemon now resolves a regular
  * workspace's cwd to the deterministic agent-centric bundle dir
  * (`<home>/.silverhand/agents/<agentId>/workspaces/<workspaceId>`), NOT the
- * old registry workspace path. The supervisor's pre-spawn
- * `assertRuntimeStartWorkspacePath` check then requires that resolved cwd to
- * exist on disk. These suites default `testRuntimeStartResolveDeps` to a
- * shared temp home (via `makeSupervisor`) and pre-create the bundles for the
- * two agent ids that boot runtimes here (`a1` from `baseStartParams`, `aX`
- * from the deliver-SPAWN test), so a plain `start`/`deliver` finds an existing
- * cwd. Tests that need a MISSING cwd pass their own homeDir and skip the
- * mkdir. */
+ * old registry workspace path. shiki + Cindy 2026-08-04: the session cwd is the
+ * ONLY hard-ensured runtime base — the supervisor's pre-spawn
+ * `ensureRuntimeStartWorkspaceCwd` does `mkdir -p` then requires a USABLE cwd
+ * (`bundleCwdUsable`: a directory this process can enter). L1/L2 CONTENT
+ * (MEMORY.md) is best-effort and NEVER gates the spawn. These suites default
+ * `testRuntimeStartResolveDeps` to a shared temp home (via `makeSupervisor`) and
+ * pre-create the bundle dirs for the two agent ids that boot runtimes here
+ * (`a1` from `baseStartParams`, `aX` from the deliver-SPAWN test) so the shared
+ * home is realized; the pre-spawn ensure would mkdir them anyway. Tests that
+ * need an UNUSABLE cwd (path occupied by a non-dir file) pass their own homeDir
+ * and skip this. */
 const SUPERVISOR_HOME = mkdtempSync(join(tmpdir(), 'sh-sup-home-'));
 function ensureSupervisorBundle(agentId: string, workspaceId = 'ws1'): void {
-  mkdirSync(
-    join(SUPERVISOR_HOME, '.silverhand', 'agents', agentId, 'workspaces', workspaceId),
-    { recursive: true },
+  const bundleDir = join(
+    SUPERVISOR_HOME,
+    '.silverhand',
+    'agents',
+    agentId,
+    'workspaces',
+    workspaceId,
   );
+  // The cwd is the only hard prerequisite — a directory the process can enter.
+  // MEMORY.md is best-effort enrichment and is intentionally NOT written here.
+  mkdirSync(bundleDir, { recursive: true });
 }
 ensureSupervisorBundle('a1');
 ensureSupervisorBundle('aX');
@@ -334,15 +343,51 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     }
   });
 
-  it('fails typed before spawn when the resolved workspace path is missing', async () => {
+  it('mkdirs a missing session cwd then spawns — L1/L2 content is never a spawn gate', async () => {
+    // shiki + Cindy 2026-08-04: the session cwd is the ONLY hard-ensured
+    // runtime base. The daemon resolves the regular workspace cwd to the
+    // deterministic bundle dir under the agent home (relocation-v1 §3.2). We
+    // give a real homeDir but DON'T pre-create the bundle: the pre-spawn
+    // `ensureRuntimeStartWorkspaceCwd` must `mkdir -p` it and proceed to spawn.
+    // A missing MEMORY.md (best-effort L2) must NOT block the start.
     const home = mkdtempSync(join(tmpdir(), 'silverhand-missing-cwd-'));
-    // The daemon resolves the regular workspace cwd to the deterministic
-    // bundle dir under the agent home (relocation-v1 §3.2). We give a real
-    // homeDir but deliberately DON'T create the bundle, so the pre-spawn
-    // existence check must fail typed with the resolved bundle path.
-    const missingBundle = join(
+    const bundleDir = join(
       home, '.silverhand', 'agents', 'a1', 'workspaces', 'ws1',
     );
+    expect(existsSync(bundleDir)).toBe(false);
+    const { supervisor } = makeSupervisor({
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: home }),
+    });
+
+    try {
+      const res = await supervisor.start(baseStartParams);
+      assertStarted(res);
+      // The cwd was hard-ensured (created) even though it did not pre-exist,
+      // and no MEMORY.md was needed.
+      expect(existsSync(bundleDir)).toBe(true);
+      expect(existsSync(join(bundleDir, 'MEMORY.md'))).toBe(false);
+    } finally {
+      await supervisor
+        .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .catch(() => {});
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('fails typed before spawn ONLY when the session cwd cannot be created (non-dir file occupies the path), without leaking the host path onto the wire', async () => {
+    // The one hard-gate on the forward path: the OS genuinely cannot spawn a
+    // child in the cwd. Occupy the bundle path with a regular FILE so `mkdir`
+    // throws (ENOTDIR/EEXIST). This must fail typed with
+    // `workspace_bundle_missing` and never spawn.
+    const home = mkdtempSync(join(tmpdir(), 'silverhand-unusable-cwd-'));
+    const bundleDir = join(
+      home, '.silverhand', 'agents', 'a1', 'workspaces', 'ws1',
+    );
+    // Create the parent chain, then plant a FILE where the cwd dir must be.
+    mkdirSync(join(home, '.silverhand', 'agents', 'a1', 'workspaces'), {
+      recursive: true,
+    });
+    writeFileSync(bundleDir, 'not a directory\n', 'utf8');
     let spawnCalled = false;
     const { supervisor } = makeSupervisor({
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: home }),
@@ -353,10 +398,18 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     });
 
     try {
-      await expect(supervisor.start(baseStartParams)).rejects.toMatchObject({
-        code: 'workspace_path_missing',
-        message: expect.stringContaining(missingBundle),
-      });
+      // relocation-v1 §7 task 3 (Cindy nail 1): the typed error's wire
+      // `message` MUST NOT carry the absolute cwd path (it is forwarded
+      // verbatim to the API/renderer). It names only the semantic id + kind;
+      // the concrete path stays a host-only log diagnostic.
+      const err = await supervisor.start(baseStartParams).then(
+        () => { throw new Error('expected start to reject'); },
+        (e: unknown) => e as { code?: string; message?: string },
+      );
+      expect(err.code).toBe('workspace_bundle_missing');
+      expect(err.message).not.toContain(bundleDir);
+      expect(err.message).not.toContain(home);
+      expect(err.message).toContain(baseStartParams.options.workspace.id);
       expect(spawnCalled).toBe(false);
     } finally {
       rmSync(home, { recursive: true, force: true });
@@ -426,10 +479,11 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     // home_dir points at the system_prompt.md we write.
     const homeDir = dir;
     const agentHome = join(dir, '.silverhand', 'agents', 'a1');
-    // The regular workspace still needs an establishment-gate path (passed to
-    // the resolver deps below), but the L2/cwd is now the agent-centric bundle
-    // dir under the agent home (relocation-v1 §3.2), keyed by workspace id 'ws1'.
-    const workspacePath = join(dir, 'workspace');
+    // The L2/cwd is the agent-centric bundle dir under the agent home
+    // (relocation-v1 §3.2), keyed by workspace id 'ws1' and derived from
+    // homeDir. The pre-spawn ensure only requires the cwd to be a usable dir;
+    // MEMORY.md is best-effort L2 whose CONTENT this test asserts is hydrated
+    // into the prompt below.
     const memoryDir = join(agentHome, 'workspaces', 'ws1');
     mkdirSync(agentHome, { recursive: true });
     mkdirSync(join(memoryDir, 'notes'), { recursive: true });
@@ -470,7 +524,6 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         spawn(execPath, [bin, ...args.slice(1)], options),
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({
         homeDir,
-        workspacePath,
       }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
@@ -592,32 +645,6 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     });
     await expect(supervisor.start(baseStartParams)).rejects.toThrow(/not found on PATH/);
-  });
-
-  it('start fails closed when the registry resolver throws (D4.e-6 — no spawn for an unprovisioned regular workspace)', async () => {
-    let spawned = false;
-    const { supervisor } = makeSupervisor({
-      spawnFn: (bin, args, options) => {
-        spawned = true;
-        return spawn(execPath, [bin, ...args.slice(1)], options);
-      },
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
-        resolveRegularWorkspacePath: () => {
-          throw new RuntimeStartResolveError(
-            'workspace_not_provisioned',
-            'ws1 is not bound on this host',
-          );
-        },
-      }),
-    });
-    // The typed error surfaces verbatim (the dispatcher maps its `.code`
-    // onto the runtime_start error arm); path resolution runs BEFORE
-    // binary/prompt/spawn, so nothing is spawned.
-    await expect(supervisor.start(baseStartParams)).rejects.toMatchObject({
-      code: 'workspace_not_provisioned',
-    });
-    expect(spawned).toBe(false);
-    expect(supervisor.status({}).runtimes).toHaveLength(0);
   });
 });
 

@@ -29,12 +29,9 @@ function bootstrap() {
   const workspace = workspaces.insert({
     name: 'eng',
     description: null,
-    workspacePath: tmp.workspacesRoot,
-    workspaceHostId: localHostId,
   });
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath: workspace.workspace_path,
     title: 'general',
   });
   return {
@@ -155,7 +152,6 @@ describe('MembershipService.listMembers', () => {
     try {
       const empty = t.conversations.insertChannel({
         workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
         title: 'empty',
       });
       expect(t.service.listMembers(empty.id)).toEqual([]);

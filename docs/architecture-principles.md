@@ -175,9 +175,9 @@ agent spawn / inbox-drain / run-state 归 `packages/host`（daemon），backend 
 
 1. **agent-facing CLI 永远只暴露业务面**（message / task / channel / thread / workspace / file / schedule）。daemon 控制权（spawn / pid / version / token 颁发）属基础设施层，**不允许**写成 `silverhand host ...` 子命令。
 2. **backend 记 `(conversation, agent)` runtime intent / state；不记 OS process handle**。handle 永远归 host。
-3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。host 已被建模成一等公民并作为 runtime 协议端点参与 spawn；一切 runtime 归属都以 `agent.host_id` 为轴（cross-computer slice 2 起，workspace 成员可合法分布在不同 computer 上，`agent.host_id == workspace.host_id` 不再是任何层的前置条件；`workspace_host_id` 只表示 workspace 的 home computer。agent 消息 header 携带 `computer=`、prompt 行为合同与 membership 入口同批启用）。
+3. **host 是真正的安全边界**：进程在哪个 host 上跑、能访问哪些 fs / API key，host 是 truth source。host 已被建模成一等公民并作为 runtime 协议端点参与 spawn；一切 runtime 归属都以 `agent.host_id` 为轴（cross-computer slice 2 起，workspace 成员可合法分布在不同 computer 上，`agent.host_id == workspace.host_id` 不再是任何层的前置条件。**workspace 没有 home computer**：`workspace-layout-relocation-v1.md` §7 退役了 `workspace_host_id`，agent 的 L2 bundle 是 `<agent home>/workspaces/<workspace_id>` 这个确定性 agent-centric 坐标，不由任何 DB 列或 registry binding 解析。agent 消息 header 携带 `computer=`、prompt 行为合同与 membership 入口同批启用）。
 4. **CLI 不是秘密边界，backend token + ACL 才是**。任何"防止 agent 看见 X"的需求，应该走 backend authz，**不要**走"agent 看不见这个命令"的路径——agent 是有自主性的 actor，藏命令并不等同于授权拒绝。
-5. **创建 host-placed 资源时,origin surface 必须显式带 host。** `POST /api/agents` 的 `host_id`、`POST /api/workspaces` 的 `workspace_host_id` 以及未来任何 optional `*_host_id` 都不能让 desktop UI 依赖 backend 的 0/1/N fallback。即使 picker 因为当前只有一个 host 而隐藏,desktop 也要发送当前 bound host id；backend fallback 只保留给无 origin-host 上下文的 API/remote caller,并在多 host 时 fail closed (`local_host_ambiguous`)。
+5. **创建 host-placed 资源时,origin surface 必须显式带 host。** `POST /api/agents` 的 `host_id` 以及未来任何 optional `*_host_id` 都不能让 desktop UI 依赖 backend 的 0/1/N fallback。即使 picker 因为当前只有一个 host 而隐藏,desktop 也要发送当前 bound host id；backend fallback 只保留给无 origin-host 上下文的 API/remote caller,并在多 host 时 fail closed。**这一条只适用于真正 host-placed 的资源**：workspace 不是——`workspace-layout-relocation-v1.md` §7 退役了 `POST /api/workspaces` 的 host 与 path 输入,它是纯 control-plane 写,不带任何 placement 语义（对应的 `local_host_unbound` / `local_host_ambiguous` 也随之不再产出）。
 
 ### 9.4 spawn / inbox / run-state 的归属（当前实现）
 
@@ -254,7 +254,7 @@ agent 授权是 capability-based（见 `graded-permissions-v1.md`）。新增 ca
 - **B 守可能不存在的 fossil 行** → 触发条件 = 对该 fossil 跑 DB count。count=0 → 删整条兼容分支 + 相关 DTO/API 判别式/字段；count≠0 的处置 = 有价值→迁移 / 可丢→同刀 destructive 删 / 既不能丢又无迁移目标才「保留」（last resort）。**legacy 数据存在本身 ≠ 清理否决项**——否则任何 legacy 都清不掉。
 - **C 守活契约** → 它在活读，count=0 也不授权删（故不是 B）。按②删除触发条件能否满足，分两味：
   - **C1 永久前向兼容** → ②触发**永远不满足**。典型：**local-first 多 DB 下 renderer 对历史行的 fallback**——每个用户库都留着自己的旧 system-message 行、缺失字段（如 task audit 行的 `actor`）不可回填、任何**单库** count 都不授权删。这类是**永久兼容，不是 legacy debt**；②写明「永久（local-first 历史行）」并在代码里标 `// intentional forward-compat, not legacy`，防下一轮审计误删。
-  - **C2 活迁移 seam / 活展示契约** → ②触发**可满足，但前置是「设计刀」而非某个 count 归零**。典型：`workspace_path`（一列背 create 输入 / daemon binding cache / 用户可见展示 path 三契约，且正被启动·恢复·Open-in-Finder 活读）——退役前提是先做设计动作把三契约拆开分别安置，不是等 count=0。②写明该**设计前置** + owner；前置达成前按 C 保留，绝不当死码删。
+  - **C2 活迁移 seam / 活展示契约** → ②触发**可满足，但前置是「设计刀」而非某个 count 归零**。典型（已退役，留作范例）：`workspace_path`（一列背 create 输入 / daemon binding cache / 用户可见展示 path 三契约，曾被启动·恢复·Open-in-Finder 活读）——退役前提是先做设计动作把三契约拆开分别安置，不是等 count=0。②写明该**设计前置** + owner；前置达成前按 C 保留，绝不当死码删。该设计刀由 `workspace-layout-relocation-v1.md` §6/§7 完成（确定性 agent-centric L2 坐标接掉 daemon binding、展示 path 归 session cwd、create 输入随 plan-A epoch 原子一刀移除），刀落之后该列与其 DTO 字段才一次性删除——**这正是 C2 的正例：先做设计前置，再删，不是等 count=0，也不是当死码删**。
 
 **失败模式（不钉这条会怎样）：** shim 加进来时没记录守什么、何时能删 → 半年后审计者面对一堆 compat 分支，分不清哪个是死化石、哪个还守着活契约，只能逐个 DB probe + 全链路 grep 重新考古（正是 #1301/#1303/#1311/#1312 花掉的力气）。退出条件把这份成本从「每次审计 O(n) 考古」降到「加入时 O(1) 写清楚」。
 

@@ -35,7 +35,6 @@ import {
 } from '@silverhand/shared';
 import type { LocalHostWsAttachment } from '../../../preload/api';
 import { api, ApiError } from '@/lib/api';
-import { canUseLocalHostPath } from './host-provenance';
 
 // Re-export the shared proxy DTO so feature consumers (HostDetailView) keep a
 // single import surface off this hooks module without reaching past it — the
@@ -344,45 +343,6 @@ export function useHostByIdQuery(
     enabled: (options?.enabled ?? true) && Boolean(hostId),
     refetchInterval: options?.refetchInterval ?? false,
   });
-}
-
-export function useHostProvenanceGate(): {
-  localHostId: string | null;
-  localHostStatus: BackendInfoSnapshot['local_host_status'];
-  currentLocalHost: HostDto | null;
-  canUseCurrentLocalHostPath: boolean;
-  canUseLocalHostPathFor: (hostId: string | null | undefined) => boolean;
-  isLoading: boolean;
-} {
-  const backendInfoQuery = useBackendInfoSnapshot();
-  const localHostId = backendInfoQuery.data?.local_host_id ?? null;
-  const hostsQuery = useHostsQuery({ enabled: localHostId !== null });
-  const hosts = useMemo(
-    () => hostsQuery.data?.hosts ?? [],
-    [hostsQuery.data],
-  );
-  const currentLocalHost = useMemo(
-    () => hosts.find(host => host.id === localHostId) ?? null,
-    [hosts, localHostId],
-  );
-  const canUseLocalHostPathFor = useCallback(
-    (hostId: string | null | undefined) =>
-      canUseLocalHostPath({
-        hosts,
-        localHostId,
-        resourceHostId: hostId,
-      }),
-    [hosts, localHostId],
-  );
-
-  return {
-    localHostId,
-    localHostStatus: backendInfoQuery.data?.local_host_status ?? 'unclaimed',
-    currentLocalHost,
-    canUseCurrentLocalHostPath: canUseLocalHostPathFor(localHostId),
-    canUseLocalHostPathFor,
-    isLoading: backendInfoQuery.isLoading || hostsQuery.isLoading,
-  };
 }
 
 /**
@@ -953,11 +913,10 @@ export function useHostResourcesQuery(
  * correct UX is wait-and-retry.
  *
  * Every other refusal is NOT typed here. `409 has_dependents` (a DELETE that
- * skipped the confirmation) and `403 workspace_forbidden` (an ownership drift
- * between the preview and the request) both describe facts the preview already
- * showed, so from this dialog they are unreachable-by-construction and get the
- * generic failure line — giving them named screens would rebuild the
- * discovery-through-error path this task removed.
+ * skipped the confirmation) describes a fact the preview already showed, so from
+ * this dialog it is unreachable-by-construction and gets the generic failure
+ * line — giving it a named screen would rebuild the discovery-through-error path
+ * this task removed.
  */
 export class ComputerHasPendingAgentsError extends Error {
   constructor(readonly pendingAgents: number) {
@@ -1097,8 +1056,8 @@ export function useHostRuntimeCatalog(
  * failure line.
  *
  * #task:1618 — that is the whole mapping now. The named `has_dependents` /
- * `dependents_changed` / `workspace_forbidden` branches are gone with the
- * discovery-through-error flow: the dialog learns the impact from
+ * `dependents_changed` branches are gone with the discovery-through-error
+ * flow: the dialog learns the impact from
  * `/resources` BEFORE asking, so those refusals are unreachable from here and a
  * dedicated screen for each would be code with no trigger.
  *

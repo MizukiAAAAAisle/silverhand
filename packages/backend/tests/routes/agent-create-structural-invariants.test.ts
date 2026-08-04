@@ -19,6 +19,7 @@ import { X_SILVERHAND_LEGACY_USER_ID_HEADER } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 /**
  * Seed a `materialization_status = 'failed'` row that matches the
@@ -766,12 +767,16 @@ describe('D4.d structural invariants', () => {
       const before = t.ctx.db
         .prepare<[], { c: number }>('SELECT COUNT(*) AS c FROM agents')
         .get()!.c;
-      // Bypass the http() helper's auto-inject: build the Request
-      // manually so headers stay exactly what we set.
+      // Bypass the http() helper's auto-injected `Idempotency-Key`: build
+      // the Request manually so the ONE header under test is genuinely
+      // absent. The desktop API epoch header is still sent — an epoch-less
+      // client is refused at admission (426) and would never reach the
+      // idempotency parse this pins.
       const res = await t.app.fetch(
         new Request('http://localhost/api/agents', {
           method: 'POST',
           headers: {
+            ...CURRENT_DESKTOP_EPOCH_HEADERS,
             'content-type': 'application/json',
             authorization: `Bearer ${t.authToken}`,
           },

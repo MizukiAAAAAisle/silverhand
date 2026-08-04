@@ -44,7 +44,7 @@ import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/d
 import type { RuntimeKind } from '@silverhand/shared';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import {
-  provisionWorkspaceOnDaemon,
+  assertOutboundAdapterWired,
   bootDaemonWithSupervisor,
   bootG2Harness,
   waitFor,
@@ -138,10 +138,10 @@ describe('Standalone G2 — live deliver + inbox delivery marker', () => {
 
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind, workspace_path,
-         workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
-    ).run(workspaceId, 'g2-b3-workspace', workspacePath, harness.hostId, now, now);
+        (id, name, description, workspace_kind,
+         owner_agent_id, archived_at, created_at, updated_at)
+        VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+    ).run(workspaceId, 'g2-b3-workspace', now, now);
     db.prepare(
       `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
         VALUES (?, ?, ?)`,
@@ -170,12 +170,12 @@ describe('Standalone G2 — live deliver + inbox delivery marker', () => {
 
     db.prepare(
       `INSERT INTO conversations
-        (id, workspace_id, workspace_path, kind,
+        (id, workspace_id, kind,
 title, status, spawned_by_agent_id, closed_at, close_summary,
          pinned_at, created_at, updated_at)
-        VALUES (?, ?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
+        VALUES (?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
                 NULL, ?, ?)`,
-    ).run(conversationId, workspaceId, workspacePath, 'g2-b3-channel', now, now);
+    ).run(conversationId, workspaceId, 'g2-b3-channel', now, now);
     db.prepare(
       `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
         VALUES (?, ?, ?)`,
@@ -206,12 +206,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     await waitForAttachment(controller, harness.hostId);
     // #task:1612 — model creation-time realization on the real daemon
     // (the spawn path no longer provisions).
-    await provisionWorkspaceOnDaemon(
-      harness.backend,
-      harness.hostId,
-      workspaceId,
-      workspacePath,
-    );
+    await assertOutboundAdapterWired(harness.backend);
 
     // Spawn the runtime + wait for session_init to land in DB (this
     // is exactly the B2 happy path; we re-use it as the precondition

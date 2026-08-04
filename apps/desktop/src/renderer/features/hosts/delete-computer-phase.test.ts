@@ -3,21 +3,21 @@ import { ComputerHasPendingAgentsError } from './hooks';
 import {
   resolveDeleteComputerPhase,
   resolveDeleteFailure,
+  type DeleteComputerPreviewState,
 } from './delete-computer-phase';
-import type {
-  HostResourcesResponse,
-  HostWorkspaceResource,
-} from '@silverhand/shared';
 
 /**
  * #task:1618 — the delete-computer dialog's structural branch.
  *
- * These pin *behavior*, not painting: "arm an irreversible confirm", "refuse and
- * name the blocker", "wait for the read" and "refuse because the read failed" are
- * decisions a later refactor must not quietly merge. In particular the
- * unknown-vs-empty distinction has no visual tell — both would render a confirm
- * with no impact blocks — so only a test keeps a future simplification from
- * folding a failed read into "nothing on it".
+ * These pin *behavior*, not painting: "arm an irreversible confirm", "wait for
+ * the read" and "refuse because the read failed" are decisions a later refactor
+ * must not quietly merge. In particular the unknown-vs-empty distinction has no
+ * visual tell — both would render a confirm with no impact blocks — so only a
+ * test keeps a future simplification from folding a failed read into "nothing on
+ * it".
+ *
+ * The impact is agents only (#task:1809): a workspace is not rooted on a
+ * computer, so there is no ownership dimension left to block on.
  */
 describe('resolveDeleteComputerPhase', () => {
   const agent = {
@@ -26,30 +26,20 @@ describe('resolveDeleteComputerPhase', () => {
     display_name: 'Norman',
     runtime: 'claude' as const,
   };
-  const ws = (
-    over: Partial<HostWorkspaceResource> = {},
-  ): HostWorkspaceResource => ({
-    id: 'w1',
-    name: 'silverhand',
-    workspace_path: '/Users/shiki/workspace/silverhand',
-    viewer_role: 'owner',
-    ...over,
-  });
-  const ready = (data: HostResourcesResponse) => ({
+  const ready = (
+    data: NonNullable<DeleteComputerPreviewState['data']>,
+  ): DeleteComputerPreviewState => ({
     isPending: false,
     isFetching: false,
     isError: false,
     data,
   });
 
-  it('arms the confirm and carries both lists once the read lands', () => {
-    const phase = resolveDeleteComputerPhase(
-      ready({ agents: [agent], workspaces: [ws()] }),
-    );
+  it('arms the confirm and carries the agent list once the read lands', () => {
+    const phase = resolveDeleteComputerPhase(ready({ agents: [agent] }));
     expect(phase.kind).toBe('confirm');
     if (phase.kind !== 'confirm') return;
     expect(phase.agents).toHaveLength(1);
-    expect(phase.workspaces).toHaveLength(1);
   });
 
   it('treats an empty computer as a legitimate read, not a missing one', () => {
@@ -57,10 +47,9 @@ describe('resolveDeleteComputerPhase', () => {
     // the plain confirm — this is exactly the case an earlier revision wrongly
     // blocked (it inherited a guard written for an EMPTY 409 PAYLOAD, where
     // "named nothing" really did mean "cannot be shown").
-    const phase = resolveDeleteComputerPhase(
-      ready({ agents: [], workspaces: [] }),
+    expect(resolveDeleteComputerPhase(ready({ agents: [] })).kind).toBe(
+      'confirm',
     );
-    expect(phase.kind).toBe('confirm');
   });
 
   it('waits instead of arming the confirm while the first read is in flight', () => {
@@ -79,13 +68,13 @@ describe('resolveDeleteComputerPhase', () => {
     // drop the cached list, so this exact state — settled data, not pending,
     // still fetching — is the ordinary second-open path. Arming Delete here would
     // confirm against the PREVIOUS visit's impact: a computer that was empty then
-    // and holds a workspace now would be destroyed from a screen showing nothing.
+    // and holds an agent now would be destroyed from a screen showing nothing.
     expect(
       resolveDeleteComputerPhase({
         isPending: false,
         isFetching: true,
         isError: false,
-        data: { agents: [], workspaces: [] },
+        data: { agents: [] },
       }).kind,
     ).toBe('loading');
   });
@@ -112,7 +101,7 @@ describe('resolveDeleteComputerPhase', () => {
         isPending: false,
         isFetching: false,
         isError: true,
-        data: { agents: [], workspaces: [] },
+        data: { agents: [] },
       }).kind,
     ).toBe('unavailable');
   });
@@ -129,34 +118,6 @@ describe('resolveDeleteComputerPhase', () => {
       }).kind,
     ).toBe('unavailable');
   });
-
-  it('blocks and names the workspaces this viewer does not own', () => {
-    const phase = resolveDeleteComputerPhase(
-      ready({
-        agents: [],
-        workspaces: [ws(), ws({ id: 'w2', name: 'theirs', viewer_role: 'admin' })],
-      }),
-    );
-    expect(phase.kind).toBe('blocked');
-    if (phase.kind !== 'blocked') return;
-    expect(phase.unauthorized.map(w => w.name)).toEqual(['theirs']);
-  });
-
-  it('treats no membership at all as unowned', () => {
-    const phase = resolveDeleteComputerPhase(
-      ready({ agents: [], workspaces: [ws({ viewer_role: null })] }),
-    );
-    expect(phase.kind).toBe('blocked');
-  });
-
-  it('reads only `owner` as cascade-able — member is not enough', () => {
-    // `viewer_role` is a resource fact; the "can this be cascaded" reading is
-    // this consumer's, and only the owner gate the DELETE re-checks will pass.
-    const phase = resolveDeleteComputerPhase(
-      ready({ agents: [], workspaces: [ws({ viewer_role: 'member' })] }),
-    );
-    expect(phase.kind).toBe('blocked');
-  });
 });
 
 describe('resolveDeleteFailure', () => {
@@ -169,9 +130,9 @@ describe('resolveDeleteFailure', () => {
   });
 
   it('folds every other failure into the generic line', () => {
-    // `has_dependents` / `workspace_forbidden` describe facts the preview already
-    // showed. Reaching them means drift or a caller that skipped the preview —
-    // naming them again would rebuild discovery-through-error.
+    // `has_dependents` describes a fact the preview already showed. Reaching it
+    // means drift or a caller that skipped the preview — naming it again would
+    // rebuild discovery-through-error.
     expect(resolveDeleteFailure(new Error('offline'))).toBe('generic');
   });
 });

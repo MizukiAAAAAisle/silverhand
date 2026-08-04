@@ -145,13 +145,3 @@ export function makeTempSilverhandDir(): {
     },
   };
 }
-
-/**
- * #task:1608 rev 3 — TEST-SIDE workspace path minting. The backend's
- * production workspaces-root contract is retired (the daemon owns managed
- * workspace paths); tests that just need a plausible absolute path for a
- * DB row mint one here explicitly.
- */
-export function testWorkspacePath(name: string): string {
-  return join(tmpdir(), 'silverhand-test-workspaces', name);
-}

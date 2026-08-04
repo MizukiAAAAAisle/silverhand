@@ -82,8 +82,11 @@ describe('AgentL2SeedEnsurer (#task:1596 pre-spawn L2 seed on the dispatch host)
     const failing = makeSeedAdapter({
       connectionId: 'conn-1',
       error: new HostWsCommandResponseError(
-        'workspace_not_provisioned' as never,
-        'ws1 not bound',
+        // A real seeder-emitted typed failure (relocation-v1 §7 task 4 removed
+        // the `workspace_not_provisioned` refusal — seeding IS provisioning).
+        // A hard host-local fs write failure is the canonical retriable case.
+        'fs_unavailable' as never,
+        'l2 seed write failed',
         { hostId: 'h1', commandKind: 'agent_l2_seed', requestId: 'r' },
       ),
     });

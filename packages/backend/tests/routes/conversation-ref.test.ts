@@ -94,8 +94,6 @@ describe('GET /api/conversations/:id/ref', () => {
       closed_at: null,
       archived_at: null,
     });
-    expect(typeof ref.workspace_path).toBe('string');
-    expect(ref.workspace_path.length).toBeGreaterThan(0);
   });
 
   it("projects an agent's dm_channel ref with workspace_kind='dm' (not agent_home)", async () => {

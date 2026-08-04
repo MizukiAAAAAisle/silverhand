@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Copy, Check, Archive, ArchiveRestore, Settings2, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, Settings2, ShieldCheck } from 'lucide-react';
 import type { AgentCapability } from '@silverhand/shared';
 import {
   Dialog,
@@ -43,7 +43,6 @@ interface WorkspaceSettingsDialogProps {
   workspaceId: string | null;
   workspaceName: string | null;
   workspaceKind: string | null;
-  workspacePath: string | null;
   /** epoch ms when archived; null for active workspaces. */
   archivedAt: number | null;
   onDeleted?: () => void;
@@ -68,7 +67,6 @@ export function WorkspaceSettingsDialog({
   workspaceId,
   workspaceName,
   workspaceKind,
-  workspacePath,
   archivedAt,
   onDeleted,
   initialSection = 'general',
@@ -83,7 +81,6 @@ export function WorkspaceSettingsDialog({
   const [permTab, setPermTab] = useState<PermissionTab>('agents');
   const [name, setName] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const renameWorkspace = useRenameWorkspace();
   const deleteWorkspace = useDeleteWorkspace();
@@ -115,7 +112,6 @@ export function WorkspaceSettingsDialog({
       setPermTab('agents');
       setName(workspaceName ?? '');
       setRenameError(null);
-      setCopied(false);
       setConfirmingDelete(false);
     }
   }, [open, workspaceName, initialSection, isDm]);
@@ -139,13 +135,6 @@ export function WorkspaceSettingsDialog({
     } catch (err) {
       setRenameError(String(err));
     }
-  };
-
-  const handleCopyWorkspace = async () => {
-    if (!workspacePath) return;
-    await navigator.clipboard.writeText(workspacePath);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
   };
 
   const handleDelete = () => {
@@ -229,9 +218,6 @@ export function WorkspaceSettingsDialog({
                 renameDisabled={renameDisabled}
                 renamePending={renameWorkspace.isPending}
                 workspaceId={workspaceId}
-                workspacePath={workspacePath}
-                copied={copied}
-                onCopyWorkspace={handleCopyWorkspace}
                 onToggleArchive={handleToggleArchive}
                 archivePending={archiveWorkspace.isPending}
                 confirmingDelete={confirmingDelete}
@@ -303,9 +289,6 @@ interface GeneralSectionProps {
   renameDisabled: boolean;
   renamePending: boolean;
   workspaceId: string | null;
-  workspacePath: string | null;
-  copied: boolean;
-  onCopyWorkspace: () => void;
   onToggleArchive: () => void;
   archivePending: boolean;
   confirmingDelete: boolean;
@@ -326,9 +309,6 @@ function GeneralSection({
   renameDisabled,
   renamePending,
   workspaceId,
-  workspacePath,
-  copied,
-  onCopyWorkspace,
   onToggleArchive,
   archivePending,
   confirmingDelete,
@@ -349,8 +329,7 @@ function GeneralSection({
         </p>
       ) : canRename ? (
         <p className="text-xs text-text-muted">
-          Renaming notifies online agents to update old name references in MEMORY;
-          the working directory is unchanged.
+          Renaming notifies online agents to update old name references in MEMORY.
         </p>
       ) : null}
 
@@ -385,34 +364,6 @@ function GeneralSection({
           />
         </div>
       )}
-
-      {workspacePath ? (
-        <div className="flex flex-col gap-1.5">
-          <Label>Working directory</Label>
-          <div className="flex gap-2">
-            <Input
-              value={workspacePath}
-              readOnly
-              onFocus={e => e.currentTarget.select()}
-              className="font-mono text-xs"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onCopyWorkspace}
-              aria-label="Copy working directory path"
-              title="Copy working directory path"
-              {...neutralAction()}
-            >
-              {copied ? (
-                <Check className="size-3.5" />
-              ) : (
-                <Copy className="size-3.5" />
-              )}
-            </Button>
-          </div>
-        </div>
-      ) : null}
 
       {!isDm && canManageLifecycle ? (
         <>

@@ -80,7 +80,6 @@ export function FavoritesGroup(props: {
    *  view (Activity/Saved/…) owns selection. */
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
-  localWorkspacePaths: ReadonlyMap<string, string>;
 }): JSX.Element | null {
   const { data } = useFavorites();
   const items = useMemo(() => data?.items ?? [], [data]);
@@ -139,8 +138,6 @@ export function FavoritesGroup(props: {
         onReorder={o => onReorder(FAVORITES_GROUP, o)}
       >
         {ordered.map(item => {
-          const workspacePath =
-            props.localWorkspacePaths.get(item.workspace_id) ?? null;
           return (
             <SortableFavoriteRow
               key={item.favorite_key}
@@ -150,8 +147,6 @@ export function FavoritesGroup(props: {
                 props.selectedWorkspaceId,
               )}
               dmAvatarUrl={dmAvatarUrls.get(item.entity_id) ?? null}
-              workspacePath={workspacePath}
-              canReveal={workspacePath !== null}
               onSelectWorkspace={props.onSelectWorkspace}
               onUnstar={() => unstar.mutate(item)}
             />
@@ -166,9 +161,6 @@ interface FavoriteRowProps {
   item: FavoriteRowDto;
   tier: RowSelectionTier;
   dmAvatarUrl: string | null;
-  /** Daemon-local path for Open in Finder / Copy path. */
-  workspacePath: string | null;
-  canReveal: boolean;
   onSelectWorkspace: (id: string) => void;
   onUnstar: () => void;
 }
@@ -206,8 +198,6 @@ function FavoriteRow({
   item,
   tier,
   dmAvatarUrl,
-  workspacePath,
-  canReveal,
   onSelectWorkspace,
   onUnstar,
 }: FavoriteRowProps): JSX.Element {
@@ -283,8 +273,6 @@ function FavoriteRow({
       canStar
       isStarred
       onToggleStar={onUnstar}
-      canReveal={canReveal}
-      workspacePath={workspacePath}
     />
   );
 }

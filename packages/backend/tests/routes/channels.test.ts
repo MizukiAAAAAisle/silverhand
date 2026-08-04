@@ -28,7 +28,7 @@ describe('POST /api/workspaces', () => {
     t = null;
   });
 
-  it('creates workspace + directory + onboarding channel + auto-spawns members', async () => {
+  it('creates workspace + onboarding channel + auto-spawns members (pure DB write, no daemon directory)', async () => {
     t = buildTestApp();
     const aliceId = await makeAgent(t, 'alice');
     const bobId = await makeAgent(t, 'bob');
@@ -45,15 +45,12 @@ describe('POST /api/workspaces', () => {
     expect(typeof body.onboarding_channel_id).toBe('string');
     expect(body.channel.kind).toBe('channel');
 
+    // relocation-v1 §7-4 — create is severed from the daemon registry, so it is
+    // a pure DB write: NO workspace directory is provisioned on disk (the daemon
+    // materializes it lazily at first spawn).
     await expect(
-      fs.stat(join(body.workspace.workspace_path, '.silverhand', 'CONSENSUS.md')),
+      fs.stat(join(t.silverhandDir, 'workspaces', body.workspace.id)),
     ).rejects.toMatchObject({ code: 'ENOENT' });
-
-    expect(
-      (
-        await fs.stat(join(body.workspace.workspace_path, '.silverhand', 'agents'))
-      ).isDirectory(),
-    ).toBe(true);
 
     expect(t.fake.starts.map(s => s.agentId).sort()).toEqual([aliceId, bobId].sort());
     expect(t.fake.delivered).toHaveLength(2);
@@ -142,17 +139,6 @@ describe('workspace metadata and membership routes', () => {
     expect(renameParsed!.new_name).toBe('newname');
     expect(renameParsed!.scope).toBe('workspace');
     expect(t.fake.delivered.some(d => d.messageId === renameMsg.id)).toBe(true);
-  });
-
-  it('does not allow workspace_path mutation after creation', async () => {
-    t = buildTestApp();
-    const created = await (
-      await http(t).post('/api/workspaces', { name: 'immutable-path' })
-    ).json() as any;
-    const res = await http(t).patch(`/api/workspaces/${created.workspace.id}`, {
-      workspace_path: '/tmp/other',
-    });
-    expect(res.status).toBe(400);
   });
 
   it('stars and unstars regular workspaces (per-viewer sort state)', async () => {

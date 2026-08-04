@@ -449,7 +449,6 @@ export class ConversationRepo {
 
   insertChannel(params: {
     workspaceId: string;
-    workspacePath: string;
     title: string;
     spawnedByAgentId?: string | null;
     /** Channel visibility; defaults to 'private'. */
@@ -457,7 +456,6 @@ export class ConversationRepo {
   }): ChannelConversationDto {
     const row = this.insert({
       workspaceId: params.workspaceId,
-      workspacePath: params.workspacePath,
       kind: 'channel',
       title: params.title,
       spawnedByAgentId: params.spawnedByAgentId ?? null,
@@ -468,13 +466,11 @@ export class ConversationRepo {
 
   insertDmChannel(params: {
     workspaceId: string;
-    workspacePath: string;
     title: string;
     agentId?: string | null;
   }): DmChannelDto {
     const row = this.insert({
       workspaceId: params.workspaceId,
-      workspacePath: params.workspacePath,
       kind: 'dm_channel',
       title: params.title,
       spawnedByAgentId: null,
@@ -727,7 +723,6 @@ export class ConversationRepo {
 
   private insert(params: {
     workspaceId: string;
-    workspacePath: string;
     kind: ConversationKind;
     title: string;
     spawnedByAgentId: string | null;
@@ -740,15 +735,14 @@ export class ConversationRepo {
     this.db
       .prepare(
         `INSERT INTO conversations
-         (id, workspace_id, workspace_path, kind, title, status,
+         (id, workspace_id, kind, title, status,
           spawned_by_agent_id, closed_at, close_summary,
           created_at, updated_at, visibility)
-         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
       )
       .run(
         id,
         params.workspaceId,
-        params.workspacePath,
         params.kind,
         params.title,
         params.spawnedByAgentId,

@@ -63,7 +63,6 @@
  * multiplexer is host-isolated; no wire envelope shape change, no
  * new wire fields.
  */
-import { testWorkspacePath } from '../utils/db.js';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -145,12 +144,9 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   const wsXRow = workspaces.insert({
     name: 'c6-x',
     description: null,
-    workspacePath: testWorkspacePath('c6-x'),
-    workspaceHostId: hostXRow.id,
   });
   const channelX = conversations.insertChannel({
     workspaceId: wsXRow.id,
-    workspacePath: wsXRow.workspace_path,
     title: 'c6-x',
   });
   const agentX = agents.create(
@@ -163,12 +159,9 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   const wsYRow = workspaces.insert({
     name: 'c6-y',
     description: null,
-    workspacePath: testWorkspacePath('c6-y'),
-    workspaceHostId: hostYRow.id,
   });
   const channelY = conversations.insertChannel({
     workspaceId: wsYRow.id,
-    workspacePath: wsYRow.workspace_path,
     title: 'c6-y',
   });
   const agentY = agents.create(

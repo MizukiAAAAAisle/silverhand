@@ -24,7 +24,6 @@
  *     them), a fresh connection mints a DISTINCT id (old id never reused),
  *     and a closed adapter delivers no further events.
  */
-import { testWorkspacePath } from '../../utils/db.js';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
@@ -129,12 +128,9 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
   const wsRow = workspaces.insert({
     name: 'd5a4-stale',
     description: null,
-    workspacePath: testWorkspacePath('d5a4-stale'),
-    workspaceHostId: hostRow.id,
   });
   const channel = conversations.insertChannel({
     workspaceId: wsRow.id,
-    workspacePath: wsRow.workspace_path,
     title: 'd5a4-stale',
   });
   const agent = agents.create(

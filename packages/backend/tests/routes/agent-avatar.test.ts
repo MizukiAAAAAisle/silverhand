@@ -7,6 +7,7 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 /**
  * Public agent avatar surface (PR-2). Mirrors the `/api/me/avatar`
@@ -30,12 +31,14 @@ function pngFile(name = 'avatar.png'): File {
 
 function localViewerHeaders(t: TestApp): Record<string, string> {
   return {
+    ...CURRENT_DESKTOP_EPOCH_HEADERS,
     authorization: `Bearer ${t.authToken}`,
   };
 }
 
 function userSessionHeaders(t: TestApp, userId: string): Record<string, string> {
   return {
+    ...CURRENT_DESKTOP_EPOCH_HEADERS,
     authorization: `Bearer ${t.ctx.authSessions.issueSession({ userId }).userToken}`,
   };
 }

@@ -1,4 +1,3 @@
-import { testWorkspacePath } from '../utils/db.js';
 import { describe, expect, it, vi } from 'vitest';
 import {
   EventFrameSchema,
@@ -1232,7 +1231,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('#task:1612 — runtime_deliver dispatches NO workspace_provision, and spawn_options carry NO host paths', async () => {
+  it('#task:1612 — runtime_deliver spawn_options carry NO host paths', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
       enqueueMessage(fix, 'start me');
@@ -1241,9 +1240,6 @@ describe('OutboundRuntimeEventFanout', () => {
       ).resolves.toBe(true);
 
       const kinds = fix.transport.calls.map(c => c.kind);
-      // The spawn path performs NO provision (the registry is the sole
-      // authority; realization happened at creation/membership time).
-      expect(kinds).not.toContain('workspace_provision');
       const deliverIdx = kinds.indexOf('runtime_deliver');
       expect(deliverIdx).toBeGreaterThanOrEqual(0);
 
@@ -1268,7 +1264,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('#task:1612 — a cross-host ACTIVE workspace spawns with ZERO provision too: guest realization is membership-time, not spawn-time', async () => {
+  it('#task:1612 — a workspace with no owning computer spawns cleanly: realization is membership/spawn-time, never placement', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       agentL2SeedEnsurer: ({ transport }) =>
@@ -1279,16 +1275,14 @@ describe('OutboundRuntimeEventFanout', () => {
     });
     try {
       enqueueMessage(fix, 'start me');
-      const otherHostId = new HostRepo(fix.db).create('host-other', 'local').id;
-      fix.db
-        .prepare(`UPDATE workspaces SET workspace_host_id = ?`)
-        .run(otherHostId);
+      // relocation-v1 §7-4 (#task:1808): this fixture used to re-home the
+      // workspace onto ANOTHER computer to prove spawn does not depend on
+      // workspace placement. There is no placement column left to move, so the
+      // premise is now structural — the row simply has no owning computer — and
+      // the spawn must still succeed.
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
-      expect(
-        fix.transport.calls.filter(c => c.kind === 'workspace_provision'),
-      ).toHaveLength(0);
       expect(fix.transport.deliverCalls()).toHaveLength(1);
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
     } finally {
@@ -1296,7 +1290,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('#task:1596/#task:1612 — strict pre-spawn order: agent_l2_seed → runtime_deliver, zero provision', async () => {
+  it('#task:1596/#task:1612 — strict pre-spawn order: agent_l2_seed → runtime_deliver', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       agentL2SeedEnsurer: ({ transport }) =>
@@ -1313,7 +1307,6 @@ describe('OutboundRuntimeEventFanout', () => {
       const kinds = fix.transport.calls.map(c => c.kind);
       const seedIdx = kinds.indexOf('agent_l2_seed');
       const deliverIdx = kinds.indexOf('runtime_deliver');
-      expect(kinds).not.toContain('workspace_provision');
       expect(seedIdx).toBeGreaterThanOrEqual(0);
       expect(deliverIdx).toBeGreaterThan(seedIdx);
       const seed = fix.transport.calls[seedIdx]!.params;
@@ -1326,7 +1319,7 @@ describe('OutboundRuntimeEventFanout', () => {
     }
   });
 
-  it('#task:1596 — a failed L2 seed BLOCKS runtime_deliver and keeps the rows pending for retry', async () => {
+  it('#task:1596/#task:1600 — a failed L2 seed does NOT block runtime_deliver: memory is best-effort enrichment, the spawn proceeds', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       agentL2SeedEnsurer: () =>
@@ -1342,20 +1335,22 @@ describe('OutboundRuntimeEventFanout', () => {
         }) as unknown as AgentL2SeedEnsurer,
     });
     try {
-      const delivery = enqueueMessage(fix, 'start me');
+      enqueueMessage(fix, 'start me');
+      // The pivot (shiki+Cindy 2026-08-04): L2 is never a runtime gate. The
+      // seed failed, yet the runtime command still dispatches and no row is
+      // left pending on seed grounds — the sole hard gate (session cwd) is
+      // judged separately host-side.
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
-      ).rejects.toThrow(/filesystem ensure incomplete/);
-      expect(fix.transport.deliverCalls()).toHaveLength(0);
-      expect(
-        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
-      ).toEqual([delivery.inboxId]);
+      ).resolves.toBe(true);
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
     } finally {
       fix.cleanup();
     }
   });
 
-  it('#task:1612 — a MISSING registry binding (typed workspace_not_provisioned from the seed) blocks the spawn; no provision heals it', async () => {
+  it('#task:1600 — a typed seed failure (fs_unavailable) no longer blocks the spawn: seed result is diagnostic only', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       agentL2SeedEnsurer: () =>
@@ -1363,27 +1358,22 @@ describe('OutboundRuntimeEventFanout', () => {
           ensure: async () => ({
             ok: false,
             failure: {
-              code: 'workspace_not_provisioned' as const,
-              message: 'workspace has no registry binding on this computer',
+              code: 'fs_unavailable' as const,
+              message: 'EROFS: read-only file system while seeding L2',
               retriable: true,
             },
           }),
         }) as unknown as AgentL2SeedEnsurer,
     });
     try {
-      const delivery = enqueueMessage(fix, 'start me');
+      enqueueMessage(fix, 'start me');
+      // No seed-layer code decides dispatch anymore. The runtime command
+      // proceeds; a failed L2 seed is diagnostic-only, never a spawn gate.
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
-      ).rejects.toThrow(/filesystem ensure incomplete/);
-      // Fail closed: NO provision was dispatched to mint a fresh root over
-      // the missing binding, no deliver reached the daemon, rows retry.
-      expect(
-        fix.transport.calls.some(c => c.kind === 'workspace_provision'),
-      ).toBe(false);
-      expect(fix.transport.deliverCalls()).toHaveLength(0);
-      expect(
-        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
-      ).toEqual([delivery.inboxId]);
+      ).resolves.toBe(true);
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -1406,8 +1396,6 @@ describe('OutboundRuntimeEventFanout', () => {
       const peer = workspaces.insert({
         name: 'peer-ws',
         description: null,
-        workspacePath: testWorkspacePath('peer-ws'),
-        workspaceHostId: fix.hostId,
       });
       fix.db
         .prepare(
@@ -1421,34 +1409,29 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
       ).resolves.toBe(true);
       expect(seeded).toEqual([fix.workspaceId]);
-      expect(
-        fix.transport.calls.some(c => c.kind === 'workspace_provision'),
-      ).toBe(false);
     } finally {
       fix.cleanup();
     }
   });
 
-  it('#task:1596/#task:1612 — a regular-workspace spawn with an UNWIRED seed dep fails closed (no dispatch)', async () => {
+  it('#task:1596/#task:1600 — a regular-workspace spawn with an UNWIRED seed dep still dispatches: a missing enrichment dep never blocks the runtime command', async () => {
     const fix = makeFixture({
       runtime: 'codex',
       agentL2SeedEnsurer: null,
     });
     try {
-      const delivery = enqueueMessage(fix, 'start me');
+      enqueueMessage(fix, 'start me');
+      // No ensurer wired → the seed is skipped and logged, but the runtime
+      // command proceeds. L2 is best-effort enrichment; only the session cwd
+      // (host-side) can hold a spawn.
       await expect(
         fix.fanout.deliverPending(fix.channelId, fix.agentId),
-      ).rejects.toThrow(/filesystem ensure incomplete/);
-      expect(
-        fix.transport.calls.some(c => c.kind === 'workspace_provision'),
-      ).toBe(false);
+      ).resolves.toBe(true);
       expect(
         fix.transport.calls.some(c => c.kind === 'agent_l2_seed'),
       ).toBe(false);
-      expect(fix.transport.deliverCalls()).toHaveLength(0);
-      expect(
-        fix.inbox.listPending(fix.channelId, fix.agentId).map(p => p.inboxId),
-      ).toEqual([delivery.inboxId]);
+      expect(fix.transport.deliverCalls()).toHaveLength(1);
+      expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
     } finally {
       fix.cleanup();
     }
@@ -2294,15 +2277,13 @@ function emitRuntimeExit(fix: Fixture): void {
 
 /**
  * The state the delete-computer cascade leaves behind at teardown time
- * (#task:1616): its workspaces, agents and the host row are all gone, committed
- * as one transaction. Order follows the FK graph (agents and workspaces both
- * reference `hosts`).
+ * (#task:1616): its agents and the host row are gone, committed as one
+ * transaction. relocation-v1 §7-4 (#task:1808): a regular workspace is no
+ * longer rooted on a computer, so the cascade does NOT delete workspaces — only
+ * the agents placed here and the host row itself.
  */
 function deleteComputerRows(fix: Fixture): void {
   fix.db.prepare('DELETE FROM agents WHERE host_id = ?').run(fix.hostId);
-  fix.db
-    .prepare('DELETE FROM workspaces WHERE workspace_host_id = ?')
-    .run(fix.hostId);
   fix.db.prepare('DELETE FROM hosts WHERE id = ?').run(fix.hostId);
 }
 
@@ -2361,17 +2342,13 @@ function makeFixture(
 ): Fixture {
   const { db, viewerUserId, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
-  const workspacePath = testWorkspacePath('fanout-ws');
   const workspace = workspaces.insert({
     name: 'fanout-ws',
     description: null,
-    workspacePath,
-    workspaceHostId: localHostId,
   });
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 'fanout',
   });
   const agent = new AgentRepo(db).create(
@@ -2660,18 +2637,6 @@ class FakeTransport implements HostWsServerController {
         started: true,
         pid: 123,
         started_at: 1700000000000,
-      }) as Promise<OutboundServerCommandResult<K>>;
-    }
-    if (kind === 'workspace_provision') {
-      // Establishment-time provision ack (#task:1612 — the only provision
-      // flows left are workspace creation and guest membership); the daemon
-      // ack is the authoritative bound path (here, the requested path,
-      // idempotently).
-      const requested = (params as { requested_path?: string }).requested_path;
-      return Promise.resolve({
-        ok: true,
-        provisioned: true,
-        bound_workspace_path: requested ?? '/host/ws/provisioned',
       }) as Promise<OutboundServerCommandResult<K>>;
     }
     if (kind === 'agent_l2_seed') {

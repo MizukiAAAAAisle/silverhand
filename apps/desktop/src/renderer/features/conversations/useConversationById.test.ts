@@ -9,7 +9,6 @@ const baseRef: ConversationRef = {
   title: 'planning',
   workspace_id: 'ws-a',
   workspace_kind: 'regular',
-  workspace_path: '/tmp/ws-a',
   closed_at: null,
   archived_at: null,
 };

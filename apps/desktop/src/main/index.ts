@@ -168,9 +168,9 @@ import {
  * epoch admission sees a uniform source on ALL desktop REST paths, not just the
  * renderer proxy. A source-scan test forbids raw calls of the underlying
  * network-policy fetch (literal `fetch` first argument) in this file outside
- * this wrapper — a new direct call missing the
- * header would otherwise be classified as a pre-epoch legacy desktop and get
- * 426-rejected after the observation-bridge cutoff.
+ * this wrapper — a new direct call missing the header is classified as a
+ * pre-epoch legacy desktop and, now that relocation-v1 §6 closed the
+ * observation bridge, is 426-rejected outright.
  */
 function backendFetch(
   input: string | URL,

@@ -1,7 +1,7 @@
 /**
  * Common carrier for daemon-business **typed** errors thrown by intent
- * handlers (e.g. `agent_materialize`, `workspace_provision`,
- * `agent_workspace_index`). A subclass sets a string `code`; the
+ * handlers (e.g. `agent_materialize`, `agent_workspace_index`). A subclass
+ * sets a string `code`; the
  * dispatcher's catch arm recognises any `DaemonTypedError` and emits its
  * code on the wire INSTEAD of collapsing to `internal_error`.
  *

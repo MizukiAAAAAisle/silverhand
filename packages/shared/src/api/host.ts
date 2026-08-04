@@ -6,7 +6,6 @@ import {
   HostProvisioningSourceSchema,
   RuntimeKindSchema,
 } from '../db/schema.js';
-import { WorkspaceRoleSchema } from './workspace.js';
 
 export const HostLifecycleStatusSchema = z.enum([
   'pending',
@@ -435,9 +434,10 @@ export type HostGetResponse = z.infer<typeof HostGetResponseSchema>;
 
 /** `DELETE /api/hosts/{id}` user-managed computer delete. The same route covers
  *  unfinalized Add-computer drafts, finalized empty computers, and — after an
- *  explicit two-phase confirmation — a computer whose agents and regular
- *  workspaces are cascade-deleted with it. The row is never soft-revoked by
- *  this user-facing delete action. */
+ *  explicit two-phase confirmation — a computer whose agents are cascade-deleted
+ *  with it. relocation-v1 §7-4: a `regular` workspace is not rooted on a
+ *  computer, so nothing workspace-shaped is in the cascade. The row is never
+ *  soft-revoked by this user-facing delete action. */
 export const HostCancelPendingResponseSchema = z.object({
   host_id: z.string(),
   deleted: z.literal(true),
@@ -460,8 +460,8 @@ export type HostDeleteResponse = HostCancelPendingResponse;
  * `dependents_changed` refusal, a re-confirmation screen).
  *
  * The flag is a guard, not an authorization: the server re-reads the current
- * dependency set, the pending-materialization state and the per-workspace owner
- * gate inside its delete transaction, and refuses there.
+ * dependency set and the pending-materialization state inside its delete
+ * transaction, and refuses there.
  *
  * Discovery is not this route's job: the dialog reads the impact from
  * `GET /api/hosts/{id}/resources` first and shows it, then sends this flag once.
@@ -476,7 +476,6 @@ export type HostDeleteInput = z.infer<typeof HostDeleteInputSchema>;
 
 export const HostDeleteDependentsSchema = z.object({
   agents: z.number().int().nonnegative(),
-  workspaces: z.number().int().nonnegative(),
 });
 export type HostDeleteDependents = z.infer<typeof HostDeleteDependentsSchema>;
 
@@ -498,23 +497,13 @@ export const HostAgentResourceSchema = z.object({
 });
 export type HostAgentResource = z.infer<typeof HostAgentResourceSchema>;
 
-/** One `regular` workspace rooted on a computer. `viewer_role` is the
- *  requester's membership role — a resource fact, not an action verdict, so the
- *  consumer decides what it implies (the delete dialog reads "not owner" as
- *  "this one needs its owner"; the DELETE re-checks the gate itself). Null when
- *  the requester holds no membership edge. */
-export const HostWorkspaceResourceSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  workspace_path: z.string(),
-  viewer_role: WorkspaceRoleSchema.nullable(),
-});
-export type HostWorkspaceResource = z.infer<typeof HostWorkspaceResourceSchema>;
-
 /**
  * `GET /api/hosts/{id}/resources` — everything persistently rooted on one
- * computer: the agents placed on it and the `regular` workspaces whose files
- * live on it.
+ * computer: the agents placed on it. relocation-v1 §7-4 removed the workspace
+ * dimension: a `regular` workspace has no home computer and keeps no files on
+ * one (each member agent's bundle lives on that agent's OWN computer, at a
+ * deterministic agent-centric coordinate), so no workspace can be this
+ * computer's resource.
  *
  * A general Computer-domain query, not a delete-flavoured read model. It answers
  * "what belongs to this computer" and carries no action fields; deciding what
@@ -524,39 +513,24 @@ export type HostWorkspaceResource = z.infer<typeof HostWorkspaceResourceSchema>;
  */
 export const HostResourcesResponseSchema = z.object({
   agents: z.array(HostAgentResourceSchema),
-  workspaces: z.array(HostWorkspaceResourceSchema),
 });
 export type HostResourcesResponse = z.infer<typeof HostResourcesResponseSchema>;
 
 /**
  * `409 has_dependents` — a DELETE arrived WITHOUT `cascade_dependents` while the
- * computer still has agents or workspaces. This is a guard for callers that
- * skipped the confirmation step (the dialog reads the lists itself), not the
- * UI's discovery path; it still names the objects so a CLI/API caller learns
- * what it would destroy. Guarantees zero deletion.
+ * computer still has agents. This is a guard for callers that skipped the
+ * confirmation step (the dialog reads the list itself), not the UI's discovery
+ * path; it still names the objects so a CLI/API caller learns what it would
+ * destroy. Guarantees zero deletion.
  */
 export const HostDeleteBlockedResponseSchema = z.object({
   error: z.string(),
   error_code: z.literal('has_dependents'),
   dependents: HostDeleteDependentsSchema,
   agents: z.array(HostAgentResourceSchema).optional().default([]),
-  workspaces: z.array(HostWorkspaceResourceSchema).optional().default([]),
 });
 export type HostDeleteBlockedResponse = z.infer<
   typeof HostDeleteBlockedResponseSchema
->;
-
-/** The confirmation covered a workspace the requester does not own (re-checked
- *  inside the delete transaction). Whole delete is refused with zero
- *  destruction; `workspaces` names the unauthorized subset so the UI can say
- *  which ones need their owner. */
-export const HostDeleteWorkspaceForbiddenResponseSchema = z.object({
-  error: z.string(),
-  error_code: z.literal('workspace_forbidden'),
-  workspaces: z.array(HostWorkspaceResourceSchema),
-});
-export type HostDeleteWorkspaceForbiddenResponse = z.infer<
-  typeof HostDeleteWorkspaceForbiddenResponseSchema
 >;
 
 export const HostDeletePendingAgentsResponseSchema = z.object({

@@ -125,8 +125,6 @@ function bootstrap() {
   const workspace = workspaces.insert({
     name: 'eng',
     description: null,
-    workspacePath: tmp.workspacesRoot,
-    workspaceHostId: localHostId,
   });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
@@ -134,7 +132,6 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, bob.id);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath: workspace.workspace_path,
     title: 'source',
   });
   conversations.addAgent(channel.id, alice.id);
@@ -571,7 +568,6 @@ describe('ConversationMessageService.sendMessage', () => {
     try {
       const other = t.conversations.insertChannel({
         workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
         title: 'other',
       });
       await expect(
@@ -592,7 +588,6 @@ describe('ConversationMessageService.sendMessage', () => {
     try {
       const other = t.conversations.insertChannel({
         workspaceId: t.workspace.id,
-        workspacePath: t.workspace.workspace_path,
         title: 'other',
       });
       const foreign = t.attachments.insert({

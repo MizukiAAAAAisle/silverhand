@@ -3,8 +3,8 @@
  *
  * D4.e-5: the backend production module `packages/backend/src/workspace-files.ts`
  * was REMOVED — host-local L1/L2 seeding is now owned exclusively by
- * the daemon (`agent_materialize` → L1, `agent_l2_seed` → L2,
- * `workspace_provision` → workspace skeleton), and `packages/backend/src` holds
+ * the daemon (`agent_materialize` → L1, `agent_l2_seed` → L2), and
+ * `packages/backend/src` holds
  * zero agent-host filesystem ops (invariant I6 / acceptance A1).
  *
  * The embedded test fake (`utils/app.ts`) still needs to put real files on the
@@ -275,17 +275,6 @@ async function seedNotesIfMissing(notesDir: string): Promise<void> {
       await fs.writeFile(dst, content);
     }
   }
-}
-
-/**
- * Test-only stand-in for the daemon's `workspace_provision` skeleton
- * (`initWorkspaceSkeleton`). Creates `<workspace>/.silverhand/agents/`.
- * Idempotent.
- */
-export async function initWorkspaceDir(workspacePath: string): Promise<void> {
-  await fs.mkdir(workspacePath, { recursive: true });
-  const dotDir = join(workspacePath, '.silverhand');
-  await fs.mkdir(join(dotDir, 'agents'), { recursive: true });
 }
 
 /**

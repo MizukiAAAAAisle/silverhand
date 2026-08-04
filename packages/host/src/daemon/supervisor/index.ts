@@ -12,7 +12,7 @@
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import { setTimeout as setTimer } from 'node:timers';
 import { randomUUID } from 'node:crypto';
-import { stat, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
   buildSystemPromptFor,
@@ -83,6 +83,7 @@ import {
   resolveRuntimeStartPaths,
   RuntimeStartResolveError,
 } from '../runtime-start-resolve.js';
+import { bundleCwdUsable } from '../agent-materialize/index.js';
 import {
   unlinkRuntimePidfile,
   writeRuntimePidfile,
@@ -194,10 +195,16 @@ export interface SupervisorOptions {
    * D4.e-6 — host path resolution deps for `runtime_start`. The wire
    * options are SEMANTIC-only (no `path`/`home_dir`); the supervisor
    * resolves every absolute host path via these deps just before building
-   * the prompt context + spawn cwd — `regular` workspaces via the registry
-   * (`resolveRegularWorkspacePath`), `agent_home` via `computeAgentDir` — and
-   * fails closed (typed `RuntimeStartResolveError`) when a regular workspace
-   * is unbound. Required (not optional) so a missing wire is a typed
+   * the prompt context + spawn cwd — `regular` workspaces to their
+   * deterministic agent-centric bundle coordinate
+   * (`resolveAgentWorkspaceBundleDir`), `agent_home` via `computeAgentDir`
+   * (relocation-v1 §7 task 4: no registry establishment gate). The active
+   * workspace's cwd is then HARD-ENSURED by `ensureRuntimeStartWorkspaceCwd`
+   * (mkdir -p + usable-dir check) — process admission that fails closed only
+   * when the OS cannot spawn a child there; a missing/half-seeded L2 never
+   * blocks. Path resolution itself still fails closed (typed
+   * `RuntimeStartResolveError`) for a foreign/corrupt `agent_home` ref or an
+   * unsafe id segment. Required (not optional) so a missing wire is a typed
    * decision, never a silent path-resolution gap — same philosophy as
    * `supervisorFactory` being required-but-nullable.
    */
@@ -1984,18 +1991,20 @@ export class Supervisor implements SupervisorContract {
     const runtimeKind = startOptions.driver.kind;
 
     // D4.e-6 — resolve every host path from the semantic wire options
-    // (registry for `regular`, `computeAgentDir` for `agent_home`). Throws a
-    // typed `RuntimeStartResolveError` (→ `workspace_not_provisioned` /
-    // `registry_unavailable`) if a regular workspace is unbound; the
-    // dispatcher projects it as the typed wire error. Done after the
-    // idempotent + cooldown gates so an already-running handle never pays a
-    // registry lookup, and before any spawn work so we never fork a child
-    // against an unresolved cwd.
-    const resolvedOptions = resolveRuntimeStartPaths(
+    // (deterministic bundle coordinate for `regular`, `computeAgentDir` for
+    // `agent_home`). Throws a typed `RuntimeStartResolveError` (→
+    // `workspace_not_provisioned` / `registry_unavailable`) only for a
+    // foreign/corrupt `agent_home` ref or an unsafe id segment. Done after the
+    // idempotent + cooldown gates so an already-running handle never pays it,
+    // and before any spawn work.
+    const resolvedOptions = await resolveRuntimeStartPaths(
       startOptions,
       this.runtimeStartResolveDeps,
     );
-    await assertRuntimeStartWorkspacePath(resolvedOptions.workspace);
+    // shiki 2026-08-04: the session cwd is the ONLY hard-ensured runtime base.
+    // Create + require a usable working dir before forking; L1/L2 CONTENT is
+    // best-effort and never blocks the spawn.
+    await ensureRuntimeStartWorkspaceCwd(resolvedOptions.workspace, this.logger);
 
     const driver = this.driverFor(runtimeKind);
     const binary = await this.resolveBinary(runtimeKind, driver.binary);
@@ -5081,35 +5090,59 @@ function driverReadyToEncode(driver: Driver): boolean {
   return driver.readyToEncode?.() ?? true;
 }
 
-async function assertRuntimeStartWorkspacePath(
+async function ensureRuntimeStartWorkspaceCwd(
   workspace: ResolvedWorkspaceRef,
+  logger: DaemonLogger,
 ): Promise<void> {
+  // shiki + Cindy 2026-08-04: the session cwd is the ONLY hard-ensured runtime
+  // base; L1/L2 CONTENT is best-effort and never gates a spawn. This creates
+  // the deterministic cwd (`mkdir -p`) and requires it to be a usable working
+  // directory. It fails closed ONLY when the OS genuinely cannot spawn a child
+  // there — the path is occupied by a non-directory file, or the dir cannot be
+  // created/entered. A missing/half-seeded MEMORY.md is NOT a failure here; the
+  // prompt simply omits the L2 section.
+  //
+  // relocation-v1 §7 task 3 (Cindy nail 1): the daemon→backend typed error is a
+  // contract surface. The absolute cwd path is a host-local diagnostic — logged
+  // HERE (host-only) but MUST NOT ride the wire `message`, which is forwarded
+  // verbatim to the API/renderer. The wire message names only the semantic
+  // workspace id + kind; the concrete path never leaves the host.
+  const logUnusable = (reason: string, detail?: string) => {
+    logger.warn(
+      {
+        kind: 'process',
+        action: 'runtime_start_workspace_cwd_unusable',
+        reason,
+        workspace_id: workspace.id,
+        workspace_kind: workspace.kind,
+        workspace_name: workspace.name,
+        resolved_path: workspace.path,
+        ...(detail !== undefined ? { detail } : {}),
+      },
+      'runtime_start: session cwd could not be ensured as a usable working directory',
+    );
+  };
+  const cwdUnusable = () =>
+    new RuntimeStartResolveError(
+      'workspace_bundle_missing',
+      `runtime_start: session cwd for ${workspace.kind} workspace ` +
+        `${workspace.id} could not be created or entered on this computer`,
+    );
+  // Best-effort create — idempotent when the dir (or a parent chain) already
+  // exists. A conflicting non-directory file at the path throws EEXIST/ENOTDIR
+  // and is caught below as a hard admission failure.
   try {
-    const st = await stat(workspace.path);
-    if (st.isDirectory()) return;
-    throw new RuntimeStartResolveError(
-      'workspace_path_missing',
-      `runtime_start: resolved ${workspace.kind} workspace "${workspace.name}" ` +
-        `(${workspace.id}) path is not a directory: ${workspace.path}`,
-    );
+    await mkdir(workspace.path, { recursive: true });
   } catch (err) {
-    if (err instanceof RuntimeStartResolveError) throw err;
-    const code = typeof err === 'object' && err !== null && 'code' in err
-      ? String((err as { code?: unknown }).code)
-      : null;
-    if (code === 'ENOENT' || code === 'ENOTDIR') {
-      throw new RuntimeStartResolveError(
-        'workspace_path_missing',
-        `runtime_start: resolved ${workspace.kind} workspace "${workspace.name}" ` +
-          `(${workspace.id}) path does not exist: ${workspace.path}`,
-      );
-    }
-    throw new Error(
-      `runtime_start: failed to access resolved ${workspace.kind} workspace ` +
-        `"${workspace.name}" (${workspace.id}) path ${workspace.path}: ` +
-        (err instanceof Error ? err.message : String(err)),
-    );
+    logUnusable('mkdir_failed', err instanceof Error ? err.message : String(err));
+    throw cwdUnusable();
   }
+  // Cwd-usability uses the SAME predicate as `list_workspaces.agent_dir`
+  // (`bundleCwdUsable`: an existing directory this process can enter/traverse),
+  // so list never reports a dir usable that this spawn would then choke on.
+  if (await bundleCwdUsable(workspace.path)) return;
+  logUnusable('not_enterable');
+  throw cwdUnusable();
 }
 
 function incrementToolCount(

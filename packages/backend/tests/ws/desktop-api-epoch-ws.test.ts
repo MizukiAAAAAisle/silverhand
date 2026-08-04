@@ -2,13 +2,14 @@
  * #task:1761 — socket-level behavior of the event-WS epoch admission.
  *
  * Pins (structure only, never copy):
- *   1. Observation bridge (default minimum 0): upgrades with a current epoch
- *      header, no header, or a malformed one all connect.
- *   2. Post-cutoff (raised minimum via the test seam): a pre-epoch upgrade is
- *      refused with a REAL structured HTTP 426 — status code AND a JSON body
- *      that parses as UpgradeRequiredBody (Cindy round-2: the body must not
- *      be dropped on the floor).
- *   3. A current-epoch upgrade still connects post-cutoff.
+ *   1. Default build (relocation-v1 §6 raised the minimum to the current
+ *      epoch): only a current epoch header connects; no header and a malformed
+ *      one are both the pre-epoch generation and are refused.
+ *   2. Raised minimum via the test seam: a pre-epoch upgrade is refused with a
+ *      REAL structured HTTP 426 — status code AND a JSON body that parses as
+ *      UpgradeRequiredBody (Cindy round-2: the body must not be dropped on the
+ *      floor).
+ *   3. A current-epoch upgrade still connects.
  */
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -108,14 +109,16 @@ describe('event WebSocket epoch admission (#task:1761)', () => {
     });
   }
 
-  it('observation bridge admits current, missing, and malformed epochs', async () => {
+  it('the default minimum admits a current epoch and refuses missing / malformed ones', async () => {
     const url = await open();
     expect((await attempt(url, String(DESKTOP_SERVER_API_EPOCH))).kind).toBe('open');
-    expect((await attempt(url)).kind).toBe('open');
-    expect((await attempt(url, 'garbage')).kind).toBe('open');
+    // relocation-v1 §6 closed the observation bridge: absent and unparseable
+    // both normalize to epoch 0, which is now below the minimum.
+    expect((await attempt(url)).kind).toBe('rejected');
+    expect((await attempt(url, 'garbage')).kind).toBe('rejected');
   });
 
-  it('post-cutoff refuses a pre-epoch upgrade with a structured HTTP 426 body', async () => {
+  it('the explicit minimum seam refuses a pre-epoch upgrade with a structured HTTP 426 body', async () => {
     const url = await open(DESKTOP_SERVER_API_EPOCH);
     const outcome = await attempt(url);
     expect(outcome.kind).toBe('rejected');
@@ -127,7 +130,7 @@ describe('event WebSocket epoch admission (#task:1761)', () => {
     expect(body.minimum_client_epoch).toBe(DESKTOP_SERVER_API_EPOCH);
   });
 
-  it('post-cutoff still admits a current-epoch upgrade', async () => {
+  it('a current-epoch upgrade still connects under the explicit minimum seam', async () => {
     const url = await open(DESKTOP_SERVER_API_EPOCH);
     expect((await attempt(url, String(DESKTOP_SERVER_API_EPOCH))).kind).toBe('open');
   });

@@ -59,7 +59,6 @@
  * check applied to outbound event frames; no wire envelope shape
  * changes.
  */
-import { testWorkspacePath } from '../utils/db.js';
 import { describe, expect, it } from 'vitest';
 import {
   KNOWN_CAPABILITIES_V1,
@@ -119,12 +118,9 @@ function makePerimeterFixture(): PerimeterFixture {
   const wsX = workspaces.insert({
     name: 'perimeter-x',
     description: null,
-    workspacePath: testWorkspacePath('perimeter-x'),
-    workspaceHostId: hostXId,
   });
   const channelX = conversations.insertChannel({
     workspaceId: wsX.id,
-    workspacePath: wsX.workspace_path,
     title: 'perimeter-x',
   });
   const agentX = agents.create(
@@ -140,12 +136,9 @@ function makePerimeterFixture(): PerimeterFixture {
   const wsY = workspaces.insert({
     name: 'perimeter-y',
     description: null,
-    workspacePath: testWorkspacePath('perimeter-y'),
-    workspaceHostId: hostY.id,
   });
   const channelY = conversations.insertChannel({
     workspaceId: wsY.id,
-    workspacePath: wsY.workspace_path,
     title: 'perimeter-y',
   });
   const agentY = agents.create(
@@ -205,7 +198,6 @@ function makePerimeterFixture(): PerimeterFixture {
       // membership backing.
       const channel = conversations.insertChannel({
         workspaceId: wsX.id,
-        workspacePath: wsX.workspace_path,
         title,
       });
       return channel.id;

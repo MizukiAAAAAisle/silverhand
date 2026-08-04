@@ -1149,7 +1149,6 @@ describe('Markdown conversation refs', () => {
         title: 'foreign-channel',
         workspace_id: 'ws-foreign',
         workspace_kind: 'regular',
-        workspace_path: '/tmp/ws-foreign',
         closed_at: null,
       },
     });

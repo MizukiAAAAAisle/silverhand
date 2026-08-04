@@ -77,11 +77,6 @@ export interface ClaimLocalHostResult {
   created: boolean;
 }
 
-export interface HostDeleteDependents {
-  agents: number;
-  workspaces: number;
-}
-
 export class HostRepo {
   constructor(private readonly db: Db) {}
 
@@ -399,25 +394,6 @@ export class HostRepo {
           WHERE id = ?`,
     ).run(finalizedAt, id);
     return this.get(id);
-  }
-
-  countDeleteDependents(hostId: string): HostDeleteDependents {
-    const agents =
-      prepareObserved<[string], { c: number }>(
-        this.db,
-        'hosts.count_dependent_agents',
-        `SELECT COUNT(*) AS c FROM agents WHERE host_id = ?`,
-      ).get(hostId)?.c ?? 0;
-    const workspaces =
-      prepareObserved<[string], { c: number }>(
-        this.db,
-        'hosts.count_dependent_workspaces',
-        `SELECT COUNT(*) AS c
-             FROM workspaces
-            WHERE workspace_host_id = ?
-              AND workspace_kind = 'regular'`,
-      ).get(hostId)?.c ?? 0;
-    return { agents, workspaces };
   }
 
   deleteOwnedUserInvite(input: { hostId: string; userId: string }): boolean {

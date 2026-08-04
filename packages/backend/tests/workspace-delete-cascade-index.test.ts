@@ -92,12 +92,12 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
        VALUES (?, ?, 'claude', ?, ?, ?, 'local')`,
     );
     const insertWorkspace = db.prepare(
-      `INSERT INTO workspaces (id, name, workspace_kind, workspace_path, workspace_host_id, owner_user_id, created_at, updated_at)
-       VALUES (?, ?, 'regular', ?, ?, 'local', ?, ?)`,
+      `INSERT INTO workspaces (id, name, workspace_kind, owner_user_id, created_at, updated_at)
+       VALUES (?, ?, 'regular', 'local', ?, ?)`,
     );
     const insertConversation = db.prepare(
-      `INSERT INTO conversations (id, workspace_id, workspace_path, kind, title, status, created_at, updated_at)
-       VALUES (?, ?, '/tmp/ws', 'channel', ?, 'active', ?, ?)`,
+      `INSERT INTO conversations (id, workspace_id, kind, title, status, created_at, updated_at)
+       VALUES (?, ?, 'channel', ?, 'active', ?, ?)`,
     );
     const insertMessage = db.prepare(
       `INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at, thread_root_id)
@@ -133,7 +133,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
       insertAgent.run('agent-bulk-2', 'bulk-agent-2', localHostId, now, now);
 
       // ── Unrelated GLOBAL bulk: the amplification substrate ─────────
-      insertWorkspace.run('ws-bulk', 'bulk', '/tmp/ws-bulk', localHostId, now, now);
+      insertWorkspace.run('ws-bulk', 'bulk', now, now);
       insertConversation.run('conv-bulk', 'ws-bulk', 'bulk', now, now);
       for (let i = 0; i < BULK_MESSAGES; i += 1) {
         insertMessage.run(`m-bulk-${i}`, 'conv-bulk', 'x', i + 1, now, null);
@@ -170,7 +170,7 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
       }
 
       // ── Small TARGET workspace (dalaran-shaped) ────────────────────
-      insertWorkspace.run('ws-target', 'target', '/tmp/ws-target', localHostId, now, now);
+      insertWorkspace.run('ws-target', 'target', now, now);
       for (const conv of ['conv-t1', 'conv-t2']) {
         insertConversation.run(conv, 'ws-target', conv, now, now);
         for (let i = 0; i < 30; i += 1) {

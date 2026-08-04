@@ -5,9 +5,9 @@ import type { RuntimeStartResolveDeps } from '../../src/daemon/runtime-start-res
 
 /**
  * Build SEMANTIC `runtime_start` options (D4.e-6): no `path`/`home_dir`
- * crosses the wire. `workspacePath`/`agentHomeDir` overrides are retained
- * for the COMPANION resolver (`testRuntimeStartResolveDeps`) — the daemon
- * resolves host paths, so a test pairs these options with matching deps.
+ * crosses the wire. The daemon resolves host paths deterministically from the
+ * agent id + workspace id, so a test pairs these options with matching deps
+ * (`testRuntimeStartResolveDeps`, keyed on `homeDir`).
  */
 export function testStartOptions(overrides: {
   conversationId?: string;
@@ -82,25 +82,30 @@ export function testStartOptions(overrides: {
 
 /**
  * Companion to `testStartOptions`: the daemon-side path resolver deps the
- * Supervisor needs (D4.e-6). `regular` workspaces resolve to `workspacePath`
- * (default `process.cwd()`); `agent_home` + `agent.home_dir` resolve via
- * `computeAgentDir(agentId, homeDir)` inside `resolveRuntimeStartPaths`, so
- * pass `homeDir` when a test reads real L1 prompt files. To force a typed
- * fail-closed, override `resolveRegularWorkspacePath` to throw.
+ * Supervisor needs (D4.e-6). relocation-v1 §7 task 4 — there is no registry
+ * establishment gate any more: both `regular` and `agent_home` cwds resolve
+ * deterministically from the agent id + workspace id under `homeDir` (or
+ * `agentHomeRootDir`) inside `resolveRuntimeStartPaths`, so pass `homeDir`
+ * when a test reads real L1 prompt files or a materialized bundle.
+ *
+ * Availability of a resolved coordinate is a separate fs fact
+ * (`bundleL2Present`: MEMORY.md at the bundle root). The default seam returns
+ * `true` so memory-index entries resolve to their coordinate without touching
+ * disk; override it to model the lazy window (never-spawned member workspace)
+ * or a half-seed → `path: null`.
  */
 export function testRuntimeStartResolveDeps(overrides: {
   homeDir?: string;
-  workspacePath?: string;
+  agentHomeRootDir?: string;
   computerId?: string;
-  resolveRegularWorkspacePath?: (workspaceId: string) => string;
+  bundleL2Present?: (bundleDir: string) => Promise<boolean>;
   resolveComputerId?: () => string;
 } = {}): RuntimeStartResolveDeps {
-  const workspacePath = overrides.workspacePath ?? process.cwd();
   const computerId = overrides.computerId ?? 'test-computer';
   return {
     homeDir: overrides.homeDir,
-    resolveRegularWorkspacePath:
-      overrides.resolveRegularWorkspacePath ?? (() => workspacePath),
+    agentHomeRootDir: overrides.agentHomeRootDir,
+    bundleL2Present: overrides.bundleL2Present ?? (async () => true),
     resolveComputerId: overrides.resolveComputerId ?? (() => computerId),
   };
 }

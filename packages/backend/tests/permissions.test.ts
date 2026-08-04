@@ -1,5 +1,4 @@
 import { join } from 'node:path';
-import { testWorkspacePath } from './utils/db.js';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -36,19 +35,15 @@ function seed(t: TestApp) {
   const workspace = workspaces.insert({
     name: `ws-${randomUUID().slice(0, 8)}`,
     description: null,
-    workspacePath: testWorkspacePath('permissions-ws'),
-    workspaceHostId: host.id,
   });
   workspaces.insertMembership(workspace.id, alice.id);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath: workspace.workspace_path,
     title: 'Main',
   });
   conversations.addAgent(channel.id, alice.id);
   const sibling = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath: workspace.workspace_path,
     title: 'Sibling',
   });
   return {
@@ -112,7 +107,6 @@ describe('permission helpers', () => {
         .run(f.workspace.id, Date.now());
       const publicChannel = f.conversations.insertChannel({
         workspaceId: f.workspace.id,
-        workspacePath: f.workspace.workspace_path,
         title: 'Public',
         visibility: 'public',
       });
@@ -317,11 +311,9 @@ describe('permission helpers', () => {
     const f = seed(t);
     const home = f.workspaces.insertAgentHome({
       agent: f.alice,
-      workspacePath: join(t.silverhandDir, 'agents', f.alice.id),
     });
     const dm = f.conversations.insertDmChannel({
       workspaceId: home.id,
-      workspacePath: home.workspace_path,
       title: 'Onboarding',
       agentId: f.alice.id,
     });

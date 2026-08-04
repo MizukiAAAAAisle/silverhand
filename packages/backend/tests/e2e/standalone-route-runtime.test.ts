@@ -46,7 +46,7 @@ import { AuthSessionService } from '../../src/auth/session.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import {
-  provisionWorkspaceOnDaemon,
+  assertOutboundAdapterWired,
   bootDaemonWithSupervisor,
   bootG2Harness,
   waitFor,
@@ -54,6 +54,7 @@ import {
   type DaemonWithSupervisorHandle,
   type G2Harness,
 } from './g2-harness.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 const FIXTURE = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -124,10 +125,10 @@ async function seedRouteEnv(harness: G2Harness, suffix: string): Promise<RouteEn
 
   db.prepare(
     `INSERT INTO workspaces
-      (id, name, description, workspace_kind, workspace_path,
-       workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-      VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
-  ).run(workspaceId, `g2-route-${suffix}-workspace`, workspacePath, harness.hostId, now, now);
+      (id, name, description, workspace_kind,
+       owner_agent_id, archived_at, created_at, updated_at)
+      VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+  ).run(workspaceId, `g2-route-${suffix}-workspace`, now, now);
   db.prepare(
     `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
       VALUES (?, ?, ?)`,
@@ -154,12 +155,12 @@ async function seedRouteEnv(harness: G2Harness, suffix: string): Promise<RouteEn
   ).run(workspaceId, agentId, now);
   db.prepare(
     `INSERT INTO conversations
-      (id, workspace_id, workspace_path, kind,
+      (id, workspace_id, kind,
 title, status, spawned_by_agent_id, closed_at, close_summary,
        pinned_at, created_at, updated_at)
-      VALUES (?, ?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
+      VALUES (?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
               NULL, ?, ?)`,
-  ).run(conversationId, workspaceId, workspacePath, `g2-route-${suffix}-channel`, now, now);
+  ).run(conversationId, workspaceId, `g2-route-${suffix}-channel`, now, now);
   db.prepare(
     `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
       VALUES (?, ?, ?)`,
@@ -195,6 +196,7 @@ async function postJson(
   const res = await fetch(url, {
     method: 'POST',
     headers: {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
       'content-type': 'application/json',
       authorization: `Bearer ${bearer}`,
     },
@@ -255,12 +257,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
     // #task:1612 — model creation-time realization on the real daemon
     // (the spawn path no longer provisions). The nodaemon arms skip this:
     // their routes fail on transport before touching the registry.
-    await provisionWorkspaceOnDaemon(
-      harness.backend,
-      harness.hostId,
-      env.workspaceId,
-      join(harness.silverhandDir, 'workspaces', env.workspaceId),
-    );
+    await assertOutboundAdapterWired(harness.backend);
 
     const baseUrl = harness.serverUrl;
 

@@ -48,20 +48,27 @@ import type { InternalRouteDeps } from './deps.js';
  * `WorkspaceRepo.listForAgent` (regular ∪ owned agent_home); per-row
  * `agent_dir` is daemon-stamped: the route does
  * the ACL/DB list, then dispatches the narrow `agent_workspace_index`
- * intent to the owning daemon, which resolves `agent_dir` from the
- * registry (regular) or its own homedir (agent_home).
+ * intent to the owning daemon, which computes `agent_dir` from the
+ * DETERMINISTIC agent-centric coordinate `<agent home>/workspaces/<id>`
+ * (regular) or its own agent home (agent_home) — relocation-v1 §7 retired
+ * both the DB column and the daemon registry binding as path sources.
  *
- * The backend NEVER derives `agent_dir` from `workspace_path` (I1). An id
- * the daemon cannot resolve (`unresolved`) on the agent's own home axis, or
- * an offline host, FAILS CLOSED — the response carries a diagnostic code,
- * never a fabricated `workspace_path`-derived path (#task:1612: no lazy
- * registry re-bind exists on this path anymore).
+ * The backend NEVER derives `agent_dir` itself (I1). Two failure axes stay
+ * separate:
+ *   - transport/host-level (no outbound adapter, offline host, malformed
+ *     response) FAILS CLOSED with a diagnostic code — never a fabricated
+ *     path;
+ *   - a single id the daemon leaves unresolved (the bundle has not been
+ *     materialized on this computer yet, because the membership is a pure DB
+ *     write until first spawn) degrades PER ENTRY to `agent_dir: null`. A
+ *     regular workspace has no home computer, so there is no same-home
+ *     inconsistency left to fail the whole response on (§3.4).
  *
  * Cross-computer slice 2 (#task:1600): the resolution axis is the AGENT's
  * host — the index renders paths as seen from the agent's own computer, so
- * there is exactly ONE daemon to ask regardless of where the workspaces'
- * home computers are. The old multi-host `workspace_host_ambiguous`
- * rejection is gone with the I4 same-host invariant it defended.
+ * there is exactly ONE daemon to ask regardless of which computers the other
+ * members run on. The old multi-host `workspace_host_ambiguous` rejection is
+ * gone with the I4 same-host invariant it defended.
  */
 type AgentListWorkspacesOutcome =
   | { kind: 'ok'; dto: AgentListWorkspacesDto }
@@ -81,9 +88,8 @@ async function buildAgentListWorkspacesDto(
   // Cross-computer slice 2 (#task:1600): resolve against the AGENT's own
   // daemon. Paths in this index are only meaningful on the computer the
   // agent runs on, so the agent's host is the single correct resolution
-  // axis — never `workspace_host_id`, which names each workspace's home
-  // computer and may legitimately differ per row once members span
-  // computers.
+  // axis. There is no workspace-side axis to confuse it with any more —
+  // relocation-v1 §7 retired the workspace's home computer entirely.
   const agent = new AgentRepo(ctx.db).get(agentId);
   if (!agent) {
     return {
@@ -96,11 +102,10 @@ async function buildAgentListWorkspacesDto(
   const hostId = agent.host_id;
   const workspaceIds = workspaces.map(w => w.id);
   // #task:1612 — list resolution performs NO workspace provision: the
-  // daemon's agent_workspace_index is the sole resolver. A same-host
-  // workspace missing its registry binding surfaces as `unresolved` and
-  // trips the strict fail-closed below (data inconsistency — never healed
-  // from the DB path); a guest workspace resolves per-entry or degrades
-  // to "unavailable on this computer" (#task:1600).
+  // daemon's agent_workspace_index is the sole resolver. Any id it leaves
+  // unresolved degrades per-entry to `agent_dir: null` ("not materialized on
+  // this computer yet") — a regular workspace no longer has a home computer,
+  // so there is no same-home registry inconsistency to fail closed on (§3.4).
   const agentDirById = new Map<string, string>();
   {
     const outbound = resolveOutboundForHost(adapter, hostId);
@@ -116,28 +121,13 @@ async function buildAgentListWorkspacesDto(
     if (index.kind === 'failed') {
       return failedOutcome(index);
     }
-    // #task:1600 piece ② — unresolved ids split by axis:
-    //  - a row whose HOME computer is the agent's host must already hold
-    //    its creation-time registry binding, so "unresolved" is a genuine
-    //    registry inconsistency → strict fail-closed (unchanged contract);
-    //  - a GUEST row (home computer elsewhere) with no local binding is
-    //    the EXPECTED "unavailable on this computer" state → degrade
-    //    per-entry to `agent_dir: null` (never a fabricated path, never
-    //    a whole-response failure). It resolves once a member on this
-    //    computer is established (membership-time pathless provision,
-    //    #task:1612).
-    const hostById = new Map(workspaces.map(w => [w.id, w.workspace_host_id]));
-    const sameHostUnresolved = index.result.unresolved.filter(
-      id => hostById.get(id) === hostId,
-    );
-    if (sameHostUnresolved.length > 0) {
-      return {
-        kind: 'failed',
-        code: 'workspace_unresolved',
-        message: `daemon could not resolve agent_dir for workspace(s): ${sameHostUnresolved.join(', ')}`,
-        status: 409,
-      };
-    }
+    // relocation-v1 §3.4 — a regular workspace has no home computer any more,
+    // so the old same-home (strict fail-closed) vs guest (degrade) split
+    // collapses. Any id the daemon leaves unresolved is the EXPECTED "not
+    // materialized on this computer yet" state (a pure-DB membership that has
+    // never spawned) → degrade per-entry to `agent_dir: null` (never a
+    // fabricated path, never a whole-response failure). It resolves once the
+    // agent first materializes its own bundle on this computer.
     for (const entry of index.result.entries) {
       agentDirById.set(entry.workspace_id, entry.agent_dir);
     }
@@ -146,12 +136,6 @@ async function buildAgentListWorkspacesDto(
   const dto: AgentListWorkspacesDto = {
     workspaces: workspaces.map((w): AgentListedWorkspace => {
       const agentDir = agentDirById.get(w.id) ?? null;
-      if (agentDir === null && w.workspace_host_id === hostId) {
-        // Unreachable: every same-host id was resolved or tripped the
-        // strict fail-closed above. Guard so a logic gap can never leak
-        // an empty/derived path.
-        throw new Error(`agent_dir unresolved for workspace ${w.id}`);
-      }
       return {
         id: w.id,
         name: w.name,

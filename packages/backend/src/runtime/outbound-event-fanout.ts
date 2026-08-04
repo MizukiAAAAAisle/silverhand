@@ -1129,16 +1129,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (entry && entry.phase !== 'idle' && entry.phase !== 'exited') {
       return;
     }
-    const fsEnsureOk = await this.ensureRuntimeStartFilesystem(
-      hostId,
-      conversationId,
-      agentId,
-    );
-    if (!fsEnsureOk) {
-      throw new Error(
-        'runtime_start blocked: runtime filesystem ensure incomplete',
-      );
-    }
+    await this.seedRuntimeStartL2BestEffort(hostId, conversationId, agentId);
     const transport = this.requireTransport();
     if (this.runtimeTransitioning(agentId)) {
       throw new Error(`agent ${agentId} is switching runtime`);
@@ -1218,75 +1209,78 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   /**
-   * Cross-computer slice 1 (#task:1596) / #task:1612 — pre-dispatch
-   * runtime filesystem ensure on the dispatch (agent's) host:
+   * Cross-computer slice 1 (#task:1596) / #task:1612 / relocation-v1 §7 task 4 —
+   * pre-dispatch L2 seed on the dispatch (agent's) host, BEST-EFFORT: it seeds
+   * enrichment, it NEVER gates dispatch (the shiki+Cindy pivot, 2026-08-04).
    *
-   * 1. ONLY the ACTIVE workspace's L2 seed for the spawning agent is
-   *    ensured (BLOCKING; memoized per host/workspace/agent). The spawn
-   *    path performs NO workspace provision — the registry is the sole
-   *    authority, membership establishment already realized the workspace
-   *    on this computer, and a missing binding surfaces as the seed's
-   *    typed workspace_not_provisioned (never healed from the DB path,
-   *    never a fresh empty root).
-   * 2. Peer memory-index workspaces are NEVER touched here: already-bound
-   *    ones resolve daemon-side, unbound ones degrade per-entry to
-   *    "unavailable on this computer".
+   * The ONLY hard runtime-start gate is the supervisor's host-side session-cwd
+   * ensure (`cwd_ready`). L1/L2 memory is enrichment: it is seeded when it can
+   * be, and neither its absence nor a failure to seed it may hold a spawn
+   * hostage. So this method dispatches the ACTIVE workspace's seed and records
+   * ANY outcome as a DIAGNOSTIC ONLY — it returns nothing, and every caller
+   * ALWAYS proceeds. The real hard conditions (transport health, the semantic
+   * ref, the session cwd) are each judged SEPARATELY downstream by the runtime
+   * send / resolver / supervisor; folding them into a seed-layer per-code gate
+   * here duplicated that judgment and, worse, let a memory-seed failure decide
+   * dispatch — which the pivot forbids. A missing ensurer (unwired dep) is
+   * likewise logged and skipped: it cannot block a spawn either.
    *
-   * `agent_home` is skipped (daemon resolves it homedir-side). For a
-   * regular active workspace the seed ensurer is a LOAD-BEARING
-   * precondition: missing wiring fails closed (never "skip and hope").
-   * Returns true iff dispatch may go on.
+   * Only the ACTIVE workspace is seeded (memoized per host/workspace/agent on
+   * SUCCESS; failures retry next spawn). The seed performs NO workspace
+   * provision — the daemon mkdir's the deterministic agent-centric bundle
+   * coordinate directly. Peer memory-index workspaces are NEVER touched here:
+   * already-materialized ones resolve daemon-side, un-materialized ones degrade
+   * per-entry to "unavailable on this computer". `agent_home` is skipped
+   * (daemon resolves it homedir-side).
    */
-  private async ensureRuntimeStartFilesystem(
+  private async seedRuntimeStartL2BestEffort(
     hostId: string,
     conversationId: string,
     agentId: string,
-  ): Promise<boolean> {
+  ): Promise<void> {
     const conversation = this.conversations.get(conversationId);
-    if (!conversation) return true;
+    if (!conversation) return;
     const plan = planRuntimeStartFilesystemEnsure(
       this.workspaces.get(conversation.workspace_id) ?? undefined,
     );
-    if (!plan.seedWorkspaceId) return true;
+    if (!plan.seedWorkspaceId) return;
 
     const seeder = this.opts.agentL2SeedEnsurer;
     if (!seeder) {
       this.opts.logger.warn(
         {
           kind: 'inbox',
-          action: 'runtime_start_filesystem_deps_unwired',
+          action: 'runtime_start_l2_seed_unwired',
           hostId,
           conversationId,
           agent_id: agentId,
           workspace_id: plan.seedWorkspaceId,
         },
-        'runtime_start blocked: L2 seed dependency unwired for a regular workspace (fail closed)',
+        'runtime_start proceeding: L2 seed dependency unwired; spawning with reduced L2 context (memory is best-effort enrichment, not a spawn gate)',
       );
-      return false;
+      return;
     }
 
-    // #task:1612 — the spawn path performs NO workspace provision: the
-    // registry is the sole authority and membership establishment already
-    // realized the workspace on this computer. A missing binding surfaces
-    // as the seed's typed workspace_not_provisioned and the spawn stays
-    // pending — never healed from the DB path, never a fresh empty root.
     const seed = await seeder.ensure(hostId, plan.seedWorkspaceId, agentId);
     if (!seed.ok) {
+      // Best-effort enrichment: ANY seed failure is a diagnostic, never an
+      // admission gate. The next spawn retries (not memoized on failure). The
+      // sole hard runtime-start gate — the session cwd — is enforced
+      // SEPARATELY host-side, so proceeding here can never let a child start
+      // without a usable cwd.
       this.opts.logger.warn(
         {
           kind: 'inbox',
-          action: 'runtime_start_agent_l2_seed_incomplete',
+          action: 'runtime_start_l2_seed_degraded',
           hostId,
           conversationId,
           agent_id: agentId,
           workspace_id: plan.seedWorkspaceId,
           code: seed.failure.code,
         },
-        'runtime_start blocked: agent L2 seed incomplete on dispatch host; kept pending for retry',
+        'runtime_start proceeding: agent L2 memory seed did not complete; spawning with reduced L2 context (best-effort enrichment; cwd is the only hard gate, judged host-side)',
       );
-      return false;
     }
-    return true;
   }
 
   getAgentRunStates(conversationId: string): AgentRunState[] {
@@ -1466,16 +1460,11 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           const connectionId =
             state.dispatchConnectionId ??
             this.connectedConnectionId(hostId, 'runtime_deliver');
-          const fsEnsureOk = await this.ensureRuntimeStartFilesystem(
+          await this.seedRuntimeStartL2BestEffort(
             hostId,
             params.conversation_id,
             params.agent_id,
           );
-          if (!fsEnsureOk) {
-            throw new Error(
-              'runtime_deliver blocked: runtime filesystem ensure incomplete',
-            );
-          }
           if (
             (this.opts.transport()?.connectionIdForHost(hostId) ?? null) !==
             connectionId

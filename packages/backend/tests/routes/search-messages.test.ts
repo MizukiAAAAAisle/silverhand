@@ -155,7 +155,6 @@ describe('agent list_channels / search_messages routes', () => {
     // is not a member so the member arm skips it too).
     const unjoinedDm = new ConversationRepo(t.ctx.db).insertDmChannel({
       workspaceId,
-      workspacePath: '/tmp/unjoined-dm',
       title: 'unjoined-dm',
     });
 

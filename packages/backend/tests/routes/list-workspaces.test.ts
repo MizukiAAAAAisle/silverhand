@@ -1,6 +1,3 @@
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { HostWsCommandTransportError } from '../../src/ws/host-ws-server.js';
@@ -108,7 +105,7 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(homePos).toBe(ids.length - 1);
   });
 
-  it('agent_dir is daemon-stamped and kind-branched (regular = nested L2, agent_home = L1 home)', async () => {
+  it('agent_dir is kind-branched: agent_home resolves to its L1 home, an unprovisioned regular workspace degrades to null (§3.4)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -121,21 +118,22 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(regular.kind).toBe('regular');
     expect(home.kind).toBe('agent_home');
 
-    // The value comes from the daemon (agent_workspace_index), NOT a backend
-    // derivation from workspace_path. We assert the kind-branched SHAPE only,
-    // without re-deriving from workspace_path (that would re-encode the I1
-    // violation into the test). Verbatim daemon value is pinned separately.
-    expect(regular.agent_dir).toMatch(
-      new RegExp(`/\\.silverhand/agents/${alice.agentId}$`),
-    );
+    // relocation-v1 §3.4 — a regular workspace is no longer provisioned at
+    // create, so the daemon index leaves it unresolved and the list degrades
+    // it to `agent_dir: null` ("not materialized on this computer yet"). Its
+    // stamped value once materialized is pinned via the daemon override in the
+    // "daemon-stamped ... verbatim" test below.
+    expect(regular.agent_dir).toBeNull();
+    // agent_home still resolves to the agent's L1 home (no nested workspace
+    // `.silverhand`): only regular rows can degrade now.
     expect(home.agent_dir.endsWith(`/agents/${alice.agentId}`)).toBe(true);
-    // agent_home resolves to the L1 home (no nested workspace `.silverhand`).
     expect(home.agent_dir).not.toContain('/.silverhand/');
   });
 
   // ── D4.e-1 3b-3: daemon-stamped agent_dir + fail-closed ───────────────
-  // The value is now resolved by the daemon (`agent_workspace_index`), not
-  // assembled by the backend from `workspace_path`. These pin that wiring.
+  // The value is resolved by the daemon (`agent_workspace_index`); the backend
+  // never assembles a host path of its own (the DB column it once assembled
+  // from is gone entirely). These pin that wiring.
 
   it('agent_dir is daemon-stamped: the response uses the daemon index value verbatim', async () => {
     t = buildTestApp();
@@ -143,7 +141,7 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
 
     // Force a sentinel agent_dir from the daemon — a value the backend could
-    // never derive from workspace_path — and assert it survives to the DTO.
+    // never derive on its own — and assert it survives to the DTO.
     t.fakeHostWs!.agentWorkspaceIndexAckOverride = params => ({
       ok: true as const,
       entries: params.workspace_ids.map(workspace_id => ({
@@ -160,26 +158,23 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(regular.agent_dir).toBe(`/daemon/stamped/${reg.workspaceId}`);
   });
 
-  it('#task:1612 — list dispatches ONLY agent_workspace_index: zero workspace_provision on the read path', async () => {
+  it('#task:1612 — list dispatches ONLY agent_workspace_index on the read path', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     await createRegularWorkspace(t, 'team-x', [alice.agentId]);
-    // Drop create-time provision calls so we observe ONLY the list path.
+    // Drop create-time fan-out so we observe ONLY the list path.
     t.fakeHostWs!.calls.length = 0;
 
     const res = await http(t).get(listWorkspacesPath(alice.dmChannelId, alice.agentId));
     expect(res.status).toBe(200);
 
-    expect(
-      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-    ).toHaveLength(0);
     const indexCalls = t.fakeHostWs!.calls.filter(
       c => c.kind === 'agent_workspace_index',
     );
     expect(indexCalls).toHaveLength(1);
   });
 
-  it('daemon offline → fail-closed (503), never falls back to a workspace_path agent_dir', async () => {
+  it('daemon offline → fail-closed (503), never falls back to a backend-fabricated agent_dir', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -199,45 +194,54 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     expect(body.workspaces).toBeUndefined();
   });
 
-  it('daemon reports unresolved → fail-closed (409 workspace_unresolved), no agent_dir in response', async () => {
+  it('daemon reports unresolved → degrades that entry to agent_dir null (no fail-closed 409) (§3.4)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
-    // Daemon cannot resolve the regular workspace (no registry binding).
+    // Daemon cannot resolve the regular workspace (never provisioned / not
+    // materialized on this computer yet).
     t.fakeHostWs!.agentWorkspaceIndexAckOverride = params => ({
       ok: true as const,
-      entries: [],
-      unresolved: params.workspace_ids,
+      entries: params.workspace_ids
+        .filter(id => id !== reg.workspaceId)
+        .map(workspace_id => ({
+          workspace_id,
+          agent_dir: `/resolved/${workspace_id}`,
+        })),
+      unresolved: [reg.workspaceId],
     });
 
     const res = await http(t).get(listWorkspacesPath(alice.dmChannelId, alice.agentId));
-    expect(res.status).toBe(409);
+    // relocation-v1 §3.4 — a regular workspace has no home computer, so an
+    // unresolved id is the EXPECTED "not materialized here yet" state, not a
+    // registry inconsistency: the entry degrades to `agent_dir: null` and the
+    // response still succeeds (the old same-home 409 fail-closed is retired).
+    expect(res.status).toBe(200);
     const body = await res.json() as any;
-    expect(body.code).toBe('workspace_unresolved');
-    expect(body.error).toContain(reg.workspaceId);
-    expect(body.workspaces).toBeUndefined();
+    const regular = body.workspaces.find((w: any) => w.id === reg.workspaceId);
+    expect(regular.agent_dir).toBeNull();
   });
 
-  it("cross-host membership set resolves against the AGENT's host; unprovisioned guest rows degrade to agent_dir null; home path never legacy-bound (#task:1600)", async () => {
+  it("a membership set resolves against the AGENT's own daemon; unmaterialized guest rows degrade to agent_dir null; home path never legacy-bound (#task:1600)", async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
 
-    // Cross-computer membership: a second host + a regular workspace on it
-    // that alice is a member of. Since #task:1600 this is a LEGAL state
-    // (the old 409 workspace_host_ambiguous defended the retired I4
-    // same-host invariant). Resolution now targets alice's OWN daemon.
+    // A second regular workspace alice is a member of, inserted directly (no
+    // create-time fan-out). relocation-v1 §7-4 (#task:1808): the "workspace on
+    // ANOTHER host" framing this fixture used is unstateable now — a workspace
+    // has no home computer at all, so there is no host axis to diverge on. The
+    // surviving axis (an AGENT on another computer) is pinned in
+    // `tests/application/cross-computer-membership.test.ts`. What this test
+    // still pins is the resolution target: alice's OWN daemon, per visible row.
     const db = t.ctx.db;
     const now = Date.now();
     db.prepare(
-      `INSERT INTO hosts (id, name, kind, created_at) VALUES (?, ?, 'remote', ?)`,
-    ).run('host-other', 'other-host', now);
-    db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind, workspace_path,
-         workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
-    ).run('ws-other-host', 'other-ws', '/tmp/other', 'host-other', now, now);
+        (id, name, description, workspace_kind,
+         owner_agent_id, archived_at, created_at, updated_at)
+        VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+    ).run('ws-other-host', 'other-ws', now, now);
     db.prepare(
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
         VALUES (?, ?, ?)`,
@@ -246,22 +250,18 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
 
     const res = await http(t).get(listWorkspacesPath(alice.dmChannelId, alice.agentId));
 
-    // #task:1600 piece ②: the unprovisioned guest row degrades PER-ENTRY
-    // to `agent_dir: null` ("unavailable on this computer") — the response
-    // succeeds, same-host rows still resolve, and no path is fabricated.
+    // #task:1600 / §3.4: a guest membership row is a LEGAL 200 (the old 409
+    // workspace_host_ambiguous defended the retired I4 same-host invariant).
+    // Neither row is provisioned at create any more, so both degrade PER-ENTRY
+    // to `agent_dir: null` ("not materialized on this computer yet") — the
+    // response succeeds and no path is ever fabricated.
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     const guest = body.workspaces.find((w: any) => w.id === 'ws-other-host');
     expect(guest).toBeDefined();
     expect(guest.agent_dir).toBeNull();
     const regular = body.workspaces.find((w: any) => w.id === reg.workspaceId);
-    expect(typeof regular.agent_dir).toBe('string');
-
-    // #task:1612 — the read path provisions NOTHING (a fortiori the guest
-    // workspace's home path can never be legacy-bound onto alice's daemon).
-    expect(
-      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-    ).toHaveLength(0);
+    expect(regular.agent_dir).toBeNull();
     void reg;
   });
 
@@ -283,85 +283,70 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
       archived: true,
     });
     expect(typeof regular.updated_at).toBe('number');
-    expect(typeof regular.agent_dir).toBe('string');
+    // Unprovisioned at create → agent_dir degrades to null (§3.4).
+    expect(regular.agent_dir).toBeNull();
 
     const home = body.workspaces.find((w: any) => w.id === alice.agentHomeWorkspaceId);
     expect(home.archived).toBe(false);
   });
 
-  it('#task:1612 — a same-host row with NO registry binding fails the list closed (409, no healing, no provision)', async () => {
+  it('#task:1612 / §3.4 — an unmaterialized row degrades to agent_dir null (no fail-closed, no healing, no provision)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     // Drop create-time fan-out so we observe only the list path below.
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
 
-    // #task:1612 — a SAME-HOST row with NO registry binding is a DATA
-    // INCONSISTENCY: the list must fail closed on the daemon's
-    // `unresolved` (409), never heal it from the DB path and never mint
-    // a fresh root. (Pre-#1612 the lazy backfill re-bound it here.)
+    // relocation-v1 §3.4 — a regular workspace has no home computer, so a row
+    // the daemon cannot resolve is the EXPECTED "not materialized here yet"
+    // state, NOT a data inconsistency. The list degrades it to `agent_dir: null`
+    // (no 409 fail-closed) and never heals it from a DB path nor mints a fresh
+    // root. §7-4 (#task:1808): the row no longer carries a host at all, so the
+    // fixture inserts it without one — the "same-host" qualifier this test used
+    // to make is unstateable.
     const db = t.ctx.db;
-    const hostId = (
-      db
-        .prepare('SELECT workspace_host_id AS h FROM workspaces WHERE id = ?')
-        .get(reg.workspaceId) as { h: string }
-    ).h;
-    const legacyDir = mkdtempSync(join(tmpdir(), 'sh-legacy-arch-'));
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind, workspace_path,
-         workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', ?, ?, NULL, ?, ?, ?)`,
-    ).run('ws-legacy-arch', 'legacy-arch', legacyDir, hostId, now, now, now);
+        (id, name, description, workspace_kind,
+         owner_agent_id, archived_at, created_at, updated_at)
+        VALUES (?, ?, NULL, 'regular', NULL, ?, ?, ?)`,
+    ).run('ws-legacy-arch', 'legacy-arch', now, now, now);
     db.prepare(
       `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
         VALUES (?, ?, ?)`,
     ).run('ws-legacy-arch', alice.agentId, now);
 
-    try {
-      t.fakeHostWs!.calls.length = 0;
-      const res = await http(t).get(
-        listWorkspacesPath(alice.dmChannelId, alice.agentId),
-      );
-      expect(res.status).toBe(409);
-      const body = await res.json() as any;
-      expect(body.code).toBe('workspace_unresolved');
-      expect(body.error).toContain('ws-legacy-arch');
-      // Fail closed WITHOUT healing: no provision was dispatched, no
-      // fabricated agent_dir leaked.
-      expect(
-        t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-      ).toHaveLength(0);
-      expect(body.workspaces).toBeUndefined();
-    } finally {
-      rmSync(legacyDir, { recursive: true, force: true });
-    }
+    t.fakeHostWs!.calls.length = 0;
+    const res = await http(t).get(
+      listWorkspacesPath(alice.dmChannelId, alice.agentId),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    const legacy = body.workspaces.find((w: any) => w.id === 'ws-legacy-arch');
+    expect(legacy).toBeDefined();
+    expect(legacy.agent_dir).toBeNull();
+    void reg;
   });
 
-  it('a same-host NON-MEMBER unbound regular row never affects the current agent list (per-visible-row scope)', async () => {
+  it('a NON-MEMBER unmaterialized regular row never affects the current agent list (per-visible-row scope)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
     // Drop create-time fan-out so we observe only the list path.
     t.fakeHostWs!.calls.length = 0;
 
-    // Insert a same-host regular workspace alice is NOT a member of, with NO
-    // registry binding. The list resolves only alice's VISIBLE rows, so this
-    // unbound stranger row is never dispatched and can never fail-close
-    // alice's list (#task:1612: it is never provisioned either).
+    // Insert a regular workspace alice is NOT a member of and that is not
+    // materialized anywhere. The list resolves only alice's VISIBLE rows, so
+    // this stranger row is never dispatched and can never fail-close alice's
+    // list (#task:1612: it is never provisioned either).
     const db = t.ctx.db;
-    const hostId = (
-      db
-        .prepare('SELECT workspace_host_id AS h FROM workspaces WHERE id = ?')
-        .get(reg.workspaceId) as { h: string }
-    ).h;
     const now = Date.now();
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind, workspace_path,
-         workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
-    ).run('ws-stranger', 'stranger', '/nonexistent/stranger/path', hostId, now, now);
+        (id, name, description, workspace_kind,
+         owner_agent_id, archived_at, created_at, updated_at)
+        VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+    ).run('ws-stranger', 'stranger', now, now);
 
     const res = await http(t).get(
       listWorkspacesPath(alice.dmChannelId, alice.agentId),
@@ -371,11 +356,6 @@ describe('agent list_workspaces / list_channels(workspace_id?) routes', () => {
     const ids = body.workspaces.map((w: any) => w.id);
     expect(ids).toContain(reg.workspaceId);
     expect(ids).not.toContain('ws-stranger');
-    // The stranger row was never provisioned during alice's list.
-    const provisioned = t.fakeHostWs!.calls
-      .filter(c => c.kind === 'workspace_provision')
-      .map(c => c.params.workspace_id);
-    expect(provisioned).not.toContain('ws-stranger');
   });
 
   it('list_channels defaults to source workspace, returns workspace_id in payload', async () => {

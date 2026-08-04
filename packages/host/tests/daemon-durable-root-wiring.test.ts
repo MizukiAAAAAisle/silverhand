@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { createConnection, type Socket } from 'node:net';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
 import { HostClient } from '../src/client/index.js';
 import { writeHostConfigAtomic } from '../src/daemon/outbound-client.js';
-import {
-  bindingSlug,
-} from '../src/daemon/workspace-registry/registry.js';
 import { RuntimeStartResolveError } from '../src/daemon/runtime-start-resolve.js';
 import type { RuntimeStartResolveDeps } from '../src/daemon/runtime-start-resolve.js';
+import { resolveAgentWorkspaceBundleDir } from '../src/daemon/agent-materialize/index.js';
 import {
   OutboundDaemonToServerCommandResponseFrameSchema,
   encodeOutboundFrame,
@@ -19,17 +24,22 @@ import {
 import { splitNdjson } from '../src/protocol.js';
 
 /**
- * #task:1596 durability fix (Cindy P1) — PRODUCTION WIRING for the
- * workspace-data location. The registry (and the managed roots holding
- * agent L2 memory) must NOT live under the identity file's directory
- * (desktop's wipeable `run/`): `runDaemon` roots it at the EXPLICIT
- * durable data root the embedder passes (`workspaceDataRootDir`) and migrates a pre-fix
- * namespace on the first registry build. This pins the wiring end to end:
- * a legacy namespace seeded next to the identity file is relocated, the
- * resolver serves the DURABLE path, and nothing registry-owned remains in
- * the wipeable dir — so wiping it can no longer destroy guest memory.
+ * #task:1596 durability fix (Cindy P1) — PRODUCTION WIRING for the durable
+ * agent tree. The roots holding agent L1/L2 memory must NOT live under the
+ * identity file's directory (desktop's wipeable `run/`).
+ *
+ * relocation-v1 §7-4 removed the daemon's registry and its workspace-data
+ * root, so the surviving durability claim is about the AGENT TREE: `runDaemon`
+ * roots it at the EXPLICIT coordinate the embedder passes — `agentHomeRootDir`,
+ * or the binding-keyed slot under `computersRootDir` — and hands that same root
+ * to the runtime-spawn deps. This pins the wiring end to end: the resolver
+ * serves the DURABLE root, every derived L2 bundle sits under it, and the
+ * claim is falsified by EXECUTION — the runtime dir is a true sibling of the
+ * agent tree and is actually deleted, after which real bundle bytes must still
+ * be readable. A fixture that merely nests both under one scratch dir cannot
+ * tell "durable" from "not yet deleted".
  */
-describe('runDaemon wiring — durable workspace-data placement', () => {
+describe('runDaemon wiring — durable agent-tree placement', () => {
   const daemons: RunningDaemon[] = [];
   const dirs: string[] = [];
 
@@ -42,56 +52,36 @@ describe('runDaemon wiring — durable workspace-data placement', () => {
     }
   });
 
-  it('resolves the durable path from the explicit workspace-data root (the daemon performs no legacy moves)', async () => {
-    const dir = mkdtempSync('/tmp/sh-wsdata-');
-    dirs.push(dir);
-    // The identity file is placed at `<dir>/identity.json` → `dir` is the
-    // legacy (wipeable) state dir the registry USED to live in.
-    const runtimePidRootDir = join(dir, 'runtime-pids');
-    const agentHomeRootDir = join(dir, 'data', 'agents');
-    const hostConfigPath = join(dir, 'daemon-config.json');
+  it('the durable agent root survives a full wipe of the runtime dir (identity/socket/pid/logs are a SIBLING of the agent tree)', async () => {
+    const scratch = mkdtempSync('/tmp/sh-agentroot-');
+    dirs.push(scratch);
+    // Two SIBLING subtrees, exactly as desktop lays them out: everything
+    // runtime-scoped (identity file, socket, pidfile, logs, runtime pidfiles,
+    // host config) lives under `run/` — the dir a reinstall/reset may wipe —
+    // while the durable agent tree lives under `data/`. Neither is an ancestor
+    // of the other, so "wipe the runtime dir" is a real, executable falsifier.
+    const runDir = join(scratch, 'run');
+    const agentHomeRootDir = join(scratch, 'data', 'agents');
+    mkdirSync(runDir, { recursive: true });
+    const hostConfigPath = join(runDir, 'daemon-config.json');
     writeHostConfigAtomic(hostConfigPath, {
       server_url: 'http://127.0.0.1:58128',
       host_id: 'computer-real-1',
       host_token: 'token-1',
     });
 
-    // The embedded registry binding after attach.
-    const binding = {
-      server_origin: 'local-embedded',
-      host_id: 'computer-real-1',
-    };
-    // Seed the FINISHED durable FLAT shape (#task:1608 — the desktop
-    // layout engine owns all legacy physical moves + the flatten and runs
-    // before any daemon).
-    const durableRoot = join(dir, 'data', 'workspace-data');
-    const durableSeedManaged = join(durableRoot, 'workspaces', 'ws-mig');
-    mkdirSync(durableSeedManaged, { recursive: true });
-    writeFileSync(
-      join(durableRoot, 'workspace-registry.json'),
-      JSON.stringify({
-        schema_version: 1,
-        binding,
-        workspaces: {
-          'ws-mig': { path: durableSeedManaged, provisioned_at: 1 },
-        },
-      }),
-      'utf-8',
-    );
-
     let deps: RuntimeStartResolveDeps | undefined;
     const daemon = await runDaemon({
-      socketPath: join(dir, 'daemon.sock'),
-      pidFilePath: join(dir, 'daemon.pid'),
-      logDir: join(dir, 'logs'),
+      socketPath: join(runDir, 'daemon.sock'),
+      pidFilePath: join(runDir, 'daemon.pid'),
+      logDir: join(runDir, 'logs'),
       // #task:1598 round 4 — the identity coordinate is EXPLICIT now (no
-      // sibling derivation); `dir` stays the legacy migration source via
+      // sibling derivation); `runDir` stays the legacy migration source via
       // dirname(daemonIdentityPath).
-      daemonIdentityPath: join(dir, 'identity.json'),
-      runtimePidRootDir,
+      daemonIdentityPath: join(runDir, 'identity.json'),
+      runtimePidRootDir: join(runDir, 'runtime-pids'),
       agentHomeRootDir,
-      workspaceDataRootDir: join(dir, 'data', 'workspace-data'),
-      localOutboundSocketPath: join(dir, 'daemon-outbound.sock'),
+      localOutboundSocketPath: join(runDir, 'daemon-outbound.sock'),
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
@@ -103,7 +93,7 @@ describe('runDaemon wiring — durable workspace-data placement', () => {
     daemons.push(daemon);
     if (!deps) throw new Error('supervisorFactory was not called');
 
-    const client = new HostClient({ socketPath: join(dir, 'daemon.sock') });
+    const client = new HostClient({ socketPath: join(runDir, 'daemon.sock') });
     await client.connect();
     try {
       const attached = await client.hostOutboundAttach({
@@ -114,12 +104,30 @@ describe('runDaemon wiring — durable workspace-data placement', () => {
       await client.close();
     }
 
-    // The registry resolves the DURABLE path from the explicit root; the
-    // identity dir stays free of registry-owned state (wiping the runtime
-    // dir can never destroy the registry or guest L2 roots).
-    expect(deps.resolveRegularWorkspacePath('ws-mig')).toBe(durableSeedManaged);
-    expect(existsSync(durableSeedManaged)).toBe(true);
-    expect(existsSync(join(dir, bindingSlug(binding)))).toBe(false);
+    // relocation-v1 §7-4 — a regular workspace's L2 bundle is the deterministic
+    // agent-centric coordinate UNDER the durable agent-home root; no registry
+    // and no DB column derives it. The resolver deps must carry the DURABLE
+    // root, and every derived bundle must sit under it — never under `run/`.
+    expect(deps.agentHomeRootDir).toBe(agentHomeRootDir);
+    const l2Bundle = resolveAgentWorkspaceBundleDir('agent-x', 'ws-mig', {
+      agentHomeRootDir: deps.agentHomeRootDir,
+    });
+    expect(l2Bundle.startsWith(`${agentHomeRootDir}/`)).toBe(true);
+    expect(l2Bundle.startsWith(`${runDir}/`)).toBe(false);
+    expect(existsSync(join(runDir, 'agents'))).toBe(false);
+
+    // Now EXECUTE the falsifier: real guest memory in the bundle, then wipe the
+    // whole runtime dir. If any part of the durable tree were derived from the
+    // identity/runtime dir, this deletion would take the memory with it.
+    mkdirSync(l2Bundle, { recursive: true });
+    const evidence = join(l2Bundle, 'MEMORY.md');
+    writeFileSync(evidence, '# guest memory that must outlive a runtime wipe\n');
+    await daemons.pop()!.stop('test_done');
+    rmSync(runDir, { recursive: true, force: true });
+
+    expect(existsSync(runDir)).toBe(false);
+    expect(existsSync(evidence)).toBe(true);
+    expect(readFileSync(evidence, 'utf-8')).toContain('guest memory');
   });
 
 

@@ -100,14 +100,8 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
-    const workspacePath = (
-      t.ctx.db
-        .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
-        .get(channelId) as any
-    ).workspace_path as string;
     const dm = conversations.insertDmChannel({
       workspaceId,
-      workspacePath,
       title: 'dm',
     });
 
@@ -130,14 +124,8 @@ describe('channel attention preference routes (#task:1227 ②a)', () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
-    const workspacePath = (
-      t.ctx.db
-        .prepare(`SELECT workspace_path FROM conversations WHERE id = ?`)
-        .get(channelId) as any
-    ).workspace_path as string;
     const dm = conversations.insertDmChannel({
       workspaceId,
-      workspacePath,
       title: 'dm',
     });
 

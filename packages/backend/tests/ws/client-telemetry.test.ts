@@ -24,6 +24,7 @@ import {
 import { EVENT_WS_PATH, installEventWebSocketServer } from '../../src/ws/ws-server.js';
 import type { EventWsServerController } from '../../src/ws/ws-server.js';
 import { buildTestApp, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 const VALID_CLIENT_INFO: ClientInfo = {
   client_surface: 'desktop',
@@ -84,6 +85,7 @@ describe('event WebSocket desktop release telemetry (#task:1530)', () => {
   async function connect(url: string, clientInfoHeader?: string): Promise<WebSocket> {
     const token = t!.ctx.authSessions.issueSession({ userId: 'local' }).userToken;
     const headers: Record<string, string> = {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
       Origin: new URL(url.replace(/^ws/, 'http')).origin,
       Cookie: `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(token)}`,
     };

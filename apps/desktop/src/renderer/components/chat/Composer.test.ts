@@ -56,7 +56,6 @@ function channel(overrides: Partial<ChannelConversationDto> = {}): ChannelConver
   return {
     id: 'qdQwBXDqcq_GE63-',
     workspace_id: 'w-1',
-    workspace_path: '/tmp/w',
     kind: 'channel',
     title: 'general',
     status: 'open',

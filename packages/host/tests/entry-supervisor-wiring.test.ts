@@ -54,10 +54,7 @@ import { spawnDaemonChild, type DaemonHandle } from '../src/spawn.js';
 import { spawnWorkspaceStartupPreflight } from '../src/preflight-spawn.js';
 import { HostClient } from '../src/client/index.js';
 import { resolveAgentWorkspaceBundleDir } from '../src/daemon/agent-materialize/handler.js';
-import {
-  WorkspaceRegistry,
-  type RegistryBinding,
-} from '../src/daemon/workspace-registry/registry.js';
+import type { RegistryBinding } from '../src/daemon/workspace-registry/registry.js';
 import { cwdSessionSlug } from '../src/daemon/workspace-registry/session-migration.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -126,10 +123,17 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
     const legacyWorkspace = join(dir, 'legacy-workspace');
     mkdirSync(slot.workspaceData, { recursive: true });
     mkdirSync(legacyWorkspace, { recursive: true });
-    new WorkspaceRegistry({
-      stateDir: slot.workspaceData,
-      binding,
-    }).provision(workspaceId, legacyWorkspace);
+    // relocation-v1 §7-4 (#task:1808): the registry only READS now, so the
+    // legacy inventory the entry-side preflight must relocate is fixtured as the
+    // file an older daemon wrote.
+    writeFileSync(
+      join(slot.workspaceData, 'workspace-registry.json'),
+      JSON.stringify({
+        schema_version: 1,
+        binding,
+        workspaces: { [workspaceId]: { path: legacyWorkspace, provisioned_at: 1 } },
+      }),
+    );
     const oldL2 = join(
       legacyWorkspace,
       '.silverhand',

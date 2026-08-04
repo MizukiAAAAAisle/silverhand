@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../../src/daemon/dispatcher.js';
 import {
-  WorkspaceProvisionError,
   AgentWorkspaceIndexError,
   AgentL2SeedError,
   AgentFilesPurgeError,
 } from '../../src/daemon/workspace-registry/index.js';
 import { createDaemonLogControl, type DaemonLogger } from '../../src/daemon/logger.js';
 import type {
-  WorkspaceProvisionParams,
-  WorkspaceProvisionResult,
   AgentWorkspaceIndexParams,
   AgentWorkspaceIndexResult,
   AgentL2SeedParams,
@@ -19,15 +16,14 @@ import type {
 } from '../../src/protocol.js';
 
 /**
- * D4.e-1 slice ② dispatcher integration for the two new intents. Mirrors
- * the agent_materialize integration pins:
+ * D4.e-1 slice ② dispatcher integration for the registry read/seed/purge
+ * intents. Mirrors the agent_materialize integration pins:
  *   1. each slot is wired (route → injected handler, params validated via
  *      `intentSchemas`);
- *   2. typed handler errors (`WorkspaceProvisionError` /
- *      `AgentWorkspaceIndexError`, both `DaemonTypedError`) survive the
- *      catch arm with their code (NOT squashed to `internal_error`), and
- *      ONLY codes in that intent's error schema pass — foreign codes are
- *      re-squashed by `intentErrorSchema(intent)`;
+ *   2. typed handler errors (`AgentWorkspaceIndexError`, a `DaemonTypedError`)
+ *      survive the catch arm with their code (NOT squashed to
+ *      `internal_error`), and ONLY codes in that intent's error schema pass —
+ *      foreign codes are re-squashed by `intentErrorSchema(intent)`;
  *   3. bare throws squash to `internal_error`;
  *   4. malformed params reject with `invalid_params` before the handler;
  *   5. an unwired slot surfaces `internal_error`.
@@ -45,10 +41,6 @@ function silentLogger(): DaemonLogger {
   } as unknown as DaemonLogger;
 }
 
-const provisionParams: WorkspaceProvisionParams = {
-  workspace_id: 'ws_1',
-  kind: 'regular',
-};
 const indexParams: AgentWorkspaceIndexParams = {
   agent_id: 'aid_x',
   workspace_ids: ['ws_1'],
@@ -60,13 +52,10 @@ const l2SeedParams: AgentL2SeedParams = {
 };
 const purgeParams: AgentFilesPurgeParams = {
   agent_id: 'aid_member',
-  scope: 'all',
-  workspace_ids: ['ws_1'],
 };
 
 type DispatcherOptions = ConstructorParameters<typeof IntentDispatcher>[0];
 type RegistryHandlerKey =
-  | 'workspaceProvisionHandler'
   | 'agentWorkspaceIndexHandler'
   | 'agentL2SeedHandler'
   | 'agentFilesPurgeHandler';
@@ -74,7 +63,6 @@ type RegistryHandlerKey =
 interface RegistryIntentCase {
   label: string;
   intent:
-    | 'workspace_provision'
     | 'agent_workspace_index'
     | 'agent_l2_seed'
     | 'agent_files_purge';
@@ -114,38 +102,6 @@ async function expectErrorCode(
 
 const registryIntentCases: RegistryIntentCase[] = [
   {
-    label: 'workspace_provision',
-    intent: 'workspace_provision',
-    requestPrefix: 'req-wp',
-    handlerKey: 'workspaceProvisionHandler',
-    params: provisionParams,
-    result: {
-      ok: true,
-      provisioned: true,
-      bound_workspace_path: '/tmp/managed/ws_1',
-    } satisfies WorkspaceProvisionResult,
-    errorName: 'WorkspaceProvisionError',
-    typedCodes: [
-      'unsupported_kind',
-      'invalid_path',
-      'path_conflict',
-      'fs_quota_exceeded',
-      'fs_unavailable',
-      'registry_unavailable',
-      'internal_error',
-    ],
-    makeTypedError: (code, message) =>
-      new WorkspaceProvisionError(code as never, message),
-    foreignError: () =>
-      // `agent_dir_collision` is an agent_materialize code, NOT a
-      // workspace_provision code. `intentErrorSchema(intent)` must
-      // reject it -> squashed to internal_error.
-      new WorkspaceProvisionError('agent_dir_collision' as never, 'leaked'),
-    malformedParams: { workspace_id: 'ws_1' },
-    malformedComment: 'Missing required `kind`.',
-    bareError: true,
-  },
-  {
     label: 'agent_workspace_index',
     intent: 'agent_workspace_index',
     requestPrefix: 'req-awi',
@@ -166,8 +122,8 @@ const registryIntentCases: RegistryIntentCase[] = [
     makeTypedError: (code, message) =>
       new AgentWorkspaceIndexError(code as never, message),
     foreignError: () =>
-      // `unsupported_kind` belongs to workspace_provision, not here.
-      new AgentWorkspaceIndexError('unsupported_kind' as never, 'leaked'),
+      // `unsupported_template` belongs to agent_l2_seed, not here.
+      new AgentWorkspaceIndexError('unsupported_template' as never, 'leaked'),
     malformedParams: { agent_id: 'aid_x', workspace_ids: 'ws_1' },
     malformedComment: '`workspace_ids` must be an array.',
   },
@@ -183,8 +139,10 @@ const registryIntentCases: RegistryIntentCase[] = [
       l2_present: true,
     } satisfies AgentL2SeedResult,
     errorName: 'AgentL2SeedError',
+    // relocation-v1 §7-4 (U5): `workspace_not_provisioned` left this taxonomy —
+    // the seed resolves its target from `{agent_id, workspace_id}` alone, so
+    // there is no binding to be missing. Seeding IS provisioning.
     typedCodes: [
-      'workspace_not_provisioned',
       'registry_unavailable',
       'unsupported_template',
       'fs_unavailable',
@@ -193,8 +151,8 @@ const registryIntentCases: RegistryIntentCase[] = [
     makeTypedError: (code, message) =>
       new AgentL2SeedError(code as never, message),
     foreignError: () =>
-      // `unsupported_kind` belongs to workspace_provision, not here.
-      new AgentL2SeedError('unsupported_kind' as never, 'leaked'),
+      // `partial_purge` belongs to agent_files_purge, not here.
+      new AgentL2SeedError('partial_purge' as never, 'leaked'),
     malformedParams: { agent_id: 'aid_member' },
     malformedComment: 'Missing required `workspace_id`.',
     bareError: true,
@@ -208,17 +166,16 @@ const registryIntentCases: RegistryIntentCase[] = [
     result: {
       ok: true,
       purged_count: 2,
-      skipped_unprovisioned: 0,
     } satisfies AgentFilesPurgeResult,
     errorName: 'AgentFilesPurgeError',
-    typedCodes: ['partial_purge', 'registry_unavailable', 'internal_error'],
+    typedCodes: ['partial_purge', 'internal_error'],
     makeTypedError: (code, message) =>
       new AgentFilesPurgeError(code as never, message),
     foreignError: () =>
-      // `workspace_not_provisioned` belongs to agent_l2_seed, not here.
-      new AgentFilesPurgeError('workspace_not_provisioned' as never, 'leaked'),
-    malformedParams: { agent_id: 'aid_member' },
-    malformedComment: 'Missing required `scope`.',
+      // `unsupported_template` belongs to agent_l2_seed, not here.
+      new AgentFilesPurgeError('unsupported_template' as never, 'leaked'),
+    malformedParams: {},
+    malformedComment: 'Missing required `agent_id`.',
     bareError: true,
   },
 ];
@@ -332,47 +289,6 @@ describe.each(registryIntentCases)(
   },
 );
 
-describe('IntentDispatcher.workspace_provision extras', () => {
-  it('forwards an optional requested_path through to the handler', async () => {
-    let observed: WorkspaceProvisionParams | null = null;
-    const d = dispatcherWithHandler('workspaceProvisionHandler', params => {
-      observed = params;
-      return {
-        ok: true,
-        provisioned: true,
-        bound_workspace_path: '/Users/alice/work/ws',
-      } satisfies WorkspaceProvisionResult;
-    });
-    const withPath: WorkspaceProvisionParams = {
-      workspace_id: 'ws_1',
-      kind: 'regular',
-      requested_path: '/Users/alice/work/ws',
-    };
-
-    await d.dispatch('req-wp-path', 'workspace_provision', withPath, { owner: 'test-owner' });
-
-    expect(observed).toEqual(withPath);
-  });
-
-  it('rejects a non-string requested_path via intentSchemas before the handler', async () => {
-    let called = false;
-    const d = dispatcherWithHandler('workspaceProvisionHandler', () => {
-      called = true;
-      throw new Error('unreachable');
-    });
-
-    await expectErrorCode(
-      d.dispatch('req-wp-badpath', 'workspace_provision', {
-        workspace_id: 'ws_1',
-        kind: 'regular',
-        requested_path: 123,
-      }, { owner: 'test-owner' }),
-      'invalid_params',
-    );
-    expect(called).toBe(false);
-  });
-});
-
 describe('IntentDispatcher.agent_l2_seed extras', () => {
   it('applies the template_choice default when omitted', async () => {
     let observed: AgentL2SeedParams | null = null;
@@ -409,26 +325,10 @@ describe('IntentDispatcher.agent_l2_seed extras', () => {
 });
 
 describe('IntentDispatcher.agent_files_purge extras', () => {
-  it('applies the workspace_ids default ([]) when omitted', async () => {
-    let observed: AgentFilesPurgeParams | null = null;
-    const d = dispatcherWithHandler('agentFilesPurgeHandler', params => {
-      observed = params;
-      return {
-        ok: true,
-        purged_count: 0,
-        skipped_unprovisioned: 0,
-      } satisfies AgentFilesPurgeResult;
-    });
-
-    await d.dispatch('req-afp-default', 'agent_files_purge', {
-      agent_id: 'aid_member',
-      scope: 'all',
-    }, { owner: 'test-owner' });
-
-    expect((observed as AgentFilesPurgeParams | null)?.workspace_ids).toEqual([]);
-  });
-
-  it('rejects an out-of-enum scope via intentSchemas before the handler', async () => {
+  it('rejects the retired scope/workspace_ids fields via the strict schema before the handler', async () => {
+    // relocation-v1 §7 task 4 — the intent collapsed to `{ agent_id }`; the
+    // retired `scope`/`workspace_ids` must be refused at the wire boundary
+    // (`.strict()`), never silently ignored into a full-home purge.
     let called = false;
     const d = dispatcherWithHandler('agentFilesPurgeHandler', () => {
       called = true;
@@ -436,9 +336,9 @@ describe('IntentDispatcher.agent_files_purge extras', () => {
     });
 
     await expectErrorCode(
-      d.dispatch('req-afp-badscope', 'agent_files_purge', {
+      d.dispatch('req-afp-retired', 'agent_files_purge', {
         agent_id: 'aid_member',
-        scope: 'bogus',
+        scope: 'all',
         workspace_ids: ['ws_1'],
       }, { owner: 'test-owner' }),
       'invalid_params',

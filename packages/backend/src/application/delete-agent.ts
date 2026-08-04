@@ -162,17 +162,15 @@ export async function deleteAgent(
 
   // 2. Purge the agent's host-local files on the OWNING daemon BEFORE any DB
   //    mutation. §3.3 fail-fast commit boundary: DB rows are NOT deleted until
-  //    the purge acks. This uses `scope:'all'`, which (relocation-v1 §3.2) now
-  //    removes the agent's TERMINAL MANAGED footprint in one shot — the agent
-  //    home tree (L1 + every nested `workspaces/<id>` L2 bundle) — so it does
-  //    NOT enumerate per-workspace targets and `skipped_unprovisioned` is 0 by
-  //    construction (the skipped fail-close below is retained for defense /
-  //    `scope:'l2'`, but inert here). The legacy relocation SOURCE that the
-  //    task-2 migration copies+retains (`<workspace>/.silverhand/agents/<id>`)
-  //    is DELIBERATELY not deleted: shiki ruled it a permanent orphan even
-  //    across hard-delete (relocation-v1), so a surviving legacy L2 after this
-  //    delete is a sanctioned data-retention outcome, NOT a leak — do not
-  //    "fix" it by re-adding legacy-source deletion.
+  //    the purge acks. relocation-v1 §3.2 / §7 task 4: the daemon removes the
+  //    agent's TERMINAL MANAGED footprint in one shot — the agent home tree
+  //    (L1 + every nested `workspaces/<id>` L2 bundle) — so it consults NO
+  //    registry and enumerates no per-workspace targets. The legacy relocation
+  //    SOURCE that the task-2 migration copies+retains
+  //    (`<workspace>/.silverhand/agents/<id>`) is DELIBERATELY not deleted:
+  //    shiki ruled it a permanent orphan even across hard-delete (relocation-v1),
+  //    so a surviving legacy L2 after this delete is a sanctioned data-retention
+  //    outcome, NOT a leak — do not "fix" it by re-adding legacy-source deletion.
   const purge = await purgeAgentHostLocalFiles(deps, agent, impact);
   if (purge.kind === 'failClosed') return purge;
 
@@ -198,7 +196,6 @@ export async function deleteAgent(
       regularWorkspaces: impact.regular_memberships.length,
       stoppedConversations: impact.running_conversation_agents.length,
       purgedCount: purge.purgedCount,
-      skippedUnprovisioned: purge.skippedUnprovisioned,
     },
     'agent deleted',
   );
@@ -226,20 +223,17 @@ export async function purgeAgentHostLocalFiles(
   agent: NonNullable<ReturnType<AgentRepo['get']>>,
   impact: AgentDeleteImpact,
 ): Promise<
-  | { kind: 'purged'; purgedCount: number; skippedUnprovisioned: number }
+  | { kind: 'purged'; purgedCount: number }
   | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus }
 > {
   const { ctx } = deps;
   // #task:1612 — the purge performs NO workspace provision (the retired
   // pre-purge backfill would have MINTED an empty root on the agent's computer
-  // just to delete it). relocation-v1 §3.2: this dispatches `scope:'all'`,
-  // which removes the agent's TERMINAL MANAGED footprint — the whole agent
-  // home tree (L1 + every nested `workspaces/<id>` L2) in one rm — so the
-  // daemon does NOT consult the registry or enumerate per-workspace targets and
-  // `skipped_unprovisioned` is 0 by construction. `workspace_ids` is still sent
-  // (harmless: the handler ignores it for `scope:'all'`), and the
-  // `skipped_unprovisioned > 0` fail-close below is retained for defense /
-  // `scope:'l2'` but is inert here. (The retained legacy relocation source is a
+  // just to delete it). relocation-v1 §3.2 / §7 task 4: the daemon removes the
+  // agent's TERMINAL MANAGED footprint — the whole agent home tree (L1 + every
+  // nested `workspaces/<id>` L2) in one rm — so the backend forwards only
+  // `{ agent_id }`; the daemon consults NO registry and enumerates no
+  // per-workspace targets. (The retained legacy relocation source is a
   // product-decided permanent orphan; see step 2's comment above.)
   const outbound = resolveOutboundForHost(
     ctx.outboundFrameAdapter?.() ?? null,
@@ -259,8 +253,6 @@ export async function purgeAgentHostLocalFiles(
     outbound.connectionId,
     {
       agent_id: agent.id,
-      scope: 'all',
-      workspace_ids: impact.regular_memberships.map(ws => ws.id),
     },
   );
   if (purge.kind === 'failed') {
@@ -271,21 +263,9 @@ export async function purgeAgentHostLocalFiles(
       status: purge.status,
     };
   }
-  // An incomplete purge is a failure, not a success. If the daemon skipped any
-  // targeted workspace, its L2 tree was NOT removed — keep the agent + membership
-  // rows so the un-purged tree isn't orphaned and a retry can re-target it.
-  if (purge.result.skipped_unprovisioned > 0) {
-    return {
-      kind: 'failClosed',
-      error: `agent files purge incomplete: ${purge.result.skipped_unprovisioned} workspace(s) unresolved on the daemon`,
-      code: 'partial_purge',
-      status: 503,
-    };
-  }
   return {
     kind: 'purged',
     purgedCount: purge.result.purged_count,
-    skippedUnprovisioned: purge.result.skipped_unprovisioned,
   };
 }
 

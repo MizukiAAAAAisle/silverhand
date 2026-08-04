@@ -14,10 +14,7 @@ import { readLayoutMigrationFailures } from '../src/diagnostics/layout-migration
 import { resolveAgentWorkspaceBundleDir } from '../src/daemon/agent-materialize/handler.js';
 import { runDirectStartupPreflight } from '../src/daemon/direct-startup-preflight.js';
 import { RelocationError } from '../src/daemon/workspace-registry/relocation-error.js';
-import {
-  WorkspaceRegistry,
-  type RegistryBinding,
-} from '../src/daemon/workspace-registry/registry.js';
+import type { RegistryBinding } from '../src/daemon/workspace-registry/registry.js';
 import { cwdSessionSlug } from '../src/daemon/workspace-registry/session-migration.js';
 
 const BINDING: RegistryBinding = {
@@ -54,10 +51,17 @@ function setUpLegacyState() {
   const oldRoot = join(scratch, 'legacy-workspace');
   mkdirSync(slot.workspaceData, { recursive: true });
   mkdirSync(oldRoot, { recursive: true });
-  new WorkspaceRegistry({
-    stateDir: slot.workspaceData,
-    binding: BINDING,
-  }).provision(workspaceId, oldRoot);
+  // relocation-v1 §7-4 (#task:1808): the registry is a READ-ONLY reader now, so
+  // the legacy inventory this preflight must relocate is fixtured by writing the
+  // file an older daemon wrote — the only way it can exist.
+  writeFileSync(
+    join(slot.workspaceData, 'workspace-registry.json'),
+    JSON.stringify({
+      schema_version: 1,
+      binding: BINDING,
+      workspaces: { [workspaceId]: { path: oldRoot, provisioned_at: 1 } },
+    }),
+  );
 
   const oldL2 = join(oldRoot, '.silverhand', 'agents', agentId);
   write(join(oldL2, 'MEMORY.md'), 'legacy memory');

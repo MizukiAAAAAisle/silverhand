@@ -15,6 +15,7 @@ import {
 import { EVENT_WS_PATH, installEventWebSocketServer } from '../../src/ws/ws-server.js';
 import type { EventWsServerController } from '../../src/ws/ws-server.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 /**
  * Live delivery obeys the CURRENT authorization, not the verdict that was true
@@ -358,6 +359,7 @@ async function connectAuthenticated(
   parsed.pathname = '/';
   const ws = new WebSocket(url, {
     headers: {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
       Origin: parsed.origin,
       Cookie: `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(token)}`,
     },

@@ -721,17 +721,17 @@ describe('database migrations', () => {
             ('agent_alice', 'alice', 'claude', NULL, 'host_local', NULL, 1, 1,
              'Alice', NULL, NULL, 'u-creator');
           INSERT INTO workspaces
-            (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+            (id, name, description, workspace_kind,
              owner_agent_id, archived_at, pinned_at, created_at, updated_at)
           VALUES
-            ('ws_main', 'Main', NULL, 'regular', '/tmp/ws_main', 'host_local',
+            ('ws_main', 'Main', NULL, 'regular',
              NULL, NULL, NULL, 1, 1);
           INSERT INTO conversations
-            (id, workspace_id, workspace_path, kind, title,
+            (id, workspace_id, kind, title,
              status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
              archived_at, created_at, updated_at)
           VALUES
-            ('conv_main', 'ws_main', '/tmp/ws_main', 'channel', 'general',
+            ('conv_main', 'ws_main', 'channel', 'general',
              'idle', NULL, NULL, NULL, NULL, NULL, 1, 1);
         `);
 
@@ -863,15 +863,15 @@ describe('database migrations', () => {
         ).run(now);
         db.prepare(
           `INSERT INTO workspaces
-             (id, name, description, workspace_path, workspace_kind,
-              workspace_host_id, owner_agent_id, created_at, updated_at)
-           VALUES ('ws1', 'w', NULL, '/tmp/y', 'regular', 'h1', NULL, ?, ?)`,
+             (id, name, description, workspace_kind,
+              owner_agent_id, created_at, updated_at)
+           VALUES ('ws1', 'w', NULL, 'regular', NULL, ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
-             (id, workspace_id, kind, title, workspace_path, status,
+             (id, workspace_id, kind, title, status,
               created_at, updated_at)
-           VALUES ('c1', 'ws1', 'channel', 't', '/tmp/y', 'open', ?, ?)`,
+           VALUES ('c1', 'ws1', 'channel', 't', 'open', ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
@@ -1023,16 +1023,16 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO workspaces
-             (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+             (id, name, description, workspace_kind,
               owner_agent_id, archived_at, pinned_at, created_at, updated_at)
-           VALUES ('ws1', 'main', NULL, 'regular', '/tmp/ws1', 'h1', NULL, NULL, NULL, ?, ?)`,
+           VALUES ('ws1', 'main', NULL, 'regular', NULL, NULL, NULL, ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
-             (id, workspace_id, workspace_path, kind, title,
+             (id, workspace_id, kind, title,
               status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
               archived_at, created_at, updated_at)
-           VALUES ('c1', 'ws1', '/tmp/ws1', 'channel', 'general',
+           VALUES ('c1', 'ws1', 'channel', 'general',
                    'idle', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
         ).run(now, now);
 
@@ -2057,6 +2057,225 @@ describe('database migrations', () => {
           display_name: 'Kept Agent',
           avatar_url: null,
         });
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  describe('v64 drop_workspace_local_binding_columns', () => {
+    const now = 1_700_000_000_000;
+
+    // Seed a POPULATED v63 DB (the migration's real input): a regular + an
+    // agent_home workspace, public / private / archived / pinned conversations,
+    // and representative child rows across both rebuilt tables. The migration
+    // rebuilds `conversations` (child) then `workspaces` (parent); this proves
+    // no field, row, FK, index, or CHECK is lost across the two rebuilds.
+    function seedV63(db: Database.Database): void {
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+          VALUES ('host_local', 'local', 'local', ${now});
+        INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES ('u_local', 'local', 'Local', ${now}, ${now});
+        INSERT INTO agents
+          (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+          VALUES
+            ('agent_home_owner', 'homie', 'claude', 'host_local', 'u_local', ${now}, ${now}),
+            ('agent_member',     'memb',  'claude', 'host_local', 'u_local', ${now}, ${now});
+
+        INSERT INTO workspaces
+          (id, name, description, workspace_kind, workspace_path, workspace_host_id,
+           owner_agent_id, archived_at, created_at, updated_at, pinned_at, owner_user_id)
+        VALUES
+          ('ws_reg', 'Regular', 'desc', 'regular', '/tmp/ws_reg', 'host_local',
+           NULL, NULL, ${now}, ${now}, ${now}, 'u_local'),
+          ('ws_home', 'home', NULL, 'agent_home', '/tmp/ws_home', 'host_local',
+           'agent_home_owner', NULL, ${now}, ${now}, NULL, NULL);
+
+        INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
+          VALUES ('ws_reg', 'agent_member', ${now});
+
+        INSERT INTO conversations
+          (id, workspace_id, workspace_path, kind, title, status, spawned_by_agent_id,
+           closed_at, close_summary, pinned_at, created_at, updated_at, archived_at,
+           latest_message_seq, visibility)
+        VALUES
+          ('c_public',   'ws_reg',  '/tmp/ws_reg',  'channel',    'public',   'idle',   NULL, NULL, NULL,   NULL,   ${now}, ${now}, NULL,   3, 'public'),
+          ('c_private',  'ws_reg',  '/tmp/ws_reg',  'channel',    'private',  'idle',   NULL, NULL, NULL,   ${now}, ${now}, ${now}, NULL,   0, 'private'),
+          ('c_archived', 'ws_reg',  '/tmp/ws_reg',  'channel',    'archived', 'closed', NULL, ${now}, 'done', NULL, ${now}, ${now}, ${now}, 0, 'private'),
+          ('c_dm',       'ws_home', '/tmp/ws_home', 'dm_channel', 'dm',       'idle',   NULL, NULL, NULL,   NULL,   ${now}, ${now}, NULL,   0, 'private');
+
+        INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at)
+          VALUES ('m1', 'c_public', 'system', 'hello', 1, ${now});
+        INSERT INTO conversation_events (conversation_id, agent_id, kind, payload, created_at)
+          VALUES ('c_archived', NULL, 'archived', NULL, ${now});
+      `);
+    }
+
+    it('drops workspace_path AND workspace_host_id, preserves every row/child/FK, keeps all indexes + CHECKs', () => {
+      const db = openDbAt(63);
+      try {
+        seedV63(db);
+
+        applyMigrationsThrough(db, 64);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 64`).get(),
+        ).toBeDefined();
+
+        // ── columns: both local-binding columns gone ───────────────────────
+        const convCols = db
+          .prepare<[], { name: string }>(`PRAGMA table_info(conversations)`)
+          .all()
+          .map(r => r.name);
+        expect(convCols).not.toContain('workspace_path');
+        expect(convCols).toEqual(
+          expect.arrayContaining([
+            'id', 'workspace_id', 'kind', 'title', 'status',
+            'spawned_by_agent_id', 'closed_at', 'close_summary', 'pinned_at',
+            'created_at', 'updated_at', 'archived_at', 'latest_message_seq',
+            'visibility',
+          ]),
+        );
+
+        const wsCols = db
+          .prepare<[], { name: string }>(`PRAGMA table_info(workspaces)`)
+          .all()
+          .map(r => r.name);
+        expect(wsCols).not.toContain('workspace_path');
+        // relocation-v1 §6 — ONE removal set, ONE rebuild: `workspace_host_id`
+        // (#task:1808) retires in the SAME v64 as `workspace_path` (#task:1807),
+        // so neither column may survive this migration. This is the falsifier
+        // for the two-column atomic cut: if a future edit re-splits the removal
+        // into v64+v65, this assertion fails at v64.
+        expect(wsCols).not.toContain('workspace_host_id');
+        // …and the FK it carried is gone with it: `workspace_host_id`'s
+        // `REFERENCES hosts(id) ON DELETE RESTRICT` was what made a workspace
+        // row block a computer delete. After v64 no workspaces FK points at
+        // hosts at all (relocation-v1 I1: a workspace has no owning computer).
+        expect(
+          db
+            .prepare<[], { table: string }>(`PRAGMA foreign_key_list(workspaces)`)
+            .all()
+            .map(r => r.table),
+        ).not.toContain('hosts');
+        expect(wsCols).toEqual(
+          expect.arrayContaining([
+            'id', 'name', 'description', 'workspace_kind',
+            'owner_agent_id', 'archived_at', 'created_at', 'updated_at',
+            'pinned_at', 'owner_user_id',
+          ]),
+        );
+
+        // ── every workspace row + its surviving values survive ─────────────
+        expect(
+          db
+            .prepare(
+              `SELECT id, workspace_kind, owner_agent_id,
+                      owner_user_id, pinned_at
+                 FROM workspaces ORDER BY id`,
+            )
+            .all(),
+        ).toEqual([
+          {
+            id: 'ws_home', workspace_kind: 'agent_home',
+            owner_agent_id: 'agent_home_owner', owner_user_id: null, pinned_at: null,
+          },
+          {
+            id: 'ws_reg', workspace_kind: 'regular',
+            owner_agent_id: null, owner_user_id: 'u_local', pinned_at: now,
+          },
+        ]);
+
+        // ── every conversation row + kind/visibility/archived/pinned survive ─
+        expect(
+          db
+            .prepare(
+              `SELECT id, workspace_id, kind, visibility,
+                      archived_at IS NOT NULL AS archived,
+                      pinned_at   IS NOT NULL AS pinned
+                 FROM conversations ORDER BY id`,
+            )
+            .all(),
+        ).toEqual([
+          { id: 'c_archived', workspace_id: 'ws_reg',  kind: 'channel',    visibility: 'private', archived: 1, pinned: 0 },
+          { id: 'c_dm',       workspace_id: 'ws_home', kind: 'dm_channel', visibility: 'private', archived: 0, pinned: 0 },
+          { id: 'c_private',  workspace_id: 'ws_reg',  kind: 'channel',    visibility: 'private', archived: 0, pinned: 1 },
+          { id: 'c_public',   workspace_id: 'ws_reg',  kind: 'channel',    visibility: 'public',  archived: 0, pinned: 0 },
+        ]);
+
+        // ── children of both rebuilt tables survive ────────────────────────
+        expect(
+          db.prepare(`SELECT conversation_id, content, seq FROM messages WHERE id = 'm1'`).get(),
+        ).toEqual({ conversation_id: 'c_public', content: 'hello', seq: 1 });
+        expect(
+          db
+            .prepare(`SELECT conversation_id, kind FROM conversation_events WHERE conversation_id = 'c_archived'`)
+            .get(),
+        ).toEqual({ conversation_id: 'c_archived', kind: 'archived' });
+        expect(
+          db.prepare(`SELECT workspace_id, agent_id FROM workspace_members`).all(),
+        ).toEqual([{ workspace_id: 'ws_reg', agent_id: 'agent_member' }]);
+
+        // ── no FK relationship broke across parent+child rebuild ───────────
+        expect(db.pragma('foreign_key_check')).toEqual([]);
+
+        // ── every index is reproduced, none extra dropped ──────────────────
+        const convIdx = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'conversations' AND name NOT LIKE 'sqlite_%'`,
+          )
+          .all()
+          .map(r => r.name)
+          .sort();
+        expect(convIdx).toEqual([
+          'idx_conversations_archived_at',
+          'idx_conversations_status',
+          'idx_conversations_workspace',
+        ]);
+        const wsIdx = db
+          .prepare<[], { name: string }>(
+            `SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'workspaces' AND name NOT LIKE 'sqlite_%'`,
+          )
+          .all()
+          .map(r => r.name)
+          .sort();
+        expect(wsIdx).toEqual([
+          'idx_workspaces_pinned_at',
+          'workspaces_regular_name_unique',
+        ]);
+
+        // ── surviving CHECKs / unique index still enforce (post-rebuild) ───
+        // visibility CHECK: a public dm_channel is rejected.
+        expect(() =>
+          db.exec(`
+            INSERT INTO conversations
+              (id, workspace_id, kind, title, status, spawned_by_agent_id,
+               closed_at, close_summary, pinned_at, created_at, updated_at,
+               archived_at, latest_message_seq, visibility)
+            VALUES ('c_badvis', 'ws_reg', 'dm_channel', 'bad', 'idle', NULL,
+                    NULL, NULL, NULL, ${now}, ${now}, NULL, 0, 'public')
+          `),
+        ).toThrow(/CHECK/);
+        // regular-name unique: a second 'regular' named 'Regular' is rejected.
+        expect(() =>
+          db.exec(`
+            INSERT INTO workspaces
+              (id, name, description, workspace_kind,
+               owner_agent_id, archived_at, created_at, updated_at, pinned_at, owner_user_id)
+            VALUES ('ws_dup', 'Regular', NULL, 'regular',
+                    NULL, NULL, ${now}, ${now}, NULL, NULL)
+          `),
+        ).toThrow(/UNIQUE/);
+        // agent_home owner CHECK: an agent_home with a NULL owner is rejected.
+        expect(() =>
+          db.exec(`
+            INSERT INTO workspaces
+              (id, name, description, workspace_kind,
+               owner_agent_id, archived_at, created_at, updated_at, pinned_at, owner_user_id)
+            VALUES ('ws_badhome', 'badhome', NULL, 'agent_home',
+                    NULL, NULL, ${now}, ${now}, NULL, NULL)
+          `),
+        ).toThrow(/CHECK/);
       } finally {
         db.close();
       }

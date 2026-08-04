@@ -15,6 +15,14 @@ import type { IncomingMessage } from 'node:http';
  * Admission input is the DEDICATED epoch header (round-2: the fail-open
  * client-info telemetry header plays no role here). Asserts status codes,
  * structured body fields, and routing only — never message copy.
+ *
+ * relocation-v1 §6 raised `MINIMUM_CLIENT_API_EPOCH` to the current epoch, so
+ * the DEFAULT build now fails closed on the pre-epoch generation; the former
+ * observation-bridge pins are inverted below. The `minimumClientEpoch` seam
+ * survives as the way to prove the gate reads the configured minimum rather
+ * than the compiled constant. A pre-epoch desktop is emulated by
+ * `http(t, {}, { omitDesktopApiEpoch: true })` — the harness otherwise stamps
+ * the header like a current desktop does.
  */
 
 const EPOCH = String(DESKTOP_SERVER_API_EPOCH);
@@ -26,53 +34,52 @@ describe('desktop api epoch admission (REST)', () => {
     t = null;
   });
 
-  it('observation bridge: admits current, pre-epoch (missing header), and malformed values', async () => {
+  it('default build: admits a current epoch, fails closed on pre-epoch (missing header) and malformed values', async () => {
     t = buildTestApp();
-    const h = http(t);
-    const current = await h.get(apiPaths.me, {
+    const current = await http(t).get(apiPaths.me, {
       headers: { [DESKTOP_API_EPOCH_HEADER]: EPOCH },
     });
     expect(current.status).toBe(200);
     // pre-epoch desktop: no epoch header at all
-    const missing = await h.get(apiPaths.me);
-    expect(missing.status).toBe(200);
-    // malformed value normalizes to epoch 0, still admitted under min=0
-    const malformed = await h.get(apiPaths.me, {
-      headers: { [DESKTOP_API_EPOCH_HEADER]: 'not-a-number' },
-    });
-    expect(malformed.status).toBe(200);
-    // client-info telemetry header alone is NOT admission input; its absence
-    // or presence must not change the outcome.
-    const telemetryOnly = await h.get(apiPaths.me, {
-      headers: { [CLIENT_INFO_HEADER]: 'garbage' },
-    });
-    expect(telemetryOnly.status).toBe(200);
-  });
-
-  it('post-cutoff: rejects below-minimum clients with a structured 426 and admits current ones', async () => {
-    t = buildTestApp({
-      desktopApiEpoch: { minimumClientEpoch: DESKTOP_SERVER_API_EPOCH },
-    });
-    const h = http(t);
-    // missing header → epoch 0 → fail closed
-    const missing = await h.get(apiPaths.me);
+    const preEpoch = http(t, {}, { omitDesktopApiEpoch: true });
+    const missing = await preEpoch.get(apiPaths.me);
     expect(missing.status).toBe(426);
     const body = UpgradeRequiredBodySchema.parse(await missing.json());
     expect(body.reason).toBe('client_too_old');
     expect(body.server_api_epoch).toBe(DESKTOP_SERVER_API_EPOCH);
     expect(body.minimum_client_epoch).toBe(DESKTOP_SERVER_API_EPOCH);
-    // current client passes the same gate via the dedicated header only
-    const current = await h.get(apiPaths.me, {
-      headers: { [DESKTOP_API_EPOCH_HEADER]: EPOCH },
+    // malformed value normalizes to epoch 0 → same rejection
+    const malformed = await http(t).get(apiPaths.me, {
+      headers: { [DESKTOP_API_EPOCH_HEADER]: 'not-a-number' },
     });
-    expect(current.status).toBe(200);
+    expect(malformed.status).toBe(426);
+    // client-info telemetry header alone is NOT admission input: it neither
+    // rescues a pre-epoch client nor spoils a current one.
+    const telemetryOnly = await preEpoch.get(apiPaths.me, {
+      headers: { [CLIENT_INFO_HEADER]: 'garbage' },
+    });
+    expect(telemetryOnly.status).toBe(426);
+    const currentWithTelemetry = await http(t).get(apiPaths.me, {
+      headers: { [CLIENT_INFO_HEADER]: 'garbage' },
+    });
+    expect(currentWithTelemetry.status).toBe(200);
   });
 
-  it('post-cutoff: exempt discovery routes stay reachable for the rejected generation', async () => {
+  it('the gate reads the CONFIGURED minimum: a minimum above this build refuses even a current client', async () => {
     t = buildTestApp({
-      desktopApiEpoch: { minimumClientEpoch: DESKTOP_SERVER_API_EPOCH },
+      desktopApiEpoch: { minimumClientEpoch: DESKTOP_SERVER_API_EPOCH + 1 },
     });
-    const h = http(t);
+    const res = await http(t).get(apiPaths.me);
+    expect(res.status).toBe(426);
+    const body = UpgradeRequiredBodySchema.parse(await res.json());
+    expect(body.reason).toBe('client_too_old');
+    expect(body.server_api_epoch).toBe(DESKTOP_SERVER_API_EPOCH);
+    expect(body.minimum_client_epoch).toBe(DESKTOP_SERVER_API_EPOCH + 1);
+  });
+
+  it('exempt discovery routes stay reachable for the rejected generation', async () => {
+    t = buildTestApp();
+    const h = http(t, {}, { omitDesktopApiEpoch: true });
     const info = await h.get(apiPaths.serverInfo);
     expect(info.status).toBe(200);
     const infoBody = (await info.json()) as {
@@ -104,9 +111,13 @@ describe('desktop api epoch admission (event-WS, same source)', () => {
     } as IncomingMessage;
   }
 
-  it('admits current and pre-epoch generations under the bridge, rejects below a raised minimum', () => {
-    expect(checkDesktopApiEpochOnUpgrade(fakeUpgradeReq())).toBeNull();
+  it('admits the current generation, rejects pre-epoch under the default and a raised minimum', () => {
     expect(checkDesktopApiEpochOnUpgrade(fakeUpgradeReq(EPOCH))).toBeNull();
+    const rejectedByDefault = checkDesktopApiEpochOnUpgrade(fakeUpgradeReq());
+    expect(rejectedByDefault).not.toBeNull();
+    expect(UpgradeRequiredBodySchema.parse(rejectedByDefault).reason).toBe(
+      'client_too_old',
+    );
     const rejected = checkDesktopApiEpochOnUpgrade(fakeUpgradeReq(), {
       minimumClientEpoch: DESKTOP_SERVER_API_EPOCH,
     });

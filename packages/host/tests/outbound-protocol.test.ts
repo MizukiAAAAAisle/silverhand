@@ -59,10 +59,6 @@ describe('outbound protocol — command catalogue', () => {
       'runtime_status',
       'runtime_stop',
       'runtime_stop_all',
-      'workspace_path_index',
-      'workspace_provision',
-      'workspace_registry_ids',
-      'workspace_unbind',
     ]);
 
     expect(OUTBOUND_SERVER_COMMAND_KINDS).not.toContain('hello' as never);
@@ -314,50 +310,10 @@ describe('outbound protocol — command catalogue', () => {
     expect(unknown.success).toBe(false);
   });
 
-  // D4.e-1 (Cindy P1-2): the same per-kind scoping must hold for the two
-  // new data-plane intents — their typed taxonomies must not leak into
-  // each other or into agent_materialize.
-  it('per-kind error scoping: workspace_provision rejects an agent_materialize-only typed code', () => {
-    const bad = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
-      direction: 'daemon_to_server',
-      type: 'command_response',
-      id: 'cmd-wp-foreign',
-      kind: 'workspace_provision',
-      error: { code: 'agent_dir_collision', message: 'wrong scope' },
-    });
-    expect(bad.success).toBe(false);
-
-    // Accepts its own typed codes (incl. the path-bind taxonomy added for
-    // A — single intent) + the shared transport code.
-    for (const code of [
-      'unsupported_kind',
-      'invalid_path',
-      'path_conflict',
-      'fs_quota_exceeded',
-      'fs_unavailable',
-      'registry_unavailable',
-    ] as const) {
-      const typedOk = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
-        direction: 'daemon_to_server',
-        type: 'command_response',
-        id: `cmd-wp-typed-${code}`,
-        kind: 'workspace_provision',
-        error: { code, message: 'seeded' },
-      });
-      expect(typedOk.success).toBe(true);
-    }
-
-    const transportOk = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
-      direction: 'daemon_to_server',
-      type: 'command_response',
-      id: 'cmd-wp-transport',
-      kind: 'workspace_provision',
-      error: { code: 'internal_error', message: 'boom' },
-    });
-    expect(transportOk.success).toBe(true);
-  });
-
-  it('per-kind error scoping: agent_workspace_index rejects a workspace_provision-only typed code', () => {
+  // D4.e-1 (Cindy P1-2): per-kind error scoping must hold for the
+  // agent_workspace_index data-plane intent — its typed taxonomy must not
+  // accept foreign codes from any other intent family or agent_materialize.
+  it('per-kind error scoping: agent_workspace_index rejects a foreign typed code', () => {
     const bad = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
       direction: 'daemon_to_server',
       type: 'command_response',
@@ -367,7 +323,7 @@ describe('outbound protocol — command catalogue', () => {
     });
     expect(bad.success).toBe(false);
 
-    // fs_* is a workspace_provision typed code, NOT an index code.
+    // fs_* is not an agent_workspace_index code.
     const badFs = OutboundDaemonToServerCommandResponseFrameSchema.safeParse({
       direction: 'daemon_to_server',
       type: 'command_response',

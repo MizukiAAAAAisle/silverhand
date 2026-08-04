@@ -14,10 +14,9 @@ import { ApiError } from '@/lib/api';
  * behaviour, so a wire drift fails here instead of silently rendering the
  * transient state as a permanent "couldn't delete".
  *
- * The removed cases are deliberate, not forgotten: `has_dependents`,
- * `dependents_changed` and `workspace_forbidden` no longer have typed branches —
- * see `interpretDeleteComputerError` for why they must fold into the generic
- * line.
+ * The removed cases are deliberate, not forgotten: `has_dependents` and
+ * `dependents_changed` no longer have typed branches — see
+ * `interpretDeleteComputerError` for why they must fold into the generic line.
  */
 describe('interpretDeleteComputerError', () => {
   function api409(body: unknown): ApiError {
@@ -44,7 +43,7 @@ describe('interpretDeleteComputerError', () => {
     const err = api409({
       error: 'computer still has dependents',
       error_code: 'has_dependents',
-      dependents: { agents: 3, workspaces: 2 },
+      dependents: { agents: 3 },
     });
     expect(interpretDeleteComputerError(err)).toBe(err);
     expect(interpretDeleteComputerError(err)).not.toBeInstanceOf(
@@ -52,25 +51,13 @@ describe('interpretDeleteComputerError', () => {
     );
   });
 
-  it('passes a 403 workspace_forbidden through untyped', () => {
-    // Ownership is named in the PREVIEW (`viewer_role`), which is where the user
-    // can still act on it. A 403 after a confirm means drift — a rare,
-    // recoverable state that gets the generic failure line, not its own screen.
+  it('passes a non-409 refusal through untyped', () => {
+    // Only the transient `has_pending_agents` gets a typed branch; every other
+    // status folds into the generic failure line.
     const err = new ApiError(
       403,
       'Forbidden',
-      JSON.stringify({
-        error: 'not the workspace owner',
-        error_code: 'workspace_forbidden',
-        workspaces: [
-          {
-            id: 'w9',
-            name: 'not-mine',
-            workspace_path: '/tmp/w9',
-            viewer_role: 'member',
-          },
-        ],
-      }),
+      JSON.stringify({ error: 'not allowed', error_code: 'host_not_owned' }),
     );
     expect(interpretDeleteComputerError(err)).toBe(err);
   });

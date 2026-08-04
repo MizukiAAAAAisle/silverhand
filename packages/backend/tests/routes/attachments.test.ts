@@ -14,6 +14,7 @@ import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 async function createWorkspaceChannel(t: TestApp, members: string[] = ['alice']) {
   const agentIds: Record<string, string> = {};
@@ -64,9 +65,12 @@ async function uploadFile(
 ): Promise<Response> {
   const form = new FormData();
   form.append('file', new Blob([bytes], { type: contentType }), filename);
-  const headers: Record<string, string> = extraHeaders ?? {
-    'X-Silverhand-User-Id': 'local',
-    authorization: `Bearer ${t.authToken}`,
+  const headers: Record<string, string> = {
+    ...CURRENT_DESKTOP_EPOCH_HEADERS,
+    ...(extraHeaders ?? {
+      'X-Silverhand-User-Id': 'local',
+      authorization: `Bearer ${t.authToken}`,
+    }),
   };
   return t.app.fetch(
     new Request(`http://localhost${path}`, {
@@ -94,9 +98,12 @@ async function patchFile(
 ): Promise<Response> {
   const form = new FormData();
   form.append('file', new Blob([bytes], { type: contentType }), filename);
-  const headers: Record<string, string> = extraHeaders ?? {
-    'X-Silverhand-User-Id': 'local',
-    authorization: `Bearer ${t.authToken}`,
+  const headers: Record<string, string> = {
+    ...CURRENT_DESKTOP_EPOCH_HEADERS,
+    ...(extraHeaders ?? {
+      'X-Silverhand-User-Id': 'local',
+      authorization: `Bearer ${t.authToken}`,
+    }),
   };
   return t.app.fetch(
     new Request(`http://localhost${path}`, {
@@ -154,7 +161,10 @@ describe('Attachment routes', () => {
 
     const noBearer = await t.app.fetch(
       new Request(`http://localhost/api/attachments/${dto.id}`, {
-        headers: { 'X-Silverhand-User-Id': 'local' },
+        headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
+          'X-Silverhand-User-Id': 'local',
+        },
       }),
     );
     expect(noBearer.status).toBe(401);
@@ -162,6 +172,7 @@ describe('Attachment routes', () => {
     const wrongBearer = await t.app.fetch(
       new Request(`http://localhost/api/attachments/${dto.id}`, {
         headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
           'X-Silverhand-User-Id': 'local',
           authorization: 'Bearer wrong',
         },
@@ -213,6 +224,7 @@ describe('Attachment routes', () => {
       new Request(`http://localhost/api/channels/${channelId}/attachments`, {
         method: 'POST',
         headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
           'X-Silverhand-User-Id': 'local',
           authorization: `Bearer ${t.authToken}`,
         },
@@ -490,14 +502,8 @@ describe('Channel attachment list (GET /api/channels/:id/attachments)', () => {
     const viewer = http(t, { 'X-Silverhand-User-Id': 'local' });
     const { workspaceId } = await createWorkspaceChannel(t);
     const conversations = new ConversationRepo(t.ctx.db);
-    const workspacePath = (
-      t.ctx.db
-        .prepare('SELECT workspace_path FROM conversations WHERE workspace_id = ? LIMIT 1')
-        .get(workspaceId) as any
-    ).workspace_path as string;
     const dm = conversations.insertDmChannel({
       workspaceId,
-      workspacePath,
       title: 'dm',
     });
     // Seed the 'local' user as a dm_channel member so canViewConversation
@@ -1067,6 +1073,7 @@ describe('Attachment lifecycle on workspace delete', () => {
       new Request(`http://localhost/api/agents/${created.agent.id}`, {
         method: 'DELETE',
         headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
           'content-type': 'application/json',
           authorization: `Bearer ${t.authToken}`,
           [X_SILVERHAND_LEGACY_USER_ID_HEADER]: 'local',

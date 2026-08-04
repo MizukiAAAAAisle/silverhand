@@ -34,7 +34,6 @@ import {
 } from '@/features/channels/channel-workspace-index';
 import { handleViewerWorkspaceRemoved } from './viewer-removal-contract';
 import { onWsFrame, subscribeWsScope, subscribeViewerScope, isCurrentViewerScope } from '@/lib/ws-client';
-import { localWorkspacePathsKey } from './local-paths';
 
 export type WorkspaceListItem = {
   id: string;
@@ -349,7 +348,6 @@ export function useCreateWorkspace() {
         return { ...prev, items };
       });
       await qc.invalidateQueries({ queryKey: workspacesKey });
-      await qc.invalidateQueries({ queryKey: localWorkspacePathsKey });
     },
   });
 }

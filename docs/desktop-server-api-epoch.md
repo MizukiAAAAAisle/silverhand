@@ -88,13 +88,17 @@ THREE epoch constants bumped to the same value in this same commit?"*
 ## 4. Release procedure (plan A — default)
 
 1. Land the breaking change + atomic triple bump (one commit).
-2. Ship server and desktop from that tree (embedded desktop carries both
-   sides, zero skew by construction).
-3. Remote deployment order is free. Server-first: old desktops are rejected
-   server-side immediately (426), and show the full-screen upgrade gate **on
-   their next startup or auth-state re-probe** — that is the accepted plan-A
-   behavior, not an incident. Desktop-first: the new desktop shows
-   `server_update_required` at startup against the old server.
+2. Ship server and desktop from that tree. The primary shape is a REMOTE
+   server with separately-installed desktops, so skew is real there; the
+   embedded single-tree build (dogfood) carries both sides and has zero skew
+   by construction.
+3. Remote deployment order is free, but the skew window is an ACCEPTED
+   mandatory upgrade, not a zero-downtime rollout (see §5). Server-first: old
+   desktops are rejected server-side immediately (426), and show the
+   full-screen upgrade gate **on their next startup or auth-state re-probe**.
+   Desktop-first: the new desktop shows `server_update_required` at startup
+   against the old server. Either way the user continues only after both
+   sides are on the new generation.
 
 **Runtime promotion (#task:1763):** server-side fail closed is immediate and
 authoritative; a RUNNING desktop additionally promotes into the full-screen
@@ -137,32 +141,52 @@ desktops, then raise the minimum and delete the adapter. Any such bridge must
 carry the §11 exit-condition triple (named contract / observable removal
 trigger / owner) inline and adjust the lockstep test in the same commit.
 
-## 5. Observation bootstrap (current state) and its exit
+## 5. Observation bootstrap — CLOSED at epoch 2
 
-First introduction ships with `MINIMUM_CLIENT_API_EPOCH = 0`:
+The first introduction shipped the observation bridge: `MINIMUM_CLIENT_API_EPOCH
+= 0` and `MINIMUM_SERVER_API_EPOCH = 0`, so a pre-epoch desktop (no dedicated
+header, classified epoch 0) and a pre-epoch server (no `desktop_api` in
+server-info) were both still admitted, while every event-WS session logged
+`admission_epoch` in `desktop_client_connected` for the cutoff decision.
 
-- pre-epoch desktops (no dedicated header) are classified epoch 0 and
-  **still admitted**;
-- every event-WS session logs, in `desktop_client_connected`:
-  `admission_epoch` (dedicated header, all sessions) plus the telemetry
-  `client_info_status` and, when valid, `desktop_api_epoch`;
-- symmetric on the client: `MINIMUM_SERVER_API_EPOCH = 0` admits pre-epoch
-  servers (no `desktop_api` in server-info).
+**The bridge is now closed.** relocation-v1 §6's atomic triple bump moved all
+three constants to epoch 2, which puts the pre-epoch generation BELOW the
+minimum on both sides:
 
-**Cutoff evidence — the hard gate is `admission_epoch`** (owner: Lio,
-#task:1761). Over a representative window the `desktop_client_connected`
-distribution must show `admission_epoch = 0` count 0 (or an explicit cutoff
-date declared here). Then raise `MINIMUM_CLIENT_API_EPOCH` (to the current
-epoch, per the §3 triple discipline) so missing fails closed.
+- server side: `/api/*` and the event-WS upgrade fail closed with a structured
+  426 `upgrade_required` / `client_too_old` for an absent or malformed header
+  (`packages/backend/src/auth/desktop-api-epoch.ts` + its two test suites);
+- client side: the desktop refuses a server that advertises below its own
+  minimum, and promotes into the full-screen upgrade gate.
 
-The telemetry `client_info_status` buckets (`missing` / `invalid`) remain
-monitored for observability health, but they are NOT cutoff conditions:
-after the dedicated-header decoupling they only describe the optional
-telemetry channel — an epoch-1 client with a failed telemetry assembly is
-safe to admit, and gating the cutoff on those buckets would re-couple
-optional telemetry to the admission decision. Raise
-`MINIMUM_SERVER_API_EPOCH` independently once fleet servers all advertise.
-Neither bridge is permanent fail-open; this section is the §11 record.
+**Cutoff basis: an explicit breaking cutoff, ruled by the product owner —
+NOT an observation that the old generation is gone.** The primary deployment
+shape is a REMOTE server with separately-installed desktops (the embedded
+single-tree build is dogfood only), so raising the minimum is a real,
+user-visible break, and it was accepted as one on 2026-08-05:
+
+- during any client/server version skew a remote user hits the full-screen
+  upgrade gate and **must upgrade both sides** to continue — mandatory,
+  interrupting, and expected;
+- neither direction can deep-decode the other's payloads: both are refused at
+  admission (426 server-side / startup gate client-side), so the failure mode
+  is "blocked until upgraded", never a partial or corrupt read;
+- no plan-B dual-DTO bridge is built for that window; the decision was that a
+  bounded interruption is cheaper than carrying two generations of the shape.
+
+Cutoff date: 2026-08 (relocation-v1 §6/§7 landing). The §3 minimum raise is
+therefore a product decision recorded here, not a wait on a distribution
+metric — and re-raising the minimum later carries the same cost, so it needs
+the same explicit ruling.
+
+`admission_epoch` logging stays — it is now the evidence channel for the NEXT
+raise, not for this one. The telemetry `client_info_status` buckets (`missing` /
+`invalid`) remain monitored for observability health and were never cutoff
+conditions: they describe the optional telemetry channel only, and gating
+admission on them would re-couple optional telemetry to the admission decision.
+
+Nothing here is a permanent fail-open, and there is no remaining bridge to
+exit; this section is the §11 record of its closure.
 
 ## 6. Known residuals
 

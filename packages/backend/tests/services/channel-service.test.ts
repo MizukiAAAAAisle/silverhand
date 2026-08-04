@@ -89,8 +89,6 @@ function bootstrap() {
   const workspace = workspaces.insert({
     name: 'eng',
     description: null,
-    workspacePath: tmp.workspacesRoot,
-    workspaceHostId: localHostId,
   });
   const alice = agents.create({ name: 'alice', runtime: 'claude' }, localHostId, 'local');
   const bob = agents.create({ name: 'bob', runtime: 'claude' }, localHostId, 'local');
@@ -98,7 +96,6 @@ function bootstrap() {
   workspaces.insertMembership(workspace.id, bob.id);
   const source = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath: workspace.workspace_path,
     title: 'source',
   });
   conversations.addAgent(source.id, alice.id);
@@ -168,7 +165,6 @@ describe('ChannelService.createChannel', () => {
 
       const dmWorkspace = t.workspaces.insertAgentHome({
         agent: t.alice,
-        workspacePath: `${t.tmp.silverhandDir}/agents/${t.alice.id}`,
       });
       await expect(
         t.service.createChannel({
@@ -280,8 +276,6 @@ describe('ChannelService.createChannel', () => {
       const otherWorkspace = t.workspaces.insert({
         name: 'other',
         description: null,
-        workspacePath: t.tmp.workspacesRoot,
-        workspaceHostId: t.localHostId,
       });
       await expect(
         t.service.createChannel({

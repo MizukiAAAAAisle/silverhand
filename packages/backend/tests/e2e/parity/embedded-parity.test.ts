@@ -213,8 +213,10 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
     daemonIdentityPath: null,
     runtimePidRootDir,
     controlPlaneServerUrlPath,
-    // #task:1596 — sandbox the durable workspace-data (default = real home).
-    workspaceDataRootDir: join(daemonDir, 'workspace-data'),
+    // #task:1596 / relocation-v1 §7-4 — the DURABLE agent tree is sandboxed by
+    // the home seam below (this rig asserts the default `<home>/.silverhand`
+    // layout), so no explicit `agentHomeRootDir`: the option would take
+    // precedence over `homeDir` and move the tree out from under those facts.
     testHooks: { agentMaterializeHomeDir: agentHomeDir },
     supervisorFactory: ({
       emit,
@@ -403,12 +405,11 @@ describe('D5.a-4 embedded parity (real startBackend embedded + real in-process d
       expect((frame as { direction: string }).direction).toBe('server_to_daemon');
     }
     // We expect to have seen at least one materialize + one runtime command,
-    // plus both D4.e-1 registry intents (Phase D dispatched them over the
-    // SAME local Unix socket): the envelope proof must cover the new
+    // plus the surviving D4.e-1 registry intent (Phase D dispatched it over
+    // the SAME local Unix socket): the envelope proof must cover the new
     // command kinds, not just the D5.a set.
     const kinds = new Set(recorded.map(f => String(f.kind)));
     expect(kinds.has('agent_materialize')).toBe(true);
-    expect(kinds.has('workspace_provision')).toBe(true);
     expect(kinds.has('agent_workspace_index')).toBe(true);
     expect(kinds.has('agent_l2_seed')).toBe(true);
     expect(kinds.has('agent_files_purge')).toBe(true);

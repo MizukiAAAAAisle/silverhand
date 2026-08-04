@@ -131,13 +131,6 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
     count: 1,
   },
   {
-    file: 'packages/host/src/daemon/workspace-registry/registry.ts',
-    token: 'homedir()',
-    line: 'if (resolved === resolve(homedir())) {',
-    reason: 'SAFETY guard rejecting the user home as a workspace root, not a derivation',
-    count: 1,
-  },
-  {
     file: 'packages/host/src/daemon/workspace-registry/workspace-skeleton.ts',
     token: '.silverhand',
     line: "const dotDir = join(workspacePath, '.silverhand');",

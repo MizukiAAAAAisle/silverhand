@@ -33,9 +33,9 @@ describe('daemon control-plane URL resolution', () => {
     let controlPlaneServerUrl: (() => string | null) | undefined;
     const daemon = await runDaemon({
       socketPath: join(dir, 'daemon.sock'),
-      workspaceDataRootDir: join(dir, 'workspace-data'),
       silverhandStateRootDir: dir,
       daemonIdentityPath: join(dir, 'identity.json'),
+      agentHomeRootDir: join(dir, 'agents'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'runtime-pids'),
@@ -62,9 +62,9 @@ describe('daemon control-plane URL resolution', () => {
     let controlPlaneServerUrl: (() => string | null) | undefined;
     const daemon = await runDaemon({
       socketPath: join(dir, 'daemon.sock'),
-      workspaceDataRootDir: join(dir, 'workspace-data'),
       silverhandStateRootDir: dir,
       daemonIdentityPath: join(dir, 'identity.json'),
+      agentHomeRootDir: join(dir, 'agents'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'runtime-pids'),
@@ -97,9 +97,9 @@ describe('daemon control-plane URL resolution', () => {
 
     const daemon = await runDaemon({
       socketPath: join(dir, 'daemon.sock'),
-      workspaceDataRootDir: join(dir, 'workspace-data'),
       silverhandStateRootDir: dir,
       daemonIdentityPath: join(dir, 'identity.json'),
+      agentHomeRootDir: join(dir, 'agents'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'daemon', 'runtime-pids'),
@@ -153,9 +153,9 @@ describe('daemon control-plane URL resolution', () => {
 
     const daemon = await runDaemon({
       socketPath: join(dir, 'daemon.sock'),
-      workspaceDataRootDir: join(dir, 'workspace-data'),
       silverhandStateRootDir: dir,
       daemonIdentityPath: join(dir, 'identity.json'),
+      agentHomeRootDir: join(dir, 'agents'),
       pidFilePath: join(dir, 'daemon.pid'),
       logDir: join(dir, 'logs'),
       runtimePidRootDir: join(dir, 'daemon', 'runtime-pids'),

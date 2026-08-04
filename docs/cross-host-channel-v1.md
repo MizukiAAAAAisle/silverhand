@@ -1,5 +1,12 @@
 # Cross-Host Channel — 跨 host agent 同 channel
 
+> **⚠️ 部分被 supersede（`workspace-layout-relocation-v1.md` §3/§6/§7，2026-08）**：本文 **§4（workspace local root，per-host）与 §6（ownership / 删除权）已不是终态**，其中的 home/guest 非对称模型整体消失了：
+> - **workspace 没有 home host**（`workspace_host_id` 已退役），因此没有"home host 的 local root = 用户 repo 路径"这一侧；`workspaces.workspace_path` 也已退役。
+> - **每个 agent（不分 home / guest）的 L2 锚点是同一个确定性 agent-centric 坐标**：`<agent home>/workspaces/<workspace_id>`——按 id 算出、首次 spawn 懒 seed，不查 DB 列、不查 daemon registry binding（registry 已降级为 marker-absent 只读 legacy inventory reader）。
+> - 于是 §6 的 ownership 二分（"用户 repo 永不删" vs "silverhand 自己建自己删"）**坍缩成单一形态**：所有 L2 bundle 都在 silverhand 自己的 agent home 下，永不落在用户项目目录里。§7 的 open question"ownership 怎么持久化"随之关闭——没有第二种 ownership 需要记。
+>
+> 仍然有效的部分：**§1–§3 的 communication-plane 命题与文件隔离硬卡口**、**§5.1 的 fail-closed 不变量**（一个 (conv, agent) 解析不出**它自己**的运行基础就拒绝 spawn，绝不 fallback 到别的机器）、以及 §5.2 的落地依赖。终态见 [`workspace-layout-relocation-v1.md`](./workspace-layout-relocation-v1.md)。
+>
 > **Status**: **已落地**(#task:1596 slice 1 + #task:1600 slice 2)。本文档是该特性的设计出处,锁定"不同 host 上的 agent 共处同一 channel"的领域模型与不变量;实现以 repo 代码为准。
 >
 > **Scope**: 这是一个 **communication-plane** feature。它**不**引入 federation / consensus / 跨 host 文件同步。唯一真正新增的领域概念是 per-(host, workspace) 的 **workspace local root** 及其 **ownership / 删除权**。落地依赖里,runtime placement 路由已由现行 `agents.host_id` + `RuntimeHostPlacementResolver` + per-host outbound routing 提供(见 `docs/orchestration-boundary-v1.md`、`docs/daemon-outbound-protocol.md`);cross-computer slice 2(#task:1600)已把内部 host-equality guard(事件周界 workspace-host arm、runtime_start I4 一致性 gate、list-workspaces 多 host 拒绝、PATCH/DELETE placement preflight)全部重分类到 `agent.host_id`/membership 轴,并在终片与 agent `computer=` header、cross-computer prompt 行为合同同批**拔除了 membership gate**(add-member 与 create-with-members 两个入口),本文只引用不重述。

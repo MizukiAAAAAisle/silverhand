@@ -479,7 +479,7 @@ describe('protocol — reasoning-effort frozen old-daemon compatibility (#task:1
     // actual wire type: `ReasoningEffortTokenSchema` is exactly the schema
     // `RuntimeStartParamsSchema`'s nested `reasoning_effort` field delegates to
     // (protocol.ts) — the open, bounded token, NOT any closed product enum. So
-    // a new daemon frames `ultra` fine while an old one (above) rejects it.
+    // a new daemon frames `ultra` fine while an old one (below) rejects it.
     expect(ReasoningEffortTokenSchema.safeParse('ultra').success).toBe(true);
     // A future, never-seen effort also frames on the wire (additive/ignorable).
     expect(ReasoningEffortTokenSchema.safeParse('giga').success).toBe(true);

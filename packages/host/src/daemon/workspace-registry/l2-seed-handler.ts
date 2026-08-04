@@ -1,30 +1,38 @@
 import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { isAgentHomeWorkspaceId } from '@silverhand/shared';
 import type {
   AgentL2SeedErrorCode,
   AgentL2SeedParams,
   AgentL2SeedResult,
 } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
-import { getAgentL2Template, resolveAgentWorkspaceBundleDir } from '../agent-materialize/index.js';
-import { WorkspaceRegistry, WorkspaceRegistryError } from './registry.js';
+import {
+  bundleL2Present,
+  getAgentL2Template,
+  resolveAgentWorkspaceBundleDir,
+} from '../agent-materialize/index.js';
+import { WorkspaceIdSegmentError } from '../workspace-path-authority.js';
 
 /**
- * D4.e-3 daemon handler for `agent_l2_seed` — seeds a member agent's L2
- * (per-workspace) memory dir on the OWNING host. Replaces backend
- * `seedAgentL2` (gap G1): the backend forwards only `{ agent_id,
- * workspace_id, template_choice }`, the daemon uses its registry only as the
- * establishment gate (fail-closed when the workspace was never realized here)
- * and writes the agent-centric bundle root
+ * D4.e-3 daemon handler for `agent_l2_seed` — materializes a member agent's L2
+ * (per-workspace) memory bundle on THIS agent's own computer. The backend
+ * forwards only `{ agent_id, workspace_id, template_choice }`; the daemon
+ * writes the deterministic agent-centric bundle root
  * `<agent home>/workspaces/<workspace_id>/{MEMORY.md, notes/…}`
- * (relocation-v1 §3.2/§7 task 1) — no `<workspace>/.silverhand/...` sub-path.
+ * (relocation-v1 §3.2/§3.3) — no `<workspace>/.silverhand/...` sub-path.
  *
- * Regular-only: agent-home L2 == L1 and is already materialized by
- * `agent_materialize`, so it is never seeded here. The handler does NOT
- * take a `kind` — it relies on `registry.resolve` as the establishment gate,
- * which only knows regular bindings; an agent-home id has no binding →
- * fail-closed `workspace_not_provisioned` (the backend never sends a path
- * or kind).
+ * relocation-v1 §7 task 4 — there is no registry establishment gate any more:
+ * seeding IS what makes the deterministic coordinate available, so it fails
+ * closed only on the fs, never on a registry binding. It is the write half of
+ * the coordinate-vs-availability split — its success is reported as
+ * `l2_present` via the shared {@link bundleL2Present} predicate, the SAME fact
+ * the read-side resolvers (list index / runtime memory index) check.
+ *
+ * Regular-only: an agent-home id has L2 == L1 and is already materialized by
+ * `agent_materialize`, so it is never seeded here. The handler rejects an
+ * agent-home id structurally (the backend never sends one) rather than
+ * creating a spurious `workspaces/<agent-home-id>` bundle.
  *
  * `system_prompt.md` is L1-only and is NEVER written to L2
  * ({@link getAgentL2Template} drops it). Idempotent: existing files are
@@ -42,7 +50,6 @@ export class AgentL2SeedError extends DaemonTypedError {
 }
 
 export interface SeedAgentL2Deps {
-  registry: WorkspaceRegistry;
   /** Parent dir for the agent-centric bundle root. Default: daemon's homedir. */
   homeDir?: string;
   /** Exact agent-home root. Takes precedence over homeDir. */
@@ -61,39 +68,35 @@ export async function seedAgentL2(
     );
   }
 
-  // Establishment gate (relocation-v1 §7 task 1): the registry must still
-  // throw fail-closed when this workspace was never realized on this computer
-  // (regular-only — an agent-home id has no binding → `not_provisioned`). Its
-  // returned old-shared path is no longer used; the L2 dir is now the
-  // deterministic agent-centric bundle root. Registry demotion is §7 task 4.
+  // Agent-home ids never carry an L2 bundle here (L2 == L1, materialized by
+  // agent_materialize). The backend never sends one; refuse rather than seed a
+  // spurious `workspaces/<agent-home-id>` dir.
+  if (isAgentHomeWorkspaceId(params.workspace_id, params.agent_id)) {
+    throw new AgentL2SeedError(
+      'internal_error',
+      `agent_l2_seed received an agent-home workspace id ${params.workspace_id}; ` +
+        'agent-home L2 is the L1 home and is materialized by agent_materialize',
+    );
+  }
+
+  let l2Dir: string;
   try {
-    deps.registry.resolve(params.workspace_id);
+    l2Dir = resolveAgentWorkspaceBundleDir(
+      params.agent_id,
+      params.workspace_id,
+      deps,
+    );
   } catch (err) {
-    if (err instanceof WorkspaceRegistryError) {
-      if (err.code === 'not_provisioned') {
-        throw new AgentL2SeedError(
-          'workspace_not_provisioned',
-          `workspace ${params.workspace_id} is not provisioned; cannot seed L2`,
-        );
-      }
-      if (err.code === 'registry_foreign' ||
-        err.code === 'registry_corrupt' ||
-        // relocation-v1 §7 task 1 — an unsafe id segment is a corrupt/unusable
-        // registry entry; fail closed before it reaches the L2 path resolver.
-        err.code === 'invalid_path') {
-        throw new AgentL2SeedError('registry_unavailable', err.message);
-      }
+    // An unsafe id segment can never become a path segment under the agent
+    // home — fail closed before touching disk.
+    if (err instanceof WorkspaceIdSegmentError) {
+      throw new AgentL2SeedError('registry_unavailable', err.message);
     }
     throw new AgentL2SeedError(
       'internal_error',
       err instanceof Error ? err.message : String(err),
     );
   }
-  const l2Dir = resolveAgentWorkspaceBundleDir(
-    params.agent_id,
-    params.workspace_id,
-    deps,
-  );
   try {
     let seeded = false;
     await fs.mkdir(l2Dir, { recursive: true });
@@ -107,8 +110,10 @@ export async function seedAgentL2(
       );
       seeded = seeded || wrote;
     }
-    // Sanity: MEMORY.md must be present after a successful seed.
-    const l2_present = await exists(join(l2Dir, 'MEMORY.md'));
+    // Report the completion fact via the shared predicate — the SAME one the
+    // read-side resolvers use for availability, so ack and availability agree
+    // by construction (a half-seed with no MEMORY.md is never `l2_present`).
+    const l2_present = await bundleL2Present(l2Dir);
     return { ok: true, seeded, l2_present };
   } catch (err) {
     throw toSeedError(err);
@@ -128,15 +133,6 @@ async function writeIfMissing(path: string, content: string): Promise<boolean> {
     await fs.mkdir(dirname(path), { recursive: true });
     await fs.writeFile(path, content);
     return true;
-  }
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await fs.access(path);
-    return true;
-  } catch {
-    return false;
   }
 }
 

@@ -7,6 +7,8 @@
 > 写作规则：每条决策旁边记一句"为什么"。新决策追加节，旧决策不改写（可"作废"标注）。
 >
 > **新功能 / 新 service / 新 DB 表 / 新 migration 设计前必读**：[`architecture-principles.md`](./architecture-principles.md)（Human/Agent 同构强制 checklist + 反模式）。鉴权细节见 [`auth-and-host-model.md`](./auth-and-host-model.md)（身份/资源归属）与 [`graded-permissions-v1.md`](./graded-permissions-v1.md)（分级能力）。
+>
+> **文件落位 / workspace 本地路径的终态在 [`workspace-layout-relocation-v1.md`](./workspace-layout-relocation-v1.md)**：它 supersede 了本文中一切"workspace 有本地路径 / 有 home computer / 创建时 materialize 目录"的条款（§2.4、§4.2、§4.3、§5、§8 已按终态更新）。
 
 ---
 
@@ -57,10 +59,9 @@ Workspace = "项目室"
   ├─ name (UNIQUE)
   ├─ kind: 'workspace' | 'dm'
   ├─ description?
-  ├─ workspace_path (NOT NULL，未填时自动生成)
-  ├─ workspace_host_id (v1 implicit = this machine)
   ├─ git_url? (元数据)
   └─ workspace_members → [agent_id, ...]
+     （无 path、无 home computer——文件位置是 agent 侧确定性坐标，见 §2.4）
 
 Channel = "一次会话 / 多 agent 协作的对话线程"（DB 表名：conversations）
   ├─ workspace_id, title
@@ -96,7 +97,7 @@ Message
 | `name` | 用户起的（"claude-planner"、"codex-reviewer"）|
 | `runtime` | `claude` \| `codex` \| `cursor` \| `gemini` |
 | `model` | 可选，特定模型（如 `sonnet-4-6`）|
-| `agent_home` / L1 path | agent 全局 home（通常由 agent_home workspace 的 `workspace_path` 表示）；`system_prompt.md` 文件定义这个 agent 的"身份/角色" |
+| `agent_home` / L1 path | agent 全局 home（daemon 侧确定性坐标：`<computers root>/<computer_id>/agents/<agent_id>/`，不由任何 workspace 列表示）；`system_prompt.md` 文件定义这个 agent 的"身份/角色" |
 
 **为什么需要 Agent 一等公民**：
 - 同一个 runtime 可以有多个 agent 实例，每个有不同身份（claude-planner vs claude-debugger）
@@ -113,32 +114,34 @@ Message
 | `name` | UNIQUE 字符串（DM 的 name = `@<agent.name>`）|
 | `kind` | `workspace` \| `dm`（默认 `workspace`）|
 | `description?` | 可选 |
-| `workspace_path` | NOT NULL，未填则后端默认生成 |
-| `workspace_host_id` | v1 implicit |
 | `git_url?` | 纯元数据，不自动 clone（v1）|
 | 关联：workspace_members | 该 workspace 内的 agent 成员 |
 
-**Workspace 生成规则**（创建 workspace 时）：
+> **作废（`workspace-layout-relocation-v1.md` §6/§7，2026-08）**：原本这里还有
+> `workspace_path`（NOT NULL，未填后端生成）与 `workspace_host_id`（workspace 的 home
+> computer）两列，以及"创建时 materialize 目录"的流程。**两列、对应的 create 输入、
+> `GET /api/workspaces/local-paths` 与 `workspace_path_conflict` 错误码均已退役**；
+> workspace **没有 home computer**，成员可合法分布在不同 computer 上。终态见下。
 
-```ts
-if (!input.workspace_path) {
-  workspace_path = path.join(
-    os.homedir(),
-    '.silverhand',
-    'workspaces',
-    sanitize(workspace.name),    // workspace.name 是 UNIQUE，可作目录名
-  );
-}
-fs.mkdir(workspace_path, { recursive: true });
-```
+**终态：workspace 是纯 control-plane 记录，文件位置由 agent 侧确定性坐标决定**
 
-**为什么 workspace 一定要有（不允许 nullable）**：agent CLI 必须有 cwd。"纯聊天"场景对应 workspace 是个空目录，不是没目录。后端始终保证 `workspace_path` 非空，UI 上"留空"只是触发自动生成。
+- 创建 workspace = 一次纯 DB 写：不碰 fs、不联系任何 computer、不需要已 claim 的机器
+  （无 claimed computer 的 standalone server 也能建成功）。
+- agent 在某 workspace 里的 L2 bundle = `<agent home>/workspaces/<workspace_id>`——
+  **确定性 agent-centric 坐标**，不查 DB 列、不查 daemon registry binding。
+- 该目录**懒创建**：首次 spawn 时 seed（"seeding 即 provisioning"）。
+- 运行基础只有一条是强 ensure 的：**session cwd**（`(computer, agent, workspace)` 坐标
+  确定、spawn 前 `mkdir -p` 且可进入才 fork，OS 真起不来才 fail-closed）。L1/L2 内容是
+  best-effort enrichment——读写失败只记日志并继续，**永不 gate spawn**。
+
+**为什么 agent 侧一定要有目录**：agent CLI 必须有 cwd。"纯聊天"场景对应的是一个空目录，
+不是没目录。区别只在于：cwd 现在从上面那个确定性坐标**算出来**，而不是从一列存储的路径**读出来**。
 
 **DM 是特殊 workspace**：
 - `kind = 'dm'`
 - 必须恰好 1 个 agent 成员
 - name 自动 = `@<agent.name>`，受 UNIQUE 约束保护"一个 agent 同一时间只有一个 DM"
-- workspace_path 同样可选，规则一致
+- DM 的 cwd 直接就是 agent 的 L1 home（不额外嵌一层 L2），见 §4.1
 - UI 上 DM 单独列在 `DIRECT MESSAGES` section，跟 `WORKSPACES` 平级
 
 **为什么 DM 不另起一套表**：
@@ -146,7 +149,9 @@ fs.mkdir(workspace_path, { recursive: true });
 - 用户心智上"DM = 1 对 1 的频道"是对的
 - 只多一个 `kind` 字段就能区分
 
-**Workspace 的 workspace_host_id 隐含约束**：workspace 的所有 member agent 必须跑在同一个 host 上（即 `workspace_host_id`），否则跨机器 cwd 不通。v1 只有 1 host 自动满足。
+**跨 computer 成员是合法的**：曾经的约束"一个 workspace 的所有 member agent 必须跑在
+`workspace_host_id` 这台机器上"已随该列退役。每个 agent 在自己所属 computer 的 agent home
+下有自己的 L2 bundle，彼此不共享一个本地目录，因此不再需要同机前提。
 
 ### 2.5 Channel（多 agent 协作单元，DB 表名：conversations）
 
@@ -430,7 +435,7 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 > `system_prompt.md` 拷贝。Workspace 之间的差异化知识进入各自
 > L2 `MEMORY.md` / `notes/`，全局身份和工作风格仍通过 DM 修改 L1。
 >
-> **DM 是塑造 L1 的专用场所**：DM 的 cwd **直接** = `~/.silverhand/agents/<id>/`（agent 全局 home），所以在 DM 里 agent 对自己 MEMORY 的更新等于更新 global，未来新 workspace 继承到这个新版本。
+> **DM 是塑造 L1 的专用场所**：DM 的 cwd **直接** = agent 的 L1 home（`computers/<computer-id>/agents/<id>/`），所以在 DM 里 agent 对自己 MEMORY 的更新等于更新 global，未来新 workspace 继承到这个新版本。
 
 ### 4.2 文件存储完整图
 
@@ -440,31 +445,31 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 ~/.silverhand/
 ├─ silverhand.db                 ← 主数据库
 ├─ server-config.json            ← embedded server URL + child-session limits（mode 0600；shared auth_token retired in Stage C.6）
-├─ agents/
-│  └─ <agent-id>/                ← L1：agent 全局 home（真实文件，唯一权威源）
-│     ├─ identity.json           ← {name, runtime, model, host_id}
-│     ├─ system_prompt.md        ← L1：全局身份模板（daemon spawn 时读取）
-│     ├─ MEMORY.md               ← 全局记忆（agent 在 DM 中迭代）
-│     └─ notes/                  ← 全局笔记
-└─ workspaces/                   ← workspace 自动生成 workspace_path 的默认根目录
-   └─ <sanitized-workspace-name>/
-      └─ ...（同 <workspace> 结构）
-
-<workspace>/                     ← workspace.workspace_path
-├─ <用户的代码 / 项目文件>...
-└─ .silverhand/
-   └─ agents/
-      ├─ <agent-id>/             ← L2：per-workspace 拷贝
-      │  ├─ MEMORY.md            ← L2：workspace 内累积的 agent 记忆
-      │  └─ notes/
-      └─ <agent-id-2>/...
+└─ computers/
+   └─ <computer-id>/
+      └─ agents/
+         └─ <agent-id>/          ← L1：agent 全局 home（真实文件，唯一权威源）
+            ├─ identity.json     ← {name, runtime, model, host_id}
+            ├─ system_prompt.md  ← L1：全局身份模板（daemon spawn 时读取）
+            ├─ MEMORY.md         ← 全局记忆（agent 在 DM 中迭代）
+            ├─ notes/            ← 全局笔记
+            └─ workspaces/
+               └─ <workspace-id>/   ← L2 bundle：**同时就是该 (agent, workspace) 的 spawn cwd**
+                  ├─ MEMORY.md      ← L2：workspace 内累积的 agent 记忆（直接在根，无 .silverhand 嵌套）
+                  └─ notes/
 
 <os.tmpdir()>/silverhand/<spawn-id>/       ← 每次 spawn 的运行时临时文件
 ├─ system-prompt.md              ← daemon 由 L1 + L2 MEMORY + session ctx 合成
 └─ bin/silverhand                ← 每次 spawn 的 CLI shim
 ```
 
-**为什么 `<workspace>/.silverhand/` 下没有 `channels/` 目录**：channel 的 system-prompt + shim 是每次 spawn 临时合成的、只在 runtime 生命周期内有用，可以从 typed `runtime_start.options` + daemon-local L1/L2 文件重算。写进 workspace 会污染用户目录（git status 看到、文件浏览器看到）、channel 多了会堆积成一大堆无关内容。改放 OS tmp，spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 conversations / messages 行**——文件系统只负责跑起来。
+> **relocation-v1 §3.2/§3.3（2026-08）改掉了这张图**：不再有 `~/.silverhand/agents/`
+> 顶层权威、不再有 `~/.silverhand/workspaces/<name>/` 默认根、也不再有
+> `<workspace>/.silverhand/agents/<id>/` 这层嵌套。L2 bundle 是**按 id 确定性算出的
+> agent-centric 坐标**，因此不落在用户的项目目录里，也不需要任何 DB 列或 registry binding
+> 来定位；用户自己的代码目录与 silverhand 的 agent 数据彻底分离。
+
+**为什么 L2 bundle 下没有 `channels/` 目录**：channel 的 system-prompt + shim 是每次 spawn 临时合成的、只在 runtime 生命周期内有用，可以从 typed `runtime_start.options` + daemon-local L1/L2 文件重算。写进用户目录会污染它（git status 看到、文件浏览器看到）、channel 多了会堆积成一大堆无关内容。改放 OS tmp，spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 conversations / messages 行**——文件系统只负责跑起来。
 
 **那既然可以重算，为什么还落盘？** 不是为了我们自己持久化，而是因为 **agent CLI 的 argv 接口强制要求文件路径**：
 
@@ -474,7 +479,7 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 
 换句话说，这些 /tmp 文件是**"给 child process 传参的一次性媒介"**，不是 silverhand 的状态。生命周期 = 从 spawn 前写入到进程退出，退出后残留只等 OS 清理。`os.tmpdir()` 的语义（跨重启不保证、定期清）刚好匹配。
 
-**DM 例外**：DM workspace 的 `workspace_path` **直接** = `~/.silverhand/agents/<agent-id>/`。也就是说 DM 没有自己的 `<workspace>/.silverhand/agents/<id>/` 嵌套——agent 在 DM 中的 cwd 就是它的 global home，所有读写都直接落到 L1。
+**DM 例外**：DM 的 cwd **直接** = agent 的 L1 home（`computers/<computer-id>/agents/<agent-id>/`）。也就是说 DM 没有 `workspaces/<workspace-id>/` 这一层 L2 bundle——agent 在 DM 中的 cwd 就是它的 global home，所有读写都直接落到 L1。
 
 ### 4.3 Workspace 创建后的对话式 onboarding（关键流程）
 
@@ -482,16 +487,19 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 
 #### 创建步骤（无表单 onboarding）
 
-用户填完 workspace 基础信息（name + 可选 description + 可选 workspace_path + 选成员 agents）点确认后，系统完成：
+用户填完 workspace 基础信息（name + 可选 description + 选成员 agents）点确认后，系统完成：
 
 1. INSERT workspace 行
-2. 计算 workspace_path（未填时按 §2.4 规则生成）并存入 server DB
-3. daemon-host materialize：mkdir workspace_path、mkdir `<workspace>/.silverhand/agents/`
-4. daemon-host 对每个成员 agent seed L2 (`<workspace>/.silverhand/agents/<id>/MEMORY.md` + `notes/`)，不复制 L1 `system_prompt.md`
-5. 自动建一个 channel（title = `Onboarding`），spawn 所有 member agent 的 chat-bridge
-6. Backend 自动 INSERT 一条 `from_kind='system'` 的 message 进这个 channel（platform 写的"开场白"），所有 agent 通过 `check_messages` 收到
+2. INSERT workspace_members 行——**到这里创建就结束了**：创建是纯 control-plane 写，不碰
+   fs、不联系任何 computer（relocation-v1 §7；原先的第 2/3/4 步"算 path + 存 DB + daemon
+   materialize 目录 + seed L2"已退役）
+3. agent 的 L2 bundle 在**首次 spawn 时懒 seed**（"seeding 即 provisioning"）：daemon 用
+   `<agent home>/workspaces/<workspace_id>` 这个确定性坐标 `mkdir -p` 出 cwd 并尽力
+   seed `MEMORY.md` + `notes/`；seed 失败只记日志，不阻止 spawn。不复制 L1 `system_prompt.md`
+4. 自动建一个 channel（title = `Onboarding`），spawn 所有 member agent 的 chat-bridge
+5. Backend 自动 INSERT 一条 `from_kind='system'` 的 message 进这个 channel（platform 写的"开场白"），所有 agent 通过 `check_messages` 收到
 
-> 第 6 步要求 message 表支持 `from_kind='system'`。Schema 中加这个枚举值。
+> 最后一步要求 message 表支持 `from_kind='system'`。Schema 中加这个枚举值。
 
 #### 系统 onboarding 消息模板
 
@@ -692,7 +700,7 @@ after compaction**. Therefore:
 
 DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
-- cwd 直接 = `~/.silverhand/agents/<your-id>/`，所有写都落 L1 global
+- cwd 直接 = agent 的 L1 home（`~/.silverhand/computers/<computer-id>/agents/<your-id>/`），所有写都落 L1 global
 - 加一段说明："You are in a DM. Updates to your MEMORY.md and notes will affect your global identity in all future workspaces."
 
 #### 为什么平台 prompt 要这么长？
@@ -712,10 +720,10 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 1. **首次启动 → 引导建第一个 Agent**
    - "给你的第一个 AI 助手起个名字" → 选 runtime（claude / codex 等）→ （可选）写 system prompt → 保存
-   - 后端/daemon 自动建 `~/.silverhand/agents/<id>/{system_prompt.md, MEMORY.md, notes/, identity.json}`
+   - 后端/daemon 自动建 `~/.silverhand/computers/<computer-id>/agents/<id>/{system_prompt.md, MEMORY.md, notes/, identity.json}`
 2. **建 Workspace**
-   - 表单：名称（unique）+ 描述（可选）+ 工作目录（可选，留空自动生成）+ 勾选成员（agents，至少 1 个）
-   - 提交后系统完成：server 建 workspace 行并记录 workspace_path → daemon materialize `.silverhand/agents/<id>/` + L2 MEMORY/notes → 自动建一个 `Onboarding` channel → 自动 INSERT 一条 `from_kind='system'` 的开场白消息（见 §4.3）
+   - 表单：名称（unique）+ 描述（可选）+ 勾选成员（agents，至少 1 个）——**不再有"工作目录"字段**（relocation-v1 §7）
+   - 提交后系统完成：server 建 workspace 行 + members 行（纯 DB 写）→ 自动建一个 `Onboarding` channel → 首次 spawn 时 daemon 才懒 seed 各成员的 L2 bundle → 自动 INSERT 一条 `from_kind='system'` 的开场白消息（见 §4.3）
    - 用户进 workspace 看到的就是已经在跑的 onboarding channel，可以直接对话塑造各 agent 角色
 3. **建后续 Channel**（在某 workspace 内）
    - 标题
@@ -724,7 +732,7 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
    - 用户消息进 messages 表，广播给所有 conversation_agents
    - 每个 agent 回复 via send_reply，标记 from_agent_id，其他 agent 通过 check_messages 看到
 5. **DM**（替代流程）
-   - Sidebar `DIRECT MESSAGES` section 点 + → 选一个 agent → 自动建 `kind='dm'` workspace（name=`@<agent.name>`），workspace_path 直接指向 `~/.silverhand/agents/<agent-id>/`
+   - Sidebar `DIRECT MESSAGES` section 点 + → 选一个 agent → 自动建 `kind='dm'` workspace（name=`@<agent.name>`），其 cwd 直接就是 agent 的 L1 home `~/.silverhand/computers/<computer-id>/agents/<agent-id>/`
    - DM 没有 onboarding 消息（cwd 就是 L1，没有"塑造本 workspace 角色"的概念；要塑造就直接说话即可）
    - 之后跟 workspace 一样使用，但 agent 在 DM 中对 MEMORY/notes 的更新等于更新 global
 
@@ -779,14 +787,15 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 |----|----|---------|
 | 1 workspace = N 1v1 channel | 1 workspace = N 多-agent channel | 多 agent 协作是产品核心，不能让 channel 退化成 1v1 |
 | Workspace.workspace_path optional | NOT NULL（后端自动生成兜底）| Agent CLI 必须有 cwd |
+| `workspace_path` / `workspace_host_id` 两列 + 创建时 materialize 目录 | 两列与对应 create 输入全部退役；L2 bundle = `<agent home>/workspaces/<workspace_id>` 确定性坐标，首次 spawn 懒 seed；session cwd 是唯一强 ensure 的运行基础 | 一列同时背 create 输入 / daemon binding cache / 用户可见展示 path 三个契约，且把 workspace 钉在一台机器上；拆开安置后 workspace 回归纯 control-plane 记录（`workspace-layout-relocation-v1.md` §6/§7，2026-08，随 plan-A epoch 2 原子一刀） |
 | Agent 绑 workspace | Agent 不绑 workspace | Agent 是身份不是任务，workspace 跟 workspace 走 |
 | Project + per-host workspace binding | 砍掉 Project 这层 | 跨机器文件协作非目标，过度设计 |
 | `--auth-token` argv 注入 | env `AGENT_HUB_AUTH_TOKEN` | 避免 `ps` 暴露 token |
 | `.agent-hub` 目录名 | `.silverhand` | 跟 app 名统一 |
 | Memory 在 workspace 级别 | Memory 分两层（L1 agent-global / L2 workspace-instance）| Agent 身份要跨 workspace 复用又要支持 workspace 内角色反转，单层 memory 做不到 |
 | L2 用 symlink 指 L1（隐式共享）| L2 只存 workspace-scoped MEMORY/notes；L1 `system_prompt.md` 是唯一角色源 | 角色身份要全局一致且由 DM 塑造；workspace 差异化知识放 L2，避免 prompt 分叉 |
-| DM 跟普通 workspace 一样有独立 workspace_path | DM workspace_path = `~/.silverhand/agents/<id>/`（直接落 L1）| DM 是塑造 agent 全局身份的专用场所，写到独立 workspace 就跟 workspace 没区别了 |
-| 应用数据放 Electron `userData` | 全部放 `~/.silverhand/`（db / config / agents / workspaces）| 用户能直接 `cd` 进去看；跟 `~/.claude` `~/.codex` 形成对称；跨 Electron 重装保留 |
+| DM 跟普通 workspace 一样有独立工作目录 | DM 的 cwd = agent 的 L1 home（直接落 L1）| DM 是塑造 agent 全局身份的专用场所，写到独立 workspace 就跟 workspace 没区别了 |
+| 应用数据放 Electron `userData` | 全部放 `~/.silverhand/`（db / config / `computers/<id>/agents/`）| 用户能直接 `cd` 进去看；跟 `~/.claude` `~/.codex` 形成对称；跨 Electron 重装保留 |
 | Workspace 创建有强制 onboarding 表单（preview + 按钮编辑 system_prompt / 清 MEMORY）| 创建后自动 post 一条 `from_kind='system'` onboarding message；global role 写 L1，workspace 知识写 L2 MEMORY/notes | 与"对话即一切"的产品理念一致；表单步骤是 UI 工程量也是用户的认知负担 |
 | Message.from_kind = `user` \| `agent` | Message.from_kind = `user` \| `agent` \| `system` | onboarding 开场白 / 后续 platform 公告需要一个非用户非 agent 的来源 |
 | Channel 运行时文件放 `<workspace>/.silverhand/channels/<channel-id>/` | 放 `<os.tmpdir()>/silverhand/<spawn-id>/` | channel 的 system-prompt + CLI shim 是每次 spawn 临时合成、可重算，写进 workspace 会污染用户目录 + 堆积旧 channel 残骸 |
@@ -802,8 +811,8 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 1. **Agent system_prompt 编辑入口**：v1 是否在 CreateAgentDialog 里暴露这个字段？还是先用 driver 默认 prompt + 隐藏字段，让用户后期在 DM 中通过对话塑造？
 2. **跨 agent 共享的全局 KB**？比如所有 agent 都读得到的"用户偏好"？倾向 NO，可加 agent 之间互相 @ 的机制代替。
-3. **Workspace 默认位置**：当前 = `~/.silverhand/workspaces/<workspace-name>/`。要不要支持用户级别的 default 根目录配置（"我的所有 workspace 都建在 ~/code/silverhand/ 下"）？
-4. **Workspace 改名 / workspace 改路径**：v1 实现还是直接禁用（要改就建新 workspace 迁移）？倾向后者，复杂度低、用户也理解。 → **2026-05-02 翻案**：决定允许改名，方案见下面 §10。workspace 改路径仍禁用。
+3. ~~**Workspace 默认位置**：要不要支持用户级别的 default 根目录配置？~~ → **已由 relocation-v1 §7 关闭**：workspace 不再有本地路径这个维度，L2 bundle 是 agent-centric 确定性坐标，没有"默认根目录"可配。
+4. **Workspace 改名**：v1 实现还是直接禁用（要改就建新 workspace 迁移）？倾向后者，复杂度低、用户也理解。 → **2026-05-02 翻案**：决定允许改名，方案见下面 §10。（"改路径"这一半已随 relocation-v1 §7 消失——workspace 没有路径了。）
 5. **Onboarding channel 的特殊性**：是不是要给它一个 `metadata.kind='onboarding'` 标记，让 UI 在 channel tab 上显示个小标签？还是完全跟普通 channel 一视同仁？倾向后者，越少特殊状态越好。
 
 ---

@@ -29,7 +29,6 @@ import {
 } from './hooks';
 import { canManageAgentSchedules, canViewAgentFiles } from './permissions';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
-import { useHostProvenanceGate } from '@/features/hosts/hooks';
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
 
 const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
@@ -93,7 +92,6 @@ export function AgentView({
   const agentQuery = useAgent(agentId);
   const runtimeQuery = useAgentRuntimeState(agentId);
   const viewerQuery = useViewerUser();
-  const hostProvenance = useHostProvenanceGate();
 
   // Selected section persists globally (not per-agent) so the user
   // doesn't have to re-pick after switching agents — the more common
@@ -211,8 +209,6 @@ export function AgentView({
               {canViewFiles ? (
                 <AgentWorkspacePane
                   agentId={agent.id}
-                  hostId={agent.host_id}
-                  canRevealPath={hostProvenance.canUseLocalHostPathFor(agent.host_id)}
                 />
               ) : (
                 <AgentWorkspaceFilesPermissionState loading={!fileAccessKnown} />

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
@@ -14,8 +13,6 @@ function bootstrapWorkspaceAndAgents() {
   const workspace = workspaces.insert({
     name: 'ops',
     description: null,
-    workspacePath: testWorkspacePath('ops'),
-    workspaceHostId: localHostId,
   });
   const a = agents.create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
   const b = agents.create({ name: 'b', runtime: 'claude' }, localHostId, 'local');
@@ -61,7 +58,6 @@ describe('WorkspaceRepo', () => {
     workspaces.insertMembership(workspace.id, a.id);
     const home = workspaces.insertAgentHome({
       agent: a,
-      workspacePath: join(tmpdir(), 'agents', a.id),
     });
 
     expect(home).toMatchObject({
@@ -80,8 +76,6 @@ describe('WorkspaceRepo', () => {
     const sameNameRegular = workspaces.insert({
       name: a.name,
       description: null,
-      workspacePath: testWorkspacePath(a.name),
-      workspaceHostId: localHostId,
     });
     expect(sameNameRegular.workspace_kind).toBe('regular');
     expect(

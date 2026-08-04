@@ -8,10 +8,8 @@ const options = {
     "Can't reach the backend. Check your connection and try again.",
   fallbackMessage: "Couldn't create the workspace. Please try again.",
   knownCodeMessages: {
-    local_host_unbound:
-      'No connected computer can store this workspace. Connect one and try again.',
-    workspace_path_conflict:
-      'This folder is already used by another Silverhand workspace; choose a different folder.',
+    agent_not_owned:
+      "You can only add agents you created. Someone else's can be brought in only by its creator.",
   },
 };
 
@@ -53,35 +51,35 @@ describe('describeApiError', () => {
     expect(
       describeApiError(
         new ApiError(
-          409,
-          'Conflict',
+          403,
+          'Forbidden',
           JSON.stringify({
-            error: 'local host not bound',
-            code: 'local_host_unbound',
+            error: 'agent not owned by requester',
+            code: 'agent_not_owned',
           }),
         ),
         options,
       ),
       // Compare to the configured copy — the routing (code → message) is the
       // contract, not the sentence text.
-    ).toBe(options.knownCodeMessages.local_host_unbound);
+    ).toBe(options.knownCodeMessages.agent_not_owned);
   });
 
-  it('lets known codes replace noisy backend path details', () => {
+  it('lets known codes replace noisy backend detail', () => {
     expect(
       describeApiError(
         new ApiError(
-          409,
-          'Conflict',
+          403,
+          'Forbidden',
           JSON.stringify({
             error:
-              'path /Users/alice/work/my-workspace is already bound to workspace ws_other',
-            code: 'workspace_path_conflict',
+              'agent ag_7f2c is owned by user usr_91be and cannot be enrolled by usr_2a04',
+            code: 'agent_not_owned',
           }),
         ),
         options,
       ),
-    ).toBe(options.knownCodeMessages.workspace_path_conflict);
+    ).toBe(options.knownCodeMessages.agent_not_owned);
   });
 
   it('surfaces unknown backend reasons instead of a generic fallback', () => {

@@ -7,6 +7,7 @@ import {
   MINIMUM_CLIENT_API_EPOCH,
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 describe('auth routes', () => {
   let t: TestApp | null = null;
@@ -260,6 +261,7 @@ function request(
   return new Request(`http://localhost${path}`, {
     method,
     headers: {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
       ...headers,
     },

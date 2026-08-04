@@ -75,18 +75,6 @@ import {
   RuntimeStopAllResultSchema,
   RuntimeStopParamsSchema,
   RuntimeStopResultSchema,
-  WorkspaceProvisionErrorCodeSchema,
-  WorkspaceProvisionParamsSchema,
-  WorkspaceProvisionResultSchema,
-  WorkspacePathIndexErrorCodeSchema,
-  WorkspacePathIndexParamsSchema,
-  WorkspacePathIndexResultSchema,
-  WorkspaceUnbindErrorCodeSchema,
-  WorkspaceUnbindParamsSchema,
-  WorkspaceUnbindResultSchema,
-  WorkspaceRegistryIdsErrorCodeSchema,
-  WorkspaceRegistryIdsParamsSchema,
-  WorkspaceRegistryIdsResultSchema,
 } from './protocol.js';
 
 // D4.d D2: agent_materialize schemas live in `protocol.ts` so the
@@ -103,24 +91,14 @@ export {
   type AgentMaterializeResult,
 } from './protocol.js';
 
-// D4.e-1: workspace_provision + agent_workspace_index schemas also live
-// in `protocol.ts` (same IPC-catalogue reason as agent_materialize);
-// re-exported here so outbound-WS callers see them. D4.e-3 adds
-// agent_l2_seed (same reason). D4.e-4 adds agent_files_purge (same reason).
-// #task:811 adds agent_workspace_tree + agent_workspace_file_read.
+// D4.e-1: agent_workspace_index schema also lives in `protocol.ts` (same
+// IPC-catalogue reason as agent_materialize); re-exported here so outbound-WS
+// callers see it. D4.e-3 adds agent_l2_seed (same reason). D4.e-4 adds
+// agent_files_purge (same reason). #task:811 adds agent_workspace_tree +
+// agent_workspace_file_read. relocation-v1 §7-4 retired the
+// workspace_provision / workspace_path_index / workspace_unbind /
+// workspace_registry_ids intent family (registry demotion).
 export {
-  WorkspaceProvisionParamsSchema,
-  WorkspaceProvisionResultSchema,
-  WorkspaceProvisionErrorCodeSchema,
-  WorkspacePathIndexParamsSchema,
-  WorkspacePathIndexResultSchema,
-  WorkspacePathIndexErrorCodeSchema,
-  WorkspaceUnbindParamsSchema,
-  WorkspaceUnbindResultSchema,
-  WorkspaceUnbindErrorCodeSchema,
-  WorkspaceRegistryIdsParamsSchema,
-  WorkspaceRegistryIdsResultSchema,
-  WorkspaceRegistryIdsErrorCodeSchema,
   AgentWorkspaceIndexParamsSchema,
   AgentWorkspaceIndexResultSchema,
   AgentWorkspaceIndexErrorCodeSchema,
@@ -142,18 +120,6 @@ export {
   HostRuntimeCatalogParamsSchema,
   HostRuntimeCatalogResultSchema,
   RuntimeStartErrorCodeSchema,
-  type WorkspaceProvisionParams,
-  type WorkspaceProvisionResult,
-  type WorkspaceProvisionErrorCode,
-  type WorkspacePathIndexParams,
-  type WorkspacePathIndexResult,
-  type WorkspacePathIndexErrorCode,
-  type WorkspaceUnbindParams,
-  type WorkspaceUnbindResult,
-  type WorkspaceUnbindErrorCode,
-  type WorkspaceRegistryIdsParams,
-  type WorkspaceRegistryIdsResult,
-  type WorkspaceRegistryIdsErrorCode,
   type AgentWorkspaceIndexParams,
   type AgentWorkspaceIndexResult,
   type AgentWorkspaceIndexErrorCode,
@@ -236,7 +202,18 @@ const FrameIdSchema = z.string().min(1);
 // (#task:1582) — bilateral strict union, so each additive sender arm is
 // independently a breaking change for an older receiver. See the note at
 // HOST_PROTOCOL_VERSION.
-export const OUTBOUND_PROTOCOL_VERSION = 8;
+//
+// v9 (#task:1808, relocation-v1 §7-4 registry demotion): a SEMANTIC-only break
+// — command framing is unchanged, so an old daemon + new backend would ATTACH
+// cleanly and fail only at business time. The backend stops DISPATCHING
+// `workspace_provision` (create is a pure DB write; L2 materializes lazily at
+// first spawn) and the daemon resolves regular-workspace file surfaces by the
+// deterministic agent-centric coordinate, not a registry establishment gate.
+// The attach gate (exact-match of the daemon's advertised `ready`
+// `protocol_version` against this constant) turns that otherwise-silent
+// incompatibility into a fail-closed refusal at hello. Bumps alongside
+// HOST_PROTOCOL_VERSION (9→10). No shim.
+export const OUTBOUND_PROTOCOL_VERSION = 9;
 
 // ── server → daemon command catalogue ──────────────────────────────
 
@@ -314,58 +291,6 @@ export type AgentMaterializeWireError = z.infer<
  * (per-command scoping — Cindy D1 round-1 P1): a typed code from one
  * command cannot leak onto another's error arm.
  */
-export const WorkspaceProvisionWireErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      WorkspaceProvisionErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
-export type WorkspaceProvisionWireError = z.infer<
-  typeof WorkspaceProvisionWireErrorSchema
->;
-
-export const WorkspacePathIndexWireErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      WorkspacePathIndexErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
-export type WorkspacePathIndexWireError = z.infer<
-  typeof WorkspacePathIndexWireErrorSchema
->;
-
-export const WorkspaceUnbindWireErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      WorkspaceUnbindErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
-export type WorkspaceUnbindWireError = z.infer<
-  typeof WorkspaceUnbindWireErrorSchema
->;
-
-export const WorkspaceRegistryIdsWireErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      WorkspaceRegistryIdsErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
-export type WorkspaceRegistryIdsWireError = z.infer<
-  typeof WorkspaceRegistryIdsWireErrorSchema
->;
-
 export const AgentWorkspaceIndexWireErrorSchema = z
   .object({
     code: z.union([
@@ -456,11 +381,12 @@ export type McpProbeWireError = z.infer<typeof McpProbeWireErrorSchema>;
 
 // D4.e-6: commands whose execution may spawn a runtime widen their wire error
 // with the same resolver taxonomy. The daemon resolves all host paths and
-// fails closed; the backend reads `workspace_not_provisioned` (never
-// established on this computer — #task:1612: no lazy backfill exists),
-// `workspace_path_missing` (host-local files absent), or
-// `registry_unavailable` (hard fail) off this arm. `runtime_deliver` shares it
-// because its SPAWN arm executes the same resolver as `runtime_start`.
+// fails closed; the backend reads `workspace_not_provisioned` (an `agent_home`
+// ref that does not belong to this agent), `workspace_bundle_missing` (the
+// session cwd could not be created/entered on this computer), or
+// `registry_unavailable` (no attached computer, or an unsafe workspace id
+// segment) off this arm. `runtime_deliver` shares it because its SPAWN arm
+// executes the same resolver as `runtime_start`.
 export const RuntimeStartWireErrorSchema = z
   .object({
     code: z.union([
@@ -486,12 +412,12 @@ export type RuntimeStartWireError = z.infer<
  * Default `error` is `ResponseErrorSchema` (the five generic
  * transport-level codes). Commands that may legitimately surface
  * typed daemon-business errors (`agent_materialize`; the D4.e
- * workspace data-plane commands `workspace_provision` /
- * `agent_workspace_index` / `agent_l2_seed` / `agent_files_purge`;
+ * workspace data-plane commands `agent_workspace_index` / `agent_l2_seed` /
+ * `agent_files_purge`;
  * #task:811 commands `agent_workspace_tree` / `agent_workspace_file_read`;
  * and runtime-spawning commands (`runtime_start` plus `runtime_deliver`'s
  * SPAWN arm — D4.e-6, codes `workspace_not_provisioned` /
- * `workspace_path_missing` / `registry_unavailable`) override with their own
+ * `workspace_bundle_missing` / `registry_unavailable`) override with their own
  * wider schema.
  */
 export const outboundServerCommandSchemas = {
@@ -551,32 +477,6 @@ export const outboundServerCommandSchemas = {
     params: AgentMaterializeParamsSchema,
     result: AgentMaterializeResultSchema,
     error: AgentMaterializeWireErrorSchema,
-  },
-  workspace_provision: {
-    params: WorkspaceProvisionParamsSchema,
-    result: WorkspaceProvisionResultSchema,
-    error: WorkspaceProvisionWireErrorSchema,
-  },
-  workspace_path_index: {
-    params: WorkspacePathIndexParamsSchema,
-    result: WorkspacePathIndexResultSchema,
-    error: WorkspacePathIndexWireErrorSchema,
-  },
-  // #task:1719 — registry-mapping removal for backend-deleted workspaces.
-  workspace_unbind: {
-    params: WorkspaceUnbindParamsSchema,
-    result: WorkspaceUnbindResultSchema,
-    error: WorkspaceUnbindWireErrorSchema,
-  },
-  // #task:1719 — ready-generation reconcile pull (ids ONLY, never paths).
-  // Both #1719 commands are capability-gated on
-  // `workspace.registry_reconcile.v1`: the backend never dispatches either
-  // to a daemon that did not advertise the token (an old daemon would
-  // strict-reject the unknown kind and drop the connection).
-  workspace_registry_ids: {
-    params: WorkspaceRegistryIdsParamsSchema,
-    result: WorkspaceRegistryIdsResultSchema,
-    error: WorkspaceRegistryIdsWireErrorSchema,
   },
   agent_workspace_index: {
     params: AgentWorkspaceIndexParamsSchema,

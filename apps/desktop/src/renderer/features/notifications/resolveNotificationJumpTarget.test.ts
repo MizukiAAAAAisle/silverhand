@@ -28,7 +28,6 @@ function makeChannelRef(overrides: Partial<ConversationRef> = {}): ConversationR
     title: 'general',
     workspace_id: 'ws_a',
     workspace_kind: 'regular',
-    workspace_path: '/tmp/ws_a',
     closed_at: null,
     archived_at: null,
     ...overrides,

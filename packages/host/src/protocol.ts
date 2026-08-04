@@ -166,8 +166,23 @@ import {
 //     lifecycle used as generation-boundary evidence.
 //   - `api_response` (#task:1582): normalized provider notice
 //     (waiting/ready/notice + message; never raw payloads).
+//
+// v10 (#task:1808, relocation-v1 §7-4 registry demotion): a SEMANTIC wire
+// break with NO schema/framing change — command shapes are byte-identical, so
+// old/new peers would hello cleanly and only diverge at business time. The
+// backend no longer dispatches `workspace_provision` (a regular workspace is
+// created as a pure DB write; each member's L2 bundle is materialized lazily
+// at first spawn), and the daemon now resolves a regular workspace's file
+// surfaces (`agent_workspace_tree`/`_file_read`) by the deterministic
+// agent-centric coordinate rather than a registry establishment gate. An old
+// daemon still expects a provision-established binding, so old daemon + new
+// backend would attach and then fail-closed later (`workspace_not_provisioned`
+// on a workspace the backend never provisions). The epoch bump converts that
+// silent behavioral incompatibility into a loud fail-at-hello.
+// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (8→9). No shim — the standalone
+// daemon epoch is unreleased and moves as one version.
 
-export const HOST_PROTOCOL_VERSION = 9;
+export const HOST_PROTOCOL_VERSION = 10;
 
 // ── capability tokens ────────────────────────────────────────────────
 //
@@ -189,13 +204,10 @@ export const HOST_PROTOCOL_VERSION = 9;
 // changes; adding a new effort VALUE does not.
 
 /**
- * #task:1719 — named export of the registry-reconcile capability token so the
- * backend gate (`workspace_unbind` / `workspace_registry_ids` dispatch) and
- * the daemon advertisement share ONE literal instead of a re-typed string.
+ * #task:1614 — this daemon serves the `agent_stale_receive` intent
+ * (deferred-pull second consumer). The CLI gates the command on this token so
+ * a new CLI against an old daemon fails with a clear message.
  */
-export const WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1 =
-  'workspace.registry_reconcile.v1' as const;
-
 export const KNOWN_CAPABILITIES_V1 = [
   'runtime.claude',
   'runtime.codex',
@@ -212,14 +224,6 @@ export const KNOWN_CAPABILITIES_V1 = [
   // token so a new CLI against an old daemon fails with a clear message
   // instead of `unknown_intent`.
   'agent.stale_receive.v1',
-  // #task:1719 — covers the workspace_unbind + workspace_registry_ids
-  // intent family (registry identity teardown + ready-generation
-  // reconcile pull). The backend MUST withhold BOTH commands from a
-  // daemon that did not advertise this token: an old daemon
-  // strict-rejects an unknown command kind and closes the connection
-  // (`closeProtocolError` in outbound-client.ts), so an ungated dispatch
-  // would DISCONNECT every not-yet-upgraded computer.
-  WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1,
 ] as const;
 export type KnownCapabilityV1 = typeof KNOWN_CAPABILITIES_V1[number];
 
@@ -759,8 +763,10 @@ const RuntimeStartWorkspaceRefSchema = z
     // D4.e-6: SEMANTIC ref only — no `path`. The carve-out that let
     // `workspace.path` cross the boundary as "server DB metadata" is
     // REVOKED (design §3.5). The daemon is the sole authority for
-    // host-local workspace paths: it resolves `regular` workspaces via
-    // its registry (`registry.resolve(id)`) and `agent_home` via
+    // host-local workspace paths: relocation-v1 §7 task 4 resolves
+    // `regular` workspaces to their deterministic agent-centric bundle
+    // coordinate (`resolveAgentWorkspaceBundleDir(agentId, id)`) — no
+    // registry establishment gate — and `agent_home` via
     // `computeAgentDir(agentId)`. No path field travels on this wire.
   })
   .strict();
@@ -1798,8 +1804,8 @@ export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
  *
  * Default = `ResponseErrorSchema` (the 5 transport-level codes).
  * Intents that may legitimately surface daemon-business typed
- * codes — `agent_materialize` and the D4.e workspace data-plane
- * intents (`workspace_provision`, `agent_workspace_index`,
+ * codes — `agent_materialize` and the workspace data-plane
+ * intents (`agent_workspace_index`,
  * `agent_l2_seed`, `agent_files_purge`) — override with a wider schema that unions
  * the 5 generic codes with the intent's own taxonomy (e.g.
  * `AgentMaterializeErrorCodeSchema`).
@@ -1835,26 +1841,38 @@ const AgentMaterializeIpcErrorSchema = z
 //
 // Before D4.e-6 runtime spawn shipped paths and could not fail on path
 // resolution, so `runtime_start` used only the 5 generic codes. Now the daemon
-// resolves `workspace.path`/`home_dir` itself (registry + computeAgentDir) and
-// FAILS CLOSED when it can't — design §3.5 / Cindy criterion 2. The three
-// daemon-business codes below form the resolver taxonomy. Both `runtime_start`
-// and `runtime_deliver` may spawn, so both declare it; a typed code still
-// cannot leak onto a non-spawning intent's wire error.
-//   - `workspace_not_provisioned`: the regular workspace id is not bound
-//     in the daemon registry (this computer never established it —
-//     #task:1612: there is no lazy backfill; the binding is created at
-//     workspace creation or guest membership establishment, or never).
-//   - `workspace_path_missing`: the daemon resolved a semantic workspace
-//     ref, but the host-local path no longer exists or is not a directory
-//     (for example an old agent_home row created under another
-//     `SILVERHAND_DIR`). Not recoverable by re-provisioning; the local
-//     files need to be restored/materialized.
-//   - `registry_unavailable`: the registry itself can't be consulted
-//     (daemon not attached to a control plane, or foreign/corrupt
-//     registry file). Hard fail-closed.
+// resolves `workspace.path`/`home_dir` itself and can fail on path resolution
+// or cwd admission — design §3.5 / Cindy criterion 2. The codes below form the
+// resolver taxonomy. Both `runtime_start` and `runtime_deliver` may spawn, so
+// both declare it; a typed code still cannot leak onto a non-spawning intent's
+// wire error.
+//
+// relocation-v1 §7 task 4 + shiki/Cindy 2026-08-04 pivot: there is no registry
+// establishment gate any more, and L1/L2 CONTENT is NEVER a spawn gate. The
+// session cwd is the ONLY hard-ensured runtime base — the supervisor `mkdir -p`s
+// the deterministic bundle coordinate and requires a usable/enterable directory.
+// A missing/half-seeded MEMORY.md still spawns (the prompt just omits the L2
+// section).
+//   - `workspace_bundle_missing`: the daemon resolved a semantic workspace ref
+//     but could NOT hard-ensure its session cwd — the OS cannot spawn a child
+//     there (the path is occupied by a non-directory file, or the dir cannot be
+//     created/entered). This is process admission, NOT an L2/memory check. The
+//     concrete host path is a host-only diagnostic (logged daemon-side) and
+//     never rides the wire `message` — the typed error names only the semantic
+//     id + kind (relocation-v1 §7 task 3).
+//   - `registry_unavailable`: an unsafe workspace id segment that can never form
+//     a bundle coordinate (path-safety fail-closed), or the daemon is not
+//     attached to a control plane so the authenticated computer id cannot be
+//     resolved. Hard fail-closed.
+//   - `workspace_not_provisioned`: an `agent_home` ref that does not belong to
+//     this agent (a foreign/corrupt ref refused rather than resolved onto this
+//     agent's L1). NOTE: no longer emitted for a "regular workspace not bound"
+//     case — that gate was removed with the registry demotion; it survives only
+//     as the agent-home ownership boundary. (Kept in the enum; a broader
+//     epoch-wide narrowing of the shared code is tracked with #1807/#1808.)
 export const RuntimeStartErrorCodeSchema = z.enum([
   'workspace_not_provisioned',
-  'workspace_path_missing',
+  'workspace_bundle_missing',
   'registry_unavailable',
 ]);
 export type RuntimeStartErrorCode = z.infer<typeof RuntimeStartErrorCodeSchema>;
@@ -1876,297 +1894,22 @@ const AgentStaleReceiveIpcErrorSchema = z
   .strict();
 
 
-// ── D4.e-1: workspace_provision + agent_workspace_index ───────────────
+// ── agent_workspace_index ─────────────────────────────────────────────
 //
-// Data-plane intents that make the daemon the sole authority for
-// host-local path resolution of regular workspaces (design rev3
-// 0e995ac §2/§3.1/§3.4). Both are server↔daemon formal semantics like
-// `agent_materialize` (NOT runtime_* control / host_outbound_* plumbing):
-// the backend speaks only semantic ids; the daemon resolves the
-// absolute path via its local workspace registry. Per-command typed
+// Data-plane READ intent that makes the daemon the sole authority for
+// host-local path resolution of regular workspaces (relocation-v1 §3.4).
+// Server↔daemon formal semantics like `agent_materialize` (NOT runtime_*
+// control / host_outbound_* plumbing): the backend speaks only semantic ids;
+// the daemon resolves the absolute path via its own layout. Per-command typed
 // error scoping mirrors agent_materialize.
-
-export const WorkspaceProvisionParamsSchema = z
-  .object({
-    workspace_id: z.string().min(1),
-    /**
-     * Semantic classification (backend-owned, from the DB) — NOT a path.
-     * Only `regular` is provisioned here; `agent_home` is materialized
-     * via `agent_materialize` and is rejected with `unsupported_kind`.
-     */
-    kind: WorkspaceKindSchema,
-    /**
-     * OPTIONAL caller-PROPOSED host path for the workspace root (M1
-     * folder-picker on local desktop, or an advanced typed path on a
-     * sandbox/remote host). When ABSENT the daemon self-picks a
-     * deterministic managed path under its own root (the zero-choice
-     * default). When PRESENT the daemon RE-VALIDATES it host-side — a
-     * registry structural check (absolute / not root / not home / not
-     * inside the silverhand state dir except under `workspaces/` / not
-     * inside the managed root / not overlapping another workspace's root)
-     * — it never blindly trusts a backend-supplied path. Creatability /
-     * writability is NOT probed in the registry; it is proven at the
-     * skeleton-creation stage, where an fs errno classifies as
-     * `fs_unavailable` / `fs_quota_exceeded`. The authoritative result is
-     * always `bound_workspace_path`, NOT this field. The backend NEVER
-     * interprets this path; it only decides whether to forward one
-     * (#task:1612: it is forwarded only at workspace creation — guest
-     * membership establishment provisions pathless).
-     */
-    requested_path: z.string().min(1).optional(),
-  })
-  .strict();
-export type WorkspaceProvisionParams = z.infer<
-  typeof WorkspaceProvisionParamsSchema
->;
-
-export const WorkspaceProvisionResultSchema = z
-  .object({
-    ok: z.literal(true),
-    /**
-     * true when this call newly bound the workspace in the registry;
-     * false on idempotent re-provision of an already-bound workspace
-     * (same id → same path, whether daemon-managed or caller-proposed).
-     */
-    provisioned: z.boolean(),
-    /**
-     * D4.e-1 (Cindy #720 Q1): the daemon-managed-or-validated workspace
-     * root the daemon just bound/created — the AUTHORITATIVE path (the
-     * daemon self-picked it, or accepted+validated the caller's
-     * `requested_path`). **Transitional seam, NOT a return to server path
-     * authority.** Path authority stays with the daemon; the backend is
-     * only permitted to cache this into the legacy NOT-NULL
-     * `workspaces.workspace_path` column to keep pre-migration consumers
-     * (member-add seed / delete / runtime_start) working until their own
-     * D4.e-3/-4/-6 slices migrate them. It MUST NOT be used to assemble
-     * `agent_dir`, any agent-facing DTO, or a runtime formal payload —
-     * those go through `agent_workspace_index` / the registry. Same class
-     * of exception as D4.d `agent_materialize` returning `agent_dir`.
-     */
-    bound_workspace_path: z.string().min(1),
-  })
-  .strict();
-export type WorkspaceProvisionResult = z.infer<
-  typeof WorkspaceProvisionResultSchema
->;
-
-export const WorkspaceProvisionErrorCodeSchema = z.enum([
-  /** `kind: 'agent_home'` routed here — must go via `agent_materialize`. */
-  'unsupported_kind',
-  /**
-   * A caller-supplied `requested_path` failed daemon-side STRUCTURAL
-   * validation (relative / root / home / inside the silverhand state dir
-   * except under `workspaces/` / inside the managed root). Creatability is
-   * NOT checked here — that surfaces as `fs_unavailable` /
-   * `fs_quota_exceeded` from the skeleton stage; a same-/nested-root
-   * collision with another workspace is `path_conflict`, not this. Cannot
-   * occur on the no-path default branch (daemon-chosen path is always
-   * valid).
-   */
-  'invalid_path',
-  /**
-   * Path-vs-id binding conflict: this `workspace_id` is already bound to
-   * a DIFFERENT path, OR the `requested_path` overlaps (equals OR nests
-   * with) a path already bound to a DIFFERENT workspace — two workspaces
-   * may never share or nest roots (a recursive purge of the outer would
-   * delete the inner). Refused, never silently overwritten. Same id→same
-   * path is idempotent (`provisioned:false`), not a conflict.
-   */
-  'path_conflict',
-  'fs_quota_exceeded',
-  'fs_unavailable',
-  /** Foreign/corrupt daemon registry — fail closed. */
-  'registry_unavailable',
-  'internal_error',
-]);
-export type WorkspaceProvisionErrorCode = z.infer<
-  typeof WorkspaceProvisionErrorCodeSchema
->;
-
-const WorkspaceProvisionIpcErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      WorkspaceProvisionErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
-
-// ── #task:1627 — workspace_path_index ───────────────────────────────
 //
-// Viewer-facing read projection of daemon-local workspace roots. The backend
-// sends only semantic refs it has already authorized from DB membership; the
-// daemon resolves regular roots through WorkspaceRegistry and agent-home roots
-// through its local L1 layout. No server-cached path crosses the boundary.
-
-export const WorkspacePathIndexRefSchema = z
-  .object({
-    workspace_id: z.string().min(1),
-    kind: WorkspaceKindSchema,
-    owner_agent_id: z.string().min(1).nullable(),
-  })
-  .strict();
-export type WorkspacePathIndexRef = z.infer<
-  typeof WorkspacePathIndexRefSchema
->;
-
-export const WorkspacePathIndexParamsSchema = z
-  .object({
-    workspaces: z.array(WorkspacePathIndexRefSchema),
-  })
-  .strict();
-export type WorkspacePathIndexParams = z.infer<
-  typeof WorkspacePathIndexParamsSchema
->;
-
-export const WorkspacePathIndexEntrySchema = z
-  .object({
-    workspace_id: z.string().min(1),
-    path: z.string().min(1),
-  })
-  .strict();
-export type WorkspacePathIndexEntry = z.infer<
-  typeof WorkspacePathIndexEntrySchema
->;
-
-export const WorkspacePathIndexResultSchema = z
-  .object({
-    ok: z.literal(true),
-    entries: z.array(WorkspacePathIndexEntrySchema),
-    /** Missing binding/directory or an invalid agent-home semantic ref. */
-    unresolved: z.array(z.string().min(1)),
-  })
-  .strict();
-export type WorkspacePathIndexResult = z.infer<
-  typeof WorkspacePathIndexResultSchema
->;
-
-export const WorkspacePathIndexErrorCodeSchema = z.enum([
-  'registry_unavailable',
-  'internal_error',
-]);
-export type WorkspacePathIndexErrorCode = z.infer<
-  typeof WorkspacePathIndexErrorCodeSchema
->;
-
-const WorkspacePathIndexIpcErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      WorkspacePathIndexErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
-
-// ── #task:1719 — workspace_unbind ───────────────────────────────────
-//
-// Registry-mapping removal for backend-deleted workspaces. When the backend
-// deletes a workspace row, the daemons' `workspace-registry.json` entries for
-// that id become ghosts that wrongly participate in path-overlap validation.
-// The backend dispatches this intent to every relevant host; the daemon
-// removes ONLY the registry mapping — it NEVER touches any directory or file
-// contents (zero implicit deletion of user data, #1594). Idempotent: an id
-// that was never bound / already unbound is SUCCESS, reported in `absent`.
-
-/**
- * #task:1719 — upper bound for one `workspace_unbind` batch. The schema
- * rejects a larger array (fail loud, not truncate); a backend holding more
- * ids (e.g. a reconcile ghost sweep) chunks by this constant. Non-empty is
- * also enforced: an empty unbind is a caller bug, not an idempotent no-op.
- */
-export const WORKSPACE_UNBIND_MAX_BATCH = 200;
-
-export const WorkspaceUnbindParamsSchema = z
-  .object({
-    workspace_ids: z
-      .array(z.string().min(1))
-      .min(1)
-      .max(WORKSPACE_UNBIND_MAX_BATCH),
-  })
-  .strict();
-export type WorkspaceUnbindParams = z.infer<
-  typeof WorkspaceUnbindParamsSchema
->;
-
-export const WorkspaceUnbindResultSchema = z
-  .object({
-    ok: z.literal(true),
-    /** Ids whose registry mapping existed and was removed. */
-    removed: z.array(z.string().min(1)),
-    /** Ids never bound / already unbound — idempotent success, not error. */
-    absent: z.array(z.string().min(1)),
-  })
-  .strict();
-export type WorkspaceUnbindResult = z.infer<
-  typeof WorkspaceUnbindResultSchema
->;
-
-export const WorkspaceUnbindErrorCodeSchema = z.enum([
-  'registry_unavailable',
-  'internal_error',
-]);
-export type WorkspaceUnbindErrorCode = z.infer<
-  typeof WorkspaceUnbindErrorCodeSchema
->;
-
-const WorkspaceUnbindIpcErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      WorkspaceUnbindErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
-
-// ── #task:1719 — workspace_registry_ids ────────────────────────────
-//
-// The ready-generation reconcile PULL: the backend asks the daemon which
-// workspace ids its registry currently binds, diffs them against the DB's
-// legal set for that host, and unbinds the ghosts. IDS ONLY — paths never
-// cross the wire (I1: the daemon is the sole path authority, and the
-// backend has no use for them). Read-only on the daemon side.
-
-export const WorkspaceRegistryIdsParamsSchema = z.object({}).strict();
-export type WorkspaceRegistryIdsParams = z.infer<
-  typeof WorkspaceRegistryIdsParamsSchema
->;
-
-export const WorkspaceRegistryIdsResultSchema = z
-  .object({
-    ok: z.literal(true),
-    /**
-     * Every workspace id currently bound in this daemon's registry under
-     * its current control-plane binding. An absent/empty registry file is
-     * SUCCESS with `[]` — "nothing bound" is a normal state, not an error.
-     */
-    workspace_ids: z.array(z.string().min(1)),
-  })
-  .strict();
-export type WorkspaceRegistryIdsResult = z.infer<
-  typeof WorkspaceRegistryIdsResultSchema
->;
-
-export const WorkspaceRegistryIdsErrorCodeSchema = z.enum([
-  /** Foreign/corrupt daemon registry — fail closed (whole call). */
-  'registry_unavailable',
-  'internal_error',
-]);
-export type WorkspaceRegistryIdsErrorCode = z.infer<
-  typeof WorkspaceRegistryIdsErrorCodeSchema
->;
-
-const WorkspaceRegistryIdsIpcErrorSchema = z
-  .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      WorkspaceRegistryIdsErrorCodeSchema,
-    ]),
-    message: z.string(),
-  })
-  .strict();
+// relocation-v1 §7-4 (#task:1808): the registry WRITE/reconcile intents that
+// used to sit alongside this one — `workspace_provision` /
+// `workspace_path_index` / `workspace_unbind` / `workspace_registry_ids` —
+// were retired when the workspace-registry was demoted from a runtime path
+// authority to a marker-absent, migration-only inventory reader. Workspace
+// creation is now a pure DB write; the daemon resolves regular workspaces by
+// their deterministic agent-centric bundle coordinate.
 
 export const AgentWorkspaceIndexParamsSchema = z
   .object({
@@ -2184,9 +1927,10 @@ export const AgentWorkspaceIndexEntrySchema = z
     workspace_id: z.string().min(1),
     /**
      * Daemon-resolved absolute `agent_dir` for this (agent, workspace):
-     * agent-home → the agent's L1 dir; regular → `<ws>/.silverhand/
-     * agents/<agent_id>`. Stamped daemon-side; the backend never
-     * assembles it from `workspace_path`.
+     * agent-home → the agent's L1 dir; regular → the deterministic
+     * agent-centric bundle coordinate `<agent home>/workspaces/
+     * <workspace_id>` (relocation-v1 §3.2/§7). Stamped daemon-side; the
+     * backend has no path to assemble one from and must not invent one (I1).
      */
     agent_dir: z.string().min(1),
   })
@@ -2200,10 +1944,13 @@ export const AgentWorkspaceIndexResultSchema = z
     ok: z.literal(true),
     entries: z.array(AgentWorkspaceIndexEntrySchema),
     /**
-     * Regular workspaces that are neither provisioned nor adopted on this
-     * daemon (read fail-closed: no managed-path guess). The backend
-     * decides how to surface these — it MUST NOT fall back to a
-     * `workspace_path`-derived path (that would re-pierce I1).
+     * Workspaces whose `agent_dir` this daemon does not report. Since
+     * relocation-v1 §7-4 this is NOT a provisioning/adoption verdict — the
+     * coordinate is always computable — it is a CWD AVAILABILITY fact: the
+     * bundle is not a usable working directory on this computer right now
+     * (the normal lazy window before the first spawn there), or its id
+     * segment could never form a safe coordinate. The backend surfaces these
+     * as `agent_dir: null`; it MUST NOT synthesize a path of its own (I1).
      */
     unresolved: z.array(z.string().min(1)),
   })
@@ -2213,7 +1960,13 @@ export type AgentWorkspaceIndexResult = z.infer<
 >;
 
 export const AgentWorkspaceIndexErrorCodeSchema = z.enum([
-  /** Foreign/corrupt daemon registry — fail closed (whole call). */
+  /**
+   * The daemon has no attached computer yet, so it has no agents root to
+   * resolve ANY entry under (`agentsRootFor`) — the whole call fails closed.
+   * Despite the legacy name this is not a registry consult (relocation-v1 §7
+   * task 4 demoted the registry): a per-entry unresolvable/unsafe id degrades
+   * to the `unresolved` list instead, never a whole-call failure.
+   */
   'registry_unavailable',
   'internal_error',
 ]);
@@ -2262,8 +2015,9 @@ export const AgentWorkspaceTreeParamsSchema = z
     /** Optional L2 scope. Omitted = the agent home/L1 dir. Present =
      *  resolve this workspace id daemon-side to the agent's per-workspace
      *  memory dir. Agent-home/DM workspace ids naturally resolve back to the
-     *  same home dir; regular workspace ids resolve through the daemon
-     *  workspace registry. No filesystem path crosses the wire. */
+     *  same home dir; regular workspace ids resolve to their DETERMINISTIC
+     *  agent-centric bundle coordinate (`resolveAgentWorkspaceBundleDir`) — no
+     *  registry establishment gate. No filesystem path crosses the wire. */
     workspace_id: z.string().min(1).optional(),
   })
   .strict();
@@ -2329,12 +2083,12 @@ export const AgentWorkspaceFsErrorCodeSchema = z.enum([
    *  the leaf is a directory when the read endpoint asked for a file,
    *  etc). Route projects 404. */
   'not_found',
-  /** A scoped regular workspace id exists in the control plane but has no
-   *  daemon registry binding, so the daemon refuses to guess a path. Route
-   *  projects 409. */
-  'workspace_not_provisioned',
-  /** The daemon cannot consult its workspace registry (no control-plane
-   *  binding yet, foreign/corrupt registry file). Route projects 503. */
+  /** The daemon has no attached computer yet (the machine has not bound to a
+   *  server), so its agents root — and therefore any agent memory tree — is
+   *  unavailable. relocation-v1 §7 task 4: this is NO LONGER a workspace-registry
+   *  consult; a regular workspace resolves purely by its deterministic bundle
+   *  coordinate, and a not-yet-materialized bundle degrades to `not_found`, never
+   *  a provisioning refusal. Route projects 503 (retriable once attached). */
   'registry_unavailable',
   /** Hard host-local fs failure (perm/IO/EROFS/…). Route projects 503. */
   'fs_unavailable',
@@ -2355,24 +2109,25 @@ const AgentWorkspaceFsIpcErrorSchema = z
   .strict();
 
 // ── D4.e-3: agent_l2_seed ────────────────────────────────────────────
-// Seeds a member agent's L2 (per-workspace) memory dir
-// `<workspace>/.silverhand/agents/<agent_id>/` (MEMORY.md + notes/) on the
-// OWNING daemon. Replaces backend `seedAgentL2` (G1). The backend forwards
-// only semantic ids; the daemon resolves the workspace path from its
-// registry (regular-only — agent-home L2 == L1 and is already materialized
-// by `agent_materialize`, so it is never seeded here) and writes the L2
-// template, which is the L1 template MINUS `system_prompt.md` (L1-only
+// Seeds a member agent's L2 (per-workspace) memory bundle
+// `<agent home>/workspaces/<workspace_id>/` (MEMORY.md + notes/) on THAT
+// agent's own daemon. Replaces backend `seedAgentL2` (G1). The backend forwards
+// only semantic ids; the daemon resolves the deterministic agent-centric bundle
+// coordinate itself (regular-only — agent-home L2 == L1 and is already
+// materialized by `agent_materialize`, so it is never seeded here) and writes
+// the L2 template, which is the L1 template MINUS `system_prompt.md` (L1-only
 // invariant). Idempotent: existing files are preserved, never overwritten.
 export const AgentL2SeedParamsSchema = z
   .object({
     /** The member agent whose L2 dir is seeded under the workspace. */
     agent_id: z.string().min(1),
     /**
-     * The REGULAR workspace to seed into. The daemon resolves its
-     * host-local path from the registry (fail-closed if not provisioned);
-     * no path crosses the wire (I1). An agent-home id is not in the
-     * registry → `workspace_not_provisioned` (this intent is regular-only;
-     * the backend never sends `kind`).
+     * The REGULAR workspace to seed into. The daemon resolves its host-local
+     * path to the DETERMINISTIC agent-centric bundle coordinate
+     * (`<agent home>/workspaces/<wid>`) — seeding IS what materializes it, so
+     * there is no establishment gate and no provisioning refusal (an
+     * un-materialized bundle is created, not rejected). No path crosses the
+     * wire (I1). This intent is regular-only; the backend never sends `kind`.
      */
     workspace_id: z.string().min(1),
     /** Template identifier (matches `agent_materialize`'s wire enum). */
@@ -2398,12 +2153,10 @@ export type AgentL2SeedResult = z.infer<typeof AgentL2SeedResultSchema>;
 
 export const AgentL2SeedErrorCodeSchema = z.enum([
   /**
-   * The workspace has no registry binding (never provisioned / adopted).
-   * Fail-closed: the daemon never derives a path from a backend-supplied
-   * value, and the L2 seed cannot proceed without the bound path.
+   * The daemon cannot form a bundle coordinate at all: no attached computer (no
+   * agents root) or an unsafe workspace id segment (path-safety fail-closed,
+   * before any fs write). Legacy name — not a registry consult.
    */
-  'workspace_not_provisioned',
-  /** Whole-registry failure (foreign identity / corrupt file). */
   'registry_unavailable',
   /** `template_choice` is structurally valid but has no host-side entry. */
   'unsupported_template',
@@ -2423,34 +2176,18 @@ const AgentL2SeedIpcErrorSchema = z
 // ── D4.e-4: agent_files_purge ────────────────────────────────────────
 // Removes an agent's host-local files on the OWNING daemon. Replaces the
 // backend `DELETE /api/agents/:id` `fs.rm(l1_path / l2_paths)` block (G3):
-// the backend forwards only semantic ids + scope; the daemon resolves L1
-// (its homedir, `<home>/.silverhand/agents/<agent_id>`) and each L2
-// (`<workspace>/.silverhand/agents/<agent_id>`, workspace path from the
-// registry) itself — no fs path crosses the wire (I1). `scope:'all'` purges
-// L1 + the listed workspaces' L2; `scope:'l2'` purges only the listed L2
-// (L1 untouched). Idempotent: a target that is already gone (ENOENT) counts
-// as success, not a failure. Fail-closed (§3.3): a HARD fs error on any
-// target → typed `partial_purge` so the route keeps the DB row for retry; a
-// workspace with no registry binding has no daemon-managed L2 dir to purge
-// and is reported (`skipped_unprovisioned`), never silently dropped.
+// the backend forwards only `{ agent_id }`; the daemon resolves the agent
+// home tree (`<home>/.silverhand/agents/<agent_id>` = L1 + every nested
+// `workspaces/<id>` L2 bundle) itself — no fs path crosses the wire (I1).
+// relocation-v1 §7 task 4 (registry demotion): the whole managed footprint is
+// one tree, so the purge removes it in a single rm and consults NO registry.
+// Idempotent: a target already gone (ENOENT) counts as success, not failure.
+// Fail-closed (§3.3): a HARD fs error → typed `partial_purge` so the route
+// keeps the DB row for retry.
 export const AgentFilesPurgeParamsSchema = z
   .object({
-    /** The agent whose host-local files are removed. */
+    /** The agent whose host-local files (the whole agent home tree) are removed. */
     agent_id: z.string().min(1),
-    /**
-     * `all` → purge the agent's L1 home dir AND each listed workspace's L2;
-     * `l2` → purge only the listed workspaces' L2 (L1 preserved).
-     */
-    scope: z.enum(['all', 'l2']),
-    /**
-     * REGULAR workspace ids whose L2 dir for this agent should be purged.
-     * The daemon resolves each one's host-local path from the registry
-     * (fail-closed — no path crosses the wire, I1). An id with no binding
-     * has no daemon-managed L2 dir and is counted in
-     * `skipped_unprovisioned`. Defaults to `[]` (e.g. `scope:'all'` with no
-     * regular memberships → L1-only purge).
-     */
-    workspace_ids: z.array(z.string().min(1)).default([]),
   })
   .strict();
 export type AgentFilesPurgeParams = z.infer<typeof AgentFilesPurgeParamsSchema>;
@@ -2461,24 +2198,17 @@ export const AgentFilesPurgeResultSchema = z
     /** Number of target dirs that existed and were removed (ENOENT targets
      *  are NOT counted — there was nothing to purge). */
     purged_count: z.number().int().nonnegative(),
-    /** Number of listed workspaces with no registry binding (no
-     *  daemon-managed L2 dir to purge). Reported, never silently dropped. */
-    skipped_unprovisioned: z.number().int().nonnegative(),
   })
   .strict();
 export type AgentFilesPurgeResult = z.infer<typeof AgentFilesPurgeResultSchema>;
 
 export const AgentFilesPurgeErrorCodeSchema = z.enum([
   /**
-   * One or more target dirs could not be removed because of a HARD fs error
+   * The agent home tree could not be removed because of a HARD fs error
    * (perm/IO/EROFS/ENOSPC — NOT ENOENT). Fail-closed (§3.3): the route keeps
-   * the DB row so a later retry has its routing anchor. May be raised even
-   * when zero targets succeeded (the purge did not fully complete).
+   * the DB row so a later retry has its routing anchor.
    */
   'partial_purge',
-  /** Whole-registry failure (foreign identity / corrupt file) — cannot
-   *  safely resolve ANY L2 path, so the purge is blocked fail-closed. */
-  'registry_unavailable',
   'internal_error',
 ]);
 export type AgentFilesPurgeErrorCode = z.infer<
@@ -2622,8 +2352,8 @@ const McpProbeIpcErrorSchema = z
  * explicit `error` entry use `ResponseErrorSchema` (the 5
  * transport-level codes) at IPC validation time. Only intents
  * that may legitimately surface daemon-business typed codes —
- * `agent_materialize` (D4.d) plus the D4.e workspace data-plane
- * intents `workspace_provision` / `agent_workspace_index` /
+ * `agent_materialize` (D4.d) plus the workspace data-plane
+ * intents `agent_workspace_index` /
  * `agent_l2_seed` / `agent_files_purge` — declare their own widened error schema. The wire surface stays
  * per-intent-scoped (Cindy D2 P1-1 + D1 round-1 P1): a typed code
  * in one intent's error arm cannot leak into another intent's
@@ -2691,9 +2421,10 @@ export const intentSchemas = {
     result: RuntimeStartResultSchema,
     // D4.e-6 — daemon now resolves all paths and fails closed on
     // unresolvable workspaces; the typed taxonomy lets the backend
-    // tell `workspace_not_provisioned` (never established here),
-    // `workspace_path_missing` (host-local files missing), and
-    // `registry_unavailable` (hard fail) apart from a generic
+    // tell `workspace_not_provisioned` (an `agent_home` ref that does
+    // not belong to this agent), `workspace_bundle_missing` (session
+    // cwd could not be created/entered) and `registry_unavailable`
+    // (no attached computer / unsafe id) apart from a generic
     // `internal_error`. Per-command scoped like agent_materialize.
     error: RuntimeSpawnIpcErrorSchema,
   },
@@ -2772,37 +2503,12 @@ export const intentSchemas = {
     result: AgentMaterializeResultSchema,
     error: AgentMaterializeIpcErrorSchema,
   },
-  // D4.e-1: data-plane path-authority intents. Same per-command typed
-  // error scoping as agent_materialize — each widens the 5 generic codes
-  // with its own taxonomy and nothing else, so a typed code from one
-  // intent cannot leak onto another's wire error. `workspace_provision`
-  // also carries the OPTIONAL caller-proposed `requested_path` (M1
-  // folder-picker / sandbox typed path unify here);
-  // when absent the daemon self-picks the managed default. There is NO
-  // separate adopt/bind intent — path provisioning is one operation.
-  workspace_provision: {
-    params: WorkspaceProvisionParamsSchema,
-    result: WorkspaceProvisionResultSchema,
-    error: WorkspaceProvisionIpcErrorSchema,
-  },
-  workspace_path_index: {
-    params: WorkspacePathIndexParamsSchema,
-    result: WorkspacePathIndexResultSchema,
-    error: WorkspacePathIndexIpcErrorSchema,
-  },
-  // #task:1719 — registry-mapping removal for backend-deleted workspaces.
-  workspace_unbind: {
-    params: WorkspaceUnbindParamsSchema,
-    result: WorkspaceUnbindResultSchema,
-    error: WorkspaceUnbindIpcErrorSchema,
-  },
-  // #task:1719 — ready-generation reconcile pull: ids currently bound in
-  // this daemon's registry (ids ONLY, never paths).
-  workspace_registry_ids: {
-    params: WorkspaceRegistryIdsParamsSchema,
-    result: WorkspaceRegistryIdsResultSchema,
-    error: WorkspaceRegistryIdsIpcErrorSchema,
-  },
+  // D4.e-1: data-plane path-authority read intent. Same per-command typed
+  // error scoping as agent_materialize — it widens the 5 generic codes with
+  // its own taxonomy and nothing else, so a typed code cannot leak onto
+  // another intent's wire error. relocation-v1 §7-4 (#task:1808): the registry
+  // write/reconcile intents (workspace_provision / _path_index / _unbind /
+  // _registry_ids) were retired with the registry's demotion.
   agent_workspace_index: {
     params: AgentWorkspaceIndexParamsSchema,
     result: AgentWorkspaceIndexResultSchema,

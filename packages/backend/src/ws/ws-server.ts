@@ -203,9 +203,11 @@ function logDesktopClientConnected(
             platform: clientInfo.value.platform,
             arch: clientInfo.value.arch,
             installation_id: clientInfo.value.installation_id,
-            // #task:1761 — observation bridge: per-session epoch distribution.
-            // Absent field logs as 0 (pre-epoch generation), matching the
-            // admission normalization.
+            // #task:1761 — per-session epoch distribution. relocation-v1 §6
+            // closed the first observation bridge, so this is now the evidence
+            // channel for the NEXT minimum raise, not for that one. Absent
+            // field logs as 0 (pre-epoch generation), matching the admission
+            // normalization.
             desktop_api_epoch: clientInfo.value.desktop_api_epoch ?? 0,
           }
         : {}),

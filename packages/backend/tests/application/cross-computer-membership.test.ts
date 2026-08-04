@@ -13,19 +13,19 @@ import {
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 /**
- * #task:1600 — cross-computer membership falsifiers for the pathless-guest
- * contract (#task:1596): a workspace's HOME-computer `workspace_path` must
- * NEVER cross machines as a guest daemon's `requested_path`, in any of the
- * three flows that plan registry-ensure rows per agent:
+ * #task:1600 / relocation-v1 §7 task 4 — cross-computer membership after the
+ * provisioning collapse. Adding a member (via `addWorkspaceAgentMember` or
+ * create-with-members) is now a PURE DB write: no per-agent daemon realization,
+ * no eager L2 seed, no home-path crossing — each member's L2 is materialized
+ * lazily at that member's first spawn. These falsifiers pin that the two
+ * membership-write flows dispatch NOTHING per-member to any daemon:
  *
- *   1. add-member L2 seed        (`addWorkspaceAgentMember`)
- *   2. create-with-members seeds (`createWorkspace`, via the route)
- *   3. delete-agent files purge  (`purgeAgentHostLocalFiles`)
+ *   1. add-member          (`addWorkspaceAgentMember`) — pure DB
+ *   2. create-with-members (`createWorkspace`, via the route) — pure DB; no
+ *      home-computer provision, no per-member daemon call
  *
- * The two membership PRODUCT ENTRY GATES were lifted by the final slice-2
- * piece (these started as Cindy's "gate-lifted preview" tests with a
- * no-oped placement assert; the real lift made them plain end-to-end
- * tests over the open product paths). Flow 3 never had a gate.
+ * The delete-agent files purge (flow 3, `purgeAgentHostLocalFiles`) is a
+ * separate lifecycle and still dispatches `agent_files_purge`.
  */
 
 function forgeGuestHost(t: TestApp, id: string, ownerUserId = 'teammate'): string {
@@ -70,24 +70,23 @@ async function makeLocalAgent(t: TestApp, name: string): Promise<string> {
   return created.agent.id as string;
 }
 
+/**
+ * relocation-v1 §7-4 (#task:1808) — a regular workspace has no owning
+ * computer, so create takes no placement input and returns none: the helper
+ * hands back only the workspace identity.
+ */
 async function createWorkspaceViaRoute(
   t: TestApp,
   name: string,
   memberAgentIds: string[],
-  workspaceHostId?: string,
-): Promise<{ id: string; workspace_path: string; workspace_host_id: string }> {
+): Promise<{ id: string }> {
   const res = await http(t).post('/api/workspaces', {
     name,
     member_agent_ids: memberAgentIds,
-    ...(workspaceHostId ? { workspace_host_id: workspaceHostId } : {}),
   });
   expect(res.status).toBe(201);
   const body = (await res.json()) as any;
   return body.workspace;
-}
-
-function provisionCalls(t: TestApp) {
-  return t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision');
 }
 
 function seedCalls(t: TestApp) {
@@ -102,7 +101,7 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     t = null;
   });
 
-  it('add-member: a GUEST add ensures PATHLESS on the agent daemon, seeds after, and never rewrites the home path cache', async () => {
+  it('add-member: a GUEST add is a PURE DB write — ZERO seed, membership row lands (L2 is lazy)', async () => {
     t = buildTestApp();
     const ws = await createWorkspaceViaRoute(t, 'home-ws', []);
     const guestHost = forgeGuestHost(t, 'host-guest-add');
@@ -116,51 +115,37 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
         // #task:1681 — the guest agent's CREATOR drives its own enrollment;
         // the host axis under test is orthogonal to the ownership gate.
         principal: { kind: 'user', userId: 'teammate' },
-        workspace: {
-          id: ws.id,
-          workspace_path: ws.workspace_path,
-          workspace_host_id: ws.workspace_host_id,
-        },
+        workspace: { id: ws.id },
         agentId: guestId,
       },
     );
     expect(result.ok).toBe(true);
 
-    // Exactly one guest ensure, PATHLESS, on the AGENT's computer.
-    const provisions = provisionCalls(t);
-    expect(provisions).toHaveLength(1);
-    expect(provisions[0]!.hostId).toBe(guestHost);
-    expect('requested_path' in provisions[0]!.params).toBe(false);
-    // Seed follows the provision, on the same guest daemon.
-    const seeds = seedCalls(t);
-    expect(seeds).toHaveLength(1);
-    expect(seeds[0]!.hostId).toBe(guestHost);
-    expect(
-      t.fakeHostWs!.calls.indexOf(seeds[0]!),
-    ).toBeGreaterThan(t.fakeHostWs!.calls.indexOf(provisions[0]!));
-    // The guest bind's ack must NOT overwrite the home computer's path.
-    expect(workspaces.get(ws.id)!.workspace_path).toBe(ws.workspace_path);
-    // Membership row landed.
+    // relocation-v1 §7 task 4 — provisioning collapse: add-member no longer
+    // realizes anything on the agent's daemon. NO guest provision, NO eager
+    // seed — the guest's L2 is materialized lazily at its first spawn.
+    expect(seedCalls(t)).toHaveLength(0);
+    // Membership row landed (pure DB write).
     expect(workspaces.listMembers(ws.id).some(m => m.id === guestId)).toBe(
       true,
     );
   });
 
-  it('#task:1719 (Cindy round-2 P1): guest realization awaits the reconcile barrier — reconcile failure returns retryable registry_unavailable, ZERO provision, ZERO membership row', async () => {
+  it('add-member is a PURE DB write — a hostile daemon (seed would fail) is never contacted, and the row still lands', async () => {
     t = buildTestApp();
     const ws = await createWorkspaceViaRoute(t, 'home-ws-barrier', []);
     const guestHost = forgeGuestHost(t, 'host-guest-barrier');
     const guestId = forgeGuestAgent(t, 'barrier-adder', guestHost);
     t.fakeHostWs!.calls.length = 0;
 
-    // Fail the reconcile PULL on the guest daemon: the barrier for that
-    // generation rejects, so guest realization must stop BEFORE any
-    // workspace_provision and BEFORE any membership row.
-    t.fakeHostWs!.workspaceRegistryIdsAckOverride = () => {
-      throw new HostWsCommandTransportError(
-        'transport_timeout',
-        'reconcile pull timed out',
-        { hostId: guestHost },
+    // Make any seed throw. After the provisioning collapse add-member dispatches
+    // no daemon traffic at all, so this override must never fire — the
+    // membership is a pure DB write independent of daemon health.
+    t.fakeHostWs!.agentL2SeedAckOverride = () => {
+      throw new HostWsCommandResponseError(
+        'fs_unavailable' as never,
+        'EROFS',
+        { hostId: guestHost, commandKind: 'agent_l2_seed', requestId: 'r' },
       );
     };
 
@@ -169,35 +154,21 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
       {
         principal: { kind: 'user', userId: 'teammate' },
-        workspace: {
-          id: ws.id,
-          workspace_path: ws.workspace_path,
-          workspace_host_id: ws.workspace_host_id,
-        },
+        workspace: { id: ws.id },
         agentId: guestId,
       },
     );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('seed_failed');
-      if (result.error.code === 'seed_failed') {
-        expect(result.error.failure.code).toBe('registry_unavailable');
-        expect(result.error.failure.status).toBe(503);
-        expect(result.error.failure.retriable).toBe(true);
-      }
-    }
-    // ZERO provision reached the daemon; the only guest-bound traffic was
-    // the failed reconcile pull itself.
-    expect(provisionCalls(t)).toHaveLength(0);
+    expect(result.ok).toBe(true);
+    // ZERO daemon traffic of any kind — no reconcile, no provision, no seed.
     expect(seedCalls(t)).toHaveLength(0);
-    // ZERO membership row — fail closed, retry later converges.
+    // Membership row landed.
     expect(workspaces.listMembers(ws.id).some(m => m.id === guestId)).toBe(
-      false,
+      true,
     );
   });
 
-  it('add-member control (#task:1612): a SAME-HOST add provisions NOTHING — the workspace was realized at creation; seed only', async () => {
+  it('add-member control (#task:1612): a SAME-HOST add is also a PURE DB write — ZERO seed', async () => {
     t = buildTestApp();
     const ws = await createWorkspaceViaRoute(t, 'home-ws-2', []);
     const localId = await makeLocalAgent(t, 'local-adder');
@@ -208,81 +179,46 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
       {
         principal: { kind: 'user', userId: t.viewerUserId },
-        workspace: {
-          id: ws.id,
-          workspace_path: ws.workspace_path,
-          workspace_host_id: ws.workspace_host_id,
-        },
+        workspace: { id: ws.id },
         agentId: localId,
       },
     );
     expect(result.ok).toBe(true);
 
-    // No provision at all (a missing binding would surface via the seed's
-    // typed workspace_not_provisioned — never healed from the DB path).
-    expect(provisionCalls(t)).toHaveLength(0);
-    const seeds = seedCalls(t);
-    expect(seeds).toHaveLength(1);
-    expect(seeds[0]!.hostId).toBe(ws.workspace_host_id);
+    // Pure DB on every host axis: the member's L2 is materialized lazily at its
+    // first spawn, so neither a same-host nor a guest add dispatches anything.
+    expect(seedCalls(t)).toHaveLength(0);
+    expect(workspaces.listMembers(ws.id).some(m => m.id === localId)).toBe(true);
   });
 
-  it('create-with-members: mixed members seed on their OWN daemons — guest pathless, home path never crosses', async () => {
+  it('create-with-members: memberships are pure DB — ZERO guest realization, ZERO seeds, all rows land', async () => {
     t = buildTestApp();
     const localId = await makeLocalAgent(t, 'home-member');
-    // #task:1681 — the create door now refuses agents the creator did not
-    // create, so the cross-COMPUTER member here is the viewer's OWN agent on a
-    // second owned computer (the axis under test is the host, not the owner;
-    // the cross-USER refusal is pinned in
-    // tests/routes/workspace-agent-enrollment.test.ts). Two owned ready hosts
-    // make placement ambiguous, so the home computer is named explicitly.
-    const homeHostId = t.ctx.coLocatedHostId!;
+    // #task:1681 — the create door refuses agents the creator did not create,
+    // so the cross-COMPUTER member here is the viewer's OWN agent on a second
+    // owned computer. The workspace itself has no computer to name (§7-4).
     const guestHost = forgeGuestHost(t, 'host-guest-create', t.viewerUserId);
     const guestId = forgeGuestAgent(t, 'creator-guest', guestHost, t.viewerUserId);
     t.fakeHostWs!.calls.length = 0;
 
-    const ws = await createWorkspaceViaRoute(
-      t,
-      'mixed-ws',
-      [localId, guestId],
-      homeHostId,
-    );
+    const ws = await createWorkspaceViaRoute(t, 'mixed-ws', [localId, guestId]);
 
-    const provisions = provisionCalls(t);
-    // Home computer: exactly ONE provision (the create itself); same-host
-    // member seeds reuse it (ensureProvisioned:false) — no re-ensure.
-    const homeProvisions = provisions.filter(
-      c => c.hostId === ws.workspace_host_id,
-    );
-    expect(homeProvisions).toHaveLength(1);
-    // Guest computer: exactly ONE pathless ensure before its seed.
-    const guestProvisions = provisions.filter(c => c.hostId === guestHost);
-    expect(guestProvisions).toHaveLength(1);
-    expect('requested_path' in guestProvisions[0]!.params).toBe(false);
+    // relocation-v1 §7 task 4 — create is severed from the daemon registry, so
+    // there is NO daemon realization at create time on ANY host: no home
+    // provision, no per-guest realization, no eager seed. Each member's L2 is
+    // materialized lazily at its first spawn.
+    expect(seedCalls(t)).toHaveLength(0);
 
-    const seeds = seedCalls(t);
-    const seedHostByAgent = new Map(
-      seeds.map(c => [c.params.agent_id as string, c.hostId]),
-    );
-    expect(seedHostByAgent.get(localId)).toBe(ws.workspace_host_id);
-    expect(seedHostByAgent.get(guestId)).toBe(guestHost);
-    expect(
-      t.fakeHostWs!.calls.indexOf(seeds.find(s => s.params.agent_id === guestId)!),
-    ).toBeGreaterThan(t.fakeHostWs!.calls.indexOf(guestProvisions[0]!));
-
-    // Home path cache untouched by the guest bind.
     const workspaces = new WorkspaceRepo(t.ctx.db);
-    expect(workspaces.get(ws.id)!.workspace_path).toBe(ws.workspace_path);
-    // Both memberships landed.
+    // Both memberships landed regardless of the members' computers.
     const memberIds = workspaces.listMembers(ws.id).map(m => m.id);
     expect(memberIds).toContain(localId);
     expect(memberIds).toContain(guestId);
   });
 
-  it('create-with-members: a failed GUEST seed leaves ZERO agent memberships (all-or-nothing invariant survives the axis change)', async () => {
+  it('create-with-members: a hostile daemon seed is never dispatched — create succeeds and both memberships land (no eager-seed rollback)', async () => {
     t = buildTestApp();
     const localId = await makeLocalAgent(t, 'home-member-2');
-    // Same #task:1681 reframing as the test above: own agent, second computer.
-    const homeHostId = t.ctx.coLocatedHostId!;
     const guestHost = forgeGuestHost(t, 'host-guest-fail', t.viewerUserId);
     const guestId = forgeGuestAgent(
       t,
@@ -290,66 +226,61 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
       guestHost,
       t.viewerUserId,
     );
-    // Wire failures are THROWN response errors, not ok:false acks.
-    t.fakeHostWs!.agentL2SeedAckOverride = params => {
-      if (params.agent_id === guestId) {
-        throw new HostWsCommandResponseError(
-          'internal_error' as never,
-          'seed boom',
-          { hostId: guestHost, commandKind: 'agent_l2_seed', requestId: 'fake' },
-        );
-      }
-      return { ok: true as const, seeded: true } as any;
+    // A seed that WOULD fail if it were dispatched. After the provisioning
+    // collapse create seeds nothing, so this override must never fire and the
+    // old "seed failure → zero memberships" rollback no longer applies.
+    t.fakeHostWs!.agentL2SeedAckOverride = () => {
+      throw new HostWsCommandResponseError(
+        'internal_error' as never,
+        'seed boom',
+        { hostId: guestHost, commandKind: 'agent_l2_seed', requestId: 'fake' },
+      );
     };
 
     const res = await http(t).post('/api/workspaces', {
       name: 'mixed-ws-fail',
       member_agent_ids: [localId, guestId],
-      workspace_host_id: homeHostId,
     });
-    expect(res.status).toBeGreaterThanOrEqual(500);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
 
-    // No PARTIAL set: neither the local nor the guest membership landed.
+    // No seed was dispatched, and BOTH memberships landed.
+    expect(seedCalls(t)).toHaveLength(0);
     const workspaces = new WorkspaceRepo(t.ctx.db);
-    const created = t.ctx.db
-      .prepare<[], { id: string }[] | undefined>(
-        `SELECT id FROM workspaces WHERE name = 'mixed-ws-fail'`,
-      )
-      .get() as { id: string } | undefined;
-    if (created) {
-      expect(workspaces.listMembers(created.id)).toEqual([]);
-    }
+    const memberIds = workspaces.listMembers(body.workspace.id).map(m => m.id);
+    expect(memberIds).toContain(localId);
+    expect(memberIds).toContain(guestId);
   });
 
-  it('delete-agent purge: mixed same-host + foreign memberships purge with ZERO provision dispatches; purge covers both workspaces', async () => {
+  it('delete-agent purge: mixed same-host + foreign memberships purge with ZERO eager realization; purge covers both workspaces', async () => {
     t = buildTestApp();
     const agentId = await makeLocalAgent(t, 'doomed');
-    const homeWs = await createWorkspaceViaRoute(t, 'purge-home', [agentId]);
+    await createWorkspaceViaRoute(t, 'purge-home', [agentId]);
 
-    // Forge a FOREIGN workspace + membership (legal cross-computer state).
-    const guestHost = forgeGuestHost(t, 'host-guest-del');
+    // Forge a second workspace + membership the agent's computer never
+    // materialized (§7-4: a workspace has no home computer, so "foreign" is an
+    // AGENT-side property now, not a workspace one).
     const now = Date.now();
     t.ctx.db
       .prepare(
         `INSERT INTO workspaces
-          (id, name, description, workspace_kind, workspace_path,
-           workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-          VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
+          (id, name, description, workspace_kind,
+           owner_agent_id, archived_at, created_at, updated_at)
+          VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
       )
-      .run('ws-foreign-del', 'foreign-del', '/home/elsewhere/project', guestHost, now, now);
-    // #task:1612 — the membership is ESTABLISHED properly (guest pathless
-    // provision + seed + commit on the agent's daemon), so the purge later
-    // finds a real local realization instead of relying on the retired
-    // pre-purge backfill.
+      .run('ws-foreign-del', 'foreign-del', now, now);
+    // relocation-v1 §7 task 4 — after the provisioning collapse the membership
+    // is a PURE DB write (no establishment-time provision or seed). At delete
+    // time the purge removes the agent's terminal managed footprint (agent home
+    // + every nested L2 bundle) in one shot WITHOUT enumerating per-workspace or
+    // consulting any registry: an unbound/never-spawned membership can no longer
+    // strand a managed tree, so the delete succeeds rather than spuriously
+    // fail-closing.
     const established = await addWorkspaceAgentMember(
       { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces: new WorkspaceRepo(t.ctx.db) },
       {
         principal: { kind: 'user', userId: t.viewerUserId },
-        workspace: {
-          id: 'ws-foreign-del',
-          workspace_path: '/home/elsewhere/project',
-          workspace_host_id: guestHost,
-        },
+        workspace: { id: 'ws-foreign-del' },
         agentId,
       },
     );
@@ -368,35 +299,32 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     );
     expect(result.kind).toBe('deleted');
 
-    // #task:1612 — the purge performs NO provision (an unbound workspace
-    // surfaces as skipped_unprovisioned; nothing mints an empty root just
-    // to delete it), and no home path ever crosses machines.
-    expect(provisionCalls(t)).toHaveLength(0);
+    // The purge mints no empty root, and no home path ever crosses machines.
+    // The daemon removes the whole agent home tree from `{ agent_id }` alone
+    // (no per-workspace enumeration), so nothing mints an empty root just to
+    // delete it.
     for (const c of t.fakeHostWs!.calls) {
       expect(JSON.stringify(c.params)).not.toContain('/home/elsewhere/project');
     }
 
     const purges = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_files_purge');
     expect(purges).toHaveLength(1);
-    expect(purges[0]!.params.workspace_ids).toEqual(
-      expect.arrayContaining([homeWs.id, 'ws-foreign-del']),
-    );
+    expect(purges[0]!.params).toEqual({ agent_id: agentId });
   });
 
   it('delete-agent purge: a failed purge stays FAIL-CLOSED with mixed memberships — no control-plane rows removed', async () => {
     t = buildTestApp();
     const agentId = await makeLocalAgent(t, 'survivor');
     await createWorkspaceViaRoute(t, 'purge-home-2', [agentId]);
-    const guestHost = forgeGuestHost(t, 'host-guest-del2');
     const now = Date.now();
     t.ctx.db
       .prepare(
         `INSERT INTO workspaces
-          (id, name, description, workspace_kind, workspace_path,
-           workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-          VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
+          (id, name, description, workspace_kind,
+           owner_agent_id, archived_at, created_at, updated_at)
+          VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
       )
-      .run('ws-foreign-del2', 'foreign-del2', '/home/elsewhere/p2', guestHost, now, now);
+      .run('ws-foreign-del2', 'foreign-del2', now, now);
     t.ctx.db
       .prepare(
         `INSERT INTO workspace_members (workspace_id, agent_id, joined_at)

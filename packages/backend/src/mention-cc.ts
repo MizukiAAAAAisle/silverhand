@@ -331,7 +331,6 @@ function getOrCreateMentionsConversation(
   return {
     conversation: conversations.insertDmChannel({
       workspaceId: dm.workspace_id,
-      workspacePath: dm.workspace_path,
       title: MENTIONS_CHANNEL_TITLE,
       agentId,
     }),

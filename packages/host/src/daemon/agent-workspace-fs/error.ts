@@ -13,11 +13,16 @@ import type { AgentWorkspaceFsErrorCode } from '../../protocol.js';
  *    daemon never distinguishes shape vs escape on the wire.
  *  - `not_found` — graceful missing along the walk (ENOENT / ENOTDIR
  *    on a non-leaf, leaf is a directory when the read endpoint asked
- *    for a file, etc). Maps to HTTP 404.
- *  - `workspace_not_provisioned` — a scoped regular workspace id has no daemon
- *    registry binding, so we refuse to guess a path. Maps to HTTP 409.
- *  - `registry_unavailable` — the daemon cannot consult its registry
- *    (missing control-plane binding, foreign/corrupt file). Maps to HTTP 503.
+ *    for a file, etc). Maps to HTTP 404. A regular workspace whose
+ *    deterministic bundle coordinate has not been materialized yet is
+ *    just an ordinary filesystem absence here — relocation-v1 §7 task 4
+ *    removed the registry establishment gate, so there is no
+ *    `workspace_not_provisioned` refusal in this taxonomy anymore.
+ *  - `registry_unavailable` — the daemon has no attached computer yet
+ *    (the machine has not bound to a server) so its agents root is
+ *    unavailable; despite the legacy code name this is NOT a
+ *    workspace-registry consult. Maps to HTTP 503 (retriable once
+ *    attached).
  *  - `fs_unavailable` — host-local fs read failed HARD (perm/IO/EROFS
  *    etc). Maps to HTTP 503.
  *  - `internal_error` — anything else; collapses to HTTP 500.

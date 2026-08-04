@@ -6,16 +6,27 @@ import {
 } from './workspace-data-plane.js';
 
 /**
- * Cross-computer slice 1 (#task:1596) — pre-spawn L2 seed on the DISPATCH
- * host: the L2 for the active workspace must exist under the dispatch
- * computer's local root before the first spawn. Dispatches the idempotent
- * `agent_l2_seed` intent to the agent's daemon, which resolves the
- * workspace via ITS registry — the registry is the sole authority
- * (#task:1612), so a missing binding surfaces as the seed's typed
- * `workspace_not_provisioned` and the caller fails closed (no provision
- * happens here, ever).
+ * Pre-spawn L2 seed on the DISPATCH host (relocation-v1 §7 tasks 1/4): before
+ * the first spawn in a workspace we TRY to materialize the agent's L2 bundle
+ * there. This is an attempt, not a precondition — "L2 must exist before spawn"
+ * was the pre-pivot model and is no longer true (shiki + Cindy 2026-08-04).
+ * Dispatches the idempotent `agent_l2_seed` intent to the agent's daemon, which
+ * mkdir's the deterministic agent-centric bundle coordinate
+ * (`<agent home>/workspaces/<workspace_id>`) DIRECTLY — no registry binding
+ * and no workspace provision gate it (U1 de-gated the seed handler; a pure-DB
+ * membership that has never spawned is a legal unbound state, not a
+ * fail-closed one). No provision ever happens here.
  *
- * Per-(host, workspace, agent) success memo for this backend lifetime
+ * L2 memory is BEST-EFFORT enrichment, never an admission gate: the
+ * runtime-start caller (`seedRuntimeStartL2BestEffort`) records ANY seed
+ * outcome — success, an `fs_unavailable` write/read failure, a transport
+ * failure, an unwired dep — as a diagnostic only and ALWAYS proceeds with the
+ * spawn (reduced/absent L2 context on failure). No seed-layer code decides
+ * dispatch. The session cwd — the sole hard-ensured runtime base — is enforced
+ * SEPARATELY, host-side, so a swallowed L2 failure can never let a child start
+ * without a usable cwd.
+ *
+ * Per-(host, workspace, agent) SUCCESS memo for this backend lifetime
  * (the daemon-side seed is writeIfMissing-idempotent, so a repeat after a
  * backend restart is safe), in-flight collapse for concurrent spawns, and
  * failures are NOT memoized so the next spawn retries.

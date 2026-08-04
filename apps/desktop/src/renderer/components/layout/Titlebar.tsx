@@ -49,7 +49,6 @@ interface TitlebarProps {
   workspaceId: string | null;
   workspaceName: string | null;
   workspaceKind: WorkspaceUiKind | null;
-  workspacePath: string | null;
   /** epoch ms when the workspace was archived; null for active workspaces.
    *  Drives the inline `Archived` pill so the user knows why this
    *  workspace is missing from the main sidebar list. */
@@ -80,10 +79,9 @@ interface TitlebarProps {
 }
 
 /**
- * Window-wide titlebar — drag region with the current workspace's name,
- * its primary actions (Settings, Manage Members, New Channel), and the
- * workspace path right-aligned with rtl ellipsis so the path tail
- * stays visible. Workspace info starts after the section-specific left
+ * Window-wide titlebar — drag region with the current workspace's name
+ * and its primary actions (Settings, Manage Members, New Channel).
+ * Workspace info starts after the section-specific left
  * chrome (`chromeWidth`) so it sits directly above the first content
  * column it describes: in chat that's the (collapsible) workspace
  * sidebar; in activity it's the `NavRail + Activity list` offset, which
@@ -96,7 +94,6 @@ export function Titlebar({
   workspaceId,
   workspaceName,
   workspaceKind,
-  workspacePath,
   workspaceArchivedAt,
   onOpenWorkspaceSettings,
   onOpenTasks,
@@ -267,19 +264,6 @@ export function Titlebar({
         >
           <Settings className="size-3.5" />
         </button>
-      ) : null}
-
-      {/* Workspace path sits inline right after the action icons —
-        * not pushed to the far right. rtl ellipsis preserves the path
-        * tail (the most useful segment) when space runs out. The bare
-        * span is itself a drag handle since it lives in the .drag-region
-        * header without an explicit .no-drag opt-out. */}
-      {workspacePath ? (
-        <div className="min-w-0 max-w-[40%] truncate text-text-muted">
-          <span title={workspacePath} dir="rtl">
-            {workspacePath}
-          </span>
-        </div>
       ) : null}
 
       {/* Trailing spacer keeps a small breathable margin at the right

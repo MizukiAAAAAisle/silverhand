@@ -13,7 +13,6 @@ import {
 export const ConversationDtoSchema = z.object({
   id: z.string(),
   workspace_id: z.string(),
-  workspace_path: z.string(),
   kind: ConversationKindSchema,
   title: z.string(),
   status: ConversationStatusSchema,
@@ -87,7 +86,6 @@ export const ConversationRefSchema = z.object({
   title: z.string(),
   workspace_id: z.string(),
   workspace_kind: ConversationRefWorkspaceKindSchema,
-  workspace_path: z.string(),
   closed_at: z.number().nullable(),
   archived_at: z.number().nullable(),
 });

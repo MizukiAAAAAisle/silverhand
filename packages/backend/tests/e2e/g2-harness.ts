@@ -487,9 +487,16 @@ export async function bootDaemonWithSupervisor(
     writeStdoutHandshake: false,
     alsoStderr: false,
     runtimePidRootDir,
-    // #task:1596 — keep durable workspace-data inside the test sandbox
-    // (the default would write the REAL ~/.silverhand/workspace-data).
-    workspaceDataRootDir: join(daemonDir, 'workspace-data'),
+    // #task:1596 / relocation-v1 §7-4 — keep the DURABLE agent tree inside the
+    // test sandbox: without an explicit coordinate the agent-file handlers fall
+    // through to the real `~/.silverhand/agents`. A test that redirects the
+    // whole home via `agentMaterializeHomeDir` is already sandboxed AND asserts
+    // against that layout, so the production option must not override it (it
+    // takes precedence over the `homeDir` seam).
+    agentHomeRootDir:
+      opts.testHooks?.agentMaterializeHomeDir == null
+        ? join(daemonDir, 'agents')
+        : undefined,
     daemonIdentityPath: null,
     testHooks: opts.testHooks,
     supervisorFactory: ({
@@ -735,23 +742,17 @@ function consoleBackendLogger(): BackendLogger {
 }
 
 /**
- * #task:1612 — the registry is the sole authority and the spawn path no
- * longer provisions. E2E fixtures that seed workspace rows by direct DB
- * insert must model CREATION-time realization explicitly: dispatch the
- * same `workspace_provision` the create-workspace flow performs, against
- * the real attached daemon.
+ * relocation-v1 §7-4 — workspace creation is a pure DB write and L2
+ * materializes lazily from the agent-centric coordinate; there is no daemon
+ * provision to dispatch. The old `provisionWorkspaceOnDaemon` leg only ever
+ * asserted the outbound adapter was wired (the invariant it implicitly
+ * depended on), so it is named for what it actually checks — no retired
+ * product concept wrapped as a "documented no-op". The runtime-start flow
+ * performs any lazy materialization on its own.
  */
-export async function provisionWorkspaceOnDaemon(
+export async function assertOutboundAdapterWired(
   backend: RunningBackend,
-  hostId: string,
-  workspaceId: string,
-  workspacePath: string,
 ): Promise<void> {
   const adapter = backend.context.outboundFrameAdapter?.();
   if (!adapter) throw new Error('outbound frame adapter unwired in harness');
-  await adapter.sendCommand(hostId, 'workspace_provision', {
-    workspace_id: workspaceId,
-    kind: 'regular',
-    requested_path: workspacePath,
-  });
 }

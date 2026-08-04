@@ -151,16 +151,6 @@ class FakeOutboundDaemon {
       this.respondResult(cmd, { stopped_count: 0 });
     } else if (cmd.kind === 'runtime_close_activity_log') {
       this.respondResult(cmd, { flushed: true });
-    } else if (cmd.kind === 'workspace_provision') {
-      // Establishment-time provision (#task:1612) — ack with a valid
-      // provision result so the flow can proceed (idempotent bind to the
-      // requested path).
-      const requested = (cmd.params as { requested_path?: string }).requested_path;
-      this.respondResult(cmd, {
-        ok: true,
-        provisioned: true,
-        bound_workspace_path: requested ?? '/host/ws/provisioned',
-      });
     } else if (cmd.kind === 'agent_l2_seed') {
       // Cross-computer slice 1 (#task:1596): runtime_start is also preceded
       // by a blocking pre-spawn L2 seed on the dispatch host — ack it.
@@ -169,15 +159,6 @@ class FakeOutboundDaemon {
         seeded: true,
         l2_present: true,
       });
-    } else if (cmd.kind === 'workspace_registry_ids') {
-      // #task:1719 — the ready frame advertises KNOWN_CAPABILITIES_V1
-      // (incl. workspace.registry_reconcile.v1), so the backend's
-      // ready-generation reconcile pulls the registry ids right after
-      // attach; answer schema-valid (empty registry) or the adapter's
-      // protocol-violation teardown drops this socket.
-      this.respondResult(cmd, { ok: true, workspace_ids: [] });
-    } else if (cmd.kind === 'workspace_unbind') {
-      this.respondResult(cmd, { ok: true, removed: [], absent: [] });
     } else if (cmd.kind === 'host_status') {
       // #task:1588 slice 2 — the fanout eager-seeds the host-status read
       // model on `ready`; answer with a schema-valid snapshot so the
@@ -295,10 +276,10 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     ).run(userId, 'd5a-boot-user', 'D5a Boot User', now, now);
     db.prepare(
       `INSERT INTO workspaces
-        (id, name, description, workspace_kind, workspace_path,
-         workspace_host_id, owner_agent_id, archived_at, created_at, updated_at)
-        VALUES (?, ?, NULL, 'regular', ?, ?, NULL, NULL, ?, ?)`,
-    ).run(workspaceId, 'd5a-boot-ws', workspacePath, localHostId, now, now);
+        (id, name, description, workspace_kind,
+         owner_agent_id, archived_at, created_at, updated_at)
+        VALUES (?, ?, NULL, 'regular', NULL, NULL, ?, ?)`,
+    ).run(workspaceId, 'd5a-boot-ws', now, now);
     db.prepare(
       `INSERT INTO agents
         (id, name, runtime, model, host_id, description, created_at,
@@ -313,12 +294,12 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
     ).run(workspaceId, agentId, now);
     db.prepare(
       `INSERT INTO conversations
-        (id, workspace_id, workspace_path, kind,
+        (id, workspace_id, kind,
 title, status, spawned_by_agent_id, closed_at, close_summary,
          pinned_at, created_at, updated_at)
-        VALUES (?, ?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
+        VALUES (?, ?, 'channel', ?, 'active', NULL, NULL, NULL,
                 NULL, ?, ?)`,
-    ).run(conversationId, workspaceId, workspacePath, 'd5a-boot-channel', now, now);
+    ).run(conversationId, workspaceId, 'd5a-boot-channel', now, now);
     db.prepare(
       `INSERT INTO conversation_agents
         (conversation_id, agent_id, cli_session_id, pid, status, joined_at)

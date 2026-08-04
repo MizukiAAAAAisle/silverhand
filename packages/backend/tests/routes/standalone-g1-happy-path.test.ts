@@ -47,6 +47,7 @@ import {
 } from '@silverhand/shared';
 import type { ConversationBusEvent } from '../../src/ws/scope-event-bus.js';
 import { buildTestApp, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 describe('standalone backend G1 — user-facing happy path (no daemon attached)', () => {
   let t: TestApp | null = null;
@@ -169,21 +170,17 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(wrong.body).toEqual({ error_code: 'auth_failed' });
   });
 
-  it('POST /api/workspaces on standalone — without a claimed local host fails closed with `local_host_unbound`; with one claimed, creates a workspace bound to that host', async () => {
-    // D4.c C3 — the standalone path no longer mints a synthetic
-    // `STANDALONE_SERVER` host on workspace create. Default placement
-    // is `resolveOwnedLocalForUser(viewerUserId)`, which returns the
-    // C1-installed 0/1/N typed result. The pre-D4.c contract here
-    // (workspace bound to a server-side `STANDALONE_SERVER` row
-    // independent of the viewer) is retired; the new contract is
-    // "workspace lives on the user's claimed local host", same as
-    // embedded.
+  it('POST /api/workspaces on standalone — succeeds with or without a claimed local host, and binds the workspace to no computer (§7-4)', async () => {
+    // D4.c C3 retired the synthetic `STANDALONE_SERVER` host and made create
+    // resolve `resolveOwnedLocalForUser(viewerUserId)` instead. relocation-v1
+    // §7-4 (#task:1808) then retired PLACEMENT itself: a regular workspace has
+    // no owning computer, so create resolves none and the 0-host case is no
+    // longer a failure — an unclaimed installation can create a workspace.
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'ws.owner@example.test');
 
-    // No host claimed yet → typed 409 `local_host_unbound` (per C1
-    // 0-host policy). The synthetic standalone-server pre-D4.c
-    // fallback is GONE.
+    // Inverted pin: no host claimed yet used to be a typed 409
+    // `local_host_unbound`. There is nothing left to place, so it is a 201.
     const beforeClaim = await fetchJson(
       t,
       'POST',
@@ -191,12 +188,12 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       { name: `g1-pre-${randomSlug()}` },
       bearer(token),
     );
-    expect(beforeClaim.status).toBe(409);
-    expect(beforeClaim.body).toMatchObject({ code: 'local_host_unbound' });
+    expect(beforeClaim.status).toBe(201);
+    expect(beforeClaim.body.workspace.workspace_host_id).toBeUndefined();
 
-    // After claiming → 201, workspace bound to the user's claimed
-    // host (NOT the synthetic standalone-server row).
-    const claimedHostId = await claimLocalHost(t, token);
+    // Claiming a local host is still what makes the installation usable for
+    // AGENT placement; workspace create is unaffected by it either way.
+    await claimLocalHost(t, token);
     const create = await fetchJson(
       t,
       'POST',
@@ -207,38 +204,12 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(create.status).toBe(201);
     expect(create.body.workspace).toMatchObject({
       name: expect.stringMatching(/^g1-/),
-      workspace_host_id: claimedHostId,
     });
+    // relocation-v1 §7-4 — a regular workspace has no owning computer, so the
+    // create DTO carries no host pointer (the claim above is still what makes
+    // the installation usable for AGENT placement).
+    expect(create.body.workspace.workspace_host_id).toBeUndefined();
     expect(create.body.onboarding_channel_id).toEqual(expect.any(String));
-  });
-
-  it('POST /api/workspaces with workspace_path on standalone → forwarded to daemon as `requested_path` (D4.e-1 3b lifted the C3 409)', async () => {
-    // D4.e-1 3b — path authority moved to the owning daemon. The server no
-    // longer rejects a caller `workspace_path` in standalone; it forwards it
-    // verbatim as `requested_path` to `workspace_provision` (the daemon
-    // re-validates + binds). The fake outbound adapter acks the bind.
-    t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
-    const token = await signupReturnToken(t, 'ws.path@example.test');
-    await claimLocalHost(t, token);
-    const res = await fetchJson(
-      t,
-      'POST',
-      apiPaths.workspaces,
-      {
-        name: `g1path-${randomSlug()}`,
-        workspace_path: '/tmp/some-arbitrary-path',
-      },
-      bearer(token),
-    );
-    expect(res.status).toBe(201);
-    const provisionCalls = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'workspace_provision',
-    );
-    expect(provisionCalls).toHaveLength(1);
-    expect(provisionCalls[0]!.params).toMatchObject({
-      kind: 'regular',
-      requested_path: '/tmp/some-arbitrary-path',
-    });
   });
 
   it('POST /api/workspaces with nonexistent member_agent_ids on standalone — silently filtered (existing pattern), workspace creates', async () => {
@@ -268,15 +239,15 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     expect(res.body.workspace.member_agent_ids ?? []).toEqual([]);
   });
 
-  it('POST /api/workspaces with REAL member_agent_ids on standalone → 201, daemon-mediated agent_l2_seed (D4.e-3 gate lifted)', async () => {
+  it('POST /api/workspaces with REAL member_agent_ids on standalone → 201, pure DB write: NO provision, NO eager seed (provisioning collapse)', async () => {
     // D4.e-3 — pre-D4.e-3 this combo was refused 409
     // `workspace_member_seed_unsupported` because the create route seeded agent
     // L2 on the BACKEND disk, which in standalone (owning daemon is another
-    // machine) would write a remote host's path locally (I1 violation). Now L2
-    // seeding is daemon-mediated (`agent_l2_seed`): the owning daemon writes its
-    // OWN host-local L2, so create-with-members works in standalone too — the
-    // backend dispatches the seed and writes no L2 itself. Cindy ordering: the
-    // membership row lands ONLY AFTER the daemon seed succeeds.
+    // machine) would write a remote host's path locally (I1 violation). D4.e-3
+    // moved seeding to the owning daemon; relocation-v1 §7 task 4 then severed
+    // create from the daemon registry entirely: create-with-members is a pure
+    // DB membership write — no `workspace_provision`, no eager seed — and each
+    // member's L2 is materialized lazily at its first spawn.
     t = buildTestApp({ deploymentMode: 'standalone', bindAddressScope: 'lan' });
     const token = await signupReturnToken(t, 'ws.seed@example.test');
     const claimedHostId = await claimLocalHost(t, token);
@@ -308,15 +279,9 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     );
     expect(res.status).toBe(201);
 
-    // Provision + seed both dispatched to the owning (claimed) host.
-    const provisionCalls = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'workspace_provision',
-    );
-    expect(provisionCalls).toHaveLength(1);
+    // Pure DB write: NO daemon provision and NO eager seed.
     const seedCalls = t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed');
-    expect(seedCalls).toHaveLength(1);
-    expect(seedCalls[0]!.hostId).toBe(claimedHostId);
-    expect(seedCalls[0]!.params).toMatchObject({ agent_id: agentId });
+    expect(seedCalls).toHaveLength(0);
 
     // Workspace row + membership persisted.
     const rowCount = t.ctx.db
@@ -644,6 +609,10 @@ async function claimLocalHost(t: TestApp, token: string): Promise<string> {
  * standalone happy path is specifically about exercising the
  * signup-and-login-issued token flow. Tests pass explicit headers
  * when they need authentication.
+ *
+ * The desktop API epoch header IS attached: it is not authentication but
+ * client-generation admission, and every caller here speaks for a current
+ * desktop (an epoch-less client is refused with 426 before any route runs).
  */
 async function fetchJson(
   t: TestApp,
@@ -656,6 +625,7 @@ async function fetchJson(
     new Request(`http://localhost${path}`, {
       method,
       headers: {
+        ...CURRENT_DESKTOP_EPOCH_HEADERS,
         ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         ...headers,
       },

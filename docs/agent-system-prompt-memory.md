@@ -34,18 +34,24 @@ on every spawn.
 
 | Path | Tier | Scope | Who writes |
 | --- | --- | --- | --- |
-| `~/.silverhand/agents/<id>/system_prompt.md` | L1 | global (all workspaces) | the agent (any workspace), guided by the scope rule |
-| `<workspace>/.silverhand/agents/<id>/MEMORY.md` | L2 | one workspace | the agent in that workspace |
-| `<workspace>/.silverhand/agents/<id>/notes/*` | L2 | one workspace | the agent in that workspace |
+| `<agent home>/system_prompt.md` | L1 | global (all workspaces) | the agent (any workspace), guided by the scope rule |
+| `<agent home>/workspaces/<workspace_id>/MEMORY.md` | L2 | one workspace | the agent in that workspace |
+| `<agent home>/workspaces/<workspace_id>/notes/*` | L2 | one workspace | the agent in that workspace |
 
-For an agent's DM workspace (`workspace_kind = 'agent_home'`), the
-workspace path **coincides with** the L1 directory:
-`workspace_path = ~/.silverhand/agents/<id>`. So the same physical
-`MEMORY.md` and `notes/` serve as the DM's L2. There is no separate
+`<agent home>` = `~/.silverhand/computers/<computer_id>/agents/<agent_id>/`, and
+the L2 bundle under it is a DETERMINISTIC, id-derived coordinate — computed from
+`(computer, agent, workspace)`, never read from a DB column or a daemon registry
+binding (`workspace-layout-relocation-v1.md` §3.2/§3.3/§7). It is both the
+agent's L2 memory dir and its spawn cwd; there is no `<workspace>/.silverhand/`
+sub-path any more, so L2 never lands inside a user project directory.
+
+For an agent's DM workspace (`workspace_kind = 'agent_home'`), the L2 coordinate
+**collapses onto** the L1 directory: the DM's cwd IS `<agent home>`, so the same
+physical `MEMORY.md` and `notes/` serve as the DM's L2. There is no separate
 "DM-L2" copy.
 
 There is no L2 `system_prompt.md`. The role contract is L1-only and is
-read directly from `~/.silverhand/agents/<id>/system_prompt.md` by the
+read directly from `<agent home>/system_prompt.md` by the
 system-prompt assembler at every spawn. The single-source-of-truth
 invariant is "L1 is the only place `system_prompt.md` exists" — there
 is no write-side restriction on which workspace may edit it. Agents
@@ -59,10 +65,10 @@ decide where to write by **scope**:
 
 ## L2 authoring contract: index first, detail on demand
 
-The workspace root is persistent and may contain shared repositories,
-worktrees, artifacts, and task files. It is not exclusively owned by one agent.
-The private authoring boundary is the agent's own
-`<workspace>/.silverhand/agents/<id>/` L2 directory. Before running git or a
+The agent's cwd is persistent across sessions and may contain shared
+repositories, worktrees, artifacts, and task files. It is not exclusively owned
+by one agent. The private authoring boundary is the agent's own L2 bundle
+(`<agent home>/workspaces/<workspace_id>/`, which IS that cwd). Before running git or a
 package manager, the agent must select the intended project/worktree inside the
 workspace rather than treating cwd layout as a fixed schema or arbitrary cwd
 files as additional private-memory tiers. Within that boundary, the agent may
@@ -142,7 +148,7 @@ exactly one `system_prompt.md` per agent.
 Daemon prompt-context assembly loads four local projections and hands them to
 `buildPlatformPrompt`:
 
-1. **Role (L1)** — `readFile(~/.silverhand/agents/<agent.id>/system_prompt.md)`,
+1. **Role (L1)** — `readFile(<agent home>/system_prompt.md)`,
    missing → empty string. Rendered as the trailing **Initial role**
    section of the prompt.
 2. **Current workspace MEMORY.md** — `readFileWithCap(<active L2>/MEMORY.md, 16 KB)`.
@@ -192,36 +198,43 @@ in-place.
 
 ## Local realization is per-computer; the index degrades to "unavailable"
 
-Each agent has a `host_id` (the computer its runtime executes on). Each
-workspace has a home computer (`workspace_host_id`), but a workspace is a
-LOGICAL collaboration domain: on every computer that runs it, the daemon
-registry binds it to a computer-local root (the home computer keeps the
-user-chosen directory; a guest computer gets a daemon-managed root, and the
-home path never crosses computers).
+Each agent has a `host_id` (the computer its runtime executes on). A workspace
+is a purely LOGICAL collaboration domain — it has **no** home computer and no
+stored path (`workspace-layout-relocation-v1.md` §7 retired `workspace_host_id`
+and `workspace_path`). On whichever computer an agent runs, its L2 bundle for
+that workspace is the deterministic coordinate above; there is no registry
+binding and no home/guest asymmetry left.
 
-Before a spawn, the backend ensures the ACTIVE workspace's local root and
-the agent's L2 seed exist on the agent's computer (blocking, idempotent —
-`workspace_provision` without a requested path on a guest, then
-`agent_l2_seed`). The workspace memory index is resolve-or-degrade: an
-entry the daemon cannot resolve locally renders as _unavailable on this
-computer_ — never a fabricated path — and does not block the spawn. It
-becomes available when that workspace next runs on this computer.
+What a spawn ensures is split in two (shiki + Cindy 2026-08-04):
+
+- **session cwd — hard.** The daemon `mkdir -p`s the bundle coordinate and
+  verifies it is enterable BEFORE forking; only a real OS failure fails the
+  spawn closed.
+- **L1/L2 CONTENT — best-effort enrichment.** The L2 seed (`agent_l2_seed`,
+  idempotent) is attempted pre-spawn, but a failure to write or read memory is
+  logged and the spawn proceeds with reduced context. Memory is never an
+  admission gate.
+
+The workspace memory index is resolve-or-degrade: an entry whose L2 the daemon
+cannot read locally renders as _unavailable on this computer_ — never a
+fabricated path — and does not block the spawn. It becomes available when that
+workspace next runs on this computer. "Is this a usable cwd?" and "is L2 memory
+present here?" are two separate predicates and are deliberately not conflated.
 
 (Membership host-equality is gone entirely — #task:1600 lifted the
-cross-computer entry gates; members join from any computer and their L2
-seeds on their own computer's local realization. This prompt-assembly
-contract is unchanged by where members live.)
+cross-computer entry gates; members join from any computer and their L2 seeds
+under their own agent home there. This prompt-assembly contract is unchanged by
+where members live.)
 
 ## Migration
 
 Manual. There is no programmatic migration script:
 
 1. Author the canonical role contract in your DM. Either edit
-   `~/.silverhand/agents/<id>/system_prompt.md` directly, or ask the
+   `<agent home>/system_prompt.md` directly, or ask the
    agent in DM to update it for you.
-2. For every regular workspace this agent is in, delete the legacy
-   `<workspace>/.silverhand/agents/<id>/system_prompt.md` if it
-   exists (it will no longer be re-seeded).
+2. For every regular workspace this agent is in, delete the legacy L2
+   `system_prompt.md` if one still exists (it will no longer be re-seeded).
 3. Re-spawn the agent. The new prompt picks up L1 system_prompt + L2
    MEMORY/notes automatically.
 

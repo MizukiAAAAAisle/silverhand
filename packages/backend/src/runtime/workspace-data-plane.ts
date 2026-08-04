@@ -15,16 +15,7 @@ import type {
   AgentWorkspaceTreeResult,
   AgentWorkspaceFileReadParams,
   AgentWorkspaceFileReadResult,
-  WorkspaceProvisionParams,
-  WorkspaceProvisionResult,
-  WorkspacePathIndexParams,
-  WorkspacePathIndexResult,
-  WorkspaceUnbindParams,
-  WorkspaceUnbindResult,
-  WorkspaceRegistryIdsParams,
-  WorkspaceRegistryIdsResult,
 } from '@silverhand/host';
-import { WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1 } from '@silverhand/host';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -33,32 +24,45 @@ import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
 
 /**
  * D4.e — backend dispatch layer for the host data-plane intents
- * (`workspace_provision`, `agent_workspace_index`,
- * `agent_l2_seed`, `agent_files_purge`).
- * The daemon is the sole authority for host-local path resolution (I1); the
- * backend only speaks `workspace_id` / `agent_id` and forwards an optional
- * caller-PROPOSED `requested_path` at provision time. This module owns ONE
- * thing: send a data-plane command over the deployment-neutral
- * {@link OutboundFrameAdapter} and normalize every failure (transport or
- * typed wire error) into a single structured outcome so each route can
- * decide how to render it — create → HTTP status; list / read /
- * seed → fail-closed with a diagnostic code (never a `workspace_path` /
- * server-fs fallback).
+ * (`agent_workspace_index`, `agent_l2_seed`, `agent_files_purge`, and the
+ * agent workspace tree/file/profile-MCP reads).
+ *
+ * relocation-v1 §3.4 / §7-4 — registry demotion: the workspace-registry is no
+ * longer a runtime path authority, so this module no longer carries
+ * `workspace_provision` / `workspace_path_index` / `workspace_unbind` /
+ * `workspace_registry_ids`. The daemon remains the sole authority for
+ * host-local path resolution (I1); the backend only speaks
+ * `workspace_id` / `agent_id`. This module owns ONE thing: send a data-plane
+ * command over the deployment-neutral {@link OutboundFrameAdapter} and
+ * normalize every failure (transport or typed wire error) into a single
+ * structured outcome. It NEVER falls back to server-side fs. What a caller
+ * does with that outcome is the CALLER's policy, and the two are deliberately
+ * different (shiki + Cindy 2026-08-04 pivot): the workspace/file reads render
+ * a diagnostic code (or degrade a single entry to `agent_dir: null`), while
+ * first-spawn L2 seeding is best-effort enrichment — its failure is logged and
+ * the spawn continues, because only the session cwd is a hard runtime
+ * precondition.
  */
 
+/**
+ * Every code this mapper can actually produce, grouped by the surviving wire
+ * producer (relocation-v1 §7-4 U5). The retired `workspace_provision` intent's
+ * codes (`invalid_workspace_path` / `workspace_path_conflict` /
+ * `unsupported_workspace_kind`) are gone with it: no daemon handler emits
+ * `invalid_path` / `path_conflict` / `unsupported_kind` on any wire enum, so an
+ * arm for them would be an authoritative-but-wrong taxonomy entry.
+ * `workspace_not_provisioned` is likewise not a data-plane code any more — its
+ * one surviving producer is the `runtime_start` resolver's agent-home ownership
+ * boundary, mapped by `runtimeStartErrorResponse`, never by this module.
+ */
 export type DataPlaneFailureCode =
   // transport / liveness
   | 'host_attach_pending'
   | 'daemon_timeout'
   | 'daemon_internal_error'
-  // typed wire codes (provision)
-  | 'invalid_workspace_path'
-  | 'workspace_path_conflict'
-  | 'unsupported_workspace_kind'
-  | 'fs_quota_exceeded'
+  // hard host-local fs failure (every fs-touching intent)
   | 'fs_unavailable'
-  // typed wire codes (agent_l2_seed)
-  | 'workspace_not_provisioned'
+  // typed wire code (agent_l2_seed)
   | 'unsupported_template'
   // typed wire code (agent_files_purge)
   | 'partial_purge'
@@ -67,7 +71,7 @@ export type DataPlaneFailureCode =
   // typed wire codes (agent_workspace_tree / agent_workspace_file_read)
   | 'forbidden_path'
   | 'not_found'
-  // typed wire code (multiple)
+  // typed wire code (agent_workspace_index / _tree / _file_read / agent_l2_seed)
   | 'registry_unavailable';
 
 export type DataPlaneHttpStatus = 400 | 403 | 404 | 409 | 502 | 503 | 504 | 507;
@@ -80,9 +84,9 @@ export interface DataPlaneFailure {
   /** Suggested HTTP status if a route renders this directly. */
   status: DataPlaneHttpStatus;
   /**
-   * True when the condition is transient (daemon offline / timeout /
-   * registry temporarily unavailable) so a later retry — next attach, next
-   * boot, next management call — can succeed. Lets the read path
+   * True when the condition is transient (daemon offline / timeout / the
+   * computer has not attached to a control plane yet) so a later retry — next
+   * attach, next boot, next management call — can succeed. Lets the read path
    * distinguish "retry later" from "genuinely missing".
    */
   retriable: boolean;
@@ -90,7 +94,6 @@ export interface DataPlaneFailure {
 
 export type DataPlaneOutcome<T> = { kind: 'ok'; result: T } | DataPlaneFailure;
 
-const PROVISION_TIMEOUT_MS = 60_000;
 const INDEX_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 30_000;
 const SEED_TIMEOUT_MS = 30_000;
@@ -128,52 +131,6 @@ export function resolveOutboundForHost(
 }
 
 /**
- * #task:1719 — capability-gated resolve for the `workspace_unbind` /
- * `workspace_registry_ids` intent family. An old daemon strict-rejects an
- * unknown command kind and CLOSES the connection (`closeProtocolError`), so
- * the backend must never dispatch either command ungated. This helper
- * therefore re-reads the CURRENT generation attachment and requires BOTH:
- *
- *  - `workspace.registry_reconcile.v1` among the capabilities THAT
- *    generation advertised in its ready frame, and
- *  - `attachment.connectionId === connectionId` (the id pinned by
- *    `resolveOutboundForHost`) — a reattach between resolve and gate means
- *    the capabilities read would describe a DIFFERENT daemon binary, so the
- *    check fails closed as `host_attach_pending` instead of trusting it.
- *
- * `no_capability` is a distinct outcome (not a failure): the caller skips
- * with a structured log and sends ZERO new traffic to that daemon — it
- * converges via the first ready-generation reconcile after upgrade.
- */
-export function resolveRegistryReconcileOutbound(
-  adapter: OutboundFrameAdapter | null,
-  hostId: string,
-):
-  | { kind: 'ok'; adapter: OutboundFrameAdapter; connectionId: string }
-  | { kind: 'no_capability'; connectionId: string }
-  | DataPlaneFailure {
-  const outbound = resolveOutboundForHost(adapter, hostId);
-  if (outbound.kind === 'failed') return outbound;
-  const attachment = outbound.adapter.getAttachment(hostId);
-  if (!attachment || attachment.connectionId !== outbound.connectionId) {
-    return {
-      kind: 'failed',
-      code: 'host_attach_pending',
-      message:
-        'host attachment was replaced between resolve and capability gate',
-      status: 503,
-      retriable: true,
-    };
-  }
-  if (
-    !attachment.capabilities.includes(WORKSPACE_REGISTRY_RECONCILE_CAPABILITY_V1)
-  ) {
-    return { kind: 'no_capability', connectionId: outbound.connectionId };
-  }
-  return outbound;
-}
-
-/**
  * Normalize any dispatch error into a {@link DataPlaneFailure}. Transport
  * errors map to liveness codes; typed daemon wire codes map to their stable
  * caller-visible code + HTTP status; anything unrecognized degrades to
@@ -182,33 +139,26 @@ export function resolveRegistryReconcileOutbound(
 export function mapDataPlaneError(err: unknown): DataPlaneFailure {
   if (err instanceof HostWsCommandResponseError) {
     // `err.code` is statically the narrow transport-level union, but a typed
-    // per-intent wire code (e.g. `invalid_path`) arrives here at runtime —
+    // per-intent wire code (e.g. `forbidden_path`) arrives here at runtime —
     // the daemon scopes it per command and the envelope preserves it. Read
     // it as a string to switch over the data-plane taxonomy (same cast the
     // `agent_materialize` mapper uses).
     const wireCode = err.code as string;
     switch (wireCode) {
-      case 'invalid_path':
-        return fail('invalid_workspace_path', err.message, 400, false);
-      case 'path_conflict':
-        return fail('workspace_path_conflict', err.message, 409, false);
-      case 'unsupported_kind':
-        return fail('unsupported_workspace_kind', err.message, 400, false);
-      case 'fs_quota_exceeded':
-        return fail('fs_quota_exceeded', err.message, 507, false);
       case 'fs_unavailable':
-        // A caller-proposed path that is momentarily unusable on the host
-        // (perm/parent-not-a-dir/ENOENT race) — retriable after the user
-        // fixes the path or the transient condition clears.
+        // A hard host-local fs failure (perm/IO/EROFS/ENOSPC) under the
+        // resolved bundle or L1 dir. Retriable: the operator can clear the
+        // condition and re-issue; the backend never falls back to its own disk.
         return fail('fs_unavailable', err.message, 503, true);
       case 'registry_unavailable':
+        // Despite the legacy name, this is NOT a registry consult
+        // (relocation-v1 §7-4 demoted it). Two producers, both fail-closed:
+        // the daemon has no attached computer yet, so it has no agents root to
+        // resolve anything under (`agentsRootFor`) — by far the reachable one;
+        // or a workspace id segment that could never form a bundle coordinate
+        // (path-safety refusal, unreachable from DB-minted ids). 503 retriable
+        // for the attach case, which is the only one a user can clear.
         return fail('registry_unavailable', err.message, 503, true);
-      case 'workspace_not_provisioned':
-        // agent_l2_seed / scoped agent_workspace_tree|file: the workspace has
-        // no registry binding on the owning host. Routes that need a regular
-        // workspace path must seed/provision before dispatch; the daemon must
-        // never guess a filesystem path.
-        return fail('workspace_not_provisioned', err.message, 409, false);
       case 'unsupported_template':
         // agent_l2_seed: the template_choice has no host-side L2 entry. The
         // backend only ever sends a supported choice, so this is a 400-class
@@ -273,118 +223,12 @@ function fail(
 }
 
 /**
- * Dispatch `workspace_provision` to the owning daemon. The daemon binds the
- * registry entry (managed default when `requested_path` is absent, or the
- * re-validated caller path when present) and creates the `.silverhand/`
- * skeleton, returning the authoritative `bound_workspace_path`.
- */
-export async function dispatchWorkspaceProvision(
-  adapter: OutboundFrameAdapter,
-  hostId: string,
-  connectionId: string,
-  params: WorkspaceProvisionParams,
-): Promise<DataPlaneOutcome<WorkspaceProvisionResult>> {
-  try {
-    const result = await adapter.sendCommand(hostId, 'workspace_provision', params, {
-      timeoutMs: PROVISION_TIMEOUT_MS,
-      expectedConnectionId: connectionId,
-    });
-    return { kind: 'ok', result };
-  } catch (err) {
-    return mapDataPlaneError(err);
-  }
-}
-
-/** Dispatch the viewer-facing, read-only workspace-root snapshot. */
-export async function dispatchWorkspacePathIndex(
-  adapter: OutboundFrameAdapter,
-  hostId: string,
-  connectionId: string,
-  params: WorkspacePathIndexParams,
-): Promise<DataPlaneOutcome<WorkspacePathIndexResult>> {
-  try {
-    const result = await adapter.sendCommand(
-      hostId,
-      'workspace_path_index',
-      params,
-      {
-        timeoutMs: INDEX_TIMEOUT_MS,
-        expectedConnectionId: connectionId,
-      },
-    );
-    return { kind: 'ok', result };
-  } catch (err) {
-    return mapDataPlaneError(err);
-  }
-}
-
-/**
- * #task:1719 — dispatch `workspace_unbind` to a daemon: remove the registry
- * mappings for backend-deleted workspace ids so they stop participating in
- * path-overlap validation as ghosts. Mapping removal ONLY — the daemon never
- * touches directories or file contents (zero implicit deletion, #1594).
- * Idempotent on the daemon side (never-bound / already-unbound ids come back
- * in `absent` as success), so best-effort re-dispatch is always safe.
- */
-export async function dispatchWorkspaceUnbind(
-  adapter: OutboundFrameAdapter,
-  hostId: string,
-  connectionId: string,
-  params: WorkspaceUnbindParams,
-): Promise<DataPlaneOutcome<WorkspaceUnbindResult>> {
-  try {
-    const result = await adapter.sendCommand(
-      hostId,
-      'workspace_unbind',
-      params,
-      {
-        timeoutMs: INDEX_TIMEOUT_MS,
-        expectedConnectionId: connectionId,
-      },
-    );
-    return { kind: 'ok', result };
-  } catch (err) {
-    return mapDataPlaneError(err);
-  }
-}
-
-/**
- * #task:1719 — dispatch `workspace_registry_ids` to a daemon: the
- * ready-generation reconcile PULL. Returns every workspace id the daemon's
- * registry currently binds (ids ONLY — paths never cross the wire) so the
- * reconciler can diff against the DB's legal set and unbind the ghosts.
- * Callers MUST gate on {@link resolveRegistryReconcileOutbound} first — an
- * old daemon would strict-reject the unknown command and drop the
- * connection.
- */
-export async function dispatchWorkspaceRegistryIds(
-  adapter: OutboundFrameAdapter,
-  hostId: string,
-  connectionId: string,
-  params: WorkspaceRegistryIdsParams,
-): Promise<DataPlaneOutcome<WorkspaceRegistryIdsResult>> {
-  try {
-    const result = await adapter.sendCommand(
-      hostId,
-      'workspace_registry_ids',
-      params,
-      {
-        timeoutMs: INDEX_TIMEOUT_MS,
-        expectedConnectionId: connectionId,
-      },
-    );
-    return { kind: 'ok', result };
-  } catch (err) {
-    return mapDataPlaneError(err);
-  }
-}
-
-/**
  * Dispatch `agent_workspace_index` to the owning daemon: the route-time
- * `agent_dir` resolver. Returns daemon-stamped `agent_dir` per workspace +
- * an `unresolved` list (regular workspaces with no registry binding). The
- * caller MUST NOT fall back to a `workspace_path`-derived path for
- * unresolved ids — that would re-pierce I1.
+ * `agent_dir` resolver. Returns daemon-stamped `agent_dir` per workspace + an
+ * `unresolved` list (regular workspaces whose deterministic bundle coordinate
+ * is not materialized on that computer yet — a lazy-seed window, not a
+ * refusal). The caller MUST NOT synthesize a path for an unresolved id: only
+ * the daemon may name a host-local path (I1).
  */
 export async function dispatchAgentWorkspaceIndex(
   adapter: OutboundFrameAdapter,
@@ -459,15 +303,18 @@ export async function dispatchAgentWorkspaceFileRead(
 }
 
 /**
- * D4.e-3 — dispatch `agent_l2_seed` to the owning daemon: seed a member
- * agent's L2 (per-workspace) memory dir on the host that owns the workspace.
- * Replaces backend `seedAgentL2` (gap G1). The daemon resolves the
- * workspace's host-local path from its own registry and writes
- * `MEMORY.md` + `notes/` (NEVER L1 `system_prompt.md`) idempotently. The
- * backend forwards only `{ agent_id, workspace_id, template_choice }`; the
- * route MUST treat a failure as fail-closed (do NOT insert the
- * `workspace_members` row, do NOT write any server-side L2) — no
- * "member added but L2 not seeded" half-state.
+ * D4.e-3 — dispatch `agent_l2_seed` to the owning daemon: materialize a member
+ * agent's L2 (per-workspace) memory bundle on that agent's own computer.
+ * Replaces backend `seedAgentL2` (gap G1). The daemon resolves the target from
+ * `{ agent_id, workspace_id }` alone — the deterministic agent-centric bundle
+ * coordinate (relocation-v1 §7-4: no registry, no provision gate; seeding IS
+ * what materializes the coordinate) — and writes `MEMORY.md` + `notes/` (NEVER
+ * L1 `system_prompt.md`) idempotently.
+ *
+ * Callers must NOT treat a failure as a gate: L2 memory is best-effort
+ * enrichment (see `AgentL2SeedEnsurer`). Membership is a pure DB write that no
+ * longer waits on a seed, and the session cwd — the one hard-ensured runtime
+ * base — is enforced separately host-side.
  */
 export async function dispatchAgentL2Seed(
   adapter: OutboundFrameAdapter,
@@ -490,11 +337,12 @@ export async function dispatchAgentL2Seed(
  * D4.e-4 — dispatch `agent_files_purge` to the owning daemon: remove an
  * agent's host-local L1/L2 files on the host that owns them. Replaces the
  * backend `DELETE /api/agents/:id` `fs.rm(l1_path / l2_paths)` block (gap
- * G3). The daemon resolves L1 (its homedir) and each L2 (workspace path from
- * its registry) itself; the backend forwards only `{ agent_id, scope,
- * workspace_ids }`. Per the §3.3 commit boundary, the route MUST treat any
- * failure as fail-closed: keep the DB row (do NOT delete) so a later retry
- * has its routing anchor — never fall back to a server-side `fs.rm`.
+ * G3). relocation-v1 §7 task 4: the agent's whole managed footprint is a
+ * single home tree, so the daemon removes it in one rm and consults NO
+ * registry; the backend forwards only `{ agent_id }`. Per the §3.3 commit
+ * boundary, the route MUST treat any failure as fail-closed: keep the DB row
+ * (do NOT delete) so a later retry has its routing anchor — never fall back
+ * to a server-side `fs.rm`.
  */
 export async function dispatchAgentFilesPurge(
   adapter: OutboundFrameAdapter,

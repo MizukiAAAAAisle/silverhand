@@ -14,10 +14,6 @@ import {
   MAX_PREVIEW_BYTES,
   readAgentWorkspaceFile,
 } from '../../src/daemon/agent-workspace-fs/index.js';
-import {
-  WorkspaceRegistry,
-  type RegistryBinding,
-} from '../../src/daemon/workspace-registry/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 import { AgentWorkspaceFileReadParamsSchema } from '../../src/protocol.js';
 
@@ -34,43 +30,34 @@ import { AgentWorkspaceFileReadParamsSchema } from '../../src/protocol.js';
  *  - missing leaf / intermediate → `not_found`.
  *  - asking for a directory → `not_found`.
  *  - HARD fs failure (chmod 000 leaf) → `fs_unavailable`.
+ *
+ * relocation-v1 §7 task 4 (registry demotion): a regular workspace resolves
+ * PURELY by its deterministic agent-centric coordinate — no registry is
+ * constructed or consulted (the deps type has no `registry` field). A
+ * never-materialized bundle is an ordinary fs absence (`not_found`), never a
+ * `workspace_not_provisioned` refusal.
  */
 
 const AGENT_ID = 'aid-read-file';
-const BINDING: RegistryBinding = {
-  server_origin: 'test://agent-workspace-read-file',
-  host_id: 'host_read_file',
-};
 
 let homeDir = '';
-let stateDir = '';
 function agentDir(): string {
   return join(homeDir, '.silverhand', 'agents', AGENT_ID);
 }
-function makeRegistry(): WorkspaceRegistry {
-  return new WorkspaceRegistry({
-    stateDir,
-    binding: BINDING,
-    now: () => 1_700_000_000_000,
-  });
-}
-function l2AgentDir(registry: WorkspaceRegistry, workspaceId = 'ws_1'): string {
-  // Establishment gate: the workspace must be realized here for the read to
-  // resolve. The L2 base is now the agent-centric bundle dir under the agent
-  // home (relocation-v1 §3.2), no longer under the registry workspace path.
-  registry.provision(workspaceId);
+/** The deterministic agent-centric L2 bundle dir for a regular workspace —
+ *  `<agent home>/workspaces/<workspace_id>` (relocation-v1 §3.2). No registry
+ *  provision; the coordinate is always computable. */
+function l2BundleDir(workspaceId = 'ws_1'): string {
   return join(agentDir(), 'workspaces', workspaceId);
 }
 
 describe('readAgentWorkspaceFile', () => {
   beforeEach(() => {
     homeDir = mkdtempSync(join(tmpdir(), 'shrf-home-'));
-    stateDir = mkdtempSync(join(tmpdir(), 'shrf-state-'));
   });
   afterEach(() => {
     try {
       rmSync(homeDir, { recursive: true, force: true });
-      rmSync(stateDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
@@ -92,19 +79,20 @@ describe('readAgentWorkspaceFile', () => {
     expect(r.file.size).toBe('i remember'.length);
   });
 
-  it('reads from a scoped regular workspace L2 dir instead of the agent home', async () => {
+  it('reads from a scoped regular workspace L2 bundle by deterministic coordinate — zero registry', async () => {
     const home = agentDir();
     mkdirSync(home, { recursive: true });
     writeFileSync(join(home, 'MEMORY.md'), 'home memory');
 
-    const registry = makeRegistry();
-    const scoped = l2AgentDir(registry);
+    // Bundle materialized at the deterministic coordinate (as first spawn
+    // would do) — NO registry provision.
+    const scoped = l2BundleDir();
     mkdirSync(scoped, { recursive: true });
     writeFileSync(join(scoped, 'MEMORY.md'), 'workspace memory');
 
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', path: 'MEMORY.md' },
-      { homeDir, registry },
+      { homeDir },
     );
     expect(r.file.content).toBe('workspace memory');
   });
@@ -125,29 +113,38 @@ describe('readAgentWorkspaceFile', () => {
     expect(r.file.content).toBe('l1 prompt');
   });
 
-  it('fails closed for a regular workspace id when no registry is available', async () => {
-    await expect(
-      readAgentWorkspaceFile(
-        { agent_id: AGENT_ID, workspace_id: 'ws_1', path: 'MEMORY.md' },
-        { homeDir },
-      ),
-    ).rejects.toMatchObject({
-      code: 'registry_unavailable',
-    });
+  it('resolves a regular workspace with ZERO registry — a pure-DB-created workspace whose bundle first-spawn materialized reads by coordinate (relocation-v1 §7-4 falsifier)', async () => {
+    // Model the U4 end-state: the workspace was created as a pure DB write
+    // (no `workspace_provision`, no registry binding anywhere), then its
+    // bundle was materialized at first spawn. The read must resolve purely by
+    // the deterministic agent-centric coordinate. No registry is constructed;
+    // if the resolver still consulted one it would fail-closed here.
+    const scoped = l2BundleDir('ws_pure_db');
+    mkdirSync(scoped, { recursive: true });
+    writeFileSync(join(scoped, 'MEMORY.md'), 'l2');
+
+    const r = await readAgentWorkspaceFile(
+      { agent_id: AGENT_ID, workspace_id: 'ws_pure_db', path: 'MEMORY.md' },
+      { homeDir },
+    );
+    expect(r.file.content).toBe('l2');
   });
 
-  it('fails closed for a never-provisioned regular workspace id', async () => {
+  it('a never-materialized regular workspace file read degrades to not_found — NOT a workspace_not_provisioned refusal (relocation-v1 §7-4)', async () => {
+    // The coordinate is always computable; a bundle that was never spawned is
+    // an ordinary filesystem absence, so reading a file inside it is a plain
+    // `not_found` rather than a fail-closed 409. No registry, no provisioning.
     await expect(
       readAgentWorkspaceFile(
         {
           agent_id: AGENT_ID,
-          workspace_id: 'ws_missing',
+          workspace_id: 'ws_never_spawned',
           path: 'MEMORY.md',
         },
-        { homeDir, registry: makeRegistry() },
+        { homeDir },
       ),
     ).rejects.toMatchObject({
-      code: 'workspace_not_provisioned',
+      code: 'not_found',
     });
   });
 

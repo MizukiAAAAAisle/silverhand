@@ -243,7 +243,6 @@ const ONBOARDING_DM_CONTENT = (agentName: string): string =>
 function insertProvisioningDependents(
   deps: CreateAgentDeps,
   agentRow: AgentRow,
-  agentDir: string,
   creatorUserId: string,
 ): {
   home: ReturnType<WorkspaceRepo['insertAgentHome']>;
@@ -259,11 +258,9 @@ function insertProvisioningDependents(
     if (!flipped) throw new Error('row vanished post-flip');
     const home = workspaces.insertAgentHome({
       agent: flipped,
-      workspacePath: agentDir,
     });
     const dm = conversations.insertDmChannel({
       workspaceId: home.id,
-      workspacePath: agentDir,
       title: 'Onboarding',
       agentId: agentRow.id,
     });
@@ -388,7 +385,6 @@ async function materializeReservedAgent(
     inserted = insertProvisioningDependents(
       deps,
       reservedRow,
-      ackResult.agent_dir,
       creatorUserId,
     );
   } catch (err) {

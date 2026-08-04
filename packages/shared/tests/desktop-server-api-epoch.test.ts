@@ -52,26 +52,20 @@ describe('desktop-server-api-epoch contract root', () => {
     ).toBe('client_too_old');
   });
 
-  it('plan-A lockstep: minima equal the current epoch, except the NAMED epoch-1 bootstrap', () => {
+  it('plan-A lockstep: both minima equal the current epoch (the epoch-1 bootstrap window is closed)', () => {
     // Cindy round-2/3 P1: default plan A rejects incompatible pairs by
-    // DEFINITION of "same generation". A minimum of 0 is legal ONLY while
-    // the current epoch is still 1 — the named observation-bootstrap window
-    // of the axis's first introduction, checked per field so the two minima
-    // can exit their bridges independently. The moment the epoch is bumped
-    // past 1, a leftover 0 minimum fails RED here (that leftover would
-    // silently re-admit the incompatible pair plan A exists to reject).
+    // DEFINITION of "same generation". A minimum of 0 was legal ONLY while the
+    // current epoch was still 1 — the named observation-bootstrap window of the
+    // axis's first introduction. relocation-v1 §6 bumped the atomic triple to 2
+    // (required workspace DTO fields and `/api/workspaces/local-paths` removed),
+    // which CLOSED that window for good: a pre-epoch peer cannot decode this
+    // generation's workspace payloads, so admitting it would only move the
+    // failure from admission into a deep parse. From here on the invariant is
+    // unconditional — a leftover low minimum fails RED here.
     // A deliberate plan-B bridge must change this test together with its
     // adapter + §11 exit conditions.
-    const inClientBootstrap =
-      DESKTOP_SERVER_API_EPOCH === 1 && MINIMUM_CLIENT_API_EPOCH === 0;
-    if (!inClientBootstrap) {
-      expect(MINIMUM_CLIENT_API_EPOCH).toBe(DESKTOP_SERVER_API_EPOCH);
-    }
-    const inServerBootstrap =
-      DESKTOP_SERVER_API_EPOCH === 1 && MINIMUM_SERVER_API_EPOCH === 0;
-    if (!inServerBootstrap) {
-      expect(MINIMUM_SERVER_API_EPOCH).toBe(DESKTOP_SERVER_API_EPOCH);
-    }
+    expect(MINIMUM_CLIENT_API_EPOCH).toBe(DESKTOP_SERVER_API_EPOCH);
+    expect(MINIMUM_SERVER_API_EPOCH).toBe(DESKTOP_SERVER_API_EPOCH);
   });
 
   it('parses the dedicated admission header: absent/malformed/repeated → 0, canonical decimal → value', () => {
@@ -91,10 +85,12 @@ describe('desktop-server-api-epoch contract root', () => {
     ).toBe(DESKTOP_SERVER_API_EPOCH);
   });
 
-  it('bootstrap invariants: minimums admit the pre-epoch generation (0)', () => {
-    // While either minimum is 0, absence (normalized to 0) must be admitted.
-    // Raising these is the documented cutoff; when that lands this test is
-    // updated in the same commit per the runbook.
+  it('minimum-vs-current invariants, and the pre-epoch generation (0) now fails closed', () => {
+    // A minimum may never exceed the current epoch (that would reject every
+    // peer, including this build). The last assertion is written against the
+    // compiled minimum rather than a literal, so it states the CURRENT rule
+    // either way: while a minimum was 0 the pre-epoch generation was admitted;
+    // now that §6 raised it, absence (normalized to 0) is refused.
     expect(MINIMUM_CLIENT_API_EPOCH).toBeLessThanOrEqual(
       DESKTOP_SERVER_API_EPOCH,
     );

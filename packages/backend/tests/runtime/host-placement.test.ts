@@ -239,8 +239,6 @@ describe('RuntimeHostPlacementResolver', () => {
     const workspace = t.workspaces.insert({
       name: 'engineering',
       description: null,
-      workspacePath: '/tmp/silverhand-engineering',
-      workspaceHostId: hostB.id,
     });
 
     // #task:1600 final piece: cross-computer membership is LEGAL and the

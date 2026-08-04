@@ -195,11 +195,6 @@ export function conversationMemberResultResponse(
         },
         403,
       );
-    case 'workspace_agent_seed_failed':
-      return c.json(
-        { error: error.failure.message, code: error.failure.code },
-        error.failure.status,
-      );
     case 'handle_ambiguous':
       return c.json(
         { error: 'handle is ambiguous', code: 'handle_ambiguous', candidates: error.candidates },
@@ -384,14 +379,14 @@ export function runtimeStartErrorResponse(c: Context, err: unknown): Response | 
   const code = err.code as string;
   if (
     code !== 'workspace_not_provisioned' &&
-    code !== 'workspace_path_missing' &&
+    code !== 'workspace_bundle_missing' &&
     code !== 'registry_unavailable' &&
     code !== 'shutting_down'
   ) {
     return null;
   }
   const status =
-    code === 'workspace_path_missing'
+    code === 'workspace_bundle_missing'
       ? 409
       : code === 'shutting_down'
         ? 503

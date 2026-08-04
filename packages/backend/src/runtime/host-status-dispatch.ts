@@ -13,7 +13,7 @@
  * the route translates dispatch outcomes into the renderer-facing
  * `HostStatusResponse` discriminated union (`available` / `disconnected` /
  * `unreachable` / `revoked`), and `host_status` doesn't need any of the
- * data-plane's typed codes (`workspace_not_provisioned`, `invalid_path`,
+ * data-plane's typed codes (`forbidden_path`, `unsupported_template`,
  * etc.). Keeping a narrow `HostStatusFailureReason` enum here makes the
  * route's switch exhaustive and prevents an unrelated data-plane code
  * from accidentally surfacing on the ComputerPane wire.

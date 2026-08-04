@@ -106,11 +106,9 @@ function bootstrap(
   // the wake delivery has a real target.
   const home = workspaces.insertAgentHome({
     agent: owner,
-    workspacePath: tmp.workspacesRoot,
   });
   const dm = conversations.insertDmChannel({
     workspaceId: home.id,
-    workspacePath: home.workspace_path,
     title: `dm-${owner.name}`,
   });
   conversations.addAgent(dm.id, owner.id);
@@ -433,12 +431,9 @@ describe('ScheduleService.create', () => {
     const ws = f.workspaces.insert({
       name: 'team',
       description: null,
-      workspacePath: '/tmp/silverhand-team',
-      workspaceHostId: f.localHostId,
     });
     const channel = f.conversations.insertChannel({
       workspaceId: ws.id,
-      workspacePath: ws.workspace_path,
       title: 'general',
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);
@@ -468,12 +463,9 @@ describe('ScheduleService.create', () => {
     const ws = f.workspaces.insert({
       name: 'team',
       description: null,
-      workspacePath: '/tmp/silverhand-team-label',
-      workspaceHostId: f.localHostId,
     });
     const channel = f.conversations.insertChannel({
       workspaceId: ws.id,
-      workspacePath: ws.workspace_path,
       title: 'release',
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);
@@ -538,12 +530,9 @@ describe('ScheduleService.create', () => {
     const ws = f.workspaces.insert({
       name: 'team',
       description: null,
-      workspacePath: '/tmp/silverhand-team-closed',
-      workspaceHostId: f.localHostId,
     });
     const channel = f.conversations.insertChannel({
       workspaceId: ws.id,
-      workspacePath: ws.workspace_path,
       title: 'closed-room',
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);
@@ -573,12 +562,9 @@ describe('ScheduleService.create', () => {
     const ws = f.workspaces.insert({
       name: 'team',
       description: null,
-      workspacePath: '/tmp/silverhand-team-strangers',
-      workspaceHostId: f.localHostId,
     });
     const channel = f.conversations.insertChannel({
       workspaceId: ws.id,
-      workspacePath: ws.workspace_path,
       title: 'no-entry',
     });
     // Note: ownerAgentId NOT added as a member.
@@ -998,12 +984,9 @@ describe('ScheduleService.tick — target_conversation_id (#task:478)', () => {
     const ws = f.workspaces.insert({
       name,
       description: null,
-      workspacePath: `/tmp/silverhand-${name}`,
-      workspaceHostId: f.localHostId,
     });
     const channel = f.conversations.insertChannel({
       workspaceId: ws.id,
-      workspacePath: ws.workspace_path,
       title: 'fire-here',
     });
     f.conversations.addAgent(channel.id, f.ownerAgentId);

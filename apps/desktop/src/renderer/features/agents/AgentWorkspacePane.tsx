@@ -59,17 +59,6 @@ export function AgentWorkspaceContainer({
 
 interface AgentWorkspacePaneProps {
   agentId: string;
-  /** The agent's host_id, used to gate the "Reveal in Finder" affordance.
-   *  We don't have an absolute fs path on the wire anymore (the daemon
-   *  owns paths, the wire only carries virtual ones); the gate stays as
-   *  a visibility hint for the local-host case. */
-  hostId: string;
-  /** True when the user owns the agent's host AND that host is the
-   *  local desktop session — only then can `showItemInFolder` reach a
-   *  meaningful absolute path. We don't currently surface a "reveal"
-   *  for the new pane (no absolute path on the wire); kept on the prop
-   *  surface for forward-compat. */
-  canRevealPath: boolean;
 }
 
 /**
@@ -85,12 +74,6 @@ interface AgentWorkspacePaneProps {
  */
 export function AgentWorkspacePane({
   agentId,
-  // hostId / canRevealPath kept on the surface for forward-compat — an
-  // absolute-path "reveal" affordance can come back when the wire grows a
-  // "where on disk is this?" field. For now the daemon owns paths and the
-  // renderer never sees them.
-  hostId: _hostId,
-  canRevealPath: _canRevealPath,
 }: AgentWorkspacePaneProps): JSX.Element {
   return (
     <AgentWorkspaceContainer

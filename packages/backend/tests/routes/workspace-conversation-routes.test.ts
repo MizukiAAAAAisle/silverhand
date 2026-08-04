@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { join } from 'node:path';
 import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
@@ -45,7 +44,6 @@ describe('workspace/conversation routes', () => {
       id: workspaceBody.onboarding_channel_id,
       workspace_id: workspaceBody.workspace.id,
       kind: 'channel',
-      workspace_path: workspaceBody.workspace.workspace_path,
     });
 
     const dms = await (
@@ -55,7 +53,6 @@ describe('workspace/conversation routes', () => {
     expect(dms.channels[0]).toMatchObject({
       kind: 'dm_channel',
       workspace_id: home.id,
-      workspace_path: join(t.silverhandDir, 'agents', agentBody.agent.id),
     });
 
     const secondary = await (
@@ -87,9 +84,11 @@ describe('workspace/conversation routes', () => {
     ]);
   });
 
-  it('defaults workspace host to the creator owned local host', async () => {
+  it('creates a workspace with NO owning computer (relocation-v1 §7-4 retires placement)', async () => {
+    // Inverted pin: create used to DEFAULT the workspace host to the creator's
+    // owned local computer. A regular workspace has no home computer any more,
+    // so create resolves nothing and the DTO exposes no host pointer.
     t = buildTestApp();
-    const ownedLocal = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
     const res = await http(t).post('/api/workspaces', {
       name: 'owned-host-default',
       member_agent_ids: [],
@@ -97,7 +96,7 @@ describe('workspace/conversation routes', () => {
 
     expect(res.status).toBe(201);
     const body = await res.json() as any;
-    expect(body.workspace.workspace_host_id).toBe(ownedLocal?.id);
+    expect(body.workspace.workspace_host_id).toBeUndefined();
   });
 
   it('adds selected human initial members to workspace and onboarding channel', async () => {
@@ -192,18 +191,25 @@ describe('workspace/conversation routes', () => {
     expect(teammateUsers).toEqual(['local', 'teammate']);
   });
 
-  it('fails closed when workspace creator has no owned local host', async () => {
+  it('creates a workspace even with NO owned local computer (§7-4: nothing to place)', async () => {
+    // Inverted pin: create used to fail closed with 409 `local_host_unbound`
+    // because it had to name an owning computer. It names none now, so an
+    // unclaimed installation can still create a workspace — the same typed code
+    // still guards AGENT placement, which really does pick a computer.
     t = buildTestApp({ ownedLocalHostUserIds: [] });
     const res = await http(t).post('/api/workspaces', {
       name: 'no-local-host',
       member_agent_ids: [],
     });
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'local_host_unbound' });
+    expect(res.status).toBe(201);
   });
 
-  it('rejects an explicit workspace host owned by another user', async () => {
+  it("ignores an explicit workspace host owned by another user (§7-4: the input has no effect)", async () => {
+    // Inverted pin: the old 403 `host_not_owned` defended an ownership decision
+    // create no longer makes. The field is accepted-but-ignored until the input
+    // schema retires it in the final atomic epoch cut, so a teammate's computer
+    // id cannot bind anything — the create simply succeeds with no host.
     t = buildTestApp();
     const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser('teammate');
     expect(teammateHost).not.toBeNull();
@@ -213,8 +219,9 @@ describe('workspace/conversation routes', () => {
       member_agent_ids: [],
     });
 
-    expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ code: 'host_not_owned' });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as any;
+    expect(body.workspace.workspace_host_id).toBeUndefined();
   });
 
   it('accepts workspace create members on another computer (#task:1600 gate lifted)', async () => {
@@ -223,10 +230,9 @@ describe('workspace/conversation routes', () => {
     // computer they own. Enrollment authority is the agent's creator (a
     // teammate's agent is refused on every door — see
     // tests/routes/workspace-agent-enrollment.test.ts); the axis under test
-    // here is the HOST, so the two must not be conflated. Two ready owned
-    // computers make placement ambiguous, hence the explicit home host.
+    // here is the member's HOST, so the two must not be conflated. The
+    // workspace itself has no computer to name (§7-4).
     const hosts = new HostRepo(t.ctx.db);
-    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
     const guestHost = hosts.claimOrCreateLocal({
       userId: t.viewerUserId,
       installationId: 'second-desktop-create',
@@ -242,7 +248,6 @@ describe('workspace/conversation routes', () => {
 
     const res = await http(t).post('/api/workspaces', {
       name: 'cross-computer-create-ok',
-      workspace_host_id: homeHost.id,
       member_agent_ids: [agentId],
     });
 
@@ -256,12 +261,11 @@ describe('workspace/conversation routes', () => {
     expect(memberRow).toBeDefined();
   });
 
-  it('accepts addMember when agent and workspace hosts differ (#task:1600 gate lifted)', async () => {
+  it('accepts addMember for an agent living on another computer (#task:1600 gate lifted)', async () => {
     t = buildTestApp();
     // Same #task:1681 framing as the create test above: own agent, second
     // owned computer.
     const hosts = new HostRepo(t.ctx.db);
-    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
     const guestHost = hosts.claimOrCreateLocal({
       userId: t.viewerUserId,
       installationId: 'second-desktop-add',
@@ -277,7 +281,6 @@ describe('workspace/conversation routes', () => {
     const workspace = await (
       await http(t).post('/api/workspaces', {
         name: 'host-mismatch-add',
-        workspace_host_id: homeHost.id,
         member_agent_ids: [],
       })
     ).json() as any;

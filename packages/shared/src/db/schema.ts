@@ -298,8 +298,6 @@ export interface WorkspaceRow {
   name: string;
   description: string | null;
   workspace_kind: WorkspaceKind;
-  workspace_path: string;
-  workspace_host_id: string;
   owner_agent_id: string | null;
   /**
    * Human governance owner (graded-permissions Layer A, v40). The live
@@ -416,7 +414,6 @@ export interface WorkspaceAgentCapabilityRow {
 export interface ConversationRow {
   id: string;
   workspace_id: string;
-  workspace_path: string;
   kind: ConversationKind;
   title: string;
   status: ConversationStatus;

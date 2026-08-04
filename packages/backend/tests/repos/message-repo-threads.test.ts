@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { testWorkspacePath } from '../utils/db.js';
 import type { Database as Db } from 'better-sqlite3';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
@@ -15,12 +14,9 @@ import { openTestDb } from '../utils/db.js';
 function bootstrap() {
   const { db, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
-  const workspacePath = testWorkspacePath('threads-ws');
   const workspace = workspaces.insert({
     name: 'threads-ws',
     description: null,
-    workspacePath,
-    workspaceHostId: localHostId,
   });
   const agent = new AgentRepo(db).create(
     { name: 'a', runtime: 'claude' },
@@ -31,7 +27,6 @@ function bootstrap() {
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 't',
   });
   conversations.addAgent(channel.id, agent.id);

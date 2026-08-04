@@ -270,12 +270,19 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
   });
 
   describe('runtime_start daemon typed response errors', () => {
-    it('start → workspace_path_missing (409) with the daemon message preserved', async () => {
+    it('start → workspace_bundle_missing (409) with the neutral daemon message preserved (no host path leak)', async () => {
       t = buildTestApp();
       const { channelId, agentId } = await createChannelWithAgent(t);
+      // relocation-v1 §7 task 3 (Cindy nail 1): the daemon strips the absolute
+      // bundle path from the typed error's wire `message` at the producer, so
+      // the message reaching the backend names only the semantic id + kind.
+      // The backend forwards it verbatim; assert both the preservation AND the
+      // absence of any filesystem path.
+      const neutralMessage =
+        'runtime_start: workspace files for agent_home workspace agent-home:a1 are not available on this computer';
       t.fake.startError = new HostWsCommandResponseError(
-        'workspace_path_missing' as never,
-        'runtime_start: resolved agent_home workspace "alice" path does not exist: /tmp/local-silverhand/agents/a1',
+        'workspace_bundle_missing' as never,
+        neutralMessage,
         { hostId: 'h1', commandKind: 'runtime_start', requestId: 'r1' },
       );
       const res = await http(t).post(
@@ -283,8 +290,9 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
       );
       expect(res.status).toBe(409);
       const body = await res.json() as { code: string; error: string };
-      expect(body.code).toBe('workspace_path_missing');
-      expect(body.error).toContain('/tmp/local-silverhand/agents/a1');
+      expect(body.code).toBe('workspace_bundle_missing');
+      expect(body.error).toBe(neutralMessage);
+      expect(body.error).not.toMatch(/\//);
     });
   });
 

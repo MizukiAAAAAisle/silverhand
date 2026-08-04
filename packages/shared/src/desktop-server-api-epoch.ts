@@ -38,7 +38,7 @@ import { apiPaths } from './api/paths.js';
  * conditions) may hold a minimum back, and it must change the lockstep test
  * in the same commit. See docs/desktop-server-api-epoch.md §3–4.
  */
-export const DESKTOP_SERVER_API_EPOCH = 1;
+export const DESKTOP_SERVER_API_EPOCH = 2;
 
 /**
  * #task:1761 (Cindy round-2 P1) — the ADMISSION header. Dedicated and
@@ -70,28 +70,26 @@ export function parseDesktopApiEpochHeader(
 /**
  * Lowest client epoch this server build admits on the desktop surface.
  *
- * `0` is the OBSERVATION-BRIDGE value: clients that do not send an epoch at
- * all (pre-epoch desktops) are classified as epoch 0 and still admitted, while
- * the server records the valid/missing/invalid distribution.
- *
- * Exit conditions (docs/architecture-principles.md §11):
- *   - guards: pre-epoch desktop builds already in the field, which cannot be
- *     retro-fitted to send `desktop_api_epoch`;
- *   - removal trigger: fleet observation shows missing-epoch desktop
- *     connections at zero (or an explicit cutoff date is declared in the
- *     runbook) — then raise this to 1 so missing fails closed;
- *   - owner: Lio (#task:1761); the raise is a one-line change reviewed like
- *     any breaking bump.
+ * relocation-v1 §6 raised this to the epoch triple: the workspace local-binding
+ * removal deleted required DTO fields (`workspace_path`, `workspace_host_id`)
+ * and the `/api/workspaces/local-paths` endpoint, so a pre-epoch desktop cannot
+ * decode this server's workspace payloads at all. The former `0`
+ * OBSERVATION-BRIDGE value (admit missing-epoch clients while recording the
+ * valid/missing/invalid distribution) exited here: a bridge that admits a client
+ * whose DTO contract no longer exists would fail deep in a parse instead of at
+ * admission. Missing/invalid epochs now fail closed with HTTP 426; the
+ * distribution counters stay for observability only.
  */
-export const MINIMUM_CLIENT_API_EPOCH = 0;
+export const MINIMUM_CLIENT_API_EPOCH = 2;
 
 /**
- * Lowest server epoch this desktop build accepts. Symmetric bootstrap: `0`
- * admits servers that predate the `desktop_api` advertisement in
- * `/api/server/info` (classified as epoch 0). Raise to 1 once fleet servers
- * all advertise, under the same §11 discipline as MINIMUM_CLIENT_API_EPOCH.
+ * Lowest server epoch this desktop build accepts. Symmetric to
+ * MINIMUM_CLIENT_API_EPOCH and raised with it by relocation-v1 §6: this desktop
+ * build reads the post-removal DTOs, so a server that predates the removal (or
+ * predates the `desktop_api` advertisement in `/api/server/info`, classified as
+ * epoch 0) is refused by the startup gate rather than decoded.
  */
-export const MINIMUM_SERVER_API_EPOCH = 0;
+export const MINIMUM_SERVER_API_EPOCH = 2;
 
 /** Advertised by `/api/server/info` under the `desktop_api` key. */
 export const DesktopApiAdvertisementSchema = z.object({
@@ -109,8 +107,9 @@ export type DesktopServerApiCompatibility =
 
 /**
  * Pure range comparison used by BOTH sides. A missing epoch on either side is
- * normalized to 0 by the caller BEFORE this call (absence is a legacy
- * generation, not an error, during the observation bridge).
+ * normalized to 0 by the caller BEFORE this call: absence NAMES the pre-epoch
+ * generation rather than being an error, and since relocation-v1 §6 closed the
+ * observation bridge that generation sits below both minima and is refused.
  *
  * `client_too_old` wins over `server_too_old` when both hold: the actionable
  * remedy ("upgrade the app") is on the client side.

@@ -72,14 +72,6 @@ export type AddConversationMemberError =
    * workspace and no enrollment would happen.
    */
   | { code: 'agent_not_owned' }
-  | {
-      code: 'workspace_agent_seed_failed';
-      failure: {
-        code: string;
-        message: string;
-        status: 400 | 403 | 404 | 409 | 502 | 503 | 504 | 507;
-      };
-    }
   | { code: 'handle_ambiguous'; candidates: HandleCandidate[] };
 
 export type AddConversationMemberResult =
@@ -276,8 +268,6 @@ export async function addConversationMember(
           principal: input.principal,
           workspace: {
             id: workspace.id,
-            workspace_path: workspace.workspace_path,
-            workspace_host_id: workspace.workspace_host_id,
           },
           agentId: agent.id,
         },
@@ -296,14 +286,6 @@ export async function addConversationMember(
             // agent in. An agent already in the workspace is unaffected (the
             // gate only runs on the auto-provision branch).
             return { ok: false, error: { code: 'agent_not_owned' } };
-          case 'seed_failed':
-            return {
-              ok: false,
-              error: {
-                code: 'workspace_agent_seed_failed',
-                failure: workspaceMember.error.failure,
-              },
-            };
         }
       }
     }

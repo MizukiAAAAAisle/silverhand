@@ -377,10 +377,6 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
     reason: 'computer-scoped host list; no conversation axis',
   },
   'inline-find': { verdicts: ['swept'], reason: "['inline-find', cid, …] → position 1" },
-  'local-workspace-paths': {
-    verdicts: ['exempt'],
-    reason: 'host filesystem mapping; no conversation axis',
-  },
   me: { verdicts: ['exempt'], reason: 'viewer identity + capabilities; no conversation axis' },
   'message-reactions': {
     verdicts: ['retained'],

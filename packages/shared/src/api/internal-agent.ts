@@ -344,13 +344,14 @@ export type AgentReadHistoryDto = z.infer<typeof AgentReadHistoryDtoSchema>;
  *  `kind` mirrors DB truth (`'regular' | 'agent_home'`); 'dm' is a
  *  conversation-level concept and is intentionally not synthesized
  *  here. `agent_dir` is the agent's working directory inside this
- *  workspace — for `agent_home` this is the workspace root itself,
- *  for `regular` it is the nested `.silverhand/agents/<agent_id>`
- *  L2 profile dir. `null` means UNAVAILABLE ON THIS COMPUTER
- *  (#task:1600): the workspace's local root is not provisioned on the
- *  agent's own computer (a cross-computer guest membership the agent
- *  has not run in yet). Never a fabricated path; it resolves once the
- *  workspace next runs on the agent's computer. */
+ *  workspace — for `agent_home` this is the agent's L1 home itself,
+ *  for `regular` it is the deterministic agent-centric bundle
+ *  `<agent home>/workspaces/<workspace_id>` (relocation-v1 §3.2/§7:
+ *  computed from ids, never read from a DB column or registry
+ *  binding). `null` means UNAVAILABLE ON THIS COMPUTER: the coordinate
+ *  is not a usable working directory yet — the membership is a pure DB
+ *  write until the agent first spawns there. Never a fabricated path;
+ *  it resolves on that first spawn. */
 export const AgentListedWorkspaceSchema = z.object({
   id: z.string(),
   name: z.string(),

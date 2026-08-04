@@ -26,6 +26,7 @@ import type { EventWsServerController, EventWsServerOptions } from '../../src/ws
 import { PresenceRegistry } from '../../src/presence/presence-registry.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 interface TestWsServer {
   url: string;
@@ -535,6 +536,7 @@ async function connectAuthenticated(
   const origin = opts.origin ?? wsOrigin(url);
   const ws = new WebSocket(url, {
     headers: {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
       Origin: origin,
       Cookie: `${EVENT_WS_SESSION_COOKIE}=${encodeURIComponent(token)}`,
     },

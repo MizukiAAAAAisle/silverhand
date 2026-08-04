@@ -43,7 +43,6 @@ import { useResizableWidth } from '@/hooks/useResizableWidth';
 import { CreateWorkspaceDialog } from '@/features/workspaces/CreateWorkspaceDialog';
 import { CreateChannelDialog } from '@/features/workspaces/CreateChannelDialog';
 import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettingsDialog';
-import { useLocalWorkspacePaths } from '@/features/workspaces/local-paths';
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
@@ -377,7 +376,6 @@ function RegisteredAppShell(): JSX.Element {
     () => workspaces.map(workspace => workspace.id),
     [workspaces],
   );
-  const localWorkspacePaths = useLocalWorkspacePaths(visibleWorkspaceIds);
   const { data: agents = [] } = useAgents();
   // Stable id → agent lookup shared with the sidebar (DM avatar
   // resolution) and any future agent-keyed surface. Memoized on the
@@ -388,9 +386,6 @@ function RegisteredAppShell(): JSX.Element {
     [agents],
   );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
-  const selectedWorkspacePath = selectedWorkspaceId
-    ? localWorkspacePaths.get(selectedWorkspaceId) ?? null
-    : null;
   // Titlebar name for a DM = the bound agent's raw display name, resolved the
   // SAME way as the rail (`dmRecognitionName`, shared so they can't drift) so
   // the header reads like the person, not `@handle` (#task:1768). Regular
@@ -1877,7 +1872,6 @@ function RegisteredAppShell(): JSX.Element {
         workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={titlebarWorkspaceName}
         workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-        workspacePath={selectedWorkspacePath}
         workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
         onOpenWorkspaceSettings={
           selectedWorkspace ? () => setWorkspaceSettingsOpen(true) : undefined
@@ -2199,7 +2193,6 @@ function RegisteredAppShell(): JSX.Element {
                       created_at: w.created_at,
                     }))}
                     agentsById={agentsById}
-                    localWorkspacePaths={localWorkspacePaths}
                     selectedWorkspaceId={selectedWorkspaceId}
                     onSelectWorkspace={handleSelectWorkspace}
                     onStarWorkspace={(workspaceId, starred) =>
@@ -2418,7 +2411,6 @@ function RegisteredAppShell(): JSX.Element {
         workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={selectedWorkspace?.name ?? null}
         workspaceKind={selectedWorkspace?.kind ?? null}
-        workspacePath={selectedWorkspacePath}
         archivedAt={selectedWorkspace?.archived_at ?? null}
         onDeleted={handleWorkspaceDeleted}
       />

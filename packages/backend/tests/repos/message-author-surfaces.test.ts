@@ -8,7 +8,7 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { SavedMessageRepo } from '../../src/repos/saved-message-repo.js';
 import { SearchRepo } from '../../src/repos/search-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
-import { openTestDb, testWorkspacePath } from '../utils/db.js';
+import { openTestDb } from '../utils/db.js';
 
 // #task:1791 — the SURFACE contract. Every read surface that renders an author
 // (root message, thread repliers + reply-preview, saved, search, attachment
@@ -24,12 +24,9 @@ import { openTestDb, testWorkspacePath } from '../utils/db.js';
 function bootstrap() {
   const { db, localHostId } = openTestDb();
   const workspaces = new WorkspaceRepo(db);
-  const workspacePath = testWorkspacePath('author-surfaces-ws');
   const workspace = workspaces.insert({
     name: 'author-surfaces-ws',
     description: null,
-    workspacePath,
-    workspaceHostId: localHostId,
   });
   const agents = new AgentRepo(db);
   // `del` authors messages across every surface, then is hard-deleted. `ren` is
@@ -41,7 +38,6 @@ function bootstrap() {
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 't',
   });
   conversations.addAgent(channel.id, del.id);

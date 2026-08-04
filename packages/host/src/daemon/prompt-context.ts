@@ -72,9 +72,10 @@ export async function buildPromptContextFromRuntimeStartOptions(
       conversationId: options.session.conversation_id,
       computerId: options.computer_id,
       workspaceName: options.workspace.name,
-      // The daemon-resolved local root on THIS computer (registry for
-      // regular workspaces, agent L1 home for DMs) — never the server-side
-      // home workspace_path.
+      // The daemon-resolved local root on THIS computer — the deterministic
+      // agent-centric bundle coordinate for regular workspaces, the agent L1
+      // home for DMs. Never a server-supplied path: since relocation-v1 §7
+      // there is no stored path column and no registry binding to read.
       workspacePath: options.workspace.path,
       channelKind: options.session.kind === 'dm_channel' ? 'dm' : 'regular',
       sessionTitle: options.session.title,

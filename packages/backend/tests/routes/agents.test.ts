@@ -61,7 +61,6 @@ describe('POST /api/agents', () => {
     const dm = channels.channels.find((c: any) => c.id === body.dm_channel_id);
     expect(dm.kind).toBe('dm_channel');
     expect(dm.title).toBe('Onboarding');
-    expect(dm.workspace_path).toContain(body.agent.id);
 
     // provision should have spawned the onboarding session for the DM
     expect(t.fake.starts).toHaveLength(1);
@@ -652,6 +651,26 @@ describe('GET /api/agents/:id/workspace/tree', () => {
         member_agent_ids: [created.agent.id],
       })
     ).json() as any;
+    // relocation-v1 §7 task 4 — create is now a pure DB write; a member's
+    // workspace dir + L2 are materialized lazily at its FIRST SPAWN, not
+    // eagerly at create, and the daemon resolves the bundle from the
+    // agent-centric coordinate (no registry binding). Simulate the daemon
+    // having a seeded L2 to scope to via the surviving tree override.
+    t.fakeHostWs!.agentWorkspaceTreeAckOverride = (): any => ({
+      ok: true,
+      tree: {
+        nodes: [
+          { path: 'MEMORY.md', kind: 'file', size: 8, mtime: 1_780_000_000_000 },
+          { path: 'notes', kind: 'directory', size: 0, mtime: 1_780_000_000_000 },
+          {
+            path: 'notes/onboarding-guide.md',
+            kind: 'file',
+            size: 10,
+            mtime: 1_780_000_000_000,
+          },
+        ],
+      },
+    });
     t.fakeHostWs!.calls.length = 0;
     const res = await http(t).get(
       `/api/agents/${created.agent.id}/workspace/tree?workspace_id=${encodeURIComponent(
@@ -847,6 +866,20 @@ describe('GET /api/agents/:id/workspace/file', () => {
         member_agent_ids: [created.agent.id],
       })
     ).json() as any;
+    // relocation-v1 §7 task 4 — the workspace dir + L2 are materialized lazily
+    // at first spawn, not eagerly at create, and the daemon resolves the bundle
+    // from the agent-centric coordinate (no registry binding). Simulate the
+    // daemon having a seeded MEMORY.md via the surviving file-read override.
+    t.fakeHostWs!.agentWorkspaceFileReadAckOverride = (params): any => ({
+      ok: true,
+      file: {
+        path: params.path,
+        content: '# Memory\n',
+        size: 8,
+        mtime: 1_780_000_000_000,
+        truncated: false,
+      },
+    });
     t.fakeHostWs!.calls.length = 0;
     const res = await http(t).get(
       `/api/agents/${created.agent.id}/workspace/file?workspace_id=${encodeURIComponent(

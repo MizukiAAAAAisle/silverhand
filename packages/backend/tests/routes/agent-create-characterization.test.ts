@@ -33,6 +33,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 function freshKey(): string {
   return `k-${randomBytes(8).toString('base64url')}`;
@@ -314,6 +315,7 @@ describe('create-agent saga — P5 pre-refactor characterization (#task:971)', (
       new Request('http://localhost/api/agents', {
         method: 'POST',
         headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
           'content-type': 'application/json',
           authorization: `Bearer ${t.authToken}`,
           'Idempotency-Key': 'has illegal spaces & symbols!',
@@ -338,6 +340,7 @@ describe('create-agent saga — P5 pre-refactor characterization (#task:971)', (
       new Request('http://localhost/api/agents', {
         method: 'POST',
         headers: {
+          ...CURRENT_DESKTOP_EPOCH_HEADERS,
           'content-type': 'application/json',
           authorization: `Bearer ${t.authToken}`,
           'Idempotency-Key': tooLong,

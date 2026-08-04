@@ -26,7 +26,6 @@
   "PATCH /api/hosts/:id",
   "GET /api/hosts/:id/status",
   "GET /api/workspaces",
-  "GET /api/workspaces/local-paths",
   "GET /api/workspaces/name-availability",
   "POST /api/workspaces",
   "GET /api/workspaces/:id",

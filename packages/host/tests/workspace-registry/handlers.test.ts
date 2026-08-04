@@ -11,9 +11,6 @@ import { join } from 'node:path';
 import {
   WorkspaceRegistry,
   WorkspaceRegistryError,
-  WorkspaceProvisionError,
-  provisionWorkspace,
-  AgentWorkspaceIndexError,
   indexAgentWorkspaces,
   AgentL2SeedError,
   seedAgentL2,
@@ -22,20 +19,22 @@ import {
   type RegistryBinding,
 } from '../../src/daemon/workspace-registry/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
-import { resolveAgentWorkspaceBundleDir } from '../../src/daemon/agent-materialize/index.js';
+import {
+  bundleL2Present,
+  resolveAgentDir,
+  resolveAgentWorkspaceBundleDir,
+} from '../../src/daemon/agent-materialize/index.js';
 import { chmodSync, mkdirSync, readdirSync } from 'node:fs';
 
 /**
- * D4.e-1 slice ② handler unit tests. The two daemon handlers sit between
- * the dispatcher and the registry: `provisionWorkspace` (bind + skeleton)
- * and `indexAgentWorkspaces` (route-time `agent_dir` resolver). Pins:
- *   - provision creates the `.silverhand/` skeleton at the managed path
- *     and reports `provisioned` (created) idempotently;
- *   - provision rejects `agent_home` with `unsupported_kind` (no fs write);
+ * D4.e-1 slice ② handler unit tests. The daemon handlers sit between the
+ * dispatcher and the fs: `indexAgentWorkspaces` (route-time `agent_dir`
+ * resolver), `seedAgentL2`, and `purgeAgentFiles`. Pins:
  *   - index resolves agent-home from `homeDir`, a regular workspace to its
- *     deterministic agent-centric bundle dir (registry kept as the
- *     establishment gate), and pushes never-provisioned ids to `unresolved`
- *     (read fail-closed).
+ *     deterministic agent-centric bundle dir when that dir is a usable cwd
+ *     (relocation-v1 §7 task 4: `agent_dir` is a CWD-existence fact via
+ *     `bundleCwdUsable`, NOT a registry binding), and pushes never-materialized
+ *     / unsafe ids to `unresolved` (read fail-closed, agent_dir null).
  */
 
 const STANDALONE: RegistryBinding = {
@@ -57,7 +56,7 @@ afterEach(() => {
 });
 
 function makeRegistry(binding: RegistryBinding = STANDALONE) {
-  return new WorkspaceRegistry({ stateDir, binding, now: () => 1_700_000_000_000 });
+  return new WorkspaceRegistry({ stateDir, binding });
 }
 
 /**
@@ -71,137 +70,76 @@ function bundleDir(agentId: string, workspaceId: string): string {
   return resolveAgentWorkspaceBundleDir(agentId, workspaceId, { homeDir });
 }
 
-describe('provisionWorkspace', () => {
-  it('binds a regular workspace and creates the .silverhand skeleton', async () => {
-    const registry = makeRegistry();
-    const r = await provisionWorkspace(
-      { workspace_id: 'ws_1', kind: 'regular' },
-      { registry },
-    );
-    const path = registry.resolve('ws_1');
-    expect(r).toEqual({ ok: true, provisioned: true, bound_workspace_path: path });
-
-    expect(existsSync(join(path, '.silverhand', 'agents'))).toBe(true);
-    expect(existsSync(join(path, '.silverhand', 'CONSENSUS.md'))).toBe(false);
-  });
-
-  it('is idempotent: re-provision reports provisioned=false and preserves existing skeleton files', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    const path = registry.resolve('ws_1');
-    const markerPath = join(path, '.silverhand', 'agents', 'marker');
-    writeFileSync(markerPath, 'preserve me\n', 'utf-8');
-
-    const r = await provisionWorkspace(
-      { workspace_id: 'ws_1', kind: 'regular' },
-      { registry },
-    );
-    expect(r).toEqual({ ok: true, provisioned: false, bound_workspace_path: path });
-    expect(readFileSync(markerPath, 'utf-8')).toBe('preserve me\n');
-  });
-
-  it('rejects kind=agent_home with unsupported_kind and writes nothing', async () => {
-    const registry = makeRegistry();
-    await expect(
-      provisionWorkspace(
-        { workspace_id: 'wsah_aid', kind: 'agent_home' },
-        { registry },
-      ),
-    ).rejects.toMatchObject({
-      code: 'unsupported_kind',
-    });
-    expect(registry.has('wsah_aid')).toBe(false);
-  });
-
-  it('throws a WorkspaceProvisionError instance (typed surface)', async () => {
-    const registry = makeRegistry();
-    const err = await provisionWorkspace(
-      { workspace_id: 'wsah_aid', kind: 'agent_home' },
-      { registry },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(WorkspaceProvisionError);
-  });
-
-  // P1-1 (Cindy): registry persistence (mkdir/write/rename) can throw raw
-  // fs errno — these MUST classify the same as skeleton-stage fs errors,
-  // never get black-holed into internal_error.
-  function throwingRegistry(toThrow: unknown): WorkspaceRegistry {
-    return {
-      provision() {
-        throw toThrow;
-      },
-    } as unknown as WorkspaceRegistry;
-  }
-
-  it.each([
-    ['ENOSPC', 'fs_quota_exceeded'],
-    ['EDQUOT', 'fs_quota_exceeded'],
-    ['EACCES', 'fs_unavailable'],
-    ['EPERM', 'fs_unavailable'],
-    ['EROFS', 'fs_unavailable'],
-    ['ENOENT', 'fs_unavailable'],
-    ['ENOTDIR', 'fs_unavailable'],
-    ['EEXIST', 'fs_unavailable'],
-  ] as const)(
-    'maps registry-write errno %s to %s (not internal_error)',
-    async (errno, expected) => {
-      const e = new Error(`${errno}: simulated`) as NodeJS.ErrnoException;
-      e.code = errno;
-      const err = await provisionWorkspace(
-        { workspace_id: 'ws_1', kind: 'regular' },
-        { registry: throwingRegistry(e) },
-      ).catch(x => x);
-      expect(err).toBeInstanceOf(WorkspaceProvisionError);
-      expect((err as WorkspaceProvisionError).code).toBe(expected);
-    },
-  );
-
-  it('maps an unrecognized registry-write errno to internal_error', async () => {
-    const e = new Error('EIO: i/o error') as NodeJS.ErrnoException;
-    e.code = 'EIO';
-    const err = await provisionWorkspace(
-      { workspace_id: 'ws_1', kind: 'regular' },
-      { registry: throwingRegistry(e) },
-    ).catch(x => x);
-    expect((err as WorkspaceProvisionError).code).toBe('internal_error');
-  });
-
-  it('maps a foreign/corrupt registry on the provision path to registry_unavailable', async () => {
-    const err = await provisionWorkspace(
-      { workspace_id: 'ws_1', kind: 'regular' },
-      {
-        registry: throwingRegistry(
-          new WorkspaceRegistryError('registry_corrupt', 'bad json'),
-        ),
-      },
-    ).catch(x => x);
-    expect((err as WorkspaceProvisionError).code).toBe('registry_unavailable');
-  });
-});
+/**
+ * The agent's L1 home dir (`<homeDir>/.silverhand/agents/<agent_id>`) — the
+ * coordinate an agent-home (DM) workspace id resolves to. Pinned against the
+ * real resolver; `homeDir` is read at call time (set per-test in beforeEach).
+ */
+function agentHomeDir(agentId: string): string {
+  return resolveAgentDir(agentId, { homeDir });
+}
 
 describe('indexAgentWorkspaces', () => {
-  it('resolves agent-home from homeDir, never via the registry', async () => {
-    const registry = makeRegistry();
+  it('resolves a materialized agent-home from homeDir, never via the registry', async () => {
+    // Cindy 2026-08-04: agent-home `agent_dir` is a CWD fact too — report it
+    // ONLY when the L1 dir is a usable cwd (the SAME `bundleCwdUsable` predicate
+    // as regular workspaces), never fabricated. Materialize it first.
     const agentHome = agentHomeWorkspaceId('aid_x');
+    mkdirSync(agentHomeDir('aid_x'), { recursive: true });
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: [agentHome] },
-      { registry, homeDir },
+      { homeDir },
     );
     expect(r.unresolved).toEqual([]);
     expect(r.entries).toHaveLength(1);
     expect(r.entries[0]).toEqual({
       workspace_id: agentHome,
-      agent_dir: join(homeDir, '.silverhand', 'agents', 'aid_x'),
+      agent_dir: agentHomeDir('aid_x'),
     });
   });
 
-  it('resolves a provisioned regular workspace to its agent-centric bundle dir', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
+  it('pushes a never-materialized agent-home to unresolved (never fabricates the L1 path)', async () => {
+    // B2 (Cindy 2026-08-04): the agent-home arm must NOT return a path
+    // unconditionally. With no L1 dir on disk yet, the coordinate is valid but
+    // the cwd is not usable → unresolved (agent_dir null), same as a regular id.
+    const agentHome = agentHomeWorkspaceId('aid_x');
+    const r = await indexAgentWorkspaces(
+      { agent_id: 'aid_x', workspace_ids: [agentHome] },
+      { homeDir },
+    );
+    expect(r.entries).toEqual([]);
+    expect(r.unresolved).toEqual([agentHome]);
+  });
+
+  it('reports a non-traversable (000) agent-home dir as unresolved (same cwd predicate)', async () => {
+    // B2 falsifier: an existing-but-non-enterable L1 dir must be reported
+    // unusable, matching what a spawn could actually chdir into.
+    if (process.getuid?.() === 0) return; // root bypasses perms — skip
+    const agentHome = agentHomeWorkspaceId('aid_x');
+    const dir = agentHomeDir('aid_x');
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o000);
+    try {
+      const r = await indexAgentWorkspaces(
+        { agent_id: 'aid_x', workspace_ids: [agentHome] },
+        { homeDir },
+      );
+      expect(r.entries).toEqual([]);
+      expect(r.unresolved).toEqual([agentHome]);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  it('resolves a materialized regular workspace to its agent-centric bundle dir', async () => {
+    // relocation-v1 §7 task 4: `agent_dir` is a CWD-existence fact
+    // (`bundleCwdUsable`), not a registry binding. Materialize the coordinate
+    // by creating the dir; the handler then reports it.
+    mkdirSync(bundleDir('aid_x', 'ws_1'), { recursive: true });
 
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: ['ws_1'] },
-      { registry, homeDir },
+      { homeDir },
     );
     expect(r.unresolved).toEqual([]);
     expect(r.entries[0]).toEqual({
@@ -210,19 +148,20 @@ describe('indexAgentWorkspaces', () => {
     });
   });
 
-  it('pushes never-provisioned regular ids to unresolved (read fail-closed)', async () => {
-    const registry = makeRegistry();
+  it('pushes a never-materialized regular id to unresolved (lazy window)', async () => {
+    // A pure-DB membership add gives a valid coordinate but no dir yet →
+    // agent_dir null (surfaced as `unresolved`), never a fabricated path.
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: ['ws_missing'] },
-      { registry, homeDir },
+      { homeDir },
     );
     expect(r.entries).toEqual([]);
     expect(r.unresolved).toEqual(['ws_missing']);
   });
 
   it('mixes resolved + unresolved + agent-home in one call, preserving order', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_ok', kind: 'regular' }, { registry });
+    mkdirSync(bundleDir('aid_x', 'ws_ok'), { recursive: true });
+    mkdirSync(agentHomeDir('aid_x'), { recursive: true });
     const agentHome = agentHomeWorkspaceId('aid_x');
 
     const r = await indexAgentWorkspaces(
@@ -230,7 +169,7 @@ describe('indexAgentWorkspaces', () => {
         agent_id: 'aid_x',
         workspace_ids: [agentHome, 'ws_missing', 'ws_ok'],
       },
-      { registry, homeDir },
+      { homeDir },
     );
     expect(r.entries.map(e => e.workspace_id)).toEqual([agentHome, 'ws_ok']);
     expect(r.unresolved).toEqual(['ws_missing']);
@@ -238,268 +177,77 @@ describe('indexAgentWorkspaces', () => {
 
   it('does NOT treat a wsah_ id for a different agent as agent-home', async () => {
     // `wsah_other` is agent-home for `other`, not for `aid_x`. For `aid_x`
-    // it is just an unprovisioned regular id → unresolved, never resolved
-    // from homeDir.
-    const registry = makeRegistry();
+    // it is just a regular id with no materialized dir → unresolved, never
+    // resolved from homeDir.
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: [agentHomeWorkspaceId('other')] },
-      { registry, homeDir },
+      { homeDir },
     );
     expect(r.entries).toEqual([]);
     expect(r.unresolved).toEqual([agentHomeWorkspaceId('other')]);
   });
 
-  it('maps a corrupt registry to AgentWorkspaceIndexError(registry_unavailable)', async () => {
-    const registry = makeRegistry();
-    registry.provision('ws_1');
-    // Corrupt the registry file on disk; the next read fails the whole
-    // call with a typed registry error → handler maps to registry_unavailable.
-    const { writeFileSync } = await import('node:fs');
-    writeFileSync(registry.registryFilePath(), '{ not valid json', 'utf-8');
-
-    const err = await indexAgentWorkspaces(
-      { agent_id: 'aid', workspace_ids: ['ws_1'] },
-      { registry, homeDir },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(AgentWorkspaceIndexError);
-    expect((err as AgentWorkspaceIndexError).code).toBe('registry_unavailable');
-  });
-});
-
-// D4.e-1 (A — single intent): `provisionWorkspace` with a caller-PROPOSED
-// `requested_path` (M1 folder picker / sandbox typed path
-// unify here). The daemon re-validates the path host-side
-// (absolute / not root / not home / not inside the managed root / not
-// already bound) before binding + creating the skeleton — it never
-// blindly trusts the backend.
-describe('provisionWorkspace with requested_path', () => {
-  let requestedDir: string;
-
-  beforeEach(() => {
-    requestedDir = mkdtempSync(join(tmpdir(), 'shd4e1-req-'));
-  });
-
-  afterEach(() => {
-    rmSync(requestedDir, { recursive: true, force: true });
-  });
-
-  it('binds the caller-proposed path, creates the skeleton there, returns it as bound_workspace_path', async () => {
-    const registry = makeRegistry();
-    const r = await provisionWorkspace(
-      { workspace_id: 'ws_custom', kind: 'regular', requested_path: requestedDir },
-      { registry },
+  it('pushes an unsafe id segment to unresolved (never fabricates a path)', async () => {
+    // relocation-v1 §7 task 4: an unsafe id can never form a bundle
+    // coordinate. The handler degrades it to `unresolved` (→ agent_dir null),
+    // never a guessed path and never a hard failure.
+    const r = await indexAgentWorkspaces(
+      { agent_id: 'aid', workspace_ids: ['../../escape'] },
+      { homeDir },
     );
-    expect(r).toEqual({
-      ok: true,
-      provisioned: true,
-      bound_workspace_path: requestedDir,
-    });
-    expect(registry.resolve('ws_custom')).toBe(requestedDir);
-    expect(existsSync(join(requestedDir, '.silverhand', 'agents'))).toBe(true);
+    expect(r.entries).toEqual([]);
+    expect(r.unresolved).toEqual(['../../escape']);
   });
 
-  it('is idempotent: re-provision of the same id→path reports provisioned=false', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace(
-      { workspace_id: 'ws_custom', kind: 'regular', requested_path: requestedDir },
-      { registry },
-    );
-    const r = await provisionWorkspace(
-      { workspace_id: 'ws_custom', kind: 'regular', requested_path: requestedDir },
-      { registry },
-    );
-    expect(r).toEqual({
-      ok: true,
-      provisioned: false,
-      bound_workspace_path: requestedDir,
-    });
-  });
-
-  it('rejects a divergent path for an already-bound id with path_conflict (no overwrite)', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace(
-      { workspace_id: 'ws_custom', kind: 'regular', requested_path: requestedDir },
-      { registry },
-    );
-    const other = mkdtempSync(join(tmpdir(), 'shd4e1-req2-'));
+  it('reports a non-traversable (000) bundle dir as unresolved, matching what a spawn could enter', async () => {
+    // Cindy 2026-08-04 nail 1: `agent_dir` must use the SAME cwd-usable
+    // predicate as the pre-spawn cwd-ensure (`bundleCwdUsable`: directory +
+    // process-enterable via X_OK), NOT bare existence. A dir that exists but the
+    // process cannot enter must be reported UNUSABLE, else list would advertise
+    // a cwd the spawn then chokes on.
+    if (process.getuid?.() === 0) return; // root bypasses perms — skip
+    const dir = bundleDir('aid_x', 'ws_locked');
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o000);
     try {
-      const err = await provisionWorkspace(
-        { workspace_id: 'ws_custom', kind: 'regular', requested_path: other },
-        { registry },
-      ).catch(e => e);
-      expect(err).toBeInstanceOf(WorkspaceProvisionError);
-      expect((err as WorkspaceProvisionError).code).toBe('path_conflict');
-      expect(registry.resolve('ws_custom')).toBe(requestedDir);
+      const r = await indexAgentWorkspaces(
+        { agent_id: 'aid_x', workspace_ids: ['ws_locked'] },
+        { homeDir },
+      );
+      expect(r.entries).toEqual([]);
+      expect(r.unresolved).toEqual(['ws_locked']);
     } finally {
-      rmSync(other, { recursive: true, force: true });
+      chmodSync(dir, 0o755);
     }
   });
-
-  it('rejects a different id binding an already-bound path with path_conflict (cross-workspace)', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace(
-      { workspace_id: 'ws_a', kind: 'regular', requested_path: requestedDir },
-      { registry },
-    );
-    const err = await provisionWorkspace(
-      { workspace_id: 'ws_b', kind: 'regular', requested_path: requestedDir },
-      { registry },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(WorkspaceProvisionError);
-    expect((err as WorkspaceProvisionError).code).toBe('path_conflict');
-    expect(registry.has('ws_b')).toBe(false);
-  });
-
-  it.each([
-    ['relative path', 'work/custom'],
-    ['filesystem root', '/'],
-  ] as const)('rejects %s with invalid_path (no skeleton, not bound)', async (_label, badPath) => {
-    const registry = makeRegistry();
-    const err = await provisionWorkspace(
-      { workspace_id: 'ws_bad', kind: 'regular', requested_path: badPath },
-      { registry },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(WorkspaceProvisionError);
-    expect((err as WorkspaceProvisionError).code).toBe('invalid_path');
-    expect(registry.has('ws_bad')).toBe(false);
-  });
-
-  it('rejects a requested path inside the daemon-managed root with invalid_path', async () => {
-    const registry = makeRegistry();
-    // Provision one default (managed) workspace to realize the managed
-    // root, then try to propose a path inside it.
-    await provisionWorkspace({ workspace_id: 'ws_managed', kind: 'regular' }, { registry });
-    const insideManaged = registry.resolve('ws_managed');
-    const err = await provisionWorkspace(
-      { workspace_id: 'ws_custom', kind: 'regular', requested_path: insideManaged },
-      { registry },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(WorkspaceProvisionError);
-    expect((err as WorkspaceProvisionError).code).toBe('invalid_path');
-  });
-
-  it('rejects kind=agent_home even with a requested_path (never bind a DM L1 here)', async () => {
-    const registry = makeRegistry();
-    const err = await provisionWorkspace(
-      { workspace_id: 'wsah_aid', kind: 'agent_home', requested_path: requestedDir },
-      { registry },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(WorkspaceProvisionError);
-    expect((err as WorkspaceProvisionError).code).toBe('unsupported_kind');
-    expect(registry.has('wsah_aid')).toBe(false);
-  });
 });
 
-// D4.e-1 P1-1 (Cindy): the registry persists the id→path mapping BEFORE the
-// skeleton is built, so a skeleton failure must COMPENSATE by rolling the
-// mapping back — otherwise the id is stuck pointing at an unusable path and
-// a retry with a corrected path would hit path_conflict. The rollback is
-// best-effort and must NEVER mask the original skeleton error.
-describe('provisionWorkspace — skeleton-failure compensation', () => {
-  let baseDir: string;
+// M1 (shiki + Cindy 2026-08-04): the memory-availability predicate must judge
+// MEMORY.md a readable regular FILE — a directory (or other non-file) named
+// MEMORY.md is "no memory yet", never handed to the prompt as a path.
+describe('bundleL2Present', () => {
+  it('true for a readable MEMORY.md file, false for a directory of that name', async () => {
+    const withFile = bundleDir('aid_x', 'ws_file');
+    mkdirSync(withFile, { recursive: true });
+    writeFileSync(join(withFile, 'MEMORY.md'), '# memory');
+    expect(await bundleL2Present(withFile)).toBe(true);
 
-  beforeEach(() => {
-    baseDir = mkdtempSync(join(tmpdir(), 'shd4e1-comp-'));
-  });
-  afterEach(() => {
-    rmSync(baseDir, { recursive: true, force: true });
-  });
-
-  // A structurally-valid requested path whose PARENT is a regular file, so
-  // `mkdir` inside the skeleton step fails (ENOTDIR) after the registry has
-  // already persisted the entry.
-  function uncreatablePath(): string {
-    const aFile = join(baseDir, 'a-file');
-    writeFileSync(aFile, 'not a dir', 'utf-8');
-    return join(aFile, 'ws-root');
-  }
-
-  it('rolls the registry entry back on skeleton failure, freeing the id for retry', async () => {
-    const registry = makeRegistry();
-    const bad = uncreatablePath();
-    const err = await provisionWorkspace(
-      { workspace_id: 'ws_x', kind: 'regular', requested_path: bad },
-      { registry },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(WorkspaceProvisionError);
-    // P2 (Cindy): a parent-is-a-file path is ENOTDIR — a property of the
-    // user's path choice, NOT an internal bug → fs_unavailable, not internal_error.
-    expect((err as WorkspaceProvisionError).code).toBe('fs_unavailable');
-    // The entry was compensated away — NOT left stuck at the bad path.
-    expect(registry.has('ws_x')).toBe(false);
-
-    // Retry with a good path on the SAME id succeeds (no path_conflict).
-    const good = join(baseDir, 'good-root');
-    const r = await provisionWorkspace(
-      { workspace_id: 'ws_x', kind: 'regular', requested_path: good },
-      { registry },
-    );
-    expect(r.provisioned).toBe(true);
-    expect(registry.resolve('ws_x')).toBe(good);
-    expect(existsSync(join(good, '.silverhand', 'agents'))).toBe(true);
-  });
-
-  it('does NOT roll back an idempotent re-provision whose skeleton step fails', async () => {
-    // First provision binds + builds the skeleton successfully.
-    const registry = makeRegistry();
-    const good = join(baseDir, 'already');
-    await provisionWorkspace(
-      { workspace_id: 'ws_y', kind: 'regular', requested_path: good },
-      { registry },
-    );
-    // Now delete the skeleton dir so a re-provision's skeleton step throws,
-    // but the entry already existed (created=false) → must NOT be removed.
-    rmSync(good, { recursive: true, force: true });
-    writeFileSync(good, 'now a file', 'utf-8'); // make re-create fail (ENOTDIR/EEXIST)
-    await provisionWorkspace(
-      { workspace_id: 'ws_y', kind: 'regular', requested_path: good },
-      { registry },
-    ).catch(e => e);
-    // Entry preserved: an idempotent re-provision is not torn down.
-    expect(registry.has('ws_y')).toBe(true);
-    expect(registry.resolve('ws_y')).toBe(good);
-  });
-
-  it('best-effort rollback never masks the original skeleton error and warns', async () => {
-    const bad = uncreatablePath();
-    const real = makeRegistry();
-    const warnings: unknown[] = [];
-    // Wrap the registry so provision() works (persists) but remove() throws,
-    // simulating a rollback failure. The handler must still reject with the
-    // ORIGINAL skeleton error and only WARN about the failed rollback.
-    const wrapped = {
-      provision: (id: string, p?: string) => real.provision(id, p),
-      remove: () => {
-        throw new Error('rollback boom');
-      },
-    } as unknown as WorkspaceRegistry;
-
-    const err = await provisionWorkspace(
-      { workspace_id: 'ws_z', kind: 'regular', requested_path: bad },
-      { registry: wrapped, logger: { warn: obj => warnings.push(obj) } },
-    ).catch(e => e);
-
-    // Original skeleton error surfaced (NOT "rollback boom").
-    expect(err).toBeInstanceOf(WorkspaceProvisionError);
-    expect((err as WorkspaceProvisionError).code).toBe('fs_unavailable');
-    expect((err as Error).message).not.toContain('rollback boom');
-    // The failed rollback was warned about.
-    expect(warnings).toHaveLength(1);
-    // The entry remains in the real registry (rollback failed) — that is the
-    // accepted residue; correctness of the error is what matters here.
-    expect(real.has('ws_z')).toBe(true);
+    const withDir = bundleDir('aid_x', 'ws_dir');
+    mkdirSync(join(withDir, 'MEMORY.md'), { recursive: true });
+    expect(await bundleL2Present(withDir)).toBe(false);
   });
 });
 
 // D4.e-3 slice handler unit tests for `seedAgentL2` — the daemon-owned L2
-// (per-workspace) memory seeder that replaces backend `seedAgentL2` (gap
-// G1). The daemon uses its registry as the establishment gate, then writes
-// the deterministic agent-centric bundle dir
-// `<agent home>/workspaces/<workspace_id>/{MEMORY.md,notes/…}` (relocation-v1
-// §3.2).
-// Cindy D4.e-3 review focuses:
-//   #2 regular-only — agent-home / unprovisioned id fails closed
-//      (workspace_not_provisioned) purely via registry.resolve, no `kind`;
+// (per-workspace) memory seeder. relocation-v1 §7 task 4: there is no registry
+// establishment gate any more — seeding IS what makes the deterministic
+// agent-centric bundle coordinate
+// `<agent home>/workspaces/<workspace_id>/{MEMORY.md,notes/…}` available. It
+// fails closed only on the fs (hard write error) or an unsafe id segment, never
+// on a registry binding.
+// Cindy D4.e-3 review focuses (still pinned):
+//   #2 regular-only — an agent-home id is refused structurally (internal_error),
+//      never seeded as a spurious `workspaces/<agent-home-id>` bundle;
 //   #3 L2 must NEVER carry L1 `system_prompt.md`; MEMORY.md/notes/ present;
 //      idempotent re-seed preserves edited content (never overwrites).
 describe('seedAgentL2', () => {
@@ -510,12 +258,9 @@ describe('seedAgentL2', () => {
   }
 
   it('seeds MEMORY.md + notes/ but NEVER system_prompt.md (L1-only)', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry, homeDir },
+      { homeDir },
     );
     expect(r).toEqual({ ok: true, seeded: true, l2_present: true });
 
@@ -533,14 +278,24 @@ describe('seedAgentL2', () => {
     ]);
   });
 
+  it('seeds a never-provisioned regular id (seeding IS establishment, no registry gate)', async () => {
+    // relocation-v1 §7 task 4: there is no prior provision step — a member
+    // agent's first spawn seeds the coordinate directly. This is the primary
+    // forward-path behavior change from the registry model.
+    const r = await seedAgentL2(
+      { agent_id: AGENT_ID, workspace_id: 'ws_fresh', template_choice: 'default' },
+      { homeDir },
+    );
+    expect(r).toEqual({ ok: true, seeded: true, l2_present: true });
+    expect(existsSync(join(l2DirFor('ws_fresh'), 'MEMORY.md'))).toBe(true);
+  });
+
   it('is idempotent: re-seed reports seeded=false and preserves edited content', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
     const l2 = l2DirFor('ws_1');
 
     await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry, homeDir },
+      { homeDir },
     );
     // An agent edits its MEMORY.md after the first seed.
     const memPath = join(l2, 'MEMORY.md');
@@ -548,47 +303,37 @@ describe('seedAgentL2', () => {
 
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry, homeDir },
+      { homeDir },
     );
     // Nothing new written; the edit survives (no clobber).
     expect(r).toEqual({ ok: true, seeded: false, l2_present: true });
     expect(readFileSync(memPath, 'utf-8')).toBe('# edited by the agent\n');
   });
 
-  it('fails closed with workspace_not_provisioned for a never-provisioned id', async () => {
-    const registry = makeRegistry();
-    const err = await seedAgentL2(
-      { agent_id: AGENT_ID, workspace_id: 'ws_missing', template_choice: 'default' },
-      { registry, homeDir },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(AgentL2SeedError);
-    expect((err as AgentL2SeedError).code).toBe('workspace_not_provisioned');
-  });
-
-  it('fails closed with workspace_not_provisioned for an agent-home id (regular-only, no kind param)', async () => {
-    // Cindy #2: an agent-home (DM) workspace has no registry binding, so
-    // resolve() throws not_provisioned. The handler relies on this — it does
-    // NOT take a `kind` and never seeds an agent-home L2 (== L1, already
-    // materialized by agent_materialize).
-    const registry = makeRegistry();
+  it('refuses an agent-home id structurally (regular-only, never seeds an L2==L1 bundle)', async () => {
+    // Cindy #2: an agent-home (DM) workspace's L2 IS its L1 home, materialized
+    // by agent_materialize. The seeder is regular-only and refuses an agent-home
+    // id rather than creating a spurious `workspaces/<agent-home-id>` dir. With
+    // no registry gate this is a structural check → internal_error (the backend
+    // never sends one).
     const err = await seedAgentL2(
       {
         agent_id: AGENT_ID,
         workspace_id: agentHomeWorkspaceId(AGENT_ID),
         template_choice: 'default',
       },
-      { registry, homeDir },
+      { homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
-    expect((err as AgentL2SeedError).code).toBe('workspace_not_provisioned');
+    expect((err as AgentL2SeedError).code).toBe('internal_error');
+    // No spurious bundle dir was created for the agent-home id.
+    expect(existsSync(l2DirFor(agentHomeWorkspaceId(AGENT_ID)))).toBe(false);
   });
 
   it('rejects an unsupported template_choice with unsupported_template (no fs write)', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'minimal' },
-      { registry, homeDir },
+      { homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('unsupported_template');
@@ -596,14 +341,14 @@ describe('seedAgentL2', () => {
     expect(existsSync(l2DirFor('ws_1'))).toBe(false);
   });
 
-  it('maps a registry_corrupt resolve to registry_unavailable (whole-registry failure)', async () => {
-    const registry = makeRegistry();
-    registry.provision('ws_1');
-    // Corrupt the registry file so resolve() throws registry_corrupt.
-    writeFileSync(registry.registryFilePath(), '{ not valid json', 'utf-8');
+  it('maps an unsafe id segment (invalid_path) to registry_unavailable', async () => {
+    // relocation-v1 §7 task 4 — an unsafe workspace id can never become a path
+    // segment under the agent home. It fails closed BEFORE touching disk, mapped
+    // to the SAME registry_unavailable the other consumers use, never falling
+    // through to internal_error.
     const err = await seedAgentL2(
-      { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { registry, homeDir },
+      { agent_id: AGENT_ID, workspace_id: '../../escape', template_choice: 'default' },
+      { homeDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('registry_unavailable');
@@ -614,15 +359,13 @@ describe('seedAgentL2', () => {
     // `workspaces/<id>` child) throw EACCES — a hard write error must surface
     // as the typed fs_unavailable (fail-closed), never a silent success.
     if (process.getuid?.() === 0) return; // root bypasses perms — skip
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
     const agentHomeDir = join(homeDir, '.silverhand', 'agents', AGENT_ID);
     mkdirSync(agentHomeDir, { recursive: true });
     chmodSync(agentHomeDir, 0o000);
     try {
       const err = await seedAgentL2(
         { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-        { registry, homeDir },
+        { homeDir },
       ).catch(e => e);
       expect(err).toBeInstanceOf(AgentL2SeedError);
       expect((err as AgentL2SeedError).code).toBe('fs_unavailable');
@@ -648,135 +391,42 @@ describe('purgeAgentFiles', () => {
     writeFileSync(join(dir, 'MEMORY.md'), '# marker\n', 'utf-8');
   }
 
-  it("scope:'all' removes the whole agent home (L1 + all nested L2) as one target", async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    await provisionWorkspace({ workspace_id: 'ws_2', kind: 'regular' }, { registry });
+  it('removes the whole agent home (L1 + all nested L2) as one target', async () => {
     seedDir(l1Dir());
     seedDir(l2DirFor('ws_1'));
     seedDir(l2DirFor('ws_2'));
 
-    const r = await purgeAgentFiles(
-      { agent_id: AGENT_ID, scope: 'all', workspace_ids: ['ws_1', 'ws_2'] },
-      { registry, homeDir },
-    );
+    const r = await purgeAgentFiles({ agent_id: AGENT_ID }, { homeDir });
     // One rm of the agent home subsumes L1 and every nested L2 bundle
-    // (relocation-v1 §3.2), so exactly one target is counted.
-    expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 0 });
+    // (relocation-v1 §3.2 / §7 task 4), so exactly one target is counted and
+    // NO registry is consulted.
+    expect(r).toEqual({ ok: true, purged_count: 1 });
     expect(existsSync(l1Dir())).toBe(false);
     expect(existsSync(l2DirFor('ws_1'))).toBe(false);
     expect(existsSync(l2DirFor('ws_2'))).toBe(false);
   });
 
-  it("scope:'l2' removes only the listed L2 dirs and preserves L1", async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    seedDir(l1Dir());
-    seedDir(l2DirFor('ws_1'));
-
-    const r = await purgeAgentFiles(
-      { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1'] },
-      { registry, homeDir },
-    );
-    expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 0 });
-    // L1 is NOT a target under scope:'l2'.
-    expect(existsSync(l1Dir())).toBe(true);
-    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
-  });
-
-  it('is idempotent: purging already-gone targets succeeds with purged_count=0 (ENOENT not a failure)', async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    // Nothing seeded — the L1/L2 dirs do not exist yet.
-    const r = await purgeAgentFiles(
-      { agent_id: AGENT_ID, scope: 'all', workspace_ids: ['ws_1'] },
-      { registry, homeDir },
-    );
-    expect(r).toEqual({ ok: true, purged_count: 0, skipped_unprovisioned: 0 });
-  });
-
-  it("scope:'all' ignores workspace_ids and NEVER skip-counts (home removal is complete cleanup)", async () => {
-    // Regression guard for the relocation: since all L2 nest under the agent
-    // home, an unprovisioned membership no longer leaves an orphan L2 tree, so
-    // scope:'all' must not consult the registry nor report skipped_unprovisioned
-    // — otherwise delete-agent (which fails closed on skipped>0) would spuriously
-    // block a delete whose cleanup fully succeeded.
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    seedDir(l1Dir());
-    seedDir(l2DirFor('ws_1'));
-
-    const r = await purgeAgentFiles(
-      { agent_id: AGENT_ID, scope: 'all', workspace_ids: ['ws_1', 'ws_missing'] },
-      { registry, homeDir },
-    );
-    expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 0 });
-    expect(existsSync(l1Dir())).toBe(false);
-    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
-  });
-
-  it("scope:'l2' counts an unprovisioned workspace in skipped_unprovisioned without failing", async () => {
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    seedDir(l1Dir());
-    seedDir(l2DirFor('ws_1'));
-
-    const r = await purgeAgentFiles(
-      // ws_missing has no registry binding → reported, not an error.
-      { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1', 'ws_missing'] },
-      { registry, homeDir },
-    );
-    expect(r).toEqual({ ok: true, purged_count: 1, skipped_unprovisioned: 1 });
-    // L1 preserved under scope:'l2'; only ws_1's bundle removed.
-    expect(existsSync(l1Dir())).toBe(true);
-    expect(existsSync(l2DirFor('ws_1'))).toBe(false);
-  });
-
-  it("scope:'l2' maps a registry_corrupt resolve to registry_unavailable (whole-registry failure)", async () => {
-    const registry = makeRegistry();
-    registry.provision('ws_1');
-    writeFileSync(registry.registryFilePath(), '{ not valid json', 'utf-8');
-    const err = await purgeAgentFiles(
-      { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1'] },
-      { registry, homeDir },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(AgentFilesPurgeError);
-    expect((err as AgentFilesPurgeError).code).toBe('registry_unavailable');
-  });
-
-  it("scope:'l2' maps an unsafe-id resolve (invalid_path) to registry_unavailable", async () => {
-    // relocation-v1 §7 task 1 — an unsafe workspace id fails closed at the
-    // registry read gate (`resolve` validates the segment) and the handler
-    // maps `invalid_path` to the SAME registry_unavailable as the other
-    // consumers, never falling through to internal_error.
-    const registry = makeRegistry();
-    const err = await purgeAgentFiles(
-      { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['../../escape'] },
-      { registry, homeDir },
-    ).catch(e => e);
-    expect(err).toBeInstanceOf(AgentFilesPurgeError);
-    expect((err as AgentFilesPurgeError).code).toBe('registry_unavailable');
+  it('is idempotent: purging an already-gone home succeeds with purged_count=0 (ENOENT not a failure)', async () => {
+    // Nothing seeded — the agent home does not exist yet.
+    const r = await purgeAgentFiles({ agent_id: AGENT_ID }, { homeDir });
+    expect(r).toEqual({ ok: true, purged_count: 0 });
   });
 
   it('fails closed with partial_purge on a HARD fs removal error', async () => {
-    // chmod 000 on the L2 parent dir (`<agent home>/workspaces`) makes the rm
-    // of the child l2Dir throw EACCES — a hard error must surface as the typed
-    // partial_purge (fail-closed), never a silent success.
+    // chmod 000 on the agent home makes the recursive rm throw EACCES — a hard
+    // error must surface as the typed partial_purge (fail-closed), never a
+    // silent success.
     if (process.getuid?.() === 0) return; // root bypasses perms — skip
-    const registry = makeRegistry();
-    await provisionWorkspace({ workspace_id: 'ws_1', kind: 'regular' }, { registry });
-    seedDir(l2DirFor('ws_1'));
-    const workspacesDir = join(l1Dir(), 'workspaces');
-    chmodSync(workspacesDir, 0o000);
+    seedDir(l1Dir());
+    chmodSync(l1Dir(), 0o000);
     try {
-      const err = await purgeAgentFiles(
-        { agent_id: AGENT_ID, scope: 'l2', workspace_ids: ['ws_1'] },
-        { registry, homeDir },
-      ).catch(e => e);
+      const err = await purgeAgentFiles({ agent_id: AGENT_ID }, { homeDir }).catch(
+        e => e,
+      );
       expect(err).toBeInstanceOf(AgentFilesPurgeError);
       expect((err as AgentFilesPurgeError).code).toBe('partial_purge');
     } finally {
-      chmodSync(workspacesDir, 0o755);
+      chmodSync(l1Dir(), 0o755);
     }
   });
 });

@@ -59,7 +59,6 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
-  localWorkspacePaths: ReadonlyMap<string, string>;
   /** Optional `+` button. DM groups omit this — DM workspaces are
    *  auto-created when an agent is provisioned. Ignored when `headerAction`
    *  is set (the caller composes its own action cluster, e.g. sort + add). */
@@ -98,7 +97,6 @@ interface RailRowContext {
   selectedWorkspaceId: string | null;
   onSelectWorkspace: (id: string) => void;
   onStarWorkspace?: (id: string, starred: boolean) => void;
-  localWorkspacePaths: ReadonlyMap<string, string>;
   agentsById?: ReadonlyMap<string, AgentDto>;
   dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
 }
@@ -138,7 +136,6 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   selectedWorkspaceId,
   onSelectWorkspace,
   onStarWorkspace,
-  localWorkspacePaths,
   onAdd,
   headerAction,
   emptyHint,
@@ -152,7 +149,6 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
     selectedWorkspaceId,
     onSelectWorkspace,
     onStarWorkspace,
-    localWorkspacePaths,
     agentsById,
     dmAgentAvatarUrls,
   };
@@ -272,7 +268,6 @@ function WorkspaceRow({
       : workspace.name;
   const icon = rowIconFor(workspace, ctx);
   const canStar = canStarWorkspace(workspace, ctx);
-  const workspacePath = ctx.localWorkspacePaths.get(workspace.id) ?? null;
   // Selection rule (#task:1254): the workspace/DM row is `primary` iff it is the
   // selected workspace. Channels never appear in the rail/STARRED, so an open
   // channel just leaves its parent workspace selected. One function
@@ -337,8 +332,6 @@ function WorkspaceRow({
       canStar={canStar}
       isStarred={isStarred}
       onToggleStar={() => ctx.onStarWorkspace?.(workspace.id, !isStarred)}
-      canReveal={workspacePath !== null}
-      workspacePath={workspacePath}
     />
   );
 }

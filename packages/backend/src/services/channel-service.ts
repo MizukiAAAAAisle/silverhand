@@ -299,7 +299,6 @@ export class ChannelService {
     const created = this.db.transaction((): CreateChannelTxResult => {
       const channel = this.conversations.insertChannel({
         workspaceId: workspace.id,
-        workspacePath: workspace.workspace_path,
         title: input.title,
         spawnedByAgentId:
           input.actor.kind === 'agent' ? input.actor.agentId : null,
@@ -440,7 +439,6 @@ export class ChannelService {
     const channel = this.db.transaction((): DmChannelDto => {
       const dm = this.conversations.insertDmChannel({
         workspaceId: workspace.id,
-        workspacePath: workspace.workspace_path,
         title: input.title,
         agentId: owner.id,
       });

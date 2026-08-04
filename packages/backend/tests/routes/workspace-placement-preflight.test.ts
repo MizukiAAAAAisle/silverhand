@@ -1,24 +1,25 @@
 /**
- * Workspace POST / PATCH / DELETE / add-member placement preflight
- * regression pins.
+ * Workspace POST / PATCH / DELETE / add-member preflight regression pins.
  *
  * Origin: D4.c C3 — pre-C3 each of these routes short-circuited under
  * `standaloneMode(ctx)` with a typed `host_runtime_disabled` 409.
- * C3 lifts those guards and replaces them with explicit
- * placement preflights:
+ * C3 lifted those guards and replaced them with explicit placement
+ * preflights. relocation-v1 §7-4 (#task:1808) then retired PLACEMENT
+ * ITSELF: a regular workspace has no owning computer, so create resolves
+ * no host, writes no host column, and can no longer return a placement
+ * error. What this file still pins:
  *
  *   - POST /api/workspaces:
- *       * `workspace_path` in standalone → originally 409
- *         `workspace_path_not_supported`; **D4.e-1 3b lifted this** —
- *         the path is now forwarded to the owning daemon as
- *         `requested_path` (server does not interpret host paths).
- *       * default `workspace_host_id` resolves via
- *         `resolveOwnedLocalForUser` (the C1-installed 0/1/N
- *         policy). The synthetic `STANDALONE_SERVER` host row is
- *         no longer minted.
+ *       * create resolves NO host: no 409 in standalone, no host
+ *         resolution, no owning-computer pointer on the response — and
+ *         specifically NO `local_host_ambiguous`, however many owned local
+ *         computers the creator has: there is nothing left to disambiguate.
+ *         (§6's atomic epoch cut removed the `workspace_path` /
+ *         `workspace_host_id` create INPUTS from the contract outright, so
+ *         there is no accepted-but-ignored input left to pin either.)
  *       * cross-host `member_agent_ids` are ACCEPTED (#task:1600 —
- *         both entry gates lifted); guest members pathless-provision
- *         + seed on their own daemons before any membership row.
+ *         both entry gates lifted); membership is a pure DB write and each
+ *         member's L2 materializes lazily at its own first spawn.
  *
  *   - PATCH /api/workspaces/:id and DELETE /api/workspaces/:id:
  *       * Cross-computer slice 2 (#task:1600) REMOVED the old
@@ -31,8 +32,8 @@
  *
  *   - POST /api/workspaces and POST /api/workspaces/:id/members:
  *       * #task:1600 final piece LIFTED both cross-computer product
- *         entry gates: members on other computers are accepted; their
- *         L2 seeds plan pathless ensures on the member's own daemon
+ *         entry gates: members on other computers are accepted; after the
+ *         §7-4 provisioning collapse neither door seeds anything
  *         (`cross-computer-membership.test.ts` pins the data paths).
  *
  * NOTE on fs side-effect transitionality (Cindy P2): C3 does NOT
@@ -55,7 +56,7 @@ import { join } from 'node:path';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
-describe('D4.c C3 — workspace placement preflight (standalone guard lift)', () => {
+describe('D4.c C3 — workspace route preflights (standalone guard lift)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
@@ -64,34 +65,7 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
 
   // ── POST /api/workspaces ────────────────────────────────────
 
-  it('POST /api/workspaces (standalone) — `workspace_path` is forwarded to the daemon as `requested_path` (D4.e-1: server no longer rejects it)', async () => {
-    // D4.e-1 3b lifted the standalone `workspace_path_not_supported` 409.
-    // Path authority moved to the owning daemon: the server does not
-    // interpret the path, it forwards it as `requested_path` to
-    // `workspace_provision` and the daemon re-validates + binds it. So a
-    // caller path is legitimate in standalone too.
-    t = buildTestApp({ deploymentMode: 'standalone' });
-    const res = await http(t).post('/api/workspaces', {
-      name: 'with-path',
-      workspace_path: '/tmp/some-arbitrary-path',
-    });
-
-    expect(res.status).toBe(201);
-    // The daemon received the caller path verbatim as `requested_path`.
-    const provisionCalls = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'workspace_provision',
-    );
-    expect(provisionCalls).toHaveLength(1);
-    expect(provisionCalls[0]!.params).toMatchObject({
-      kind: 'regular',
-      requested_path: '/tmp/some-arbitrary-path',
-    });
-    // The persisted row caches the daemon's authoritative bound path.
-    const body = (await res.json()) as any;
-    expect(body.workspace.workspace_path).toBe('/tmp/some-arbitrary-path');
-  });
-
-  it('POST /api/workspaces (standalone) — default placement uses `resolveOwnedLocalForUser` (no synthetic STANDALONE_SERVER host)', async () => {
+  it('POST /api/workspaces (standalone) — create resolves NO placement: the response carries no owning computer (§7-4)', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     const ownedLocal = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       t.viewerUserId,
@@ -105,14 +79,21 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
 
     expect(res.status).toBe(201);
     const body = (await res.json()) as any;
-    // Must be the user's claimed local host, NOT the
-    // pre-D4.c synthetic standalone-server row. (The
-    // synthetic row may exist from migration, but it's
-    // never the resolved host_id under C3.)
-    expect(body.workspace.workspace_host_id).toBe(ownedLocal!.id);
+    // relocation-v1 §7-4 — placement is retired, not merely defaulted: the
+    // workspace has no owning computer, so the DTO exposes no host pointer at
+    // all (the pre-C3 synthetic `STANDALONE_SERVER` row, the C1
+    // `resolveOwnedLocalForUser` default and the `workspace_host_id` field
+    // itself are all gone).
+    expect(body.workspace.workspace_host_id).toBeUndefined();
   });
 
-  it('POST /api/workspaces — omitted workspace_host_id fails closed when the creator has ≥2 active local hosts (#task:1221)', async () => {
+  it('POST /api/workspaces — ≥2 active local hosts is NOT ambiguous any more: create succeeds (§7-4 retires placement)', async () => {
+    // Inverted #task:1221 pin: the old 409 `local_host_ambiguous` defended a
+    // placement decision create no longer makes. With two owned ready
+    // computers and no `workspace_host_id` there is nothing to disambiguate,
+    // so the create must succeed rather than fail closed. (The same typed code
+    // still guards AGENT placement, which really does pick a computer —
+    // `tests/routes/agent-placement*.test.ts`.)
     t = buildTestApp({ deploymentMode: 'standalone' });
     new HostRepo(t.ctx.db).claimOrCreateLocal({
       userId: t.viewerUserId,
@@ -124,40 +105,10 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
       member_agent_ids: [],
     });
 
-    expect(res.status).toBe(409);
-    expect(await res.json()).toMatchObject({ code: 'local_host_ambiguous' });
-    expect(
-      t.fakeHostWs!.calls.filter(c => c.kind === 'workspace_provision'),
-    ).toHaveLength(0);
-  });
-
-  it('POST /api/workspaces — explicit owned+active workspace_host_id disambiguates placement (#task:1221)', async () => {
-    t = buildTestApp({ deploymentMode: 'standalone' });
-    const hosts = new HostRepo(t.ctx.db);
-    const target = hosts.getOwnedLocalForUser(t.viewerUserId);
-    expect(target).not.toBeNull();
-    hosts.claimOrCreateLocal({
-      userId: t.viewerUserId,
-      installationId: 'second-desktop',
-    });
-
-    const res = await http(t).post('/api/workspaces', {
-      name: 'workspace-explicit-host',
-      workspace_host_id: target!.id,
-      member_agent_ids: [],
-    });
-
     expect(res.status).toBe(201);
-    const body = (await res.json()) as any;
-    expect(body.workspace.workspace_host_id).toBe(target!.id);
-    const provisionCalls = t.fakeHostWs!.calls.filter(
-      c => c.kind === 'workspace_provision',
-    );
-    expect(provisionCalls).toHaveLength(1);
-    expect(provisionCalls[0]!.hostId).toBe(target!.id);
   });
 
-  it('POST /api/workspaces (standalone) — cross-host `member_agent_ids` are ACCEPTED (#task:1600 gate lifted): membership lands, guest ensure is pathless', async () => {
+  it('POST /api/workspaces (standalone) — cross-host `member_agent_ids` are ACCEPTED (#task:1600 gate lifted): membership lands, no seed', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     // Direct DB insert: in standalone, POST /api/agents is still
     // gated by `host_runtime_disabled` (defer to D4.d). Seeding the
@@ -168,10 +119,9 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     // they own: enrollment authority is the creator (a teammate's agent is
     // refused regardless of host, pinned in
     // tests/routes/workspace-agent-enrollment.test.ts), while the axis under
-    // test here is the HOST. Two ready owned computers make placement
-    // ambiguous, so the home one is named explicitly.
+    // test here is the member's HOST. The workspace itself has no computer to
+    // name (§7-4), so nothing is passed for placement.
     const hosts = new HostRepo(t.ctx.db);
-    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
     const guestHost = hosts.claimOrCreateLocal({
       userId: t.viewerUserId,
       installationId: 'second-desktop',
@@ -187,7 +137,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
 
     const res = await http(t).post('/api/workspaces', {
       name: 'standalone-cross-host-ok',
-      workspace_host_id: homeHost.id,
       member_agent_ids: [agentId],
     });
 
@@ -200,15 +149,12 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
       )
       .get(body.workspace.id, agentId);
     expect(memberRow).toBeDefined();
-    // The guest ensure ran on the AGENT's daemon WITHOUT the home path.
-    const guestProvisions = t.fakeHostWs!.calls.filter(
-      c =>
-        c.kind === 'workspace_provision' &&
-        c.hostId === guestHost.id &&
-        c.params.workspace_id === body.workspace.id,
-    );
-    expect(guestProvisions).toHaveLength(1);
-    expect('requested_path' in guestProvisions[0]!.params).toBe(false);
+    // relocation-v1 §7 task 4 — the provisioning collapse: create-with-members
+    // does NO realization on ANY host — no provision, no per-guest realization,
+    // no eager seed. Each member's L2 is materialized lazily at its first spawn.
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed'),
+    ).toHaveLength(0);
   });
 
   // ── PATCH /api/workspaces/:id ───────────────────────────────
@@ -219,9 +165,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     // synthetic agent row whose host is the teammate's host (not
     // the workspace host). This is the regression scenario the
     // pre-C3 short-circuit blocked.
-    const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
-      t.viewerUserId,
-    )!;
     const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       'teammate',
     )!;
@@ -232,7 +175,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     });
     expect(wsRes.status).toBe(201);
     const ws = (await wsRes.json()) as any;
-    expect(ws.workspace.workspace_host_id).toBe(viewerHost.id);
 
     // Insert the synthetic cross-host agent + channel membership
     // directly via DB (the add-member PRODUCT ENTRY GATE is still
@@ -271,9 +213,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
   // ── DELETE /api/workspaces/:id ──────────────────────────────
   it('DELETE /api/workspaces/:id — cross-computer member agent is LEGAL: delete cascade proceeds (#task:1600 reclassification)', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
-    const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
-      t.viewerUserId,
-    )!;
     const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       'teammate',
     )!;
@@ -284,7 +223,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     });
     expect(wsRes.status).toBe(201);
     const ws = (await wsRes.json()) as any;
-    expect(ws.workspace.workspace_host_id).toBe(viewerHost.id);
 
     const agentId = `delete-cross-host-agent-${Date.now()}`;
     const now = Date.now();
@@ -329,9 +267,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
   // may smuggle a host-equality assumption back in.
   it('PATCH/DELETE — cross-host agent attached to a DM_CHANNEL is legal too (#task:1600, ex-Cindy round-1 P1)', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
-    const viewerHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
-      t.viewerUserId,
-    )!;
     const teammateHost = new HostRepo(t.ctx.db).getOwnedLocalForUser(
       'teammate',
     )!;
@@ -342,7 +277,6 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     });
     expect(wsRes.status).toBe(201);
     const ws = (await wsRes.json()) as any;
-    expect(ws.workspace.workspace_host_id).toBe(viewerHost.id);
 
     // Direct-INSERT a dm_channel row (dm_channels have no parent
     // conversation). A non-channel conversation kind is what the
@@ -352,15 +286,14 @@ describe('D4.c C3 — workspace placement preflight (standalone guard lift)', ()
     t.ctx.db
       .prepare(
         `INSERT INTO conversations
-          (id, workspace_id, workspace_path, kind,
+          (id, workspace_id, kind,
 title, status, spawned_by_agent_id, closed_at, close_summary,
            pinned_at, created_at, updated_at)
-         VALUES (?, ?, ?, 'dm_channel', ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, 'dm_channel', ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
       )
       .run(
         dmId,
         ws.workspace.id,
-        ws.workspace.workspace_path,
         'dm under workspace',
         now,
         now,
@@ -421,15 +354,14 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
 
   // ── POST /api/workspaces/:id/members ────────────────────────
 
-  it('POST /api/workspaces/:id/members — cross-host agent is ACCEPTED (#task:1600 gate lifted); the HOME-path L2 dir is never created server-side', async () => {
+  it('POST /api/workspaces/:id/members — cross-host agent is ACCEPTED (#task:1600 gate lifted); pure DB write, NO seed, HOME-path L2 dir never created server-side', async () => {
     t = buildTestApp({ deploymentMode: 'standalone' });
     // Direct DB insert (standalone POST /api/agents is still
     // gated; see comment on the POST workspace cross-host test).
     // #task:1681 — own agent on a second owned computer: creator = enrollment
-    // authority, host = the axis under test. Home computer named explicitly
-    // because two ready owned computers are ambiguous for placement.
+    // authority, the member's host = the axis under test. The workspace itself
+    // has no computer to name (§7-4), so nothing is passed for placement.
     const hosts = new HostRepo(t.ctx.db);
-    const homeHost = hosts.getOwnedLocalForUser(t.viewerUserId)!;
     const guestHost = hosts.claimOrCreateLocal({
       userId: t.viewerUserId,
       installationId: 'second-desktop',
@@ -445,17 +377,22 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
 
     const wsRes = await http(t).post('/api/workspaces', {
       name: 'add-member-cross-host',
-      workspace_host_id: homeHost.id,
       member_agent_ids: [],
     });
     expect(wsRes.status).toBe(201);
     const ws = (await wsRes.json()) as any;
 
-    // D4.e-3: L2 seeding is daemon-mediated; the would-be L2 dir lives at
-    // `<workspace_path>/.silverhand/agents/<agentId>`. Snapshot the path — it
-    // MUST NOT exist after a rejected add-member.
+    // D4.e-3: L2 seeding is daemon-mediated. This is the LEGACY bound-path
+    // shape (`<workspace path>/.silverhand/agents/<agentId>`) under the test
+    // `.silverhand` root: §7-3/§7-4 retired both the `workspace_path` DTO field
+    // and the registry that bound it, so nothing derives this path any more.
+    // It is kept as a negative pin that member-add writes NO server-side bytes
+    // at all — neither here nor at the agent-centric bundle coordinate, which
+    // only the member's own daemon may create at first spawn.
     const expectedL2Dir = join(
-      ws.workspace.workspace_path,
+      t.silverhandDir,
+      'workspaces',
+      ws.workspace.id,
       '.silverhand',
       'agents',
       agentId,
@@ -463,10 +400,9 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     expect(existsSync(expectedL2Dir)).toBe(false);
 
     t.fakeHostWs!.calls.length = 0;
-    // Pure ack for the guest seed: the shared embedded test fs conflates
-    // "both computers" onto one disk, so the default fake seed would write
-    // under the same path a real guest daemon would keep on ITS machine.
-    // What this pin protects is that the SERVER writes nothing.
+    // A seed that WOULD fire if member-add still dispatched one — after the
+    // relocation-v1 §7 task 4 provisioning collapse it must never fire: the
+    // guest's L2 is materialized lazily at its first spawn, not here.
     t.fakeHostWs!.agentL2SeedAckOverride = () =>
       ({ ok: true as const, seeded: true }) as any;
     const res = await http(t).post(
@@ -475,12 +411,11 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     );
 
     expect(res.status).toBe(201);
-    // The seed went to the GUEST daemon (agent's own computer), pathless
-    // ensure first; the HOME computer's workspace path gains no L2 dir —
-    // the guest L2 lives under the guest daemon's managed root.
-    const seed = t.fakeHostWs!.calls.find(c => c.kind === 'agent_l2_seed');
-    expect(seed).toBeDefined();
-    expect(seed!.hostId).toBe(guestHost.id);
+    // Pure DB write: no seed of any kind crossed to any daemon, and the HOME
+    // computer's workspace path gains no L2 dir.
+    expect(
+      t.fakeHostWs!.calls.filter(c => c.kind === 'agent_l2_seed'),
+    ).toHaveLength(0);
     expect(existsSync(expectedL2Dir)).toBe(false);
   });
 

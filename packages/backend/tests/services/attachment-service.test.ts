@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { testWorkspacePath } from '../utils/db.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSafeOpenExtension } from '@silverhand/shared';
@@ -21,19 +20,15 @@ function bootstrap() {
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   const workspaces = new WorkspaceRepo(db);
-  const workspacePath = testWorkspacePath('att-ws');
   const workspace = workspaces.insert({
     name: 'att-ws',
     description: null,
-    workspacePath,
-    workspaceHostId: localHostId,
   });
   const agent = new AgentRepo(db).create({ name: 'a', runtime: 'claude' }, localHostId, 'local');
   workspaces.insertMembership(workspace.id, agent.id);
   const conversations = new ConversationRepo(db);
   const channel = conversations.insertChannel({
     workspaceId: workspace.id,
-    workspacePath,
     title: 't',
   });
   conversations.addAgent(channel.id, agent.id);
@@ -203,12 +198,9 @@ describe('AttachmentService.locateForAgent', () => {
       const otherWorkspace = new WorkspaceRepo(db).insert({
         name: 'other',
         description: null,
-        workspacePath: join(tmpdir(), 'silverhand-attsvc-test-2', 'other'),
-        workspaceHostId: localHostId,
       });
       const otherChannel = conversations.insertChannel({
         workspaceId: otherWorkspace.id,
-        workspacePath: otherWorkspace.workspace_path,
         title: 'o',
       });
       const denied = await service.locateForAgent(dto.id, otherChannel.id);
@@ -525,12 +517,9 @@ describe('AttachmentService.update (creator-only pointer-swap)', () => {
       const otherWorkspace = new WorkspaceRepo(db).insert({
         name: 'other',
         description: null,
-        workspacePath: join(tmpdir(), 'silverhand-attsvc-update', 'other'),
-        workspaceHostId: localHostId,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({
         workspaceId: otherWorkspace.id,
-        workspacePath: otherWorkspace.workspace_path,
         title: 'o',
       });
       // Creator matches, but the caller's channel is a different one → the
@@ -838,12 +827,9 @@ describe('AttachmentService.resolveSnapshotsForChannel', () => {
       const otherWorkspace = new WorkspaceRepo(db).insert({
         name: 'other',
         description: null,
-        workspacePath: join(tmpdir(), 'silverhand-attsvc-test-3', 'other'),
-        workspaceHostId: localHostId,
       });
       const otherChannel = new ConversationRepo(db).insertChannel({
         workspaceId: otherWorkspace.id,
-        workspacePath: otherWorkspace.workspace_path,
         title: 'o',
       });
       const foreign = await service.upload({

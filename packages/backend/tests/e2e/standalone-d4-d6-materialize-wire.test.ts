@@ -77,6 +77,7 @@ import {
   type DaemonWithSupervisorHandle,
   type G2Harness,
 } from './g2-harness.js';
+import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 /**
  * Stub driver — D6 e2e does NOT exercise any runtime intent
@@ -123,6 +124,7 @@ async function postCreate(
   const res = await fetch(`${url}/api/agents${qs}`, {
     method: 'POST',
     headers: {
+      ...CURRENT_DESKTOP_EPOCH_HEADERS,
       'content-type': 'application/json',
       authorization: `Bearer ${bearer}`,
       'Idempotency-Key': idempotencyKey,

@@ -37,20 +37,6 @@
 
 import type { ConversationByIdResult } from '@/features/conversations/useConversationById';
 
-/**
- * Workspace context attached to a `?side` resolved descriptor. Drives
- * the four ChannelView wiring sites Cindy flagged in PR-2 review:
- *   - `channelKind` (regular vs dm) per ref.workspace_kind
- *   - archive mutation invalidation per ref.workspace_id
- *   - `handleJumpToOriginal` parent navigation per ref.workspace_id
- *   - sidebar selected row gated by ref.workspace_id === selected
- */
-export interface SecondaryWorkspaceContext {
-  workspaceId: string;
-  workspaceKind: 'regular' | 'dm';
-  workspacePath: string;
-}
-
 export type SecondaryDescriptor =
   | {
       source: 'side';
@@ -60,7 +46,6 @@ export type SecondaryDescriptor =
       title: string;
       workspaceId: string;
       workspaceKind: 'regular' | 'dm';
-      workspacePath: string;
       closedAt: number | null;
       archivedAt: number | null;
     }
@@ -84,7 +69,7 @@ export interface SecondaryRouteInputs {
  *
  * Cross-workspace `?side` ids resolve through the ref hook
  * (`useConversationById`); the resolved branch carries workspace
- * metadata (`workspaceId`, `workspaceKind`, `workspacePath`) so
+ * metadata (`workspaceId`, `workspaceKind`) so
  * ChannelView can switch its workspace-scoped hooks via the
  * `workspaceContext` prop without a second round-trip.
  *
@@ -121,29 +106,11 @@ export function selectSecondaryDescriptor(
       title: ref.title,
       workspaceId: ref.workspace_id,
       workspaceKind: ref.workspace_kind,
-      workspacePath: ref.workspace_path,
       closedAt: ref.closed_at,
       archivedAt: ref.archived_at,
     };
   }
   return null;
-}
-
-/** Workspace-context view for a resolved `?side` descriptor — the
- *  shape ChannelView consumes via its `workspaceContext` prop. Returns
- *  null when the secondary slot doesn't drive a workspace switch
- *  (no secondary, non-side source, or non-resolved status). */
-export function selectSecondaryWorkspaceContext(
-  secondary: SecondaryDescriptor | null,
-): SecondaryWorkspaceContext | null {
-  if (!secondary) return null;
-  if (secondary.source !== 'side') return null;
-  if (secondary.status !== 'resolved') return null;
-  return {
-    workspaceId: secondary.workspaceId,
-    workspaceKind: secondary.workspaceKind,
-    workspacePath: secondary.workspacePath,
-  };
 }
 
 /** ChannelView-shaped descriptor for a conversation. Mirrors the

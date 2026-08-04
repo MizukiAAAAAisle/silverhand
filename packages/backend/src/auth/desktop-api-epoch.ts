@@ -31,16 +31,15 @@ import type { AppEnv } from './principal.js';
  * header (Cindy round-2 P1): its value is a compiled constant rendered to a
  * decimal string, so an epoch-aware desktop can never fail to send it — the
  * fail-open client-info telemetry header plays no role in admission. Absent
- * or malformed normalizes to epoch 0, the pre-epoch legacy generation. While
- * MINIMUM_CLIENT_API_EPOCH is 0 (observation bridge, exit conditions on the
- * constant), epoch 0 is admitted; once the minimum is raised, the same code
- * fails closed with a structured 426 body.
+ * or malformed normalizes to epoch 0, the pre-epoch legacy generation, which
+ * relocation-v1 §6 put BELOW `MINIMUM_CLIENT_API_EPOCH`: the observation
+ * bridge is closed, so that generation now fails closed here with a structured
+ * 426 body instead of being admitted and counted.
  */
 /**
- * Test seam: the observation bridge ships with MINIMUM_CLIENT_API_EPOCH = 0,
- * which makes the rejection arm unreachable in production until the cutoff.
- * Tests inject a higher minimum to prove the fail-closed behavior the cutoff
- * will enable; production callers pass nothing and use the shared constant.
+ * Test seam: lets a test raise the minimum ABOVE this build's own epoch to
+ * prove the gate reads the configured minimum rather than the compiled
+ * constant. Production callers pass nothing and use the shared constant.
  */
 export interface DesktopApiEpochOptions {
   minimumClientEpoch?: number;

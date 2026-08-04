@@ -1,18 +1,15 @@
 import type { ReactElement } from 'react';
-import { Copy, FolderOpen, Star } from 'lucide-react';
-import { toast } from 'sonner';
+import { Star } from 'lucide-react';
 import {
   AppContextMenu,
   AppContextMenuItem,
-  AppContextMenuSeparator,
 } from '@/components/menus/AppContextMenu';
 
 /**
  * The single workspace/DM right-click menu, shared by the home-rail rows
  * (`WorkspaceRow`) and the STARRED rows (`FavoriteRow`). Starring MOVES a
  * workspace out of its home group into STARRED, so the same entity is reached
- * through two components — before this, the two built their own menus and drifted
- * (a starred workspace lost "Open in Finder" / "Copy path"; #task:1439). One
+ * through two components; keeping the menu here means the two can't drift. One
  * entity, one menu: callers only supply the resolved capabilities/handlers, the
  * structure lives here so it can't fork again.
  */
@@ -21,60 +18,23 @@ export function WorkspaceContextMenu({
   canStar,
   isStarred,
   onToggleStar,
-  canReveal,
-  workspacePath,
 }: {
   trigger: ReactElement;
   canStar: boolean;
   isStarred: boolean;
   onToggleStar: () => void;
-  canReveal: boolean;
-  /** Null only in the rare window where a starred row's full workspace record
-   *  hasn't resolved yet — the path-based items hide rather than act on a
-   *  missing path. A home-rail `WorkspaceItem` always has one, so nothing hides
-   *  there. */
-  workspacePath: string | null;
 }): JSX.Element {
+  // Star is the only item today; a row that can't star (archived) would render
+  // an empty menu, so it gets no context menu at all.
+  if (!canStar) return trigger;
   return (
     <AppContextMenu trigger={trigger}>
-      {canStar ? (
-        <AppContextMenuItem
-          icon={<Star className={'size-3.5' + (isStarred ? ' fill-current' : '')} />}
-          onSelect={onToggleStar}
-        >
-          {isStarred ? 'Unstar' : 'Star'}
-        </AppContextMenuItem>
-      ) : null}
-      {canStar ? <AppContextMenuSeparator /> : null}
-      {canReveal && workspacePath ? (
-        <AppContextMenuItem
-          icon={<FolderOpen className="size-3.5" />}
-          onSelect={() => {
-            void window.silverhand.showItemInFolder(workspacePath);
-          }}
-        >
-          Open in Finder
-        </AppContextMenuItem>
-      ) : null}
-      {workspacePath ? (
-        <AppContextMenuItem
-          icon={<Copy className="size-3.5" />}
-          onSelect={() => {
-            void copyWorkspacePath(workspacePath);
-          }}
-        >
-          Copy path
-        </AppContextMenuItem>
-      ) : null}
+      <AppContextMenuItem
+        icon={<Star className={'size-3.5' + (isStarred ? ' fill-current' : '')} />}
+        onSelect={onToggleStar}
+      >
+        {isStarred ? 'Unstar' : 'Star'}
+      </AppContextMenuItem>
     </AppContextMenu>
   );
-}
-
-async function copyWorkspacePath(path: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(path);
-    toast.success('Path copied');
-  } catch {
-    toast.error("Couldn't copy the path");
-  }
 }

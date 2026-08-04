@@ -20,7 +20,6 @@ import type { LogLevelControl } from './logger.js';
 import type { RuntimeHostPlacementControl } from './runtime/host-placement.js';
 import type { OutboundFrameAdapter } from './runtime/outbound-frame-adapter.js';
 import type { HostRuntimeActivityView, HostStatusReadModel } from './runtime/host-status-read-model.js';
-import type { WorkspaceRegistryReconciler } from './runtime/workspace-registry-reconcile.js';
 import type { AgentL2SeedEnsurer } from './runtime/agent-l2-seed-ensurer.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 import type { PresenceRegistry } from './presence/presence-registry.js';
@@ -203,28 +202,12 @@ export interface BackendContext {
    */
   hostStatusReadModel?: () => HostStatusReadModel;
   /**
-   * #task:1719 — REQUIRED provision barrier port (Cindy round-2 P1:
-   * load-bearing, fail-closed — an optional accessor made "provision
-   * without barrier" a legal composition and silently bypassable).
-   * The composition root binds it to the process-wide
-   * {@link WorkspaceRegistryReconciler.barrier}: every
-   * `workspace_provision` dispatch site (`create-workspace`,
-   * `agent-l2-seed` guest realization) MUST await it so a provision
-   * never races its own generation's ghost sweep. Test harnesses
-   * provide it EXPLICITLY (a real reconciler over the fake transport
-   * in `buildTestApp`) — absence is a type error, not a behavior
-   * fallback. Deliberately only the narrow `barrier` function: the
-   * reconciler's lifecycle (`onHostReady` / `close`) stays owned by
-   * the composition root and is not exposed here. Heartbeat / status /
-   * runtime paths must NOT touch it.
-   */
-  workspaceProvisionBarrier: (hostId: string) => Promise<void>;
-  /**
    * Cross-computer slice 1 (#task:1596) — pre-spawn agent L2 seed on the
    * dispatch host (idempotent daemon `agent_l2_seed`, memoized per
    * (host, workspace, agent)). Consumed by the runtime start/deliver
-   * filesystem-ensure chain. Optional so a minimal embedded boot or a
-   * test harness can omit it (runtime start then fails closed).
+   * filesystem-ensure chain. Optional, and its absence is NOT a spawn gate
+   * (relocation-v1 §7-4): a minimal embedded boot or a test harness that omits
+   * it just spawns without the L2 enrichment, recorded as a diagnostic.
    */
   agentL2SeedEnsurer?: AgentL2SeedEnsurer;
   /**

@@ -1,26 +1,20 @@
 import type {
   HostAgentResource,
   HostDeleteDependents,
-  HostWorkspaceResource,
 } from '@silverhand/shared';
-import type { AgentDto, WorkspaceDto, WorkspaceRoleDto } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
-import type { UserPrincipal } from '../auth/principal.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { HostRepo } from '../repos/host-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { StoredFileRef } from '../storage/blob-file-storage.js';
-import { canGovernWorkspace, workspaceRole } from '../permissions.js';
 import {
   computeDeleteImpact,
   type AgentDeleteImpact,
 } from '../read-model/agent-delete-impact.js';
-import {
-  toHostAgentResource,
-  toHostWorkspaceResource,
-} from '../read-model/host-resources.js';
+import { toHostAgentResource } from '../read-model/host-resources.js';
 import {
   collectAgentDmBlobRefs,
   deleteFailedAgentRowOnly,
@@ -28,54 +22,52 @@ import {
   teardownAgentControlPlaneRows,
   type DeleteAgentDeps,
 } from './delete-agent.js';
-import {
-  collectWorkspaceTeardownPlan,
-  deleteWorkspaceRow,
-  publishWorkspaceRemoved,
-  stopWorkspaceRuntime,
-  sweepWorkspaceAttachments,
-  unbindWorkspaceBindings,
-  type DeleteWorkspaceDeps,
-  type WorkspaceTeardownPlan,
-} from './delete-workspace.js';
 
 /**
  * DeleteComputer use case (#task:1616 + #task:1617).
  *
  * Owns `DELETE /api/hosts/:id` for user-managed computers, including the
- * explicit cascade of everything rooted on that computer: its agents and its
- * `regular` workspaces (channels, messages, memberships and attachments
- * included).
+ * explicit cascade of everything rooted on that computer: its agents (their
+ * conversations, memberships and DM attachments included).
+ *
+ * relocation-v1 §7-4 — a `regular` workspace is NO LONGER rooted on a computer.
+ * It has no `workspace_host_id` and no host-local directory: its per-agent
+ * bundles resolve to a terminal deterministic agent-centric coordinate on each
+ * MEMBER's own computer. So deleting a computer no longer cascades workspaces —
+ * there is no workspace whose files live here, and the DB-backed workspace /
+ * channel / message content is computer-independent. The member agents placed
+ * here are still deleted (below), which is the same outcome as deleting those
+ * agents individually; a workspace left with no members survives exactly as it
+ * does today in that case. §6 removed the last workspace-shaped field from the
+ * refusal payloads with the epoch cut, so nothing here counts or names a
+ * workspace.
  *
  * ## Why this exists as one use case
  *
  * The route previously deleted agents one at a time and then deleted the host
  * row, with no transaction around the sequence: a mid-loop refusal left some
  * agents irreversibly gone while the computer stayed, and the 409 it returned
- * re-listed the already-deleted agents as dependents. Cascading workspaces on
- * top of that would have widened the same partial failure from "some agents" to
- * "some channels and their message history".
+ * re-listed the already-deleted agents as dependents.
  *
  * ## Two phases, one authoritative read — the atomicity contract
  *
  *  1. **commit** (ONE synchronous `db.transaction`): read the CURRENT dependency
  *     set, check every precondition against it (`pending_materialization`, the
- *     per-workspace owner gate, the cascade confirmation), CAPTURE everything the
- *     teardown will need (runtime-stop pairs *and their routing*, purge targets,
- *     attachment storage refs, viewer ids), then delete the workspace rows, the
- *     agent rows and the host row as a single atomic unit. A failed precondition
- *     rolls the whole transaction back.
+ *     cascade confirmation), CAPTURE everything the teardown will need
+ *     (runtime-stop pairs *and their routing*, purge targets, attachment storage
+ *     refs, viewer ids), then delete the agent rows and the host row as a single
+ *     atomic unit. A failed precondition rolls the whole transaction back.
  *  2. **post-commit teardown** (best-effort, unrollbackable): runtime stops, the
- *     host-local `agent_files_purge`, the attachment blob deletes and the
- *     `viewer_workspaces_changed` fan-out — all of it off the captures, never off
- *     a fresh query, because the rows are gone by now.
+ *     host-local `agent_files_purge` and the attachment blob deletes — all of it
+ *     off the captures, never off a fresh query, because the rows are gone by
+ *     now.
  *
  * The read and the capture live INSIDE the transaction on purpose. The cascade
  * deletes whatever belongs to the computer at execution time (see the consent
  * note below), so a set read before the transaction could differ from the set
- * deleted inside it: the drifted-in workspace would be deleted with no captured
- * blob refs and no captured runtime pairs — leaked bytes and an orphan daemon
- * child. One authoritative read point makes that class of mismatch unstateable.
+ * deleted inside it: the drifted-in agent would be deleted with no captured blob
+ * refs and no captured runtime pairs — leaked bytes and an orphan daemon child.
+ * One authoritative read point makes that class of mismatch unstateable.
  *
  * "Off the captures" includes ROUTING, not just identity: `runtimeHost.stop`
  * normally resolves `agents.host_id` → `hosts` to pick the daemon, which
@@ -91,12 +83,12 @@ import {
  *
  * Every cross-process or unrollbackable effect lives in phase 2, *after* the
  * commit. That ordering is the contract, not an optimization: the commit is the
- * single decision point, so a refusal (`hasDependents`, `pendingAgents`,
- * `workspaceForbidden`, an unmodeled FK violation) leaves the DB, the daemon's disk and the
- * blob store exactly as they were. Nothing before the commit may destroy
- * anything — an agent whose L2 tree was purged while the request then failed
- * would be a half-delete no retry can undo, which is precisely the failure mode
- * this use case exists to remove.
+ * single decision point, so a refusal (`hasDependents`, `pendingAgents`, an
+ * unmodeled FK violation) leaves the DB, the daemon's disk and the blob store
+ * exactly as they were. Nothing before the commit may destroy anything — an
+ * agent whose L2 tree was purged while the request then failed would be a
+ * half-delete no retry can undo, which is precisely the failure mode this use
+ * case exists to remove.
  *
  * The price is that phase 2 cannot report failure: by then the delete is
  * committed and the objects that could name those bytes are gone. That is the
@@ -111,13 +103,13 @@ import {
  * request cannot change the CLASS of what is destroyed — an exact-id snapshot
  * would have bought only that, at the price of a second consent model (set
  * equality, a `dependents_changed` refusal, a re-confirmation screen). Discovery
- * is not this use case's job either: the dialog reads the computer's agents and
- * workspaces from `GET /api/hosts/:id/resources` first, and the `hasDependents`
- * refusal here is only a guard for a caller that skipped that step.
+ * is not this use case's job either: the dialog reads the computer's agents from
+ * `GET /api/hosts/:id/resources` first, and the `hasDependents` refusal here is
+ * only a guard for a caller that skipped that step.
  *
- * What the flag does NOT do is authorize: the owner gate and the
- * pending-materialization check are re-evaluated inside the transaction against
- * current state, because those are legality questions, not consent questions.
+ * What the flag does NOT do is authorize: the pending-materialization check is
+ * re-evaluated inside the transaction against current state, because that is a
+ * legality question, not a consent question.
  *
  * ## Host-local bytes are best-effort, control-plane rows are not
  *
@@ -149,11 +141,13 @@ export interface DeleteComputerCommand {
 }
 
 /** The named dependency lists carried by the `hasDependents` guard, so a caller
- *  that skipped the confirmation step still learns what it would destroy. */
+ *  that skipped the confirmation step still learns what it would destroy.
+ *
+ *  Agents only (relocation-v1 §7-4): a regular workspace is not rooted on a
+ *  computer, so this cascade can never reach one. */
 export interface ComputerDeleteDependentsPayload {
   dependents: HostDeleteDependents;
   agents: HostAgentResource[];
-  workspaces: HostWorkspaceResource[];
 }
 
 export type DeleteComputerResult =
@@ -161,8 +155,7 @@ export type DeleteComputerResult =
   | { kind: 'notFound' }
   | { kind: 'provisioningSourceNotSupported' }
   | { kind: 'pendingAgents'; pendingAgents: number }
-  | { kind: 'hasDependents'; payload: ComputerDeleteDependentsPayload }
-  | { kind: 'workspaceForbidden'; workspaces: HostWorkspaceResource[] };
+  | { kind: 'hasDependents'; payload: ComputerDeleteDependentsPayload };
 
 /**
  * Thrown inside the commit transaction to roll it back when a precondition fails.
@@ -173,7 +166,6 @@ export type DeleteComputerResult =
 type CommitRefusal =
   | { reason: 'hasDependents'; payload: ComputerDeleteDependentsPayload }
   | { reason: 'pendingAgents'; pendingAgents: number }
-  | { reason: 'workspaceForbidden'; workspaces: HostWorkspaceResource[] }
   | { reason: 'hostGone' };
 
 class CommitPreconditionFailed extends Error {
@@ -185,13 +177,6 @@ class CommitPreconditionFailed extends Error {
 interface ComputerDeletePlan {
   hostAgents: AgentDto[];
   pendingAgents: number;
-  hostWorkspaces: WorkspaceDto[];
-  /** workspace id → the requester's membership role (the resource fact the
-   *  refusal payloads carry). */
-  workspaceRoles: Map<string, WorkspaceRoleDto | null>;
-  /** workspace id → owner-gate verdict for the requester (the legality answer,
-   *  taken from the same ACL the workspace-delete route uses). */
-  workspaceDeletable: Map<string, boolean>;
 }
 
 /** One agent's teardown, fully captured before its rows are deleted. */
@@ -204,7 +189,6 @@ interface AgentTeardown {
 /** Everything the post-commit teardown will act on, captured inside the
  *  transaction because every source row it derives from is deleted there. */
 interface ComputerTeardownCapture {
-  workspacePlans: WorkspaceTeardownPlan[];
   agentTeardowns: AgentTeardown[];
 }
 
@@ -229,12 +213,6 @@ export async function deleteComputer(
     conversations: deps.conversations,
     conversationInboxes: deps.conversationInboxes,
   };
-  const workspaceDeps: DeleteWorkspaceDeps = {
-    ctx,
-    workspaces: deps.workspaces,
-    conversations: deps.conversations,
-    agents: deps.agents,
-  };
 
   // ── phase 1: read, check, capture and delete — one transaction ─────
   let capture: ComputerTeardownCapture;
@@ -255,20 +233,10 @@ export async function deleteComputer(
           pendingAgents: txPlan.pendingAgents,
         });
       }
-      if (
-        (txPlan.hostAgents.length > 0 || txPlan.hostWorkspaces.length > 0) &&
-        !cmd.cascadeDependents
-      ) {
+      if (txPlan.hostAgents.length > 0 && !cmd.cascadeDependents) {
         throw new CommitPreconditionFailed({
           reason: 'hasDependents',
           payload: buildPayload(txPlan),
-        });
-      }
-      const unauthorized = unauthorizedWorkspaces(txPlan);
-      if (unauthorized.length > 0) {
-        throw new CommitPreconditionFailed({
-          reason: 'workspaceForbidden',
-          workspaces: unauthorized,
         });
       }
 
@@ -276,11 +244,8 @@ export async function deleteComputer(
       // FK cascade there is no row left to derive a storage key, a runtime pair
       // or a viewer id from (read-only, so it cannot destroy anything even
       // though a later precondition could still roll this back).
-      const txCapture = captureTeardown(agentDeps, workspaceDeps, txPlan);
+      const txCapture = captureTeardown(agentDeps, txPlan);
 
-      for (const workspacePlan of txCapture.workspacePlans) {
-        deleteWorkspaceRow(workspaceDeps, workspacePlan.workspaceId);
-      }
       for (const agent of txPlan.hostAgents) {
         const current = deps.agents.get(agent.id);
         if (!current) continue;
@@ -288,9 +253,6 @@ export async function deleteComputer(
           deleteFailedAgentRowOnly(ctx, deps.agents, current);
           continue;
         }
-        // Recomputed here rather than reused from the capture: the workspace
-        // rows deleted just above are already gone, so the membership teardown
-        // must not work off a pre-delete impact.
         const impact: AgentDeleteImpact = computeDeleteImpact(agentDeps, agent.id);
         teardownAgentControlPlaneRows(agentDeps, agent.id, impact);
       }
@@ -309,10 +271,9 @@ export async function deleteComputer(
     }
     // Anything else rolled the whole transaction back — including an FK
     // violation, which here can only mean the schema holds a RESTRICT reference
-    // this cascade does not model (drift or a bug). It FAILS LOUD. Dressing it
+    // this cascade does not model (drift or a bug). It FAILS LOUD: dressing it
     // up as a user-actionable `has_dependents` would hand the UI a dead end
-    // (blocked, nothing to remove, retry forever) and hide the invariant
-    // violation.
+    // (blocked, nothing to remove, retry forever) and hide the broken invariant.
     throw err;
   }
 
@@ -329,32 +290,13 @@ export async function deleteComputer(
   }
   let blobsAttempted = 0;
   let blobsFailed = 0;
-  // The two teardown authorities overlap on the MAIN path: an on-host agent that
-  // is a member of a channel in a deleted workspace appears in the workspace
-  // plan's captured pairs AND in its own live runs. Neither loop can be dropped
-  // (the workspace plan also stops agents placed on OTHER computers; the agent
-  // teardown also stops runs in workspaces not rooted here), so the union is
-  // dispatched exactly once per pair rather than twice-and-idempotent.
+  // One stop per (conversation, agent) pair: an agent may be running in several
+  // conversations, and `impact.running_conversation_agents` is now the ONLY
+  // teardown authority — relocation-v1 §7-4 removed the workspace-cascade half,
+  // so there is no second source to union with.
   const stopped = new Set<string>();
   const stopKey = (conversationId: string, agentId: string): string =>
     `${conversationId}\u0000${agentId}`;
-  for (const workspacePlan of capture.workspacePlans) {
-    for (const pair of workspacePlan.runtimeStops) {
-      stopped.add(stopKey(pair.conversationId, pair.agentId));
-    }
-    stopWorkspaceRuntime(workspaceDeps, workspacePlan);
-    const swept = await sweepWorkspaceAttachments(workspaceDeps, workspacePlan);
-    blobsAttempted += swept.attempted;
-    blobsFailed += swept.failed;
-    publishWorkspaceRemoved(workspaceDeps, workspacePlan);
-    // #task:1719 — best-effort registry unbind on OTHER hosts' daemons (guest
-    // entries from cross-computer members). The host being deleted is skipped:
-    // its whole registry leaves with the computer, and its daemon is exactly
-    // the unreachable one this route exists for.
-    await unbindWorkspaceBindings(workspaceDeps, workspacePlan, {
-      skipHostId: cmd.hostId,
-    });
-  }
   let purgeAttempts = 0;
   let purgeFailures = 0;
   for (const teardown of capture.agentTeardowns) {
@@ -432,7 +374,6 @@ export async function deleteComputer(
     {
       hostId: cmd.hostId,
       cascadedAgents: plan.hostAgents.length,
-      cascadedWorkspaces: plan.hostWorkspaces.length,
       purgeAttempts,
       purgeFailures,
       blobsAttempted,
@@ -447,29 +388,13 @@ function buildPlan(
   deps: DeleteComputerDeps,
   cmd: DeleteComputerCommand,
 ): ComputerDeletePlan {
-  const { ctx, agents, workspaces } = deps;
-  const principal: UserPrincipal = { kind: 'user', userId: cmd.requesterUserId };
+  const { agents } = deps;
   const hostAgents = agents.listByHost(cmd.hostId);
-  const hostWorkspaces = workspaces.listRegularByHost(cmd.hostId);
-  const workspaceDeletable = new Map<string, boolean>(
-    hostWorkspaces.map(workspace => [
-      workspace.id,
-      canGovernWorkspace(ctx, principal, workspace.id, 'owner'),
-    ]),
-  );
   return {
     hostAgents,
     pendingAgents: hostAgents.filter(
       agent => agent.materialization_status === 'pending_materialization',
     ).length,
-    hostWorkspaces,
-    workspaceRoles: new Map(
-      hostWorkspaces.map(workspace => [
-        workspace.id,
-        workspaceRole(ctx, principal, workspace.id),
-      ]),
-    ),
-    workspaceDeletable,
   };
 }
 
@@ -480,7 +405,6 @@ function buildPlan(
  */
 function captureTeardown(
   agentDeps: DeleteAgentDeps,
-  workspaceDeps: DeleteWorkspaceDeps,
   plan: ComputerDeletePlan,
 ): ComputerTeardownCapture {
   const agentTeardowns: AgentTeardown[] = [];
@@ -495,12 +419,7 @@ function captureTeardown(
       blobRefs: collectAgentDmBlobRefs(agentDeps, impact),
     });
   }
-  return {
-    workspacePlans: plan.hostWorkspaces.map(workspace =>
-      collectWorkspaceTeardownPlan(workspaceDeps, workspace.id),
-    ),
-    agentTeardowns,
-  };
+  return { agentTeardowns };
 }
 
 /** Map a rolled-back commit precondition to its typed result. The lists it
@@ -512,32 +431,14 @@ function refusalToResult(refusal: CommitRefusal): DeleteComputerResult {
       return { kind: 'hasDependents', payload: refusal.payload };
     case 'pendingAgents':
       return { kind: 'pendingAgents', pendingAgents: refusal.pendingAgents };
-    case 'workspaceForbidden':
-      return { kind: 'workspaceForbidden', workspaces: refusal.workspaces };
     case 'hostGone':
       return { kind: 'notFound' };
   }
 }
 
-function unauthorizedWorkspaces(
-  plan: ComputerDeletePlan,
-): HostWorkspaceResource[] {
-  return plan.hostWorkspaces
-    .filter(workspace => !plan.workspaceDeletable.get(workspace.id))
-    .map(workspace =>
-      toHostWorkspaceResource(workspace, plan.workspaceRoles.get(workspace.id) ?? null),
-    );
-}
-
 function buildPayload(plan: ComputerDeletePlan): ComputerDeleteDependentsPayload {
   return {
-    dependents: {
-      agents: plan.hostAgents.length,
-      workspaces: plan.hostWorkspaces.length,
-    },
+    dependents: { agents: plan.hostAgents.length },
     agents: plan.hostAgents.map(toHostAgentResource),
-    workspaces: plan.hostWorkspaces.map(workspace =>
-      toHostWorkspaceResource(workspace, plan.workspaceRoles.get(workspace.id) ?? null),
-    ),
   };
 }
