@@ -31,22 +31,39 @@
  *    machine with real sessions BEFORE the migration release ships.
  *    Encoded as no-op pending that audit.
  *
- * The cwd slug replaces every `/`, `.`, and `_` with `-` (verified against
- * live Claude 2.1.220 and Qoder 1.1.5 probes). Slugs are only ever COMPUTED
- * from exact known cwds — never parsed back, never matched by prefix or
- * basename.
+ * The cwd slug is the VENDORS' OWN transform, read out of the installed
+ * binaries rather than inferred from observed directory names (#task:1816):
+ *
+ *   claude 2.1.221  `GC(e)`  = fold, cap 200, `-${Math.abs(nat(e)).toString(36)}`
+ *   qodercli 1.1.6  `Bk(A)`  = fold, cap 200, `-${Math.abs(Uz_(A)).toString(36)}`
+ *
+ * where "fold" is `replace(/[^a-zA-Z0-9]/g, '-')` in BOTH — every
+ * non-alphanumeric code unit folds, not just `/._`, so a cwd containing a
+ * space, a parenthesis or a CJK character has a perfectly well-defined vendor
+ * namespace. The two 32-bit cap hashes differ per vendor, which is why the
+ * slug is a function of (kind, cwd) and not of cwd alone. See
+ * {@link cwdSessionSlug} for the byte-level port.
+ *
+ * The slug INPUT is the cwd as the spawned child reports it, i.e. the PHYSICAL
+ * path: `process.cwd()` is `getcwd(3)`, which always returns the symlink-free
+ * on-disk form. Proven live on the audit machine — a probe run in `/tmp`
+ * (a symlink to `/private/tmp`) produced `~/.qoder/projects/-private-tmp-...`.
+ * claude 2.1.221 additionally realpaths and NFC-normalizes it
+ * (`originalCwd = NFC(realpathSync(process.cwd()))`); qodercli 1.1.6 uses the
+ * raw string. Slugs are only ever COMPUTED from exact known cwds — never
+ * parsed back, never matched by prefix or basename.
  *
  * The first shipped v2 migrator omitted `_` from this transform. A v2 cwd
  * containing an underscore was therefore renamed into a namespace neither
  * runtime would read. The repair pass below recognizes only that exact
  * historical transform and atomically renames it to the runtime coordinate;
  * it never scans or merges arbitrary project directories. The buggy source
- * slug necessarily still contains `_`, while the verified Claude 2.1.220 and
- * Qoder 1.1.5 transforms never do, so that source cannot be a live
- * vendor-written coordinate.
+ * slug necessarily still contains a character the vendors fold (`_` in the
+ * observed population), while a real vendor-written coordinate never does, so
+ * that source cannot be a live vendor coordinate.
  */
-import { lstatSync, renameSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { lstatSync, realpathSync, renameSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { RuntimeKind } from '@silverhand/shared';
 
 /**
@@ -76,22 +93,80 @@ export interface MigrationLogger {
 /** The frozen set of runtimes whose session store is cwd-scoped. */
 export const CWD_SCOPED_SESSION_RUNTIMES = ['claude', 'qoder'] as const;
 
-export function cwdSessionSlug(cwd: string): string {
-  return cwd.replace(/[\/._]/g, '-');
+/** Both vendors cap the folded slug at 200 code units before appending a hash
+ *  of the whole cwd (claude `A2e`, qodercli `ODA`). */
+const VENDOR_SLUG_MAX_LENGTH = 200;
+
+/** claude 2.1.221 `nat` — 32-bit `(h << 5) - h + c`, base-36 of its magnitude. */
+function claudeCwdSlugHash(cwd: string): string {
+  let h = 0;
+  for (let i = 0; i < cwd.length; i += 1) {
+    h = ((h << 5) - h + cwd.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h).toString(36);
 }
 
-/** The buggy transform shipped by the first layout-v2 package. */
-function legacyV2CwdSessionSlug(cwd: string): string {
-  return cwd.replace(/[/.]/g, '-');
+/** qodercli 1.1.6 `Uz_` — djb2-xor (`h * 33 ^ c`, ToInt32 per `^`), base-36 of
+ *  its magnitude. Deliberately NOT the same hash as claude's. */
+function qoderCwdSlugHash(cwd: string): string {
+  let h = 5381;
+  for (let i = 0; i < cwd.length; i += 1) {
+    h = (h * 33) ^ cwd.charCodeAt(i);
+  }
+  return Math.abs(h).toString(36);
 }
 
 /**
- * The slug transform is VERIFIED only for POSIX absolute paths over
- * `[A-Za-z0-9/._-]` (live fixtures); we do not claim the vendors'
- * algorithm for other characters.
+ * The physical path the spawned child's `process.cwd()` will report: symlinks
+ * resolved, on-disk name bytes. Resolves the deepest ANCESTOR that exists and
+ * re-appends the remaining segments, because a relocation destination is slugged
+ * before it is created and only real directories can be symlinks. A path with
+ * nothing resolvable degrades to the given path — the same best-effort fallback
+ * claude 2.1.221 uses around its own `realpathSync`.
  */
-export function isSlugVerifiableCwd(cwd: string): boolean {
-  return /^[A-Za-z0-9/._-]+$/.test(cwd);
+function physicalSlugCwd(cwd: string): string {
+  const absolute = resolve(cwd);
+  const pending: string[] = [];
+  let current = absolute;
+  for (;;) {
+    try {
+      const real = realpathSync.native(current);
+      return pending.length === 0 ? real : join(real, ...pending);
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return absolute;
+      pending.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * The vendor cwd → project-namespace transform, ported byte-for-byte from the
+ * installed CLIs (see the module docblock for the source functions). Total over
+ * every absolute path: there is no charset outside which the namespace is
+ * undefined, so this never rejects. `kind` selects the cap hash and whether the
+ * input is NFC-normalized.
+ */
+export function cwdSessionSlug(
+  kind: (typeof CWD_SCOPED_SESSION_RUNTIMES)[number],
+  cwd: string,
+): string {
+  const physical = physicalSlugCwd(cwd);
+  const input = kind === 'claude' ? physical.normalize('NFC') : physical;
+  const folded = input.replace(/[^a-zA-Z0-9]/g, '-');
+  if (folded.length <= VENDOR_SLUG_MAX_LENGTH) return folded;
+  const hash =
+    kind === 'claude' ? claudeCwdSlugHash(input) : qoderCwdSlugHash(input);
+  return `${folded.slice(0, VENDOR_SLUG_MAX_LENGTH)}-${hash}`;
+}
+
+/** The buggy transform shipped by the first layout-v2 package: it folded only
+ *  `/` and `.`, had no length cap, and slugged the path string it was handed
+ *  (no realpath). Reproduced verbatim so the repair pass can recognize exactly
+ *  that historical population — never "improved". */
+function legacyV2CwdSessionSlug(cwd: string): string {
+  return cwd.replace(/[/.]/g, '-');
 }
 
 export interface SessionStoreEnv {
@@ -181,7 +256,7 @@ export function sessionNamespaceFor(
       return join(
         sessionStoreRootFor(kind, sessionStoreHome, env),
         'projects',
-        cwdSessionSlug(cwd),
+        cwdSessionSlug(kind, cwd),
       );
     case 'codex':
       return null; // thread-id resume; not cwd-scoped (verified live)
@@ -297,7 +372,9 @@ function warnSessionSlugRepairSkipped(
  * and warn. Throwing would brick an otherwise healthy boot behind a startup
  * failure window that intentionally has no Retry action. The ordinary rename
  * pass below remains fail-closed because its migration cannot be completed
- * safely without verifying those same coordinates.
+ * safely without verifying that same store root. (The cwd charset is no longer
+ * one of those unverifiable coordinates: since #task:1816 the slug transform is
+ * total over every path — see {@link cwdSessionSlug}.)
  */
 export function runSessionSlugRepairPass(
   cwds: readonly string[],
@@ -306,24 +383,15 @@ export function runSessionSlugRepairPass(
   const probe = deps.probe ?? defaultNamespaceProbe;
   const rename = deps.rename ?? renameSync;
   const result: SessionPassResult = { renamed: 0 };
-  const repairCwds = [...new Set(cwds)].filter(
-    cwd => legacyV2CwdSessionSlug(cwd) !== cwdSessionSlug(cwd),
+  // Fast path only: a cwd whose legacy slug already equals the current slug for
+  // EVERY runtime has nothing to repair. The per-runtime equality below is the
+  // authoritative check.
+  const repairCwds = [...new Set(cwds)].filter(cwd =>
+    CWD_SCOPED_SESSION_RUNTIMES.some(
+      kind => legacyV2CwdSessionSlug(cwd) !== cwdSessionSlug(kind, cwd),
+    ),
   );
   if (repairCwds.length === 0) return result;
-
-  const verifiableRepairCwds = repairCwds.filter(cwd => {
-    if (isSlugVerifiableCwd(cwd)) return true;
-    deps.logger.warn(
-      {
-        action: 'runtime_session_namespace_slug_repair_skipped',
-        reason: 'unverifiable_cwd',
-        cwd,
-      },
-      'skipping one released session-slug repair coordinate because its cwd is outside the verified slug charset',
-    );
-    return false;
-  });
-  if (verifiableRepairCwds.length === 0) return result;
 
   for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
     const [envVar, envValue] = storeRootOverrideFor(kind, deps.env);
@@ -340,7 +408,7 @@ export function runSessionSlugRepairPass(
       continue;
     }
 
-    for (const cwd of verifiableRepairCwds) {
+    for (const cwd of repairCwds) {
       const legacyPath = legacyV2SessionNamespaceFor(
         kind,
         cwd,
@@ -404,11 +472,11 @@ export function runSessionSlugRepairPass(
  *    probe fails, or the rename fails → typed LayoutMigrationError. The
  *    engine does not write the completion marker, so startup fails closed
  *    with every byte in place.
- *  - a cwd outside the verified slug charset, or a non-absolute config-dir
- *    override, makes the namespace location unverifiable: FAIL CLOSED too
- *    (nothing is moved or guessed). A skipped bucket would have no
- *    provable completion point — the user corrects the environment and
- *    the next startup retries the idempotent pass (P1-2, Cindy).
+ *  - a non-absolute config-dir override makes the STORE ROOT unverifiable:
+ *    FAIL CLOSED too (nothing is moved or guessed). A skipped bucket would
+ *    have no provable completion point — the user corrects the environment and
+ *    the next startup retries the idempotent pass (P1-2, Cindy). The cwd itself
+ *    is never unverifiable: the slug transform is total (#task:1816).
  */
 export function runSessionRenamePass(
   pairs: readonly SessionCwdPair[],
@@ -431,12 +499,6 @@ export function runSessionRenamePass(
     }
     for (const pair of pairs) {
       if (pair.oldCwd === pair.newCwd) continue;
-      if (!isSlugVerifiableCwd(pair.oldCwd) || !isSlugVerifiableCwd(pair.newCwd)) {
-        throw new SessionMigrationError(
-          'layout_conflict',
-          'a workspace cwd contains characters outside the verified session-slug charset; refusing to guess the namespace location',
-        );
-      }
       const from = sessionNamespaceFor(kind, pair.oldCwd, deps.sessionStoreHome, deps.env)!;
       const to = sessionNamespaceFor(kind, pair.newCwd, deps.sessionStoreHome, deps.env)!;
       if (from === to) continue;

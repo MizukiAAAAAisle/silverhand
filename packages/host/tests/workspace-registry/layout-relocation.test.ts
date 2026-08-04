@@ -571,11 +571,11 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     claudeDest: string;
   }
 
-  function setUp(): Fixture {
+  function setUp(oldRootName = 'checkout'): Fixture {
     const workspaceDataRootDir = join(scratch, 'wdr');
     const agentHomeRootDir = join(scratch, 'agents-home');
     const sessionHome = join(scratch, 'home');
-    const oldRoot = join(scratch, 'checkout');
+    const oldRoot = join(scratch, oldRootName);
     const workspaceId = 'ws_1';
     const agentId = 'agentAAA';
     mkdirSync(workspaceDataRootDir, { recursive: true });
@@ -590,11 +590,11 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     });
 
     // Shared Claude session bucket keyed by the OLD cwd slug.
-    const claudeSource = join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRoot));
+    const claudeSource = join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', oldRoot));
     makeTree(claudeSource, { 'sess.jsonl': '{"turn":1}\n' });
 
     const l2Dest = resolveAgentWorkspaceBundleDir(agentId, workspaceId, { agentHomeRootDir });
-    const claudeDest = join(sessionHome, '.claude', 'projects', cwdSessionSlug(l2Dest));
+    const claudeDest = join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', l2Dest));
 
     return {
       workspaceDataRootDir,
@@ -643,6 +643,37 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     expect(second).toMatchObject({ status: 'already_done', moved: false });
   });
 
+  /**
+   * #task:1816 — before the vendor-rule port, a legacy cwd holding any
+   * character outside `[A-Za-z0-9/._-]` (a space, a parenthesis, CJK — exactly
+   * what the old native folder picker accepted unvalidated) threw
+   * `relocation_unverifiable` in the PLAN phase. The marker was therefore never
+   * written and every subsequent boot failed the same way, with no in-app
+   * remedy. This is the falsifier for that regression.
+   */
+  it('a legacy cwd with a space, parens and CJK migrates end-to-end (#task:1816)', () => {
+    const fx = setUp('My Checkout (2025)/\u5de5\u4f5c\u533a');
+    expect(fx.oldRoot).toMatch(/ \(2025\)/);
+
+    expect(run(fx)).toMatchObject({ status: 'migrated', workspaces: 1, agents: 1, moved: true });
+    expect(readFileSync(join(fx.l2Dest, 'MEMORY.md'), 'utf-8')).toBe('agent memory');
+    expect(readFileSync(join(fx.claudeDest, 'sess.jsonl'), 'utf-8')).toBe('{"turn":1}\n');
+    // Source bytes retained, and the marker IS written — the boot completes.
+    expect(readFileSync(join(fx.oldRoot, '.silverhand/agents/agentAAA/MEMORY.md'), 'utf-8')).toBe(
+      'agent memory',
+    );
+    expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('file');
+  });
+
+  it('such a cwd still fails CLOSED when its session destination conflicts', () => {
+    const fx = setUp('My Checkout (2025)/\u5de5\u4f5c\u533a');
+    makeTree(fx.claudeDest, { 'sess.jsonl': 'CONFLICTING' });
+
+    expect(() => run(fx)).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+    expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
+    expect(readFileSync(join(fx.claudeSource, 'sess.jsonl'), 'utf-8')).toBe('{"turn":1}\n');
+  });
+
   it('L2 publishes but session fan-out fails ⇒ NO marker; a restart converges from that state', () => {
     const fx = setUp();
     // Poison the session destination with conflicting content so the fan-out
@@ -684,7 +715,7 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
       '.silverhand/agents/a_x/MEMORY.md': 'mem-underscore',
       '.silverhand/agents/a-x/MEMORY.md': 'mem-hyphen',
     });
-    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRoot)), {
+    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', oldRoot)), {
       'sess.jsonl': '{"t":1}\n',
     });
 
@@ -704,8 +735,8 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     expect(readFileSync(join(cwdUnderscore, 'MEMORY.md'), 'utf-8')).toBe('mem-underscore');
     expect(readFileSync(join(cwdHyphen, 'MEMORY.md'), 'utf-8')).toBe('mem-hyphen');
     // The two new cwds slug-collide → ONE shared session namespace, published once.
-    const destUnderscore = join(sessionHome, '.claude', 'projects', cwdSessionSlug(cwdUnderscore));
-    const destHyphen = join(sessionHome, '.claude', 'projects', cwdSessionSlug(cwdHyphen));
+    const destUnderscore = join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', cwdUnderscore));
+    const destHyphen = join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', cwdHyphen));
     expect(destUnderscore).toBe(destHyphen); // guard: the alias really collides
     expect(readFileSync(join(destUnderscore, 'sess.jsonl'), 'utf-8')).toBe('{"t":1}\n');
   });
@@ -722,10 +753,10 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     seedLegacyInventory(workspaceDataRootDir, { w_1: oldRootA, 'w-1': oldRootB });
     makeTree(oldRootA, { '.silverhand/agents/ax/MEMORY.md': 'A' });
     makeTree(oldRootB, { '.silverhand/agents/ax/MEMORY.md': 'B' });
-    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRootA)), {
+    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', oldRootA)), {
       'sess.jsonl': 'A\n',
     });
-    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug(oldRootB)), {
+    makeTree(join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', oldRootB)), {
       'sess.jsonl': 'B\n',
     });
 
@@ -745,8 +776,8 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     expect(probe(join(workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
     const cwdA = resolveAgentWorkspaceBundleDir('ax', 'w_1', { agentHomeRootDir });
     const cwdB = resolveAgentWorkspaceBundleDir('ax', 'w-1', { agentHomeRootDir });
-    expect(cwdSessionSlug(cwdA)).toBe(cwdSessionSlug(cwdB)); // guard: they really collide
-    expect(probe(join(sessionHome, '.claude', 'projects', cwdSessionSlug(cwdA)))).toBe('absent');
+    expect(cwdSessionSlug('claude', cwdA)).toBe(cwdSessionSlug('claude', cwdB)); // guard: they really collide
+    expect(probe(join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', cwdA)))).toBe('absent');
     expect(probe(cwdA)).toBe('absent');
     expect(probe(cwdB)).toBe('absent');
   });

@@ -128,10 +128,16 @@ function seedCrossBindingLegacyWorkspace(
   return { predecessorManaged, predecessorNamespace };
 }
 
+/** The cwd slug is a function of (runtime kind, cwd) — the two vendors hash the
+ *  over-long tail differently (#task:1816). Map a fixture store dir to its kind. */
+function sessionKind(store: string): 'claude' | 'qoder' {
+  return store === '.claude' ? 'claude' : 'qoder';
+}
+
 /** A fake session-store home with claude+qoder buckets for a cwd. */
 function seedSessionStores(home: string, cwd: string): void {
   for (const store of ['.claude', '.qoder']) {
-    const bucket = join(home, store, 'projects', cwdSessionSlug(cwd));
+    const bucket = join(home, store, 'projects', cwdSessionSlug(sessionKind(store), cwd));
     mkdirSync(bucket, { recursive: true });
     writeFileSync(join(bucket, 'session-1.jsonl'), `{"store":"${store}"}`);
   }
@@ -201,13 +207,13 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       for (const store of ['.claude', '.qoder']) {
         expect(
           readFileSync(
-            join(home, store, 'projects', cwdSessionSlug(v2Managed), 'session-1.jsonl'),
+            join(home, store, 'projects', cwdSessionSlug(sessionKind(store), v2Managed), 'session-1.jsonl'),
             'utf8',
           ),
         ).toContain(store);
-        expect(existsSync(join(home, store, 'projects', cwdSessionSlug(managed)))).toBe(false);
+        expect(existsSync(join(home, store, 'projects', cwdSessionSlug(sessionKind(store), managed)))).toBe(false);
         const v2AgentHome = join(root, 'computers', 'h1', 'agents', 'agent-1');
-        expect(existsSync(join(home, store, 'projects', cwdSessionSlug(v2AgentHome)))).toBe(true);
+        expect(existsSync(join(home, store, 'projects', cwdSessionSlug(sessionKind(store), v2AgentHome)))).toBe(true);
       }
       // Legacy sources gone; staging gone; marker selects v2 WITH sessions.
       expect(existsSync(join(root, 'agents'))).toBe(false);
@@ -277,10 +283,10 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       // predecessor cwd to the final flat remote cwd.
       for (const store of ['.claude', '.qoder']) {
         expect(
-          existsSync(join(home, store, 'projects', cwdSessionSlug(finalManaged), 'session-1.jsonl')),
+          existsSync(join(home, store, 'projects', cwdSessionSlug(sessionKind(store), finalManaged), 'session-1.jsonl')),
         ).toBe(true);
         expect(
-          existsSync(join(home, store, 'projects', cwdSessionSlug(predecessorManaged))),
+          existsSync(join(home, store, 'projects', cwdSessionSlug(sessionKind(store), predecessorManaged))),
         ).toBe(false);
       }
       expect(
@@ -773,12 +779,12 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       expect(registry.workspaces[WS_ID]!.path).toBe(slotManaged);
       // Session buckets re-renamed to the slot cwds.
       expect(
-        existsSync(join(home, '.claude', 'projects', cwdSessionSlug(slotManaged), 'session-1.jsonl')),
+        existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', slotManaged), 'session-1.jsonl')),
       ).toBe(true);
-      expect(existsSync(join(home, '.qoder', 'projects', cwdSessionSlug(aliasManaged)))).toBe(false);
+      expect(existsSync(join(home, '.qoder', 'projects', cwdSessionSlug('qoder', aliasManaged)))).toBe(false);
       expect(
         existsSync(
-          join(home, '.claude', 'projects', cwdSessionSlug(join(root, 'computers', 'h1', 'agents', 'agent-1'))),
+          join(home, '.claude', 'projects', cwdSessionSlug('claude', join(root, 'computers', 'h1', 'agents', 'agent-1'))),
         ),
       ).toBe(true);
       // Marker keeps its history and gains the computer_slot AND
@@ -813,7 +819,7 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
         root, 'computers', 'h1', 'workspace-data', 'workspaces', WS_ID,
       );
       // Destination bucket already exists.
-      mkdirSync(join(home, '.claude', 'projects', cwdSessionSlug(v2Managed)), { recursive: true });
+      mkdirSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', v2Managed)), { recursive: true });
 
       expect(() =>
         migrateDesktopAppDataLayout(root, silent, Date.now, {
@@ -824,7 +830,7 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       // Fail closed: nothing moved, no marker.
       expect(existsSync(join(root, 'run', NS))).toBe(true);
       expect(
-        existsSync(join(home, '.claude', 'projects', cwdSessionSlug(managed), 'session-1.jsonl')),
+        existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', managed), 'session-1.jsonl')),
       ).toBe(true);
       expect(
         layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
@@ -848,8 +854,8 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
         }),
       ).toThrow(/CLAUDE_CONFIG_DIR/);
       // Fail closed: buckets and tree untouched, no marker.
-      expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug(managed)))).toBe(true);
-      expect(existsSync(join(home, '.qoder', 'projects', cwdSessionSlug(managed)))).toBe(true);
+      expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', managed)))).toBe(true);
+      expect(existsSync(join(home, '.qoder', 'projects', cwdSessionSlug('qoder', managed)))).toBe(true);
       expect(existsSync(join(root, 'run', NS))).toBe(true);
       expect(
         layoutVersionFromMarker(readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'))),
@@ -1033,7 +1039,7 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       expect(readFileSync(join(root, 'computers', 'computer-user-1', 'agents', '8nIdlc9Jabs_PtAG', 'MEMORY.md'), 'utf8')).toBe('mem');
       expect(
         existsSync(
-          join(home, '.claude', 'projects', cwdSessionSlug(join(root, 'computers', 'computer-user-1', 'agents', '8nIdlc9Jabs_PtAG'))),
+          join(home, '.claude', 'projects', cwdSessionSlug('claude', join(root, 'computers', 'computer-user-1', 'agents', '8nIdlc9Jabs_PtAG'))),
         ),
       ).toBe(true);
       // Pre-existing neighbors preserved byte-for-byte; transients untouched.
@@ -1172,11 +1178,11 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       expect(existsSync(join(root, 'computers', 'local', 'workspace-data'))).toBe(false);
       // Both session buckets end at slot coordinates (agents one untouched).
       expect(
-        existsSync(join(home, '.claude', 'projects', cwdSessionSlug(slotManaged), 'session-1.jsonl')),
+        existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', slotManaged), 'session-1.jsonl')),
       ).toBe(true);
       expect(
         existsSync(
-          join(home, '.claude', 'projects', cwdSessionSlug(join(root, 'computers', 'h1', 'agents', 'agent-1'))),
+          join(home, '.claude', 'projects', cwdSessionSlug('claude', join(root, 'computers', 'h1', 'agents', 'agent-1'))),
         ),
       ).toBe(true);
       // Marker completes with history preserved.
@@ -1359,9 +1365,9 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       expect(existsSync(join(slotWsData, orphanNs, 'workspace-registry.json'))).toBe(true);
       // Session bucket re-renamed to the flat cwd.
       expect(
-        existsSync(join(home, '.claude', 'projects', cwdSessionSlug(flatManaged), 'session-1.jsonl')),
+        existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', flatManaged), 'session-1.jsonl')),
       ).toBe(true);
-      expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug(currentManaged)))).toBe(false);
+      expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', currentManaged)))).toBe(false);
       // Marker history preserved; workspace_layout stamped.
       const marker = readDataLayoutMarker(join(root, 'desktop', 'data-layout.json'));
       expect(marker.state === 'v2' && marker.marker.computer_slot?.migrated_at === 113).toBe(true);
@@ -1420,7 +1426,7 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
         for (const store of ['.claude', '.qoder']) {
           expect(
             readFileSync(
-              join(home, store, 'projects', cwdSessionSlug(cwd), 'session-1.jsonl'),
+              join(home, store, 'projects', cwdSessionSlug(sessionKind(store), cwd), 'session-1.jsonl'),
               'utf8',
             ),
           ).toBe(`{"store":"${store}"}`);
@@ -1720,16 +1726,16 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
       // Session pair derived from the STAGED source still uses the
       // resolver-computed old cwd and targets the final flat coordinate.
       expect(
-        existsSync(join(home, '.claude', 'projects', cwdSessionSlug(v2Managed), 'session-1.jsonl')),
+        existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', v2Managed), 'session-1.jsonl')),
       ).toBe(true);
-      expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug(managed)))).toBe(false);
+      expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', managed)))).toBe(false);
       expect(
         existsSync(
           join(
             home,
             '.claude',
             'projects',
-            cwdSessionSlug(
+            cwdSessionSlug('claude', 
               join(
                 root,
                 'computers',

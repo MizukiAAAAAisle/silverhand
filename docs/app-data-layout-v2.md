@@ -326,10 +326,12 @@ only the namespaces derivable from its own registry/agents tree.
 This is a migration-release inventory, not a permanent driver capability or
 negotiation protocol:
 
-- migrate Claude and Qoder's proven cwd-derived project namespaces (the store
-  roots honor `CLAUDE_CONFIG_DIR` / `QODER_CONFIG_DIR` with each CLI's
-  measured semantics; a non-absolute override, or a cwd outside the verified
-  slug charset, makes the location unverifiable and FAILS CLOSED — a skipped
+- migrate Claude and Qoder's proven cwd-derived project namespaces (the slug is
+  each vendor's own transform, ported byte-for-byte from the installed CLI and
+  therefore total over every path — #task:1816; the store roots honor
+  `CLAUDE_CONFIG_DIR` / `QODER_CONFIG_DIR` with each CLI's
+  measured semantics; a non-absolute override makes the location
+  unverifiable and FAILS CLOSED — a skipped
   bucket would have no provable completion point, so the user corrects the
   environment and the idempotent pass retries on the next start);
 - keep Codex as an explicit no-op, because its resume identity is not tied to
@@ -484,10 +486,11 @@ After the legacy runtime process is quiescent, classify each
 4. Either side is a symlink/special file, or a probe fails: typed conflict,
    no traversal.
 5. Rename fails (permissions, `EXDEV`): fail closed; never copy recursively.
-6. A cwd outside the verified slug charset, or a non-absolute config-dir
+6. A non-absolute config-dir
    override: fail closed — the namespace location is unverifiable and nothing
    is moved or guessed, and completion is never stamped over an unlocatable
-   bucket. The user corrects the environment and the next start retries.
+   bucket. The user corrects the environment and the next start retries. The cwd
+   itself is never unverifiable: the slug transform is total (#task:1816).
 
 The filesystem is the progress record: the pass is idempotent (a renamed pair
 classifies as case 2 on re-run) and single-process by construction — it runs

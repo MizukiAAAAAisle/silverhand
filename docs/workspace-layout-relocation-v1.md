@@ -287,7 +287,7 @@ error). Reuse the composition-entry shape, the runtime inventory
 (`CWD_SCOPED_SESSION_RUNTIMES = ['claude','qoder']`, Codex/opencode/cursor/gemini
 no-op, exhaustive `RuntimeKind` switch), the slug computation
 (`cwdSessionSlug`, computed only from exact known cwds, never parsed back), the
-`isSlugVerifiableCwd` charset gate, the config-dir override normalization, and
+config-dir override normalization, and
 the fail-closed taxonomy. Two mechanics are genuinely new, and rounds 1–2
 corrected three false reuse claims:
 
@@ -454,8 +454,10 @@ inventory already enumerates** under the registry workspace root:
   shared cwd; for **each child agent in that inventory set**, publish a verbatim
   copy of that bucket to the child's **new-cwd** bucket coordinate, through the
   same staging + classifier + atomic publish above (1→N opaque fan-out; the extra
-  sessions carried along are inert). Guard slug/config-dir with
-  `isSlugVerifiableCwd` / override normalization (fail closed on unverifiable).
+  sessions carried along are inert). The slug transform is TOTAL over every path
+  (the vendors fold every non-alphanumeric code unit and hash the over-long tail
+  — #task:1816), so no cwd is ever "unverifiable"; only a non-absolute
+  config-dir override still fails closed via the override normalization.
   Codex and the other non-cwd-scoped runtimes are explicit no-ops; a runtime whose
   old bucket is absent is the not-applicable classifier cell (no empty
   destination synthesized).

@@ -146,7 +146,7 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
       homeDir,
       '.claude',
       'projects',
-      cwdSessionSlug(legacyWorkspace),
+      cwdSessionSlug('claude', legacyWorkspace),
     );
     mkdirSync(oldSession, { recursive: true });
     writeFileSync(join(oldSession, 'session.jsonl'), '{"entry":true}\n');
@@ -203,7 +203,7 @@ describe('daemon entry — production supervisor wiring (Cindy `MlwnvOfs-L5Nv_x2
           homeDir,
           '.claude',
           'projects',
-          cwdSessionSlug(newL2),
+          cwdSessionSlug('claude', newL2),
           'session.jsonl',
         ),
         'utf8',

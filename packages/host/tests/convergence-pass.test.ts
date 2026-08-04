@@ -53,7 +53,7 @@ describe('runWorkspaceDataConvergencePass', () => {
     try {
       const { managed } = seedSlugNamespace(root, BINDING, WS);
       const orphan = seedSlugNamespace(root, PLACEHOLDER, WS);
-      const bucket = join(home, '.claude', 'projects', cwdSessionSlug(managed));
+      const bucket = join(home, '.claude', 'projects', cwdSessionSlug('claude', managed));
       mkdirSync(bucket, { recursive: true });
       writeFileSync(join(bucket, 'session-1.jsonl'), '{"s":1}');
 
@@ -78,7 +78,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(readFileSync(join(orphan.managed, 'MEMORY.md'), 'utf8')).toBe('memory');
       // Session bucket followed the cwd.
       expect(
-        existsSync(join(home, '.claude', 'projects', cwdSessionSlug(flatManaged), 'session-1.jsonl')),
+        existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', flatManaged), 'session-1.jsonl')),
       ).toBe(true);
       expect(existsSync(bucket)).toBe(false);
 
@@ -200,7 +200,7 @@ describe('runWorkspaceDataConvergencePass', () => {
   // must produce ZERO session renames, an intact source registry, and no
   // flat registry.
   function seedBucket(home: string, cwd: string): string {
-    const bucket = join(home, '.claude', 'projects', cwdSessionSlug(cwd));
+    const bucket = join(home, '.claude', 'projects', cwdSessionSlug('claude', cwd));
     mkdirSync(bucket, { recursive: true });
     writeFileSync(join(bucket, 'session-1.jsonl'), '{"s":1}');
     return bucket;
@@ -472,7 +472,7 @@ describe('runWorkspaceDataConvergencePass', () => {
       expect(result).toEqual({ status: 'already_flat', renamed: 1 });
       expect(
         readFileSync(
-          join(home, '.claude', 'projects', cwdSessionSlug(cwd), 'session-1.jsonl'),
+          join(home, '.claude', 'projects', cwdSessionSlug('claude', cwd), 'session-1.jsonl'),
           'utf8',
         ),
       ).toBe('{"session":"preserved"}');

@@ -73,14 +73,14 @@ function setUpLegacyState() {
     sessionHome,
     '.claude',
     'projects',
-    cwdSessionSlug(oldRoot),
+    cwdSessionSlug('claude', oldRoot),
   );
   write(join(oldSession, 'session.jsonl'), '{"turn":1}\n');
   const newSession = join(
     sessionHome,
     '.claude',
     'projects',
-    cwdSessionSlug(newL2),
+    cwdSessionSlug('claude', newL2),
   );
 
   return {

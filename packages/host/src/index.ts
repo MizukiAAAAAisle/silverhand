@@ -61,7 +61,6 @@ export {
   SessionMigrationError,
   cwdSessionSlug,
   defaultNamespaceProbe,
-  isSlugVerifiableCwd,
   normalizeStoreRootOverride,
   runSessionRenamePass,
   runSessionSlugRepairPass,

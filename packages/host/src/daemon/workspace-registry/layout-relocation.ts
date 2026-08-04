@@ -27,7 +27,6 @@ import {
 import {
   CWD_SCOPED_SESSION_RUNTIMES,
   isSessionStoreRootVerifiable,
-  isSlugVerifiableCwd,
   sessionNamespaceFor,
   type MigrationLogger,
   type SessionStoreEnv,
@@ -49,8 +48,8 @@ import {
  * invoke that same unit before binding any socket; host code remains the only
  * marker writer. The supervised daemon starts only after the one-shot exits.
  * It reuses the registry inventory, the
- * cwd-slug computation, the `isSlugVerifiableCwd` charset gate, the config-dir
- * override normalization, and the fail-closed typed-error discipline; it does
+ * cwd-slug computation, the config-dir override normalization, and the
+ * fail-closed typed-error discipline; it does
  * NOT reuse the rename-based physical move (cross-fs copy instead) nor the
  * 1→1 session rename (1→N opaque fan-out instead).
  *
@@ -424,9 +423,9 @@ interface SessionFanOutStep {
 /**
  * Plan every cwd-scoped runtime's session fan-out across the WHOLE inventory
  * BEFORE any publish (§5, Cindy 2026-08-04). The vendor cwd-slug is
- * non-injective (`/._` all fold to `-`), so two distinct new bundle cwds can
- * resolve to the same physical session namespace. This planner is the one place
- * that reconciles the collapse:
+ * non-injective (EVERY non-alphanumeric code unit folds to `-`), so two
+ * distinct new bundle cwds can resolve to the same physical session namespace.
+ * This planner is the one place that reconciles the collapse:
  *
  * - two destinations from the SAME source bucket (aliasing agents) collapse to
  *   one publish — the agents stay separated at runtime by their `cli_session_id`
@@ -451,12 +450,6 @@ function planSessionFanOut(
     const bySource = new Map<string, Set<string>>(); // source namespace → deduped destinations
     for (const { entry, census } of workspaces) {
       const oldRoot = entry.path;
-      if (!isSlugVerifiableCwd(oldRoot)) {
-        throw new RelocationError(
-          'relocation_unverifiable',
-          `workspace cwd ${oldRoot} is outside the verified session-slug charset`,
-        );
-      }
       if (!isSessionStoreRootVerifiable(kind, deps.env)) {
         throw new RelocationError(
           'relocation_unverifiable',
@@ -470,12 +463,6 @@ function planSessionFanOut(
         const newCwd = resolveAgentWorkspaceBundleDir(agentId, entry.workspace_id, {
           agentHomeRootDir: deps.agentHomeRootDir,
         });
-        if (!isSlugVerifiableCwd(newCwd)) {
-          throw new RelocationError(
-            'relocation_unverifiable',
-            `new bundle cwd ${newCwd} is outside the verified session-slug charset`,
-          );
-        }
         const dest = sessionNamespaceFor(kind, newCwd, deps.sessionStoreHome, deps.env)!;
         const owner = destOwner.get(dest);
         if (owner !== undefined && owner !== source) {
