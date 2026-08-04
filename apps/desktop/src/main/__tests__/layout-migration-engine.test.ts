@@ -1735,7 +1735,8 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
             home,
             '.claude',
             'projects',
-            cwdSessionSlug('claude', 
+            cwdSessionSlug(
+              'claude',
               join(
                 root,
                 'computers',

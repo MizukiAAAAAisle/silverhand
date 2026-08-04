@@ -92,6 +92,9 @@ describe('cwdSessionSlug — the claude/qoder cwd → namespace transform', () =
   });
 
   it('caps the folded slug at 200 and appends each vendor OWN hash', () => {
+    // Anchored live: real claude and qoder runs in an over-200 `/tmp` path
+    // produced buckets this transform reproduces byte for byte, with the two
+    // hashes differing (see the module docblock).
     const folded200 = `-nonexistent-1816${'-deep'.repeat(50)}-ws`.slice(0, 200);
     expect(cwdSessionSlug('claude', LONG_CWD)).toBe(`${folded200}-8js9uk`);
     expect(cwdSessionSlug('qoder', LONG_CWD)).toBe(`${folded200}-r8xt0f`);

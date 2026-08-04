@@ -37,6 +37,13 @@
  *   claude 2.1.221  `GC(e)`  = fold, cap 200, `-${Math.abs(nat(e)).toString(36)}`
  *   qodercli 1.1.6  `Bk(A)`  = fold, cap 200, `-${Math.abs(Uz_(A)).toString(36)}`
  *
+ * The migration reads HISTORICAL buckets, so the rule was checked across every
+ * version present on the audit machine, not just the current one: fold, cap and
+ * hash are byte-identical in claude 2.1.210 / 2.1.220 / 2.1.221 and in qodercli
+ * 1.0.48 / 1.1.5 / 1.1.6 (two independent extractions, Alice + Cindy 2026-08-05).
+ * No per-version compatibility layer is therefore needed. A vendor that changed
+ * the transform would be a new inventory fact, handled by re-auditing here.
+ *
  * where "fold" is `replace(/[^a-zA-Z0-9]/g, '-')` in BOTH — every
  * non-alphanumeric code unit folds, not just `/._`, so a cwd containing a
  * space, a parenthesis or a CJK character has a perfectly well-defined vendor
@@ -48,6 +55,11 @@
  * path: `process.cwd()` is `getcwd(3)`, which always returns the symlink-free
  * on-disk form. Proven live on the audit machine — a probe run in `/tmp`
  * (a symlink to `/private/tmp`) produced `~/.qoder/projects/-private-tmp-...`.
+ * A second pair of probes, in a `/tmp` path whose folded form exceeds 200 code
+ * units, produced claude and qoder buckets whose names this port reproduces
+ * byte for byte — and whose trailing hashes differ from each other, as the two
+ * transforms predict. That one sample anchors the physical-path resolution AND
+ * both cap+hash branches live, not in source reading alone.
  * claude 2.1.221 additionally realpaths and NFC-normalizes it
  * (`originalCwd = NFC(realpathSync(process.cwd()))`); qodercli 1.1.6 uses the
  * raw string. Slugs are only ever COMPUTED from exact known cwds — never
@@ -94,10 +106,14 @@ export interface MigrationLogger {
 export const CWD_SCOPED_SESSION_RUNTIMES = ['claude', 'qoder'] as const;
 
 /** Both vendors cap the folded slug at 200 code units before appending a hash
- *  of the whole cwd (claude `A2e`, qodercli `ODA`). */
+ *  of the whole cwd (claude `A2e`, qodercli `ODA`). Same constant in every
+ *  installed version audited: claude 2.1.210/2.1.220/2.1.221, qodercli
+ *  1.0.48/1.1.5/1.1.6. */
 const VENDOR_SLUG_MAX_LENGTH = 200;
 
-/** claude 2.1.221 `nat` — 32-bit `(h << 5) - h + c`, base-36 of its magnitude. */
+/** claude `nat` — 32-bit `(h << 5) - h + c`, base-36 of its magnitude.
+ *  Byte-identical in 2.1.210/2.1.220/2.1.221 (minified symbol name as of
+ *  2.1.221). */
 function claudeCwdSlugHash(cwd: string): string {
   let h = 0;
   for (let i = 0; i < cwd.length; i += 1) {
@@ -106,8 +122,9 @@ function claudeCwdSlugHash(cwd: string): string {
   return Math.abs(h).toString(36);
 }
 
-/** qodercli 1.1.6 `Uz_` — djb2-xor (`h * 33 ^ c`, ToInt32 per `^`), base-36 of
- *  its magnitude. Deliberately NOT the same hash as claude's. */
+/** qodercli `Uz_` — djb2-xor (`h * 33 ^ c`, ToInt32 per `^`), base-36 of its
+ *  magnitude. Byte-identical in 1.0.48/1.1.5/1.1.6 (minified symbol name as of
+ *  1.1.6). Deliberately NOT the same hash as claude's. */
 function qoderCwdSlugHash(cwd: string): string {
   let h = 5381;
   for (let i = 0; i < cwd.length; i += 1) {
