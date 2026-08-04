@@ -59,6 +59,8 @@ export {
 export {
   CWD_SCOPED_SESSION_RUNTIMES,
   SessionMigrationError,
+  SessionStoreConfigError,
+  assertSessionStoreRootVerifiable,
   cwdSessionSlug,
   defaultNamespaceProbe,
   normalizeStoreRootOverride,
@@ -69,6 +71,7 @@ export {
   type SessionCwdPair,
   type SessionPassDeps,
   type SessionPassResult,
+  type SessionStoreConfigOrigin,
   type SessionStoreEnv,
 } from './daemon/workspace-registry/session-migration.js';
 // #task:1603 — legacy-runtime quiesce primitives for the desktop layout-v2
@@ -90,6 +93,10 @@ export {
   spawnWorkspaceStartupPreflight,
   type SpawnWorkspacePreflightOptions,
 } from './preflight-spawn.js';
+// #task:1815 — the launcher-visible refusal: a typed error whose `code` is a
+// member of the daemon diagnostics closed set, so the desktop startup-failure
+// window can name the cause instead of showing an exit status.
+export { WorkspaceStartupPreflightFailure } from './workspace-preflight-protocol.js';
 export {
   AnyFrameSchema,
   EventFrameSchema,

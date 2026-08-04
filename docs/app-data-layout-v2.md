@@ -333,7 +333,11 @@ negotiation protocol:
   measured semantics; a non-absolute override makes the location
   unverifiable and FAILS CLOSED — a skipped
   bucket would have no provable completion point, so the user corrects the
-  environment and the idempotent pass retries on the next start);
+  environment and the idempotent pass retries on the next start. It is the one
+  failure in this facet the user can repair, so it carries its own typed code,
+  `session_store_root_unverifiable`, under the same name in both the desktop and
+  daemon diagnostics tables — the repair does not depend on which process
+  refused the launch, #task:1815);
 - keep Codex as an explicit no-op, because its resume identity is not tied to
   cwd;
 - audit every other pre-cutover runtime and give it an explicit migrate or

@@ -240,6 +240,61 @@ export function isSessionStoreRootVerifiable(
   return normalizeStoreRootOverride(value).kind !== 'unverifiable';
 }
 
+/** Which unit noticed an unverifiable store root. This is PROVENANCE for the
+ *  host-local log and the diagnostics stage — never part of the failure's
+ *  identity: the condition, the code, and the repair action are the same
+ *  wherever it is caught (#task:1815, Cindy ruling). */
+export type SessionStoreConfigOrigin = 'session_rename_pass' | 'relocation_plan';
+
+/**
+ * #task:1815 — a config-dir override (`CLAUDE_CONFIG_DIR` / `QODER_CONFIG_DIR`)
+ * that is not an absolute path, so the session store root cannot be located.
+ *
+ * This is NOT a migration conflict, and deliberately not one of the migration
+ * error classes: it is a PRECONDITION of every session coordinate this unit
+ * computes, it depends only on (runtime, env) — never on the data on disk — and
+ * it is the one failure in this facet whose repair action is known and
+ * user-performable (make the value absolute, or unset it). It therefore carries
+ * its own code in both diagnostics tables so the startup-failure window can name
+ * that action instead of falling into "unexpected state, see the logs".
+ *
+ * Both passes raise it through {@link assertSessionStoreRootVerifiable} — one
+ * producer, so the two carriers cannot drift into two different sentences for
+ * the same condition. The `origin` is provenance only (see above).
+ */
+export class SessionStoreConfigError extends Error {
+  readonly code = 'session_store_root_unverifiable' as const;
+
+  constructor(
+    readonly origin: SessionStoreConfigOrigin,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'SessionStoreConfigError';
+  }
+}
+
+/**
+ * Fail closed when the store root cannot be located from the env. Naming the
+ * variable in the MESSAGE (host-local log only) is intentional: the frame that
+ * crosses to the desktop carries the code alone, so no env value can reach a
+ * window or the breadcrumb. Every startup re-runs the idempotent pass, so fixing
+ * the variable and reopening the app is a real repair, not a workaround.
+ */
+export function assertSessionStoreRootVerifiable(
+  kind: RuntimeKind,
+  env: SessionStoreEnv,
+  origin: SessionStoreConfigOrigin,
+): void {
+  if (kind !== 'claude' && kind !== 'qoder') return; // no store root to verify
+  if (isSessionStoreRootVerifiable(kind, env)) return;
+  const [envVar] = storeRootOverrideFor(kind, env);
+  throw new SessionStoreConfigError(
+    origin,
+    `${envVar} is set to a non-absolute value; the ${kind} session store location is unverifiable — make it an absolute path or unset it, then restart`,
+  );
+}
+
 function sessionStoreRootFor(
   kind: (typeof CWD_SCOPED_SESSION_RUNTIMES)[number],
   sessionStoreHome: string,
@@ -490,10 +545,12 @@ export function runSessionSlugRepairPass(
  *    engine does not write the completion marker, so startup fails closed
  *    with every byte in place.
  *  - a non-absolute config-dir override makes the STORE ROOT unverifiable:
- *    FAIL CLOSED too (nothing is moved or guessed). A skipped bucket would
- *    have no provable completion point — the user corrects the environment and
- *    the next startup retries the idempotent pass (P1-2, Cindy). The cwd itself
- *    is never unverifiable: the slug transform is total (#task:1816).
+ *    FAIL CLOSED too (nothing is moved or guessed), as a typed
+ *    {@link SessionStoreConfigError} rather than a conflict — the user makes the
+ *    variable absolute (or unsets it) and the next startup retries the idempotent
+ *    pass (P1-2, Cindy). It is a precondition of the pass, checked before any
+ *    coordinate is computed. The cwd itself is never unverifiable: the slug
+ *    transform is total (#task:1816).
  */
 export function runSessionRenamePass(
   pairs: readonly SessionCwdPair[],
@@ -501,19 +558,19 @@ export function runSessionRenamePass(
 ): SessionPassResult {
   const probe = deps.probe ?? defaultNamespaceProbe;
   const rename = deps.rename ?? renameSync;
+  // Precondition of the whole pass, so it is checked before any work: on a boot
+  // that will be refused anyway there is nothing to gain from a partial repair.
+  // (The repair pass is independently safe here — it skips an unverifiable
+  // runtime with a warning rather than moving anything, #task:1815.)
+  for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
+    assertSessionStoreRootVerifiable(kind, deps.env, 'session_rename_pass');
+  }
   const result = runSessionSlugRepairPass(
     pairs.flatMap(pair => [pair.oldCwd, pair.newCwd]),
     deps,
   );
 
   for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
-    const [envVar, envValue] = storeRootOverrideFor(kind, deps.env);
-    if (normalizeStoreRootOverride(envValue).kind === 'unverifiable') {
-      throw new SessionMigrationError(
-        'layout_conflict',
-        `${envVar} is set to a non-absolute value; the ${kind} session store location is unverifiable — fix the environment and restart`,
-      );
-    }
     for (const pair of pairs) {
       if (pair.oldCwd === pair.newCwd) continue;
       const from = sessionNamespaceFor(kind, pair.oldCwd, deps.sessionStoreHome, deps.env)!;

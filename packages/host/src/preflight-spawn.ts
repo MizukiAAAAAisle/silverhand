@@ -5,7 +5,11 @@ import {
 } from 'node:child_process';
 import type { LayoutMigrationOutcome } from './protocol.js';
 import type { RegistryBinding } from './daemon/workspace-registry/registry.js';
-import { WORKSPACE_PREFLIGHT_RESULT_EVENT } from './workspace-preflight-protocol.js';
+import {
+  parseWorkspacePreflightFailureFrame,
+  WORKSPACE_PREFLIGHT_RESULT_EVENT,
+  WorkspaceStartupPreflightFailure,
+} from './workspace-preflight-protocol.js';
 import type { DaemonLauncher } from './spawn.js';
 
 const MAX_PREFLIGHT_STDOUT_BYTES = 64 * 1024;
@@ -95,7 +99,14 @@ export function spawnWorkspaceStartupPreflight(
         return;
       }
       if (code !== 0) {
-        reject(new Error(`workspace startup preflight exited with code ${code}`));
+        // A recognized refusal names its cause; anything else keeps the plain
+        // exit-status error (#task:1815).
+        const failure = parseWorkspacePreflightFailureFrame(stdout);
+        reject(
+          failure === null
+            ? new Error(`workspace startup preflight exited with code ${code}`)
+            : new WorkspaceStartupPreflightFailure(failure),
+        );
         return;
       }
       const lines = stdout.trim().split('\n').filter(Boolean);

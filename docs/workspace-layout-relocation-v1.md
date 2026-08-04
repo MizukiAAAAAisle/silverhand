@@ -339,6 +339,22 @@ then starts the supervised daemon under its ordinary 30-second ready deadline.
 The migration child itself has no fixed duration timeout because work scales
 with retained bytes. Preflight failure aborts daemon startup (invariant #4).
 
+**Refusal frame — child → launcher (#task:1815).** The preflight child owns the
+only log of what it refused, and a refused startup is exactly the case where the
+user has nothing but the startup window. So the child writes ONE JSON line on
+stdout — `{ event: "workspace_startup_preflight_failed", code }` — and the
+launcher rejects with a typed `WorkspaceStartupPreflightFailure` carrying that
+`code`. Contract, deliberately narrow:
+
+- the frame carries the **closed-set diagnostics code and nothing else** — no
+  message, path, errno, env value, or stage. Operator text stays in the child's
+  own log, where absolute paths and variable names belong;
+- `code` outside the closed set (or a success frame on a nonzero exit) leaves the
+  launcher's generic exit-status error in place: the window never invents a cause
+  it does not recognize;
+- a launcher **contract violation** (bad argv) emits no frame at all — it is a
+  bug, not a user-repairable state, and has no window arm.
+
 **Completion marker — the SSOT (BLOCKER 3, rounds 1+2).** The daemon convergence
 pass has no completion marker today; it uses the flat registry as its resume
 authority, and this design retires that registry. This facet introduces a
@@ -457,7 +473,11 @@ inventory already enumerates** under the registry workspace root:
   sessions carried along are inert). The slug transform is TOTAL over every path
   (the vendors fold every non-alphanumeric code unit and hash the over-long tail
   — #task:1816), so no cwd is ever "unverifiable"; only a non-absolute
-  config-dir override still fails closed via the override normalization.
+  config-dir override still fails closed, as the typed
+  `session_store_root_unverifiable` refusal raised once per runtime before any
+  coordinate is planned — the same code the convergence pass and the desktop
+  engine raise for the same condition, because the repair is the user's and does
+  not depend on which pass noticed (#task:1815).
   Codex and the other non-cwd-scoped runtimes are explicit no-ops; a runtime whose
   old bucket is absent is the not-applicable classifier cell (no empty
   destination synthesized).

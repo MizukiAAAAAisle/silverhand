@@ -1,10 +1,16 @@
 import { EventEmitter } from 'node:events';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
+import { DaemonLayoutMigrationCodeSchema } from '@silverhand/shared';
 import {
   spawnWorkspaceStartupPreflight,
   type PreflightSpawnProcessImpl,
 } from '../src/preflight-spawn.js';
+import {
+  parseWorkspacePreflightFailureFrame,
+  serializeWorkspacePreflightFailureFrame,
+  WorkspaceStartupPreflightFailure,
+} from '../src/workspace-preflight-protocol.js';
 
 class FakeStream extends EventEmitter {
   setEncoding(): this {
@@ -90,5 +96,85 @@ describe('spawnWorkspaceStartupPreflight (#task:1806)', () => {
     await expect(pending).rejects.toThrow(
       'workspace startup preflight exited with code 1',
     );
+  });
+
+  describe('failure frame (#task:1815)', () => {
+    function run(): {
+      child: FakeChild;
+      pending: Promise<unknown>;
+    } {
+      const child = new FakeChild();
+      const pending = spawnWorkspaceStartupPreflight({
+        launcher: { command: 'node', args: ['daemon.js'] },
+        logDir: '/tmp/logs',
+        computersRootDir: '/tmp/computers',
+        binding: { host_id: 'computer-1', server_origin: 'local-embedded' },
+        alsoStderr: false,
+        spawnProcess: () => child as unknown as ChildProcess,
+      });
+      return { child, pending };
+    }
+
+    it('rejects with the typed refusal carrying the child code', async () => {
+      const { child, pending } = run();
+      child.stdout.emit(
+        'data',
+        '{"event":"workspace_startup_preflight_failed","code":"session_store_root_unverifiable"}\n',
+      );
+      child.emit('close', 1);
+      await expect(pending).rejects.toBeInstanceOf(
+        WorkspaceStartupPreflightFailure,
+      );
+      await pending.catch((err: unknown) => {
+        expect((err as WorkspaceStartupPreflightFailure).code).toBe(
+          'session_store_root_unverifiable',
+        );
+      });
+    });
+
+    it('never invents a cause: a code outside the closed set stays generic', async () => {
+      // The whole point of the frame is to name a cause we recognize. An
+      // arbitrary string must not become one — it would reach a product window.
+      const { child, pending } = run();
+      child.stdout.emit(
+        'data',
+        '{"event":"workspace_startup_preflight_failed","code":"EPERM: /Users/someone/.silverhand"}\n',
+      );
+      child.emit('close', 1);
+      await expect(pending).rejects.toThrow(
+        'workspace startup preflight exited with code 1',
+      );
+    });
+
+    it('a success frame on a nonzero exit is not read as a refusal code', async () => {
+      const { child, pending } = run();
+      child.stdout.emit(
+        'data',
+        '{"event":"workspace_startup_preflight_complete","layout_migration_outcome":"migrated"}\n',
+      );
+      child.emit('close', 1);
+      await expect(pending).rejects.toThrow(
+        'workspace startup preflight exited with code 1',
+      );
+    });
+
+    it('parses the exact bytes the child writes, for every daemon code', () => {
+      // Producer/consumer are pinned to each other rather than to a literal, so
+      // a rename cannot leave one side reading a frame nobody writes.
+      for (const code of DaemonLayoutMigrationCodeSchema.options) {
+        expect(
+          parseWorkspacePreflightFailureFrame(
+            serializeWorkspacePreflightFailureFrame(code),
+          ),
+        ).toBe(code);
+      }
+      expect(parseWorkspacePreflightFailureFrame('')).toBeNull();
+      expect(parseWorkspacePreflightFailureFrame('not json')).toBeNull();
+      expect(
+        parseWorkspacePreflightFailureFrame(
+          '{"event":"workspace_startup_preflight_failed","code":"relocation_conflict"}\n{"event":"workspace_startup_preflight_failed","code":"relocation_conflict"}\n',
+        ),
+      ).toBeNull();
+    });
   });
 });

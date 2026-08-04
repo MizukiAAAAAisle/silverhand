@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   existsSync,
   mkdirSync,
@@ -12,10 +12,21 @@ import { dirname, join } from 'node:path';
 import { resolveComputerSlotFromComputersRoot } from '@silverhand/shared/app-data-layout';
 import { readLayoutMigrationFailures } from '../src/diagnostics/layout-migration-breadcrumb.js';
 import { resolveAgentWorkspaceBundleDir } from '../src/daemon/agent-materialize/handler.js';
-import { runDirectStartupPreflight } from '../src/daemon/direct-startup-preflight.js';
+import {
+  runDirectStartupPreflight,
+  runDirectStartupPreflightCommand,
+} from '../src/daemon/direct-startup-preflight.js';
 import { RelocationError } from '../src/daemon/workspace-registry/relocation-error.js';
 import type { RegistryBinding } from '../src/daemon/workspace-registry/registry.js';
-import { cwdSessionSlug } from '../src/daemon/workspace-registry/session-migration.js';
+import {
+  bindingSlug,
+  managedWorkspaceSlug,
+} from '../src/daemon/workspace-registry/registry.js';
+import {
+  cwdSessionSlug,
+  SessionStoreConfigError,
+} from '../src/daemon/workspace-registry/session-migration.js';
+import { parseWorkspacePreflightFailureFrame } from '../src/workspace-preflight-protocol.js';
 
 const BINDING: RegistryBinding = {
   server_origin: 'local-embedded',
@@ -184,5 +195,137 @@ describe('direct daemon startup preflight (#task:1806)', () => {
       }),
     ).resolves.toBe('already_current');
     expect(existsSync(join(scratch, 'logs'))).toBe(false);
+  });
+});
+
+describe('store-root refusal reaches the launcher (#task:1815)', () => {
+  /** A namespaced (pre-flatten) root, so convergence's session rename pass runs
+   * before relocation ever plans — the other side of the same condition. */
+  function setUpNamespacedState() {
+    const computersRootDir = join(scratch, 'computers');
+    const slot = resolveComputerSlotFromComputersRoot(
+      computersRootDir,
+      BINDING.host_id,
+    );
+    const workspaceId = 'workspace-1';
+    const nsDir = join(slot.workspaceData, bindingSlug(BINDING));
+    const managed = join(nsDir, 'workspaces', managedWorkspaceSlug(workspaceId));
+    mkdirSync(managed, { recursive: true });
+    writeFileSync(join(managed, 'MEMORY.md'), 'legacy memory');
+    writeFileSync(
+      join(nsDir, 'workspace-registry.json'),
+      JSON.stringify({
+        schema_version: 1,
+        binding: BINDING,
+        workspaces: { [workspaceId]: { path: managed, provisioned_at: 1 } },
+      }),
+    );
+    return {
+      computersRootDir,
+      slot,
+      stateRoot: join(scratch, 'state'),
+      logDir: join(scratch, 'logs'),
+      sessionHome: join(scratch, 'home'),
+      managed,
+    };
+  }
+
+  it('the one-shot command writes exactly one closed-set frame and refuses the launch', async () => {
+    const fx = setUpLegacyState();
+    // The command resolves its own home and env, so the one condition drivable
+    // from outside is the store-root override — which is also the only failure
+    // in this facet the user can repair. It refuses while PLANNING, so nothing
+    // under the real session home is moved.
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = 'not-absolute';
+    const stdout: string[] = [];
+    const outSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => {
+        stdout.push(String(chunk));
+        return true;
+      });
+    const errSpy = vi
+      .spyOn(process.stderr, 'write')
+      .mockImplementation(() => true);
+    let exitCode: number;
+    try {
+      exitCode = await runDirectStartupPreflightCommand([
+        '--workspace-relocation-host-id',
+        BINDING.host_id,
+        '--workspace-relocation-server-origin',
+        BINDING.server_origin,
+        '--computers-root-dir',
+        fx.computersRootDir,
+        '--silverhand-state-root-dir',
+        fx.stateRoot,
+        '--log-dir',
+        fx.logDir,
+        '--layout-migration-outcome',
+        'already_current',
+      ]);
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
+
+    expect(exitCode).toBe(1);
+    // Exactly one frame, and the success frame is NOT among the writes.
+    expect(stdout).toHaveLength(1);
+    expect(parseWorkspacePreflightFailureFrame(stdout[0]!)).toBe(
+      'session_store_root_unverifiable',
+    );
+    // Nothing user-identifying rode along: no env value, no absolute path.
+    expect(stdout[0]).not.toContain('not-absolute');
+    expect(stdout[0]).not.toContain(scratch);
+    expect(
+      existsSync(join(fx.slot.workspaceData, 'relocation-v1.marker.json')),
+    ).toBe(false);
+    expect(readLayoutMigrationFailures({ appRoot: fx.stateRoot })).toEqual({
+      reports: [
+        expect.objectContaining({
+          component: 'daemon',
+          stage: 'workspace_layout_relocation',
+          code: 'session_store_root_unverifiable',
+          count: 1,
+        }),
+      ],
+    });
+  });
+
+  it('the same code is filed under the stage of whichever pass noticed', async () => {
+    const fx = setUpNamespacedState();
+
+    await expect(
+      runDirectStartupPreflight({
+        binding: BINDING,
+        computersRootDir: fx.computersRootDir,
+        silverhandStateRootDir: fx.stateRoot,
+        logDir: fx.logDir,
+        alsoStderr: false,
+        initialOutcome: 'already_current',
+        sessionStoreHome: fx.sessionHome,
+        env: { CLAUDE_CONFIG_DIR: 'not-absolute' },
+      }),
+    ).rejects.toBeInstanceOf(SessionStoreConfigError);
+
+    expect(readLayoutMigrationFailures({ appRoot: fx.stateRoot })).toEqual({
+      reports: [
+        expect.objectContaining({
+          // Same code as the relocation-side refusal above; only the
+          // attribution key differs, because that is all the stage is for.
+          code: 'session_store_root_unverifiable',
+          stage: 'workspace_data_convergence',
+          count: 1,
+        }),
+      ],
+    });
+    // Fail closed: the plan is refused before convergence writes the flat root.
+    expect(existsSync(join(fx.slot.workspaceData, 'workspaces'))).toBe(false);
+    expect(readFileSync(join(fx.managed, 'MEMORY.md'), 'utf8')).toBe(
+      'legacy memory',
+    );
   });
 });

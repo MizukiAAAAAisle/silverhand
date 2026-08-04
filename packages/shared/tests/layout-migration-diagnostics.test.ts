@@ -62,6 +62,17 @@ describe('code mapping', () => {
     expect(daemonLayoutMigrationCode('layout_marker_corrupt')).toBe('unknown');
     expect(desktopLayoutMigrationCode('flatten_conflict')).toBe('unknown');
   });
+
+  it('carries the store-root config code in BOTH tables under one name (#task:1815)', () => {
+    // One condition (a non-absolute config-dir override), one user repair, so
+    // the code must not depend on which process refused the launch.
+    expect(daemonLayoutMigrationCode('session_store_root_unverifiable')).toBe(
+      'session_store_root_unverifiable',
+    );
+    expect(desktopLayoutMigrationCode('session_store_root_unverifiable')).toBe(
+      'session_store_root_unverifiable',
+    );
+  });
 });
 
 describe('aggregation', () => {

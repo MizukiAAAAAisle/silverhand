@@ -847,12 +847,23 @@ describe('migrateDesktopAppDataLayout — eager move + session pass', () => {
     try {
       const { managed } = seedLegacyLocalComputer(root);
       seedSessionStores(home, managed);
-      expect(() =>
-        migrateDesktopAppDataLayout(root, silent, Date.now, {
-          sessionStoreHome: home,
-          env: { CLAUDE_CONFIG_DIR: 'relative/dir' },
-        }),
-      ).toThrow(/CLAUDE_CONFIG_DIR/);
+      const refusal = (() => {
+        try {
+          migrateDesktopAppDataLayout(root, silent, Date.now, {
+            sessionStoreHome: home,
+            env: { CLAUDE_CONFIG_DIR: 'relative/dir' },
+          });
+          return null;
+        } catch (err) {
+          return err as LayoutMigrationError;
+        }
+      })();
+      // The desktop carrier must file this under the SAME name the daemon uses,
+      // so one condition reaches one window arm (#task:1815). The host-local
+      // message still names the variable; the code never carries it.
+      expect(refusal).toBeInstanceOf(LayoutMigrationError);
+      expect(refusal!.code).toBe('session_store_root_unverifiable');
+      expect(refusal!.message).toMatch(/CLAUDE_CONFIG_DIR/);
       // Fail closed: buckets and tree untouched, no marker.
       expect(existsSync(join(home, '.claude', 'projects', cwdSessionSlug('claude', managed)))).toBe(true);
       expect(existsSync(join(home, '.qoder', 'projects', cwdSessionSlug('qoder', managed)))).toBe(true);

@@ -14,9 +14,13 @@ import type { RegistryBinding } from './workspace-registry/registry.js';
 import { RelocationError } from './workspace-registry/relocation-error.js';
 import {
   SessionMigrationError,
+  SessionStoreConfigError,
   type SessionStoreEnv,
 } from './workspace-registry/session-migration.js';
-import { WORKSPACE_PREFLIGHT_RESULT_EVENT } from '../workspace-preflight-protocol.js';
+import {
+  serializeWorkspacePreflightFailureFrame,
+  WORKSPACE_PREFLIGHT_RESULT_EVENT,
+} from '../workspace-preflight-protocol.js';
 
 export interface DirectStartupPreflightOptions {
   binding: RegistryBinding | null;
@@ -147,6 +151,14 @@ export async function runDirectStartupPreflightCommand(
     process.stderr.write(
       `silverhand-daemon preflight: ${(err as Error).message}\n`,
     );
+    // The launcher cannot see this process's log, and a failed preflight is
+    // exactly the case where the user has nothing but the startup window to
+    // report. Emit the closed-set code — and only the code (#task:1815).
+    process.stdout.write(
+      serializeWorkspacePreflightFailureFrame(
+        daemonLayoutMigrationCode((err as { code?: unknown }).code),
+      ),
+    );
     return 1;
   }
 }
@@ -214,12 +226,21 @@ export async function runDirectStartupPreflight(
     if (
       err instanceof FlattenLayoutError ||
       err instanceof SessionMigrationError ||
-      err instanceof RelocationError
+      err instanceof RelocationError ||
+      err instanceof SessionStoreConfigError
     ) {
+      // `SessionStoreConfigError` is pass-neutral by design, so its stage comes
+      // from the provenance the producer recorded — not from its identity
+      // (#task:1815): the code, and what the user must do, are the same either
+      // way, and only the diagnostics key wants to know which pass noticed.
       const stage: DaemonLayoutMigrationStage =
-        err instanceof RelocationError
-          ? 'workspace_layout_relocation'
-          : 'workspace_data_convergence';
+        err instanceof SessionStoreConfigError
+          ? err.origin === 'relocation_plan'
+            ? 'workspace_layout_relocation'
+            : 'workspace_data_convergence'
+          : err instanceof RelocationError
+            ? 'workspace_layout_relocation'
+            : 'workspace_data_convergence';
       const code = daemonLayoutMigrationCode(err.code);
       logger.error(
         {

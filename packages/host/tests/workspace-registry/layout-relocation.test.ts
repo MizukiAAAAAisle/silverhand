@@ -31,7 +31,7 @@ import {
   __test_relocateSingleTree as relocateSingleTree,
 } from '../../src/daemon/workspace-registry/layout-relocation.js';
 import type { RegistryBinding } from '../../src/daemon/workspace-registry/registry.js';
-import { cwdSessionSlug } from '../../src/daemon/workspace-registry/session-migration.js';
+import { cwdSessionSlug, SessionStoreConfigError } from '../../src/daemon/workspace-registry/session-migration.js';
 
 /**
  * #task:1805 workspace-layout-relocation-v1 §5 falsifiers. Each block breaks a
@@ -443,6 +443,44 @@ describe('planSessionFanOut — whole-inventory session plan (§5 B2)', () => {
         deps(),
       ),
     ).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+  });
+
+  it('an unverifiable store root is the SAME code the session pass raises (#task:1815)', () => {
+    // The condition depends only on (runtime, env), so the planner raises the
+    // pass-neutral typed error — not `relocation_unverifiable`, which is the
+    // "we cannot prove this location" bucket the user cannot act on.
+    let thrown: unknown;
+    try {
+      planSessionFanOut(
+        [
+          {
+            entry: {
+              workspace_id: 'ws_1',
+              path: join(scratch, 'checkout'),
+              provisioned_at: 1,
+            },
+            census: ['a_x'],
+          },
+        ],
+        { ...deps(), env: { CLAUDE_CONFIG_DIR: 'relative/dir' } },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SessionStoreConfigError);
+    expect((thrown as SessionStoreConfigError).code).toBe(
+      'session_store_root_unverifiable',
+    );
+    expect((thrown as SessionStoreConfigError).origin).toBe('relocation_plan');
+    expect((thrown as Error).message).toMatch(/CLAUDE_CONFIG_DIR/);
+  });
+
+  it('asserts the store root ONCE per runtime, never per workspace', () => {
+    // A per-workspace check made the refusal depend on inventory size; the
+    // condition never did (#task:1815).
+    expect(() =>
+      planSessionFanOut([], { ...deps(), env: { CLAUDE_CONFIG_DIR: 'nope' } }),
+    ).toThrow(SessionStoreConfigError);
   });
 });
 

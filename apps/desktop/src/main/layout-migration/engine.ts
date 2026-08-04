@@ -55,6 +55,7 @@ import {
   runSessionSlugRepairPass,
   runWorkspaceDataConvergencePass,
   SessionMigrationError,
+  SessionStoreConfigError,
   type RegistryBinding,
   type SessionCwdPair,
   type SessionStoreEnv,
@@ -71,7 +72,11 @@ export class LayoutMigrationError extends Error {
       | 'layout_special_file'
       | 'layout_move_failed'
       | 'layout_registry_rewrite_blocked'
-      | 'layout_marker_corrupt',
+      | 'layout_marker_corrupt'
+      /** A config-dir override that is not an absolute path. Shares its name
+       *  with the daemon table on purpose: one condition, one code, one repair
+       *  action, whichever process refuses (#task:1815). */
+      | 'session_store_root_unverifiable',
     message: string,
   ) {
     super(message);
@@ -998,6 +1003,12 @@ function wrapFlatten<T>(fn: () => T): T {
       );
     }
     if (err instanceof SessionMigrationError) {
+      throw new LayoutMigrationError(err.code, err.message);
+    }
+    // Pass-neutral store-root refusal: keep the SAME code the daemon carrier
+    // reports (#task:1815) — translating it into `layout_conflict` here would
+    // give one condition two names depending on which process refused.
+    if (err instanceof SessionStoreConfigError) {
       throw new LayoutMigrationError(err.code, err.message);
     }
     throw err;

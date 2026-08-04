@@ -24,6 +24,7 @@ import {
   runSessionSlugRepairPass,
   sessionNamespaceFor,
   SessionMigrationError,
+  SessionStoreConfigError,
 } from '../src/daemon/workspace-registry/session-migration.js';
 
 const silent = { info: () => {}, warn: () => {} };
@@ -583,17 +584,26 @@ describe('runSessionRenamePass — fail-closed arms', () => {
     }
   });
 
-  it('a non-absolute config-dir override FAILS CLOSED naming the env var (P1-2)', () => {
-    expect(() =>
-      runSessionRenamePass(
-        [{ oldCwd: '/a/b', newCwd: '/a/c' }],
-        {
-          sessionStoreHome: HOME,
-          env: { QODER_CONFIG_DIR: 'relative/dir' },
-          logger: silent,
-          probe: () => 'absent',
-        },
-      ),
-    ).toThrow(/QODER_CONFIG_DIR/);
+  it('a non-absolute config-dir override FAILS CLOSED with its own typed code (P1-2, #task:1815)', () => {
+    let thrown: unknown;
+    try {
+      runSessionRenamePass([{ oldCwd: '/a/b', newCwd: '/a/c' }], {
+        sessionStoreHome: HOME,
+        env: { QODER_CONFIG_DIR: 'relative/dir' },
+        logger: silent,
+        probe: () => 'absent',
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    // Not a migration conflict: a code of its own, because the user can repair
+    // it — and the env var is named in the message (host-local log), never in
+    // the code that crosses to the window.
+    expect(thrown).toBeInstanceOf(SessionStoreConfigError);
+    expect((thrown as SessionStoreConfigError).code).toBe(
+      'session_store_root_unverifiable',
+    );
+    expect((thrown as SessionStoreConfigError).origin).toBe('session_rename_pass');
+    expect((thrown as Error).message).toMatch(/QODER_CONFIG_DIR/);
   });
 });

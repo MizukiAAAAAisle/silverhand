@@ -31,9 +31,12 @@ export type RelocationErrorCode =
   | 'relocation_unstable'
   /** A `mkdir`/copy/`rename` filesystem mutation failed. */
   | 'relocation_move_failed'
-  /** A cwd is outside the verified session-slug charset, a config-dir override
-   *  is non-absolute, or a census id is not a safe path segment — the location
-   *  cannot be proven, so nothing is moved or guessed. */
+  /** A workspace id, agent id or census id is not a safe path segment, or a
+   *  retained registry path is not absolute/canonical — the location cannot be
+   *  proven, so nothing is moved or guessed. The cwd itself is never
+   *  unverifiable (the slug transform is total, #task:1816) and a non-absolute
+   *  config-dir override is its own code (`session_store_root_unverifiable`,
+   *  #task:1815) because the user can repair it. */
   | 'relocation_unverifiable'
   /** The completion marker's `schema_version` is one this binary has no right
    *  to interpret (a strictly higher future/downgrade artifact, or a value

@@ -25,8 +25,8 @@ import {
   type WorkspaceRegistryEntry,
 } from './registry.js';
 import {
+  assertSessionStoreRootVerifiable,
   CWD_SCOPED_SESSION_RUNTIMES,
-  isSessionStoreRootVerifiable,
   sessionNamespaceFor,
   type MigrationLogger,
   type SessionStoreEnv,
@@ -446,16 +446,13 @@ function planSessionFanOut(
 ): SessionFanOutStep[] {
   const steps: SessionFanOutStep[] = [];
   for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
+    // A store root that cannot be located is a property of (runtime, env)
+    // alone — asserted ONCE per runtime, never per workspace (#task:1815).
+    assertSessionStoreRootVerifiable(kind, deps.env, 'relocation_plan');
     const destOwner = new Map<string, string>(); // physical destination → owning source namespace
     const bySource = new Map<string, Set<string>>(); // source namespace → deduped destinations
     for (const { entry, census } of workspaces) {
       const oldRoot = entry.path;
-      if (!isSessionStoreRootVerifiable(kind, deps.env)) {
-        throw new RelocationError(
-          'relocation_unverifiable',
-          `${kind} session store root is unverifiable from the environment`,
-        );
-      }
       const source = sessionNamespaceFor(kind, oldRoot, deps.sessionStoreHome, deps.env)!;
       if (!bySource.has(source)) bySource.set(source, new Set());
       const bucket = bySource.get(source)!;

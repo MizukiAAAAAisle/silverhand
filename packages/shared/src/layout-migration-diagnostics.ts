@@ -80,6 +80,11 @@ export type DesktopLayoutMigrationStage = z.infer<
  * error out of quiesce). Keep in sync with `LayoutMigrationError` in
  * `apps/desktop/src/main/layout-migration/engine.ts`; the sync is enforced by
  * `packages/shared/src/__tests__` + the desktop engine tests, never by a cast.
+ *
+ * `session_store_root_unverifiable` is deliberately the SAME member string as in
+ * the daemon table below: it is one condition (a config-dir override that is not
+ * an absolute path) reached from more than one carrier, and a condition the user
+ * can fix, so it must not be renamed per carrier (#task:1815, Cindy ruling).
  */
 export const DesktopLayoutMigrationCodeSchema = z.enum([
   'layout_conflict',
@@ -88,6 +93,7 @@ export const DesktopLayoutMigrationCodeSchema = z.enum([
   'layout_move_failed',
   'layout_registry_rewrite_blocked',
   'layout_marker_corrupt',
+  'session_store_root_unverifiable',
   'unknown',
 ]);
 export type DesktopLayoutMigrationCode = z.infer<
@@ -114,10 +120,19 @@ export type DaemonLayoutMigrationStage = z.infer<
 
 /**
  * Closed set of daemon failure codes = `FlattenLayoutError` ∪
- * `SessionMigrationError` ∪ `RelocationError` codes (disjoint prefixes —
- * `flatten_` / `layout_` / `relocation_` — so no collision), plus `'unknown'`.
- * The `relocation_` codes (#task:1805) mirror `RelocationError` 1:1 and are
- * appended additively (see the stage schema note above).
+ * `SessionMigrationError` ∪ `RelocationError` ∪ `SessionStoreConfigError` codes
+ * (disjoint prefixes — `flatten_` / `layout_` / `relocation_` / `session_store_`
+ * — so no collision), plus `'unknown'`. The `relocation_` codes (#task:1805)
+ * mirror `RelocationError` 1:1 and are appended additively (see the stage schema
+ * note above).
+ *
+ * `session_store_root_unverifiable` (#task:1815) is the one code that is NOT
+ * owned by a single pass: a config-dir override that is not an absolute path
+ * makes the session store location unprovable, and BOTH the session rename pass
+ * and the relocation planner refuse on it. It gets its own member — rather than
+ * borrowing `layout_conflict` / `relocation_unverifiable` — because it is the
+ * only member here whose repair action is known and user-performable, so the
+ * failure window can name it (#task:1641 criterion).
  */
 export const DaemonLayoutMigrationCodeSchema = z.enum([
   'flatten_conflict',
@@ -135,6 +150,7 @@ export const DaemonLayoutMigrationCodeSchema = z.enum([
   'relocation_move_failed',
   'relocation_unverifiable',
   'relocation_marker_unsupported',
+  'session_store_root_unverifiable',
   'unknown',
 ]);
 export type DaemonLayoutMigrationCode = z.infer<
