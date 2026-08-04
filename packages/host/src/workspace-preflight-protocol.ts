@@ -17,11 +17,14 @@ export const WORKSPACE_PREFLIGHT_RESULT_EVENT =
  *
  * The frame carries the closed-set diagnostics code and NOTHING ELSE. Not the
  * child's message, not a path, not an errno, not the stage: the child's messages
- * are operator text with absolute paths and env values in them, and the window is
- * a product surface. The desktop derives every user-visible word from the code
- * alone, so nothing that crosses this boundary can leak into a window, and the
- * two sides cannot drift apart in what they claim happened. Operator detail stays
- * in the host-local log the window points at.
+ * are operator text with absolute paths and env variable names in them, and the
+ * window is a product surface. For a code arriving through THIS frame the desktop
+ * derives every user-visible word from the code alone, so nothing crossing this
+ * boundary can reach a window, and the two sides cannot drift apart in what they
+ * claim happened. (The desktop engine is a second carrier for some of the same
+ * conditions, in-process; that path is the desktop's own and is not constrained
+ * by this frame.) Operator detail stays in the host-local log the window points
+ * at.
  *
  * Emitted on stdout exactly like the success frame — one JSON line, one frame per
  * run, either the success discriminator or this one, never both.

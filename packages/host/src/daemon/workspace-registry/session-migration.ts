@@ -275,11 +275,16 @@ export class SessionStoreConfigError extends Error {
 }
 
 /**
- * Fail closed when the store root cannot be located from the env. Naming the
- * variable in the MESSAGE (host-local log only) is intentional: the frame that
- * crosses to the desktop carries the code alone, so no env value can reach a
- * window or the breadcrumb. Every startup re-runs the idempotent pass, so fixing
- * the variable and reopening the app is a real repair, not a workaround.
+ * Fail closed when the store root cannot be located from the env.
+ *
+ * The message is host-local operator text: it names the VARIABLE (never its
+ * value) so a log reader can act. What this guarantees is narrow and about the
+ * process boundary only — the cross-process frame carries no free text and no
+ * env value, just the code (#task:1815). It does NOT claim the message can never
+ * be seen: the desktop engine raises the same condition in-process, where the
+ * window derives its words from the code table (Norman's carrier, and his
+ * guarantee). Every startup re-runs the idempotent pass, so correcting the
+ * variable is a real repair, not a workaround.
  */
 export function assertSessionStoreRootVerifiable(
   kind: RuntimeKind,
@@ -291,7 +296,7 @@ export function assertSessionStoreRootVerifiable(
   const [envVar] = storeRootOverrideFor(kind, env);
   throw new SessionStoreConfigError(
     origin,
-    `${envVar} is set to a non-absolute value; the ${kind} session store location is unverifiable — make it an absolute path or unset it, then restart`,
+    `${envVar} is set to a non-absolute value; the ${kind} session store location is unverifiable — make it an absolute path or unset it`,
   );
 }
 
