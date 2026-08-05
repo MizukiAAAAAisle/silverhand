@@ -44,6 +44,7 @@ import {
   dropSentAttachmentsFromDraft,
   hasComposerDraftInFlightUpload,
   patchComposerDraftText,
+  pendingAttachmentsBlockSend,
   readComposerDraft,
   removeComposerDraftAttachment,
   startComposerDraftAttachmentUpload,
@@ -429,7 +430,7 @@ export function Composer({
   const sendDisabled =
     disabled
     || send.isPending
-    || pending.some(p => p.state === 'uploading')
+    || pendingAttachmentsBlockSend(pending)
     || (!draft.trim() && pending.filter(p => p.state === 'done').length === 0);
 
   /** Insert a passage quoted from a message as a Markdown blockquote at
@@ -493,7 +494,7 @@ export function Composer({
       // identity the chip showed (#task:1324).
       .map(p => ({ ...p.attachment!, label: p.label }));
     if ((!content && ready.length === 0) || disabled) return;
-    if (pending.some(p => p.state === 'uploading')) return;
+    if (pendingAttachmentsBlockSend(pending)) return;
     const submittedPending = pending.filter(p => p.state === 'done' && p.attachment);
     const sentAttachmentIds = ready.map(item => item.id);
     const submittedSnapshot: ComposerDraftSnapshot = {

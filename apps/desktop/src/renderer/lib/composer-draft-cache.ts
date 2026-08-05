@@ -39,6 +39,28 @@ export type CachedPendingAttachment = {
  *  draft is cleared/sent (a fresh message starts at #1). */
 export type ComposerLabelSeq = { image: number; file: number };
 
+/**
+ * Does this pending set block a send? An `uploading` item is not ready yet, and
+ * an `error` item would be dropped WITHOUT NOTICE — the send payload carries
+ * only `state === 'done'` items, so a failed upload used to leave the composer
+ * looking normal, disappear from the sent message, and take its typed
+ * `Image #N` reference with it (#task:1834).
+ *
+ * One predicate for both gates on purpose. The Send button's `disabled` and
+ * `submit()`'s own guard each spelled out `uploading` separately, which is
+ * exactly how `error` ended up gated in neither: two copies of a rule drift the
+ * moment a third state exists. The escape hatch is the chip's own remove
+ * button — there is no retry path today, so blocking means "resolve it or drop
+ * it deliberately", never a dead end.
+ */
+export function pendingAttachmentsBlockSend(
+  pending: ReadonlyArray<CachedPendingAttachment>,
+): boolean {
+  return pending.some(
+    item => item.state === 'uploading' || item.state === 'error',
+  );
+}
+
 export type ComposerDraftSnapshot = {
   conversationId: string;
   text: string;

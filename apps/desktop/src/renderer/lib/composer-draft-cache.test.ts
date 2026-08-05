@@ -24,6 +24,7 @@ import {
   dropSentAttachmentsFromDraft,
   hasComposerDraftInFlightUpload,
   MAX_DRAFTS,
+  pendingAttachmentsBlockSend,
   readComposerDraft,
   startComposerDraftAttachmentUpload,
   writeComposerDraft,
@@ -151,6 +152,36 @@ describe('composer draft cache', () => {
     expect(item?.file).toBe(file);
     expect(item?.previewUrl).toBe('blob:image');
     expect(revokeObjectURL).not.toHaveBeenCalled();
+  });
+
+  it('clear destroys a FAILED attachment that no whitelist can protect (#task:1834)', () => {
+    // Why `pendingAttachmentsBlockSend` has to run BEFORE the send path reaches
+    // `clearComposerDraft`: the whitelist is keyed on uploaded attachment ids,
+    // and a failed item never got one — so clearing revokes its preview blob
+    // and drops the draft entry, losing the file the user picked. The guard is
+    // the only thing standing between a failed upload and this cleanup.
+    writeComposerDraft({
+      conversationId: 'c1',
+      text: 'send',
+      caret: 0,
+      pending: [
+        donePending('sent-key', 'sent-id'),
+        {
+          key: 'failed-key',
+          filename: 'a.png',
+          size: 1,
+          contentType: 'image/png',
+          state: 'error' as const,
+          previewUrl: 'blob:failed',
+        },
+      ],
+      updatedAt: 1,
+    });
+
+    clearComposerDraft('c1', { sentAttachmentIds: ['sent-id'] });
+
+    expect(readComposerDraft('c1')).toBeNull();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:failed');
   });
 
   it('clear skips sent attachment ids but cleans unsent ids', () => {
@@ -413,3 +444,30 @@ function testFile(contents: string, name: string, type: string): File {
   Object.defineProperty(blob, 'lastModified', { value: 1 });
   return blob;
 }
+
+describe('pendingAttachmentsBlockSend (#task:1834)', () => {
+  const item = (state: 'uploading' | 'done' | 'error') => ({
+    key: `k-${state}`,
+    filename: 'a.png',
+    size: 1,
+    contentType: 'image/png',
+    state,
+  });
+
+  it('does not block an empty set or an all-done set', () => {
+    expect(pendingAttachmentsBlockSend([])).toBe(false);
+    expect(pendingAttachmentsBlockSend([item('done'), item('done')])).toBe(false);
+  });
+
+  it('blocks while an upload is still in flight', () => {
+    expect(pendingAttachmentsBlockSend([item('done'), item('uploading')])).toBe(
+      true,
+    );
+  });
+
+  it('blocks a failed upload, which the send payload would drop silently', () => {
+    expect(pendingAttachmentsBlockSend([item('error')])).toBe(true);
+    expect(pendingAttachmentsBlockSend([item('done'), item('error')])).toBe(true);
+  });
+});
+
