@@ -256,7 +256,12 @@ describe('host outbound WebSocket server', () => {
 
     const closed = await waitForClose(ws);
     expect(closed.code).toBe(1002);
-    // Never attached → server→daemon command dispatch can't target it either.
+    // Never ready-attached → server→daemon command dispatch can't target it
+    // either. The transport slot taken at upgrade is released by the server's
+    // own `close` handler, which runs independently of the CLIENT-observed
+    // close `waitForClose` resolves on — so settle on the server fact first,
+    // exactly like the other refusal cases above.
+    await waitFor(() => server!.controller.getAttachment(host.id) === null);
     expect(server.controller.getAttachment(host.id)).toBeNull();
     expect(server.controller.getAdmissionFailure(host.id)).toMatchObject({
       kind: 'protocol_mismatch',
