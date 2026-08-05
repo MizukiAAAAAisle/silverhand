@@ -1,5 +1,5 @@
 import type { Database as Db } from 'better-sqlite3';
-import type { UserRow } from '@silverhand/shared';
+import { ParticipantNameSchema, type UserRow } from '@silverhand/shared';
 
 /**
  * Repository for the `users` table.
@@ -10,7 +10,9 @@ import type { UserRow } from '@silverhand/shared';
  *   - `name` is the public mention name (`@<name>`), decided once at
  *     registration and never editable after. Globally unique across
  *     `users.name` ⊕ `agents.name` — migration v21 triggers enforce
- *     this in DB.
+ *     this in DB; its FORMAT is enforced here, in `create` (see there
+ *     for why the two halves of "what is a valid name" live in
+ *     different layers).
  *   - `display_name` is a human label. Editable post-registration via
  *     `updateProfile`; no uniqueness constraint.
  *
@@ -79,6 +81,21 @@ export class UserRepo {
    * `name` collides with an existing `agents.name`; the column UNIQUE
    * fires for collisions inside `users`. better-sqlite3 surfaces both
    * as SqliteError instances the caller can map to 409.
+   *
+   * `name` FORMAT is asserted here against `ParticipantNameSchema` — the
+   * single declarative authority for "what an addressable participant name
+   * is" (#task:1826/1828). `users.name` IS a mention handle and every
+   * production writer of it funnels through this method, so this assertion is
+   * what makes "a stored human handle is mentionable" a declared property
+   * instead of an emergent one. Format is a pure function of the value, so a
+   * single check at the write boundary is terminal; uniqueness is a race
+   * property, which is why that half legitimately lives in DB triggers.
+   *
+   * Scope note: this fences the production write path, not the table. Test
+   * fixtures INSERT rows directly, and pre-existing rows predate the check, so
+   * it is not a claim about what `users.name` values the DB can contain. Read
+   * paths deliberately do not re-validate (`UserRow.name` stays `z.string()`),
+   * so no stored row can be made unreadable by tightening this.
    */
   create(input: {
     id: string;
@@ -86,6 +103,11 @@ export class UserRepo {
     displayName: string;
     email?: string | null;
   }): UserRow {
+    if (!ParticipantNameSchema.safeParse(input.name).success) {
+      throw new Error(
+        `UserRepo.create: name must satisfy ParticipantNameSchema (got ${JSON.stringify(input.name)})`,
+      );
+    }
     const now = Date.now();
     this.db
       .prepare(

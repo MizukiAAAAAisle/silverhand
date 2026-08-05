@@ -154,8 +154,12 @@ function displayNameFromEmailLocalPart(localPart: string): string {
 
 /**
  * Derive the immutable `users.name` mention anchor from user-supplied email.
- * This producer must remain a subset of `ParticipantNameSchema`: an email
- * local-part may start with a digit or punctuation, but the stored name may not.
+ * This producer must stay within `ParticipantNameSchema` — an email local-part
+ * may start with a digit or punctuation, but the stored name may not — and it
+ * is no longer the thing that *guarantees* that: `UserRepo.create` asserts the
+ * schema at the write boundary, so a regression here fails loudly at signup
+ * instead of quietly persisting an unmentionable handle. Keep the two in sync
+ * by reading the schema, not by reproducing its character classes here.
  */
 function profileNameFromEmailLocalPart(localPart: string): string {
   const normalized = localPart
