@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RuntimeKind } from '@silverhand/shared';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
 import type { StartOptions } from '../../src/protocol.js';
@@ -7,7 +9,7 @@ import type { RuntimeStartResolveDeps } from '../../src/daemon/runtime-start-res
  * Build SEMANTIC `runtime_start` options (D4.e-6): no `path`/`home_dir`
  * crosses the wire. The daemon resolves host paths deterministically from the
  * agent id + workspace id, so a test pairs these options with matching deps
- * (`testRuntimeStartResolveDeps`, keyed on `homeDir`).
+ * (`testRuntimeStartResolveDeps`, keyed on the explicit agents root).
  */
 export function testStartOptions(overrides: {
   conversationId?: string;
@@ -84,9 +86,10 @@ export function testStartOptions(overrides: {
  * Companion to `testStartOptions`: the daemon-side path resolver deps the
  * Supervisor needs (D4.e-6). relocation-v1 §7 task 4 — there is no registry
  * establishment gate any more: both `regular` and `agent_home` cwds resolve
- * deterministically from the agent id + workspace id under `homeDir` (or
- * `agentHomeRootDir`) inside `resolveRuntimeStartPaths`, so pass `homeDir`
- * when a test reads real L1 prompt files or a materialized bundle.
+ * deterministically from the agent id + workspace id under the EXPLICIT
+ * `agentHomeRootDir` inside `resolveRuntimeStartPaths` (#task:1813 — there is no
+ * home-relative default to fall back on), so pass the sandbox agents root when a
+ * test reads real L1 prompt files or a materialized bundle.
  *
  * Availability of a resolved coordinate is a separate fs fact
  * (`bundleL2Present`: MEMORY.md at the bundle root). The default seam returns
@@ -95,7 +98,6 @@ export function testStartOptions(overrides: {
  * or a half-seed → `path: null`.
  */
 export function testRuntimeStartResolveDeps(overrides: {
-  homeDir?: string;
   agentHomeRootDir?: string;
   computerId?: string;
   bundleL2Present?: (bundleDir: string) => Promise<boolean>;
@@ -103,8 +105,10 @@ export function testRuntimeStartResolveDeps(overrides: {
 } = {}): RuntimeStartResolveDeps {
   const computerId = overrides.computerId ?? 'test-computer';
   return {
-    homeDir: overrides.homeDir,
-    agentHomeRootDir: overrides.agentHomeRootDir,
+    // Never home-derived: a test that does not care which root is used still
+    // gets an explicit, obviously-fake one rather than the real user home.
+    agentHomeRootDir:
+      overrides.agentHomeRootDir ?? join(tmpdir(), 'silverhand-test-agents-root'),
     bundleL2Present: overrides.bundleL2Present ?? (async () => true),
     resolveComputerId: overrides.resolveComputerId ?? (() => computerId),
   };

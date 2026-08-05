@@ -63,8 +63,13 @@ interface AgentWorkspacePaneProps {
 
 /**
  * #task:811 — the members-page view of the agent's **home** workspace files
- * (`~/.silverhand/agents/<id>/`). A thin home preset over
+ * (its L1 identity dir). A thin home preset over
  * `AgentWorkspaceContainer`: home source, wide two-column layout.
+ *
+ * No physical coordinate is named here on purpose: the home dir lives under
+ * the agent's computer slot (`resolveComputerSlotPaths(...).agents` in
+ * `@silverhand/shared`) and the renderer never builds a path. The flat
+ * `~/.silverhand/agents/<id>/` shape is a migration source only.
  *
  * Why the browser speaks a virtual-path namespace (not the old categorised
  * snapshot): the old single-shot route baked the renderer's

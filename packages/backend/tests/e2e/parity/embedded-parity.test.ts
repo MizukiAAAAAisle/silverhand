@@ -158,7 +158,7 @@ interface EmbeddedRigInternals extends ParityRig {
 
 async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
   const tmpDir = mkdtempSync(join(tmpdir(), 'silverhand-d5a4-emb-'));
-  const agentHomeDir = mkdtempSync(join(tmpdir(), 'silverhand-d5a4-emb-home-'));
+  const agentsRootDir = mkdtempSync(join(tmpdir(), 'silverhand-d5a4-emb-agents-'));
   const daemonDir = join(tmpDir, 'daemon');
   const logDir = join(daemonDir, 'logs');
   const runtimePidRootDir = join(daemonDir, 'runtime-pids');
@@ -214,10 +214,9 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
     runtimePidRootDir,
     controlPlaneServerUrlPath,
     // #task:1596 / relocation-v1 §7-4 — the DURABLE agent tree is sandboxed by
-    // the home seam below (this rig asserts the default `<home>/.silverhand`
-    // layout), so no explicit `agentHomeRootDir`: the option would take
-    // precedence over `homeDir` and move the tree out from under those facts.
-    testHooks: { agentMaterializeHomeDir: agentHomeDir },
+    // this EXPLICIT agents root, the same coordinate the rig asserts L1 dirs
+    // under (#task:1813: required option, no home-derived fallback).
+    agentHomeRootDir: agentsRootDir,
     supervisorFactory: ({
       emit,
       logger,
@@ -347,7 +346,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
     userId,
     silverhandDir: tmpDir,
     expectedSessionId,
-    agentHomeDir,
+    agentsRootDir,
     adapter,
     proxy,
     shutdown: async () => {
@@ -359,7 +358,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
       await daemon.stop('d5a4_embedded_shutdown').catch(() => undefined);
       await backend.close().catch(() => undefined);
       await proxy.close().catch(() => undefined);
-      for (const dir of [tmpDir, agentHomeDir, sockDir]) {
+      for (const dir of [tmpDir, agentsRootDir, sockDir]) {
         try {
           rmSync(dir, { recursive: true, force: true });
         } catch {

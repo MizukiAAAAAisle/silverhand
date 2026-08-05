@@ -114,16 +114,14 @@ export class RuntimeStartResolveError extends DaemonTypedError {
 
 export interface RuntimeStartResolveDeps {
   /**
-   * Daemon homedir override (test seam — mirrors the other intents'
-   * `agentMaterializeHomeDir`). Omitted in production so `computeAgentDir`
-   * falls back to the daemon process `homedir()`.
+   * The EXACT root under which per-agent L1 dirs live — the computer
+   * slot's `agents` dir, read from the daemon's generation-scoped path
+   * context at spawn time. Required — no implicit default (#task:1813):
+   * a daemon with no computer bound refuses the spawn with its own typed
+   * `registry_unavailable` rather than resolving a home-relative
+   * coordinate.
    */
-  homeDir?: string;
-  /**
-   * Exact root under which per-agent L1 dirs live. Production Desktop
-   * passes `<SILVERHAND_DIR>/agents`; takes precedence over `homeDir`.
-   */
-  agentHomeRootDir?: string;
+  agentHomeRootDir: string;
   /**
    * Memory-readable predicate for a resolved bundle coordinate — the SAME
    * `bundleL2Present` (MEMORY.md readable) fact the seeder acks. Governs ONLY

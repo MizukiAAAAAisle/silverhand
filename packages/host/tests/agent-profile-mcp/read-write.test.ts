@@ -28,25 +28,25 @@ import {
 
 const AGENT_ID = 'aid-profile-mcp';
 
-let homeDir = '';
+let agentHomeRootDir = '';
 function agentDir(): string {
-  return join(homeDir, '.silverhand', 'agents', AGENT_ID);
+  return join(agentHomeRootDir, AGENT_ID);
 }
 
 describe('agent-profile-mcp daemon handlers', () => {
   beforeEach(() => {
-    homeDir = mkdtempSync(join(tmpdir(), 'pmcp-home-'));
+    agentHomeRootDir = mkdtempSync(join(tmpdir(), 'pmcp-agents-'));
   });
   afterEach(() => {
     try {
-      rmSync(homeDir, { recursive: true, force: true });
+      rmSync(agentHomeRootDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
   });
 
   it('read returns raw: null when no mcp.json exists', async () => {
-    const r = await readAgentProfileMcp({ agent_id: AGENT_ID }, { homeDir });
+    const r = await readAgentProfileMcp({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r).toEqual({ ok: true, raw: null });
   });
 
@@ -55,7 +55,7 @@ describe('agent-profile-mcp daemon handlers', () => {
     mkdirSync(dir, { recursive: true });
     const raw = '{\n  "mcpServers": {\n    "fs": { "command": "npx" }\n  }\n}';
     writeFileSync(join(dir, 'mcp.json'), raw);
-    const r = await readAgentProfileMcp({ agent_id: AGENT_ID }, { homeDir });
+    const r = await readAgentProfileMcp({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r).toEqual({ ok: true, raw });
   });
 
@@ -65,7 +65,7 @@ describe('agent-profile-mcp daemon handlers', () => {
     const raw = '{   "mcpServers":{"fs":{"command":"npx","args":["-y","x"]}}   }';
     const r = await writeAgentProfileMcp(
       { agent_id: AGENT_ID, raw },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.ok).toBe(true);
     expect(r.bytes_written).toBe(Buffer.byteLength(raw, 'utf-8'));
@@ -75,7 +75,7 @@ describe('agent-profile-mcp daemon handlers', () => {
 
   it('write creates the agent dir if missing', async () => {
     const raw = '{"mcpServers":{}}';
-    await writeAgentProfileMcp({ agent_id: AGENT_ID, raw }, { homeDir });
+    await writeAgentProfileMcp({ agent_id: AGENT_ID, raw }, { agentHomeRootDir });
     expect(readFileSync(join(agentDir(), 'mcp.json'), 'utf-8')).toBe(raw);
   });
 
@@ -83,17 +83,17 @@ describe('agent-profile-mcp daemon handlers', () => {
     await expect(
       writeAgentProfileMcp(
         { agent_id: AGENT_ID, raw: '{ not valid json' },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'invalid_config' });
     await expect(
       writeAgentProfileMcp(
         { agent_id: AGENT_ID, raw: '{ not valid json' },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toBeInstanceOf(AgentProfileMcpError);
     // Nothing written.
-    const r = await readAgentProfileMcp({ agent_id: AGENT_ID }, { homeDir });
+    const r = await readAgentProfileMcp({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r.raw).toBeNull();
   });
 
@@ -106,7 +106,7 @@ describe('agent-profile-mcp daemon handlers', () => {
             mcpServers: { fs: { command: 'npx', bogus: true } },
           }),
         },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'invalid_config' });
   });
@@ -114,7 +114,7 @@ describe('agent-profile-mcp daemon handlers', () => {
   it('write leaves no stray .tmp file behind on success', async () => {
     await writeAgentProfileMcp(
       { agent_id: AGENT_ID, raw: '{"mcpServers":{}}' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     const entries = readdirSync(agentDir());
     expect(entries).toEqual(['mcp.json']);
@@ -123,11 +123,11 @@ describe('agent-profile-mcp daemon handlers', () => {
   it('overwrites an existing config atomically', async () => {
     await writeAgentProfileMcp(
       { agent_id: AGENT_ID, raw: '{"mcpServers":{"a":{"command":"x"}}}' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     await writeAgentProfileMcp(
       { agent_id: AGENT_ID, raw: '{"mcpServers":{"b":{"command":"y"}}}' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     const onDisk = readFileSync(join(agentDir(), 'mcp.json'), 'utf-8');
     expect(onDisk).toBe('{"mcpServers":{"b":{"command":"y"}}}');
@@ -142,7 +142,7 @@ describe('agent-profile-mcp daemon handlers', () => {
     chmodSync(filePath, 0o000);
     try {
       await expect(
-        readAgentProfileMcp({ agent_id: AGENT_ID }, { homeDir }),
+        readAgentProfileMcp({ agent_id: AGENT_ID }, { agentHomeRootDir }),
       ).rejects.toMatchObject({ code: 'fs_unavailable' });
     } finally {
       chmodSync(filePath, 0o644);

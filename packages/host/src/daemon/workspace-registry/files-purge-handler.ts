@@ -48,10 +48,11 @@ export class AgentFilesPurgeError extends DaemonTypedError {
 }
 
 export interface PurgeAgentFilesDeps {
-  /** Parent dir L1 is computed under. Production: `~`. Tests: tmp dir. */
-  homeDir?: string;
-  /** Exact root L1 is computed under. Takes precedence over homeDir. */
-  agentHomeRootDir?: string;
+  /**
+   * The EXACT agents root L1 is computed under, from the composition
+   * root. Required — no implicit default (#task:1813).
+   */
+  agentHomeRootDir: string;
 }
 
 export async function purgeAgentFiles(

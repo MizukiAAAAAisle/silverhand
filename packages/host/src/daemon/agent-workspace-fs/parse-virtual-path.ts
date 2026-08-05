@@ -32,7 +32,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
  *      collapses a permission failure to `not_found`.
  *   6. **Root-symlink rejection.** The agent home dir itself must NOT
  *      be a symlink — `lstat(baseDir)` precedes `realpath(baseDir)` so
- *      a symlink replacement of `~/.silverhand/agents/<id>` cannot
+ *      a symlink replacement of the agent's L1 dir cannot
  *      become a trusted base. Same `forbidden_path` projection as a
  *      symlink anywhere else in the chain (Cindy round-1 P1 #2).
  *
@@ -83,7 +83,7 @@ export async function resolveAgentHomeBase(
   if (lst.isSymbolicLink()) {
     // The agent home dir itself was replaced by a symlink. Refuse —
     // following it would let an attacker (with write access to the
-    // homedir) silently re-base every subsequent virtual-path lookup
+    // agents root) silently re-base every subsequent virtual-path lookup
     // onto an arbitrary directory. Same `forbidden_path` projection as
     // a symlink anywhere else in the chain.
     return { ok: false, code: 'forbidden_path' };

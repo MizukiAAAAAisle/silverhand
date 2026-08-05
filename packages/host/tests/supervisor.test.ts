@@ -57,24 +57,23 @@ const NO_OUTPUT_FIXTURE = join(__dirname, '_fixtures', 'no-output-runtime.cjs');
 /**
  * relocation-v1 §3.2 / §7 task 4: the daemon now resolves a regular
  * workspace's cwd to the deterministic agent-centric bundle dir
- * (`<home>/.silverhand/agents/<agentId>/workspaces/<workspaceId>`), NOT the
+ * (`<agentsRoot>/<agentId>/workspaces/<workspaceId>`), NOT the
  * old registry workspace path. shiki + Cindy 2026-08-04: the session cwd is the
  * ONLY hard-ensured runtime base — the supervisor's pre-spawn
  * `ensureRuntimeStartWorkspaceCwd` does `mkdir -p` then requires a USABLE cwd
  * (`bundleCwdUsable`: a directory this process can enter). L1/L2 CONTENT
  * (MEMORY.md) is best-effort and NEVER gates the spawn. These suites default
- * `testRuntimeStartResolveDeps` to a shared temp home (via `makeSupervisor`) and
- * pre-create the bundle dirs for the two agent ids that boot runtimes here
- * (`a1` from `baseStartParams`, `aX` from the deliver-SPAWN test) so the shared
- * home is realized; the pre-spawn ensure would mkdir them anyway. Tests that
- * need an UNUSABLE cwd (path occupied by a non-dir file) pass their own homeDir
- * and skip this. */
-const SUPERVISOR_HOME = mkdtempSync(join(tmpdir(), 'sh-sup-home-'));
+ * `testRuntimeStartResolveDeps` to a shared temp AGENTS ROOT (via
+ * `makeSupervisor`; #task:1813 — the root is always explicit, never derived from
+ * a home) and pre-create the bundle dirs for the two agent ids that boot
+ * runtimes here (`a1` from `baseStartParams`, `aX` from the deliver-SPAWN test)
+ * so the shared root is realized; the pre-spawn ensure would mkdir them anyway.
+ * Tests that need an UNUSABLE cwd (path occupied by a non-dir file) pass their
+ * own agents root and skip this. */
+const SUPERVISOR_AGENTS_ROOT = mkdtempSync(join(tmpdir(), 'sh-sup-agents-'));
 function ensureSupervisorBundle(agentId: string, workspaceId = 'ws1'): void {
   const bundleDir = join(
-    SUPERVISOR_HOME,
-    '.silverhand',
-    'agents',
+    SUPERVISOR_AGENTS_ROOT,
     agentId,
     'workspaces',
     workspaceId,
@@ -87,7 +86,7 @@ ensureSupervisorBundle('a1');
 ensureSupervisorBundle('aX');
 afterAll(() => {
   try {
-    rmSync(SUPERVISOR_HOME, { recursive: true, force: true });
+    rmSync(SUPERVISOR_AGENTS_ROOT, { recursive: true, force: true });
   } catch {
     /* best-effort */
   }
@@ -226,7 +225,7 @@ function makeSupervisor(opts: {
     runtimePidRootDir: opts.runtimePidRootDir,
     runtimeStartResolveDeps:
       opts.runtimeStartResolveDeps ??
-      testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
     controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
@@ -347,16 +346,16 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     // shiki + Cindy 2026-08-04: the session cwd is the ONLY hard-ensured
     // runtime base. The daemon resolves the regular workspace cwd to the
     // deterministic bundle dir under the agent home (relocation-v1 §3.2). We
-    // give a real homeDir but DON'T pre-create the bundle: the pre-spawn
+    // give a real agents root but DON'T pre-create the bundle: the pre-spawn
     // `ensureRuntimeStartWorkspaceCwd` must `mkdir -p` it and proceed to spawn.
     // A missing MEMORY.md (best-effort L2) must NOT block the start.
-    const home = mkdtempSync(join(tmpdir(), 'silverhand-missing-cwd-'));
-    const bundleDir = join(
-      home, '.silverhand', 'agents', 'a1', 'workspaces', 'ws1',
-    );
+    const agentsRoot = mkdtempSync(join(tmpdir(), 'silverhand-missing-cwd-'));
+    const bundleDir = join(agentsRoot, 'a1', 'workspaces', 'ws1');
     expect(existsSync(bundleDir)).toBe(false);
     const { supervisor } = makeSupervisor({
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: home }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: agentsRoot,
+      }),
     });
 
     try {
@@ -370,7 +369,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       await supervisor
         .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
         .catch(() => {});
-      rmSync(home, { recursive: true, force: true });
+      rmSync(agentsRoot, { recursive: true, force: true });
     }
   });
 
@@ -379,18 +378,16 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     // child in the cwd. Occupy the bundle path with a regular FILE so `mkdir`
     // throws (ENOTDIR/EEXIST). This must fail typed with
     // `workspace_bundle_missing` and never spawn.
-    const home = mkdtempSync(join(tmpdir(), 'silverhand-unusable-cwd-'));
-    const bundleDir = join(
-      home, '.silverhand', 'agents', 'a1', 'workspaces', 'ws1',
-    );
+    const agentsRoot = mkdtempSync(join(tmpdir(), 'silverhand-unusable-cwd-'));
+    const bundleDir = join(agentsRoot, 'a1', 'workspaces', 'ws1');
     // Create the parent chain, then plant a FILE where the cwd dir must be.
-    mkdirSync(join(home, '.silverhand', 'agents', 'a1', 'workspaces'), {
-      recursive: true,
-    });
+    mkdirSync(join(agentsRoot, 'a1', 'workspaces'), { recursive: true });
     writeFileSync(bundleDir, 'not a directory\n', 'utf8');
     let spawnCalled = false;
     const { supervisor } = makeSupervisor({
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: home }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: agentsRoot,
+      }),
       spawnFn: () => {
         spawnCalled = true;
         throw new Error('spawn should not be called');
@@ -408,11 +405,11 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       );
       expect(err.code).toBe('workspace_bundle_missing');
       expect(err.message).not.toContain(bundleDir);
-      expect(err.message).not.toContain(home);
+      expect(err.message).not.toContain(agentsRoot);
       expect(err.message).toContain(baseStartParams.options.workspace.id);
       expect(spawnCalled).toBe(false);
     } finally {
-      rmSync(home, { recursive: true, force: true });
+      rmSync(agentsRoot, { recursive: true, force: true });
     }
   });
 
@@ -473,15 +470,16 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
 
   it('hydrates prompt/spawn/env on daemon side from typed runtime_start options and drains the deliver SPAWN batch', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'silverhand-d2g-hydrate-'));
-    // D4.e-6: options are semantic-only; the daemon resolves home_dir via
-    // computeAgentDir(agentId, homeDir) and the regular workspace via the
-    // injected resolver. Lay out L1 under computeAgentDir so the resolved
-    // home_dir points at the system_prompt.md we write.
-    const homeDir = dir;
-    const agentHome = join(dir, '.silverhand', 'agents', 'a1');
+    // D4.e-6: options are semantic-only; the daemon resolves home_dir as ONE
+    // join onto the explicit agents root (`resolveAgentDir`) and the regular
+    // workspace via the injected resolver. Lay out L1 under that same
+    // coordinate so the resolved home_dir points at the system_prompt.md we
+    // write.
+    const agentHomeRootDir = join(dir, 'agents');
+    const agentHome = join(agentHomeRootDir, 'a1');
     // The L2/cwd is the agent-centric bundle dir under the agent home
-    // (relocation-v1 §3.2), keyed by workspace id 'ws1' and derived from
-    // homeDir. The pre-spawn ensure only requires the cwd to be a usable dir;
+    // (relocation-v1 §3.2), keyed by workspace id 'ws1' and derived from the
+    // agents root. The pre-spawn ensure only requires the cwd to be a usable dir;
     // MEMORY.md is best-effort L2 whose CONTENT this test asserts is hydrated
     // into the prompt below.
     const memoryDir = join(agentHome, 'workspaces', 'ws1');
@@ -523,7 +521,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       spawnFn: (bin, args, options) =>
         spawn(execPath, [bin, ...args.slice(1)], options),
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({
-        homeDir,
+        agentHomeRootDir,
       }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
@@ -641,7 +639,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       logger: silentLogger(),
       driverFor: () => makeFakeDriver(),
       resolveBinary: async () => null,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     });
     await expect(supervisor.start(baseStartParams)).rejects.toThrow(/not found on PATH/);
@@ -1049,7 +1047,7 @@ describe('Supervisor 3a — hard stop / exit', () => {
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
@@ -1264,7 +1262,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
     driverFor: () => driver,
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
-    runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+    runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
     controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
@@ -1814,7 +1812,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
@@ -2165,7 +2163,7 @@ function make3cSupervisor(
     driverFor: () => driver,
     resolveBinary: async (_kind, fallback) => fallback,
     spawnFn,
-    runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+    runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
     controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
@@ -4204,7 +4202,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       emitRawRuntimeOutput: true,
       sigtermToSigkillMs: 50,
@@ -4400,7 +4398,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       emitRawRuntimeOutput: true,
       sigtermToSigkillMs: 50,
@@ -4664,7 +4662,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       driverFor: () => driver,
       resolveBinary: async (_kind, fallback) => fallback,
       spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       emitRawRuntimeOutput: true,
       sigtermToSigkillMs: 50,
@@ -5919,7 +5917,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         firstSpawn = false;
         return stub as unknown as ChildProcess;
       },
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
@@ -6456,7 +6454,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       driverFor: () => driver,
       resolveBinary: async (_k, fb) => fb,
       spawnFn: () => stub as unknown as ChildProcess,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
@@ -6892,7 +6890,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
         firstSpawn = false;
         return stub as unknown as ChildProcess;
       },
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ homeDir: SUPERVISOR_HOME }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,

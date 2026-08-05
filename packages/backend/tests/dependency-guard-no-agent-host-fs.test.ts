@@ -247,7 +247,7 @@ describe('backend/src → runtime_start path-emission boundary (D4.e-6 A1/I6)', 
 
   it('no backend/src file references the retired agent-host `home_dir` key', () => {
     // `home_dir` was the agent L1 home path the runtime_start carve-out used
-    // to emit. The daemon now resolves it (`computeAgentDir`); the key must
+    // to emit. The daemon now resolves it (`resolveAgentDir`); the key must
     // appear nowhere in backend/src so a future change can't re-introduce a
     // server-emitted agent-home path. (`agent_home_workspace_path` — the
     // daemon's ACK field validated by the materialize route — is a distinct

@@ -10,14 +10,15 @@ import { join, relative, resolve } from 'node:path';
  * actually write. `workspaceDataRootDir` is gone (the daemon owns no registry
  * and no workspace-data root), so requiring it would guard nothing. What the
  * daemon does root is the DURABLE AGENT TREE — agent L1 plus the per-agent L2
- * bundles under it: with no explicit coordinate, agent-file operations fall
- * through to the helpers' homedir default (`~/.silverhand/agents`). Three
- * distinct seams redirect that tree, and any ONE of them is sufficient:
- * `agentHomeRootDir` (direct override), `computersRootDir` (the binding-keyed
- * slot the frozen context derives the agents root from), and the
- * `agentMaterializeHomeDir` test hook (replaces the home the default layout is
- * derived from — used by fixtures that assert the default `<home>/.silverhand`
- * shape). #task:1598 round 4's rule still holds for `daemonIdentityPath`: with
+ * bundles under it. #task:1813 removed the homedir-derived fallback: the agents
+ * root is now a REQUIRED explicit coordinate, so an un-rooted daemon refuses
+ * agent-file work instead of quietly resolving `~/.silverhand/agents`. This
+ * guard therefore pins the POSITIVE requirement — a fixture states where the
+ * durable tree lives rather than relying on that refusal — via either of the
+ * two remaining seams, any ONE of which is sufficient: `agentHomeRootDir`
+ * (direct) or `computersRootDir` (the binding-keyed slot the frozen context
+ * derives the agents root from). There is deliberately no home-dir test hook
+ * left to sandbox. #task:1598 round 4's rule still holds for `daemonIdentityPath`: with
  * the sibling derivation gone, an omitted identity coordinate falls back to
  * `~/.silverhand/daemon/identity.json`.
  *
@@ -51,14 +52,13 @@ function collectTsFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe('daemon test fixtures cannot address the real ~/.silverhand', () => {
-  it('every runDaemon( call in test sources sandboxes the durable agent tree (agentHomeRootDir | computersRootDir | agentMaterializeHomeDir) AND passes daemonIdentityPath', () => {
+  it('every runDaemon( call in test sources sandboxes the durable agent tree (agentHomeRootDir | computersRootDir) AND passes daemonIdentityPath', () => {
     // #task:1608 — `computersRootDir` sandboxes the binding-keyed slot that
-    // supplies the agents root, and `agentMaterializeHomeDir` replaces the home
-    // the default layout hangs off; each protects the same bytes an explicit
-    // `agentHomeRootDir` does, so any one keeps the fixture off the real
+    // supplies the agents root, protecting the same bytes an explicit
+    // `agentHomeRootDir` does, so either one keeps the fixture off the real
     // ~/.silverhand.
     const REQUIRED_OPTIONS: Array<string | readonly string[]> = [
-      ['agentHomeRootDir', 'computersRootDir', 'agentMaterializeHomeDir'],
+      ['agentHomeRootDir', 'computersRootDir'],
       'daemonIdentityPath',
     ];
     const violations: string[] = [];
@@ -93,7 +93,7 @@ describe('daemon test fixtures cannot address the real ~/.silverhand', () => {
     }
     expect(
       violations,
-      `daemon fixtures must sandbox the agent tree (agentHomeRootDir | computersRootDir | agentMaterializeHomeDir) + pass daemonIdentityPath (or they write the real ~/.silverhand):\n${violations.join('\n')}`,
+      `daemon fixtures must state the durable agent tree (agentHomeRootDir | computersRootDir) + pass daemonIdentityPath (whose omission still falls back to the real ~/.silverhand):\n${violations.join('\n')}`,
     ).toEqual([]);
   });
 });

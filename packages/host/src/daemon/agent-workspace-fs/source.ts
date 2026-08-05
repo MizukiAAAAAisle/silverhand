@@ -7,10 +7,11 @@ import { WorkspaceIdSegmentError } from '../workspace-path-authority.js';
 import { AgentWorkspaceFsError } from './error.js';
 
 export interface ResolveAgentWorkspaceBaseDeps {
-  /** Parent dir for agent-home resolution. Default: daemon's homedir. */
-  homeDir?: string;
-  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
-  agentHomeRootDir?: string;
+  /**
+   * The EXACT agents root agent-home resolution joins onto, from the
+   * composition root. Required — no implicit default (#task:1813).
+   */
+  agentHomeRootDir: string;
 }
 
 /**
@@ -38,7 +39,7 @@ export interface ResolveAgentWorkspaceBaseDeps {
  */
 export function resolveAgentWorkspaceBaseDir(
   params: { agent_id: string; workspace_id?: string },
-  deps: ResolveAgentWorkspaceBaseDeps = {},
+  deps: ResolveAgentWorkspaceBaseDeps,
 ): string {
   const workspaceId = params.workspace_id;
   if (!workspaceId || isAgentHomeWorkspaceId(workspaceId, params.agent_id)) {

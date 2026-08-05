@@ -150,7 +150,7 @@ Daemon-host owns and is the only writer of:
   directory tree, seeding agent L2 (`MEMORY.md` / `notes/`), and
   deriving local runtime paths from the
   typed `workspace.path` metadata it receives.
-- Agent L1/L2 fs mutation: `~/.silverhand/agents/<id>/system_prompt.md`
+- Agent L1/L2 fs mutation: `<agents root>/<id>/system_prompt.md`
   + `MEMORY.md` + `notes/*.md` writes, `<workspace>/.silverhand/agents/<id>/`
   scaffolding, agent-deletion `fs.rm` of L1/L2 directories
 - Spawn materialization: writing per-spawn `system-prompt.md`,
@@ -609,8 +609,10 @@ authority for every host-local absolute path.
   fails closed, so a server-supplied id like `../escape` can never become a
   path. A caller-*requested* path is re-validated daemon-side and rejected
   inside the managed root, the home dir, `/`, or the state root. Agent-home
-  derives deterministically from `homedir()` + agent_id (`computeAgentDir`)
-  and is not stored in the registry.
+  derives deterministically as ONE join of the composition root's agents root
+  + agent_id (`resolveAgentDir`; the root is a REQUIRED explicit coordinate —
+  #task:1813 removed the `homedir()`-derived fallback) and is not stored in the
+  registry.
 - **No lazy backfill.** The legacy `WorkspaceRegistryBackfiller` (DB-path →
   `requested_path` rebind) is retired (#task:1612, delete gate: fleet
   `migration_complete=true`). The registry is the sole authority: provision

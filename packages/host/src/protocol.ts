@@ -767,7 +767,7 @@ const RuntimeStartWorkspaceRefSchema = z
     // `regular` workspaces to their deterministic agent-centric bundle
     // coordinate (`resolveAgentWorkspaceBundleDir(agentId, id)`) — no
     // registry establishment gate — and `agent_home` via
-    // `computeAgentDir(agentId)`. No path field travels on this wire.
+    // `resolveAgentDir(agentId)`. No path field travels on this wire.
   })
   .strict();
 
@@ -777,7 +777,7 @@ const RuntimeStartAgentRefSchema = z
     name: z.string().min(1),
     // D4.e-6: SEMANTIC ref only — no `home_dir`. Revokes the prior
     // carve-out (design §3.5). The daemon resolves the agent's L1
-    // profile base locally as `computeAgentDir(agentId)` — identical
+    // profile base locally as `resolveAgentDir(agentId)` — identical
     // to how `agent_materialize`/`agent_workspace_tree` already resolve
     // it — and reads `system_prompt.md` under it.
   })
@@ -831,7 +831,7 @@ const FORBIDDEN_RUNTIME_START_OPTION_KEYS = new Set([
   'cwd',
   'workspace_path',
   // D4.e-6: `home_dir` joins the forbidden set — the agent L1 base is
-  // daemon-resolved (`computeAgentDir`), never server-supplied. The
+  // daemon-resolved (`resolveAgentDir`), never server-supplied. The
   // strict() ref schemas already reject it at the top level; listing it
   // here also bans it from appearing nested anywhere in options.
   'home_dir',
@@ -875,8 +875,8 @@ function rejectForbiddenRuntimeStartOptionKeys(
  * Runtime start metadata. This schema is deliberately strict and, as of
  * D4.e-6, carries NO host-local paths: `agent`/`workspace`/
  * `workspace_memory_index` are semantic refs (`id`/`name`/`kind`) and the
- * daemon resolves every absolute path locally (registry for `regular`,
- * `computeAgentDir` for `agent_home`). Server-derived execution artifacts
+ * daemon resolves every absolute path locally (the deterministic bundle
+ * coordinate for `regular`, `resolveAgentDir` for `agent_home`). Server-derived execution artifacts
  * and prompt bytes were never allowed and remain forbidden below.
  */
 export const StartOptionsSchema = z
@@ -2009,7 +2009,7 @@ const AgentWorkspaceIndexIpcErrorSchema = z
 export const AgentWorkspaceTreeParamsSchema = z
   .object({
     /** The agent whose home dir is walked. The daemon owns path
-     *  resolution (`computeAgentDir`) — no server-derived path
+     *  resolution (`resolveAgentDir`) — no server-derived path
      *  crosses the wire. */
     agent_id: z.string().min(1),
     /** Optional L2 scope. Omitted = the agent home/L1 dir. Present =
@@ -2177,7 +2177,7 @@ const AgentL2SeedIpcErrorSchema = z
 // Removes an agent's host-local files on the OWNING daemon. Replaces the
 // backend `DELETE /api/agents/:id` `fs.rm(l1_path / l2_paths)` block (G3):
 // the backend forwards only `{ agent_id }`; the daemon resolves the agent
-// home tree (`<home>/.silverhand/agents/<agent_id>` = L1 + every nested
+// home tree (`<agents root>/<agent_id>` = L1 + every nested
 // `workspaces/<id>` L2 bundle) itself — no fs path crosses the wire (I1).
 // relocation-v1 §7 task 4 (registry demotion): the whole managed footprint is
 // one tree, so the purge removes it in a single rm and consults NO registry.
@@ -2225,7 +2225,7 @@ const AgentFilesPurgeIpcErrorSchema = z
 
 // ── #task:1135: profile MCP read / write ─────────────────────────────
 // Backs `silverhand profile mcp get|set`. The subject's raw MCP config is
-// host-local L1 truth (`<home>/.silverhand/agents/<id>/mcp.json`); the backend
+// host-local L1 truth (`<agents root>/<agent_id>/mcp.json`); the backend
 // never stores raw bytes. Read returns the raw text (or null when absent — the
 // normal "no MCP" case, NOT an error). Write validates the canonical schema
 // (fail-loud `invalid_config`) and atomically replaces the file. The daemon

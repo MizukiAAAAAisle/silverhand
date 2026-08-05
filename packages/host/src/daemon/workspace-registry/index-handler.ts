@@ -53,10 +53,11 @@ export class AgentWorkspaceIndexError extends DaemonTypedError {
 }
 
 export interface IndexAgentWorkspacesDeps {
-  /** Parent dir for agent-home resolution. Default: daemon's homedir(). */
-  homeDir?: string;
-  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
-  agentHomeRootDir?: string;
+  /**
+   * The EXACT agents root agent-home resolution joins onto, from the
+   * composition root. Required — no implicit default (#task:1813).
+   */
+  agentHomeRootDir: string;
 }
 
 export async function indexAgentWorkspaces(
@@ -67,7 +68,7 @@ export async function indexAgentWorkspaces(
   const unresolved: string[] = [];
 
   for (const workspaceId of params.workspace_ids) {
-    // Agent-home (DM): the L1 dir, derived from the daemon's own homedir
+    // Agent-home (DM): the L1 dir, derived from the daemon's own agents root
     // — materialized by `agent_materialize`. Structural match on the canonical
     // id. Still a CWD fact: report it ONLY if the L1 dir is a usable cwd right
     // now (the SAME `bundleCwdUsable` predicate as regular workspaces), so we

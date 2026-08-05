@@ -20,10 +20,20 @@ import {
  * (layout v2, later release) consumes this same API's `legacy-v1`/`v2`
  * pairs — it must not become a second resolver.
  *
- * Compatibility floor (#task:1598): production pins `legacy-v1`, whose
- * output is byte-identical to the historical flat layout. `v2` is defined
- * here so the migration and the layout marker have a single source, but
- * nothing writes it yet.
+ * Version selection (#task:1603, corrected #task:1813): production is on
+ * `v2`. The desktop process flips to it exactly once at startup, right after
+ * `prepareDesktopDataLayout` reads/writes the data-layout marker
+ * (`initializeDesktopLayoutVersion('v2')`); every main-process path consumer
+ * then reads the resolved bundle. The two versions differ in the
+ * `embeddedServer` facet ONLY — `legacy-v1` puts it directly on the app root,
+ * `v2` under `embedded-server/`; every other facet is byte-identical in both.
+ *
+ * `legacy-v1` therefore survives in exactly three roles, none of them a
+ * "production is still flat" claim: the desktop config module's PRE-INIT
+ * default (before the migration has run), the migration's own SOURCE
+ * coordinates, and callers outside the desktop process that read only
+ * version-independent facets (attachments cache, `run/`, the legacy flat
+ * local-computer facet) — there the argument is inert.
  */
 
 export type DesktopLayoutVersion = 'legacy-v1' | 'v2';

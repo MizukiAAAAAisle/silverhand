@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import {
   AgentWorkspaceFsError,
   MAX_PREVIEW_BYTES,
+  TRUNCATED_SUFFIX,
   readAgentWorkspaceFile,
 } from '../../src/daemon/agent-workspace-fs/index.js';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
@@ -40,9 +41,9 @@ import { AgentWorkspaceFileReadParamsSchema } from '../../src/protocol.js';
 
 const AGENT_ID = 'aid-read-file';
 
-let homeDir = '';
+let agentHomeRootDir = '';
 function agentDir(): string {
-  return join(homeDir, '.silverhand', 'agents', AGENT_ID);
+  return join(agentHomeRootDir, AGENT_ID);
 }
 /** The deterministic agent-centric L2 bundle dir for a regular workspace —
  *  `<agent home>/workspaces/<workspace_id>` (relocation-v1 §3.2). No registry
@@ -53,11 +54,11 @@ function l2BundleDir(workspaceId = 'ws_1'): string {
 
 describe('readAgentWorkspaceFile', () => {
   beforeEach(() => {
-    homeDir = mkdtempSync(join(tmpdir(), 'shrf-home-'));
+    agentHomeRootDir = mkdtempSync(join(tmpdir(), 'shrf-agents-'));
   });
   afterEach(() => {
     try {
-      rmSync(homeDir, { recursive: true, force: true });
+      rmSync(agentHomeRootDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
@@ -70,7 +71,7 @@ describe('readAgentWorkspaceFile', () => {
 
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'MEMORY.md' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.ok).toBe(true);
     expect(r.file.path).toBe('MEMORY.md');
@@ -92,7 +93,7 @@ describe('readAgentWorkspaceFile', () => {
 
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', path: 'MEMORY.md' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.file.content).toBe('workspace memory');
   });
@@ -108,7 +109,7 @@ describe('readAgentWorkspaceFile', () => {
         workspace_id: agentHomeWorkspaceId(AGENT_ID),
         path: 'system_prompt.md',
       },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.file.content).toBe('l1 prompt');
   });
@@ -125,7 +126,7 @@ describe('readAgentWorkspaceFile', () => {
 
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, workspace_id: 'ws_pure_db', path: 'MEMORY.md' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.file.content).toBe('l2');
   });
@@ -141,7 +142,7 @@ describe('readAgentWorkspaceFile', () => {
           workspace_id: 'ws_never_spawned',
           path: 'MEMORY.md',
         },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({
       code: 'not_found',
@@ -155,7 +156,7 @@ describe('readAgentWorkspaceFile', () => {
 
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'notes/work-log.md' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.ok).toBe(true);
     expect(r.file.content).toBe('## entry');
@@ -167,10 +168,10 @@ describe('readAgentWorkspaceFile', () => {
     writeFileSync(join(dir, 'MEMORY.md'), 'x'.repeat(MAX_PREVIEW_BYTES + 500));
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'MEMORY.md' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.file.truncated).toBe(true);
-    expect(r.file.content).toContain('(truncated;');
+    expect(r.file.content.endsWith(TRUNCATED_SUFFIX)).toBe(true);
     // size reflects the real on-disk size, not the capped preview length.
     expect(r.file.size).toBe(MAX_PREVIEW_BYTES + 500);
   });
@@ -201,7 +202,7 @@ describe('readAgentWorkspaceFile', () => {
     try {
       const r = await readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path: 'MEMORY.md' },
-        { homeDir },
+        { agentHomeRootDir },
       );
       expect(readFileCalled).toBe(false);
       expect(r.file.truncated).toBe(true);
@@ -224,7 +225,7 @@ describe('readAgentWorkspaceFile', () => {
     writeFileSync(join(dir, 'MEMORY.md'), exact);
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'MEMORY.md' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.file.truncated).toBe(false);
     expect(r.file.size).toBe(exact.length);
@@ -245,18 +246,21 @@ describe('readAgentWorkspaceFile', () => {
     writeFileSync(join(dir, 'MEMORY.md'), oneOver);
     const r = await readAgentWorkspaceFile(
       { agent_id: AGENT_ID, path: 'MEMORY.md' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.file.truncated).toBe(true);
     expect(r.file.size).toBe(oneOver.length);
     // Preview MUST start with exactly the first MAX bytes of file
     // content — proves we sliced what we read, not unread tail of
-    // `allocUnsafe`. End MUST be the truncation suffix.
+    // `allocUnsafe` — and MUST end with the marker, nothing after it.
     expect(r.file.content.startsWith('c'.repeat(MAX_PREVIEW_BYTES))).toBe(true);
-    expect(r.file.content.endsWith('(truncated;')).toBe(false); // suffix has trailing chars after
-    expect(r.file.content).toContain('(truncated;');
-    // Preview length is bounded: MAX preview bytes + suffix headroom.
-    expect(r.file.content.length).toBeLessThanOrEqual(MAX_PREVIEW_BYTES + 200);
+    expect(r.file.content.endsWith(TRUNCATED_SUFFIX)).toBe(true);
+    // With both ends pinned, the exact length proves there is nothing else in
+    // between (asserted as a length, not a 512KB string equality, so a
+    // regression prints a number instead of a diff nobody can read).
+    expect(r.file.content.length).toBe(
+      MAX_PREVIEW_BYTES + TRUNCATED_SUFFIX.length,
+    );
   });
 
   it('survives short reads: forcing the first read syscalls to return 1 byte at a time still fills the preview', async () => {
@@ -319,14 +323,14 @@ describe('readAgentWorkspaceFile', () => {
     try {
       const r = await readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path: 'MEMORY.md' },
-        { homeDir },
+        { agentHomeRootDir },
       );
       expect(r.file.truncated).toBe(true); // lstat-driven, not bytesRead-driven
       expect(r.file.size).toBe(total);
       expect(r.file.content.startsWith('d'.repeat(MAX_PREVIEW_BYTES))).toBe(
         true,
       );
-      expect(r.file.content).toContain('(truncated;');
+      expect(r.file.content.endsWith(TRUNCATED_SUFFIX)).toBe(true);
     } finally {
       fs.promises.open = origOpen;
     }
@@ -347,7 +351,7 @@ describe('readAgentWorkspaceFile', () => {
     await expect(
       readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'forbidden_path' });
   });
@@ -372,7 +376,7 @@ describe('readAgentWorkspaceFile', () => {
     await expect(
       readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path: 'link.md' },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'forbidden_path' });
   });
@@ -386,7 +390,7 @@ describe('readAgentWorkspaceFile', () => {
     await expect(
       readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path: 'notes/inner.md' },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'forbidden_path' });
   });
@@ -397,7 +401,7 @@ describe('readAgentWorkspaceFile', () => {
     await expect(
       readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path: 'MEMORY.md' },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
@@ -408,7 +412,7 @@ describe('readAgentWorkspaceFile', () => {
     await expect(
       readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path: 'notes/a.md' },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
@@ -419,7 +423,7 @@ describe('readAgentWorkspaceFile', () => {
     await expect(
       readAgentWorkspaceFile(
         { agent_id: AGENT_ID, path: 'notes' },
-        { homeDir },
+        { agentHomeRootDir },
       ),
     ).rejects.toMatchObject({ code: 'not_found' });
   });
@@ -431,13 +435,13 @@ describe('readAgentWorkspaceFile', () => {
     try {
       writeFileSync(join(outside, 'leak.md'), 'never');
       const dir = agentDir();
-      mkdirSync(join(homeDir, '.silverhand', 'agents'), { recursive: true });
+      mkdirSync(agentHomeRootDir, { recursive: true });
       symlinkSync(outside, dir);
 
       await expect(
         readAgentWorkspaceFile(
           { agent_id: AGENT_ID, path: 'leak.md' },
-          { homeDir },
+          { agentHomeRootDir },
         ),
       ).rejects.toMatchObject({ code: 'forbidden_path' });
     } finally {
@@ -456,13 +460,13 @@ describe('readAgentWorkspaceFile', () => {
       await expect(
         readAgentWorkspaceFile(
           { agent_id: AGENT_ID, path: 'system_prompt.md' },
-          { homeDir },
+          { agentHomeRootDir },
         ),
       ).rejects.toBeInstanceOf(AgentWorkspaceFsError);
       await expect(
         readAgentWorkspaceFile(
           { agent_id: AGENT_ID, path: 'system_prompt.md' },
-          { homeDir },
+          { agentHomeRootDir },
         ),
       ).rejects.toMatchObject({ code: 'fs_unavailable' });
     } finally {

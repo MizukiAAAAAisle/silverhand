@@ -52,7 +52,7 @@ const MAX_NODES = 5000;
 
 export async function listAgentWorkspaceTree(
   params: AgentWorkspaceTreeParams,
-  deps: ListAgentWorkspaceTreeDeps = {},
+  deps: ListAgentWorkspaceTreeDeps,
 ): Promise<AgentWorkspaceTreeResult> {
   const baseDir = resolveAgentWorkspaceBaseDir(params, deps);
   const nodes: AgentWorkspaceTreeNode[] = [];

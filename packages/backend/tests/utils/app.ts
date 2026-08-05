@@ -648,7 +648,7 @@ export class FakeHostWsServerController implements HostWsServerController {
       }
       // Mirror the daemon (relocation-v1 §7 task 4, files-purge-handler.ts):
       // the agent's whole managed footprint is a SINGLE tree
-      // (`<home>/.silverhand/agents/<agent_id>` = L1 + every nested
+      // (`<agents root>/<agent_id>` = L1 + every nested
       // `workspaces/<wid>` L2 bundle), so purge is one rm — no registry, no
       // workspace-id enumeration, no disjoint L2 map. ENOENT is success (not
       // counted). Legacy pre-relocation sources are permanently retained per

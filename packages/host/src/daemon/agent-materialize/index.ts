@@ -9,8 +9,6 @@ export {
   AgentMaterializeError,
   bundleCwdUsable,
   bundleL2Present,
-  computeAgentDir,
-  computeAgentDirFromRoot,
   materializeAgent,
   resolveAgentDir,
   resolveAgentWorkspaceBundleDir,

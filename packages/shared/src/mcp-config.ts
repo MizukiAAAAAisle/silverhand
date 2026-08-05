@@ -29,7 +29,8 @@ export type McpScope = 'profile' | 'workspace';
 
 /**
  * Canonical filename of the raw profile MCP config under a subject's L1 home
- * (`~/.silverhand/agents/<id>/mcp.json`). One constant so the daemon
+ * (`<agent L1 dir>/mcp.json`; the daemon is the sole authority for that dir's
+ * host-local coordinate). One constant so the daemon
  * read/write handler, the spawn loader, and the UI all agree.
  */
 export const MCP_CONFIG_FILENAME = 'mcp.json';

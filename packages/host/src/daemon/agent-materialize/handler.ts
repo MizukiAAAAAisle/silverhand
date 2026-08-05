@@ -10,9 +10,11 @@
  * Contract (design §3.1 / §4.6 / §6.5 / §8):
  *
  *   - `agent_dir` is computed daemon-local — the server only
- *     supplies `agent_id`. Default: `~/.silverhand/agents/<id>/`.
- *     Tests inject `homeDir` so they can point at a tmp dir
- *     without touching the real user home.
+ *     supplies `agent_id`. It is ONE join onto the agents root the
+ *     composition root resolved (`resolveComputerSlotPaths(...).agents`,
+ *     i.e. `computers/<computer_id>/agents/<agent_id>/`), passed in
+ *     EXPLICITLY as `agentHomeRootDir`. There is no implicit default —
+ *     see {@link resolveAgentDir}.
  *   - `agent_home_workspace_path === agent_dir` (§6.5 invariant —
  *     the DM workspace path IS the L1 dir).
  *   - Templates come from `template.ts`; daemon owns them and the
@@ -40,12 +42,7 @@ import {
 import { access, stat } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import {
-  defaultAppRoot,
-  resolveDesktopAppPaths,
-} from '@silverhand/shared/app-data-layout';
 import type {
   AgentMaterializeErrorCode,
   AgentMaterializeParams,
@@ -85,17 +82,21 @@ export class AgentMaterializeError extends DaemonTypedError {
 
 export interface MaterializeAgentDeps {
   /**
-   * Override the parent dir under which `agent_dir` is computed.
-   * Production: `~`. Tests: a tmp directory. Default: `homedir()`.
+   * The EXACT root under which per-agent L1 dirs live — the computer
+   * slot's `agents` dir (`resolveComputerSlotPaths(...).agents`),
+   * resolved once by the composition root and passed down.
+   *
+   * REQUIRED, deliberately (#task:1813). Every agent-file, seed, purge
+   * and spawn path resolves its coordinate from this one value, so a
+   * missing root must be a refusal at the caller, never a fallback
+   * here: the historical `homeDir`-seeded default resolved to the
+   * legacy flat `~/.silverhand/agents/<id>` through the env-AWARE
+   * `defaultAppRoot`, which made any un-rooted caller (bare daemon,
+   * unit test) a SECOND path authority writing durable L1/L2 into the
+   * real user home. Requiring the root moves that from a runtime
+   * surprise to a type error.
    */
-  homeDir?: string;
-  /**
-   * Override the exact root under which per-agent L1 dirs live.
-   * Production Desktop passes `<SILVERHAND_DIR>/agents` so isolated
-   * app launches do not write L1 files into the global user profile.
-   * Takes precedence over `homeDir`.
-   */
-  agentHomeRootDir?: string;
+  agentHomeRootDir: string;
   /** Override `Date.now()` so tests can pin `materialized_at`. */
   now?: () => number;
   /**
@@ -115,35 +116,19 @@ export interface MaterializeAgentDeps {
 }
 
 /**
- * Compute the absolute path the agent's L1 home lives at on this
- * host. Bare-daemon fallback only — production wiring passes
- * `agentHomeRootDir` explicitly. #task:1598/#task:1603 — delegates to
- * the shared app-data path authority (legacy-v1 agents root; env-AWARE
- * since the v2 cutover, contract §8); the `homeDir` seam keeps the
- * historical test signature.
+ * The absolute path the agent's L1 home lives at on this host — the SOLE
+ * resolver for that coordinate, and one join onto the explicit agents
+ * root (#task:1598/#task:1603/#task:1813). It derives nothing: no
+ * `homedir()`, no env read, no layout-version branch. Callers that have
+ * no root must fail closed with their own typed error instead of asking
+ * for a default (the daemon's `agentsRootFor`), so no process can
+ * silently rebuild the retired flat `~/.silverhand/agents` authority.
  */
-export function computeAgentDir(agentId: string, homeDir = homedir()): string {
-  return join(
-    resolveDesktopAppPaths(defaultAppRoot(process.env, () => homeDir), 'legacy-v1')
-      .legacyLocalComputer.agents,
-    agentId,
-  );
-}
-
-export function computeAgentDirFromRoot(
-  agentId: string,
-  agentHomeRootDir: string,
-): string {
-  return join(agentHomeRootDir, agentId);
-}
-
 export function resolveAgentDir(
   agentId: string,
-  deps: Pick<MaterializeAgentDeps, 'homeDir' | 'agentHomeRootDir'> = {},
+  deps: Pick<MaterializeAgentDeps, 'agentHomeRootDir'>,
 ): string {
-  return deps.agentHomeRootDir
-    ? computeAgentDirFromRoot(agentId, deps.agentHomeRootDir)
-    : computeAgentDir(agentId, deps.homeDir);
+  return join(deps.agentHomeRootDir, agentId);
 }
 
 /**
@@ -170,7 +155,7 @@ export function resolveAgentDir(
 export function resolveAgentWorkspaceBundleDir(
   agentId: string,
   workspaceId: string,
-  deps: Pick<MaterializeAgentDeps, 'homeDir' | 'agentHomeRootDir'> = {},
+  deps: Pick<MaterializeAgentDeps, 'agentHomeRootDir'>,
 ): string {
   return join(
     resolveAgentDir(agentId, deps),
@@ -254,7 +239,7 @@ export async function bundleL2Present(bundleDir: string): Promise<boolean> {
  */
 export async function materializeAgent(
   params: AgentMaterializeParams,
-  deps: MaterializeAgentDeps = {},
+  deps: MaterializeAgentDeps,
 ): Promise<AgentMaterializeResult> {
   const now = deps.now ?? Date.now;
   const agentDir = resolveAgentDir(params.agent_id, deps);

@@ -25,8 +25,8 @@ export interface BuildRuntimeStartOptionsInput {
  * backend ships `agent`/`workspace`/`workspace_memory_index` as identity
  * refs only (`id`/`name`/`kind`). It does NOT compute, read, or transmit
  * any host-local path — the daemon is the sole authority and resolves every
- * absolute path itself (registry for `regular`, `computeAgentDir` for
- * `agent_home`). No `node:path`/`node:fs` import lives here.
+ * absolute path itself (the deterministic bundle coordinate for `regular`,
+ * `resolveAgentDir` for `agent_home`). No `node:path`/`node:fs` import lives here.
  */
 export function buildRuntimeStartOptions(
   input: BuildRuntimeStartOptionsInput,

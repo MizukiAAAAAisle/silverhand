@@ -6,10 +6,9 @@ import {
   AGENT_HOME_SENTINEL_FILENAME,
   AGENT_HOME_TEMPLATE_VERSION,
   AgentMaterializeError,
-  computeAgentDir,
-  computeAgentDirFromRoot,
   materializeAgent,
   readSentinel,
+  resolveAgentDir,
 } from '../../src/daemon/agent-materialize/index.js';
 
 /**
@@ -17,27 +16,33 @@ import {
  * each `it` below pins one of the seven cases (success, idempotent,
  * three mismatch flavors, foreign-content, fs-classification).
  *
- * Tmp home dir convention: each test gets its own `mkdtempSync` so
+ * Sandbox convention: each test gets its own `mkdtempSync` root so
  * cases cannot bleed (especially the "permission-denied" arm, which
- * leaves a dir mode flipped). Tests run on the daemon's local fs;
- * the handler's `homeDir` injection points us at the tmp tree.
+ * leaves a dir mode flipped). Tests run on the daemon's local fs; the
+ * handler takes the agents root EXPLICITLY (`agentHomeRootDir`, #task:1813
+ * — there is no implicit home-relative default), so every case below is
+ * pinned to the tmp tree by construction, never by an env-aware fallback.
  */
 
-let homeDir: string;
+let sandboxRoot: string;
+/** The EXACT agents root every case joins onto — same on-disk shape the
+ *  composition root produces, just under a tmp sandbox. */
+let agentHomeRootDir: string;
 
 beforeEach(() => {
-  homeDir = mkdtempSync(join(tmpdir(), 'silverhand-d4d-d2-'));
+  sandboxRoot = mkdtempSync(join(tmpdir(), 'silverhand-d4d-d2-'));
+  agentHomeRootDir = join(sandboxRoot, '.silverhand', 'agents');
 });
 
 afterEach(() => {
   // Restore writable mode in case a test flipped it; rmSync ignores
   // the perms but trying to clean up cleanly keeps CI output sane.
   try {
-    chmodSync(homeDir, 0o755);
+    chmodSync(sandboxRoot, 0o755);
   } catch {
     // ignore
   }
-  rmSync(homeDir, { recursive: true, force: true });
+  rmSync(sandboxRoot, { recursive: true, force: true });
 });
 
 function baseParams(overrides: Partial<Record<string, unknown>> = {}) {
@@ -54,11 +59,11 @@ function baseParams(overrides: Partial<Record<string, unknown>> = {}) {
 describe('materializeAgent — §4.6 decision tree', () => {
   it('first-time materialize: missing dir → seed + sentinel + ok', async () => {
     const result = await materializeAgent(baseParams(), {
-      homeDir,
+      agentHomeRootDir,
       now: () => 1_700_000_000_000,
     });
 
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     expect(result).toEqual({
       ok: true,
       agent_dir: agentDir,
@@ -100,33 +105,19 @@ describe('materializeAgent — §4.6 decision tree', () => {
     });
   });
 
-  it('uses agentHomeRootDir when provided', async () => {
-    const agentHomeRootDir = join(homeDir, 'isolated-agents');
-    const result = await materializeAgent(baseParams(), {
+  it('idempotent re-call: sentinel identity fields match → ok without rewrite', async () => {
+    await materializeAgent(baseParams(), {
       agentHomeRootDir,
       now: () => 1_700_000_000_000,
     });
-
-    const agentDir = computeAgentDirFromRoot('aid_abc', agentHomeRootDir);
-    expect(result.agent_dir).toBe(agentDir);
-    expect(result.agent_home_workspace_path).toBe(agentDir);
-    expect(existsSync(join(agentDir, 'system_prompt.md'))).toBe(true);
-    expect(existsSync(computeAgentDir('aid_abc', homeDir))).toBe(false);
-  });
-
-  it('idempotent re-call: sentinel identity fields match → ok without rewrite', async () => {
-    await materializeAgent(baseParams(), {
-      homeDir,
-      now: () => 1_700_000_000_000,
-    });
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     // Mutate a template file to prove the second call does NOT
     // re-seed (idempotent ok must not overwrite existing files).
     const promptPath = join(agentDir, 'system_prompt.md');
     writeFileSync(promptPath, 'user-edited content');
 
     const result = await materializeAgent(baseParams(), {
-      homeDir,
+      agentHomeRootDir,
       now: () => 1_700_999_999_999,
     });
 
@@ -140,8 +131,8 @@ describe('materializeAgent — §4.6 decision tree', () => {
     'sentinel mismatch on %s → agent_dir_collision',
     async field => {
       // First materialize with the canonical params.
-      await materializeAgent(baseParams(), { homeDir });
-      const agentDir = computeAgentDir('aid_abc', homeDir);
+      await materializeAgent(baseParams(), { agentHomeRootDir });
+      const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
       const sentinelPath = join(agentDir, AGENT_HOME_SENTINEL_FILENAME);
 
       // Mutate ONE sentinel field so the second call (which sends
@@ -162,7 +153,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
       }
       writeFileSync(sentinelPath, JSON.stringify(stored));
 
-      await expect(materializeAgent(baseParams(), { homeDir })).rejects.toMatchObject({
+      await expect(materializeAgent(baseParams(), { agentHomeRootDir })).rejects.toMatchObject({
         name: 'AgentMaterializeError',
         code: 'agent_dir_collision',
         message: expect.stringContaining(field),
@@ -171,14 +162,14 @@ describe('materializeAgent — §4.6 decision tree', () => {
   );
 
   it('treats sentinel runtime as materialization provenance, not directory identity', async () => {
-    await materializeAgent(baseParams(), { homeDir });
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    await materializeAgent(baseParams(), { agentHomeRootDir });
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     const file = join(agentDir, AGENT_HOME_SENTINEL_FILENAME);
     const stored = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
     stored.runtime = 'codex';
     writeFileSync(file, JSON.stringify(stored));
 
-    const result = await materializeAgent(baseParams(), { homeDir });
+    const result = await materializeAgent(baseParams(), { agentHomeRootDir });
 
     expect(result.ok).toBe(true);
     expect(result.materialized_at).toBe(stored.materialized_at);
@@ -186,11 +177,11 @@ describe('materializeAgent — §4.6 decision tree', () => {
   });
 
   it('foreign content in dir (no sentinel) → agent_dir_collision', async () => {
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(join(agentDir, 'someone-elses-file'), 'hello');
 
-    await expect(materializeAgent(baseParams(), { homeDir })).rejects.toMatchObject({
+    await expect(materializeAgent(baseParams(), { agentHomeRootDir })).rejects.toMatchObject({
       name: 'AgentMaterializeError',
       code: 'agent_dir_collision',
       message: expect.stringContaining('someone-elses-file'),
@@ -202,24 +193,24 @@ describe('materializeAgent — §4.6 decision tree', () => {
   });
 
   it('empty dir (no sentinel) → seed (not collision)', async () => {
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     mkdirSync(agentDir, { recursive: true });
     expect(readdirSync(agentDir)).toEqual([]);
 
-    const result = await materializeAgent(baseParams(), { homeDir });
+    const result = await materializeAgent(baseParams(), { agentHomeRootDir });
     expect(result.ok).toBe(true);
     expect(existsSync(join(agentDir, AGENT_HOME_SENTINEL_FILENAME))).toBe(true);
   });
 
   it('sentinel JSON corrupt → agent_dir_collision (fail-closed)', async () => {
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(
       join(agentDir, AGENT_HOME_SENTINEL_FILENAME),
       'this is not json {{{',
     );
 
-    await expect(materializeAgent(baseParams(), { homeDir })).rejects.toMatchObject({
+    await expect(materializeAgent(baseParams(), { agentHomeRootDir })).rejects.toMatchObject({
       name: 'AgentMaterializeError',
       code: 'agent_dir_collision',
       message: expect.stringContaining('unrecognized sentinel'),
@@ -227,7 +218,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
   });
 
   it('sentinel with unknown version → agent_dir_collision', async () => {
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(
       join(agentDir, AGENT_HOME_SENTINEL_FILENAME),
@@ -240,7 +231,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
       }),
     );
 
-    await expect(materializeAgent(baseParams(), { homeDir })).rejects.toMatchObject({
+    await expect(materializeAgent(baseParams(), { agentHomeRootDir })).rejects.toMatchObject({
       name: 'AgentMaterializeError',
       code: 'agent_dir_collision',
     });
@@ -249,7 +240,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
   it('unsupported template_choice → unsupported_template (fails before fs touch)', async () => {
     await expect(
       materializeAgent(baseParams({ template_choice: 'onboarding' }), {
-        homeDir,
+        agentHomeRootDir,
       }),
     ).rejects.toMatchObject({
       name: 'AgentMaterializeError',
@@ -260,7 +251,7 @@ describe('materializeAgent — §4.6 decision tree', () => {
     // BEFORE the fs branches so a fail-fast doesn't half-create
     // an empty dir that the next retry would mistake for an
     // empty-but-claimed state.
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
     expect(existsSync(agentDir)).toBe(false);
   });
 
@@ -268,13 +259,13 @@ describe('materializeAgent — §4.6 decision tree', () => {
     // First materialize to create the dir, then make the dir
     // unreadable. The next call's `readdirSync` will EACCES on
     // the parent silverhand dir.
-    await materializeAgent(baseParams(), { homeDir });
-    const agentParent = join(homeDir, '.silverhand', 'agents');
+    await materializeAgent(baseParams(), { agentHomeRootDir });
+    const agentParent = agentHomeRootDir;
     chmodSync(agentParent, 0o000);
 
     try {
       await expect(
-        materializeAgent(baseParams({ agent_id: 'aid_other' }), { homeDir }),
+        materializeAgent(baseParams({ agent_id: 'aid_other' }), { agentHomeRootDir }),
       ).rejects.toMatchObject({
         name: 'AgentMaterializeError',
         // EACCES → fs_unavailable (NOT internal_error — Cindy
@@ -343,11 +334,11 @@ describe('materializeAgent — §4.6 decision tree', () => {
   // occur. The post-seed `verifyExpectedTree` scan must catch
   // it and refuse to write the sentinel.
   it('non-colliding foreign content dropped after empty-dir check → agent_dir_collision (post-seed scan catches it, sentinel NOT written)', async () => {
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
 
     await expect(
       materializeAgent(baseParams(), {
-        homeDir,
+        agentHomeRootDir,
         afterEmptyDirCheck: dir => {
           // Race winner drops a file the template doesn't own.
           // `notes/` is created by seedTemplate (in step 3) so we
@@ -379,11 +370,11 @@ describe('materializeAgent — §4.6 decision tree', () => {
   // `verifyExpectedTree` walk descends into template-declared
   // subdirs rather than only checking the top level.
   it('non-colliding foreign content dropped into template subdir → agent_dir_collision (nested scan catches it)', async () => {
-    const agentDir = computeAgentDir('aid_abc', homeDir);
+    const agentDir = resolveAgentDir('aid_abc', { agentHomeRootDir });
 
     await expect(
       materializeAgent(baseParams(), {
-        homeDir,
+        agentHomeRootDir,
         afterEmptyDirCheck: dir => {
           // Pre-create notes/ so we can drop a foreign file inside it
           // BEFORE seedTemplate runs. The template will then write
@@ -412,14 +403,14 @@ describe('materializeAgent — §4.6 decision tree', () => {
 
 describe('readSentinel — schema sanity', () => {
   it('returns kind:missing when the file does not exist', () => {
-    const agentDir = computeAgentDir('aid_nope', homeDir);
+    const agentDir = resolveAgentDir('aid_nope', { agentHomeRootDir });
     mkdirSync(agentDir, { recursive: true });
     const result = readSentinel(agentDir);
     expect(result.kind).toBe('missing');
   });
 
   it('returns kind:invalid for partial sentinel (missing runtime)', () => {
-    const agentDir = computeAgentDir('aid_partial', homeDir);
+    const agentDir = resolveAgentDir('aid_partial', { agentHomeRootDir });
     mkdirSync(agentDir, { recursive: true });
     writeFileSync(
       join(agentDir, AGENT_HOME_SENTINEL_FILENAME),

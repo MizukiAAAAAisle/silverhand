@@ -109,18 +109,10 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
   },
   {
     file: 'packages/host/src/daemon/agent-materialize/handler.ts',
-    token: 'homedir()',
-    line: 'export function computeAgentDir(agentId: string, homeDir = homedir()): string {',
-    reason:
-      'L1 agent-home bare-daemon fallback seam; the body delegates to the resolver agents root',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/agent-materialize/handler.ts',
     token: 'app-data dir join',
     line: 'return join(',
     reason:
-      'the deterministic (agent, regular-workspace) L2 bundle resolver: the agent-home subtree layout already lives in this file (computeAgentDir/resolveAgentDir), and this extends it with the id-keyed `workspaces/<id>` bundle root (id validated via `assertSafeWorkspaceIdSegment` before it becomes a path segment) — the SOLE runtime path authority for regular workspaces (relocation-v1 §3.2/§7 task 1)',
+      'the deterministic (agent, regular-workspace) L2 bundle resolver: the agent-home subtree layout already lives in this file (`resolveAgentDir`, ONE join onto the caller-supplied agents root — #task:1813 removed the homedir()-seeded fallback), and this extends it with the id-keyed `workspaces/<id>` bundle root (id validated via `assertSafeWorkspaceIdSegment` before it becomes a path segment) — the SOLE runtime path authority for regular workspaces (relocation-v1 §3.2/§7 task 1)',
     count: 1,
   },
   {
@@ -427,11 +419,6 @@ const VERSION_LITERAL_ALLOWLIST: Array<{
   {
     file: 'packages/host/src/daemon/local-outbound-frame-server.ts',
     reason: 'bare-daemon fallback wrapper (deriveLocalOutboundFrameSocketPath)',
-    count: 1,
-  },
-  {
-    file: 'packages/host/src/daemon/agent-materialize/handler.ts',
-    reason: 'bare-daemon fallback wrapper (computeAgentDir)',
     count: 1,
   },
   {

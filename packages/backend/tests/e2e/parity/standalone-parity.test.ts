@@ -43,14 +43,14 @@ interface StandaloneRigInternals extends ParityRig {
 }
 
 async function bootStandaloneRig(): Promise<StandaloneRigInternals> {
-  const agentHomeDir = mkdtempSync(join(tmpdir(), 'silverhand-d5a4-std-home-'));
+  const agentsRootDir = mkdtempSync(join(tmpdir(), 'silverhand-d5a4-std-agents-'));
   const harness = await bootG2Harness();
   const expectedSessionId = `d5a4-std-session-${Date.now()}`;
 
   const bootDaemon = (): Promise<DaemonWithSupervisorHandle> =>
     bootDaemonWithSupervisor(harness, {
       driverFor: (_kind: RuntimeKind) => makeParitySessionInitDriver(expectedSessionId),
-      testHooks: { agentMaterializeHomeDir: agentHomeDir },
+      agentHomeRootDir: agentsRootDir,
     });
 
   const daemonRef = { current: await bootDaemon() };
@@ -78,7 +78,7 @@ async function bootStandaloneRig(): Promise<StandaloneRigInternals> {
     userId: harness.userId,
     silverhandDir: harness.silverhandDir,
     expectedSessionId,
-    agentHomeDir,
+    agentsRootDir,
     adapter,
     harness,
     daemonRef,
@@ -87,7 +87,7 @@ async function bootStandaloneRig(): Promise<StandaloneRigInternals> {
       await daemonRef.current?.stop().catch(() => undefined);
       await harness.shutdown().catch(() => undefined);
       try {
-        rmSync(agentHomeDir, { recursive: true, force: true });
+        rmSync(agentsRootDir, { recursive: true, force: true });
       } catch {
         /* best-effort */
       }

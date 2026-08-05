@@ -375,7 +375,7 @@ const REQUESTS: WireFixture[] = [
   {
     name: 'request/agent_workspace_tree',
     description:
-      "#task:811: flat tree of every visible file/directory under the agent home dir. Backend sends ONLY {agent_id} — no path. The daemon walks computeAgentDir(agent_id, homedir), filters dotfiles + symlinks (intermediate or leaf), and emits `nodes` ordered (parent dir, kind=directory-first, name). A brand-new agent (no L1 dir yet) returns `{ nodes: [] }` gracefully — never an error.",
+      "#task:811: flat tree of every visible file/directory under the agent home dir. Backend sends ONLY {agent_id} — no path. The daemon walks resolveAgentDir(agent_id), filters dotfiles + symlinks (intermediate or leaf), and emits `nodes` ordered (parent dir, kind=directory-first, name). A brand-new agent (no L1 dir yet) returns `{ nodes: [] }` gracefully — never an error.",
     frame: enc({
       id: 'req-agent-workspace-tree-1',
       intent: 'agent_workspace_tree',
@@ -1653,13 +1653,13 @@ const AGENT_WORKSPACE_TREE_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_workspace_tree-error-registry_unavailable',
     description:
-      'The daemon has no attached computer yet (the machine has not bound to a server) so its agents root — and any agent memory tree — is unavailable. Despite the legacy code name this is NOT a workspace-registry consult (relocation-v1 §7 task 4 demoted the registry); a scoped workspace_id resolves purely by its deterministic bundle coordinate. Retriable once attached. Maps to HTTP 503.',
+      'No agents root resolved, so the agent memory tree is unavailable: either no computer is attached yet, or the daemon runs bare — an accepted binding with neither a computers root to resolve the slot from nor an explicit agents root (#task:1813 widened the refusal to that second case). Despite the legacy code name this is NOT a workspace-registry consult (relocation-v1 §7 task 4 demoted the registry); a scoped workspace_id resolves purely by its deterministic bundle coordinate. Retriable once a root exists. Maps to HTTP 503.',
     frame: enc({
       id: 'req-agent-workspace-tree-1',
       error: {
         code: 'registry_unavailable',
         message:
-          'no computer is registered on this daemon yet; agent files are unavailable until the machine binds to a server',
+          'no agents root is available on this daemon; agent files need a root from a registered computer slot or from explicit configuration',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_workspace_tree' },
@@ -1725,13 +1725,13 @@ const AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_workspace_file_read-error-registry_unavailable',
     description:
-      'The daemon has no attached computer yet (the machine has not bound to a server) so its agents root — and any agent memory file — is unavailable. Despite the legacy code name this is NOT a workspace-registry consult (relocation-v1 §7 task 4 demoted the registry); a scoped workspace_id resolves purely by its deterministic bundle coordinate. Retriable once attached. Maps to HTTP 503.',
+      'No agents root resolved, so the agent memory file is unavailable: either no computer is attached yet, or the daemon runs bare — an accepted binding with neither a computers root to resolve the slot from nor an explicit agents root (#task:1813 widened the refusal to that second case). Despite the legacy code name this is NOT a workspace-registry consult (relocation-v1 §7 task 4 demoted the registry); a scoped workspace_id resolves purely by its deterministic bundle coordinate. Retriable once a root exists. Maps to HTTP 503.',
     frame: enc({
       id: 'req-agent-workspace-file-read-1',
       error: {
         code: 'registry_unavailable',
         message:
-          'no computer is registered on this daemon yet; agent files are unavailable until the machine binds to a server',
+          'no agents root is available on this daemon; agent files need a root from a registered computer slot or from explicit configuration',
       },
     }),
     kind: {
@@ -1778,13 +1778,13 @@ const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
   {
     name: 'response/agent_l2_seed-error-registry_unavailable',
     description:
-      'Legacy name, two real producers: the daemon has no attached computer yet (no agents root), or the workspace id segment is unsafe and can never form a bundle coordinate. NOT a registry consult.',
+      'Legacy name, two real producers: no agents root resolved (no computer attached yet, or a bare daemon whose binding has neither a computers root nor an explicit agents root), or the workspace id segment is unsafe and can never form a bundle coordinate. NOT a registry consult.',
     frame: enc({
       id: 'req-agent-l2-seed-1',
       error: {
         code: 'registry_unavailable',
         message:
-          'no computer is registered on this daemon yet; agent files are unavailable until the machine binds to a server',
+          'no agents root is available on this daemon; agent files need a root from a registered computer slot or from explicit configuration',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
@@ -1856,7 +1856,7 @@ const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
 // D4.e-6 runtime_start typed errors. The carve-out that let host paths cross
 // the runtime_start wire is revoked; the daemon resolves every host path from
 // the deterministic agent-centric bundle coordinate (regular) /
-// computeAgentDir (agent_home) and fail-closes with one of these typed codes.
+// resolveAgentDir (agent_home) and fail-closes with one of these typed codes.
 // relocation-v1 §7-4 (U5) producer map: `workspace_not_provisioned` = an
 // `agent_home` ref that does not belong to this agent; `workspace_bundle_missing`
 // = the session cwd could not be created/entered; `registry_unavailable` = no

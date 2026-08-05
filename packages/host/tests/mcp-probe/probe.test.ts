@@ -19,9 +19,9 @@ import { buildTransport, probeMcpServer } from '../../src/daemon/mcp-probe/index
 
 const AGENT_ID = 'aid-mcp-probe';
 
-let homeDir = '';
+let agentHomeRootDir = '';
 function writeConfig(raw: string): void {
-  const dir = join(homeDir, '.silverhand', 'agents', AGENT_ID);
+  const dir = join(agentHomeRootDir, AGENT_ID);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'mcp.json'), raw);
 }
@@ -30,11 +30,11 @@ const source = { kind: 'profile', agent_id: AGENT_ID } as const;
 
 describe('mcp_probe daemon handler', () => {
   beforeEach(() => {
-    homeDir = mkdtempSync(join(tmpdir(), 'probe-home-'));
+    agentHomeRootDir = mkdtempSync(join(tmpdir(), 'probe-agents-'));
   });
   afterEach(() => {
     try {
-      rmSync(homeDir, { recursive: true, force: true });
+      rmSync(agentHomeRootDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
@@ -43,7 +43,7 @@ describe('mcp_probe daemon handler', () => {
   it('not_found when the agent has no mcp.json', async () => {
     const r = await probeMcpServer(
       { source, server_name: 'whatever' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.ok).toBe(false);
     expect(r.phase).toBe('not_found');
@@ -51,7 +51,7 @@ describe('mcp_probe daemon handler', () => {
 
   it('parse when the config is invalid JSON', async () => {
     writeConfig('{ not json');
-    const r = await probeMcpServer({ source, server_name: 'x' }, { homeDir });
+    const r = await probeMcpServer({ source, server_name: 'x' }, { agentHomeRootDir });
     expect(r.ok).toBe(false);
     expect(r.phase).toBe('parse');
   });
@@ -60,7 +60,7 @@ describe('mcp_probe daemon handler', () => {
     writeConfig('{"mcpServers":{"other":{"command":"npx"}}}');
     const r = await probeMcpServer(
       { source, server_name: 'missing' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.ok).toBe(false);
     expect(r.phase).toBe('not_found');
@@ -74,7 +74,7 @@ describe('mcp_probe daemon handler', () => {
 
     const r = await probeMcpServer(
       { source, server_name: 'live' },
-      { homeDir, buildTransport: () => clientSide },
+      { agentHomeRootDir, buildTransport: () => clientSide },
     );
     expect(r.ok).toBe(true);
     expect(r.phase).toBe('initialize');
@@ -96,7 +96,7 @@ describe('mcp_probe daemon handler', () => {
 
     const r = await probeMcpServer(
       { source, server_name: 'live', include_tools: true },
-      { homeDir, buildTransport: () => clientSide },
+      { agentHomeRootDir, buildTransport: () => clientSide },
     );
     expect(r.ok).toBe(true);
     expect(r.phase).toBe('tools');
@@ -118,7 +118,7 @@ describe('mcp_probe daemon handler', () => {
 
     const r = await probeMcpServer(
       { source, server_name: 'remote' },
-      { homeDir, buildTransport: () => throwing },
+      { agentHomeRootDir, buildTransport: () => throwing },
     );
     expect(r.ok).toBe(false);
     expect(r.phase).toBe('connect');

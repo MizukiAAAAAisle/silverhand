@@ -197,7 +197,7 @@ export interface SupervisorOptions {
    * resolves every absolute host path via these deps just before building
    * the prompt context + spawn cwd — `regular` workspaces to their
    * deterministic agent-centric bundle coordinate
-   * (`resolveAgentWorkspaceBundleDir`), `agent_home` via `computeAgentDir`
+   * (`resolveAgentWorkspaceBundleDir`), `agent_home` via `resolveAgentDir`
    * (relocation-v1 §7 task 4: no registry establishment gate). The active
    * workspace's cwd is then HARD-ENSURED by `ensureRuntimeStartWorkspaceCwd`
    * (mkdir -p + usable-dir check) — process admission that fails closed only
@@ -1991,7 +1991,7 @@ export class Supervisor implements SupervisorContract {
     const runtimeKind = startOptions.driver.kind;
 
     // D4.e-6 — resolve every host path from the semantic wire options
-    // (deterministic bundle coordinate for `regular`, `computeAgentDir` for
+    // (deterministic bundle coordinate for `regular`, `resolveAgentDir` for
     // `agent_home`). Throws a typed `RuntimeStartResolveError` (→
     // `workspace_not_provisioned` / `registry_unavailable`) only for a
     // foreign/corrupt `agent_home` ref or an unsafe id segment. Done after the

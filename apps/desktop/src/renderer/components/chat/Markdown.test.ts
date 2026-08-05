@@ -1655,9 +1655,7 @@ describe('oversized-content guard (#task:1550)', () => {
     // this exact shape degraded to plain text (a 97KB work-log.md showed 4000
     // chars); the file preview is bounded upstream, not here.
     const preview =
-      '# work log\n\n' +
-      'a'.repeat(CAP * 2) +
-      '\n\n… (truncated; open in Finder for full content)';
+      '# work log\n\n' + 'a'.repeat(CAP * 2) + '\n\n… (truncated)';
     const html = renderToStaticMarkup(
       React.createElement(Markdown, {
         content: preview,

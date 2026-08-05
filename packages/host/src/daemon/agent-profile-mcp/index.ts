@@ -38,15 +38,16 @@ export class AgentProfileMcpError extends DaemonTypedError {
 }
 
 export interface AgentProfileMcpDeps {
-  /** Parent dir for agent-home resolution. Default: daemon's homedir. */
-  homeDir?: string;
-  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
-  agentHomeRootDir?: string;
+  /**
+   * The EXACT agents root agent-home resolution joins onto, from the
+   * composition root. Required — no implicit default (#task:1813).
+   */
+  agentHomeRootDir: string;
 }
 
 export async function readAgentProfileMcp(
   params: AgentProfileMcpReadParams,
-  deps: AgentProfileMcpDeps = {},
+  deps: AgentProfileMcpDeps,
 ): Promise<AgentProfileMcpReadResult> {
   const filePath = join(resolveAgentDir(params.agent_id, deps), MCP_CONFIG_FILENAME);
   try {
@@ -62,7 +63,7 @@ export async function readAgentProfileMcp(
 
 export async function writeAgentProfileMcp(
   params: AgentProfileMcpWriteParams,
-  deps: AgentProfileMcpDeps = {},
+  deps: AgentProfileMcpDeps,
 ): Promise<AgentProfileMcpWriteResult> {
   // Re-validate fail-loud before touching disk: a bad payload never persists.
   const parsed = parseMcpConfig(params.raw);

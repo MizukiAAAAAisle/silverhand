@@ -421,14 +421,21 @@ export interface DaemonWithSupervisorOptions {
    *  `.cjs` fixtures don't need `chmod +x`. */
   spawnFn?: SupervisorOptions['spawnFn'];
   /**
+   * The EXACT agents root the daemon resolves every agent L1/L2
+   * coordinate under. Defaults to a dir inside the harness's own
+   * daemon sandbox; pass it when the test asserts against its own
+   * tree (#task:1813 — the root is a required production option,
+   * never a test hook).
+   */
+  agentHomeRootDir?: string;
+  /**
    * D4.d D6 — narrow test hooks on `RunDaemonOptions.testHooks`,
    * pinned by Cindy P1-1 (`d4IID_Nnn1VShRa5`). The production
    * dispatcher slot ALWAYS calls the real `materializeAgent`;
-   * tests can only:
-   *   - point `materializeAgent` at a tmp `homeDir` instead of
-   *     the daemon process's real `homedir()`;
-   *   - inject a deterministic typed `AgentMaterializeError`
-   *     BEFORE `materializeAgent` runs.
+   * tests can only inject a deterministic typed
+   * `AgentMaterializeError` BEFORE `materializeAgent` runs. There is
+   * no home-dir seam: the agents root is an ordinary production
+   * option (see `agentHomeRootDir`).
    * No handler-replacement seam, no embedder-facing API for
    * rewriting `agent_materialize` formal semantics.
    */
@@ -488,15 +495,10 @@ export async function bootDaemonWithSupervisor(
     alsoStderr: false,
     runtimePidRootDir,
     // #task:1596 / relocation-v1 §7-4 — keep the DURABLE agent tree inside the
-    // test sandbox: without an explicit coordinate the agent-file handlers fall
-    // through to the real `~/.silverhand/agents`. A test that redirects the
-    // whole home via `agentMaterializeHomeDir` is already sandboxed AND asserts
-    // against that layout, so the production option must not override it (it
-    // takes precedence over the `homeDir` seam).
-    agentHomeRootDir:
-      opts.testHooks?.agentMaterializeHomeDir == null
-        ? join(daemonDir, 'agents')
-        : undefined,
+    // test sandbox. #task:1813: the agents root is REQUIRED (no homedir
+    // fallback, no home-dir test hook), so the harness always states one; a
+    // test asserting against its own tree passes `agentHomeRootDir`.
+    agentHomeRootDir: opts.agentHomeRootDir ?? join(daemonDir, 'agents'),
     daemonIdentityPath: null,
     testHooks: opts.testHooks,
     supervisorFactory: ({

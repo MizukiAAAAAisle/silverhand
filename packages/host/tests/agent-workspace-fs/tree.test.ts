@@ -40,9 +40,9 @@ import { agentHomeWorkspaceId } from '@silverhand/shared';
 
 const AGENT_ID = 'aid-tree';
 
-let homeDir = '';
+let agentHomeRootDir = '';
 function agentDir(): string {
-  return join(homeDir, '.silverhand', 'agents', AGENT_ID);
+  return join(agentHomeRootDir, AGENT_ID);
 }
 /** The deterministic agent-centric L2 bundle dir for a regular workspace —
  *  `<agent home>/workspaces/<workspace_id>` (relocation-v1 §3.2). No registry
@@ -53,18 +53,18 @@ function l2BundleDir(workspaceId = 'ws_1'): string {
 
 describe('listAgentWorkspaceTree', () => {
   beforeEach(() => {
-    homeDir = mkdtempSync(join(tmpdir(), 'shtree-home-'));
+    agentHomeRootDir = mkdtempSync(join(tmpdir(), 'shtree-agents-'));
   });
   afterEach(() => {
     try {
-      rmSync(homeDir, { recursive: true, force: true });
+      rmSync(agentHomeRootDir, { recursive: true, force: true });
     } catch {
       /* best-effort */
     }
   });
 
   it('returns an empty tree for a brand-new agent (no dir yet)', async () => {
-    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir });
+    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r.ok).toBe(true);
     expect(r.tree.nodes).toEqual([]);
   });
@@ -77,7 +77,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, 'notes', 'a.md'), 'a');
     writeFileSync(join(dir, 'notes', 'b.md'), 'b');
 
-    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir });
+    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r.ok).toBe(true);
     const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
     // Preorder: each directory is followed immediately by its
@@ -110,7 +110,7 @@ describe('listAgentWorkspaceTree', () => {
 
     const r = await listAgentWorkspaceTree(
       { agent_id: AGENT_ID, workspace_id: 'ws_1' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
     expect(paths).toEqual([
@@ -132,7 +132,7 @@ describe('listAgentWorkspaceTree', () => {
         agent_id: AGENT_ID,
         workspace_id: agentHomeWorkspaceId(AGENT_ID),
       },
-      { homeDir },
+      { agentHomeRootDir },
     );
     const paths = r.tree.nodes.map(n => n.path);
     expect(paths).toEqual(['MEMORY.md', 'system_prompt.md']);
@@ -150,7 +150,7 @@ describe('listAgentWorkspaceTree', () => {
 
     const r = await listAgentWorkspaceTree(
       { agent_id: AGENT_ID, workspace_id: 'ws_pure_db' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.ok).toBe(true);
     expect(r.tree.nodes.map(n => n.path)).toEqual(['MEMORY.md']);
@@ -162,7 +162,7 @@ describe('listAgentWorkspaceTree', () => {
     // fail-closed. No registry, no 409.
     const r = await listAgentWorkspaceTree(
       { agent_id: AGENT_ID, workspace_id: 'ws_never_spawned' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.ok).toBe(true);
     expect(r.tree.nodes).toEqual([]);
@@ -175,7 +175,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, 'dirA', 'fileA.md'), 'a');
     writeFileSync(join(dir, 'dirA', 'dirB', 'fileB.md'), 'b');
 
-    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir });
+    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     const paths = r.tree.nodes.map(n => `${n.kind}:${n.path}`);
     // Preorder, dir-first within each parent. Even though `fileR.md`
     // has the same parent as `dirA`, it appears AFTER every descendant
@@ -198,7 +198,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, 'notes', '.gitkeep'), '');
     writeFileSync(join(dir, 'notes', 'real.md'), 'r');
 
-    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir });
+    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     const paths = r.tree.nodes.map(n => n.path);
     expect(paths).not.toContain('.env');
     expect(paths).not.toContain('.hiddenDir');
@@ -222,7 +222,7 @@ describe('listAgentWorkspaceTree', () => {
 
       const r = await listAgentWorkspaceTree(
         { agent_id: AGENT_ID },
-        { homeDir },
+        { agentHomeRootDir },
       );
       const paths = r.tree.nodes.map(n => n.path);
       expect(paths).toEqual(['MEMORY.md']);
@@ -237,7 +237,7 @@ describe('listAgentWorkspaceTree', () => {
     const dir = agentDir();
     mkdirSync(join(dir, 'notes', 'sub'), { recursive: true });
     writeFileSync(join(dir, 'notes', 'sub', 'nested.md'), 'n');
-    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir });
+    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r.tree.nodes.some(n => n.path === 'notes/sub/nested.md')).toBe(true);
     expect(r.tree.nodes.every(n => !n.path.includes('\\'))).toBe(true);
   });
@@ -255,7 +255,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, 'foo\\bar.md'), 'sneaky');
     writeFileSync(join(dir, 'MEMORY.md'), 'mem');
 
-    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir });
+    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     const paths = r.tree.nodes.map(n => n.path);
     // The sneaky entry must not appear, in any normalization.
     expect(paths).not.toContain('foo\\bar.md');
@@ -281,7 +281,7 @@ describe('listAgentWorkspaceTree', () => {
     writeFileSync(join(dir, '.hidden'), 'h');
     writeFileSync(join(dir, 'foo\\bar.md'), 'b');
 
-    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir });
+    const r = await listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r.tree.nodes.length).toBeGreaterThan(0);
     for (const node of r.tree.nodes) {
       const v = validateVirtualPathShape(node.path);
@@ -300,14 +300,14 @@ describe('listAgentWorkspaceTree', () => {
       writeFileSync(join(outside, 'should-not-appear.md'), 'leak');
       const dir = agentDir();
       // Parent of agent dir must exist; the symlink REPLACES the agent dir.
-      mkdirSync(join(homeDir, '.silverhand', 'agents'), { recursive: true });
+      mkdirSync(agentHomeRootDir, { recursive: true });
       symlinkSync(outside, dir);
 
       await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir }),
+        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
       ).rejects.toBeInstanceOf(AgentWorkspaceFsError);
       await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir }),
+        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
       ).rejects.toMatchObject({ code: 'forbidden_path' });
     } finally {
       rmSync(outside, { recursive: true, force: true });
@@ -324,10 +324,10 @@ describe('listAgentWorkspaceTree', () => {
     chmodSync(notes, 0o000);
     try {
       await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir }),
+        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
       ).rejects.toBeInstanceOf(AgentWorkspaceFsError);
       await expect(
-        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { homeDir }),
+        listAgentWorkspaceTree({ agent_id: AGENT_ID }, { agentHomeRootDir }),
       ).rejects.toMatchObject({ code: 'fs_unavailable' });
     } finally {
       chmodSync(notes, 0o755);

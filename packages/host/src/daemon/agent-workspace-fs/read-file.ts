@@ -56,15 +56,26 @@ export interface ReadAgentWorkspaceFileDeps
  * raising `MAX_FRAME_BYTES` in both transports, which is a protocol change.)
  */
 const MAX_PREVIEW_BYTES = 512 * 1024;
-const TRUNCATED_SUFFIX = '\n\n… (truncated; open in Finder for full content)';
+/**
+ * In-band end-of-content marker. It states the bare fact and nothing else:
+ * what the reader can DO about it is the renderer's banner to say (it labels
+ * the cap and where the full file lives from its own copy), and this string
+ * cannot know which client is reading. The previous wording ("open in Finder
+ * for full content") named an action the app no longer has — #task:1813 deleted
+ * the last reveal-in-Finder IPC — which is the failure mode a second copy of
+ * one fact always has: the duplicate rots while the structured `truncated`
+ * flag stays correct.
+ */
+const TRUNCATED_SUFFIX = '\n\n… (truncated)';
 
-/** Exported so callers and tests state the bound once instead of restating a
- *  number (the renderer labels the truncation banner from its own copy). */
-export { MAX_PREVIEW_BYTES };
+/** Exported so callers and tests state the bound and the marker once instead of
+ *  restating a number or a literal (the renderer labels the truncation banner
+ *  from its own copy). */
+export { MAX_PREVIEW_BYTES, TRUNCATED_SUFFIX };
 
 export async function readAgentWorkspaceFile(
   params: AgentWorkspaceFileReadParams,
-  deps: ReadAgentWorkspaceFileDeps = {},
+  deps: ReadAgentWorkspaceFileDeps,
 ): Promise<AgentWorkspaceFileReadResult> {
   const baseDir = resolveAgentWorkspaceBaseDir(params, deps);
   let resolved;

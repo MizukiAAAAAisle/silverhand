@@ -53,10 +53,11 @@ export class McpProbeError extends DaemonTypedError {
 }
 
 export interface McpProbeDeps {
-  /** Parent dir for agent-home resolution. Default: daemon's homedir. */
-  homeDir?: string;
-  /** Exact root for agent-home resolution. Takes precedence over homeDir. */
-  agentHomeRootDir?: string;
+  /**
+   * The EXACT agents root agent-home resolution joins onto, from the
+   * composition root. Required — no implicit default (#task:1813).
+   */
+  agentHomeRootDir: string;
   /** Test seam: build a transport for a server. Default = real SDK transports
    *  (stdio child / streamable-http / sse). Tests inject an in-memory pair so
    *  the connect/initialize/tools/teardown flow runs without real I/O. */
@@ -71,7 +72,7 @@ const TOOLS_TIMEOUT_MS = 10_000;
 
 export async function probeMcpServer(
   params: McpProbeParams,
-  deps: McpProbeDeps = {},
+  deps: McpProbeDeps,
 ): Promise<McpProbeResult> {
   // 1. Resolve + parse the raw config for the source, then find the server.
   const raw = await readSourceConfig(params, deps);

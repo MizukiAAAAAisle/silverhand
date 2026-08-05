@@ -72,7 +72,6 @@ const cataloguedIpcHandlers = [
   'profile:saveWithTest',
   'settings:saveServerUrl',
   'shell:openExternal',
-  'shell:showItemInFolder',
 ].sort();
 
 interface SourceFile {

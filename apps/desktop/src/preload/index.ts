@@ -516,8 +516,6 @@ const api = {
     | { ok: false; canceled: true }
     | { ok: false; reason: string }
   > => ipcRenderer.invoke('attachment:save', input),
-  showItemInFolder: (path: string): Promise<void> =>
-    ipcRenderer.invoke('shell:showItemInFolder', path),
   /** Subscribe to shutdown progress steps emitted by the main process
    *  just before and during graceful shutdown. Drives the in-app overlay
    *  so the user sees what's happening instead of a frozen window. */

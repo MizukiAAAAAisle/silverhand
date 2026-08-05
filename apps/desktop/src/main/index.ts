@@ -615,8 +615,9 @@ interface DaemonPaths {
 
 function daemonPaths(): DaemonPaths {
   // #task:1598 — every path comes from the ONE app-data resolver
-  // (`desktopAppPaths()`, pinned legacy-v1: physically identical to the
-  // historical flat layout). run/ stays wholly disposable — the user can
+  // (`desktopAppPaths()`, which reports whichever layout version the
+  // process settled on when the startup migration read the data-layout
+  // marker). run/ stays wholly disposable — the user can
   // rm -rf it if the machine ends up in a weird state; durable
   // workspace-data (registry + managed roots holding agent L2 memory)
   // lives OUTSIDE run/ (#task:1596).

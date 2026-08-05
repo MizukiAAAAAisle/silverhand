@@ -118,8 +118,9 @@ export interface ParityRig {
   readonly silverhandDir: string;
   /** Session id the daemon's parity driver emits (Phase A assertion). */
   readonly expectedSessionId: string;
-  /** Daemon-side home dir `materializeAgent` writes the L1 template under. */
-  readonly agentHomeDir: string;
+  /** Daemon-side agents ROOT `materializeAgent` writes each agent's L1
+   *  template under — one join from the L1 dir (#task:1813). */
+  readonly agentsRootDir: string;
   /** The live, mode-specific outbound adapter the backend is using. */
   adapter(): OutboundFrameAdapter;
   /** Tear down backend + daemon + temp dirs. */
@@ -138,11 +139,6 @@ export async function waitFor<T>(
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   throw new Error(`timed out waiting for ${label}`);
-}
-
-/** Daemon-side L1 dir for `agentId` under `homeDir` (mirrors computeAgentDir). */
-function agentL1Dir(homeDir: string, agentId: string): string {
-  return join(homeDir, '.silverhand', 'agents', agentId);
 }
 
 interface CreateAgentOk {
@@ -303,7 +299,7 @@ export function registerParityPhases(getRig: () => ParityRig): void {
 
     // Real template seeded on the daemon side over the real wire — proves
     // the dispatch reached the REAL `materializeAgent`, not a fake success.
-    const l1 = agentL1Dir(rig.agentHomeDir, ok.agent.id);
+    const l1 = join(rig.agentsRootDir, ok.agent.id);
     expect(existsSync(join(l1, 'system_prompt.md'))).toBe(true);
     expect(existsSync(join(l1, 'MEMORY.md'))).toBe(true);
     expect(existsSync(join(l1, '.materialized'))).toBe(true);
@@ -425,7 +421,7 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     const agentId = `agent-prov-${suffix}`;
     const neverId = `ws-never-${suffix}`;
     const bundleDir = join(
-      agentL1Dir(rig.agentHomeDir, agentId),
+      join(rig.agentsRootDir, agentId),
       'workspaces',
       workspaceId,
     );
@@ -509,7 +505,7 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     // `.silverhand/agents/<id>` sub-path under the workspace): MEMORY.md +
     // notes/, NEVER L1 system_prompt.md.
     const l2 = join(
-      agentL1Dir(rig.agentHomeDir, agentId),
+      join(rig.agentsRootDir, agentId),
       'workspaces',
       workspaceId,
     );
@@ -548,7 +544,7 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     expect(neverSeed).toMatchObject({ ok: true, seeded: true, l2_present: true });
     // The coordinate was materialized from the id alone — no registry binding.
     const neverL2 = join(
-      agentL1Dir(rig.agentHomeDir, agentId),
+      join(rig.agentsRootDir, agentId),
       'workspaces',
       neverId,
     );
@@ -593,7 +589,7 @@ export function registerParityPhases(getRig: () => ParityRig): void {
       { expectedConnectionId: conn, timeoutMs: 5_000 },
     );
     const l2 = join(
-      agentL1Dir(rig.agentHomeDir, agentId),
+      join(rig.agentsRootDir, agentId),
       'workspaces',
       workspaceId,
     );

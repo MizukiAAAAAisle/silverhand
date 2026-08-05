@@ -7,8 +7,7 @@ import {
   type RuntimeStartResolveDeps,
 } from '../src/daemon/runtime-start-resolve.js';
 import {
-  computeAgentDir,
-  computeAgentDirFromRoot,
+  resolveAgentDir,
   resolveAgentWorkspaceBundleDir,
 } from '../src/daemon/agent-materialize/handler.js';
 import { WorkspaceIdSegmentError } from '../src/daemon/workspace-path-authority.js';
@@ -28,16 +27,30 @@ import type { StartOptions } from '../src/protocol.js';
  *   - a memory-INDEX entry resolves to its coordinate only when available, else
  *     `path: null` — the legal lazy window (added to a workspace, never spawned
  *     there) and a half-seeded dir both degrade, never fabricate a path;
- *   - `agent_home` resolves via `computeAgentDir`, never a coordinate lookup;
+ *   - `agent_home` resolves via `resolveAgentDir` (ONE join onto the explicit
+ *     agents root), never a coordinate lookup;
  *   - an unresolvable ref (foreign agent_home, unsafe id) fails closed as the
  *     active workspace, degrades to null as an index entry.
  */
 
-const HOME = '/tmp/d4e6-home';
+/** The EXPLICIT agents root every case below resolves under (#task:1813: the
+ *  resolver has no home-relative default to fall back on). */
+const AGENTS_ROOT = '/tmp/d4e6-agents';
 
 /** The deterministic regular-workspace L2/cwd path (relocation-v1 §3.2). */
-function bundle(agentId: string, workspaceId: string, homeDir = HOME): string {
-  return resolveAgentWorkspaceBundleDir(agentId, workspaceId, { homeDir });
+function bundle(
+  agentId: string,
+  workspaceId: string,
+  agentHomeRootDir = AGENTS_ROOT,
+): string {
+  return resolveAgentWorkspaceBundleDir(agentId, workspaceId, {
+    agentHomeRootDir,
+  });
+}
+
+/** The agent's L1 dir — ONE join onto the agents root. */
+function l1(agentId: string, agentHomeRootDir = AGENTS_ROOT): string {
+  return resolveAgentDir(agentId, { agentHomeRootDir });
 }
 
 /**
@@ -47,10 +60,10 @@ function bundle(agentId: string, workspaceId: string, homeDir = HOME): string {
  */
 function depsWith(
   available: (bundleDir: string) => Promise<boolean> = async () => true,
-  homeDir = HOME,
+  agentHomeRootDir = AGENTS_ROOT,
 ): RuntimeStartResolveDeps {
   return {
-    homeDir,
+    agentHomeRootDir,
     bundleL2Present: available,
     resolveComputerId: () => 'computer-1',
   };
@@ -67,7 +80,7 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
         return true;
       }),
     );
-    expect(resolved.agent.home_dir).toBe(computeAgentDir('a1', HOME));
+    expect(resolved.agent.home_dir).toBe(l1('a1'));
     expect(resolved.workspace.path).toBe(bundle('a1', 'ws1'));
     expect(resolved.workspace_memory_index[0]!.path).toBe(bundle('a1', 'ws1'));
     // The active workspace is NOT availability-probed here (that is the
@@ -151,22 +164,22 @@ describe('resolveRuntimeStartPaths — regular workspace', () => {
 });
 
 describe('resolveRuntimeStartPaths — agent_home workspace', () => {
-  it('resolves agent_home path via computeAgentDir, never a coordinate lookup', async () => {
+  it('resolves agent_home path via resolveAgentDir, never a coordinate lookup', async () => {
     const options = testStartOptions({
       agentId: 'a9',
       workspaceKind: 'agent_home',
     });
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
-    expect(resolved.workspace.path).toBe(computeAgentDir('a9', HOME));
+    expect(resolved.workspace.path).toBe(l1('a9'));
     expect(resolved.workspace_memory_index[0]!.path).toBe(
-      computeAgentDir('a9', HOME),
+      l1('a9'),
     );
-    expect(resolved.agent.home_dir).toBe(computeAgentDir('a9', HOME));
+    expect(resolved.agent.home_dir).toBe(l1('a9'));
     // The valid ref is THIS agent's own home workspace id.
     expect(resolved.workspace.id).toBe(agentHomeWorkspaceId('a9'));
   });
 
-  it('uses agentHomeRootDir for agent.home_dir and agent_home workspace paths', async () => {
+  it('joins agent.home_dir and agent_home workspace paths onto the caller-supplied agents root', async () => {
     const agentHomeRootDir = '/tmp/isolated-silverhand/agents';
     const options = testStartOptions({
       agentId: 'a9',
@@ -177,7 +190,7 @@ describe('resolveRuntimeStartPaths — agent_home workspace', () => {
       bundleL2Present: async () => true,
       resolveComputerId: () => 'computer-1',
     });
-    const expected = computeAgentDirFromRoot('a9', agentHomeRootDir);
+    const expected = l1('a9', agentHomeRootDir);
     expect(resolved.agent.home_dir).toBe(expected);
     expect(resolved.workspace.path).toBe(expected);
     expect(resolved.workspace_memory_index[0]!.path).toBe(expected);
@@ -253,7 +266,7 @@ describe('resolveRuntimeStartPaths — mixed memory index', () => {
     const resolved = await resolveRuntimeStartPaths(options, depsWith());
     expect(resolved.workspace_memory_index.map(w => w.path)).toEqual([
       bundle('a1', 'ws1'),
-      computeAgentDir('a1', HOME),
+      l1('a1'),
       bundle('a1', 'ws2'),
     ]);
   });
@@ -311,7 +324,7 @@ describe('resolveAgentWorkspaceBundleDir — sole path authority self-validates'
     it(`throws invalid_path and never resolves an escaping path for ${JSON.stringify(id)}`, () => {
       let thrown: unknown;
       try {
-        resolveAgentWorkspaceBundleDir('a1', id, { homeDir: HOME });
+        resolveAgentWorkspaceBundleDir('a1', id, { agentHomeRootDir: AGENTS_ROOT });
       } catch (err) {
         thrown = err;
       }
@@ -321,8 +334,8 @@ describe('resolveAgentWorkspaceBundleDir — sole path authority self-validates'
   }
 
   it('a conforming id resolves under the agent home', () => {
-    const path = resolveAgentWorkspaceBundleDir('a1', 'ws1', { homeDir: HOME });
+    const path = resolveAgentWorkspaceBundleDir('a1', 'ws1', { agentHomeRootDir: AGENTS_ROOT });
     expect(path).toBe(bundle('a1', 'ws1'));
-    expect(path.startsWith(computeAgentDir('a1', HOME))).toBe(true);
+    expect(path.startsWith(l1('a1'))).toBe(true);
   });
 });

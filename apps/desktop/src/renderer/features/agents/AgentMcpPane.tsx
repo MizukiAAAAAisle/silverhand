@@ -59,7 +59,7 @@ interface AgentMcpPaneProps {
  *    never on mount, never polled (#1138 UI ↔ Alice's #1137 host action).
  *
  * Scope model: the page is "MCP"; this block is the **Profile** scope (the
- * subject's L1 `~/.silverhand/agents/<id>/mcp.json`). A future Workspace scope
+ * `mcp.json` in the subject's L1 home dir). A future Workspace scope
  * stacks as a sibling block on the same page — it is intentionally NOT bound to
  * any single workspace panel.
  *

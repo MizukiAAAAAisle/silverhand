@@ -50,10 +50,11 @@ export class AgentL2SeedError extends DaemonTypedError {
 }
 
 export interface SeedAgentL2Deps {
-  /** Parent dir for the agent-centric bundle root. Default: daemon's homedir. */
-  homeDir?: string;
-  /** Exact agent-home root. Takes precedence over homeDir. */
-  agentHomeRootDir?: string;
+  /**
+   * The EXACT agents root the agent-centric bundle root joins onto, from
+   * the composition root. Required — no implicit default (#task:1813).
+   */
+  agentHomeRootDir: string;
 }
 
 export async function seedAgentL2(

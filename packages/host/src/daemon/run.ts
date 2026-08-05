@@ -155,9 +155,12 @@ export interface RunDaemonOptions {
    */
   computersRootDir?: string | null;
   /**
-   * Root for daemon-owned per-agent L1 dirs. Omit to keep the legacy
-   * `~/.silverhand/agents/<id>` default; connect passes a data-root-scoped
-   * path so custom roots are fully isolated from the user's profile.
+   * Root for daemon-owned per-agent L1 dirs. #task:1813 removed the legacy
+   * home-relative default: omit it and the daemon has a durable agents root
+   * ONLY from the accepted binding's `computers/<id>/agents` slot; a bare
+   * daemon with neither refuses every agent-file intent instead of writing
+   * into the user's real profile. Connect passes a data-root-scoped path so
+   * custom roots are fully isolated from that profile.
    */
   agentHomeRootDir?: string | null;
   /**
@@ -281,7 +284,7 @@ export interface RunDaemonOptions {
          * D4.e-6 — host path resolution deps for `runtime_start`. The
          * daemon resolves semantic workspace/agent refs to absolute host
          * paths via these (relocation-v1 §7-4: the deterministic
-         * agent-centric coordinate for `regular`, `computeAgentDir` for
+         * agent-centric coordinate for `regular`, `resolveAgentDir` for
          * `agent_home` — no registry lookup on either), fail-closed.
          * `runDaemon` builds them from the frozen computer path context; the
          * factory threads them into `Supervisor`.
@@ -296,14 +299,9 @@ export interface RunDaemonOptions {
    * D4.d D6 — **test-only** hooks. NOT part of the embedder
    * contract. Production MUST omit this field. The dispatcher
    * slot ALWAYS calls `materializeAgent(...)` — there is no
-   * embedder-facing seam to replace the handler. The two hooks
-   * below are narrow test surfaces:
+   * embedder-facing seam to replace the handler. The hook
+   * below is a narrow test surface:
    *
-   *   - `agentMaterializeHomeDir` overrides the parent dir
-   *     `materializeAgent` joins onto (`<homeDir>/.silverhand/
-   *     agents/<id>/`); without it, the real
-   *     `materializeAgent` would write into the daemon process's
-   *     `homedir()`, which is unacceptable in tests.
    *   - `agentMaterializeFaultInjector` is a deterministic
    *     typed-error pre-hook: if it returns an
    *     `AgentMaterializeError`, the dispatcher surfaces the
@@ -315,6 +313,13 @@ export interface RunDaemonOptions {
    *     test control is "fail this dispatch with code X" or
    *     "let the real handler run".
    *
+   * There is deliberately NO home-dir seam (#task:1813): tests
+   * sandbox the durable agent tree the same way production roots
+   * it — by passing `agentHomeRootDir` / `computersRootDir`. A
+   * test-only home override existed only to keep the retired
+   * home-relative default from writing into the real user home,
+   * and that default is gone.
+   *
    * Cindy D6-2 P1-1 (`d4IID_Nnn1VShRa5`): a previous draft
    * exposed `agentMaterializeHandler?` at the top of
    * `RunDaemonOptions`, which read like an embedder-facing
@@ -325,7 +330,6 @@ export interface RunDaemonOptions {
    * replacement.
    */
   testHooks?: {
-    agentMaterializeHomeDir?: string;
     agentMaterializeFaultInjector?: (
       params: AgentMaterializeParams,
     ) => AgentMaterializeError | undefined;
@@ -643,20 +647,26 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // crash every connect boot.
   const currentAgentsRoot = (): string | undefined =>
     computerContext?.agentsRoot ?? explicitAgentsRoot;
-  // #task:1608 P0-2 — in slot mode (desktop passes `computersRootDir`) an
-  // agent-file operation BEFORE the machine registers must fail closed
-  // with the handler's own typed error: falling through to the helpers'
-  // legacy homedir default would silently rebuild the retired top-level
-  // `agents/` authority. Explicit roots (connect --data-root, tests) are
-  // not binding-derived and stay valid pre-attach by contract.
-  const slotMode = opts.computersRootDir != null;
+  // #task:1608 P0-2 / #task:1813 — an agent-file operation with no agents
+  // root resolved fails closed with the handler's own typed error. In slot
+  // mode (desktop passes `computersRootDir`) that is the pre-registration
+  // window; with no slot and no explicit root (a bare daemon) there is no
+  // durable coordinate at all. Neither may fall through to a home-relative
+  // default: that is how the retired top-level `agents/` authority gets
+  // silently rebuilt — in the real user home, since the old default read
+  // `SILVERHAND_DIR`/`homedir()` rather than the embedder's root. Explicit
+  // roots (connect, desktop post-attach, tests) are the ONLY way in.
+  // The message states the missing ROOT, not a missing registration: a bare
+  // daemon can hold an accepted binding and still have no agents root (no
+  // `computersRootDir` to resolve the slot with, no explicit root), so
+  // "until the machine binds" would misreport that half of the refusal set.
   const agentsRootFor = <E extends Error>(
     wrap: (message: string) => E,
-  ): string | undefined => {
+  ): string => {
     const root = currentAgentsRoot();
-    if (root === undefined && slotMode) {
+    if (root === undefined) {
       throw wrap(
-        'no computer is registered on this daemon yet; agent files are unavailable until the machine binds to a server',
+        'no agents root is available on this daemon; agent files need a root from a registered computer slot or from explicit configuration',
       );
     }
     return root;
@@ -689,7 +699,8 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   };
   // D4.e-6 — runtime_start path resolution deps. The wire options are
   // semantic-only; `resolveRuntimeStartPaths` resolves the L2/cwd PATH to the
-  // deterministic agent-centric bundle root (agent-home via `computeAgentDir`).
+  // deterministic agent-centric bundle root (agent-home via
+  // `resolveAgentDir`, one join onto the agents root below).
   // relocation-v1 §7 task 4 + the shiki+Cindy pivot (2026-08-04): there is no
   // registry establishment gate, and L2 presence is NOT a spawn gate. A
   // workspace id maps to a unique bundle coordinate; the ACTIVE workspace
@@ -702,10 +713,9 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
   // memory path. `agentHomeRootDir` is generation-scoped (read via getter at
   // spawn time), so the standalone binding (known only post-attach) is current.
   const runtimeStartResolveDeps = {
-    homeDir: opts.testHooks?.agentMaterializeHomeDir,
     // Generation-scoped (#task:1608): reads the FROZEN context at spawn
     // time via a getter — never a mutable binding lookup.
-    get agentHomeRootDir(): string | undefined {
+    get agentHomeRootDir(): string {
       return agentsRootFor(
         m => new RuntimeStartResolveError('registry_unavailable', m),
       );
@@ -797,34 +807,30 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     },
     // D4.d D2 — server↔daemon formal semantics. `materializeAgent`
     // owns the §4.6 idempotency decision tree + atomic seed +
-    // sentinel write. `homeDir` defaults to the daemon process's
-    // own `homedir()`, which is correct in production (the daemon
-    // runs as the user whose `~/.silverhand/agents/` is the target
-    // L1 root). D4.d D6 narrowed the test seam to `testHooks` per
-    // Cindy `d4IID_Nnn1VShRa5` P1-1: there is NO embedder-facing
-    // handler-replacement option. The dispatcher slot ALWAYS
-    // invokes `materializeAgent`; tests may inject a tmp `homeDir`
-    // and/or a deterministic typed-error fault BEFORE the real
-    // handler runs.
+    // sentinel write. The L1 root is the agents root resolved above
+    // — always explicit, never derived from the daemon process's
+    // `homedir()` (#task:1813). D4.d D6 narrowed the test seam to
+    // `testHooks` per Cindy `d4IID_Nnn1VShRa5` P1-1: there is NO
+    // embedder-facing handler-replacement option. The dispatcher slot
+    // ALWAYS invokes `materializeAgent`; tests may inject a
+    // deterministic typed-error fault BEFORE the real handler runs.
     agentMaterializeHandler: async params => {
       const fault = opts.testHooks?.agentMaterializeFaultInjector?.(params);
       if (fault) throw fault;
       return materializeAgent(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentMaterializeError('fs_unavailable', m),
         ),
       });
     },
     // D4.e-1 — agent_workspace_index: route-time `agent_dir` resolver.
-    // agent-home dirs resolve from the daemon's homedir (test override via
-    // `agentMaterializeHomeDir`); regular workspaces resolve to their
+    // agent-home dirs resolve under the agents root resolved above;
+    // regular workspaces resolve to their
     // deterministic agent-centric bundle coordinate and report `agent_dir`
     // only when that bundle is materialized here (relocation-v1 §7 task 4 —
     // no registry establishment gate; availability is an fs fact).
     agentWorkspaceIndexHandler: async params => {
       return indexAgentWorkspaces(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentWorkspaceIndexError('registry_unavailable', m),
         ),
@@ -832,7 +838,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     },
     // #task:811/#1190 — agent_workspace_tree: flat tree of every visible
     // file/directory under the selected agent memory root. No `workspace_id`
-    // means agent-home/L1 (homedir-derived); `workspace_id` resolves the
+    // means agent-home/L1 (the agents root above); `workspace_id` resolves the
     // regular workspace by its deterministic agent-centric coordinate
     // (relocation-v1 §7 task 4 — no registry establishment gate; a not-yet-
     // materialized bundle degrades to an empty tree, not a refusal), or
@@ -840,7 +846,6 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // the wire.
     agentWorkspaceTreeHandler: async params =>
       listAgentWorkspaceTree(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentWorkspaceFsError('registry_unavailable', m),
         ),
@@ -853,7 +858,6 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // registry lookup.
     agentWorkspaceFileReadHandler: async params =>
       readAgentWorkspaceFile(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentWorkspaceFsError('registry_unavailable', m),
         ),
@@ -866,7 +870,6 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     // fails closed only on the fs.
     agentL2SeedHandler: async params => {
       return seedAgentL2(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentL2SeedError('registry_unavailable', m),
         ),
@@ -874,44 +877,39 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     },
     // D4.e-4 — agent_files_purge: remove an agent's host-local files on the
     // owning host. relocation-v1 §7 task 4 (registry demotion): the agent's
-    // whole managed footprint is a single tree under its home
-    // (`<home>/.silverhand/agents/<id>` = L1 + every nested `workspaces/<id>`
-    // L2 bundle), so the purge removes that tree in one rm and consults NO
-    // registry. L1 resolves from the daemon's homedir (test override via
-    // `agentMaterializeHomeDir`, same as materialize). A hard fs failure →
-    // typed `partial_purge` so the route keeps the DB row for retry.
+    // whole managed footprint is a single tree under its agent home
+    // (`<agents root>/<id>` = L1 + every nested `workspaces/<id>` L2 bundle),
+    // so the purge removes that tree in one rm and consults NO registry. A
+    // hard fs failure → typed `partial_purge` so the route keeps the DB row
+    // for retry.
     agentFilesPurgeHandler: async params => {
       return purgeAgentFiles(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentFilesPurgeError('partial_purge', m),
         ),
       });
     },
     // #task:1135 — agent_profile_mcp_read / _write: the host-local truth
-    // behind `silverhand profile mcp get|set`. L1 resolves from the daemon's
-    // homedir (test override via `agentMaterializeHomeDir`); the write handler
+    // behind `silverhand profile mcp get|set`. L1 resolves under the agents
+    // root above; the write handler
     // re-validates the canonical schema and replaces `mcp.json` atomically.
     agentProfileMcpReadHandler: async params =>
       readAgentProfileMcp(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentProfileMcpError('fs_unavailable', m),
         ),
       }),
     agentProfileMcpWriteHandler: async params =>
       writeAgentProfileMcp(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentProfileMcpError('fs_unavailable', m),
         ),
       }),
     // #task:1137 — mcp_probe: open a one-shot live MCP connection to a named
     // server (initialize + optional tools/list) and close it immediately. L1
-    // resolves from the same homedir as read/write.
+    // resolves under the same agents root as read/write.
     mcpProbeHandler: async params =>
       probeMcpServer(params, {
-        homeDir: opts.testHooks?.agentMaterializeHomeDir,
         agentHomeRootDir: agentsRootFor(
           m => new AgentProfileMcpError('fs_unavailable', m),
         ),

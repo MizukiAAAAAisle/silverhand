@@ -16,7 +16,8 @@ addition to** whatever MCP the underlying runtime already has (the user's own
 servers are an **additive layer**, never a replacement.
 
 - **Scope = `profile`** — the executing subject's global / L1 config. For an
-  agent this is its L1 home (`~/.silverhand/agents/<id>/`), shared across every
+  agent this is its L1 home (the computer slot's `agents/<id>/` dir, resolved
+  by the daemon), shared across every
   workspace. `profile` is deliberately subject-agnostic: a human can have a
   profile too, with no change to the CLI language. (Human/Agent isomorphism —
   see `docs/architecture-principles.md`.)
@@ -28,8 +29,12 @@ servers are an **additive layer**, never a replacement.
 The raw config is a JSON file at the subject's L1 home:
 
 ```
-~/.silverhand/agents/<agentId>/mcp.json
+<app-root>/computers/<computer_id>/agents/<agentId>/mcp.json
 ```
+
+The L1 home is the daemon-resolved coordinate — one join of the computer
+slot's `agents` root and the agent id (`resolveAgentDir`, #task:1813). No
+process derives it from `homedir()`, and no fs path crosses the wire.
 
 - **The file is the only source of truth for the raw config.** The backend / DB
   store **no** raw JSON. (A future column MAY cache *derived* metadata —
@@ -205,7 +210,7 @@ that any viewer may read it.
   node deps in the pure parts.
 - **`packages/host`** —
   - protocol commands `agent_profile_mcp_read` / `agent_profile_mcp_write`
-    (params keyed by `agent_id`; daemon resolves L1 via `computeAgentDir` and
+    (params keyed by `agent_id`; daemon resolves L1 via `resolveAgentDir` and
     reads / atomically writes `mcp.json`).
   - drivers `{claude,codex}.ts` call the shared adapters at `buildArgs` time;
     spawn-prep writes any temp files.

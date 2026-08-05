@@ -30,7 +30,7 @@ import { chmodSync, mkdirSync, readdirSync } from 'node:fs';
  * D4.e-1 slice ② handler unit tests. The daemon handlers sit between the
  * dispatcher and the fs: `indexAgentWorkspaces` (route-time `agent_dir`
  * resolver), `seedAgentL2`, and `purgeAgentFiles`. Pins:
- *   - index resolves agent-home from `homeDir`, a regular workspace to its
+ *   - index resolves agent-home from the explicit `agentHomeRootDir`, a regular workspace to its
  *     deterministic agent-centric bundle dir when that dir is a usable cwd
  *     (relocation-v1 §7 task 4: `agent_dir` is a CWD-existence fact via
  *     `bundleCwdUsable`, NOT a registry binding), and pushes never-materialized
@@ -43,16 +43,16 @@ const STANDALONE: RegistryBinding = {
 };
 
 let stateDir: string;
-let homeDir: string;
+let agentHomeRootDir: string;
 
 beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), 'shd4e1-h-'));
-  homeDir = mkdtempSync(join(tmpdir(), 'shd4e1-home-'));
+  agentHomeRootDir = mkdtempSync(join(tmpdir(), 'shd4e1-agents-'));
 });
 
 afterEach(() => {
   rmSync(stateDir, { recursive: true, force: true });
-  rmSync(homeDir, { recursive: true, force: true });
+  rmSync(agentHomeRootDir, { recursive: true, force: true });
 });
 
 function makeRegistry(binding: RegistryBinding = STANDALONE) {
@@ -63,24 +63,26 @@ function makeRegistry(binding: RegistryBinding = STANDALONE) {
  * The deterministic agent-centric L2 bundle dir a regular workspace resolves
  * to now (relocation-v1 §3.2): `<agent home>/workspaces/<workspace_id>`, no
  * longer `<registry ws path>/.silverhand/agents/<agent>`. Pinned against the
- * real resolver so a layout change is caught here. `homeDir` is read at call
- * time (set per-test in beforeEach).
+ * real resolver so a layout change is caught here. `agentHomeRootDir` — the
+ * EXPLICIT agents root (#task:1813) — is read at call time (set per-test in
+ * beforeEach).
  */
 function bundleDir(agentId: string, workspaceId: string): string {
-  return resolveAgentWorkspaceBundleDir(agentId, workspaceId, { homeDir });
+  return resolveAgentWorkspaceBundleDir(agentId, workspaceId, { agentHomeRootDir });
 }
 
 /**
- * The agent's L1 home dir (`<homeDir>/.silverhand/agents/<agent_id>`) — the
- * coordinate an agent-home (DM) workspace id resolves to. Pinned against the
- * real resolver; `homeDir` is read at call time (set per-test in beforeEach).
+ * The agent's L1 home dir (`<agentHomeRootDir>/<agent_id>` — ONE join onto the
+ * explicit agents root) — the coordinate an agent-home (DM) workspace id
+ * resolves to. Pinned against the real resolver; `agentHomeRootDir` is read at
+ * call time (set per-test in beforeEach).
  */
 function agentHomeDir(agentId: string): string {
-  return resolveAgentDir(agentId, { homeDir });
+  return resolveAgentDir(agentId, { agentHomeRootDir });
 }
 
 describe('indexAgentWorkspaces', () => {
-  it('resolves a materialized agent-home from homeDir, never via the registry', async () => {
+  it('resolves a materialized agent-home from agentHomeRootDir, never via the registry', async () => {
     // Cindy 2026-08-04: agent-home `agent_dir` is a CWD fact too — report it
     // ONLY when the L1 dir is a usable cwd (the SAME `bundleCwdUsable` predicate
     // as regular workspaces), never fabricated. Materialize it first.
@@ -88,7 +90,7 @@ describe('indexAgentWorkspaces', () => {
     mkdirSync(agentHomeDir('aid_x'), { recursive: true });
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: [agentHome] },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.unresolved).toEqual([]);
     expect(r.entries).toHaveLength(1);
@@ -105,7 +107,7 @@ describe('indexAgentWorkspaces', () => {
     const agentHome = agentHomeWorkspaceId('aid_x');
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: [agentHome] },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.entries).toEqual([]);
     expect(r.unresolved).toEqual([agentHome]);
@@ -122,7 +124,7 @@ describe('indexAgentWorkspaces', () => {
     try {
       const r = await indexAgentWorkspaces(
         { agent_id: 'aid_x', workspace_ids: [agentHome] },
-        { homeDir },
+        { agentHomeRootDir },
       );
       expect(r.entries).toEqual([]);
       expect(r.unresolved).toEqual([agentHome]);
@@ -139,7 +141,7 @@ describe('indexAgentWorkspaces', () => {
 
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: ['ws_1'] },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.unresolved).toEqual([]);
     expect(r.entries[0]).toEqual({
@@ -153,7 +155,7 @@ describe('indexAgentWorkspaces', () => {
     // agent_dir null (surfaced as `unresolved`), never a fabricated path.
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: ['ws_missing'] },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.entries).toEqual([]);
     expect(r.unresolved).toEqual(['ws_missing']);
@@ -169,7 +171,7 @@ describe('indexAgentWorkspaces', () => {
         agent_id: 'aid_x',
         workspace_ids: [agentHome, 'ws_missing', 'ws_ok'],
       },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.entries.map(e => e.workspace_id)).toEqual([agentHome, 'ws_ok']);
     expect(r.unresolved).toEqual(['ws_missing']);
@@ -178,10 +180,10 @@ describe('indexAgentWorkspaces', () => {
   it('does NOT treat a wsah_ id for a different agent as agent-home', async () => {
     // `wsah_other` is agent-home for `other`, not for `aid_x`. For `aid_x`
     // it is just a regular id with no materialized dir → unresolved, never
-    // resolved from homeDir.
+    // resolved from agentHomeRootDir.
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid_x', workspace_ids: [agentHomeWorkspaceId('other')] },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.entries).toEqual([]);
     expect(r.unresolved).toEqual([agentHomeWorkspaceId('other')]);
@@ -193,7 +195,7 @@ describe('indexAgentWorkspaces', () => {
     // never a guessed path and never a hard failure.
     const r = await indexAgentWorkspaces(
       { agent_id: 'aid', workspace_ids: ['../../escape'] },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r.entries).toEqual([]);
     expect(r.unresolved).toEqual(['../../escape']);
@@ -212,7 +214,7 @@ describe('indexAgentWorkspaces', () => {
     try {
       const r = await indexAgentWorkspaces(
         { agent_id: 'aid_x', workspace_ids: ['ws_locked'] },
-        { homeDir },
+        { agentHomeRootDir },
       );
       expect(r.entries).toEqual([]);
       expect(r.unresolved).toEqual(['ws_locked']);
@@ -260,7 +262,7 @@ describe('seedAgentL2', () => {
   it('seeds MEMORY.md + notes/ but NEVER system_prompt.md (L1-only)', async () => {
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r).toEqual({ ok: true, seeded: true, l2_present: true });
 
@@ -284,7 +286,7 @@ describe('seedAgentL2', () => {
     // forward-path behavior change from the registry model.
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_fresh', template_choice: 'default' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     expect(r).toEqual({ ok: true, seeded: true, l2_present: true });
     expect(existsSync(join(l2DirFor('ws_fresh'), 'MEMORY.md'))).toBe(true);
@@ -295,7 +297,7 @@ describe('seedAgentL2', () => {
 
     await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     // An agent edits its MEMORY.md after the first seed.
     const memPath = join(l2, 'MEMORY.md');
@@ -303,7 +305,7 @@ describe('seedAgentL2', () => {
 
     const r = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-      { homeDir },
+      { agentHomeRootDir },
     );
     // Nothing new written; the edit survives (no clobber).
     expect(r).toEqual({ ok: true, seeded: false, l2_present: true });
@@ -322,7 +324,7 @@ describe('seedAgentL2', () => {
         workspace_id: agentHomeWorkspaceId(AGENT_ID),
         template_choice: 'default',
       },
-      { homeDir },
+      { agentHomeRootDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('internal_error');
@@ -333,7 +335,7 @@ describe('seedAgentL2', () => {
   it('rejects an unsupported template_choice with unsupported_template (no fs write)', async () => {
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'minimal' },
-      { homeDir },
+      { agentHomeRootDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('unsupported_template');
@@ -348,7 +350,7 @@ describe('seedAgentL2', () => {
     // through to internal_error.
     const err = await seedAgentL2(
       { agent_id: AGENT_ID, workspace_id: '../../escape', template_choice: 'default' },
-      { homeDir },
+      { agentHomeRootDir },
     ).catch(e => e);
     expect(err).toBeInstanceOf(AgentL2SeedError);
     expect((err as AgentL2SeedError).code).toBe('registry_unavailable');
@@ -359,13 +361,13 @@ describe('seedAgentL2', () => {
     // `workspaces/<id>` child) throw EACCES — a hard write error must surface
     // as the typed fs_unavailable (fail-closed), never a silent success.
     if (process.getuid?.() === 0) return; // root bypasses perms — skip
-    const agentHomeDir = join(homeDir, '.silverhand', 'agents', AGENT_ID);
+    const agentHomeDir = join(agentHomeRootDir, AGENT_ID);
     mkdirSync(agentHomeDir, { recursive: true });
     chmodSync(agentHomeDir, 0o000);
     try {
       const err = await seedAgentL2(
         { agent_id: AGENT_ID, workspace_id: 'ws_1', template_choice: 'default' },
-        { homeDir },
+        { agentHomeRootDir },
       ).catch(e => e);
       expect(err).toBeInstanceOf(AgentL2SeedError);
       expect((err as AgentL2SeedError).code).toBe('fs_unavailable');
@@ -379,7 +381,7 @@ describe('purgeAgentFiles', () => {
   const AGENT_ID = 'aid_purge';
 
   function l1Dir(): string {
-    return join(homeDir, '.silverhand', 'agents', AGENT_ID);
+    return join(agentHomeRootDir, AGENT_ID);
   }
   function l2DirFor(workspaceId: string): string {
     return bundleDir(AGENT_ID, workspaceId);
@@ -396,7 +398,7 @@ describe('purgeAgentFiles', () => {
     seedDir(l2DirFor('ws_1'));
     seedDir(l2DirFor('ws_2'));
 
-    const r = await purgeAgentFiles({ agent_id: AGENT_ID }, { homeDir });
+    const r = await purgeAgentFiles({ agent_id: AGENT_ID }, { agentHomeRootDir });
     // One rm of the agent home subsumes L1 and every nested L2 bundle
     // (relocation-v1 §3.2 / §7 task 4), so exactly one target is counted and
     // NO registry is consulted.
@@ -408,7 +410,7 @@ describe('purgeAgentFiles', () => {
 
   it('is idempotent: purging an already-gone home succeeds with purged_count=0 (ENOENT not a failure)', async () => {
     // Nothing seeded — the agent home does not exist yet.
-    const r = await purgeAgentFiles({ agent_id: AGENT_ID }, { homeDir });
+    const r = await purgeAgentFiles({ agent_id: AGENT_ID }, { agentHomeRootDir });
     expect(r).toEqual({ ok: true, purged_count: 0 });
   });
 
@@ -420,7 +422,7 @@ describe('purgeAgentFiles', () => {
     seedDir(l1Dir());
     chmodSync(l1Dir(), 0o000);
     try {
-      const err = await purgeAgentFiles({ agent_id: AGENT_ID }, { homeDir }).catch(
+      const err = await purgeAgentFiles({ agent_id: AGENT_ID }, { agentHomeRootDir }).catch(
         e => e,
       );
       expect(err).toBeInstanceOf(AgentFilesPurgeError);

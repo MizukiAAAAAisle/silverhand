@@ -18,9 +18,9 @@ import { Markdown } from '@/components/chat/Markdown';
 import { cn } from '@/lib/cn';
 
 /**
- * The read-only file browser for an agent's `.silverhand/agents/<id>/`
- * directory, factored out of `AgentWorkspacePane` so the **same renderer**
- * serves two data sources (#task:1191):
+ * The read-only file browser for an agent's own files, factored out of
+ * `AgentWorkspacePane` so the **same renderer** serves two data sources
+ * (#task:1191):
  *
  *  - the full members page → the agent **home** dir (L1 identity:
  *    `system_prompt.md` + the home `MEMORY.md`/`notes`);

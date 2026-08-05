@@ -9,11 +9,14 @@
  * `RunDaemonOptions.testHooks` (Cindy D6-2 P1-1
  * `d4IID_Nnn1VShRa5`) lets the test:
  *
- *   - point `materializeAgent` at a tmp `homeDir` so the L1 tree
- *     lands outside the user's real `~/.silverhand/agents/`;
  *   - inject a deterministic typed `AgentMaterializeError` once
  *     to drive the §3.2 retry path through the dispatcher's
  *     typed-error narrowing branch.
+ *
+ * The L1 tree lands outside the user's real `~/.silverhand/agents/`
+ * because the daemon takes its agents root as an ordinary EXPLICIT
+ * option (`agentHomeRootDir`, #task:1813) pointed at a tmp dir —
+ * not through a test hook.
  *
  * There is NO embedder-facing handler-replacement option — the
  * dispatcher slot always calls the real `materializeAgent`. The
@@ -139,41 +142,39 @@ async function postCreate(
 }
 
 /**
- * Daemon-side L1 dir for `agent_id` under the test's `homeDir`.
- * Mirrors `computeAgentDir`'s layout (`<homeDir>/.silverhand/
- * agents/<agentId>/`) without importing it (that path is behind
- * the agent-materialize tripwire for backend tests; the public
- * barrel does not re-export it).
+ * Daemon-side L1 dir for `agent_id` under the test's agents root.
+ * Mirrors `resolveAgentDir`'s layout (ONE join onto the root) without
+ * importing it (that path is behind the agent-materialize tripwire
+ * for backend tests; the public barrel does not re-export it).
  */
-function agentL1Dir(homeDir: string, agentId: string): string {
-  return join(homeDir, '.silverhand', 'agents', agentId);
+function agentL1Dir(agentsRoot: string, agentId: string): string {
+  return join(agentsRoot, agentId);
 }
 
 describe('D4.d D6 — agent_materialize real-wire e2e', () => {
   let harness: G2Harness | null = null;
   let daemon: DaemonWithSupervisorHandle | null = null;
-  let tmpHome: string | null = null;
+  let tmpAgentsRoot: string | null = null;
 
   afterEach(async () => {
     await daemon?.stop().catch(() => undefined);
     daemon = null;
     await harness?.shutdown().catch(() => undefined);
     harness = null;
-    if (tmpHome) {
+    if (tmpAgentsRoot) {
       try {
-        rmSync(tmpHome, { recursive: true, force: true });
+        rmSync(tmpAgentsRoot, { recursive: true, force: true });
       } catch {}
-      tmpHome = null;
+      tmpAgentsRoot = null;
     }
   });
 
   it('POST → real WS → real materializeAgent → row active → typed-fault injection → ?retry=true succeeds → echo still 200', async () => {
-    // Tmp dir that stands in for `homedir()` on the daemon side.
-    // `materializeAgent` joins `<homeDir>/.silverhand/agents/<id>/`
-    // onto this root, so passing the dir verbatim through
-    // `testHooks.agentMaterializeHomeDir` keeps the real handler
-    // off the user's `~/.silverhand/agents/`.
-    tmpHome = mkdtempSync(join(tmpdir(), 'silverhand-d6-home-'));
+    // Tmp dir that stands in for the computer slot's `agents` root on
+    // the daemon side. `materializeAgent` joins `<agentsRoot>/<id>/`
+    // onto it, so passing it as the production `agentHomeRootDir`
+    // keeps the real handler off the user's `~/.silverhand/agents/`.
+    tmpAgentsRoot = mkdtempSync(join(tmpdir(), 'silverhand-d6-agents-'));
 
     harness = await bootG2Harness();
 
@@ -197,8 +198,8 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
 
     daemon = await bootDaemonWithSupervisor(harness, {
       driverFor: stubDriver(),
+      agentHomeRootDir: tmpAgentsRoot,
       testHooks: {
-        agentMaterializeHomeDir: tmpHome,
         agentMaterializeFaultInjector: faultInjector,
       },
     });
@@ -234,7 +235,7 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
     // (proves the sendCommand → daemon `materializeAgent` →
     // sentinel write round-trip really fired — and that what
     // ran was production code, not a test-replaced fake).
-    const happyL1 = agentL1Dir(tmpHome, happyJson.agent.id);
+    const happyL1 = agentL1Dir(tmpAgentsRoot, happyJson.agent.id);
     expect(existsSync(join(happyL1, 'system_prompt.md'))).toBe(true);
     expect(existsSync(join(happyL1, 'MEMORY.md'))).toBe(true);
     expect(existsSync(join(happyL1, 'notes', 'onboarding-guide.md'))).toBe(true);
@@ -305,7 +306,7 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
     // The injected fault hook short-circuits BEFORE
     // `materializeAgent` runs, so no L1 dir for the failed
     // agent_id should exist.
-    expect(existsSync(agentL1Dir(tmpHome, failedRow!.id))).toBe(false);
+    expect(existsSync(agentL1Dir(tmpAgentsRoot, failedRow!.id))).toBe(false);
 
     // Same-row retry — fault hook is exhausted (`oneShotFault`
     // back to false after the first throw). Row should flip
@@ -323,7 +324,7 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
     const retriedJson = retried.json as CreateAgentOk;
     expect(retriedJson.agent.id).toBe(failedRow!.id); // same-row
     expect(retriedJson.agent.materialization_status).toBe('active');
-    const retriedL1 = agentL1Dir(tmpHome, retriedJson.agent.id);
+    const retriedL1 = agentL1Dir(tmpAgentsRoot, retriedJson.agent.id);
     expect(existsSync(join(retriedL1, '.materialized'))).toBe(true);
     expect(existsSync(join(retriedL1, 'MEMORY.md'))).toBe(true);
     expect(existsSync(join(retriedL1, 'notes', 'onboarding-faq.md'))).toBe(true);
@@ -347,8 +348,7 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
     // before any FS touch) + retry-ok = 2 real on-disk dirs
     // (happy + retry). Phase-3 echo short-circuits at the route
     // layer (200 echo) without crossing the wire.
-    const agentsRoot = join(tmpHome, '.silverhand', 'agents');
-    const agentsDir = readdirSync(agentsRoot);
+    const agentsDir = readdirSync(tmpAgentsRoot);
     expect(agentsDir.sort()).toEqual(
       [happyJson.agent.id, retriedJson.agent.id].sort(),
     );

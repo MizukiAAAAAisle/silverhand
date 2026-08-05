@@ -599,7 +599,6 @@ declare global {
         | { ok: false; canceled: true }
         | { ok: false; reason: string }
       >;
-      showItemInFolder(path: string): Promise<void>;
       showSystemNotification(opts: {
         title: string;
         body: string;

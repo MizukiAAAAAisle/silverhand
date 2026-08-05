@@ -263,8 +263,8 @@ export type AgentChangedEvent = z.infer<typeof AgentChangedEventSchema>;
 
 // Pair of read-only protocols that together back the two-column workspace
 // pane. The renderer pulls a flat tree of every file under the agent's
-// home directory ("agent home workspace files" — agent-home L1 in
-// today's topology, i.e. `~/.silverhand/agents/<id>/`), then reads any
+// home directory ("agent home workspace files" — the agent's L1 dir, whose
+// host-local coordinate only the daemon resolves), then reads any
 // path the user clicks. This intentionally does NOT segment by
 // `system_prompt` / `MEMORY` / `notes/`: the protocol speaks one virtual
 // path namespace rooted at the agent home dir, and the UI categorizes

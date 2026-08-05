@@ -160,14 +160,6 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
     },
   );
 
-  ipc.handle('shell:showItemInFolder', (_event, fullPath: string) => {
-    // Reveal a file/dir in Finder/Explorer. Used by the agent profile's
-    // "Reveal in Finder" buttons. Path validity is enforced by Electron;
-    // an unknown path simply opens the home dir, which is harmless.
-    if (typeof fullPath !== 'string' || fullPath.length === 0) return;
-    shell.showItemInFolder(fullPath);
-  });
-
   ipc.handle('badge:setCount', (_event, value: unknown) => {
     // macOS dock badge. n=0 clears it; non-finite / negative values are
     // coerced to 0 so a buggy renderer can't paint nonsense on the icon.
