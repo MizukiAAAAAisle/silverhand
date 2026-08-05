@@ -470,4 +470,3 @@ describe('pendingAttachmentsBlockSend (#task:1834)', () => {
     expect(pendingAttachmentsBlockSend([item('done'), item('error')])).toBe(true);
   });
 });
-
