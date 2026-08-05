@@ -897,9 +897,15 @@ function AttachmentChip({
   onPreview?: () => void;
 }): JSX.Element {
   const sizeLabel = formatBytes(item.size);
+  // `error` uses the `--color-error` token at full strength on BOTH frame and
+  // ink: there is no `danger` token in any theme (the `status-danger` classes
+  // this replaced were never generated, so a failed upload read exactly like a
+  // finished one), and a failure the user must notice before sending is where
+  // saturation is earned. Full-strength `border-error` on a compact bordered
+  // control matches `ConnectionPane`'s failed-endpoint option.
   const stateClass =
     item.state === 'error'
-      ? 'border-status-danger text-status-danger'
+      ? 'border-error text-error'
       : item.state === 'uploading'
         ? 'border-border-subtle text-text-muted'
         : 'border-border-subtle text-text-secondary';
