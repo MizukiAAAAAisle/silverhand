@@ -246,13 +246,18 @@ an email-only auth row. Auth-related state lives in dedicated tables; the
   must not be guessed. There is no server-side handle deriver any more; the
   email→handle suggestion survives only as a renderer prefill
   (`suggestParticipantNameFromEmail`).
-- A handle, once held, is **never recycled**. There is no account-deletion path
-  today, so nothing needs to be built for this; the constraint is on future work:
-  if account deletion is added it must soft-delete, or otherwise keep the handle
-  permanently reserved, so that no new subject can acquire an old one. `@mentions`
-  are re-parsed out of stored message text at read time, so recycling a handle
-  would silently re-point every historical mention of the previous holder
-  (shiki, 2026-08-05).
+- A **human handle** (`users.name`), once held, is **never recycled**. There is no
+  account-deletion path today, so nothing needs to be built for this; the
+  constraint is on future work: if account deletion is added it must soft-delete,
+  or otherwise keep the handle permanently reserved, so that no new subject can
+  acquire an old one. `@mentions` are re-parsed out of stored message text at read
+  time, so recycling a handle would silently re-point every historical mention of
+  the previous holder (shiki, 2026-08-05). Scope note: this is a ruling about USER
+  handles, and it deliberately is not stated for the namespace as a whole —
+  `AgentRepo.delete` is a hard DELETE today, so an agent name IS reusable after
+  deletion. Whether agent handles should be reserved too is the same question with
+  the same mention argument behind it, but it is undecided and unimplemented; do
+  not read this bullet as covering it.
 - Login: `POST /auth/login {email, password}` → server resolves
   `users` row by email, joins `user_password_credentials`, validates → issues
   `user_token` (opaque session token) bound to a row in

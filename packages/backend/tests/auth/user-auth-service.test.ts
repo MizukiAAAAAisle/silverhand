@@ -1,5 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { UserRow } from '@silverhand/shared';
 import {
   PasswordCredentialService,
   type Argon2idPasswordHashParams,
@@ -52,6 +53,31 @@ class FakePasswordHasher implements PasswordHasher {
   async verifyDummyPassword(password: string): Promise<boolean> {
     this.dummyCalls.push(password);
     return false;
+  }
+}
+
+/**
+ * A `UserRepo` whose first read on each lookup lies "nothing found", then tells
+ * the truth. This is how a pre-check goes stale in production — a row appears
+ * between the check and the INSERT — without needing a second writer process.
+ */
+class StaleReadsUserRepo extends UserRepo {
+  readonly staleReads = { byName: 1, byEmail: 1 };
+
+  override getByName(name: string): UserRow | null {
+    if (this.staleReads.byName > 0) {
+      this.staleReads.byName -= 1;
+      return null;
+    }
+    return super.getByName(name);
+  }
+
+  override getByEmail(email: string): UserRow | null {
+    if (this.staleReads.byEmail > 0) {
+      this.staleReads.byEmail -= 1;
+      return null;
+    }
+    return super.getByEmail(email);
   }
 }
 
@@ -218,5 +244,40 @@ describe('UserAuthService.signup — answer ordering and cost floor', () => {
       }),
     ).resolves.toEqual({ ok: false, code: 'handle_taken' });
     expect(new UserRepo(db).getByEmail('human@example.com')).toBeNull();
+  });
+
+  it('keeps the handle answer first when the DB reports the email conflict', async () => {
+    // The DB-conflict path is the SECOND place the ordering has to hold. With a
+    // stale pre-check and BOTH axes taken, `users.email` UNIQUE fires before the
+    // name trigger, so mapping each SQLite error 1:1 would answer 401 for a
+    // taken handle — an email-existence oracle in the race window. `StaleReads`
+    // reproduces exactly that: the pre-check sees a free handle and a free
+    // email, and the row is there by INSERT time.
+    const opened = openTestDb();
+    db = opened.db;
+    db.prepare(`UPDATE users SET email = 'alice@example.com' WHERE id = 'alice'`).run();
+    const users = new StaleReadsUserRepo(db);
+    const service = new UserAuthService({
+      db,
+      users,
+      agents: new AgentRepo(db),
+      passwordCredentials: new PasswordCredentialService(
+        db,
+        new FakePasswordHasher(),
+      ),
+      authSessions: new AuthSessionService(db),
+    });
+    const usersBefore = new UserRepo(db).list().length;
+
+    await expect(
+      service.signup({
+        email: 'alice@example.com',
+        password: 'correct-password',
+        name: 'alice-test',
+      }),
+    ).resolves.toEqual({ ok: false, code: 'handle_taken' });
+    // Both lies were spent, i.e. the pre-check really did read "free".
+    expect(users.staleReads).toEqual({ byName: 0, byEmail: 0 });
+    expect(new UserRepo(db).list()).toHaveLength(usersBefore);
   });
 });

@@ -84,7 +84,8 @@ export class UserAuthService {
     );
 
     // Decided on the handle alone, for both halves of the mention namespace.
-    // Racy by construction — the DB catch below is what closes the window.
+    // Racy by construction — the catch below re-answers in this same order, so
+    // the ordering holds on the DB-conflict path too.
     if (
       !isParticipantHandleAvailable(
         { agents: this.agents, users: this.users },
@@ -131,13 +132,32 @@ export class UserAuthService {
         this.publishCreated(userId);
         return { ok: true, userId };
       } catch (err) {
-        // Both DB races land here, and each keeps the ordering above: a handle
-        // that was free at the pre-check but is now taken still answers 409, and
-        // an email registered since the check still answers the uniform 401. The
-        // password cost was already paid before either check.
-        if (isNameConflict(err)) return { ok: false, code: 'handle_taken' };
-        if (isEmailConflict(err)) return { ok: false, code: 'auth_failed' };
+        // Internal id allocation is a different axis: retry, and whatever else
+        // is wrong resurfaces on the next attempt.
         if (isUserIdConflict(err)) continue;
+        if (isNameConflict(err) || isEmailConflict(err)) {
+          // A conflict here means the world moved under the pre-checks, so
+          // RE-ANSWER in the same priority order instead of mapping each error
+          // 1:1. Mapping 1:1 would let SQLite pick the answer: when the handle
+          // and the email are both taken, `users.email` UNIQUE can fire before
+          // the name trigger, and a taken handle would then be reported as 401
+          // — the very email-existence oracle the ordering above exists to
+          // prevent. Re-reading the handle is authoritative because a conflict
+          // proves the pre-check read is stale.
+          if (
+            !isParticipantHandleAvailable(
+              { agents: this.agents, users: this.users },
+              input.name,
+            )
+          ) {
+            return { ok: false, code: 'handle_taken' };
+          }
+          // Handle free on re-read: either the email is the conflict, or a
+          // handle taken at INSERT time has since been released (agent names
+          // can be hard-deleted). Never lose the name-conflict fact.
+          if (isEmailConflict(err)) return { ok: false, code: 'auth_failed' };
+          return { ok: false, code: 'handle_taken' };
+        }
         throw err;
       }
     }
