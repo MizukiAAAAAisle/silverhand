@@ -93,6 +93,10 @@ export const CLI_INVOKE_ROUTES: readonly CliInvokeRoute[] = [
   // longer `profile/mcp*` suffixes so the facet routes win their paths.
   { method: 'GET', suffix: 'profile', noun: 'profile', verb: 'get' },
   { method: 'POST', suffix: 'profile', noun: 'profile', verb: 'update' },
+  // peer-profile — the SAME CLI verb (`profile get --handle <name>`) reading a
+  // second subject, so it is tagged `profile get` too; the logged
+  // `routeSuffix` is what tells the two reads apart (#task:1823).
+  { method: 'GET', suffix: 'peer-profile', noun: 'profile', verb: 'get' },
 ];
 
 /**

@@ -607,6 +607,10 @@ export type SavedMessagesQueryInput = z.infer<typeof SavedMessagesQueryInputSche
 // (`/^[a-zA-Z0-9_-]+$/`, allows numeric-first); a numeric-first
 // agent name will not be `@`-mentionable until/unless that schema
 // is tightened — out of scope for the registration rewrite.
+// Not to be confused with `HandleSchema` in `../handle.ts`, the input
+// grammar for command/lookup arguments (`member add --handle`,
+// `profile get --handle`): that one is broader — mentionable names are a
+// strict subset of it, because only THIS regex has to survive prose.
 const MENTION_RE = /(?<![\w/])@([a-zA-Z][a-zA-Z0-9_-]*)/g;
 
 /** Returns the unique set of @-names referenced in `text`, in

@@ -1,10 +1,16 @@
 /**
- * `silverhand profile` — the executing subject's GLOBAL (L1) config, the
- * config that travels with the agent across every workspace. Subject-agnostic
- * (Human/Agent isomorphism): it always targets whoever is running the CLI.
+ * `silverhand profile` — profile config. The WRITE side is always the
+ * executing subject's own (Human/Agent isomorphism): there is no target flag
+ * on any verb that changes something, and the backend pins it structurally.
+ * The READ side of profile metadata also answers for a PEER
+ * (`get --handle <name>`, #task:1823), because "who is @X and what do they
+ * own" is a question every collaborator has and identity is not private
+ * within a workspace.
  *
  * Two grammars coexist under this noun (#task:1178):
  *   - Faceted:  `silverhand profile mcp <verb>`  — custom MCP servers.
+ *               ALWAYS self: it is host-local L1 config and may carry
+ *               credentials, so it takes no `--handle`.
  *   - Flat:     `silverhand profile get|update`  — profile metadata
  *               (display name / description / avatar). The dispatcher tries
  *               the facet token first; an unknown facet falls through to a
@@ -554,23 +560,47 @@ async function readBodyCapped(res: Response, cap: number): Promise<Buffer> {
 
 const profileGetCommand: Command = {
   verb: 'get',
-  summary: "Print the executing agent's own profile (display name, description, avatar).",
-  help: `silverhand profile get
+  summary:
+    "Print an agent's profile (display name, description, avatar) — yours, or a peer's with --handle.",
+  help: `silverhand profile get [--handle <name>] [--workspace-id <id>]
 
-Print the executing agent's own profile metadata — the identity and the
-fields it can change with \`profile update\`. This is the SELF view (always
-whoever runs the CLI; there is no target flag). Distinct from
-\`profile mcp get\` (custom MCP config).
+Print profile metadata. Without flags this is the SELF view — the executing
+agent's own profile, i.e. the fields it can change with \`profile update\`.
+Distinct from \`profile mcp get\` (custom MCP config, self-only always).
+
+  --handle <name>       Read ANOTHER agent's profile instead (read-only; a
+                        leading @ is fine). Use it to find out who a peer is
+                        and what they own before handing work over.
+  --workspace-id <id>   Which workspace the peer lookup is scoped to.
+                        Defaults to this conversation's workspace.
+
+A peer read is READ-ONLY and needs the target to be an agent in that
+workspace; anything else — no such handle, a human's handle, an agent in a
+workspace you two don't share — is the same not_found.
 
 stdout: an AgentProfileDto —
   { "id", "name", "display_name",
     "description": <string|null>, "avatar_url": <string|null> }
-\`avatar_url\` is a derived, read-only Silverhand URL (or null) — set the
+\`avatar_url\` is a derived, read-only Silverhand URL (or null) — set your own
 avatar via \`profile update --avatar-file|--avatar-url\`, never by writing
-this field.`,
-  flags: [] as const,
-  async run({ client }) {
-    const { profile } = await client.getProfile();
+this field. There is no way to write another agent's profile.`,
+  flags: ['handle', 'workspace-id'] as const,
+  async run({ client, args }) {
+    const handle = flagString(args, 'handle');
+    const workspaceId = flagString(args, 'workspace-id');
+    if (handle === undefined) {
+      if (workspaceId !== undefined) {
+        throw new CliError({
+          code: 'validation_error',
+          message:
+            '--workspace-id only applies to a peer lookup; pass --handle <name> too (your own profile is workspace-independent).',
+          retriable: false,
+        });
+      }
+      const { profile } = await client.getProfile();
+      return profile;
+    }
+    const { profile } = await client.getPeerProfile(handle, workspaceId);
     return profile;
   },
 };

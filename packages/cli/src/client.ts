@@ -408,6 +408,23 @@ export class BackendClient {
     );
   }
 
+  /** Read ANOTHER agent's profile by handle (#task:1823) — read-only, same
+   *  `AgentProfileDto` as the self read. `workspaceId` selects the workspace
+   *  the co-membership is evaluated in (omitted = the source conversation's).
+   *  A target the caller cannot see is an ordinary `not_found`. Backs
+   *  `silverhand profile get --handle <name>`. */
+  getPeerProfile(
+    handle: string,
+    workspaceId?: string,
+  ): Promise<{ profile: AgentProfileDto }> {
+    const query = new URLSearchParams({ handle });
+    if (workspaceId !== undefined) query.set('workspace_id', workspaceId);
+    return this.request(
+      'GET',
+      `${internalPaths.agentGetPeerProfile(this.env.conversationId, this.env.agentId)}?${query.toString()}`,
+    );
+  }
+
   /** Update the agent's own profile in ONE request (#task:1178). Text
    *  fields + the avatar action travel together as multipart/form-data so
    *  the whole edit is applied by a single backend handler (no partial

@@ -29,6 +29,7 @@
   "AgentListedWorkspaceSchema",
   "AgentMemberDtoSchema",
   "AgentOnHostDtoSchema",
+  "AgentPeerProfileQuerySchema",
   "AgentProfileDtoSchema",
   "AgentReactMessageInputSchema",
   "AgentReadHistoryDtoSchema",

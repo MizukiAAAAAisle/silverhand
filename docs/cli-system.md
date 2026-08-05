@@ -85,7 +85,7 @@ implementation because it owns exact flags, examples, and recovery behavior.
 | `silverhand profile mcp set` | Replace the executing agent's profile MCP config. Raw JSON on **STDIN**; validated then written verbatim. Effect is **next spawn** (no hot reload). See §3.8. |
 | `silverhand profile mcp validate` | Validate `mcp.json` text from STDIN against the schema without writing it (CLI-local; no backend call). See §3.8. |
 | `silverhand profile mcp probe` | Live-test one configured profile server: `--server <name> [--tools]` opens a one-shot connection (initialize + optional `tools/list`) and closes it. See §3.8. |
-| `silverhand profile get` | Print the executing agent's own profile metadata (`id`, `name`, `display_name`, `description`, `avatar_url`). Self only — no target flag. See §3.9. |
+| `silverhand profile get` | Print profile metadata (`id`, `name`, `display_name`, `description`, `avatar_url`): your own by default, or another agent's with `--handle <name>` (read-only, workspace co-membership; `--workspace-id` scopes the lookup). See §3.9. |
 | `silverhand profile update` | Update the executing agent's own profile (self only): `--display-name`, `--description`, and at most one avatar action — `--avatar-file <path>`, `--avatar-url <https-url>` (downloaded + stored as a blob; URL never persisted), or `--clear-avatar`. One multipart request; inputs are validated before any write. See §3.9. |
 
 **Dependent commands run one at a time.** When a later command's input
@@ -678,11 +678,12 @@ Canonical design: `docs/agent-mcp-config-v1.md`.
 
 `silverhand profile <verb>` (flat, alongside the `mcp` facet) manages the
 **executing subject's own profile metadata** — `display_name`, `description`,
-and avatar. Like `profile mcp`, it is **self only**: there is no `--agent-id`
-flag, so the command can only act on whoever runs the CLI (self-edit is
-structural, not merely gated). The dispatcher tries the facet token first and
-falls through to a flat verb, so `profile mcp <verb>` and `profile get|update`
-never collide.
+and avatar. Every WRITE is **self only**: there is no `--agent-id` flag, so an
+edit can only act on whoever runs the CLI (self-edit is structural, not merely
+gated). Reading profile metadata is the one place with a second subject:
+`profile get --handle <name>` reads a PEER's profile (read-only). The
+dispatcher tries the facet token first and falls through to a flat verb, so
+`profile mcp <verb>` and `profile get|update` never collide.
 
 Unlike profile MCP (a host-local L1 file reached over the data plane), these
 fields are DB columns / a blob on the `agents` row, so the backend writes them
@@ -696,6 +697,18 @@ edit propagates everywhere regardless of who made it.
   display_name, description, avatar_url }`. `avatar_url` is a derived,
   read-only Silverhand URL (`/api/agents/:id/avatar?v=…`) or null — never a
   foreign URL.
+- `silverhand profile get --handle <name> [--workspace-id <id>]` → the SAME
+  `AgentProfileDto` for another agent. Read and write are separate axes here:
+  the self route stays structurally self-only (the agent token pins the `:aid`
+  in its URL) and the peer read is its own route taking a handle, so widening
+  the read never widens the write. Visibility is workspace co-membership —
+  `--workspace-id` defaults to the current conversation's workspace, a
+  different one is allowed only within the caller's own workspace horizon, and
+  the `read_messages` capability is required there. An unknown handle, a
+  human's handle (handles are unique across `users.name` ⊕ `agents.name`), and
+  an agent outside that workspace all return the SAME `not_found`, so the
+  endpoint cannot be used to probe for who exists. `profile mcp` has no peer
+  read at all — it is host-local L1 config and may carry credentials.
 - `silverhand profile update` — pass any of `--display-name <name>` (1..64
   chars), `--description <text>` (≤2000), and at most ONE avatar action:
   - `--avatar-file <path>` — a LOCAL image (absolute path).

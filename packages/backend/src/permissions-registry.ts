@@ -369,6 +369,12 @@ export const AGENT_ROUTE_CAPABILITIES: Record<
   agentFollowThread: { status: 'enforced', capability: 'read_messages', scope: 'principal conversation\'s workspace' },
   agentUnfollowThread: { status: 'enforced', capability: 'read_messages', scope: 'principal conversation\'s workspace' },
   agentListChannels: { status: 'enforced', capability: 'read_messages', scope: 'target workspace_id arg (default principal\'s)' },
+  // Peer profile read (#task:1823) — the PEER axis of the profile noun. Unlike
+  // the self routes above (identity axis, `none-justified`) this reads ANOTHER
+  // agent's row, so it is a per-workspace observation and gates like the other
+  // roster/channel reads. Target must be a `workspace_members` agent of that
+  // same workspace; unknown / non-member / human handles are one 404.
+  agentGetPeerProfile: { status: 'enforced', capability: 'read_messages', scope: 'target workspace_id arg (default principal\'s)' },
   agentSearchMessages: { status: 'enforced', capability: 'read_messages', scope: 'resolved target: channel.workspace_id | workspace_id arg | principal\'s' },
   agentSendConversationMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },
   agentResolveStaleMessage: { status: 'enforced', capability: 'send_messages', scope: 'principal conversation\'s workspace' },

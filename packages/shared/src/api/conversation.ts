@@ -1,6 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: conversation. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
+import { HandleSchema } from '../handle.js';
 import {
   ConversationAgentStatusSchema,
   ConversationEventKindSchema,
@@ -196,13 +197,6 @@ export type ConversationMembersReadResponse = z.infer<
   typeof ConversationMembersReadResponseSchema
 >;
 
-const ConversationMemberHandleSchema = z
-  .string()
-  .trim()
-  .regex(/^@?[a-zA-Z0-9_-]{1,64}$/, {
-    message: 'handle must be @optional alphanumeric / dash / underscore',
-  });
-
 export const AddConversationMemberByIdInputSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('agent'),
@@ -214,7 +208,7 @@ export const AddConversationMemberByIdInputSchema = z.discriminatedUnion('kind',
   }),
 ]);
 export const AddConversationMemberByHandleInputSchema = z.object({
-  handle: ConversationMemberHandleSchema,
+  handle: HandleSchema,
 });
 export const AddConversationMemberInputSchema = z.union([
   AddConversationMemberByIdInputSchema,

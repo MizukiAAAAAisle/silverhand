@@ -7,6 +7,7 @@ import {
   type ConversationVisibility,
   type MemberRemovabilityDto,
   type WorkspaceRoleDto,
+  normalizeHandle,
   systemSubtype,
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
@@ -1215,10 +1216,6 @@ type ResolvedConversationMemberInput =
   | { kind: 'agent'; agent_id: string }
   | { kind: 'human'; user_id: string };
 
-function normalizeMemberHandle(handle: string): string {
-  return handle.trim().replace(/^@/, '');
-}
-
 function resolveConversationMemberInput(
   deps: { agents: AgentRepo; users: UserRepo; workspaces: WorkspaceRepo },
   input: {
@@ -1233,7 +1230,7 @@ function resolveConversationMemberInput(
     return { ok: true, member: input.member };
   }
 
-  const handle = normalizeMemberHandle(input.member.handle);
+  const handle = normalizeHandle(input.member.handle);
   const candidates: Array<HandleCandidate & { workspaceMember: boolean }> = [];
 
   const agent = deps.agents.getByName(handle);

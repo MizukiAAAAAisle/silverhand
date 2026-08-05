@@ -1,33 +1,64 @@
-// Agent self-edit profile facet (silverhand CLI → backend): avatar set/clear
-// and profile display_name / description. Same self-only contract throughout —
-// the agent-token middleware pins `principal.agentId === :aid` from the
-// spawn-injected token (no caller-chosen target), and `canEditAgent` is the
-// defensive double-check that for an agent principal reduces to the self
-// predicate. These fields are DB columns / blob on `agents`, so the backend
-// writes them directly via the repo / avatar service — no host round-trip
-// (unlike profile MCP, which lives in a sibling module).
+// Agent profile facet (silverhand CLI → backend). Two axes, deliberately not
+// one: the SELF axis (avatar set/clear, display_name / description read+write)
+// is self-only STRUCTURALLY — the agent-token middleware pins
+// `principal.agentId === :aid` from the spawn-injected token, so there is no
+// caller-chosen target, and `canEditAgent` is the defensive double-check that
+// for an agent principal reduces to the self predicate. The PEER axis
+// (#task:1823) is read-only and takes its target as a handle, gated by
+// workspace co-membership + `read_messages`; it never touches the self routes'
+// pin. These fields are DB columns / blob on `agents`, so the backend writes
+// them directly via the repo / avatar service — no host round-trip (unlike
+// profile MCP, which lives in a sibling module and stays self-only).
 import type { Hono } from 'hono';
 import {
   getAgentPrincipal,
   type AppEnv,
 } from '../../auth/principal.js';
-import { canEditAgent } from '../../permissions.js';
+import {
+  canAgentAccessWorkspace,
+  canEditAgent,
+  canViewConversation,
+} from '../../permissions.js';
+import { requireAgentCapability } from '../capability.js';
 import {
   agentServiceErrorBody,
   agentServiceErrorStatus,
 } from '../responses.js';
 import {
+  AgentPeerProfileQuerySchema,
   UpdateProfileInputSchema,
   internalPaths,
+  normalizeHandle,
   type AgentProfileDto,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+
+/**
+ * The ONE profile projection, shared by the self read/write and the peer read
+ * (#task:1823). Peer reads deliberately return the identical shape: forking a
+ * narrower "public profile" DTO would make one domain fact two contracts, and
+ * nothing in it is privileged — `id` buys no authority (every self route is
+ * token-pinned) and `avatar_url` is a derived read-only Silverhand route.
+ */
+const toAgentProfileDto = (dto: {
+  id: string;
+  name: string;
+  display_name: string;
+  description: string | null;
+  avatar_url: string | null;
+}): AgentProfileDto => ({
+  id: dto.id,
+  name: dto.name,
+  display_name: dto.display_name,
+  description: dto.description,
+  avatar_url: dto.avatar_url,
+});
 
 export function registerProfileRoutes(
   app: Hono<AppEnv>,
   deps: InternalRouteDeps,
 ): void {
-  const { ctx, agents, conversations } = deps;
+  const { ctx, agents, conversations, workspaces } = deps;
 
   // ── Agent self-edit avatar (silverhand CLI → backend) ────────────
   // The agent token middleware already enforces `principal.agentId ===
@@ -129,19 +160,6 @@ export function registerProfileRoutes(
   // pointer-write; tracked as a follow-up, not v1. The avatar bytes ride a
   // `file` part (never base64 in JSON); the avatar service stays the single
   // MIME/size/storage validator.
-  const toAgentProfileDto = (dto: {
-    id: string;
-    name: string;
-    display_name: string;
-    description: string | null;
-    avatar_url: string | null;
-  }): AgentProfileDto => ({
-    id: dto.id,
-    name: dto.name,
-    display_name: dto.display_name,
-    description: dto.description,
-    avatar_url: dto.avatar_url,
-  });
 
   app.get(internalPaths.agentProfileGet(':cid', ':aid'), async c => {
     const cid = c.req.param('cid');
@@ -241,5 +259,83 @@ export function registerProfileRoutes(
     const fresh = agents.get(aid);
     if (!fresh) return c.json({ error: 'agent not found' }, 404);
     return c.json({ profile: toAgentProfileDto(fresh) });
+  });
+
+  // ── Peer profile READ (#task:1823) ───────────────────────────────
+  // Read ANOTHER agent's profile. Read horizon and write authority are
+  // different axes: the self routes above are self-only STRUCTURALLY (the
+  // token pins `:aid`), and that property is worth keeping, so the peer read
+  // is a separate route with a caller-supplied HANDLE rather than a widened
+  // gate on the self URL. `:aid` still means "the executing agent" here.
+  //
+  // Same projection as the self read — one `AgentProfileDto`, so "what a
+  // profile is" cannot fork into a self shape and a public shape.
+  //
+  // Visibility: co-membership of a workspace the caller can reach. The order
+  // is load-bearing (anti-enumeration, #957): every CALLER-SIDE gate — the
+  // conversation floor, the workspace horizon, the capability — is resolved
+  // BEFORE the target is resolved, so nothing about the target, not even
+  // whether that handle exists, can be observed by a caller who fails them.
+  // Query SYNTAX is validated first and that is deliberate: a 400 for a
+  // malformed handle is a statement about the request, never about who
+  // exists, and keeping it first is what lets the gates below assume a
+  // well-formed input. Past those gates unknown handle / a handle that
+  // belongs to a human / an agent outside this workspace collapse into ONE
+  // identical 404: a handle is globally unique across `users.name` ⊕
+  // `agents.name`, so a distinguishable "that's a human" would answer a
+  // cross-workspace existence question (§AP).
+  app.get(internalPaths.agentGetPeerProfile(':cid', ':aid'), c => {
+    const cid = c.req.param('cid');
+    const aid = c.req.param('aid');
+    if (!cid || !aid) {
+      return c.json({ error: 'conversation id and agent id required' }, 400);
+    }
+    const parsedQuery = AgentPeerProfileQuerySchema.safeParse({
+      handle: c.req.query('handle'),
+      workspace_id: c.req.query('workspace_id') || undefined,
+    });
+    if (!parsedQuery.success) {
+      return c.json(
+        { error: 'invalid query', issues: parsedQuery.error.issues },
+        400,
+      );
+    }
+    const principal = getAgentPrincipal(c);
+    if (!canViewConversation(ctx, principal, principal.conversationId)) {
+      return c.json({ error: 'forbidden' }, 403);
+    }
+    const sourceConversation = conversations.get(principal.conversationId);
+    if (!sourceConversation) {
+      return c.json({ error: 'conversation not found' }, 404);
+    }
+    // Default to the source workspace; a cross-workspace target is gated by
+    // the caller's own workspace horizon (`canAgentAccessWorkspace` =
+    // workspace_members ∪ owned agent_home), mirroring `list_channels`.
+    const targetWorkspaceId =
+      parsedQuery.data.workspace_id ?? sourceConversation.workspace_id;
+    if (targetWorkspaceId !== sourceConversation.workspace_id) {
+      if (!canAgentAccessWorkspace(ctx, principal.agentId, targetWorkspaceId)) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+    }
+    {
+      const denied = requireAgentCapability(
+        c,
+        ctx,
+        principal,
+        'read_messages',
+        targetWorkspaceId,
+      );
+      if (denied) return denied;
+    }
+    const target = agents.getByName(normalizeHandle(parsedQuery.data.handle));
+    // Target membership is the authoritative `workspace_members` edge — NOT
+    // the caller-side horizon predicate, which also admits an agent's own
+    // home workspace. Being reachable BY the caller and being a member OF the
+    // workspace are different facts.
+    if (!target || !workspaces.isMember(targetWorkspaceId, target.id)) {
+      return c.json({ error: 'agent not found' }, 404);
+    }
+    return c.json({ profile: toAgentProfileDto(target) });
   });
 }

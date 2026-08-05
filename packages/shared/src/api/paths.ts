@@ -514,4 +514,23 @@ export const internalPaths = {
   agentProfileUpdate: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/profile`,
 
+  /** Agent reads ANOTHER agent's profile metadata (#task:1823), read-only.
+   *  `aid` is still the EXECUTING agent (token-pinned); the target rides the
+   *  `handle` query param, so the self routes above keep their structural
+   *  self-only property untouched — read horizon and write authority are
+   *  separate axes, not one URL with a wider gate.
+   *
+   *  Returns the SAME `AgentProfileDto` as the self read (one projection, so
+   *  the two views cannot drift). Visibility is co-membership of a workspace
+   *  the caller can reach: `workspace_id` defaults to the source
+   *  conversation's workspace and a cross-workspace target is gated by
+   *  `canAgentAccessWorkspace`, then `read_messages`. Every caller-side gate
+   *  runs before the TARGET is resolved (query syntax is validated first — a
+   *  400 talks about the request, not about who exists). Unknown handle, a
+   *  handle that belongs to a human, and a target outside that workspace all
+   *  answer an identical 404 — this endpoint must not become an existence
+   *  oracle. Backs `silverhand profile get --handle <name>`. */
+  agentGetPeerProfile: (cid: string, aid: string) =>
+    `/internal/conversations/${cid}/agents/${aid}/peer-profile`,
+
 } as const;

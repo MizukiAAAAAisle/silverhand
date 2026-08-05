@@ -1,6 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: internal-agent. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
+import { HandleSchema } from '../handle.js';
 import {
   ConversationKindSchema,
   ConversationVisibilitySchema,
@@ -373,6 +374,18 @@ export const AgentListChannelsQuerySchema = z.object({
   workspace_id: z.string().min(1).optional(),
 });
 export type AgentListChannelsQuery = z.infer<typeof AgentListChannelsQuerySchema>;
+
+/** Query for the peer-profile read (#task:1823). `handle` is the TARGET
+ *  agent's handle on the SHARED handle grammar (`HandleSchema` — a leading
+ *  `@` is tolerated so an agent can paste a mention verbatim, and the route
+ *  normalizes it away before resolving); `workspace_id` names the workspace
+ *  the co-membership is evaluated in and defaults to the source
+ *  conversation's workspace, exactly like `list_channels`. */
+export const AgentPeerProfileQuerySchema = z.object({
+  handle: HandleSchema,
+  workspace_id: z.string().min(1).optional(),
+});
+export type AgentPeerProfileQuery = z.infer<typeof AgentPeerProfileQuerySchema>;
 
 export const AgentListedChannelSchema = z.object({
   id: z.string(),

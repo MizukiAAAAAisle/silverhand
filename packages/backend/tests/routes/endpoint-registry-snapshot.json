@@ -163,6 +163,7 @@
   "DELETE /internal/conversations/:cid/agents/:aid/avatar",
   "GET /internal/conversations/:cid/agents/:aid/profile",
   "POST /internal/conversations/:cid/agents/:aid/profile",
+  "GET /internal/conversations/:cid/agents/:aid/peer-profile",
   "GET /internal/conversations/:cid/agents/:aid/profile/mcp",
   "POST /internal/conversations/:cid/agents/:aid/profile/mcp",
   "POST /internal/conversations/:cid/agents/:aid/profile/mcp/probe",
