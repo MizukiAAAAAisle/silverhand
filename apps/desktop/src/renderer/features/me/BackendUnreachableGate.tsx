@@ -131,13 +131,20 @@ export function BackendUnreachableGate({
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <div
+        // Same dialog identity as the other boot gates — see UpdateRequiredGate
+        // for the per-theme rationale (#task:1833). Not forza6-only: studio-light
+        // also drops the 1px frame by its own `[data-modal-shell]` rule.
+        data-modal-shell
+        data-popover-frame="info"
         className="w-full max-w-[480px] rounded-md border border-border bg-bg-floating p-6 shadow-modal"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <header className="mb-4 flex items-center gap-2">
-          <span className="grid size-7 place-items-center rounded-md border border-border-subtle bg-bg-row-hover text-warning">
-            <AlertTriangle className="size-4" />
-          </span>
+          {/* No frame around the glyph: `text-warning` already carries the
+              semantic, so a ground + border on top of it is a third layer on
+              one 20px mark (shiki #task:1833 「warning icon 不要给背景色」).
+              Same bare-glyph shape as AppStatusBanner. */}
+          <AlertTriangle className="size-5 shrink-0 text-warning" />
           <h1 className="text-base font-semibold leading-tight">
             Can&apos;t reach this server
           </h1>
@@ -211,7 +218,7 @@ export function BackendUnreachableGate({
           </form>
         ) : (
           <div className="mb-4 flex items-center gap-2">
-            <p className="min-w-0 flex-1 break-all rounded-sm border border-border-subtle bg-bg-row-hover px-2 py-1.5 font-mono text-xs">
+            <p className="min-w-0 flex-1 break-all rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-xs">
               {serverUrl}
             </p>
             <Button
@@ -230,12 +237,18 @@ export function BackendUnreachableGate({
           <div
             role="status"
             className={cn(
-              'mb-4 rounded-md border px-3 py-2 text-xs',
+              // Border width comes from the theme's control cluster, not
+              // Tailwind's 1px `border` — forza6 states are 2px (shiki
+              // #task:1833 「下方的状态用 2px」). Warm themes declare 1px, so
+              // they are unchanged.
+              'mb-4 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-2 text-xs',
               banner.tone === 'error'
-                ? 'border-error bg-bg-row-hover text-error'
+                ? 'border-error bg-bg-inset text-error'
                 : banner.tone === 'success'
-                  ? 'border-accent bg-bg-row-hover text-text-primary'
-                  : 'border-border-subtle bg-bg-row-hover text-text-secondary',
+                  ? // Theme's own success hue, not `accent` — see the twin
+                    // banner in ConnectionPane (#task:1833).
+                    'border-success bg-bg-inset text-text-primary'
+                  : 'border-border-subtle bg-bg-inset text-text-secondary',
             )}
           >
             <div className="font-medium">{banner.title}</div>
@@ -251,7 +264,7 @@ export function BackendUnreachableGate({
           unreachable.
         </p>
         {message ? (
-          <pre className="mb-4 overflow-x-auto rounded-sm border border-border-subtle bg-bg-row-hover px-2 py-1.5 font-mono text-[11px] leading-snug text-text-muted">
+          <pre className="mb-4 overflow-x-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-[11px] leading-snug text-text-muted">
             {message}
           </pre>
         ) : null}

@@ -794,7 +794,7 @@ function AttachmentThumb({
 
   if (isImage && imageUrl && !failed) {
     return (
-      <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--chip-radius)] bg-bg-muted">
+      <span className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-[var(--chip-radius)] bg-bg-inset">
         <img
           src={imageUrl}
           alt={attachment.filename}
@@ -806,7 +806,7 @@ function AttachmentThumb({
   }
   const Icon = isImage ? ImageIcon : FileText;
   return (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-[var(--chip-radius)] bg-bg-muted text-text-muted">
+    <span className="flex size-8 shrink-0 items-center justify-center rounded-[var(--chip-radius)] bg-bg-inset text-text-muted">
       <Icon className="size-4" />
     </span>
   );

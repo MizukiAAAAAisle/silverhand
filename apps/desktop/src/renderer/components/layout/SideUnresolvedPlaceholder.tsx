@@ -90,12 +90,12 @@ export function SideUnresolvedPlaceholder({
       </header>
       <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-text-muted">
         {status === 'loading' ? (
-          <Loader2 className="size-5 animate-spin text-text-disabled" />
+          <Loader2 className="size-5 animate-spin text-text-faint" />
         ) : null}
         <p>{copy.body}</p>
-        <p className="font-mono text-xs text-text-disabled">#conv:{shortId}</p>
+        <p className="font-mono text-xs text-text-faint">#conv:{shortId}</p>
         {copy.hint ? (
-          <p className="text-xs text-text-disabled">{copy.hint}</p>
+          <p className="text-xs text-text-faint">{copy.hint}</p>
         ) : null}
       </div>
     </main>

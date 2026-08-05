@@ -1777,6 +1777,32 @@
   padding: 0;
 }
 
+/* ── Hero tab strip — poster sticker (#task:1833) ──
+   shiki: "Create account 的那个 tabs 还能做一下 poster sticker 效果吗?"
+   The `="hero"` density (global.css `[data-panel-tabs]` doc) is the boot
+   auth gate's Sign up ⇄ Log in switch: one modal-level widget, so the
+   sticker goes on the TRACK, not on the active wedge — a sticker is a
+   widget's identity, and which half is on is state inside it. The bracket
+   and the 0 radius are already there from the rule above; the hard ink
+   shadow is what turns that bracket into a sticker.
+
+   The wedge therefore has to go quiet, or the strip carries two lift
+   layers at once: `shadow-sm` on the active segment is the warm themes'
+   embedded-wedge cue and stays theirs, but a soft halo inside a hard
+   bracket reads muddy here (same "半透墨水晕不好" rule as the modal
+   shell above). State is carried by fill + ink text instead, and the
+   divider makes the two halves read as poster cells rather than one
+   field with a lighter end. */
+[data-theme='forza6'] [data-panel-tabs='hero'] {
+  box-shadow: 2px 2px 0 var(--forza6-ink);
+}
+[data-theme='forza6'] [data-panel-tabs='hero'] button {
+  box-shadow: none;
+}
+[data-theme='forza6'] [data-panel-tabs='hero'] button + button {
+  border-left: 2px solid var(--forza6-ink);
+}
+
 /* AgentSidebar buttons — control-surface semantics (the rail is a
    navigation control, not a tile). Selected = lime fill + 2px black
    border + `--control-radius` (= 0 in forza6); hover (unselected) =

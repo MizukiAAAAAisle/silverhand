@@ -37,10 +37,12 @@
   --color-bg-chat: var(--bg-chat);
   --color-bg-island: var(--bg-island);
   --color-bg-island-deep: var(--bg-island-deep);
+  --color-bg-inset: var(--bg-inset);
 
   --color-text-primary: var(--text-primary);
   --color-text-secondary: var(--text-secondary);
   --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
   --color-text-inverse: var(--text-inverse);
   --color-text-island: var(--text-island);
   --color-text-inline-code: var(--text-inline-code);
@@ -1221,6 +1223,13 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
        can pick: forza6 = `0` (hard wedge inside the bracket);
        studio-light / slack-dark = `4px` (active segment reads as
        "embedded" rather than wedged, hairline-rounded language).
+       The optional VALUE is density, not shape: `="hero"` marks a
+       page- or modal-level switch (the boot auth gate's Sign up ⇄ Log in),
+       which in forza6 earns the poster sticker — hard ink drop shadow on
+       the bracket + a 2px ink divider between wedges (#task:1833). A
+       valueless tab strip is a dense in-card filter and stays quiet:
+       the same loud recipe repeated in a list is the "用力过重" case.
+       Both match `[data-panel-tabs]`, so radius is shared either way.
 
      [data-panel-control]               GhostInput / GhostTextarea /
                                          Select trigger / Select content
@@ -1275,13 +1284,23 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    and inside the chat header's member chips, which forza6 deliberately
    grounds on `--bg-elevated` itself. Any fixed surface token is therefore
    invisible somewhere (the old `--bg-elevated` fill vanished on forza6's
-   pale-lime sidebars; the `bg-bg-row-hover` / `bg-bg-muted` classes some
-   call sites carried were never generated at all — neither token is mapped
-   in `@theme inline` above). A translucent ink is one step off WHATEVER is
-   behind it, and it follows the theme automatically: `--text-primary` is
-   near-black in the light themes and near-white in slack-dark, and
-   forza6-components re-declares it inside its dark regions, so the wash
-   inverts there without a per-surface rule.
+   pale-lime sidebars; the `bg-bg-row-hover` / `bg-bg-muted` classes other
+   call sites used to carry were never generated at all — those two tokens
+   are still unmapped, and those sites now read `bg-bg-inset` below,
+   #task:1833). A translucent ink is one step off WHATEVER is behind it, and
+   it follows the THEME for free: `--text-primary` is near-black in the light
+   themes and near-white in slack-dark, and `useAppearance` sets `data-theme`
+   on `documentElement` — the very element this `:root` block lands on, so the
+   winning theme's ink is what gets substituted here.
+
+   It does NOT follow a nested REGION, though (#task:1833, measured): the
+   `var()` below is substituted where the custom property is DECLARED, and
+   the result inherits as an already-fixed color. forza6-components
+   re-declaring `--text-primary` inside its dark regions therefore does not
+   invert this wash there — a region that needs its own ground has to
+   re-declare `--bg-avatar-ground` itself. Same for `--bg-inset` below, and
+   the same reason moving `data-theme` off `documentElement` would freeze
+   both tokens at one theme.
 
    Utility-neutral on purpose: this is the container, not the identity —
    the person's identity is the image (or, later, their initial). A theme
@@ -1294,6 +1313,46 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 }
 [data-avatar-ground] {
   background-color: var(--bg-avatar-ground);
+}
+
+/* ── Inset ground + faint ink (#task:1833) ────────────────────────────
+   `--bg-inset` is the recessed ground for a small area sitting ON something
+   else: the bordered icon plinths in the boot / auth gates, the sign-up ⇄
+   log-in segment track, mono read-only paths and diagnostic `<pre>`s, status
+   banner fills, and the attachment thumbnail squares. It replaces
+   `bg-bg-row-hover` / `bg-bg-muted`, two utilities that were NEVER generated
+   (neither token is mapped in `@theme inline` above), so 14 of those areas
+   had no ground at all — the class read as intent, not as pixels.
+
+   An ink wash rather than a `--bg-*` surface token, for the reason recorded
+   under §Avatar ground: these areas sit on `--bg-floating` cards in the
+   gates but also on the settings pane and the attachments panel, and forza6
+   grounds whole regions on pale lime — any fixed surface token is invisible
+   somewhere. A translucent ink is one step off WHATEVER is behind it and
+   follows the theme for free: it darkens the white cards in studio-light and
+   forza6, and lightens slack-dark's `#2C2D30`, which is what "recessed"
+   means in each. 7% sits in the same register as the themes' own code
+   surfaces (`--bg-inline-code` is 5% ink in forza6, `#ECF1F7` in
+   studio-light) and deliberately below the 12% avatar ground — that one has
+   to read as a SHAPE standing in for a person, this one only has to read as
+   "not the card".
+
+   One value for all of them on purpose: the optical job is identical, and
+   whatever must read as RAISED above it carries its own fill plus a shadow
+   (the active segment is `bg-bg-floating shadow-sm`). Grading this into
+   per-role tiers would spend a token cluster on a difference nobody can
+   point at.
+
+   `--text-faint` is the step below `--text-muted` for third-tier text — the
+   unresolved side-pane placeholder's spinner, conversation id, and hint,
+   which must stay quieter than the body line they sit under. NOT named
+   `--text-disabled` like the dead class it replaces: disabled controls are
+   expressed with `disabled:opacity-*` throughout this renderer, and a token
+   by that name would invite a second, conflicting mechanism for the same
+   state. */
+:root {
+  --bg-inset: color-mix(in oklab, var(--text-primary) 7%, transparent);
+  --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
 }
 
 /* Kanban column drop target (#task:784). The drag-over wash can't be a

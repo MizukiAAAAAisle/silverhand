@@ -127,12 +127,17 @@ export function RegistrationGate({
     >
       <form
         onSubmit={onSubmit}
+        // Same dialog identity as the other boot gates — see UpdateRequiredGate
+        // for the per-theme rationale (#task:1833). Not forza6-only: studio-light
+        // also drops the 1px frame by its own `[data-modal-shell]` rule.
+        data-modal-shell
+        data-popover-frame="info"
         className="w-full max-w-[420px] rounded-md border border-border bg-bg-floating p-6 shadow-modal"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <header className="mb-5 flex flex-col gap-1.5">
           <div className="flex items-center gap-2">
-            <span className="grid size-7 place-items-center rounded-md border border-border-subtle bg-bg-row-hover text-text-secondary">
+            <span className="grid size-7 place-items-center rounded-[var(--chip-radius)] border border-border-subtle bg-bg-inset text-text-secondary">
               <KeyRound className="size-4" />
             </span>
             <h1 className="text-base font-semibold leading-tight">
@@ -147,7 +152,16 @@ export function RegistrationGate({
         </header>
 
         {signupEnabled ? (
-          <div className="mb-5 grid grid-cols-2 rounded-md border border-border-subtle bg-bg-row-hover p-0.5">
+          // The app's one segmented-control contract (`data-panel-tabs`,
+          // global.css panel-radius SSOT) rather than hand-written radii, so
+          // this switch and the Schedules FilterTabs stay one widget. The
+          // `hero` value is the density: a modal-level switch earns forza6's
+          // poster weight (2px ink bracket + hard ink shadow); the valueless
+          // in-card filter does not (#task:1833).
+          <div
+            data-panel-tabs="hero"
+            className="mb-5 grid grid-cols-2 border border-border-subtle bg-bg-inset p-0.5"
+          >
             <ModeButton
               active={isSignup}
               onClick={() => setMode('signup')}
@@ -311,7 +325,9 @@ function ModeButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'inline-flex h-8 items-center justify-center gap-1.5 rounded-[4px] text-xs font-medium text-text-muted transition',
+        // Radius comes from `[data-panel-tabs] button` (global.css SSOT), not
+        // from a class here — same reason the track dropped its own.
+        'inline-flex h-8 items-center justify-center gap-1.5 text-xs font-medium text-text-muted transition',
         active && 'bg-bg-floating text-text-primary shadow-sm',
       )}
     >

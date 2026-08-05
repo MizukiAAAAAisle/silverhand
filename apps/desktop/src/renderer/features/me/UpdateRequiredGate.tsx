@@ -44,13 +44,30 @@ export function UpdateRequiredGate({
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
       <div
+        // A boot gate IS a modal — it is the app's only content. Wearing the
+        // same two hooks as `ui/dialog.tsx` DialogContent makes it read as one
+        // (#task:1833), per theme:
+        //   forza6       0 radius + 2px ink frame + hard sticker shadow
+        //                (the shadow replaces the soft halo).
+        //   studio-light radius unchanged (`--floating-radius` IS `--radius-md`),
+        //                but the 1px frame goes away: that theme's
+        //                `[data-modal-shell] { border-width: 0 }` (#task:1194,
+        //                shiki "边框很奇怪") outranks both this `border` utility
+        //                and `[data-popover-frame]` at (0,2,0). Intended — it is
+        //                the same borderless-plus-shadow shell its real dialogs
+        //                get.
+        //   slack-dark   byte-identical (`--floating-border` is 1px `--border`).
+        // Tailwind classes stay per the panel-radius SSOT in global.css — the
+        // token rules win on source order at equal specificity.
+        data-modal-shell
+        data-popover-frame="info"
         className="w-full max-w-[480px] rounded-md border border-border bg-bg-floating p-6 shadow-modal"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <header className="mb-4 flex items-center gap-2">
-          <span className="grid size-7 place-items-center rounded-md border border-border-subtle bg-bg-row-hover text-warning">
-            <AlertTriangle className="size-4" />
-          </span>
+          {/* Bare glyph — see BackendUnreachableGate for why the warning mark
+              carries no ground or frame (#task:1833). */}
+          <AlertTriangle className="size-5 shrink-0 text-warning" />
           <h1 className="text-base font-semibold leading-tight">{title}</h1>
         </header>
         <p className="mb-4 text-xs leading-relaxed text-text-muted">{description}</p>

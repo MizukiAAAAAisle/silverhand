@@ -383,12 +383,22 @@ export function ConnectionPane(): JSX.Element {
           <div
             role="status"
             className={cn(
-              'rounded-md border px-3 py-2 text-xs',
+              // Width from the theme's control cluster (forza6 = 2px), so this
+              // banner stays identical to its twin in BackendUnreachableGate
+              // (#task:1833).
+              'rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-2 text-xs',
               banner.tone === 'error'
-                ? 'border-error bg-bg-row-hover text-error'
+                ? 'border-error bg-bg-inset text-error'
                 : banner.tone === 'success'
-                  ? 'border-accent bg-bg-row-hover text-text-primary'
-                  : 'border-border-subtle bg-bg-row-hover text-text-secondary',
+                  ? // Success borrows the theme's own success hue, not `accent`:
+                    // in forza6 `--accent` is brand magenta and sits next to
+                    // `--error` crimson, so an accent-bordered success banner
+                    // read as a second error (#task:1833). `--success` is deep
+                    // lime there. Matches `STATUS_TONE_CLASS.connected` above.
+                    // Text stays neutral — error earns more loudness than a
+                    // transient confirmation does.
+                    'border-success bg-bg-inset text-text-primary'
+                  : 'border-border-subtle bg-bg-inset text-text-secondary',
             )}
           >
             <div className="font-medium">{banner.title}</div>
