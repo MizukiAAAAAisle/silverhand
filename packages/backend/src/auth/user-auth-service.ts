@@ -50,7 +50,11 @@ export class UserAuthService {
 
   async signup(
     input: AuthSignupInput,
-  ): Promise<{ ok: true; userId: string } | { ok: false; code: 'auth_failed' }> {
+  ): Promise<
+    | { ok: true; userId: string }
+    | { ok: false; code: 'auth_failed' }
+    | { ok: false; code: 'handle_taken' }
+  > {
     const email = normalizeLoginEmail(input.email);
     if (this.users.getByEmail(email)) {
       await this.passwordCredentials.verifyLoginPassword({
@@ -81,12 +85,15 @@ export class UserAuthService {
       },
     );
 
-    const baseName = profileNameFromEmailLocalPart(emailLocalPart(email));
+    // The retry loop covers ONLY internal id allocation. The handle is the
+    // user's choice (#task:1830), so a name collision is a fact to report, not
+    // something to work around by silently storing a suffixed variant of a
+    // permanent, non-renamable identifier.
     for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
         const userId = tx({
           id: randomHex(8),
-          name: nameCandidate(baseName, attempt),
+          name: input.name,
           displayName,
           email,
         });
@@ -103,11 +110,16 @@ export class UserAuthService {
           });
           return { ok: false, code: 'auth_failed' };
         }
-        if (isNameConflict(err) || isUserIdConflict(err)) continue;
+        // Both halves of the mention namespace land here: the `users.name`
+        // column UNIQUE and the migration v21 cross-table trigger against
+        // `agents.name`. One code for both — the caller cannot act differently
+        // on "a human has it" vs "an agent has it".
+        if (isNameConflict(err)) return { ok: false, code: 'handle_taken' };
+        if (isUserIdConflict(err)) continue;
         throw err;
       }
     }
-    throw new Error('UserAuthService.signup: could not allocate unique user identity');
+    throw new Error('UserAuthService.signup: could not allocate unique user id');
   }
 
   async resetPassword(input: {
@@ -144,38 +156,21 @@ function emailLocalPart(email: string): string {
   return email.split('@')[0] ?? 'user';
 }
 
+/**
+ * Default for the MUTABLE `display_name` when signup omits it. Unlike the
+ * handle, this is a label the user can change from the profile editor at any
+ * time, so deriving a first value from the email costs nothing irreversible.
+ * The retired `users.name` deriver used to live beside this one; the handle is
+ * now supplied by the caller (#task:1830) and the prefill half moved to
+ * `suggestParticipantNameFromEmail` in @silverhand/shared, where it sits next to
+ * the grammar it must respect.
+ */
 function displayNameFromEmailLocalPart(localPart: string): string {
   const normalized = localPart
     .replace(/[._-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   return (normalized || 'User').slice(0, 64);
-}
-
-/**
- * Derive the immutable `users.name` mention anchor from user-supplied email.
- * This producer must stay within `ParticipantNameSchema` — an email local-part
- * may start with a digit or punctuation, but the stored name may not — and it
- * is no longer the thing that *guarantees* that: `UserRepo.create` asserts the
- * schema at the write boundary, so a regression here fails loudly at signup
- * instead of quietly persisting an unmentionable handle. Keep the two in sync
- * by reading the schema, not by reproducing its character classes here.
- */
-function profileNameFromEmailLocalPart(localPart: string): string {
-  const normalized = localPart
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^[^a-z]+/, '')
-    .replace(/[-_]+$/g, '');
-  const base = normalized || 'user';
-  const alphaFirst = /^[a-z]/.test(base) ? base : `user-${base}`;
-  return alphaFirst.slice(0, 32);
-}
-
-function nameCandidate(baseName: string, attempt: number): string {
-  if (attempt === 0) return baseName.length >= 2 ? baseName : `${baseName}u`;
-  const suffix = `-${randomHex(2)}`;
-  return `${baseName.slice(0, Math.max(2, 32 - suffix.length))}${suffix}`;
 }
 
 function isEmailConflict(err: unknown): boolean {

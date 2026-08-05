@@ -2,6 +2,7 @@
   "ACTIVITY_ITEM_KINDS",
   "ACTIVITY_SALIENCES",
   "ATTACHMENT_LABEL_PATTERN",
+  "AUTH_HANDLE_TAKEN_CODE",
   "AVATAR_ALLOWED_CONTENT_TYPES",
   "AVATAR_MAX_BYTES",
   "AVATAR_MAX_SIZE_LABEL",
@@ -333,6 +334,7 @@
   "resolveAttachmentLabels",
   "resolveMessageAuthor",
   "senderRefFromAuthor",
+  "suggestParticipantNameFromEmail",
   "validateAvatarFile",
   "validateReactionEmoji"
 ]

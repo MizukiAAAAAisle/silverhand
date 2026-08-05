@@ -257,6 +257,7 @@ describe('standalone server env config', () => {
         body: JSON.stringify({
           email: 'user@example.com',
           password: 'password123',
+          name: 'user-one',
           display_name: 'User',
         }),
         headers: { 'content-type': 'application/json' },

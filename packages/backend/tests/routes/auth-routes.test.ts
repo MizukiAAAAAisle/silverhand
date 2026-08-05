@@ -81,16 +81,19 @@ describe('auth routes', () => {
     t = buildTestApp();
 
     const signup = await requestJson(t, 'POST', authPaths.signup, {
-      // A user-controlled, numeric-first email local-part must still derive an
-      // alpha-first permanent name that the mention parser can address.
+      // The handle is the user's own choice and is stored verbatim. The email
+      // deliberately has a numeric-first local-part that the retired deriver
+      // would have rewritten: nothing about the email may reach `users.name`
+      // any more (#task:1830).
       email: '2.New.User@example.com',
       password: 'correct-password',
+      name: 'shiki',
       display_name: 'New User',
     });
     expect(signup.status).toBe(200);
     expect(signup.body.user_token).toEqual(expect.any(String));
     expect(signup.body.user).toMatchObject({
-      name: 'new-user',
+      name: 'shiki',
       display_name: 'New User',
     });
 
@@ -159,6 +162,7 @@ describe('auth routes', () => {
     const created = await requestJson(t, 'POST', authPaths.signup, {
       email: 'login@example.com',
       password: 'correct-password',
+      name: 'login-user',
     });
     expect(created.status).toBe(200);
     t.ctx.db
@@ -176,6 +180,7 @@ describe('auth routes', () => {
     const duplicateSignup = await requestJson(t, 'POST', authPaths.signup, {
       email: 'login@example.com',
       password: 'different-password',
+      name: 'second-attempt',
     });
     const wrongPassword = await requestJson(t, 'POST', authPaths.login, {
       email: 'login@example.com',
@@ -194,6 +199,113 @@ describe('auth routes', () => {
       expect(res.status).toBe(401);
       expect(res.body).toEqual({ error_code: 'auth_failed' });
     }
+  });
+
+  it('stores the chosen handle verbatim and defaults only display_name from the email', async () => {
+    t = buildTestApp();
+    const res = await requestJson(t, 'POST', authPaths.signup, {
+      email: 'first.last@example.com',
+      password: 'correct-password',
+      name: 'Zed_9',
+    });
+    expect(res.status).toBe(200);
+    // Two independent fields: the handle is exactly what was asked for, while
+    // the still-mutable display label keeps its email-derived default.
+    expect(res.body.user).toMatchObject({
+      name: 'Zed_9',
+      display_name: 'first last',
+    });
+    expect(
+      t.ctx.db
+        .prepare<[string], { name: string; display_name: string }>(
+          `SELECT name, display_name FROM users WHERE id = ?`,
+        )
+        .get(res.body.user.id),
+    ).toEqual({ name: 'Zed_9', display_name: 'first last' });
+  });
+
+  it('rejects a missing or malformed handle 400 and persists nothing', async () => {
+    t = buildTestApp();
+    const bodies = [
+      { email: 'no-handle@example.com', password: 'correct-password' },
+      { email: 'empty@example.com', password: 'correct-password', name: '' },
+      // Numeric-first is the participant-grammar cut (#task:1826); a space and a
+      // `@` are the two shapes that would break the mention parser outright.
+      { email: 'numeric@example.com', password: 'correct-password', name: '2b' },
+      { email: 'spaced@example.com', password: 'correct-password', name: 'two words' },
+      { email: 'sigil@example.com', password: 'correct-password', name: '@alice' },
+      {
+        email: 'long@example.com',
+        password: 'correct-password',
+        name: 'a'.repeat(65),
+      },
+    ];
+    for (const body of bodies) {
+      const res = await requestJson(t, 'POST', authPaths.signup, body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body).toMatchObject({ error: 'invalid input' });
+    }
+    expect(
+      t.ctx.db
+        .prepare<[], { c: number }>(
+          `SELECT COUNT(*) AS c FROM users WHERE email IS NOT NULL`,
+        )
+        .get()?.c,
+    ).toBe(0);
+  });
+
+  it('answers a taken handle with 409 handle_taken for both users and agents, and creates nothing', async () => {
+    t = buildTestApp();
+    // One code for both halves of the mention namespace: `alice-test` is a
+    // fixture human, `takenbot` an agent. Which side holds the name is not the
+    // caller's business, and both must be reported — not silently suffixed.
+    await http(t).post('/api/agents', { name: 'takenbot', runtime: 'claude' });
+    // Baseline AFTER the harness request above: `http()` issues a viewer session
+    // of its own, so absolute zero is the wrong bar — "signup added nothing" is
+    // the actual claim.
+    const before = credentialAndSessionCounts(t);
+
+    for (const name of ['alice-test', 'takenbot']) {
+      const res = await requestJson(t, 'POST', authPaths.signup, {
+        email: `${name}-signup@example.com`,
+        password: 'correct-password',
+        name,
+      });
+      expect(res.status, name).toBe(409);
+      expect(res.body).toEqual({ error_code: 'handle_taken' });
+    }
+
+    // A rejected signup is a non-event: no user row, no credential, no session.
+    expect(
+      t.ctx.db
+        .prepare<[], { c: number }>(
+          `SELECT COUNT(*) AS c FROM users WHERE email IS NOT NULL`,
+        )
+        .get()?.c,
+    ).toBe(0);
+    expect(credentialAndSessionCounts(t)).toEqual(before);
+  });
+
+  it('answers an existing email with the uniform 401 even when the handle is also taken', async () => {
+    // Ordering is load-bearing: the credential answer must not become
+    // distinguishable just because signup gained a typed 409. An attacker who
+    // learns "handle_taken" for a known-registered email would learn the email
+    // is free; keeping the email check first means they only ever see 401.
+    t = buildTestApp();
+    const first = await requestJson(t, 'POST', authPaths.signup, {
+      email: 'taken@example.com',
+      password: 'correct-password',
+      name: 'first-owner',
+    });
+    expect(first.status).toBe(200);
+
+    const again = await requestJson(t, 'POST', authPaths.signup, {
+      email: 'taken@example.com',
+      password: 'correct-password',
+      name: 'first-owner',
+    });
+    expect(again.status).toBe(401);
+    expect(again.body).toEqual({ error_code: 'auth_failed' });
   });
 
   // Thin route-local schema / bearer guards pinned before the auth carve
@@ -227,6 +339,17 @@ function legacyViewerSetting(t: TestApp): string | null {
       `SELECT value FROM app_settings WHERE key = 'viewer_user_id'`,
     )
     .get()?.value ?? null;
+}
+
+function credentialAndSessionCounts(t: TestApp): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const table of ['user_password_credentials', 'auth_sessions']) {
+    counts[table] =
+      t.ctx.db
+        .prepare<[], { c: number }>(`SELECT COUNT(*) AS c FROM ${table}`)
+        .get()?.c ?? -1;
+  }
+  return counts;
 }
 
 function bearer(token: string): Record<string, string> {

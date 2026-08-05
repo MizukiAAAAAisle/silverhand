@@ -107,6 +107,7 @@ describe('Pre-auth public API', () => {
     const signup = await noPrincipalHttp(t).post(authPaths.signup, {
       email: 'shiki@example.test',
       password: 'correct horse battery staple',
+      name: 'shiki',
       display_name: 'Shiki',
     });
     expect(signup.status).toBe(200);

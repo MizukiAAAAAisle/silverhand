@@ -10,10 +10,12 @@ export const ENTITY_NAME_MAX_LENGTH = 64;
  * message and renderer `@mention` parsers. The optional display `@` belongs to
  * command inputs (`HandleSchema`), never to the stored value.
  *
- * Agent input paths validate against this schema directly. User names are
- * currently system-generated (`local` or an alpha-first `user-*`/email-derived
- * name) and satisfy it by construction; any future user-selected signup or
- * invite name must validate here before persistence.
+ * Agent AND user input paths validate against this schema directly: password
+ * signup takes the handle from the user (`AuthSignupInputSchema.name`,
+ * #task:1830), and `UserRepo.create` re-asserts it at the persistence boundary
+ * (#task:1828). The remaining system-generated user names — embedded bootstrap's
+ * `local` and the legacy `user-<4hex>` registration suggestion — satisfy it by
+ * construction.
  *
  * Kept separate from {@link WorkspaceNameSchema}: workspace names are display
  * labels and must not inherit participant-addressing constraints.
@@ -30,6 +32,31 @@ export const ParticipantNameSchema = z
     /^[a-zA-Z][a-zA-Z0-9_-]*$/,
     'participant name must start with a letter and contain only letters, numbers, dash, or underscore',
   );
+
+/**
+ * Suggest a participant name from an email address, for PREFILLING a signup
+ * handle field. Advisory only: the returned value is a starting point the user
+ * may overwrite, and it says nothing about uniqueness.
+ *
+ * This is the retired half of the old signup deriver (#task:1830). The stored
+ * `users.name` used to be whatever that deriver computed, which is how a
+ * permanent, non-renamable handle came to be decided by the shape of an email
+ * address. Now the user chooses and this only seeds the field — so it lives next
+ * to the grammar it must respect, with no second copy in the renderer.
+ *
+ * Output is always admissible by {@link ParticipantNameSchema}: after the
+ * leading non-letters are dropped the first character is a letter or the string
+ * is empty (→ `user`), every surviving character is in the allowed class, and
+ * slicing a prefix cannot break either property.
+ */
+export function suggestParticipantNameFromEmail(email: string): string {
+  const localPart = email.trim().toLowerCase().split('@')[0] ?? '';
+  const cleaned = localPart
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[^a-z]+/, '')
+    .replace(/[-_]+$/g, '');
+  return (cleaned || 'user').slice(0, ENTITY_NAME_MAX_LENGTH);
+}
 
 /**
  * Canonical form for a stored workspace name.

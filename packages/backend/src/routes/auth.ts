@@ -15,6 +15,7 @@
 import { Hono } from 'hono';
 import {
   authPaths,
+  AUTH_HANDLE_TAKEN_CODE,
   AuthLoginInputSchema,
   AuthSignupInputSchema,
 } from '@silverhand/shared';
@@ -57,7 +58,17 @@ export function createAuthApp(deps: AuthRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const signup = await userAuth.signup(parsed.data);
-    if (!signup.ok) return authFailed(c);
+    if (!signup.ok) {
+      // Two typed outcomes, on purpose. `auth_failed` stays the uniform
+      // credential answer (§3.4); `handle_taken` is the one signup rejection
+      // the user can act on, and a mention handle is public by construction so
+      // reporting it leaks no credential fact. Without it a taken handle is
+      // indistinguishable from a wrong password and signup dead-ends.
+      if (signup.code === AUTH_HANDLE_TAKEN_CODE) {
+        return c.json({ error_code: AUTH_HANDLE_TAKEN_CODE }, 409);
+      }
+      return authFailed(c);
+    }
     const user = ctx.userService.getDto(signup.userId);
     if (!user) {
       return c.json({ error: 'created user is missing post-signup' }, 500);

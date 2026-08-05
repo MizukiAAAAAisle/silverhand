@@ -44,6 +44,7 @@ import {
   authPaths,
   DESKTOP_SERVER_API_EPOCH,
   MINIMUM_CLIENT_API_EPOCH,
+  suggestParticipantNameFromEmail,
 } from '@silverhand/shared';
 import type { ConversationBusEvent } from '../../src/ws/scope-event-bus.js';
 import { buildTestApp, type TestApp } from '../utils/app.js';
@@ -115,6 +116,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     const signup = await fetchJson(t, 'POST', authPaths.signup, {
       email: 'remote.user@example.test',
       password: 'correct-password',
+      name: 'remote-user',
       display_name: 'Remote User',
     });
     expect(signup.status).toBe(200);
@@ -145,6 +147,7 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
     const signup = await fetchJson(t, 'POST', authPaths.signup, {
       email: 'login.test@example.test',
       password: 'correct-password',
+      name: 'login-test',
     });
     expect(signup.status).toBe(200);
 
@@ -564,6 +567,9 @@ async function signupReturnToken(t: TestApp, email: string): Promise<string> {
   const signup = await fetchJson(t, 'POST', authPaths.signup, {
     email,
     password: 'correct-password',
+    // Signup now requires an explicit handle; these callers only care about the
+    // resulting session, so they take the same prefill the signup form offers.
+    name: suggestParticipantNameFromEmail(email),
   });
   if (signup.status !== 200) {
     throw new Error(

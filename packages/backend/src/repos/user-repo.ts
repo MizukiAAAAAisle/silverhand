@@ -7,9 +7,9 @@ import { ParticipantNameSchema, type UserRow } from '@silverhand/shared';
  * Identity model:
  *   - `id` is a stable internal id (16 lowercase hex chars; generator
  *     in the service layer); never exposed to humans, never editable.
- *   - `name` is the public mention name (`@<name>`), decided once at
- *     registration and never editable after. Globally unique across
- *     `users.name` ⊕ `agents.name` — migration v21 triggers enforce
+ *   - `name` is the public mention name (`@<name>`), chosen by the user at
+ *     password signup, decided once and never editable after. Globally unique
+ *     across `users.name` ⊕ `agents.name` — migration v21 triggers enforce
  *     this in DB; its FORMAT is enforced here, in `create` (see there
  *     for why the two halves of "what is a valid name" live in
  *     different layers).
@@ -90,6 +90,12 @@ export class UserRepo {
    * instead of an emergent one. Format is a pure function of the value, so a
    * single check at the write boundary is terminal; uniqueness is a race
    * property, which is why that half legitimately lives in DB triggers.
+   *
+   * Since #task:1830 the signup handle is USER-supplied rather than derived from
+   * an email, which raises this from a regression tripwire to the last format
+   * gate on untrusted input (`AuthSignupInputSchema` is the first, at the route).
+   * Neither is redundant: the route decides what the API accepts, this decides
+   * what the table may hold.
    *
    * Scope note: this fences the production write path, not the table. Test
    * fixtures INSERT rows directly, and pre-existing rows predate the check, so

@@ -1,6 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: user. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
+import { ParticipantNameSchema } from './name.js';
 
 // Profile-only "human" identity. Auth/credentials live in a separate
 // (V2-only) `user_auth_identities` table; this DTO is what the renderer
@@ -91,12 +92,47 @@ export const DisplayNameSchema = z
 
 const AuthEmailSchema = z.string().trim().email().max(320);
 
+/**
+ * `POST /auth/signup` body.
+ *
+ * `name` is the user's **immutable mention handle** and is REQUIRED (#task:1830).
+ * It is not optional-with-a-server-fallback on purpose: the field can never be
+ * changed afterwards (no rename path exists, and historical `@mentions` are
+ * re-parsed out of stored message text at read time, so a rename would silently
+ * re-point them), and a value that permanent must not be chosen by a
+ * server-side guess at what an email local-part meant. `AuthSignupInput` has a
+ * single production client shipped in lockstep with the backend, and signup sits
+ * outside the desktop API-epoch gate, so there is no old-client population to
+ * keep a second, weaker model alive for — the email deriver survives only as a
+ * renderer PREFILL (`suggestParticipantNameFromEmail`).
+ *
+ * The wire keeps the domain word `name` (matching `UserDto.name` and
+ * `agents.name`); "Handle" is the UI label for the same field, and the leading
+ * `@` belongs to command input (`HandleSchema`), never to this value.
+ *
+ * `display_name` stays optional and independent: it is a mutable label, so a
+ * server-side default costs nothing irreversible.
+ */
 export const AuthSignupInputSchema = z.object({
   email: AuthEmailSchema,
   password: z.string().min(8).max(1024),
+  name: ParticipantNameSchema,
   display_name: DisplayNameSchema.optional(),
 });
 export type AuthSignupInput = z.infer<typeof AuthSignupInputSchema>;
+
+/**
+ * `POST /auth/signup` → 409 `{ error_code: 'handle_taken' }`: the requested
+ * `name` already exists in the `users.name` ⊕ `agents.name` mention namespace.
+ *
+ * Deliberately distinguishable from the uniform 401 `auth_failed`, which exists
+ * to hide CREDENTIAL facts (email exists / password wrong). A mention handle is
+ * public by construction — its whole purpose is that other people type it — and
+ * a user who cannot be told which of the two unique fields collided cannot
+ * finish signing up at all. See `docs/auth-and-host-model.md` §3.4 for the
+ * scoped anti-enumeration rule and the residual cost this accepts.
+ */
+export const AUTH_HANDLE_TAKEN_CODE = 'handle_taken';
 
 export const AuthLoginInputSchema = z.object({
   email: AuthEmailSchema,

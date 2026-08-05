@@ -48,6 +48,7 @@ describe('silverhand-server admin reset-password', () => {
         body: JSON.stringify({
           email: 'user@example.com',
           password: 'old-password',
+          name: 'user-one',
           display_name: 'User',
         }),
         headers: { 'content-type': 'application/json' },

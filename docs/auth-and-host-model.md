@@ -236,10 +236,16 @@ an email-only auth row. Auth-related state lives in dedicated tables; the
   recommendation; specific values are not committed in this doc —
   implementation chooses per-env benchmark and stores them in
   `password_hash_params` so future migration is non-breaking.
-- Signup populates `users.name` / `users.display_name` (defaults derived
-  from email local-part if the user does not provide them) so the new row is
-  valid against profile constraints + uniqueness; signup body shape:
-  `{ email, password, display_name? }`.
+- Signup takes the immutable mention handle from the user: body shape
+  `{ email, password, name, display_name? }`, where `name` is REQUIRED and
+  validated by `ParticipantNameSchema` at the route and re-asserted by
+  `UserRepo.create` at the persistence boundary. `display_name` stays optional
+  and is defaulted from the email local-part when absent — it is mutable, so a
+  guessed default costs nothing irreversible, whereas `name` has no rename path
+  and is re-parsed out of historical message text by the mention resolver, so it
+  must not be guessed. There is no server-side handle deriver any more; the
+  email→handle suggestion survives only as a renderer prefill
+  (`suggestParticipantNameFromEmail`).
 - Login: `POST /auth/login {email, password}` → server resolves
   `users` row by email, joins `user_password_credentials`, validates → issues
   `user_token` (opaque session token) bound to a row in
@@ -327,10 +333,22 @@ The rule is **uniformity within the same route**, not "always 401":
   exposes truthfully.
 - Validation errors (malformed JSON, missing field) keep their normal 400
   shape; they do not distinguish account state.
+- `POST /auth/signup` handle collision: 409 `{error_code: "handle_taken"}`,
+  deliberately distinguishable. What §3.4 protects is CREDENTIAL state; a
+  mention handle is public by construction (its purpose is that other people
+  type it), and the user chooses it, so a caller who is not told which of the
+  two unique fields collided cannot complete signup at all. One code covers both
+  halves of the namespace (`users.name` UNIQUE and the cross-table trigger
+  against `agents.name`) — which side holds the name is not the caller's
+  business and not actionable. Accepted residual cost, stated rather than
+  hidden: while signup is enabled an unauthenticated caller can probe whether a
+  given handle exists, one full POST at a time. The *cheap* oracle is what stays
+  closed — there is no public, unauthenticated handle-availability endpoint, and
+  the authenticated agent/workspace availability probes are not reused here.
 
 Anti-enumeration applies to authentication outcomes, not to route
-existence. Implementations MUST add timing-equalisation for the credential
-path; the disabled-signup 404 needs no special handling.
+existence or to public naming. Implementations MUST add timing-equalisation for
+the credential path; the disabled-signup 404 needs no special handling.
 
 ### 3.5 Principal source per route class (single owner of the identity axis)
 
@@ -368,7 +386,7 @@ other docs reference it, they do not restate it.
 
 ### 4.1 Open signup with disable env
 
-- `POST /auth/signup {email, password}` is open by default.
+- `POST /auth/signup {email, password, name, display_name?}` is open by default (see §3.1 for why `name` is required).
 - `SILVERHAND_DISABLE_SIGNUP=1` env (read once at server startup, frozen) closes the route — returns 404, identical to other not-found.
 - `GET /api/server/info` returns `{ signup_enabled: bool }` so desktop UI can render the right surface (signup form vs login-only) without round-tripping through a failed POST.
 - Startup log prints the resolved value: `Signup: enabled (or: disabled)`.
@@ -725,6 +743,6 @@ The following invariants hold; implementation PRs are auditable against this lis
 
 16. Every resource picks exactly one of three ACL classes (direct owner column / membership edge / inherited via parent) per §2.1. Routes do not invent ad-hoc paths.
 17. Open signup ≠ no ACL. Every public route resolves a principal per §3.5: a `user` principal scopes reads/mutations by `viewer_user_id` (no principal → 403 registration gate); internal agent routes carry an `agent` principal from the URL binding; `system` is backend-internal only.
-18. Auth/setup error responses are uniform within the same route — no enumeration of email/password/credential-row distinguishability. Disabled-signup 404 is allowed; credential-failure path is always 401 with constant-time compare.
+18. Auth/setup error responses are uniform within the same route for CREDENTIAL facts — no enumeration of email/password/credential-row distinguishability. Disabled-signup 404 is allowed; credential-failure path is always 401 with constant-time compare. Signup's 409 `handle_taken` is the one deliberate exception and is scoped to a public, user-chosen name, never to credential state (§3.4).
 19. `installation_id` is a stable local id only, not an auth factor. Hardware machine fingerprint is at most a UI display hint, never a permission boundary.
 20. Existing host record + revoked_at set + new claim attempt → 409 fail-closed, no silent revival.

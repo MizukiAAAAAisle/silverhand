@@ -49,6 +49,7 @@ import type { Database as Db } from 'better-sqlite3';
 import {
   apiPaths,
   authPaths,
+  suggestParticipantNameFromEmail,
   type ServerConfig,
 } from '@silverhand/shared';
 import {
@@ -200,6 +201,7 @@ describe('Standalone G3 — signup-toggle real restart (D4.c C8)', () => {
       const signupRes = await postJson(`${phase1Url}${authPaths.signup}`, {
         email,
         password,
+        name: suggestParticipantNameFromEmail(email),
         display_name,
       });
       expect(signupRes.status).toBe(200);
@@ -383,9 +385,11 @@ describe('Standalone G3 — signup-toggle real restart (D4.c C8)', () => {
 
       // A fresh signup attempt now succeeds with a different email.
       {
+        const reopenEmail = `c8-toggle-reopen-${Date.now()}@example.test`;
         const reopened = await postJson(`${phase3Url}${authPaths.signup}`, {
-          email: `c8-toggle-reopen-${Date.now()}@example.test`,
+          email: reopenEmail,
           password: 'c8-test-password-3',
+          name: suggestParticipantNameFromEmail(reopenEmail),
           display_name: 'C8 Reopen',
         });
         expect(reopened.status).toBe(200);

@@ -94,6 +94,7 @@ describe('identity-creation app-scope broadcast (#task:1707)', () => {
     const res = await http(t).post(authPaths.signup, {
       email: 'shiki@example.test',
       password: 'correct horse battery staple',
+      name: 'shiki',
       display_name: 'Shiki',
     });
     expect(res.status).toBe(200);
@@ -109,6 +110,7 @@ describe('identity-creation app-scope broadcast (#task:1707)', () => {
     const first = await http(t).post(authPaths.signup, {
       email: 'dup@example.test',
       password: 'correct horse battery staple',
+      name: 'dup-first',
       display_name: 'First',
     });
     expect(first.status).toBe(200);
@@ -117,6 +119,7 @@ describe('identity-creation app-scope broadcast (#task:1707)', () => {
     const repeat = await http(t).post(authPaths.signup, {
       email: 'dup@example.test',
       password: 'correct horse battery staple',
+      name: 'dup-second',
       display_name: 'Second',
     });
     // Existing email resolves to auth_failed, never a second creation.

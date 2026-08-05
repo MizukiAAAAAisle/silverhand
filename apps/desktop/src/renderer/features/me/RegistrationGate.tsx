@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { KeyRound, Loader2, LogIn, UserPlus } from 'lucide-react';
+import {
+  AUTH_HANDLE_TAKEN_CODE,
+  suggestParticipantNameFromEmail,
+} from '@silverhand/shared';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { primaryAction } from '@/features/common/PrimaryAction';
+import { nameFormatMessage } from '@/features/naming/useNameAvailability';
 import { cn } from '@/lib/cn';
 import { useLoginUser, useSignupUser } from './hooks';
 
@@ -12,11 +17,25 @@ export interface RegistrationGateProps {
 
 type AuthMode = 'signup' | 'login';
 
+/** A submit failure that belongs to ONE field rather than to the form. Only the
+ *  handle has such a case today (`handle_taken`): every other auth failure is
+ *  either about the email+password PAIR or about the whole body, and pinning
+ *  those to a single input would point the user at the wrong place. */
+interface AuthError {
+  field: 'handle' | null;
+  message: string;
+}
+
 /**
  * Full-screen desktop auth gate. The renderer never receives the
  * `user_token`: submit calls an IPC method, main performs `/auth/*`,
  * persists the main-owned 0600 local session file, and returns only
  * the resolved user.
+ *
+ * Signup asks for the handle explicitly (#task:1830). It is the one field here
+ * that can never be corrected afterwards, which is why it carries a note, is
+ * required, sits directly under the email it is prefilled from, and stops
+ * following that email the moment the user edits it.
  */
 export function RegistrationGate({
   signupEnabled,
@@ -25,11 +44,14 @@ export function RegistrationGate({
   const login = useLoginUser();
   const [mode, setMode] = useState<AuthMode>(signupEnabled ? 'signup' : 'login');
   const [email, setEmail] = useState('');
+  const [handle, setHandle] = useState('');
+  const [handleEdited, setHandleEdited] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AuthError | null>(null);
   const emailInputRef = useRef<HTMLInputElement | null>(null);
+  const handleInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!signupEnabled) setMode('login');
@@ -41,13 +63,29 @@ export function RegistrationGate({
 
   const submitting = signup.isPending || login.isPending;
   const emailTrimmed = email.trim();
+  const handleTrimmed = handle.trim();
   const displayNameTrimmed = displayName.trim();
   const isSignup = mode === 'signup';
+  // Shared format seam — never a second regex or a second wording (#task:1827).
+  // `agent` is the naming-era label for the participant/mention grammar, which
+  // is exactly what a handle is, so the words match create-agent and rename.
+  const handleFormatMessage = nameFormatMessage('agent', handleTrimmed);
   const canSubmit =
     !submitting
     && emailTrimmed.length > 0
     && password.length >= (isSignup ? 8 : 1)
-    && (!isSignup || password === confirmPassword);
+    && (!isSignup
+      || (handleTrimmed.length > 0
+        && handleFormatMessage === null
+        && password === confirmPassword));
+
+  /** Prefill the handle from the email until the user takes the field over. A
+   *  dirty flag rather than "empty means follow": typing a handle and then going
+   *  back to finish the email must not overwrite the deliberate choice. */
+  const onEmailChange = (next: string) => {
+    setEmail(next);
+    if (!handleEdited) setHandle(suggestParticipantNameFromEmail(next.trim()));
+  };
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -58,6 +96,7 @@ export function RegistrationGate({
         await signup.mutateAsync({
           email: emailTrimmed,
           password,
+          name: handleTrimmed,
           display_name:
             displayNameTrimmed.length > 0 ? displayNameTrimmed : undefined,
         });
@@ -65,9 +104,21 @@ export function RegistrationGate({
         await login.mutateAsync({ email: emailTrimmed, password });
       }
     } catch (err) {
-      setError(authErrorMessage(err));
+      const authError = authErrorMessage(err);
+      setError(authError);
+      // There is no availability probe by design, so a taken handle can only
+      // come back after submit. Put the cursor where the fix has to happen and
+      // preselect the value — everything else the user typed stays untouched.
+      if (authError.field === 'handle') {
+        handleInputRef.current?.focus();
+        handleInputRef.current?.select();
+      }
     }
   };
+
+  const formError = error?.field === null ? error.message : null;
+  const handleError =
+    handleFormatMessage ?? (error?.field === 'handle' ? error.message : null);
 
   return (
     <main
@@ -122,12 +173,43 @@ export function RegistrationGate({
               id="auth-email"
               type="email"
               value={email}
-              onChange={e => setEmail(e.target.value)}
+              onChange={e => onEmailChange(e.target.value)}
               autoComplete="email"
               spellCheck={false}
               placeholder="you@example.com"
             />
           </div>
+
+          {isSignup ? (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="auth-handle" required>
+                Handle
+              </Label>
+              <Input
+                ref={handleInputRef}
+                id="auth-handle"
+                value={handle}
+                onChange={e => {
+                  setHandleEdited(true);
+                  setHandle(e.target.value);
+                }}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="your-handle"
+              />
+              {/* One line, always occupied: the problem when there is one, the
+                  irreversibility note otherwise. Same height either way, so
+                  nothing moves — and no reserved empty row. */}
+              <p
+                className={cn(
+                  'text-xs leading-4',
+                  handleError ? 'text-error' : 'text-text-muted',
+                )}
+              >
+                {handleError ?? "Can't be changed later."}
+              </p>
+            </div>
+          ) : null}
 
           {isSignup ? (
             <div className="flex flex-col gap-1.5">
@@ -193,10 +275,13 @@ export function RegistrationGate({
             )}
           </Button>
           {isSignup && password.length > 0 && password !== confirmPassword ? (
-            <p className="text-xs text-status-error">Passwords do not match.</p>
+            // `text-error` — the theme token. `text-status-error`, which these
+            // two lines used, is not defined in any theme, so both rendered in
+            // the default text colour.
+            <p className="text-xs text-error">Passwords do not match.</p>
           ) : null}
-          {error ? (
-            <p className="text-xs text-status-error">{error}</p>
+          {formError ? (
+            <p className="text-xs text-error">{formError}</p>
           ) : null}
         </footer>
       </form>
@@ -230,7 +315,13 @@ function ModeButton({
   );
 }
 
-function authErrorMessage(err: unknown): string {
+/**
+ * Classify a submit failure into (field, message). The field is what decides
+ * WHERE the message is rendered: a conflict on one unique field has to appear
+ * under that field, while a credential failure describes the email+password pair
+ * and belongs in the form footer.
+ */
+function authErrorMessage(err: unknown): AuthError {
   const apiErr = err as { body?: string; message?: string };
   let parsed: { error?: string; error_code?: string; code?: string } = {};
   try {
@@ -238,11 +329,20 @@ function authErrorMessage(err: unknown): string {
   } catch {
     // not JSON — fall through.
   }
+  if (
+    parsed.error_code === AUTH_HANDLE_TAKEN_CODE
+    || parsed.code === AUTH_HANDLE_TAKEN_CODE
+  ) {
+    return { field: 'handle', message: 'This handle is taken' };
+  }
   if (parsed.error_code === 'auth_failed' || parsed.code === 'auth_failed') {
-    return 'Email or password is incorrect.';
+    return { field: null, message: 'Email or password is incorrect.' };
   }
   if (parsed.error === 'invalid input') {
-    return 'Check the email and password fields.';
+    return { field: null, message: 'Check the email and password fields.' };
   }
-  return parsed.error ?? apiErr.message ?? 'Authentication failed.';
+  return {
+    field: null,
+    message: parsed.error ?? apiErr.message ?? 'Authentication failed.',
+  };
 }
