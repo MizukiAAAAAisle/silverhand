@@ -246,6 +246,13 @@ an email-only auth row. Auth-related state lives in dedicated tables; the
   must not be guessed. There is no server-side handle deriver any more; the
   email→handle suggestion survives only as a renderer prefill
   (`suggestParticipantNameFromEmail`).
+- A handle, once held, is **never recycled**. There is no account-deletion path
+  today, so nothing needs to be built for this; the constraint is on future work:
+  if account deletion is added it must soft-delete, or otherwise keep the handle
+  permanently reserved, so that no new subject can acquire an old one. `@mentions`
+  are re-parsed out of stored message text at read time, so recycling a handle
+  would silently re-point every historical mention of the previous holder
+  (shiki, 2026-08-05).
 - Login: `POST /auth/login {email, password}` → server resolves
   `users` row by email, joins `user_password_credentials`, validates → issues
   `user_token` (opaque session token) bound to a row in
@@ -340,11 +347,17 @@ The rule is **uniformity within the same route**, not "always 401":
   two unique fields collided cannot complete signup at all. One code covers both
   halves of the namespace (`users.name` UNIQUE and the cross-table trigger
   against `agents.name`) — which side holds the name is not the caller's
-  business and not actionable. Accepted residual cost, stated rather than
-  hidden: while signup is enabled an unauthenticated caller can probe whether a
-  given handle exists, one full POST at a time. The *cheap* oracle is what stays
-  closed — there is no public, unauthenticated handle-availability endpoint, and
-  the authenticated agent/workspace availability probes are not reused here.
+  business and not actionable. **Answer ordering is part of the contract**: the
+  handle verdict is decided first and depends ONLY on the handle, so a taken
+  handle answers the identical 409 whether or not the email is registered. The
+  reverse order would turn the 401/409 pair into an email-existence oracle for
+  anyone holding one known-taken handle. Every signup POST also pays one Argon2id
+  hash before either check, so no answer is cheaper than another. Accepted
+  residual cost, stated rather than hidden: while signup is enabled an
+  unauthenticated caller can probe whether a given handle exists, one full POST
+  at a time. The *cheap* oracle is what stays closed — there is no public,
+  unauthenticated handle-availability endpoint, and the authenticated
+  agent/workspace availability probes are not reused here.
 
 Anti-enumeration applies to authentication outcomes, not to route
 existence or to public naming. Implementations MUST add timing-equalisation for

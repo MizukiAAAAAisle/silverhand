@@ -192,8 +192,14 @@ export function RegistrationGate({
                 onChange={e => {
                   setHandleEdited(true);
                   setHandle(e.target.value);
+                  // A field-scoped error describes the value that was submitted.
+                  // Since a `handle_taken` failure focuses AND selects this
+                  // input, the next keystroke replaces exactly that value — and
+                  // a stale "already taken" under a freshly typed handle reads
+                  // as "this one is taken too".
+                  if (error?.field === 'handle') setError(null);
                 }}
-                autoComplete="off"
+                autoComplete="username"
                 spellCheck={false}
                 placeholder="your-handle"
               />
@@ -206,7 +212,7 @@ export function RegistrationGate({
                   handleError ? 'text-error' : 'text-text-muted',
                 )}
               >
-                {handleError ?? "Can't be changed later."}
+                {handleError ?? "Can't be changed later"}
               </p>
             </div>
           ) : null}
@@ -333,7 +339,7 @@ function authErrorMessage(err: unknown): AuthError {
     parsed.error_code === AUTH_HANDLE_TAKEN_CODE
     || parsed.code === AUTH_HANDLE_TAKEN_CODE
   ) {
-    return { field: 'handle', message: 'This handle is taken' };
+    return { field: 'handle', message: 'Handle already taken' };
   }
   if (parsed.error_code === 'auth_failed' || parsed.code === 'auth_failed') {
     return { field: null, message: 'Email or password is incorrect.' };

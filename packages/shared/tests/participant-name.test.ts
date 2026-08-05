@@ -50,7 +50,9 @@ describe('email → handle suggestion (#task:1830)', () => {
     // permanent, so "the user has to fix the prefill before submitting" is a
     // defect. Includes every shape that used to need special-casing in the old
     // server-side deriver: digit-first, punctuation-only, non-ASCII, empty
-    // local-part, and an over-long one.
+    // local-part, and an over-long one. Empty is the one other admissible
+    // outcome — the field is required, so an empty prefill asks the question
+    // instead of answering it wrongly.
     const emails = [
       'alice@example.com',
       '2b@example.com',
@@ -67,18 +69,23 @@ describe('email → handle suggestion (#task:1830)', () => {
     ];
     for (const email of emails) {
       const suggested = suggestParticipantNameFromEmail(email);
+      const label = `suggestion ${JSON.stringify(suggested)} for ${JSON.stringify(email)}`;
+      if (suggested === '') continue;
       expect(
         ParticipantNameSchema.safeParse(suggested).success,
-        `suggestion ${JSON.stringify(suggested)} for ${JSON.stringify(email)}`,
+        label,
       ).toBe(true);
-      expect(suggested.length).toBeLessThanOrEqual(ENTITY_NAME_MAX_LENGTH);
+      expect(suggested.length, label).toBeLessThanOrEqual(ENTITY_NAME_MAX_LENGTH);
       // A prefill that is not addressable would be worse than none.
       expect(extractMentions(`hi @${suggested}`)).toEqual([suggested]);
     }
   });
 
-  it('falls back to a usable handle when nothing survives normalization', () => {
-    expect(suggestParticipantNameFromEmail('...@example.com')).toBe('user');
-    expect(suggestParticipantNameFromEmail('@example.com')).toBe('user');
+  it('suggests nothing when no part of the local-part survives', () => {
+    // Not a `user` placeholder: on the one field that can never be changed, a
+    // plausible-looking default gets accepted unread (@Norman, #task:1830).
+    for (const email of ['...@example.com', '@example.com', '张三@example.com', '']) {
+      expect(suggestParticipantNameFromEmail(email), email).toBe('');
+    }
   });
 });

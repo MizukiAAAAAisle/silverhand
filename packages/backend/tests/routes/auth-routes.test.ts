@@ -286,26 +286,44 @@ describe('auth routes', () => {
     expect(credentialAndSessionCounts(t)).toEqual(before);
   });
 
-  it('answers an existing email with the uniform 401 even when the handle is also taken', async () => {
-    // Ordering is load-bearing: the credential answer must not become
-    // distinguishable just because signup gained a typed 409. An attacker who
-    // learns "handle_taken" for a known-registered email would learn the email
-    // is free; keeping the email check first means they only ever see 401.
+  it('answers a taken handle with the same 409 whether or not the email exists', async () => {
+    // Ordering is a security property (#task:1830). If the email check came
+    // first, an attacker holding ONE publicly-known taken handle could read the
+    // pair of answers as an email-existence oracle: 401 = "registered",
+    // 409 = "free". So the handle verdict must be byte-identical for a
+    // registered and an unregistered email.
     t = buildTestApp();
-    const first = await requestJson(t, 'POST', authPaths.signup, {
-      email: 'taken@example.com',
+    const registered = await requestJson(t, 'POST', authPaths.signup, {
+      email: 'occupant@example.com',
       password: 'correct-password',
-      name: 'first-owner',
+      name: 'occupant',
     });
-    expect(first.status).toBe(200);
+    expect(registered.status).toBe(200);
 
-    const again = await requestJson(t, 'POST', authPaths.signup, {
-      email: 'taken@example.com',
-      password: 'correct-password',
-      name: 'first-owner',
+    const known = await requestJson(t, 'POST', authPaths.signup, {
+      email: 'occupant@example.com',
+      password: 'another-password',
+      name: 'occupant',
     });
-    expect(again.status).toBe(401);
-    expect(again.body).toEqual({ error_code: 'auth_failed' });
+    const unknown = await requestJson(t, 'POST', authPaths.signup, {
+      email: 'never-seen@example.com',
+      password: 'another-password',
+      name: 'occupant',
+    });
+    for (const res of [known, unknown]) {
+      expect(res.status).toBe(409);
+      expect(res.body).toEqual({ error_code: 'handle_taken' });
+    }
+
+    // The complement: a FREE handle is what lets the email axis speak, and it
+    // still speaks only in the uniform credential answer.
+    const freeHandle = await requestJson(t, 'POST', authPaths.signup, {
+      email: 'occupant@example.com',
+      password: 'another-password',
+      name: 'somebody-else',
+    });
+    expect(freeHandle.status).toBe(401);
+    expect(freeHandle.body).toEqual({ error_code: 'auth_failed' });
   });
 
   // Thin route-local schema / bearer guards pinned before the auth carve

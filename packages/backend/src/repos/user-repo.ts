@@ -12,7 +12,12 @@ import { ParticipantNameSchema, type UserRow } from '@silverhand/shared';
  *     across `users.name` ⊕ `agents.name` — migration v21 triggers enforce
  *     this in DB; its FORMAT is enforced here, in `create` (see there
  *     for why the two halves of "what is a valid name" live in
- *     different layers).
+ *     different layers). A handle is also never RECYCLED: there is no account
+ *     deletion path today, and if one is added it must soft-delete or otherwise
+ *     keep the handle reserved forever, because `@mentions` are re-parsed from
+ *     stored message text at read time and a reused handle would silently
+ *     re-point every historical mention of the previous holder (shiki,
+ *     2026-08-05; `docs/auth-and-host-model.md` §3.1).
  *   - `display_name` is a human label. Editable post-registration via
  *     `updateProfile`; no uniqueness constraint.
  *

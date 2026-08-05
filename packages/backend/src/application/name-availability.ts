@@ -13,13 +13,17 @@ import type { WorkspaceRepo } from '../repos/workspace-repo.js';
  *  - workspaces: partial unique index `workspaces_regular_name_unique`
  */
 
-/** Agent names live in the GLOBAL @-handle namespace shared with human users
- *  (DB: `agents.name` UNIQUE + `agents_name_unique_against_users` /
- *  `users_name_unique_against_agents` triggers). A name is available iff no
- *  agent AND no user already holds it — checking agents alone would report a
- *  name colliding with a human handle as "available", then create would trip
- *  the DB trigger. */
-export function isAgentNameAvailable(
+/** Participant handles live in ONE global @-handle namespace shared by agents
+ *  and human users (DB: `agents.name` UNIQUE + `users.name` UNIQUE +
+ *  `agents_name_unique_against_users` / `users_name_unique_against_agents`
+ *  triggers). A handle is available iff no agent AND no user already holds it —
+ *  checking one table alone would report a colliding handle as "available" and
+ *  then trip the DB trigger at create time.
+ *
+ *  The predicate is scoped to the NAMESPACE, not to the kind of actor being
+ *  created: agent creation, the agent-name probe endpoint, and password signup's
+ *  user handle (#task:1830) all ask the same question and must not drift apart. */
+export function isParticipantHandleAvailable(
   deps: { agents: AgentRepo; users: UserRepo },
   name: string,
 ): boolean {

@@ -44,10 +44,14 @@ export const ParticipantNameSchema = z
  * address. Now the user chooses and this only seeds the field — so it lives next
  * to the grammar it must respect, with no second copy in the renderer.
  *
- * Output is always admissible by {@link ParticipantNameSchema}: after the
- * leading non-letters are dropped the first character is a letter or the string
- * is empty (→ `user`), every surviving character is in the allowed class, and
- * slicing a prefix cannot break either property.
+ * Output is either **empty** or admissible by {@link ParticipantNameSchema}:
+ * after the leading non-letters are dropped the first character is a letter,
+ * every surviving character is in the allowed class, and slicing a prefix cannot
+ * break either property. Empty is deliberate rather than a `user` placeholder
+ * (@Norman, #task:1830): when nothing of the local-part survives — a fully
+ * non-ASCII address, say — a plausible-looking default on the one field that can
+ * never be changed invites being accepted unread. An empty required field asks
+ * the question instead.
  */
 export function suggestParticipantNameFromEmail(email: string): string {
   const localPart = email.trim().toLowerCase().split('@')[0] ?? '';
@@ -55,7 +59,7 @@ export function suggestParticipantNameFromEmail(email: string): string {
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^[^a-z]+/, '')
     .replace(/[-_]+$/g, '');
-  return (cleaned || 'user').slice(0, ENTITY_NAME_MAX_LENGTH);
+  return cleaned.slice(0, ENTITY_NAME_MAX_LENGTH);
 }
 
 /**

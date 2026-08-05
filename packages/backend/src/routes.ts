@@ -387,6 +387,7 @@ export function createApiRouter(
   const userAuth = new UserAuthService({
     db: ctx.db,
     users,
+    agents,
     passwordCredentials: ctx.passwordCredentials,
     authSessions: ctx.authSessions,
     events: ctx.events,

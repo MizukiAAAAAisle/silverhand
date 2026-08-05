@@ -17,7 +17,7 @@ import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
 } from '../ws/host-ws-server.js';
-import { isAgentNameAvailable } from './name-availability.js';
+import { isParticipantHandleAvailable } from './name-availability.js';
 import type { PostCommitEffect } from './post-commit.js';
 
 /**
@@ -638,11 +638,11 @@ export async function createAgent(
   }
 
   // Name uniqueness check — SHARED predicate with the name-availability probe
-  // endpoint (`isAgentNameAvailable`): agent names are the global @-handle
+  // endpoint (`isParticipantHandleAvailable`): agent names are the global @-handle
   // namespace shared with human users, so this rejects a name colliding with a
   // user handle too (previously only `agents` was checked and a user-collision
   // tripped the DB trigger instead of returning a clean `nameTaken`).
-  if (!isAgentNameAvailable({ agents, users }, input.name)) {
+  if (!isParticipantHandleAvailable({ agents, users }, input.name)) {
     return { kind: 'nameTaken', message: 'agent name already exists' };
   }
 

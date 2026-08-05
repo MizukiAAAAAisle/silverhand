@@ -100,11 +100,17 @@ const AuthEmailSchema = z.string().trim().email().max(320);
  * changed afterwards (no rename path exists, and historical `@mentions` are
  * re-parsed out of stored message text at read time, so a rename would silently
  * re-point them), and a value that permanent must not be chosen by a
- * server-side guess at what an email local-part meant. `AuthSignupInput` has a
- * single production client shipped in lockstep with the backend, and signup sits
- * outside the desktop API-epoch gate, so there is no old-client population to
- * keep a second, weaker model alive for — the email deriver survives only as a
- * renderer PREFILL (`suggestParticipantNameFromEmail`).
+ * server-side guess at what an email local-part meant.
+ *
+ * Adding a required field to a request body IS a breaking wire change, and the
+ * primary deployment is a remote server with separately-installed desktops, so
+ * skew is real (see `docs/desktop-server-api-epoch.md`). What makes this one
+ * safe WITHOUT bumping the epoch is not that `/auth/signup` sits outside the
+ * REST admission middleware — it is that epoch 2 is still unreleased and this
+ * change ships inside the same release: any deployed desktop is at epoch ≤ 1 and
+ * is already refused at startup by the epoch-2 minimum-client gate, so it can
+ * never reach this shape. If this change is ever split out of that release, the
+ * epoch MUST be bumped (or a compatibility bridge kept) instead.
  *
  * The wire keeps the domain word `name` (matching `UserDto.name` and
  * `agents.name`); "Handle" is the UI label for the same field, and the leading

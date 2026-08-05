@@ -6,6 +6,7 @@ import {
   UserAuthService,
   type UserPasswordResetResult,
 } from './auth/user-auth-service.js';
+import { AgentRepo } from './repos/agent-repo.js';
 import { UserRepo } from './repos/user-repo.js';
 
 export type AdminResetPasswordErrorCode = 'user_not_found' | 'db_locked';
@@ -45,6 +46,9 @@ export async function resetAdminPassword(
     const userAuth = new UserAuthService({
       db,
       users: new UserRepo(db),
+      // Unused by `resetPassword`, required by the service surface: signup's
+      // handle check spans agents ∪ users (#task:1830).
+      agents: new AgentRepo(db),
       passwordCredentials: new PasswordCredentialService(db),
       authSessions: new AuthSessionService(db),
     });

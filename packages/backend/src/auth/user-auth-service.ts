@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import type { Database as Db } from 'better-sqlite3';
 import type { AuthSignupInput } from '@silverhand/shared';
+import { isParticipantHandleAvailable } from '../application/name-availability.js';
+import type { AgentRepo } from '../repos/agent-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import {
@@ -18,6 +20,10 @@ export interface UserPasswordResetResult {
 export class UserAuthService {
   private readonly db: Db;
   private readonly users: UserRepo;
+  /** Signup needs the OTHER half of the @-handle namespace: a handle held by an
+   *  agent is just as taken as one held by a human, and answering that before
+   *  the credential check is what keeps the 409 off the email axis. */
+  private readonly agents: AgentRepo;
   private readonly passwordCredentials: PasswordCredentialService;
   private readonly authSessions: AuthSessionService;
   private readonly events?: ScopeEventBus;
@@ -25,12 +31,14 @@ export class UserAuthService {
   constructor(opts: {
     db: Db;
     users: UserRepo;
+    agents: AgentRepo;
     passwordCredentials: PasswordCredentialService;
     authSessions: AuthSessionService;
     events?: ScopeEventBus;
   }) {
     this.db = opts.db;
     this.users = opts.users;
+    this.agents = opts.agents;
     this.passwordCredentials = opts.passwordCredentials;
     this.authSessions = opts.authSessions;
     this.events = opts.events;
@@ -48,6 +56,17 @@ export class UserAuthService {
     this.events?.publishToScope('app', 'user_changed', { user_id: id });
   }
 
+  /**
+   * Register a brand-new email+password identity.
+   *
+   * Answer ordering is a SECURITY property, not a style choice (#task:1830):
+   * the handle verdict must depend only on the handle. If the email check came
+   * first, an attacker holding one publicly-known taken handle could read 401
+   * as "this email is registered" and 409 as "it is not" — the uniform
+   * credential answer would have become an email-existence oracle the moment
+   * signup gained a typed conflict code. So: pay the password cost, then decide
+   * the handle, then the credential answer.
+   */
   async signup(
     input: AuthSignupInput,
   ): Promise<
@@ -56,17 +75,26 @@ export class UserAuthService {
     | { ok: false; code: 'handle_taken' }
   > {
     const email = normalizeLoginEmail(input.email);
-    if (this.users.getByEmail(email)) {
-      await this.passwordCredentials.verifyLoginPassword({
-        email,
-        password: input.password,
-      });
-      return { ok: false, code: 'auth_failed' };
-    }
-
+    // Cost floor first, before any branch: every signup POST pays one Argon2id
+    // hash whatever the outcome, so neither answer below is a cheap probe. This
+    // replaces the former dummy-verify on the existing-email path — the work is
+    // now unconditional instead of per-branch.
     const credential = await this.passwordCredentials.hashPasswordCredential(
       input.password,
     );
+
+    // Decided on the handle alone, for both halves of the mention namespace.
+    // Racy by construction — the DB catch below is what closes the window.
+    if (
+      !isParticipantHandleAvailable(
+        { agents: this.agents, users: this.users },
+        input.name,
+      )
+    ) {
+      return { ok: false, code: 'handle_taken' };
+    }
+    if (this.users.getByEmail(email)) return { ok: false, code: 'auth_failed' };
+
     const displayName =
       input.display_name ?? displayNameFromEmailLocalPart(emailLocalPart(email));
     const tx = this.db.transaction(
@@ -103,18 +131,12 @@ export class UserAuthService {
         this.publishCreated(userId);
         return { ok: true, userId };
       } catch (err) {
-        if (isEmailConflict(err)) {
-          await this.passwordCredentials.verifyLoginPassword({
-            email,
-            password: input.password,
-          });
-          return { ok: false, code: 'auth_failed' };
-        }
-        // Both halves of the mention namespace land here: the `users.name`
-        // column UNIQUE and the migration v21 cross-table trigger against
-        // `agents.name`. One code for both — the caller cannot act differently
-        // on "a human has it" vs "an agent has it".
+        // Both DB races land here, and each keeps the ordering above: a handle
+        // that was free at the pre-check but is now taken still answers 409, and
+        // an email registered since the check still answers the uniform 401. The
+        // password cost was already paid before either check.
         if (isNameConflict(err)) return { ok: false, code: 'handle_taken' };
+        if (isEmailConflict(err)) return { ok: false, code: 'auth_failed' };
         if (isUserIdConflict(err)) continue;
         throw err;
       }

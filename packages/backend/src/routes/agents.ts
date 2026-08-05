@@ -7,7 +7,7 @@ import {
   createAgent,
   type AgentMaterializeFailureCode,
 } from '../application/create-agent.js';
-import { isAgentNameAvailable } from '../application/name-availability.js';
+import { isParticipantHandleAvailable } from '../application/name-availability.js';
 import {
   deleteAgent,
 } from '../application/delete-agent.js';
@@ -265,9 +265,9 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   // GET /api/agents/name-availability?name= — create-form onBlur uniqueness
   // probe. Registered BEFORE `/api/agents/:id` so the static segment is not
   // shadowed by the param route. Shares ONE predicate with the create path
-  // (`isAgentNameAvailable`) so the form can never report "available" for a
-  // name create would reject. Agent names are the GLOBAL @-handle namespace
-  // shared with human users → the predicate checks agents ∪ users.
+  // (`isParticipantHandleAvailable`) so the form can never report "available"
+  // for a name create would reject. Agent names are the GLOBAL @-handle
+  // namespace shared with human users → the predicate checks agents ∪ users.
   app.get(apiPaths.agentNameAvailability, c => {
     getUserPrincipal(c); // authed-user gate (parity with sibling routes)
     const parsed = ParticipantNameSchema.safeParse(c.req.query('name') ?? '');
@@ -277,7 +277,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
         reason: 'invalid',
       } satisfies NameAvailabilityDto);
     }
-    const available = isAgentNameAvailable({ agents, users }, parsed.data);
+    const available = isParticipantHandleAvailable({ agents, users }, parsed.data);
     return c.json({
       available,
       reason: available ? 'available' : 'taken',
