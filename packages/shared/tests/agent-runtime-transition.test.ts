@@ -109,6 +109,16 @@ describe('SwitchAgentRuntimeInputSchema', () => {
 });
 
 describe('CreateAgentInputSchema runtime tuning', () => {
+  it('requires a participant name to start with a letter', () => {
+    expect(
+      CreateAgentInputSchema.safeParse({ name: 'agent-2b', runtime: 'claude' })
+        .success,
+    ).toBe(true);
+    expect(
+      CreateAgentInputSchema.safeParse({ name: '2b', runtime: 'claude' }).success,
+    ).toBe(false);
+  });
+
   it('rejects fast mode outside runtimes that support it', () => {
     expect(
       CreateAgentInputSchema.safeParse({

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { nameAvailabilityView, nameFormatIssue } from './useNameAvailability';
 
 const base = {
+  kind: 'agent',
   touched: true,
   name: 'alice',
   formatIssue: null,
@@ -12,21 +13,26 @@ const base = {
 } as const;
 
 describe('nameFormatIssue', () => {
-  it('accepts a well-formed name', () => {
-    expect(nameFormatIssue('my-agent_1')).toBeNull();
+  it('accepts a well-formed participant name', () => {
+    expect(nameFormatIssue('agent', 'my-agent_1')).toBeNull();
   });
 
-  it('reports charset for illegal characters', () => {
-    expect(nameFormatIssue('bad name!')).toBe('charset');
-    expect(nameFormatIssue('空格 name')).toBe('charset');
+  it('requires agent names to start with a letter without constraining workspaces', () => {
+    expect(nameFormatIssue('agent', '2b')).toBe('charset');
+    expect(nameFormatIssue('workspace', '2b')).toBeNull();
+  });
+
+  it('reports charset for illegal characters in either current schema', () => {
+    expect(nameFormatIssue('agent', 'bad name!')).toBe('charset');
+    expect(nameFormatIssue('workspace', '空格 name')).toBe('charset');
   });
 
   it('reports length before charset for an over-long name', () => {
-    expect(nameFormatIssue('a'.repeat(65))).toBe('length');
+    expect(nameFormatIssue('agent', 'a'.repeat(65))).toBe('length');
   });
 
   it('says nothing for an empty field (idle, not invalid)', () => {
-    expect(nameFormatIssue('')).toBeNull();
+    expect(nameFormatIssue('agent', '')).toBeNull();
   });
 });
 

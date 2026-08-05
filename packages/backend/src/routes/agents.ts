@@ -54,7 +54,7 @@ import {
 } from '../runtime/workspace-data-plane.js';
 import {
   CreateAgentInputSchema,
-  EntityNameSchema,
+  ParticipantNameSchema,
   McpProbeRequestSchema,
   ScheduleListInputSchema,
   SwitchAgentRuntimeInputSchema,
@@ -270,7 +270,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   // shared with human users → the predicate checks agents ∪ users.
   app.get(apiPaths.agentNameAvailability, c => {
     getUserPrincipal(c); // authed-user gate (parity with sibling routes)
-    const parsed = EntityNameSchema.safeParse(c.req.query('name') ?? '');
+    const parsed = ParticipantNameSchema.safeParse(c.req.query('name') ?? '');
     if (!parsed.success) {
       return c.json({
         available: false,

@@ -1494,8 +1494,9 @@ function rowKey(item: PickerItem): string {
  * mention popover. Exported for the regression test that locks the
  * two branches the renderer always resolves:
  *
- *   - `agent`   → `@<name>` — agent.name is url-safe by schema, so
- *                 the renderer's `@<handle>` parser always matches.
+ *   - `agent`   → `@<name>` — ParticipantNameSchema is alpha-first and
+ *                 shares the renderer's `@<handle>` grammar, so the parser
+ *                 always matches every stored agent name.
  *   - `channel` → `#conv:<id>` — universal, id-precise. We do NOT
  *                 emit `#<title>` even when the title happens to be
  *                 handle-safe: `#name` parsing is workspace-scoped

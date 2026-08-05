@@ -601,16 +601,10 @@ export type SavedMessagesQueryInput = z.infer<typeof SavedMessagesQueryInputSche
 // Mirrors the renderer-side regex in `Markdown.tsx` and the
 // composer-side detector — the boundary check rejects emails (`me@x`)
 // and paths (`a/@b`), and the alpha-first requirement rejects issue
-// refs like `@123`. Aligned with auth-signup generated user names
-// (alpha-first by design: `users.name` is the permanent mention
-// anchor). `CreateAgentInputSchema.name` is intentionally broader
-// (`/^[a-zA-Z0-9_-]+$/`, allows numeric-first); a numeric-first
-// agent name will not be `@`-mentionable until/unless that schema
-// is tightened — out of scope for the registration rewrite.
-// Not to be confused with `HandleSchema` in `../handle.ts`, the input
-// grammar for command/lookup arguments (`member add --handle`,
-// `profile get --handle`): that one is broader — mentionable names are a
-// strict subset of it, because only THIS regex has to survive prose.
+// refs like `@123`. The inner name grammar mirrors
+// `ParticipantNameSchema`; this parser additionally owns only the boundary
+// needed to survive prose. `HandleSchema` wraps the same stored-name grammar
+// for command/lookup input, where one leading display `@` is tolerated.
 const MENTION_RE = /(?<![\w/])@([a-zA-Z][a-zA-Z0-9_-]*)/g;
 
 /** Returns the unique set of @-names referenced in `text`, in

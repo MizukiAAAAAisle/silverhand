@@ -11,7 +11,7 @@ import {
   WorkspaceKindSchema,
 } from '../db/schema.js';
 import { DisplayNameSchema } from './user.js';
-import { EntityNameSchema } from './name.js';
+import { ParticipantNameSchema } from './name.js';
 import {
   reasoningEffortValidForRuntime,
   runtimeSupportsFastMode,
@@ -68,7 +68,7 @@ export type AgentDto = z.infer<typeof AgentDtoSchema>;
 
 export const CreateAgentInputSchema = z
   .object({
-    name: EntityNameSchema,
+    name: ParticipantNameSchema,
     runtime: RuntimeKindSchema,
     model: z.string().optional(),
     reasoning_effort: ReasoningEffortTokenSchema.optional(),

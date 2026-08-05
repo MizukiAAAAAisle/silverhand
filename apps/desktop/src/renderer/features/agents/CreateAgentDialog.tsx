@@ -111,7 +111,7 @@ export function CreateAgentDialog({
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const createAgent = useCreateAgent();
-  // onBlur name validation — format (shared EntityNameSchema) + uniqueness
+  // onBlur name validation — format (shared ParticipantNameSchema) + uniqueness
   // (agents ∪ users, server probe). See features/naming/useNameAvailability.
   const nameCheck = useNameAvailability('agent', name);
 

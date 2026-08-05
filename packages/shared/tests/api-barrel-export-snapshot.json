@@ -199,6 +199,7 @@
   "ObserveDtoSchema",
   "ObserveInputSchema",
   "ObserveSourceSchema",
+  "ParticipantNameSchema",
   "PresenceResponseSchema",
   "ReactMessageInputSchema",
   "ReactionAggregateDtoSchema",

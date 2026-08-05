@@ -152,6 +152,11 @@ function displayNameFromEmailLocalPart(localPart: string): string {
   return (normalized || 'User').slice(0, 64);
 }
 
+/**
+ * Derive the immutable `users.name` mention anchor from user-supplied email.
+ * This producer must remain a subset of `ParticipantNameSchema`: an email
+ * local-part may start with a digit or punctuation, but the stored name may not.
+ */
 function profileNameFromEmailLocalPart(localPart: string): string {
   const normalized = localPart
     .toLowerCase()

@@ -81,7 +81,9 @@ describe('auth routes', () => {
     t = buildTestApp();
 
     const signup = await requestJson(t, 'POST', authPaths.signup, {
-      email: 'New.User@example.com',
+      // A user-controlled, numeric-first email local-part must still derive an
+      // alpha-first permanent name that the mention parser can address.
+      email: '2.New.User@example.com',
       password: 'correct-password',
       display_name: 'New User',
     });
@@ -99,7 +101,7 @@ describe('auth routes', () => {
       .get(signup.body.user.id);
     expect(userRow).toEqual({
       id: signup.body.user.id,
-      email: 'new.user@example.com',
+      email: '2.new.user@example.com',
     });
     expect(
       t.ctx.db

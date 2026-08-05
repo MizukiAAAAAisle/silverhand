@@ -54,6 +54,13 @@ describe('GET /api/agents/name-availability', () => {
     expect(await res.json()).toEqual({ available: false, reason: 'invalid' });
   });
 
+  it('rejects a numeric-first participant name', async () => {
+    t = buildTestApp();
+    const res = await http(t).get('/api/agents/name-availability?name=2b');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ available: false, reason: 'invalid' });
+  });
+
   it('treats an empty name as invalid', async () => {
     t = buildTestApp();
     const res = await http(t).get('/api/agents/name-availability?name=');
@@ -84,6 +91,13 @@ describe('GET /api/workspaces/name-availability', () => {
     const res = await http(t).get(
       '/api/workspaces/name-availability?name=freshspace',
     );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ available: true, reason: 'available' });
+  });
+
+  it('keeps numeric-first workspace names valid', async () => {
+    t = buildTestApp();
+    const res = await http(t).get('/api/workspaces/name-availability?name=2b');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ available: true, reason: 'available' });
   });
