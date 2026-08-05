@@ -184,7 +184,16 @@ export function WorkspaceSettingsDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex h-[32rem] gap-5">
+        {/* The only dialog body with a FIXED height, so it is the only one that
+            can outgrow a top-anchored shell (#task:1829): a centred shell used
+            to split the overflow across both edges, a top-anchored one puts all
+            of it past the bottom — taking the footer with it. Capping against
+            the viewport keeps 32rem as the intent and lets a short window
+            shrink the body instead of hiding it. 65vh, not 70: the shell costs
+            15vh above plus ~92px of chrome, so 65 keeps the footer on screen
+            down to a ~460px-tall window — below that nothing in this app is
+            usable anyway. */}
+        <div className="flex h-[min(32rem,65vh)] gap-5">
           <nav className="flex w-40 shrink-0 flex-col gap-0.5">
             {visibleNavItems.map(item => {
               const active = activeSection === item.id;

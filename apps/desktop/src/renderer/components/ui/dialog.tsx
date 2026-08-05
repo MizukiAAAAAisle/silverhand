@@ -91,7 +91,17 @@ export const DialogContent = forwardRef<
       data-modal-shell
       data-popover-frame="info"
       className={cn(
-        'fixed left-1/2 top-1/2 z-50 grid w-full max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none',
+        // TOP-ANCHORED, not vertically centred (#task:1829, shiki go). Under
+        // `top-1/2 -translate-y-1/2` a dialog's HEIGHT IS ITS POSITION: every
+        // content growth moves the whole shell by half the delta, in both
+        // directions. That made routine, correct behaviour read as flicker —
+        // a one-line validation note appearing and leaving, a member tag row
+        // wrapping to a second line. Anchoring the top edge makes growth go
+        // DOWNWARD only: the title and the field the user is looking at stay
+        // put, and nothing has to reserve space it doesn't need.
+        // 15vh (shiki), proportional so a short window keeps the whole shell
+        // on screen.
+        'fixed left-1/2 top-[15vh] z-50 grid w-full max-w-md -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none',
         className,
       )}
       {...props}

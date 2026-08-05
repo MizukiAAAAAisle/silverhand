@@ -8,6 +8,7 @@ import {
   type NameAvailabilityDto,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/cn';
 
 /**
  * Shared onBlur name-validation for the create-agent / create-workspace
@@ -239,15 +240,54 @@ export function useNameAvailability(kind: NameCheckKind, rawName: string): NameC
   };
 }
 
-/** Inline field note under a Name input. Renders the red message for the
- *  definitive bad states, a muted "Checking…" while probing, and nothing
- *  otherwise (a calm resting field — no positive-confirmation clutter). */
+/** How long a probe must stay in flight before the field says anything. A
+ *  local probe settles well inside this window, so the common path shows no
+ *  note at all instead of flashing one word. */
+const CHECKING_NOTE_DELAY_MS = 400;
+
+/** True once `active` has held for `ms`; false again the moment it drops. */
+function useSettledTrue(active: boolean, ms: number): boolean {
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setHeld(false);
+      return;
+    }
+    const t = setTimeout(() => setHeld(true), ms);
+    return () => clearTimeout(t);
+  }, [active, ms]);
+  return held;
+}
+
+/**
+ * Inline field note under a Name input: the red message for the definitive bad
+ * states, a muted "Checking…" for a probe that is actually slow, and nothing
+ * otherwise (a calm resting field — no positive-confirmation clutter, and no
+ * reserved empty line either).
+ *
+ * Mounts and unmounts freely, which is only safe because `DialogContent` is
+ * TOP-ANCHORED (#task:1829). While the dialog was centred by transform its
+ * height was its position, so this note joining the flow moved the whole modal
+ * by half the delta — validating a good name did that twice in a row (idle →
+ * checking → available) and read as the modal flickering. Reserving a permanent
+ * line fixed the motion but left a visible empty row under every Name field
+ * (shiki: 空着一行, 视觉上不是很完美), so the fix moved to the actual cause and
+ * this line went back to costing nothing when there is nothing to say.
+ *
+ * The delay stays: growth is now downward-only, but a probe that settles in
+ * ~100ms would still flash one word and push the footer 22px and back. "Checking…"
+ * is for a user who has already started waiting.
+ */
 export function NameAvailabilityHint({ check }: { check: NameCheckView }): JSX.Element | null {
-  if (check.status === 'invalid' || check.status === 'taken') {
-    return <p className="text-xs text-error">{check.message}</p>;
-  }
-  if (check.status === 'checking') {
-    return <p className="text-xs text-text-muted">Checking…</p>;
-  }
-  return null;
+  const slowProbe = useSettledTrue(
+    check.status === 'checking',
+    CHECKING_NOTE_DELAY_MS,
+  );
+  const problem = check.status === 'invalid' || check.status === 'taken';
+  if (!problem && !slowProbe) return null;
+  return (
+    <p className={cn('text-xs leading-4', problem ? 'text-error' : 'text-text-muted')}>
+      {problem ? check.message : 'Checking…'}
+    </p>
+  );
 }
