@@ -212,7 +212,7 @@ export function RegistrationGate({
                   handleError ? 'text-error' : 'text-text-muted',
                 )}
               >
-                {handleError ?? "Can't be changed later"}
+                {handleError ?? 'This handle is permanent and cannot be changed.'}
               </p>
             </div>
           ) : null}
@@ -339,7 +339,7 @@ function authErrorMessage(err: unknown): AuthError {
     parsed.error_code === AUTH_HANDLE_TAKEN_CODE
     || parsed.code === AUTH_HANDLE_TAKEN_CODE
   ) {
-    return { field: 'handle', message: 'Handle already taken' };
+    return { field: 'handle', message: 'This handle is already taken.' };
   }
   if (parsed.error_code === 'auth_failed' || parsed.code === 'auth_failed') {
     return { field: null, message: 'Email or password is incorrect.' };

@@ -45,8 +45,8 @@ const NAME_RULE = {
   agent: {
     schema: ParticipantNameSchema,
     message: {
-      charset: 'Start with a letter; then use letters, numbers, - and _ only',
-      length: `Up to ${ENTITY_NAME_MAX_LENGTH} characters`,
+      charset: 'Must start with a letter; letters, numbers, - and _ only.',
+      length: `Must be ${ENTITY_NAME_MAX_LENGTH} characters or fewer.`,
     },
   },
   workspace: {
@@ -57,8 +57,8 @@ const NAME_RULE = {
       // render — pasted zero-width joiners, BOM, bidi overrides. Naming the
       // invisible cause is the whole value of this line; "invalid name" would
       // leave the user staring at text that looks correct.
-      charset: 'No control or invisible characters',
-      length: `Up to ${ENTITY_NAME_MAX_LENGTH} characters`,
+      charset: 'Control and invisible characters are not allowed.',
+      length: `Must be ${ENTITY_NAME_MAX_LENGTH} characters or fewer.`,
     },
   },
 } satisfies Record<
@@ -69,7 +69,7 @@ const NAME_RULE = {
   }
 >;
 
-const TAKEN_MESSAGE = 'Name already taken';
+const TAKEN_MESSAGE = 'This name is already taken.';
 
 export interface NameCheckView {
   status: NameCheckStatus;

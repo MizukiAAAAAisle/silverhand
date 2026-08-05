@@ -55,16 +55,16 @@ describe('nameFormatMessage — workspace rename', () => {
 
   it('rejects invisible and control characters, naming the cause', () => {
     expect(nameFormatMessage('workspace', '设计\u200B评审')).toBe(
-      'No control or invisible characters',
+      'Control and invisible characters are not allowed.',
     );
     expect(nameFormatMessage('workspace', 'eng\u0007')).toBe(
-      'No control or invisible characters',
+      'Control and invisible characters are not allowed.',
     );
   });
 
   it('reports 65 astral characters as length, not charset', () => {
     expect(nameFormatMessage('workspace', '𠮷'.repeat(65))).toBe(
-      'Up to 64 characters',
+      'Must be 64 characters or fewer.',
     );
   });
 });
