@@ -408,11 +408,27 @@ describe('detectTrigger', () => {
     expect(detectTrigger('me@example', 10)).toBeNull();
   });
 
-  it('does not trigger when a CJK char precedes @ (#task:1720 boundary)', () => {
-    // The widened handle class means a CJK char now also extends a handle,
-    // so '张@x' must NOT open the menu — the '@' is mid-token.
-    const text = '张@x';
-    expect(detectTrigger(text, text.length)).toBeNull();
+  it('opens right after CJK prose with no separating space (#task:1822)', () => {
+    // Chinese/Japanese prose has no inter-word spaces, so requiring one
+    // before `@` made the picker unusable there. Both parsers that decide
+    // what a mention MEANS (`extractMentions`, `canStartRef`) treat a
+    // preceding CJK char as a boundary and do produce `@alice` here — the
+    // picker must not be stricter than the message it would send.
+    const text = '谢谢@alice';
+    expect(detectTrigger(text, text.length)).toEqual({
+      kind: '@',
+      pos: 2,
+      query: 'alice',
+    });
+  });
+
+  it('opens for a CJK channel ref right after CJK prose (#task:1822)', () => {
+    const text = '搬到#设计';
+    expect(detectTrigger(text, text.length)).toEqual({
+      kind: '#',
+      pos: 2,
+      query: '设计',
+    });
   });
 
   it('does not trigger across a slash (path-like)', () => {

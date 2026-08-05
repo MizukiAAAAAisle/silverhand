@@ -119,11 +119,12 @@ type SubmittingSnapshot = {
  *  - Plain textarea — IME-safe Enter submission preserved from the
  *    previous inline implementation (composition events + the
  *    isComposing fallback).
- *  - Typing `@` or `#` at a word boundary (start of input, or after
- *    whitespace / `(` / `[`) opens a floating menu of matches. The
- *    menu stays anchored above the textarea (popup-relative-to-row,
- *    not caret-x; caret-x positioning needs a mirror div and isn't
- *    worth the complexity for this usage).
+ *  - Typing `@` or `#` opens a floating menu of matches, unless the
+ *    char before it is the tail of another token (ASCII word char or
+ *    `/`) — so emails and paths stay quiet while CJK prose needs no
+ *    separating space. The menu stays anchored above the textarea
+ *    (popup-relative-to-row, not caret-x; caret-x positioning needs a
+ *    mirror div and isn't worth the complexity for this usage).
  *  - While the menu is open: ↑/↓ navigate, Enter or Tab pick, Esc
  *    dismisses. Enter does NOT submit while the menu is open with
  *    matches — that would be the worst possible foot-gun.
@@ -996,28 +997,45 @@ interface ActiveTrigger {
   query: string;
 }
 
-// A "handle" character is anything that can sit inside a mention/channel
-// token as the scanner walks left from the caret. Unicode-aware
-// (`\p{L}` letters, `\p{N}` numbers, `\p{M}` combining marks, plus `_`
-// and `-`), NOT ASCII-only: a CJK channel title like `#设计` or a CJK
-// name like `@张三` must keep the menu open as the user types real text,
-// not bail on the first non-ASCII char (#task:1720). This is a strict
-// superset of `[a-zA-Z0-9_-]`, so ASCII behaviour is unchanged and the
-// boundary check below still fires on whitespace and punctuation.
+// The scanner needs TWO different character classes, and conflating them
+// is what made `你好@norman` unmentionable until #task:1822.
+//
+// `HANDLE_CHAR` — "can this char sit inside the query the user is still
+// typing". Unicode-aware (`\p{L}` letters, `\p{N}` numbers, `\p{M}`
+// combining marks, plus `_` and `-`) so a CJK query (`#设计`, `@张三`)
+// keeps the menu open instead of bailing on the first non-ASCII char
+// (#task:1720).
 const HANDLE_CHAR = /[\p{L}\p{N}\p{M}_-]/u;
+
+// `TOKEN_TAIL_CHAR` — "does the char BEFORE the sigil extend some other
+// token", i.e. is this `@` the tail of an email / a `page#anchor` rather
+// than a fresh mention. This one must stay ASCII (`\w`, no `u` flag)
+// because it mirrors the two parsers that decide what a mention actually
+// MEANS: `extractMentions` in `packages/shared/src/api/message.ts`
+// (`(?<![\w/])@…`, the notification/attention authority) and
+// `canStartRef` in `Markdown.tsx` (`!/[\w]/.test(prev)`, the render
+// authority). Both treat a preceding CJK char as a boundary and DO
+// produce a mention there — so a Unicode class here made the picker
+// strictly stricter than the product: in prose without spaces
+// (`谢谢@alice`) the menu refused to open even though the sent message
+// would have mentioned Alice correctly. Keep this class equal to the
+// parsers' `\w`; widening it silently drops mentions the backend honors.
+const TOKEN_TAIL_CHAR = /\w/;
 
 /**
  * Walks left from the caret looking for the nearest `@` or `#` that
  * could plausibly start an autocomplete token. Bails on whitespace or
- * anything not in the handle character class — so `foo@bar`, `path/@x`,
- * and `2#3` don't open the menu. The handle class is Unicode-aware, so
- * a CJK query (`#设计`, `@张三`) keeps walking instead of stopping at the
+ * anything not in the handle character class — so `path/@x` and `2#3`
+ * don't open the menu. The handle class is Unicode-aware, so a CJK
+ * query (`#设计`, `@张三`) keeps walking instead of stopping at the
  * first non-ASCII char.
  *
  * Boundary check on the trigger char itself: the char before the
- * trigger must not extend the handle (i.e. not a handle char and not
- * `/`, so emails like `me@example.com` and URL-ish `path/@thing`
- * stay quiet). Mirrors the render-side regex in `Markdown.tsx`.
+ * trigger must not be the tail of another token — ASCII word char or
+ * `/` — so `me@example.com` and `path/@thing` stay quiet while CJK
+ * prose (`谢谢@alice`) opens the menu with no space needed. Mirrors
+ * `canStartRef` in `Markdown.tsx` and `extractMentions` in
+ * `packages/shared/src/api/message.ts`; see `TOKEN_TAIL_CHAR`.
  *
  * Exported for unit tests (pure function; no DOM).
  */
@@ -1027,7 +1045,8 @@ export function detectTrigger(text: string, caret: number): ActiveTrigger | null
     const ch = text[i]!;
     if (ch === '@' || ch === '#') {
       const prev = i === 0 ? '' : text[i - 1]!;
-      const boundary = prev === '' || (!HANDLE_CHAR.test(prev) && prev !== '/');
+      const boundary =
+        prev === '' || (!TOKEN_TAIL_CHAR.test(prev) && prev !== '/');
       if (!boundary) return null;
       return {
         kind: ch as '@' | '#',
