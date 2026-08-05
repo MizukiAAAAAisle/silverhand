@@ -211,6 +211,38 @@ export function App(): JSX.Element {
   return <RegisteredAppShell />;
 }
 
+/**
+ * Toast viewport insets (#task:1824 — notifications moved from the bottom-right
+ * to the top-right).
+ *
+ * Top clears `--titlebar-height` instead of sitting on it: the titlebar is a
+ * window-DRAG region, and a float parked over it both reads as "on top of the
+ * chrome" and hands its own clicks to the window drag unless it opts out
+ * (`AppStatusBanner` has to). Starting below the bar avoids that whole class,
+ * and top-right of the CONTENT area is what "in-app" means anyway. Right inset
+ * matches the titlebar's trailing spacer so the toast's edge lines up with the
+ * chrome above it.
+ *
+ * `mobileOffset` is spelled out because the main window has no `minWidth`:
+ * under 600px sonner swaps to its mobile insets (default 16px all round) and
+ * would land back on the titlebar. All four keys are set in both objects —
+ * sonner only writes the keys it is given, and its mobile rules compute
+ * `width: calc(100% - var(--mobile-offset-left) * 2)`, which breaks on an
+ * unset var.
+ */
+const TOAST_OFFSET = {
+  top: 'calc(var(--titlebar-height) + 8px)',
+  right: '12px',
+  bottom: '24px',
+  left: '24px',
+} as const;
+const TOAST_MOBILE_OFFSET = {
+  top: 'calc(var(--titlebar-height) + 8px)',
+  right: '16px',
+  bottom: '16px',
+  left: '16px',
+} as const;
+
 function RegisteredAppShell(): JSX.Element {
   const {
     layout,
@@ -2488,7 +2520,12 @@ function RegisteredAppShell(): JSX.Element {
           nav.toTasks();
         }}
       />
-      <Toaster position="bottom-right" richColors />
+      <Toaster
+        position="top-right"
+        richColors
+        offset={TOAST_OFFSET}
+        mobileOffset={TOAST_MOBILE_OFFSET}
+      />
 
       {/* #task:1462 — single app-status banner slot. Mounted INSIDE the
         * registered shell on purpose: boot-time unreachability is the
