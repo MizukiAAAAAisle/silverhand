@@ -28,15 +28,24 @@ function renameMessage(meta: Record<string, unknown>): MessageDto {
 }
 
 describe('RenameRow scope (#task:1109)', () => {
-  it('defaults to a workspace rename with #-prefixed names (legacy rows have no scope)', () => {
+  it('defaults to a workspace rename when legacy rows carry no scope', () => {
     const html = renderToStaticMarkup(
       React.createElement(SystemMessage, {
-        message: renameMessage({ old_name: 'alpha', new_name: 'beta' }),
+        message: renameMessage({ old_name: '设计 评审', new_name: 'beta' }),
       }),
     );
-    // Workspace scope is name-addressable → names carry the `#` sigil.
-    expect(html).toContain('#alpha');
-    expect(html).toContain('#beta');
+    // `scope` splits only the VERB (a workspace rename broadcasts to every
+    // channel, a channel rename does not) — and legacy rows without it default
+    // to 'workspace'.
+    expect(html).toContain('workspace renamed');
+    // A workspace name is a free-text label since #task:1827 — Chinese and
+    // spaces are legal and it is not `#`-addressable, so BOTH scopes render the
+    // bare name. A `#` prefix would spell a channel reference resolving to
+    // nothing.
+    expect(html).toContain('设计 评审');
+    expect(html).toContain('beta');
+    expect(html).not.toContain('#设计');
+    expect(html).not.toContain('#beta');
   });
 
   it('renders a channel rename without the # sigil for conversation scope', () => {
@@ -49,7 +58,8 @@ describe('RenameRow scope (#task:1109)', () => {
         }),
       }),
     );
-    // Freeform titles (spaces / CJK) drop the name-addressable `#` sigil.
+    expect(html).toContain('channel renamed');
+    // Freeform titles (spaces / CJK) render bare, same as workspace labels.
     expect(html).toContain('UI/UX 优化');
     expect(html).not.toContain('#UI/UX');
     expect(html).not.toContain('#old room');

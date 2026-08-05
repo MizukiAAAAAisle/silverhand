@@ -23,8 +23,9 @@ import {
   ArchivedChannelsQueryInputSchema,
   CreateConversationChannelInputSchema,
   CreateWorkspaceInputSchema,
-  EntityNameSchema,
+  WorkspaceNameSchema,
   UpdateWorkspaceInputSchema,
+  inlineCode,
   systemSubtype,
   type NameAvailabilityDto,
 } from '@silverhand/shared';
@@ -84,7 +85,7 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
   // report "available" for a name create would reject.
   app.get(apiPaths.workspaceNameAvailability, c => {
     getUserPrincipal(c); // authed-user gate (parity with sibling routes)
-    const parsed = EntityNameSchema.safeParse(c.req.query('name') ?? '');
+    const parsed = WorkspaceNameSchema.safeParse(c.req.query('name') ?? '');
     if (!parsed.success) {
       return c.json({
         available: false,
@@ -192,8 +193,15 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
         const announce = messages.insertForConversation({
           conversationId: channel.id,
           fromKind: 'system',
+          // Agent-facing body (delivered verbatim on stdin): the workspace name
+          // is a free-text label (#task:1827), so no `#` sigil — that spells a
+          // channel reference — and each name goes in a code span so a label
+          // like `@alice` or one containing backticks cannot read as a mention
+          // or fabricate Markdown structure. The structured `old_name` /
+          // `new_name` metadata below is what the renderer draws.
           content:
-            `This workspace was renamed from #${workspace.name} to #${parsed.data.name}. ` +
+            `This workspace was renamed from ${inlineCode(workspace.name)} to ` +
+            `${inlineCode(parsed.data.name)}. ` +
             `Update any references in your MEMORY.md when you next edit it.`,
           metadata: {
             subtype: systemSubtype('rename'),

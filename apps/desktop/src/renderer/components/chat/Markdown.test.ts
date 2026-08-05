@@ -605,22 +605,27 @@ describe('SystemMessage channel refs', () => {
   // `otnb0ykIuDaNTtoC`).
 
   it('renders rename as a data-rename-row audit row with old/new name passthrough when metadata is present', () => {
+    // A workspace name is a free-text LABEL, not `#`-addressable (#task:1827):
+    // a Chinese name with a space is legal, and the row must render it bare —
+    // a `#` prefix would spell a channel reference that resolves to nothing.
     const msg = makeSystemMessage(
       'rename',
-      { old_name: 'version2', new_name: 'version3' },
-      'This workspace was renamed from #version2 to #version3.',
+      { old_name: '设计 评审', new_name: 'version3' },
+      'This workspace was renamed from `设计 评审` to `version3`.',
     );
     const html = renderSystem(msg, new Map());
     expect(html).toContain('data-rename-row="1"');
-    expect(html).toContain('#version2');
-    expect(html).toContain('#version3');
+    expect(html).toContain('设计 评审');
+    expect(html).toContain('version3');
+    expect(html).not.toContain('#设计');
+    expect(html).not.toContain('#version3');
   });
 
   it('renames without enriched metadata fall back to generic italic narration', () => {
     const msg = makeSystemMessage(
       'rename',
       {},
-      'This workspace was renamed from #legacy-old to #legacy-new.',
+      'This workspace was renamed from `legacy-old` to `legacy-new`.',
     );
     const html = renderSystem(msg, new Map());
     expect(html).not.toContain('data-rename-row="1"');

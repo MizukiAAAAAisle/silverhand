@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   conversationSideScope,
   encodeUserPrincipalHeader,
+  extractMentions,
   readRenameMetadata,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
@@ -11,6 +12,14 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+
+/** Drop every Markdown code span, matching the containers the renderer's
+ *  `remarkRefs` walker skips. What remains is the text a mention / `#ref` could
+ *  actually be parsed out of. `extractMentions` itself is code-span-blind, so
+ *  the strip — not the raw string — is what encodes the real hazard. */
+function stripCodeSpans(text: string): string {
+  return text.replace(/(`+)[\s\S]*?\1/g, ' ');
+}
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const r = await http(t).post('/api/agents', { name, runtime: 'claude' });
@@ -89,8 +98,14 @@ describe('POST /api/workspaces', () => {
 
   it('rejects invalid and duplicate workspace names', async () => {
     t = buildTestApp();
-    expect((await http(t).post('/api/workspaces', { name: 'has spaces' })).status)
+    // Internal spaces and Chinese are legal in a workspace name (#task:1827):
+    // it is a display label, not an addressable handle. What create must still
+    // refuse is a code point the name field cannot render — here a zero-width
+    // space, which would make two different names pixel-identical.
+    expect((await http(t).post('/api/workspaces', { name: 'has\u200Bspaces' })).status)
       .toBe(400);
+    expect((await http(t).post('/api/workspaces', { name: '设计 评审' })).status)
+      .toBe(201);
     expect((await http(t).post('/api/workspaces', { name: 'eng' })).status)
       .toBe(201);
     expect((await http(t).post('/api/workspaces', { name: 'eng' })).status)
@@ -139,6 +154,59 @@ describe('workspace metadata and membership routes', () => {
     expect(renameParsed!.new_name).toBe('newname');
     expect(renameParsed!.scope).toBe('workspace');
     expect(t.fake.delivered.some(d => d.messageId === renameMsg.id)).toBe(true);
+  });
+
+  // #task:1827 — a workspace name is free text, and these two bodies reach an
+  // agent verbatim on stdin. So a legal label must not be able to spell a
+  // mention, a `#` reference, or Markdown structure. Asserted by STRIPPING code
+  // spans (the same containers the renderer's `remarkRefs` skips) and then
+  // looking for the hazards in what is left: whatever survives the strip is
+  // exactly what a reader — human or agent — can act on.
+  it('cannot let a legal workspace label spell a mention, a ref, or Markdown', async () => {
+    t = buildTestApp();
+    const aliceId = await makeAgent(t, 'alice');
+    const hostile = '@alice #general `x` **bold**';
+
+    const created = await (
+      await http(t).post('/api/workspaces', {
+        name: hostile,
+        member_agent_ids: [aliceId],
+      })
+    ).json() as any;
+    expect(created.workspace.name).toBe(hostile);
+
+    const afterCreate = await (
+      await http(t).get(`/api/channels/${created.onboarding_channel_id}/messages`)
+    ).json() as any;
+    const onboarding = afterCreate.messages.find(
+      (m: any) => m.metadata?.subtype === 'onboarding',
+    );
+    // The label rides in a code span, so the only mention left in the open text
+    // is the recipient's own handle — the one this body means to address.
+    expect(extractMentions(stripCodeSpans(onboarding.content))).toEqual(['alice']);
+    expect(stripCodeSpans(onboarding.content)).not.toContain('#general');
+    expect(stripCodeSpans(onboarding.content)).not.toContain('**bold**');
+    // Sigil placement: `#` belongs to channels, so the label is never prefixed.
+    expect(onboarding.content).not.toContain(`#${hostile}`);
+
+    const renamed = '#general @alice';
+    expect(
+      (await http(t).patch(`/api/workspaces/${created.workspace.id}`, { name: renamed }))
+        .status,
+    ).toBe(200);
+    const afterRename = await (
+      await http(t).get(`/api/channels/${created.onboarding_channel_id}/messages`)
+    ).json() as any;
+    const rename = afterRename.messages.find(
+      (m: any) => m.metadata?.subtype === 'rename',
+    );
+    // Both the old and the new label are quoted, so the announcement carries no
+    // mention and no reference at all.
+    expect(extractMentions(stripCodeSpans(rename.content))).toEqual([]);
+    expect(stripCodeSpans(rename.content)).not.toContain('#general');
+    // The structured metadata the renderer draws stays the raw label.
+    expect(rename.metadata.old_name).toBe(hostile);
+    expect(rename.metadata.new_name).toBe(renamed);
   });
 
   it('stars and unstars regular workspaces (per-viewer sort state)', async () => {

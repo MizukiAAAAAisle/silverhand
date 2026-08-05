@@ -1,4 +1,4 @@
-import { extractMentions, systemSubtype } from '@silverhand/shared';
+import { extractMentions, inlineCode, systemSubtype } from '@silverhand/shared';
 import type { Database as Db } from 'better-sqlite3';
 import type {
   ConversationDto,
@@ -366,8 +366,13 @@ function renderMentionWrap(agent: { name: string }, opts: MentionCcOpts): string
   // the "system-triggered" disclaimer are NOT spelled out here; the
   // platform prompt covers send_message mechanics and the from_kind=system
   // framing, and surfacing them again leaks impl into the chat UI.
+  // Both interpolated values are free text: the workspace name is a label
+  // (#task:1827, no `#` sigil — that spells a channel reference) and a channel
+  // title has always been freeform. Since this body reaches the agent verbatim
+  // on stdin, each goes in a code span so a name like `@alice` cannot read as a
+  // mention, and one containing backticks cannot fabricate Markdown structure.
   return [
-    `The user @-mentioned you (@${agent.name}) in #${opts.sourceWorkspace.name} · ${opts.sourceConversation.title}.`,
+    `The user @-mentioned you (@${agent.name}) in ${inlineCode(opts.sourceWorkspace.name)} · ${inlineCode(opts.sourceConversation.title)}.`,
     `You're not a member of that channel — you can't see or reply there directly.`,
     ``,
     `Original message:`,

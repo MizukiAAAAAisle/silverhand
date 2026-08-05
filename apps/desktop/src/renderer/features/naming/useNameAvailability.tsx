@@ -3,8 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import {
   apiPaths,
   ENTITY_NAME_MAX_LENGTH,
-  EntityNameSchema,
   ParticipantNameSchema,
+  WorkspaceNameSchema,
   type NameAvailabilityDto,
 } from '@silverhand/shared';
 import { api } from '@/lib/api';
@@ -17,7 +17,7 @@ import { api } from '@/lib/api';
  *
  * Two axes, kept separate on purpose (mirrors the backend split):
  *   - FORMAT is client-side and synchronous, via the SHARED
- *     {@link ParticipantNameSchema} or {@link EntityNameSchema} (never a
+ *     {@link ParticipantNameSchema} or {@link WorkspaceNameSchema} (never a
  *     second regex).
  *   - UNIQUENESS is server-only, via the matching name-availability probe
  *     endpoint, which shares ONE predicate with the create path — so the form
@@ -49,16 +49,21 @@ const NAME_RULE = {
     },
   },
   workspace: {
-    schema: EntityNameSchema,
+    schema: WorkspaceNameSchema,
     message: {
-      charset: 'Letters, numbers, - and _ only',
+      // A workspace name is a label, so almost everything is legal and the
+      // only reachable non-length rejection is a code point the field cannot
+      // render — pasted zero-width joiners, BOM, bidi overrides. Naming the
+      // invisible cause is the whole value of this line; "invalid name" would
+      // leave the user staring at text that looks correct.
+      charset: 'No control or invisible characters',
       length: `Up to ${ENTITY_NAME_MAX_LENGTH} characters`,
     },
   },
 } satisfies Record<
   NameCheckKind,
   {
-    schema: typeof ParticipantNameSchema | typeof EntityNameSchema;
+    schema: typeof ParticipantNameSchema | typeof WorkspaceNameSchema;
     message: Record<FormatIssue, string>;
   }
 >;
@@ -87,6 +92,29 @@ export function nameFormatIssue(
   return parsed.error.issues.some(issue => issue.code === 'too_big')
     ? 'length'
     : 'charset';
+}
+
+/**
+ * FORMAT message for a trimmed name, or `null` when the format is acceptable.
+ *
+ * The RENAME seam (#task:1827). Rename is not a create form — it has no
+ * availability probe and no armed/touched state — but its format rule must be
+ * the same one, and so must the words: a workspace that create admits with a
+ * Chinese label cannot be a workspace the rename field refuses. This exists so
+ * rename consumes the shared schema through the shared copy instead of keeping
+ * a second local regex (it kept `/^[a-zA-Z0-9_-]+$/` and the copy "Only
+ * letters, digits, - and _ are allowed" — a rule create never had).
+ *
+ * Empty stays `null` here, matching {@link nameFormatIssue}: "say nothing about
+ * an empty field" is a format verdict, and each consumer owns its own required
+ * -field message.
+ */
+export function nameFormatMessage(
+  kind: NameCheckKind,
+  name: string,
+): string | null {
+  const issue = nameFormatIssue(kind, name);
+  return issue ? NAME_RULE[kind].message[issue] : null;
 }
 
 /** Pure presentation core — no React, no fetching. Maps the resolved facts to

@@ -140,7 +140,7 @@ const systemMessageRenderers: Record<SystemSubtype, SystemMessageRenderer> = {
   // P2 (PR-6): minor polish (badge, icon).
   // P2 (PR-6): minor polish — onboarding gets an explicit badge in
   // its collapsible header; rename reads `{old_name, new_name}` and
-  // draws a compact `↻ #old → #new` audit row (legacy rows without
+  // draws a compact `✎ old → new` audit row (legacy rows without
   // metadata fall through to generic italic narration).
   onboarding: OnboardingRow,
   rename: RenameRow,

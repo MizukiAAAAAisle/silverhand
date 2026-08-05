@@ -1,4 +1,4 @@
-import { type AgentDto, systemSubtype } from '@silverhand/shared';
+import { type AgentDto, inlineCode, systemSubtype } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { UserPrincipal } from '../auth/principal.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
@@ -210,7 +210,11 @@ function onboardingBody(
   others: AgentDto[],
 ): string {
   return [
-    `You (@${recipient.name}) just joined workspace #${workspaceName}.`,
+    // The workspace name is a free-text label (#task:1827) and this body goes
+    // to an agent verbatim on stdin: no `#` sigil (it would spell a channel
+    // reference), and a code span so a label like `@alice` or `` `x` `` cannot
+    // read as a mention or fabricate Markdown structure.
+    `You (@${recipient.name}) just joined workspace ${inlineCode(workspaceName)}.`,
     others.length === 0
       ? `You're the only agent here right now.`
       : `Other agents in this workspace:\n${others.map(m => `- @${m.name} (${m.runtime})`).join('\n')}`,

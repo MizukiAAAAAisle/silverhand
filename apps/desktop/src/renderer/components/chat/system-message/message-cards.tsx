@@ -43,7 +43,9 @@ export function MentionCcCard({
   humansByName,
 }: RendererProps): JSX.Element {
   const meta = (message.metadata ?? {}) as Record<string, unknown>;
-  const channelName =
+  // WORKSPACE name, despite the metadata key's neighbours: a free-text label
+  // (#task:1827) that is not `#`-addressable, so it renders bare below.
+  const workspaceName =
     typeof meta['source_workspace_name'] === 'string'
       ? (meta['source_workspace_name'] as string)
       : null;
@@ -113,10 +115,10 @@ export function MentionCcCard({
   const handleOpenSource = canJumpSource
     ? () => onOpenConversationRef!(sourceConversationId!)
     : null;
-  const sourceLocationLabel = channelName
+  const sourceLocationLabel = workspaceName
     ? conversationTitle
-      ? `#${channelName} · ${conversationTitle}`
-      : `#${channelName}`
+      ? `${workspaceName} · ${conversationTitle}`
+      : workspaceName
     : conversationTitle ?? null;
 
   return (
@@ -351,16 +353,15 @@ export function RenameRow(props: RendererProps): JSX.Element {
   if (!meta) {
     return <GenericNarrationFallback {...props} />;
   }
-  // `scope` splits a workspace rename (broadcast to every channel) from a
-  // single channel rename (#task:1108/1109). Channel titles are freeform
-  // (spaces / CJK), so the `#` name sigil is dropped for them; workspace
-  // names stay `#`-prefixed since they're name-addressable. Legacy rows
-  // lack `scope` → schema default 'workspace' preserves the original
-  // rendering. The names render as plain inline text (old = muted, new =
-  // emphasised) — the earlier `<code>` chips read as visual noise in the
-  // stream (@shiki feedback msg `otnb0ykIuDaNTtoC`).
+  // Both scopes render the bare name. Channel titles were always freeform, and
+  // a workspace name is a freeform label too (#task:1827) — it is not
+  // `#`-addressable, so prefixing it would spell a channel reference that
+  // resolves to nothing. The names render as plain inline text (old = muted,
+  // new = emphasised) — the earlier `<code>` chips read as visual noise in the
+  // stream (@shiki feedback msg `otnb0ykIuDaNTtoC`). `scope` still splits the
+  // verb: a workspace rename broadcasts to every channel, a channel rename
+  // does not (#task:1108/1109); legacy rows lack it and default to 'workspace'.
   const isConversation = meta.scope === 'conversation';
-  const namePrefix = isConversation ? '' : '#';
   return (
     <div
       data-rename-row="1"
@@ -368,15 +369,9 @@ export function RenameRow(props: RendererProps): JSX.Element {
     >
       <Pencil aria-hidden className="size-3.5 shrink-0 opacity-60" />
       <span>{isConversation ? 'channel renamed' : 'workspace renamed'}</span>
-      <span className="text-text-secondary">
-        {namePrefix}
-        {meta.old_name}
-      </span>
+      <span className="text-text-secondary">{meta.old_name}</span>
       <span aria-hidden>→</span>
-      <span className="font-medium text-text-primary">
-        {namePrefix}
-        {meta.new_name}
-      </span>
+      <span className="font-medium text-text-primary">{meta.new_name}</span>
     </div>
   );
 }

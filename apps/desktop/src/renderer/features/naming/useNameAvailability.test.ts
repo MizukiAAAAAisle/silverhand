@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nameAvailabilityView, nameFormatIssue } from './useNameAvailability';
+import { nameAvailabilityView, nameFormatIssue, nameFormatMessage } from './useNameAvailability';
 
 const base = {
   kind: 'agent',
@@ -24,15 +24,48 @@ describe('nameFormatIssue', () => {
 
   it('reports charset for illegal characters in either current schema', () => {
     expect(nameFormatIssue('agent', 'bad name!')).toBe('charset');
-    expect(nameFormatIssue('workspace', '空格 name')).toBe('charset');
+    // A workspace name is a label (#task:1827): Chinese and internal spaces are
+    // legal, so its reachable charset rejection is an invisible code point —
+    // here a zero-width space, which the field renders as nothing.
+    expect(nameFormatIssue('workspace', '空格 name')).toBeNull();
+    expect(nameFormatIssue('workspace', '空格\u200Bname')).toBe('charset');
   });
 
   it('reports length before charset for an over-long name', () => {
     expect(nameFormatIssue('agent', 'a'.repeat(65))).toBe('length');
+    // 65 astral characters are 130 UTF-16 units; the workspace limit counts
+    // code points, so this must read as length — not charset.
+    expect(nameFormatIssue('workspace', '𠮷'.repeat(65))).toBe('length');
+    expect(nameFormatIssue('workspace', '𠮷'.repeat(64))).toBeNull();
   });
 
   it('says nothing for an empty field (idle, not invalid)', () => {
     expect(nameFormatIssue('agent', '')).toBeNull();
+  });
+});
+
+// The rename seam (#task:1827). `WorkspaceSettingsDialog.handleRename` consumes
+// `nameFormatMessage` — these three assertions are what stop a second local
+// regex from coming back and refusing a name create already accepted. No DOM
+// test: the dialog contributes only the empty-field message and the mutation.
+describe('nameFormatMessage — workspace rename', () => {
+  it('accepts a Chinese label with an internal space', () => {
+    expect(nameFormatMessage('workspace', '设计 评审')).toBeNull();
+  });
+
+  it('rejects invisible and control characters, naming the cause', () => {
+    expect(nameFormatMessage('workspace', '设计\u200B评审')).toBe(
+      'No control or invisible characters',
+    );
+    expect(nameFormatMessage('workspace', 'eng\u0007')).toBe(
+      'No control or invisible characters',
+    );
+  });
+
+  it('reports 65 astral characters as length, not charset', () => {
+    expect(nameFormatMessage('workspace', '𠮷'.repeat(65))).toBe(
+      'Up to 64 characters',
+    );
   });
 });
 

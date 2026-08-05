@@ -1,6 +1,7 @@
 import type { MemberDto } from './api/conversation.js';
 import type { RuntimeKind } from './db/schema.js';
 import { SILVERHAND_COMMAND_DOMAINS } from './cli-command-manifest.js';
+import { inlineCode } from './markdown-escape.js';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 type ToolName =
@@ -711,30 +712,6 @@ function renderSessionContext(sc: SessionContextInput, agentId: string): string 
     );
   }
   return lines.join('\n');
-}
-
-/**
- * Render a value as a single-line Markdown code span.
- *
- * Ids are server-generated and paths are daemon-resolved, so these values
- * are trusted in practice — but the Context block sits at the very top of
- * the prompt, so it gets the same defensive single-line guarantee as the
- * untrusted fields: any line-break character collapses to a space, and the
- * span delimiter is one backtick longer than the longest backtick run in
- * the value (CommonMark code-span rules), so the value can never terminate
- * the span early or fabricate a Context bullet.
- */
-function inlineCode(value: string): string {
-  const singleLine = value.replace(/[\r\n\u2028\u2029\u0085]+/g, ' ');
-  let longest = 0;
-  const re = /`+/g;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(singleLine)) !== null) {
-    if (match[0].length > longest) longest = match[0].length;
-  }
-  if (longest === 0) return `\`${singleLine}\``;
-  const delimiter = '`'.repeat(longest + 1);
-  return `${delimiter} ${singleLine} ${delimiter}`;
 }
 
 /**

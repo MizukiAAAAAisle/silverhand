@@ -89,4 +89,31 @@ describe('WorkspaceRepo', () => {
     ).toEqual({ c: 2 });
   });
 
+  // #task:1827 — the write boundary, not the caller, is what makes "every
+  // stored workspace name is NFC" true. A workspace name is display text AND a
+  // selector (`getByName`, and `--workspace <name>` on the agent task commands,
+  // whose wire schema is a bare `z.string()`), so a row written in a decomposed
+  // spelling would be permanently unaddressable by the name the user reads off
+  // the screen. Fixtures are explicit escapes: `caf\u00E9` (precomposed) vs
+  // `cafe\u0301` (e + COMBINING ACUTE ACCENT) render identically.
+  it('stores an NFD name in NFC so either spelling selects the row', () => {
+    const { db } = openTestDb();
+    const workspaces = new WorkspaceRepo(db);
+
+    const created = workspaces.insert({
+      name: 'cafe\u0301-team',
+      description: null,
+    });
+    expect(created.name).toBe('caf\u00E9-team');
+    expect(workspaces.getByName('cafe\u0301-team')?.id).toBe(created.id);
+    expect(workspaces.getByName('caf\u00E9-team')?.id).toBe(created.id);
+
+    const renamed = workspaces.updateMutableMetadata(created.id, {
+      name: 'de\u0301sign',
+    });
+    expect(renamed?.name).toBe('d\u00E9sign');
+    expect(workspaces.getByName('de\u0301sign')?.id).toBe(created.id);
+    expect(workspaces.getByName('d\u00E9sign')?.id).toBe(created.id);
+  });
+
 });

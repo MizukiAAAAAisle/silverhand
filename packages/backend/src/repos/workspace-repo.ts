@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import {
   agentHomeWorkspaceId,
+  normalizeWorkspaceName,
   type AgentDto,
   type AgentRow,
   type UserRow,
@@ -116,6 +117,10 @@ export class WorkspaceRepo {
     return row ? rowToDto(row) : null;
   }
 
+  /** Name equality is defined in NFC, not by raw bytes: `WorkspaceNameSchema`
+   *  normalizes on every write, so a lookup argument must be normalized too or
+   *  a canonically-equivalent spelling (a pasted NFD name, common on macOS)
+   *  would silently miss a row that displays identically. */
   getByName(name: string): WorkspaceDto | null {
     const row = this.db
       .prepare<[string], WorkspaceSelectRow>(
@@ -123,7 +128,7 @@ export class WorkspaceRepo {
          WHERE w.name = ?
            AND w.workspace_kind = 'regular'`,
       )
-      .get(name);
+      .get(normalizeWorkspaceName(name));
     return row ? rowToDto(row) : null;
   }
 
@@ -132,7 +137,7 @@ export class WorkspaceRepo {
    *  agent-facing task ops to resolve `--workspace <name>` without
    *  assuming uniqueness: only `regular` workspaces have a partial
    *  unique index, agent_home names mirror the agent's name and may
-   *  collide across the two kinds. */
+   *  collide across the two kinds. Compares in NFC — see `getByName`. */
   findAllByName(name: string): WorkspaceDto[] {
     return this.db
       .prepare<[string], WorkspaceSelectRow>(
@@ -142,7 +147,7 @@ export class WorkspaceRepo {
          ORDER BY CASE w.workspace_kind WHEN 'regular' THEN 0 ELSE 1 END,
                   w.created_at ASC`,
       )
-      .all(name)
+      .all(normalizeWorkspaceName(name))
       .map(rowToDto);
   }
 
@@ -216,6 +221,9 @@ export class WorkspaceRepo {
     if (params.workspaceKind && params.workspaceKind !== 'regular') {
       throw new Error('use insertAgentHome for agent_home workspaces');
     }
+    // `name` is NFC-normalized at this write boundary (see
+    // {@link updateMutableMetadata}) — "every stored name is NFC" must not rest
+    // on the caller having parsed through `WorkspaceNameSchema`.
     // relocation-v1 §7 — a regular workspace no longer carries a host binding
     // or a working directory. Its bundle resolves daemon-side to a terminal
     // deterministic agent-centric coordinate at first spawn; the row is a pure
@@ -231,7 +239,7 @@ export class WorkspaceRepo {
       )
       .run(
         id,
-        params.name,
+        normalizeWorkspaceName(params.name),
         params.description,
         now,
         now,
@@ -281,6 +289,17 @@ export class WorkspaceRepo {
     return row ? rowToDto(row) : null;
   }
 
+  /**
+   * Mutable-metadata update. `name` is normalized on the way in for the same
+   * reason {@link insert} does it: the name is a SELECTOR (`getByName` looks up
+   * `normalizeWorkspaceName(name)`), so a row stored in a non-NFC spelling is
+   * permanently unaddressable by the name the user reads off the screen. The
+   * fence lives here, at the write boundary, rather than resting on every
+   * caller having gone through `WorkspaceNameSchema` — the CLI selector path
+   * never does. Normalize, do not reject: NFC is an equivalence over spellings
+   * of the same characters, so it costs no name and FORMAT validation stays the
+   * schema's job (no full re-parse here, and no DB CHECK).
+   */
   updateMutableMetadata(
     id: string,
     fields: { name?: string; description?: string | null },
@@ -289,7 +308,7 @@ export class WorkspaceRepo {
     const values: Array<string | number | null> = [];
     if (fields.name !== undefined) {
       sets.push('name = ?');
-      values.push(fields.name);
+      values.push(normalizeWorkspaceName(fields.name));
     }
     if (fields.description !== undefined) {
       sets.push('description = ?');

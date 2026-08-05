@@ -20,11 +20,14 @@
  * The header gear is shown when at least one section is available.
  *
  * Channel titles are free-form (spaces / CJK / `/` are all valid — e.g.
- * "UI/UX 优化"), so rename validation is non-empty + maxLength only, NOT
- * the workspace `NAME_PATTERN`. `onRename` is async and may reject; the
- * rename row surfaces the rejection inline and keeps the modal open so the
- * user can retry or close. `onSetVisibility` / `onLeave` are async the same
- * way — each surfaces its own inline error and stays open on rejection.
+ * "UI/UX 优化"), so rename validation is non-empty + maxLength only. Workspace
+ * names are free-form labels too since #task:1827 — the difference is that a
+ * workspace name is also a selector, so its dialog additionally enforces
+ * `WorkspaceNameSchema` (NFC + no invisible code points). `onRename` is async
+ * and may reject; the rename row surfaces the rejection inline and keeps the
+ * modal open so the user can retry or close. `onSetVisibility` / `onLeave` are
+ * async the same way — each surfaces its own inline error and stays open on
+ * rejection.
  *
  * Visibility toggles in ONE click (reversible — toggle straight back), no
  * confirm: `Make private` / `Make public` fires the PATCH directly and closes

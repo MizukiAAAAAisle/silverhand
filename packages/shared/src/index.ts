@@ -13,6 +13,7 @@ export * from './handle.js';
 export * from './host-diagnostics.js';
 export * from './layout-migration-diagnostics.js';
 export * from './logging.js';
+export * from './markdown-escape.js';
 export * from './mcp-config.js';
 export * from './mime.js';
 export * from './opencode-config.js';

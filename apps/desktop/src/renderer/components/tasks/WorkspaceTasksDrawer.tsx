@@ -465,7 +465,10 @@ export function WorkspaceTasksDrawer({
               Tasks
               {workspaceName ? (
                 <span className="ml-2 text-sm font-normal text-text-muted">
-                  · #{workspaceName}
+                  {/* No `#`: that sigil belongs to channels. A workspace name
+                      is a free-text label (#task:1827), so prefixing it reads
+                      as a broken channel reference. */}
+                  · {workspaceName}
                 </span>
               ) : null}
             </span>

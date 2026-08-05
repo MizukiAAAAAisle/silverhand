@@ -16,6 +16,7 @@ import {
   destructiveCancel,
 } from '@/features/common/DestructiveAction';
 import { cn } from '@/lib/cn';
+import { nameFormatMessage } from '@/features/naming/useNameAvailability';
 import { AgentPermissionsPanel } from './AgentPermissionsPanel';
 import { HumanRolesPanel } from './HumanRolesPanel';
 import {
@@ -53,8 +54,6 @@ interface WorkspaceSettingsDialogProps {
   focusAgentId?: string | null;
   highlightCapability?: AgentCapability | null;
 }
-
-const NAME_PATTERN = /^[a-zA-Z0-9_\-]+$/;
 
 const NAV_ITEMS: { id: SettingsSection; label: string; icon: typeof Settings2 }[] = [
   { id: 'general', label: 'General', icon: Settings2 },
@@ -125,8 +124,14 @@ export function WorkspaceSettingsDialog({
       setRenameError('Please enter a workspace name');
       return;
     }
-    if (!NAME_PATTERN.test(trimmed)) {
-      setRenameError('Only letters, digits, - and _ are allowed');
+    // ONE format rule for both doors (#task:1827): the shared
+    // `WorkspaceNameSchema` verdict, through the same copy the create dialog
+    // shows. Rename previously kept a local `/^[a-zA-Z0-9_-]+$/`, so a
+    // workspace create had just admitted as `设计 评审` could not be renamed at
+    // all. Uniqueness stays server-only — the PATCH answers 409.
+    const formatMessage = nameFormatMessage('workspace', trimmed);
+    if (formatMessage) {
+      setRenameError(formatMessage);
       return;
     }
     if (trimmed === workspaceName) return;

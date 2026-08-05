@@ -7,7 +7,7 @@ import {
 } from '../db/schema.js';
 import { AgentDtoSchema } from './agent.js';
 import { UserDtoSchema } from './user.js';
-import { EntityNameSchema } from './name.js';
+import { WorkspaceNameSchema } from './name.js';
 
 //
 // New naming model for workspace -> channel/dm_channel/thread. The
@@ -90,7 +90,7 @@ export const UpdateAgentCapabilitiesInputSchema = z.object({
 export type UpdateAgentCapabilitiesInput = z.infer<typeof UpdateAgentCapabilitiesInputSchema>;
 
 export const CreateWorkspaceInputSchema = z.object({
-  name: EntityNameSchema,
+  name: WorkspaceNameSchema,
   description: z.string().optional(),
   member_agent_ids: z.array(z.string()).default([]),
   /** Initial human workspace members. The creator is always added
@@ -100,7 +100,7 @@ export const CreateWorkspaceInputSchema = z.object({
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 
 export const UpdateWorkspaceInputSchema = z.object({
-  name: EntityNameSchema.optional(),
+  name: WorkspaceNameSchema.optional(),
   description: z.string().nullable().optional(),
 }).refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateWorkspaceInput = z.infer<typeof UpdateWorkspaceInputSchema>;

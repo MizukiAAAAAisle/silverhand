@@ -112,10 +112,35 @@ describe('GET /api/workspaces/name-availability', () => {
     expect(await res.json()).toEqual({ available: false, reason: 'taken' });
   });
 
-  it('reports an invalid format as invalid, not taken', async () => {
+  it('keeps a Chinese workspace name valid', async () => {
     t = buildTestApp();
     const res = await http(t).get(
-      `/api/workspaces/name-availability?name=${encodeURIComponent('has space')}`,
+      `/api/workspaces/name-availability?name=${encodeURIComponent('设计评审')}`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ available: true, reason: 'available' });
+  });
+
+  it('answers the same for either Unicode spelling of one name', async () => {
+    // The probe must normalize BEFORE the uniqueness lookup, or a name pasted
+    // in NFD (what macOS often produces) reads `available` here while create
+    // stores/compares NFC and answers 409 — the advisory hint and the
+    // authoritative path would disagree on the same visible name.
+    t = buildTestApp();
+    await http(t).post('/api/workspaces', { name: 'café'.normalize('NFC') });
+    const res = await http(t).get(
+      `/api/workspaces/name-availability?name=${encodeURIComponent('café'.normalize('NFD'))}`,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ available: false, reason: 'taken' });
+  });
+
+  it('reports an invalid format as invalid, not taken', async () => {
+    t = buildTestApp();
+    // A workspace name is a label, so the reachable non-length rejection is a
+    // code point the field cannot render — here a zero-width space.
+    const res = await http(t).get(
+      `/api/workspaces/name-availability?name=${encodeURIComponent('has\u200Bspace')}`,
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ available: false, reason: 'invalid' });

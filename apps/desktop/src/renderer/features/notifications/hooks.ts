@@ -448,8 +448,11 @@ function buildToastLabel(n: NotificationDto): string {
     return `@${name} didn't start: ${error}`;
   }
   if (n.kind === 'mention_external') {
-    const channelName = n.payload?.['source_workspace_name'] as string | undefined;
-    return channelName ? `New mention in #${channelName}` : 'New mention';
+    // `source_workspace_name` is a WORKSPACE name — a free-text label
+    // (#task:1827), not `#`-addressable, so it renders bare. The `mention_self`
+    // arm below reads `conversation_title` and keeps its `#`.
+    const workspaceName = n.payload?.['source_workspace_name'] as string | undefined;
+    return workspaceName ? `New mention in ${workspaceName}` : 'New mention';
   }
   if (n.kind === 'mention_self') {
     const conversationTitle = n.payload?.['conversation_title'] as string | undefined;

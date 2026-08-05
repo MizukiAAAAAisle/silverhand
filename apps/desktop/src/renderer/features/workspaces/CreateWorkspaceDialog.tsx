@@ -70,7 +70,7 @@ export function CreateWorkspaceDialog({
       ? viewer.data.id
       : null;
   const createWorkspace = useCreateWorkspace();
-  // onBlur name validation — format (shared EntityNameSchema) + uniqueness
+  // onBlur name validation — format (shared WorkspaceNameSchema) + uniqueness
   // (regular workspaces, global; server probe). Mirrors CreateAgentDialog.
   const nameCheck = useNameAvailability('workspace', name);
 

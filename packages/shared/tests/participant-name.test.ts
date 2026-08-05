@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EntityNameSchema,
   HandleSchema,
   ParticipantNameSchema,
+  WorkspaceNameSchema,
   extractMentions,
 } from '../src/index.js';
 
@@ -12,8 +12,11 @@ describe('participant name grammar (#task:1826)', () => {
     expect(ParticipantNameSchema.safeParse('2b').success).toBe(false);
   });
 
-  it('keeps the generic workspace grammar independent', () => {
-    expect(EntityNameSchema.safeParse('2b').success).toBe(true);
+  it('keeps the workspace grammar independent', () => {
+    // The participant cut must not leak into workspace labels: a
+    // numeric-first workspace name stays legal (see workspace-name.test.ts
+    // for that grammar in full).
+    expect(WorkspaceNameSchema.safeParse('2b').success).toBe(true);
   });
 
   it('wraps the same participant grammar for command handles', () => {
