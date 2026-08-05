@@ -135,7 +135,7 @@ export function BackendUnreachableGate({
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <header className="mb-4 flex items-center gap-2">
-          <span className="grid size-7 place-items-center rounded-md border border-border-subtle bg-bg-row-hover text-status-warning">
+          <span className="grid size-7 place-items-center rounded-md border border-border-subtle bg-bg-row-hover text-warning">
             <AlertTriangle className="size-4" />
           </span>
           <h1 className="text-base font-semibold leading-tight">

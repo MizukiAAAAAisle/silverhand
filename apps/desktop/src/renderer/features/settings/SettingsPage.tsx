@@ -507,7 +507,7 @@ function AccountPane(): JSX.Element {
           </Button>
         </div>
         {error ? (
-          <p className="text-xs text-status-error" role="alert">{error}</p>
+          <p className="text-xs text-error" role="alert">{error}</p>
         ) : null}
       </div>
     </section>

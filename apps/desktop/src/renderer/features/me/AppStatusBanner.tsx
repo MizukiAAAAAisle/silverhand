@@ -50,8 +50,8 @@ function BannerShell({
       // its own click target so it never gets swallowed by window drag.
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
     >
-      <div className="flex items-center gap-3 rounded-md border border-status-warning/30 bg-bg-floating px-3 py-2 shadow-modal">
-        <span className="grid size-6 place-items-center rounded-md text-status-warning">
+      <div className="flex items-center gap-3 rounded-md border border-warning/30 bg-bg-floating px-3 py-2 shadow-modal">
+        <span className="grid size-6 place-items-center rounded-md text-warning">
           <AlertTriangle className="size-4" />
         </span>
         <div className="min-w-0">
