@@ -8,7 +8,7 @@
 >
 > **新功能 / 新 service / 新 DB 表 / 新 migration 设计前必读**：[`architecture-principles.md`](./architecture-principles.md)（Human/Agent 同构强制 checklist + 反模式）。鉴权细节见 [`auth-and-host-model.md`](./auth-and-host-model.md)（身份/资源归属）与 [`graded-permissions-v1.md`](./graded-permissions-v1.md)（分级能力）。
 >
-> **文件落位 / workspace 本地路径的终态在 [`workspace-layout-relocation-v1.md`](./workspace-layout-relocation-v1.md)**：它 supersede 了本文中一切"workspace 有本地路径 / 有 home computer / 创建时 materialize 目录"的条款（§2.4、§4.2、§4.3、§5、§8 已按终态更新）。
+> **文件落位 / workspace 本地路径的终态在 [`workspace-layout-relocation-v1.md`](./workspace-layout-relocation-v1.md)**：它 supersede 了本文中一切"workspace 有本地路径 / 有 home computer / 创建时 materialize 目录 / 每个 agent 在 workspace 里有 `.silverhand/agents/<id>/` 子目录"的条款。本文的 §2.4、§4.2、§4.3、§4.5、§4.7、§5、§8、§10 已按终态更新；仍保留旧坐标字面量的三处都带显式历史边界——§4.3 的平台 prompt fence（2026-07-18 起为历史记录）、§4.5 末尾的"历史（已退役）"块、§8 的"旧 → 新"备查表——**都不是当前操作指引**。
 
 ---
 
@@ -463,11 +463,13 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
 └─ bin/silverhand                ← 每次 spawn 的 CLI shim
 ```
 
-> **relocation-v1 §3.2/§3.3（2026-08）改掉了这张图**：不再有 `~/.silverhand/agents/`
-> 顶层权威、不再有 `~/.silverhand/workspaces/<name>/` 默认根、也不再有
-> `<workspace>/.silverhand/agents/<id>/` 这层嵌套。L2 bundle 是**按 id 确定性算出的
-> agent-centric 坐标**，因此不落在用户的项目目录里，也不需要任何 DB 列或 registry binding
-> 来定位；用户自己的代码目录与 silverhand 的 agent 数据彻底分离。
+> **上图就是 relocation-v1 §3.2/§3.3（2026-08）的终态形状**，此处只是产品视角的一张地图，
+> **坐标本身的权威是 relocation-v1 §3.2（及代码里唯一的 resolver）——两者若有出入以它为准**。
+> 历史上被它替换掉的三种旧坐标都已不存在：`~/.silverhand/agents/` 顶层权威、
+> `~/.silverhand/workspaces/<name>/` 默认根、以及 `<workspace>/.silverhand/agents/<id>/`
+> 这层 workspace 内嵌套。L2 bundle 是**按 id 确定性算出的 agent-centric 坐标**，因此不落在
+> 用户的项目目录里，也不需要任何 DB 列或 registry binding 来定位；用户自己的代码目录与
+> silverhand 的 agent 数据彻底分离。
 
 **为什么 L2 bundle 下没有 `channels/` 目录**：channel 的 system-prompt + shim 是每次 spawn 临时合成的、只在 runtime 生命周期内有用，可以从 typed `runtime_start.options` + daemon-local L1/L2 文件重算。写进用户目录会污染它（git status 看到、文件浏览器看到）、channel 多了会堆积成一大堆无关内容。改放 OS tmp，spawn 前写、进程退出清，出错残留也由 OS 定期清理。**真正持久化的是 SQLite 里的 conversations / messages 行**——文件系统只负责跑起来。
 
@@ -517,13 +519,20 @@ talk to you to refine your role for *this* workspace — e.g. "claude, in this
 workspace focus on architecture review only" / "codex, your job here is to
 write tests".
 
-When the user gives durable workspace guidance, update your own
-`./.silverhand/agents/<your-id>/MEMORY.md` or notes. Global identity /
+When the user gives durable workspace guidance, update this workspace's own
+L2 MEMORY.md / notes (auto-loaded for you; no path needed). Global identity /
 role changes belong in your L1 `system_prompt.md`.
 
 There is no "onboarding done" signal — when the user starts asking you to
 work, just start working.
 ```
+
+> **模板是意图规格，不是逐字文案**：实际下发的 body 由
+> `onboardingBody()`（`packages/backend/src/application/create-workspace.ts`）
+> 生成，并且**刻意不含任何路径字面量**——种子文本里的坐标会变成第二份 path
+> authority，agent 会照字面去 Write（relocation-v1 §3.3 的单一 resolver 要求）。
+> 因此本节只约束"说什么"（欢迎、成员当前设定、可以改角色、按 scope 分 L1/L2、
+> 没有完成信号），措辞与格式以该 producer 为准。
 
 #### 流程要点
 
@@ -542,16 +551,22 @@ work, just start working.
 
 DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 
-### 4.5 .silverhand/ 目录约定
+### 4.5 L2 目录约定
 
-```
-<workspace>/.silverhand/
-└─ agents/<id>/             ← L2（DM 中此层不存在，cwd 就是 L1）
-   ├─ MEMORY.md
-   └─ notes/
-```
+**没有独立的 L2 目录约定**：L2 就是 §4.2 图里那个 agent-centric bundle
+（`workspaces/<workspace-id>/` 下的 `MEMORY.md` + `notes/`），坐标权威同样是
+relocation-v1 §3.2。这里只补三条读法：
 
-> channel 级的临时文件（每次 spawn 合成的 system-prompt + CLI shim）放 `<os.tmpdir()>/silverhand/<spawn-id>/`，见 §4.2。不进 workspace。
+- 因为 bundle 根就是 cwd，prompt 里给 agent 的 L2 坐标永远是 `.`（`./MEMORY.md`、`./notes/`）。
+- DM 没有这一层：cwd 直接是 L1 home，读写都落 L1。
+- 用户的项目目录里**不再有** silverhand 的任何 agent 目录。
+
+> **历史（已退役，勿作当前指引）**：relocation-v1 之前，L2 曾放在 workspace 目录内的
+> `<workspace>/.silverhand/agents/<id>/{MEMORY.md,notes/}`。该形状连同"workspace 有本地路径"
+> 一起被 `workspace-layout-relocation-v1.md` §3.2 取代，迁移口径见其 §5；现存磁盘上的旧目录
+> 只由那次一次性迁移读取。
+
+> channel 级的临时文件（每次 spawn 合成的 system-prompt + CLI shim）放 `<os.tmpdir()>/silverhand/<spawn-id>/`，见 §4.2。不进 workspace，也不进 L2 bundle。
 
 ### 4.6 不引入 memory MCP 工具
 
@@ -562,8 +577,9 @@ DM 不参与同步——DM 直接操作 L1（cwd = global home）。
 ### 4.7 System prompt 合成机制
 
 每次 daemon-host 处理 `runtime_start` 时，使用 server 传来的 typed
-metadata（`agent.home_dir`、`workspace.path`、session/members/driver/env
-policy）在本机读取 L1/L2，并把最终 system prompt 写到
+metadata（**只有语义 ref**：`agent {id,name}`、`workspace {id,name,kind}`、
+`workspace_memory_index[]`、session/members/driver/env policy——**没有任何路径
+字段**）在本机把坐标算出来、读取 L1/L2，并把最终 system prompt 写到
 per-spawn tmp 目录的 `system-prompt.md`。Server 不读取、不缓存、不传输
 `system_prompt.md` / `MEMORY.md` bytes，也不准备 spawn
 目录、cwd 或 child env。合成逻辑：
@@ -571,11 +587,11 @@ per-spawn tmp 目录的 `system-prompt.md`。Server 不读取、不缓存、不�
 ```
 [平台层 prompt — silverhand 注入的协作教育，包含 Critical rules / Startup sequence / Compaction safety / Etiquette]
   ↓
-[Initial role — L1 `<agent.home_dir>/system_prompt.md`，daemon 本机读取]
+[Initial role — L1 `<agent L1 home>/system_prompt.md`，路径由 agent_id 在本机推导，daemon 读取]
   ↓
-[Active Workspace Memory — L2 `<workspace.path>/.silverhand/agents/<id>/MEMORY.md`，16KB cap]
+[Active Workspace Memory — L2 `./MEMORY.md`（bundle 根即 cwd），16KB cap]
   ↓
-[Session 上下文 — workspace name、thread parent、conversation members、memory index 路径]
+[Session 上下文 — workspace name、thread parent、conversation members、memory index（本机推导的绝对 `MEMORY.md` 路径，**含 current 条目**——`.` 只是上面两个块的坐标；本机无 L2 的条目不给路径）]
 ```
 
 Initial inbox 不拼进 system prompt；spawn-time 未投递消息通过
@@ -590,6 +606,13 @@ Initial inbox 不拼进 system prompt；spawn-time 未投递消息通过
 > 尤其 MEMORY.md 现在是精简的 recovery index / knowledge router，详细
 > domain knowledge 通过 notes/docs 渐进式披露；不要照抄下方
 > “self-sufficient knowledge body” 或手动启动读取的旧措辞。
+>
+> **同样作废：下方 fence 内出现的 `./.silverhand/agents/<your-id>/` 路径**——
+> 文件落位以 [`workspace-layout-relocation-v1.md`](./workspace-layout-relocation-v1.md)
+> §3.2 为准：当前 workspace 的 L2 就是 cwd，prompt 里写作 `.`。平台 prompt 里出现的
+> 路径（L1 `system_prompt.md`、其他 workspace 的 memory index）一律是 daemon
+> 当场按 id 推导后渲染的，模板里**不写死任何坐标字面量**。下方保留原文只为记录
+> 当时的设计意图，勿据此实现或复制。
 
 > 要点：slock 的 system prompt 不是"几条提醒"，而是一份完整的**操作手册**——明示了 agent 必须遵守的关键规则、启动后必须执行的步骤、压缩安全策略、协作礼仪、记忆管理结构。我们要把同等覆盖度的内容塞进平台 prompt，不能只丢一句"互相礼貌点"。
 
@@ -786,7 +809,7 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 | 旧 | 新 | 改的原因 |
 |----|----|---------|
 | 1 workspace = N 1v1 channel | 1 workspace = N 多-agent channel | 多 agent 协作是产品核心，不能让 channel 退化成 1v1 |
-| Workspace.workspace_path optional | NOT NULL（后端自动生成兜底）| Agent CLI 必须有 cwd |
+| Workspace.workspace_path optional | NOT NULL（后端自动生成兜底）—— **此行的"新"已被下一行再次取代，该列整体退役** | Agent CLI 必须有 cwd（该前提现在由 daemon 本机推导的 bundle 坐标满足，不再需要 DB 列） |
 | `workspace_path` / `workspace_host_id` 两列 + 创建时 materialize 目录 | 两列与对应 create 输入全部退役；L2 bundle = `<agent home>/workspaces/<workspace_id>` 确定性坐标，首次 spawn 懒 seed；session cwd 是唯一强 ensure 的运行基础 | 一列同时背 create 输入 / daemon binding cache / 用户可见展示 path 三个契约，且把 workspace 钉在一台机器上；拆开安置后 workspace 回归纯 control-plane 记录（`workspace-layout-relocation-v1.md` §6/§7，2026-08，随 plan-A epoch 2 原子一刀） |
 | Agent 绑 workspace | Agent 不绑 workspace | Agent 是身份不是任务，workspace 跟 workspace 走 |
 | Project + per-host workspace binding | 砍掉 Project 这层 | 跨机器文件协作非目标，过度设计 |
@@ -843,10 +866,11 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 ### Settings 菜单（UI）
 
-- ChannelsSidebar 顶部 header：workspace name + workspace path 副标题（已实现），右侧加一个齿轮 icon。点击弹出 dropdown：
+- ChannelsSidebar 顶部 header：workspace name（**没有 path 副标题**——workspace 不再有本地路径，
+  relocation-v1 §3.5 裁定删掉所有 workspace-local-path 展示面且不给替代入口），右侧加一个齿轮 icon。点击弹出 dropdown：
   - Rename workspace… → 输入框 dialog → `PATCH /api/workspaces/:id`
   - Archive → 确认 dialog → `POST /api/workspaces/:id/archive`
-  - Delete → 二次确认 dialog（"This will permanently delete the workspace; workspace files at `<path>` are kept on disk."）→ `DELETE /api/workspaces/:id`
+  - Delete → 二次确认 dialog（只说明删的是 workspace 本身；**文案里不得出现任何路径**。今天 workspace 删除是纯控制面 + attachment blob 的删除，不下发任何 host-local 清理，agent 的 L2 bundle 留在各自机器上）→ `DELETE /api/workspaces/:id`
 - 三项都仅对 `kind=workspace` 显示。DM workspace 随 agent 生命周期管理，不暴露这些操作。
 
 ### 暂不做的原因

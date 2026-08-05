@@ -18,11 +18,22 @@ import type { AgentWorkspaceFsErrorCode } from '../../protocol.js';
  *    just an ordinary filesystem absence here — relocation-v1 §7 task 4
  *    removed the registry establishment gate, so there is no
  *    `workspace_not_provisioned` refusal in this taxonomy anymore.
- *  - `registry_unavailable` — the daemon has no attached computer yet
- *    (the machine has not bound to a server) so its agents root is
- *    unavailable; despite the legacy code name this is NOT a
- *    workspace-registry consult. Maps to HTTP 503 (retriable once
- *    attached).
+ *  - `registry_unavailable` — the daemon could not resolve an AGENTS
+ *    ROOT for these two intents (`agentsRootFor` in `daemon/run.ts`),
+ *    so there is no base dir to resolve anything under. Two members:
+ *    the pre-registration window in slot mode (a `computersRootDir` is
+ *    configured, no computer slot registered yet), and a bare daemon
+ *    with neither a slot root nor an explicit root — that one can hold
+ *    an accepted binding and still have no durable coordinate, and
+ *    since #task:1813 it no longer falls back to a home-relative
+ *    default. So binding/attach state is NOT the predicate and
+ *    attaching is not the recovery for the second half: recovery is a
+ *    root (a registered computer slot, or explicit configuration).
+ *    Despite the legacy code name this is NOT a workspace-registry
+ *    consult (relocation-v1 §3.4 left the registry a migration-only
+ *    reader). Note the scope: an unsafe `workspace_id` segment is
+ *    `forbidden_path` in THIS taxonomy (`source.ts`), unlike
+ *    `runtime_start` where it shares this code. Maps to HTTP 503.
  *  - `fs_unavailable` — host-local fs read failed HARD (perm/IO/EROFS
  *    etc). Maps to HTTP 503.
  *  - `internal_error` — anything else; collapses to HTTP 500.

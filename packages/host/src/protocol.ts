@@ -1702,20 +1702,26 @@ export const AgentMaterializeResultSchema = z
      */
     agent_dir: z.string().min(1),
     /**
-     * MUST equal `agent_dir`. Per `docs/agent-system-prompt-memory.md`
-     * and CLAUDE.md §3, the DM workspace path coincides with L1
-     * (`agent_home` workspace's `workspace_path` IS the agent's L1
-     * dir). The daemon returns the same string for both fields to
-     * make this invariant explicit on the wire — the server uses
-     * `agent_home_workspace_path` verbatim when it INSERTs the
-     * `agent_home` workspace row (see design §6.5).
+     * MUST equal `agent_dir`. The agent-home (DM) workspace's local
+     * realization IS the agent's L1 dir — an agent-home id resolves to
+     * that dir itself rather than to a nested `workspaces/<id>/` bundle
+     * (`docs/agent-system-prompt-memory.md`,
+     * `workspace-layout-relocation-v1.md` §3.2) — so the daemon returns
+     * the same string for both fields to make the coincidence explicit
+     * on the wire.
+     *
+     * The server does NOT store either string: relocation-v1 §3.4
+     * retired the `workspaces.workspace_path` column, so there is no row
+     * for a path to land in. The one backend use is the §6.5 equality
+     * cross-check in `create-agent.ts` — on mismatch it flips the agent
+     * to `failed` (`daemon_internal_error`) and logs both strings as
+     * diagnostics; neither is persisted, parsed, or joined onto.
      *
      * Cindy D2 P1-2: the equality is enforced by the schema's
-     * `superRefine` below, NOT just by convention. A handler that
-     * drifts (or a future stub that diverges the two strings)
-     * would otherwise let a wrong workspace path land in the
-     * server's L3a `workspace` row — the kind of silent
-     * corruption a schema constraint is supposed to catch.
+     * `superRefine` below, NOT just by convention. With no column left
+     * to corrupt, what the constraint still catches is a handler (or a
+     * future stub) that has silently split the two coordinates apart —
+     * the wire is the only place that split is observable at all.
      */
     agent_home_workspace_path: z.string().min(1),
     /**

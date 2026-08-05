@@ -2,11 +2,28 @@
  * Agent-home (DM) workspace id convention — the single source of truth.
  *
  * An agent's "home" workspace (its DM workspace) has a deterministic id
- * derived from the agent id: `wsah_<agent_id>`. This coincidence is
- * load-bearing across the system: the DM workspace's `workspace_path` IS
- * the agent's L1 dir (`docs/agent-system-prompt-memory.md`, CLAUDE.md §3),
- * and `agent_materialize` returns that path as both `agent_dir` and
- * `agent_home_workspace_path` (§6.5 invariant).
+ * derived from the agent id: `wsah_<agent_id>`. Two layers, with very
+ * different breadth:
+ *
+ * - **The ID CONVENTION is load-bearing broadly.** It MINTS the row id
+ *   (`workspace-repo.insertAgentHome`), rides the wire and the API
+ *   (`agent_materialize`'s `agent_home_workspace_id`, `create-agent`'s
+ *   payload), and is how every consumer RECOGNIZES an agent-home id
+ *   structurally, without a `kind` or a path from the backend —
+ *   `agent_workspace_index`, `agent_l2_seed`, the agent-fs source
+ *   resolver, and `runtime_start` ref resolution (which also uses it to
+ *   refuse a FOREIGN agent's home ref fail-closed).
+ * - **Its FILESYSTEM CONSEQUENCE is the singular part.** Once an id is
+ *   recognized as the owning agent's own home, coordinate resolution
+ *   lands on the agent's L1 dir itself rather than on a nested
+ *   `workspaces/<id>/` L2 bundle (`resolveAgentWorkspaceBaseDir`,
+ *   `workspace-layout-relocation-v1.md` §3.2) — and `agent_materialize`
+ *   returns that one dir as both `agent_dir` and
+ *   `agent_home_workspace_path` (§6.5 invariant).
+ *
+ * That consequence is NOT a stored fact: relocation-v1 §3.4 retired the
+ * `workspaces.workspace_path` column, so no workspace row carries the L1
+ * dir and nothing server-side derives a path from this id.
  *
  * D4.e-1 (Cindy rev2 guard #2): the daemon's `agent_workspace_index`
  * handler must decide whether a `workspace_id` is a given agent's home

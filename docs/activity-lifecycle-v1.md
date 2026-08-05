@@ -341,4 +341,5 @@ Cindy 的 5 条硬标准 = 本 doc 的逐条验收:
 - 统一语言 / 领域模型:`docs/core-design.md`。
 - 应用层三层 + Effect 三分类:`docs/use-case-layer-p0-spec.md`。
 - 底座 per-stream cursor + 未读读模型:`docs/thread-unread-v1.md`(`#1226`)。
-- 设计讨论流水 / 历史决策:`.silverhand/agents/Z18wRZX6Uhsoa2tw/notes/inbox-design.md`。
+- 可交付的现行合同以本文正文与 git history 为准；不再把某个 agent 的
+  宿主机本地 note 路径当作可移植的文档链接或路径权威。
