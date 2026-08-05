@@ -75,10 +75,13 @@ export class UserAuthService {
     | { ok: false; code: 'handle_taken' }
   > {
     const email = normalizeLoginEmail(input.email);
-    // Cost floor first, before any branch: every signup POST pays one Argon2id
-    // hash whatever the outcome, so neither answer below is a cheap probe. This
-    // replaces the former dummy-verify on the existing-email path — the work is
-    // now unconditional instead of per-branch.
+    // Cost floor first, before any branch: every attempt that gets HERE — signup
+    // enabled, body already through the request schema — pays one Argon2id hash
+    // whatever the outcome, so neither answer below is a cheap probe. Earlier
+    // route-level exits (`signup_disabled`, `invalid input`) do not hash and read
+    // no identity state, so they are not part of this floor. This replaces the
+    // former dummy-verify on the existing-email path — the work is now
+    // unconditional instead of per-branch.
     const credential = await this.passwordCredentials.hashPasswordCredential(
       input.password,
     );

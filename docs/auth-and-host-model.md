@@ -356,8 +356,14 @@ The rule is **uniformity within the same route**, not "always 401":
   handle verdict is decided first and depends ONLY on the handle, so a taken
   handle answers the identical 409 whether or not the email is registered. The
   reverse order would turn the 401/409 pair into an email-existence oracle for
-  anyone holding one known-taken handle. Every signup POST also pays one Argon2id
-  hash before either check, so no answer is cheaper than another. Accepted
+  anyone holding one known-taken handle. The same priority holds on the DB-conflict
+  path: a UNIQUE/trigger failure proves the pre-check read was stale, so the
+  handle is re-read and answered first rather than reporting whichever constraint
+  SQLite happened to hit. Every signup attempt that REACHES identity resolution —
+  i.e. signup is enabled and the body passed the request schema — pays exactly one
+  Argon2id hash before either lookup, so neither answer is cheaper than the other.
+  (Earlier exits, `signup_disabled` and `invalid input`, do not hash; they reveal
+  configuration or request shape and read no identity state at all.) Accepted
   residual cost, stated rather than hidden: while signup is enabled an
   unauthenticated caller can probe whether a given handle exists, one full POST
   at a time. The *cheap* oracle is what stays closed — there is no public,
