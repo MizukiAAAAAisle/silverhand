@@ -891,17 +891,13 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    slider value and does NOT double-apply the way an `em` chained onto the
    already-scaled `.markdown-body` would).
 
-   This rule is the family's ONLY size — offset 2px, i.e. 12px at the 14px
-   default, in prose and in the system-message chrome alike (activity clusters /
+   This rule is the family's DEFAULT / lighter size — offset 2px, i.e. 12px at
+   the 14px default. It governs the system-message chrome (activity clusters /
    `.system-message-row`), which shiki wants kept lighter than running text
-   (2026-08-01 "system message 更 light,需要保持 12"). Prose chips were briefly
-   raised to full body size (offset 0px) on 2026-08-01 "正文其他文字是 14,有保持
-   一致的需求"; that override is gone again per shiki 2026-08-06「conversation 中的
-   channel chip font size 从 14 改到 12」 — the same call as 2026-07-21 ("channel
-   chip 字体从 14 换成 12,和 task chip 一致"), whose rationale is why the whole
-   family moved together rather than the channel chip alone: a chip reading a
-   notch off its siblings in the same sentence is the defect that ruling names.
-   One offset, one knob — change it here and every reference chip follows.
+   (2026-08-01 "system message 更 light,需要保持 12"), and in prose it governs
+   every chip that reads as a BOX. Only the one in-prose form that reads as
+   running text overrides it up to full body size — see the next rule for the
+   criterion, which is form, not entity kind.
 
    line-height is intentionally NOT set — the chip inherits `.markdown-body`'s
    line-height, matching inline code so the reference chips share one line
@@ -935,6 +931,36 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 .markdown-body [data-channel-ref-state],
 .markdown-body [data-conversation-ref] {
   align-items: baseline;
+}
+
+/* SIZE IN PROSE IS DECIDED BY FORM, NOT BY ENTITY KIND (shiki 2026-08-06:
+   「在 forza6 中,task 是 underline,因此字体和正文是混合的,需要一样大,而
+   channel 是带有一个 chip 的,有明显的 background,内部也是 14px 会看起来很大,
+   明显比正文高」).
+
+   Two forms exist in prose:
+   - Running text — a resolved `#task:<n>` is a borderless accent link in every
+     theme (no fill, no padding; see the `[data-task-ref-state='resolved']`
+     rules below and forza6's prose override). It is mixed INTO the sentence, so
+     it takes the sentence's size: offset 0px → 14px at the default.
+   - A box — anything with a fill + horizontal padding (`#name` / `#conv:<id>`
+     pills, and the degraded task-ref states `static` / `loading` / `missing` /
+     `no-context` / `resolved-no-handler`, which all carry `bg-bg-elevated
+     px-1.5`). Fill + padding make the box taller than the line it sits in, so
+     14px inside it reads oversized against the prose; it stays on the family
+     base one notch down (12px). This is why the selector below is state-scoped
+     rather than `[data-task-ref]` — a task ref that renders AS a chip is sized
+     as a chip.
+
+   Do NOT hardcode 14px: the calc subtracts from the Appearance token, so the
+   chip still tracks the font-size slider; the 0px offset is the prose knob.
+   Earlier rounds moved the whole family together (12px per #1192 / #1721; the
+   2026-07-30 full-prose experiment reverted in #1758; both at 14px on
+   2026-08-01 "正文其他文字是 14,有保持一致的需求") — the form criterion above
+   supersedes that read of "一致": consistency is with the surrounding text for
+   text-form refs and with the other chips for box-form refs. */
+.markdown-body [data-task-ref][data-task-ref-state='resolved'] {
+  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 0px);
 }
 
 /* Resolved task-ref = borderless accent link, shared across every theme
