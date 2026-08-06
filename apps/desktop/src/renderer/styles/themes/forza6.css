@@ -382,9 +382,11 @@
 
   /* ── Own-message bubble radius (#task:1838) ──
      Same poster reasoning as `--row-radius` above: the message row it sits
-     in is hard-cut, so the default `--card-radius` would make this the only
-     rounded corner in the read column. Fill stays the shared ink wash
-     declared in global.css. */
+     in is hard-cut, so a rounded bubble would be the only soft corner in
+     the read column. This block is also the root layer, so the value has to
+     be stated in the other two theme files too (they take
+     `var(--card-radius)`) — it does not fall back. Fill stays the shared
+     ink wash declared in global.css. */
   --message-bubble-radius: 0;
 
   /* ── Control border width (#task:555 release-testing 2) ──

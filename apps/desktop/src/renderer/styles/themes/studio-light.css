@@ -211,6 +211,12 @@
      default-theme block 漏 0 过来（design-new-theme §3.1 关键 3）。 */
   --profile-section-radius: var(--card-radius);
 
+  /* ── Own-message bubble radius (#task:1838) ──
+     同 `--profile-section-radius`：必须显式定义，否则会从 default-theme
+     block 漏 forza6 的 hard-cut 0 过来（shiki 实机报「其他主题也是直角」）。
+     填充是 global.css 的共享墨洗，只有形状按主题分。 */
+  --message-bubble-radius: var(--card-radius);
+
   /* ── Control + chip radius (§3.7.2 / §3.7.3) ──
      control（input / textarea / button / select trigger / icon button）
      6px；chip（inline reference / mention / filter chip）4px。字面值而非

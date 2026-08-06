@@ -1395,21 +1395,25 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    avatar ground — the bubble is a GROUND for text, not a shape standing in
    for a person.
 
-   Radius follows `--card-radius` by default; forza6 overrides it to 0 in
-   its own file, where rows and controls are hard-cut and a rounded bubble
-   would be the only soft corner in the read column.
+   Shape is per-theme and each theme states it in its OWN file — 0 in
+   forza6 (rows and controls are hard-cut there, so a rounded bubble would
+   be the only soft corner in the read column), `--card-radius` in the other
+   two. There is deliberately no default for it here, because a default
+   cannot work: forza6's opening selector is `:root, [data-theme='forza6']`,
+   i.e. the default theme is ALSO the root layer, so its `0` reaches every
+   theme at (0,1,0) — a `:root` default written down here would be beaten by
+   source order (theme files are `@import`ed at the top) and an `html`
+   default is beaten by specificity. Both were measured: `:root` made forza6
+   round, `html` made all three square. Same trap the note beside
+   `--profile-section-radius` in slack-dark.css records (design-new-theme
+   §3.1 key 3, "新增 token 不能依赖 fallback"). New per-theme tokens get one
+   declaration per theme file, and are accepted on measured
+   `getComputedStyle` values, never on the declarations existing.
 
-   Declared on `html`, NOT `:root` — the two select the same element, but
-   `:root` is (0,1,0), exactly the specificity of the `[data-theme='…']`
-   half of every theme file's opening selector, so the winner is decided by
-   SOURCE ORDER. Theme files are `@import`ed at the top of this one, which
-   means a `:root` default written down here silently BEATS the per-theme
-   override it is supposed to be a default for (measured: forza6's `0` lost
-   to this block's `var(--card-radius)` and the bubble came out 6px).
-   `html` is (0,0,1) and loses to `[data-theme]` at any position. */
+   The FILL stays here: no theme overrides it, and any that later wants to
+   would win from its own file against this (0,0,1) `html` rule. */
 html {
   --bg-message-bubble: color-mix(in oklab, var(--text-primary) 9%, transparent);
-  --message-bubble-radius: var(--card-radius);
 }
 
 /* Kanban column drop target (#task:784). The drag-over wash can't be a

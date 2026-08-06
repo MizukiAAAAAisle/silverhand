@@ -213,6 +213,12 @@
      真实 case —— shiki review 报 slack-dark profile section 直角问题。 */
   --profile-section-radius: var(--card-radius);
 
+  /* ── Own-message bubble radius (#task:1838) ──
+     同上，同一个 §3.1 关键 3 的 case 又发生了一次（shiki 实机报「其他主题
+     也是直角」）：新 token 的默认值挂不到 root 之外去，每个主题都得自己写。
+     填充是 global.css 的共享墨洗，只有形状按主题分。 */
+  --message-bubble-radius: var(--card-radius);
+
   /* ── Control + chip radius ──
      dark 不走 forza6 的 hard-cut，保持 light 默认（与 studio-light 同值）。 */
   --control-radius: 6px;
