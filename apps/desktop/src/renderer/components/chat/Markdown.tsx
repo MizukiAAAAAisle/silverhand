@@ -816,8 +816,13 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
           title={copied ? 'Copied' : 'Copy code'}
           aria-label="Copy code"
         >
+          {/* Icon only — the header strip is chrome, and a word next to a
+              glyph that already says "copy" spends label width on nothing
+              (shiki #task:1835). The Check/Copy swap carries the copied
+              confirmation on its own; the accessible name stays on
+              `aria-label` (constant, so screen readers announce the action)
+              while `title` carries the transient "Copied" state. */}
           {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-          <span>{copied ? 'copied' : 'copy'}</span>
         </button>
       </div>
       <pre ref={preRef}>{children}</pre>

@@ -122,7 +122,7 @@
    shell the user is about to paste into, so it should read as a terminal
    in every theme, the way a screenshot of a terminal would. The `island`
    family it used before is the opposite contract: it exists so each theme
-   OWNS the code surface (cool neutral / teal HUD / ink), which made the
+   OWNS the code surface (cool neutral / navy HUD / ink), which made the
    card look like three different app surfaces and like no terminal.
 
    Kept as tokens rather than hardcoded hexes in the component so a theme
@@ -784,10 +784,25 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
 .markdown-body blockquote {
   margin: 0.5em 0;
-  padding: 0.2em 0.8em;
+  padding: 0 0.8em;
   border-left: 3px solid var(--border);
   color: var(--text-secondary);
 }
+/* The rule bar must hug the quoted TEXT, not the paragraph's outer margins.
+   `blockquote` has vertical padding, so the child `<p>`'s `0.4em` margins
+   (`.markdown-body p`) cannot collapse out of it — they stack INSIDE and the
+   3px border grew ~1.2em taller than the words it marks (shiki #task:1835
+   "left border 太高了"). Zeroing only the first/last child's outer margin
+   keeps the border tight to the text while a multi-paragraph quote still
+   breathes between its paragraphs.
+
+   Vertical padding is 0 (shiki, #task:1835): the bar ends exactly at the
+   line box. Nothing is clipped — prose leading is `font-size + 8px`, so 4px
+   of half-leading still sits below the deepest descender. Note that ANY
+   vertical padding here re-blocks the child margin collapse above; if one is
+   ever reintroduced, the two child rules are what keep the bar tight. */
+.markdown-body blockquote > :first-child { margin-top: 0; }
+.markdown-body blockquote > :last-child { margin-bottom: 0; }
 
 .markdown-body hr {
   margin: 0.8em 0;
@@ -950,7 +965,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    Background / border / pre text colour all read from the `island`
    token family (`--bg-island` / `--text-island` / `--border-island`)
    so each theme owns the code-block palette directly — studio-light
-   gets its cool neutral tint, forza6 gets its deep teal-black
+   gets its cool neutral tint, forza6 gets its near-black navy
    HUD aesthetic, no per-theme override of these rules needed. */
 .markdown-body .code-block {
   max-width: 100%;
@@ -976,10 +991,14 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   text-transform: lowercase;
   letter-spacing: 0.04em;
 }
+/* Icon-only control (#task:1835): no `gap` — there is no second child to
+   space against. The small symmetric padding is hit area, not visual weight:
+   the header's height is set by the language tag's line box (~1.6em), which
+   still exceeds the 12px glyph plus this padding, so the strip does not grow. */
 .markdown-body .code-block__copy {
   display: inline-flex;
   align-items: center;
-  gap: 0.25em;
+  padding: 0.15em;
   color: var(--text-muted);
   transition: color 120ms ease;
 }

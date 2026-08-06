@@ -962,15 +962,16 @@
   box-shadow: 1px 1px 0 var(--forza6-ink);
 }
 
-/* ── #v5.5 — Multi-line fenced code block as deep-teal HUD island ───
+/* ── #v5.5 — Multi-line fenced code block as dark HUD island ────────
    shiki `GpO6aSc83fIkGZ-1` "多行 ``` 围栏代码块需要处理" + Cindy
    `VGm9HpWGWyDx5bhf` "深色 HUD/code island，保留可读性，lime/粉只
    做边框或小标题，不要把大段代码染成高饱和底".
 
    PR-2 token promotion (#task:346) moves the structural recipe to
-   the global rule via the `island` token family — forza6.css already
-   set `--bg-island: #0F2F2C` / `--text-island: #E8F1EF` / `--border-island:
-   rgba(255,255,255,0.08)`, so `.markdown-body .code-block` and
+   the global rule via the `island` token family — forza6.css sets
+   `--bg-island` (near-black navy `--forza6-code-island`, was deep teal
+   `#0F2F2C` before #task:1835) / `--text-island` / `--border-island`,
+   so `.markdown-body .code-block` and
    `.code-block pre` pick those up directly. What stays in this
    forza6-only block:
      - Poster sticker geometry: 2px near-black outline + 0 radius — the
@@ -1003,7 +1004,10 @@
 [data-theme='forza6'] .markdown-body .code-block__header {
   margin: -2px -2px 0;
   background: var(--forza6-indigo-slab);
-  border-bottom: 1px solid #0F2F2C;
+  /* The seam under the cap is the island ground itself — read it from the
+     token rather than repeating the hex, which is how it drifted out of step
+     when the ground changed (#task:1835). */
+  border-bottom: 1px solid var(--bg-island);
 }
 [data-theme='forza6'] .markdown-body .code-block__lang {
   color: #D4F523;
@@ -1034,8 +1038,10 @@
    `highlight.js/styles/github.css` (light theme); rehype-highlight
    wraps fenced code tokens in `.hljs-*` spans whose github-light
    colors (e.g. `.hljs-string {color:#032f62}` deep blue) become
-   nearly invisible on the v5.5 deep-teal-black `#0F2F2C` island
-   ground (≈ 1.5:1 contrast — fails AA).
+   nearly invisible on the dark island ground (≈ 1.5:1 contrast — fails
+   AA). Ground was deep-teal `#0F2F2C` when this was written; it is now
+   near-black navy `--forza6-code-island` (#task:1835) — the github-light
+   problem this palette solves holds on either.
 
    Fix: scope a small dark palette inside `[data-theme='forza6']
    .markdown-body .code-block` only — this leaves github.css
@@ -1056,9 +1062,11 @@
      - meta                            → muted white 0.55
      - addition (diff)                 → lime
      - deletion (diff)                 → coral (mockup .tool-body .del)
-   All contrasts on `#0F2F2C` ground are AA+ except comments which
-   stay 0.45 alpha as mockup intends — comments are de-emphasized
-   by design and 5:1 still passes UI-component contrast. */
+   All contrasts on the `--forza6-code-island` ground are AA+ except
+   comments, which stay 0.45 alpha as the mockup intends — de-emphasized by
+   design, and they still clear the 3:1 UI-component floor (≈4.5:1 composited).
+   The #task:1835 move from teal `#0F2F2C` to navy `#07111F` LOWERED the
+   ground's luminance, so every light-on-dark ratio here only went up. */
 [data-theme='forza6'] .markdown-body .code-block .hljs,
 [data-theme='forza6'] .markdown-body .code-block .hljs * {
   color: var(--forza6-syntax-base);

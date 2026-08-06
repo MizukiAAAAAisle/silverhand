@@ -55,8 +55,20 @@
                                         normal, AAA Large). Pink stays exclusive
                                         to `#` channel identity + unread badge. */
   --forza6-ink: #0A0A0A;             /* poster near-black — ink / poster border / structure */
-  --forza6-teal-island: #0F2F2C;     /* code-island ground */
-  --forza6-teal-deep: #081E1B;       /* code-island deep ground */
+  /* Code-island ground (#task:1835, shiki gave the value). Was deep teal
+     #0F2F2C through v5.5-v6.x; now a near-black navy, which also puts the
+     island in the same cool-blue family as its indigo header cap
+     (`--forza6-indigo-slab`, forza6-components.css) instead of reading as a
+     teal body under a blue hat. Named by ROLE, not hue — the previous
+     `--forza6-teal-*` names would now lie about the value. Every syntax token
+     is light/bright (`--forza6-syntax-*` below) and this ground is darker than
+     the teal it replaces, so all island contrasts can only improve. */
+  --forza6-code-island: #07111F;     /* code-island ground */
+  /* Deep variant derived from the ground, so the pair can never split hue.
+     Shadowed in forza6 today (the header cap paints indigo instead of
+     `--bg-island-deep`) — deriving keeps it correct if that override ever
+     goes away. Was a hand-picked #081E1B teal. */
+  --forza6-code-deep: color-mix(in srgb, var(--forza6-code-island) 70%, #000);
   /* P2 v6.3 (#task:917) — chrome poster colours.
      v6.0 ran chrome at brand magenta (misread of "粉色作 frame 的角色").
      v6.1 fixed it to saturated mid-teal #329E86 + deep湖青 #23545E.
@@ -70,7 +82,7 @@
      reads as "festival poster ground" while #1E5E55 reads as
      "muted工业 chrome". The reference posters' chrome IS this
      brightness — figure 1's "发烧友" page ground is the mid-cyan-
-     teal family, not the deeper #0F2F2C island. */
+     teal family, not the darker code island. */
   --forza6-poster-teal: #329E86;     /* chrome 主色 — saturated mid-teal poster ground */
   --forza6-poster-teal-deep: #23545E;/* hosts identity (v6.6.1, [data-host-hero]).
                                         Was NavRail bg in v6.1-v6.3; replaced by
@@ -210,9 +222,9 @@
   --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
   --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 4%, var(--bg-base));
 
-  /* ── Islands (code blocks) — deep teal-black HUD aesthetic ── */
-  --bg-island: var(--forza6-teal-island);
-  --bg-island-deep: var(--forza6-teal-deep);
+  /* ── Islands (code blocks) — near-black navy HUD ground ── */
+  --bg-island: var(--forza6-code-island);
+  --bg-island-deep: var(--forza6-code-deep);
 
   /* ── Text (cool-neutral on light, light on dark island) ── */
   --text-primary: #0F1F1D;
@@ -419,8 +431,8 @@
      `global.css`). Name prefix `--forza6-syntax-*` makes the
      theme-private nature explicit so a future cross-theme syntax
      contract (`--syntax-*`) won't collide. See design-new-theme.md §12
-     for the design intent (HUD readout palette on deep-teal-black
-     island ground; all foreground/background pairings AA+ except the
+     for the design intent (HUD readout palette on the near-black island
+     ground; all foreground/background pairings AA+ except the
      intentionally-muted comment line). */
   --forza6-syntax-base: #E8F1EF;
   --forza6-syntax-keyword: var(--forza6-lime);
