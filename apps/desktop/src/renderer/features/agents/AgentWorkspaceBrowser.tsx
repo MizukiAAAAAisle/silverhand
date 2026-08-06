@@ -31,9 +31,12 @@ import { cn } from '@/lib/cn';
  * never branches on home-vs-workspace. The container owns the queries (which
  * carry the source) and hands the resolved results in; the renderer only knows
  * "here is a tree, here is the selected file, render it." The only source-aware
- * inputs are the explicit `header` copy and `layout` props — everything else is
- * identical regardless of which dir is behind the wire. See Cindy #task:1190 for
- * the backend `workspace_id` scope this pairs with.
+ * input is the `layout` prop — everything else is identical regardless of which
+ * dir is behind the wire. (A `header` prop used to carry per-source descriptive
+ * copy; shiki had it removed from the full page 2026-08-07 and the side panel
+ * never passed any, so it is gone — the file tree names the files, which is the
+ * information that copy was restating.) See Cindy #task:1190 for the backend
+ * `workspace_id` scope this pairs with.
  */
 
 /** Structural view of the tree query — just the fields the renderer reads, so
@@ -62,10 +65,6 @@ interface AgentWorkspaceBrowserProps {
   selectedPath: string | null;
   onSelect: (path: string | null) => void;
   onRefresh: () => void;
-  /** Source-specific descriptive copy shown in the header (e.g. "Agent home —
-   *  system_prompt.md is global identity…" for home, "此 workspace 的 memory" for
-   *  a scoped view). */
-  header: React.ReactNode;
   /** `full` (default) = two-column tree + preview for the wide members page.
    *  `compact` = single-column drill-in for the narrow chat side panel. */
   layout?: AgentWorkspaceLayout;
@@ -124,7 +123,6 @@ export function AgentWorkspaceBrowser({
   selectedPath,
   onSelect,
   onRefresh,
-  header,
   layout = 'full',
 }: AgentWorkspaceBrowserProps): JSX.Element {
   return layout === 'compact' ? (
@@ -134,7 +132,6 @@ export function AgentWorkspaceBrowser({
       selectedPath={selectedPath}
       onSelect={onSelect}
       onRefresh={onRefresh}
-      header={header}
     />
   ) : (
     <FullBrowser
@@ -143,7 +140,6 @@ export function AgentWorkspaceBrowser({
       selectedPath={selectedPath}
       onSelect={onSelect}
       onRefresh={onRefresh}
-      header={header}
     />
   );
 }
@@ -161,34 +157,43 @@ function FullBrowser({
   selectedPath,
   onSelect,
   onRefresh,
-  header,
 }: LayoutBrowserProps): JSX.Element {
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <header className="flex shrink-0 items-center gap-3">
-        <div className="min-w-0 flex-1 text-xs leading-relaxed text-text-muted">
-          {header}
-        </div>
-        <RefreshButton onRefresh={onRefresh} isFetching={treeQuery.isFetching} />
-      </header>
-
-      <div
-        // Routed through `--card-radius` so warm/forza6 stay 0 (poster
-        // hard-cut) and slack-dark gets 8px. #task:912 review round 6.
-        className="flex min-h-0 flex-1 overflow-hidden rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating"
-      >
-        <aside className="flex w-[280px] shrink-0 flex-col overflow-y-auto border-r border-border-subtle bg-bg-base">
+    <div
+      // Routed through `--card-radius` so warm/forza6 stay 0 (poster
+      // hard-cut) and slack-dark gets 8px. #task:912 review round 6.
+      className="flex h-full min-h-0 overflow-hidden rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating"
+    >
+      <aside className="flex w-[280px] shrink-0 flex-col overflow-hidden border-r border-border-subtle bg-bg-base">
+        {/* The tree column owns the refresh (shiki 2026-08-07「刷新按钮应该融合
+            进 file tree nav 中」). It used to float alone in a bar above the
+            card, which read as orphaned chrome — the same verdict that keeps a
+            toolbar off the compact drill-in. Here it sits in the column's own
+            header, whose padding + tallest child (a size-6 icon button) match
+            the preview header opposite it, so the card reads as ONE top bar
+            across both panes. Header is outside the scroll box below so it
+            stays put while the tree scrolls. */}
+        <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
+          <span className="text-[11px] uppercase tracking-[0.08em] text-text-muted">
+            Files
+          </span>
+          <RefreshButton
+            onRefresh={onRefresh}
+            isFetching={treeQuery.isFetching}
+          />
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto">
           <TreeColumn
             treeQuery={treeQuery}
             selectedPath={selectedPath}
             onSelect={onSelect}
           />
-        </aside>
+        </div>
+      </aside>
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <WorkspaceFilePreview path={selectedPath} fileQuery={fileQuery} />
-        </section>
-      </div>
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <WorkspaceFilePreview path={selectedPath} fileQuery={fileQuery} />
+      </section>
     </div>
   );
 }
@@ -208,10 +213,10 @@ function CompactBrowser({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {selectedPath === null ? (
-        // No top toolbar in the drill-in list: the side panel passes no header
-        // copy, and a bar holding only a refresh icon read as orphaned chrome
-        // (shiki). The file list opens directly; refresh rides query staleness +
-        // remount-on-reopen. The full members page keeps its refresh.
+        // No top toolbar in the drill-in list: a bar holding only a refresh
+        // icon read as orphaned chrome (shiki). The file list opens directly;
+        // refresh rides query staleness + remount-on-reopen. The full members
+        // page keeps its refresh.
         <div className="min-h-0 flex-1 overflow-y-auto">
           <TreeColumn
             treeQuery={treeQuery}
@@ -251,6 +256,11 @@ function CompactBrowser({
   );
 }
 
+/**
+ * Refresh action for the full layout's tree-column header. Sized to the preview
+ * header's copy-path button (`size-6`) so both ends of the card's top bar have
+ * the same control height; `ml-auto` pins it to the column's right edge.
+ */
 function RefreshButton({
   onRefresh,
   isFetching,
@@ -264,7 +274,7 @@ function RefreshButton({
       onClick={onRefresh}
       disabled={isFetching}
       data-panel-control="row-action"
-      className="inline-flex h-7 w-7 shrink-0 items-center justify-center text-text-muted transition-all duration-150 hover:scale-110 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:opacity-50 disabled:hover:scale-100"
+      className="ml-auto inline-flex size-6 shrink-0 items-center justify-center text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:opacity-50"
       aria-label="Refresh workspace files"
       title="Refresh"
     >

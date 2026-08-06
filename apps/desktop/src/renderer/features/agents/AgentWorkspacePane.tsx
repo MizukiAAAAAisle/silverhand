@@ -14,7 +14,7 @@ import {
  * The bridge between a data source and the source-blind `AgentWorkspaceBrowser`
  * (#task:1191): owns the scoped tree/file queries + selection, hands the
  * resolved results to the renderer. One container, parameterized by `source` +
- * `layout` + `header`, serves both views so they can't drift:
+ * `layout`, serves both views so they can't drift:
  *  - full members page → `source = home`, `layout = 'full'`;
  *  - chat side panel → `source = workspace(currentWorkspaceId)`, `layout =
  *    'compact'`.
@@ -25,12 +25,10 @@ export function AgentWorkspaceContainer({
   agentId,
   source,
   layout,
-  header,
 }: {
   agentId: string;
   source: AgentWorkspaceSource;
   layout: AgentWorkspaceLayout;
-  header: React.ReactNode;
 }): JSX.Element {
   const treeQuery = useAgentWorkspaceTree(agentId, source);
   // Two-column (full) always wants a file in its ever-present preview pane;
@@ -52,7 +50,6 @@ export function AgentWorkspaceContainer({
       onSelect={setSelectedPath}
       onRefresh={onRefresh}
       layout={layout}
-      header={header}
     />
   );
 }
@@ -85,13 +82,6 @@ export function AgentWorkspacePane({
       agentId={agentId}
       source={{ kind: 'home' }}
       layout="full"
-      header={
-        <>
-          Agent home — <span className="font-mono">system_prompt.md</span> is
-          global identity; <span className="font-mono">MEMORY.md</span> +{' '}
-          <span className="font-mono">notes/</span> are this workspace's memory.
-        </>
-      }
     />
   );
 }

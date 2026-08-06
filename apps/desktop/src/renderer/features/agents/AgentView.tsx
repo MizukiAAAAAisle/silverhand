@@ -205,7 +205,13 @@ export function AgentView({
             // add a vertical scrollbar of its own (would defeat the
             // two-internal-scroll design and chop the pane off below
             // the fold). #task:812.
-            <div className="flex min-h-0 flex-1 flex-col px-8 py-6">
+            //
+            // Tighter inset than the sibling sections' `px-8 py-6` (shiki
+            // 2026-08-07「不需要这么大的 padding」): those are prose/form panes
+            // where wide margins aid reading, while this is a dense two-pane
+            // browser that already carries its own card border — the margin
+            // only ate file-name width. Equal 12px on all four sides.
+            <div className="flex min-h-0 flex-1 flex-col p-3">
               {canViewFiles ? (
                 <AgentWorkspacePane
                   agentId={agent.id}
@@ -538,8 +544,8 @@ function AgentSidePanel({
           // Current workspace's L2 memory in compact form (#task:1191). The
           // container manages its own scroll, so no padded wrapper. A
           // DM/agent-home context resolves to the agent home dir on the backend
-          // (expected overlap) — no frontend branch, and the copy stays neutral
-          // about which files appear (it may include system_prompt.md in a DM).
+          // (expected overlap) — no frontend branch, and nothing in the UI
+          // claims which files appear (it may include system_prompt.md in a DM).
           // Owner-private: non-owners get the neutral state, no requests fire
           // (#task:1220).
           canViewFiles ? (
@@ -556,7 +562,6 @@ function AgentSidePanel({
                     : { kind: 'home' }
                 }
                 layout="compact"
-                header={null}
               />
             </div>
           ) : (
