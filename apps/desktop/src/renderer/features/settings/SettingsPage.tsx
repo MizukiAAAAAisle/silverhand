@@ -890,7 +890,11 @@ function SettingsSection({
   return (
     <section
       id={id}
-      className="scroll-mt-6 grid gap-4 border-b border-border-subtle pb-8 last:border-b-0 last:pb-0"
+      // No rule between sections (shiki 2026-08-06 「Appearance section 下面
+      // 加了一个 divider 吗?去掉」): the icon chip + serif heading already
+      // opens a section, so the line was a second separator doing the same
+      // job. Spacing is the parent's `space-y-8` alone.
+      className="scroll-mt-6 grid gap-4"
     >
       <div className="flex items-start gap-3">
         <span

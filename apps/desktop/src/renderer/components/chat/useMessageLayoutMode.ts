@@ -27,10 +27,12 @@ export const MESSAGE_LAYOUT_MODES: ReadonlyArray<MessageLayoutMode> = [
   'user-right',
 ];
 
-/** Dot-separated, unlike the `silverhand:layout.*` keys next door: this one
- *  predates that convention and is already set in installs that opted in via
- *  the dev console, so renaming it would silently reset their choice. */
-const STORAGE_KEY = 'silverhand.layout.message-mode';
+/** Same `silverhand:layout.*` family as the other renderer-local layout
+ *  preferences (`sidebar-section`, `workspace-sidebar-visible`, …) — the key
+ *  used to be dot-separated, which forked the convention for no reason
+ *  (shiki 2026-08-06 「统一吧,这个只有我在用」; the rename resets the stored
+ *  choice once, back to the default). */
+const STORAGE_KEY = 'silverhand:layout.message-mode';
 const DEFAULT_MODE: MessageLayoutMode = 'all-left';
 
 function parse(raw: string | null): MessageLayoutMode {
