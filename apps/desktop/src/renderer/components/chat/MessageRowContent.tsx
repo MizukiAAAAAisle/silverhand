@@ -55,7 +55,8 @@ export interface MessageRowContentProps {
    *  edge, ahead of `reactions` / `trailing` (#task:1185). Export passes
    *  `null`. */
   taskTag: ReactNode;
-  /** Rendered markdown body. */
+  /** Rendered markdown body, or `null` on an attachment-only message (empty
+   *  content is sendable when an attachment is attached). */
   body: ReactNode;
   /** Attachment list node, or `null` when the message has no attachments. */
   attachments: ReactNode;
@@ -126,9 +127,33 @@ export function MessageRowContent({
           the words above it. Left-aligned text in a box sized by something
           else dangles in mid-row; a shrink-to-fit box keeps a short message
           flush with the right edge and only lets prose that actually wraps
-          reach the 85% cap — where a straight left edge is what we want. */}
+          reach the 85% cap — where a straight left edge is what we want.
+
+          That same box is the bubble (shiki 2026-08-06「给消息文本内容加上一个
+          有背景色的气泡」, #task:1838) — the fill belongs to the words, not to
+          the row, so attachments / reactions / the adornment row / the reply
+          preview all stay outside it. `alignRight` is already
+          `user-right && isCurrentUser` and `isCurrentUser` implies
+          `from_kind === 'user'`, so "own side + human" needs no second
+          predicate. Colour + corner are per-theme tokens (see §Own-message
+          bubble in global.css); only the padding is stated here, because
+          spacing is this layout's business and the token cluster's is
+          identity. */}
       <div data-message-body className="text-sm text-text-primary">
-        <div className={alignRight ? 'ml-auto w-fit' : undefined}>{body}</div>
+        {/* `body` is null on an attachment-only message (Composer allows
+            sending one) — without that the bubble would render as an empty
+            padded blob above the attachments. */}
+        {body ? (
+          <div
+            className={
+              alignRight
+                ? 'ml-auto w-fit rounded-[var(--message-bubble-radius)] bg-[var(--bg-message-bubble)] px-3 py-2'
+                : undefined
+            }
+          >
+            {body}
+          </div>
+        ) : null}
         {attachments}
       </div>
 

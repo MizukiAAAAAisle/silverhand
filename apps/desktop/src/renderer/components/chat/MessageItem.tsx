@@ -571,7 +571,11 @@ function ActorMessageItem({
       {timeLabel}
     </time>
   );
-  const bodyNode = (
+  // `null` when the message is attachment-only (the composer allows an empty
+  // draft as long as an upload finished): rendering an empty Markdown tree is
+  // invisible, but the own-message bubble it now sits in is not — it would be
+  // a padded blob above the attachments (#task:1838).
+  const bodyNode = message.content.trim() ? (
     <Markdown
       content={message.content}
       conversationId={conversationId}
@@ -584,7 +588,7 @@ function ActorMessageItem({
       onOpenConversationRef={onOpenConversationRef}
       searchQuery={searchQuery}
     />
-  );
+  ) : null;
   const attachmentsNode =
     message.attachments && message.attachments.length > 0 ? (
       <AttachmentList

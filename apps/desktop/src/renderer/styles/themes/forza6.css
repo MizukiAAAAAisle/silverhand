@@ -380,6 +380,13 @@
      small chrome) so this scopes cleanly. */
   --profile-section-radius: 0;
 
+  /* ── Own-message bubble radius (#task:1838) ──
+     Same poster reasoning as `--row-radius` above: the message row it sits
+     in is hard-cut, so the default `--card-radius` would make this the only
+     rounded corner in the read column. Fill stays the shared ink wash
+     declared in global.css. */
+  --message-bubble-radius: 0;
+
   /* ── Control border width (#task:555 release-testing 2) ──
      forza6 的 hard-cut 语汇在 sidebar / select / focus ring 上都走 2px
      描边；selection toolbar 上的 Cancel / Copy markdown / Save image

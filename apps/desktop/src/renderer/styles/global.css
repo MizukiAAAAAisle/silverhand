@@ -1374,6 +1374,44 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
 }
 
+/* ── Own-message bubble (#task:1838) ──────────────────────────────────
+   The fill behind the PROSE of a `user-right` own message (shiki
+   2026-08-06). Only that: attachments, reactions, the bottom adornment row
+   and the reply preview stay on the row's own ground, so the bubble reads
+   as "the words I said", not as a card around everything.
+
+   An ink wash for the reason recorded under §Inset ground, and here the
+   argument is sharper: the ground under this bubble MOVES. The message row
+   is transparent at rest and flips to `bg-bg-floating` (plus a per-theme
+   fill in studio-light, whose chat ground is already pure white) on hover /
+   saved / replying / search-hit. Any fixed `--bg-*` surface token is either
+   invisible at rest or invisible framed in at least one theme; a
+   translucent ink is one step off WHATEVER is behind it in every state.
+   Composites correctly with the inline-code chip too — that chip is its own
+   wash, so it lands darker/lighter than the bubble instead of matching it.
+
+   9% rather than the 7% inset: this is a large area, and it sits on the
+   frame fill half the time, which eats the difference. Still below the 12%
+   avatar ground — the bubble is a GROUND for text, not a shape standing in
+   for a person.
+
+   Radius follows `--card-radius` by default; forza6 overrides it to 0 in
+   its own file, where rows and controls are hard-cut and a rounded bubble
+   would be the only soft corner in the read column.
+
+   Declared on `html`, NOT `:root` — the two select the same element, but
+   `:root` is (0,1,0), exactly the specificity of the `[data-theme='…']`
+   half of every theme file's opening selector, so the winner is decided by
+   SOURCE ORDER. Theme files are `@import`ed at the top of this one, which
+   means a `:root` default written down here silently BEATS the per-theme
+   override it is supposed to be a default for (measured: forza6's `0` lost
+   to this block's `var(--card-radius)` and the bubble came out 6px).
+   `html` is (0,0,1) and loses to `[data-theme]` at any position. */
+html {
+  --bg-message-bubble: color-mix(in oklab, var(--text-primary) 9%, transparent);
+  --message-bubble-radius: var(--card-radius);
+}
+
 /* Kanban column drop target (#task:784). The drag-over wash can't be a
    Tailwind utility on the column: forza6-components.css gives
    `[data-tasks-column]` a (0,2,0) background/border that outweighs any
