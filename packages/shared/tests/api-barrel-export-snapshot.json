@@ -117,6 +117,7 @@
   "CreatedTaskIdentitySchema",
   "DEFAULT_CHANNEL_ATTENTION_MODE",
   "DeleteAgentInputSchema",
+  "DISPLAY_NAME_MAX_LENGTH",
   "DisplayNameSchema",
   "DmChannelDtoSchema",
   "ENTITY_NAME_MAX_LENGTH",

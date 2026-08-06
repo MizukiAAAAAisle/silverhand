@@ -1,11 +1,17 @@
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Loader2, User as UserIcon } from 'lucide-react';
-import { validateAvatarFile, type UserDto } from '@silverhand/shared';
+import {
+  DISPLAY_NAME_MAX_LENGTH,
+  validateAvatarFile,
+  type UserDto,
+} from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
+import { primaryAction } from '@/features/common/PrimaryAction';
+import { readDisplayNameDraft } from '@/features/common/display-name';
 import { useUpdateProfile, useUploadAvatar, useViewerAvatarObjectUrl } from './hooks';
 
 /**
@@ -63,16 +69,18 @@ import { useUpdateProfile, useUploadAvatar, useViewerAvatarObjectUrl } from './h
  *     interaction, and a second control under a 56px square costs more
  *     attention than the action is worth (shiki:「把头像下面那个 remove
  *     去掉」).
- *   - Editing `@handle`. It is decided once at registration; the field
- *     is read-only (still selectable, so it can be copied) and the label
- *     row says so.
+ *   - The `@handle`, as a form row. It cannot be changed, so a permanent
+ *     read-only field would spend a labelled row on a value the identity
+ *     summary above already shows (shiki 2026-08-06:「UserName 不可改,
+ *     先移除」). It comes back with the field's own edit story, if it ever
+ *     gets one.
  */
 export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const update = useUpdateProfile();
   const upload = useUploadAvatar();
   const avatarObjectUrl = useViewerAvatarObjectUrl();
   const nameFieldId = useId();
-  const handleFieldId = useId();
+  const nameErrorId = useId();
 
   // `null` = pristine, i.e. "whatever the server says". Not seeded from
   // the dto, so a name changed on another device flows straight through
@@ -83,12 +91,16 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const nameValue = draftName ?? user.display_name;
-  const nextName = nameValue.trim();
-  const canSave =
-    draftName !== null
-    && nextName.length > 0
-    && nextName !== user.display_name
-    && !update.isPending;
+  // The shared schema decides, not a length check: `maxLength` below caps
+  // the field but cannot filter pasted control characters or line
+  // separators, which the schema refuses (@Cindy / @Alice 2026-08-06).
+  const nameDraft = readDisplayNameDraft(draftName, user.display_name);
+  const canSave = nameDraft.kind === 'ready' && !update.isPending;
+  // Shown, not just disabled: the offending character is invisible in
+  // the field, so a dead button would leave the viewer with nothing to
+  // go on. Pristine / blank / unchanged stay silent — the field itself
+  // says those.
+  const nameRejection = nameDraft.kind === 'rejected' ? nameDraft.message : null;
 
   const onPickAvatar = async (file: File): Promise<void> => {
     setAvatarError(null);
@@ -106,10 +118,10 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
-    if (!canSave) return;
+    if (nameDraft.kind !== 'ready' || update.isPending) return;
     setSaveError(null);
     try {
-      await update.mutateAsync({ display_name: nextName });
+      await update.mutateAsync({ display_name: nameDraft.value });
       // Back to pristine: the fresh dto is now the field's value, so the
       // button disables itself without a second source of truth.
       setDraftName(null);
@@ -184,40 +196,27 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
           <Input
             id={nameFieldId}
             value={nameValue}
-            maxLength={128}
+            maxLength={DISPLAY_NAME_MAX_LENGTH}
             disabled={update.isPending}
+            aria-invalid={nameRejection ? true : undefined}
+            aria-describedby={nameRejection ? nameErrorId : undefined}
             onChange={event => setDraftName(event.target.value)}
             onKeyDown={onNameKeyDown}
           />
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-baseline justify-between gap-2">
-            <Label htmlFor={handleFieldId}>Username</Label>
-            <span className="text-[11px] text-text-muted">permanent</span>
-          </div>
-          {/* Read-only rather than disabled: the handle is worth copying,
-              and the inset fill plus the label marker already say it
-              can't be edited. The `@` sits in its own cell so the value
-              reads as the bare name it is everywhere else. */}
-          <div className="flex h-9 items-stretch overflow-hidden rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-inset">
-            <span
-              aria-hidden
-              className="grid w-9 shrink-0 place-items-center border-r-[length:var(--control-border-width)] border-border-subtle font-mono text-sm text-text-muted"
-            >
-              @
-            </span>
-            <input
-              id={handleFieldId}
-              readOnly
-              value={user.name}
-              className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm text-text-secondary outline-none"
-            />
-          </div>
+          {nameRejection ? (
+            <p id={nameErrorId} role="alert" className="text-xs text-error">
+              {nameRejection}
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-2">
-          <Button type="submit" size="sm" disabled={!canSave} className="self-start">
+          <Button
+            type="submit"
+            size="sm"
+            disabled={!canSave}
+            {...primaryAction('self-start')}
+          >
             {update.isPending ? (
               <Loader2 className="size-3.5 animate-spin" />
             ) : null}

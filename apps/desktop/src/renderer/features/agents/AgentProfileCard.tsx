@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
 import { Lock } from 'lucide-react';
 import dayjs from 'dayjs';
-import type { AgentDto } from '@silverhand/shared';
+import { DISPLAY_NAME_MAX_LENGTH, type AgentDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { cn } from '@/lib/cn';
@@ -15,6 +15,7 @@ import { canEditAgentProfile } from './permissions';
 import { EditableAgentAvatar } from './EditableAgentAvatar';
 import { EditPencilButton } from '@/features/common/EditPencilButton';
 import { InlineText } from '@/features/common/InlineText';
+import { rejectDisplayName } from '@/features/common/display-name';
 import { InlineTextarea } from './InlineTextarea';
 import { RuntimeConfigEditor } from './RuntimeConfigEditor';
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
@@ -108,6 +109,8 @@ export function AgentProfileCard({
                 ariaLabel="Display name"
                 editing={nameEditing}
                 onExitEdit={() => setNameEditing(false)}
+                maxLength={DISPLAY_NAME_MAX_LENGTH}
+                validate={rejectDisplayName}
                 className="font-serif text-lg font-semibold leading-tight"
                 onCommit={async next => {
                   await update.mutateAsync({ display_name: next });

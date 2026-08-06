@@ -75,17 +75,34 @@ const DISPLAY_NAME_FORBIDDEN_MSG =
   'display_name must not contain control characters or Unicode line separators';
 
 /**
+ * Upper bound on a `display_name`, in UTF-16 code units — the unit both
+ * `z.string().max()` and the DOM `maxLength` attribute count in, so an
+ * input that consumes this constant caps at exactly what the schema
+ * accepts, astral characters included.
+ *
+ * Display-name-specific on purpose. `ENTITY_NAME_MAX_LENGTH` in `name.ts`
+ * is numerically the same 64 but counts **code points**
+ * (`Array.from(name).length`); borrowing it would make an emoji-bearing
+ * name pass on one side and fail on the other.
+ */
+export const DISPLAY_NAME_MAX_LENGTH = 64;
+
+/**
  * Shared validator for any user-editable `display_name` field. Used by
  * `AuthSignupInputSchema`, `UpdateUserProfileInputSchema`, and
- * `UpdateAgentInputSchema`. Trim → 1..64 chars → reject control
- * characters (C0 U+0000–U+001F, DEL U+007F, C1 U+0080–U+009F) and
- * Unicode line separators (U+2028 / U+2029).
+ * `UpdateAgentInputSchema`. Trim → 1..`DISPLAY_NAME_MAX_LENGTH` chars →
+ * reject control characters (C0 U+0000–U+001F, DEL U+007F, C1
+ * U+0080–U+009F) and Unicode line separators (U+2028 / U+2029).
+ *
+ * Editors should gate their submit on `safeParse` rather than on a length
+ * attribute alone: a single-line `<input>` drops CR/LF but happily accepts
+ * pasted U+2028/U+2029/U+0085/DEL, which only this refinement rejects.
  */
 export const DisplayNameSchema = z
   .string()
   .trim()
   .min(1)
-  .max(64)
+  .max(DISPLAY_NAME_MAX_LENGTH)
   .refine(s => !DISPLAY_NAME_FORBIDDEN_RE.test(s), {
     message: DISPLAY_NAME_FORBIDDEN_MSG,
   });

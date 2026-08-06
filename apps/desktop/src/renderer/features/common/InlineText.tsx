@@ -28,19 +28,42 @@ export interface InlineTextProps {
   ariaLabel: string;
   editing: boolean;
   onExitEdit: () => void;
-  maxLength?: number;
+  /**
+   * Cap for the field, in UTF-16 code units — the unit the DOM attribute
+   * counts in. REQUIRED, and deliberately without a default: an inline
+   * editor has no idea what field it is editing, so any number it picked
+   * would be a guess that silently outlives the next caller. It used to
+   * default to 128, which is how the agent `display_name` editor came to
+   * accept twice what `DisplayNameSchema` allows (#task:1846). Pass the
+   * field's own bound.
+   */
+  maxLength: number;
+  /**
+   * Reason `next` cannot be saved, or `null` when it can. Consulted
+   * before `onCommit`, so a value the server would refuse is reported in
+   * the inline error instead of being sent (a length cap alone cannot
+   * cover a schema's other rules — see `features/common/display-name`).
+   */
+  validate?: (next: string) => string | null;
   className?: string;
   onCommit: (next: string) => Promise<void>;
 }
 
-/** Pure commit decision — exported for tests. */
+/**
+ * Pure commit decision — exported for tests. `error` distinguishes "not
+ * worth saving" (empty / unchanged, which just leaves edit mode) from
+ * "refused", which must stay in edit mode with the reason shown.
+ */
 export function decideTextCommit(
   draft: string,
   value: string,
-): { commit: false } | { commit: true; next: string } {
+  validate?: (next: string) => string | null,
+): { commit: false; error?: string } | { commit: true; next: string } {
   const trimmed = draft.trim();
   if (trimmed.length === 0) return { commit: false };
   if (trimmed === value) return { commit: false };
+  const error = validate?.(trimmed) ?? null;
+  if (error !== null) return { commit: false, error };
   return { commit: true, next: trimmed };
 }
 
@@ -49,7 +72,8 @@ export function InlineText({
   ariaLabel,
   editing,
   onExitEdit,
-  maxLength = 128,
+  maxLength,
+  validate,
   className,
   onCommit,
 }: InlineTextProps): JSX.Element {
@@ -90,8 +114,14 @@ export function InlineText({
 
   async function commit() {
     if (pending) return;
-    const decision = decideTextCommit(draft, value);
+    const decision = decideTextCommit(draft, value, validate);
     if (!decision.commit) {
+      // A refused value stays in edit mode with the reason: leaving edit
+      // would discard the draft and say nothing about why.
+      if (decision.error !== undefined) {
+        setError(decision.error);
+        return;
+      }
       cancel();
       return;
     }

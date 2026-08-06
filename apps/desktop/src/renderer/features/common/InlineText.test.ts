@@ -18,6 +18,40 @@ describe('decideTextCommit — required non-null string', () => {
   });
 });
 
+describe('decideTextCommit — field validation before the request', () => {
+  const noDigits = (next: string): string | null =>
+    /[0-9]/.test(next) ? 'No digits allowed.' : null;
+
+  it('refuses a value the field rejects, carrying the reason', () => {
+    // `error` is what keeps the editor in edit mode: an empty or
+    // unchanged draft just leaves, a refused one has something to say.
+    expect(decideTextCommit('Alice 2', 'Alice', noDigits)).toEqual({
+      commit: false,
+      error: 'No digits allowed.',
+    });
+  });
+
+  it('validates the trimmed candidate, which is what would be sent', () => {
+    expect(decideTextCommit('  Alice 2  ', 'Alice', noDigits)).toEqual({
+      commit: false,
+      error: 'No digits allowed.',
+    });
+  });
+
+  it('commits when the field accepts the value', () => {
+    expect(decideTextCommit('Alicia', 'Alice', noDigits)).toEqual({
+      commit: true,
+      next: 'Alicia',
+    });
+  });
+
+  it('leaves empty and unchanged drafts silent, not refused', () => {
+    // A validator must not turn "nothing to save" into an error message.
+    expect(decideTextCommit('   ', 'Alice', noDigits)).toEqual({ commit: false });
+    expect(decideTextCommit(' Alice ', 'Alice', noDigits)).toEqual({ commit: false });
+  });
+});
+
 describe('InlineText component source — no-blur invariant', () => {
   // Structural regression lock: the edit-mode input must not attach an
   // onBlur handler. Focus loss must preserve the draft, not PATCH. Grepping
