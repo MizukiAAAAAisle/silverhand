@@ -1275,7 +1275,7 @@ export class Supervisor implements SupervisorContract {
     // its cache entry was evicted; a truly unseen target still has neither a
     // cache entry nor an observed stream and remains loose first-touch.
     const observedCanonicalRootStreamKey = threadTargetMessageId
-      ? `thread:${threadTargetMessageId}`
+      ? replyTargetStreamKey(threadTargetMessageId, null)
       : undefined;
     const observedRootTargetStreamKey =
       observedCanonicalRootStreamKey !== undefined
