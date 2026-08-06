@@ -29,20 +29,19 @@ export interface InlineTextProps {
   editing: boolean;
   onExitEdit: () => void;
   /**
-   * Cap for the field, in UTF-16 code units — the unit the DOM attribute
-   * counts in. REQUIRED, and deliberately without a default: an inline
-   * editor has no idea what field it is editing, so any number it picked
-   * would be a guess that silently outlives the next caller. It used to
-   * default to 128, which is how the agent `display_name` editor came to
-   * accept twice what `DisplayNameSchema` allows (#task:1846). Pass the
-   * field's own bound.
-   */
-  maxLength: number;
-  /**
    * Reason `next` cannot be saved, or `null` when it can. Consulted
    * before `onCommit`, so a value the server would refuse is reported in
-   * the inline error instead of being sent (a length cap alone cannot
-   * cover a schema's other rules — see `features/common/display-name`).
+   * the inline error instead of being sent (see
+   * `features/common/display-name` for the display-name rule).
+   *
+   * This replaced a `maxLength` prop that defaulted to 128 — a number no
+   * inline editor can know, which is how the agent `display_name` editor
+   * came to accept twice what `DisplayNameSchema` allows (#task:1846).
+   * A DOM cap would not have been the fix either: it counts RAW input
+   * while the schema counts the TRIMMED value, so capping at the schema's
+   * bound truncates a padded paste and saves the short result silently.
+   * Field bounds belong to a validator that sees the same string the
+   * request would carry.
    */
   validate?: (next: string) => string | null;
   className?: string;
@@ -72,7 +71,6 @@ export function InlineText({
   ariaLabel,
   editing,
   onExitEdit,
-  maxLength,
   validate,
   className,
   onCommit,
@@ -157,7 +155,6 @@ export function InlineText({
           type="text"
           value={draft}
           disabled={pending}
-          maxLength={maxLength}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           // No onBlur — commit is explicit only (Enter / Save button).

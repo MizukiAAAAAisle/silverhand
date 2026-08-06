@@ -75,15 +75,18 @@ const DISPLAY_NAME_FORBIDDEN_MSG =
   'display_name must not contain control characters or Unicode line separators';
 
 /**
- * Upper bound on a `display_name`, in UTF-16 code units — the unit both
- * `z.string().max()` and the DOM `maxLength` attribute count in, so an
- * input that consumes this constant caps at exactly what the schema
- * accepts, astral characters included.
+ * Upper bound on a `display_name`, in UTF-16 code units — the unit
+ * `z.string().max()` counts in. Exported so an editor can name the limit
+ * in its own error copy from the same source the schema enforces.
  *
  * Display-name-specific on purpose. `ENTITY_NAME_MAX_LENGTH` in `name.ts`
  * is numerically the same 64 but counts **code points**
  * (`Array.from(name).length`); borrowing it would make an emoji-bearing
  * name pass on one side and fail on the other.
+ *
+ * NOT a DOM `maxLength`: that attribute caps RAW input while this bound
+ * applies to the TRIMMED value, so a field capped here would cut a padded
+ * paste short and save the truncated result silently.
  */
 export const DISPLAY_NAME_MAX_LENGTH = 64;
 
@@ -94,9 +97,10 @@ export const DISPLAY_NAME_MAX_LENGTH = 64;
  * reject control characters (C0 U+0000–U+001F, DEL U+007F, C1
  * U+0080–U+009F) and Unicode line separators (U+2028 / U+2029).
  *
- * Editors should gate their submit on `safeParse` rather than on a length
- * attribute alone: a single-line `<input>` drops CR/LF but happily accepts
- * pasted U+2028/U+2029/U+0085/DEL, which only this refinement rejects.
+ * Editors should gate their submit on `safeParse`, not on the field's
+ * length: the trim happens before the bound is applied, and a single-line
+ * `<input>` drops CR/LF but happily accepts pasted
+ * U+2028/U+2029/U+0085/DEL, which only this refinement rejects.
  */
 export const DisplayNameSchema = z
   .string()

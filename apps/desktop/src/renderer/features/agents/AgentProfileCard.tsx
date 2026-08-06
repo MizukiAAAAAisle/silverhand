@@ -1,7 +1,7 @@
 import { useState, type JSX } from 'react';
 import { Lock } from 'lucide-react';
 import dayjs from 'dayjs';
-import { DISPLAY_NAME_MAX_LENGTH, type AgentDto } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { AVATAR_PX } from '@/components/avatar-scale';
 import { cn } from '@/lib/cn';
@@ -109,7 +109,6 @@ export function AgentProfileCard({
                 ariaLabel="Display name"
                 editing={nameEditing}
                 onExitEdit={() => setNameEditing(false)}
-                maxLength={DISPLAY_NAME_MAX_LENGTH}
                 validate={rejectDisplayName}
                 className="font-serif text-lg font-semibold leading-tight"
                 onCommit={async next => {

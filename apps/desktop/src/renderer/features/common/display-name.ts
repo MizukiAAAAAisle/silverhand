@@ -6,13 +6,20 @@ import type { ZodError } from 'zod';
  *
  * The authority is the shared `DisplayNameSchema` — trim → 1..
  * `DISPLAY_NAME_MAX_LENGTH` → no control characters or Unicode line
- * separators. Editors call in here instead of re-deriving the rule,
- * because a length attribute only covers part of it: a single-line
- * `<input>` swallows CR/LF but keeps a pasted U+2028 / U+2029 / U+0085 /
- * DEL, which the schema's refinement rejects. Without this gate that
- * value looks submittable and only fails as a 400 (@Alice / @Cindy
- * 2026-08-06, #task:1846). Same shape as the host rename mutation, which
- * parses its input before the request for the same reason.
+ * separators. Editors call in here instead of re-deriving the rule, and
+ * they carry NO DOM `maxLength`, because a length attribute is wrong on
+ * both counts (@Alice / @Cindy 2026-08-06, #task:1846):
+ *   - it filters nothing else — a single-line `<input>` swallows CR/LF but
+ *     keeps a pasted U+2028 / U+2029 / U+0085 / DEL, which the schema's
+ *     refinement rejects, so that value looks submittable and fails as a
+ *     400;
+ *   - and it counts the RAW string while the schema counts the TRIMMED
+ *     one, so capping at the schema's bound cuts a padded paste short and
+ *     saves the truncated name with no word to the viewer — a silent
+ *     rewrite, worse than the 400.
+ *
+ * Parsing before the request is the same shape the host rename mutation
+ * already uses (`UpdateHostInputSchema.parse`).
  *
  * The rejection copy is ours, not Zod's: the schema's messages name the
  * wire field (`display_name must not contain…`) and are written for API

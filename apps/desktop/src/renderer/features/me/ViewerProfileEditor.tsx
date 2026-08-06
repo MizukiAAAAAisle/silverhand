@@ -1,7 +1,6 @@
 import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { Loader2, User as UserIcon } from 'lucide-react';
 import {
-  DISPLAY_NAME_MAX_LENGTH,
   validateAvatarFile,
   type UserDto,
 } from '@silverhand/shared';
@@ -91,9 +90,12 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const nameValue = draftName ?? user.display_name;
-  // The shared schema decides, not a length check: `maxLength` below caps
-  // the field but cannot filter pasted control characters or line
-  // separators, which the schema refuses (@Cindy / @Alice 2026-08-06).
+  // The shared schema decides, and nothing else does: the field carries
+  // NO `maxLength`. The DOM attribute counts raw input, the schema counts
+  // the trimmed value, so a cap of 64 would cut a pasted `"  <64
+  // chars>  "` down to 62 and save that silently — a client-side rewrite,
+  // worse than the 400 it was meant to prevent (@Cindy 2026-08-06). Over
+  // length is reported like any other rejection, below.
   const nameDraft = readDisplayNameDraft(draftName, user.display_name);
   const canSave = nameDraft.kind === 'ready' && !update.isPending;
   // Shown, not just disabled: the offending character is invisible in
@@ -196,7 +198,6 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
           <Input
             id={nameFieldId}
             value={nameValue}
-            maxLength={DISPLAY_NAME_MAX_LENGTH}
             disabled={update.isPending}
             aria-invalid={nameRejection ? true : undefined}
             aria-describedby={nameRejection ? nameErrorId : undefined}
