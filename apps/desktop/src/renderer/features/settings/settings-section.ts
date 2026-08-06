@@ -72,3 +72,24 @@ export function persistSettingsSection(section: SettingsSection): void {
     // Quota / disabled storage — the choice still holds for this session.
   }
 }
+
+/**
+ * Forget the section, memory AND disk.
+ *
+ * The section is identity-bound — it reveals what the previous viewer was
+ * looking at — so logout must wipe it (`clearViewerLocalState` in
+ * `features/me/hooks`). Clearing the localStorage key alone would not:
+ * the singleton above outlives a sign-out inside one renderer process, so
+ * the next viewer would inherit the previous viewer's section from memory
+ * and never consult the emptied storage. Same two-layer reset as
+ * `clearPlaceMemory`, and it lives here because this module is the only
+ * owner of both layers.
+ */
+export function clearSettingsSection(): void {
+  currentSection = null;
+  try {
+    localStorage.removeItem(SETTINGS_SECTION_KEY);
+  } catch {
+    // Quota / disabled storage — the in-memory reset above is what matters.
+  }
+}

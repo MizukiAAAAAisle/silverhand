@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
  *
  * Device-scoped by design, and deliberately NOT identity-bound: a collapsed
  * section reveals nothing about who was signed in, so it survives logout with
- * the rest of the chrome ergonomics (see `IDENTITY_BOUND_KEYS` in
+ * the rest of the chrome ergonomics (see `clearViewerLocalState` in
  * features/me/hooks.ts). This is the localStorage-eligible family — unlike
  * list sort mode / rank, which is viewer-scoped server state
  * (docs/list-sort-v1.md) and must not fork per surface.

@@ -24,6 +24,7 @@ import {
   loadAvatarBlobUrl,
 } from '@/lib/avatar-blob-cache';
 import { CONVERSATION_MEMBERS_KEY_PREFIX } from '@/features/conversations/useConversationMembers';
+import { clearSettingsSection } from '@/features/settings/settings-section';
 import { usersKey } from '@/features/users/hooks';
 
 /**
@@ -36,14 +37,22 @@ import { usersKey } from '@/features/users/hooks';
  *
  * Kept INSIDE the file (rather than exported from current-user) so the
  * full ownership of "what survives a logout" stays in one place; if a
- * future preference key is added, this list is the diff target.
+ * future preference key is added, this function is the diff target.
  *
- * Two layers are cleared:
+ * Every layer is reset through the module that owns it, and each of those
+ * resets clears memory AND disk. A list of localStorage keys wiped from
+ * here would not be enough: a module holding its value in a singleton
+ * (place memory, the settings section) keeps serving the previous viewer
+ * from memory while the emptied key goes unread (#task:1846).
  *   1. {@link clearPlaceMemory} — last-channel-per-workspace and
- *      last-thread-per-channel. Maps + disk both wiped.
- *   2. The `IDENTITY_BOUND_KEYS` list below — small set of localStorage
- *      keys that surface previous-viewer activity (which settings tab
- *      was open, whether the setup wizard is pending).
+ *      last-thread-per-channel.
+ *   2. {@link clearAvatarBlobCache} — app-session avatar object URLs, so
+ *      the next viewer inherits no avatar bytes and the blobs are
+ *      released (#task:1321).
+ *   3. {@link clearSettingsSection} — which Settings sub-section was open,
+ *      identity-bound because it reveals what the previous viewer was
+ *      looking at when they signed out. Defaulting back to the
+ *      wizard-recommended landing tab is strictly safer than inheriting.
  *
  * What intentionally SURVIVES (device-scoped UI ergonomics — Cindy
  * #task:861 review): theme (`silverhand:appearance`), sidebar
@@ -51,33 +60,12 @@ import { usersKey } from '@/features/users/hooks';
  * drawer width, agent-section collapse state. None of these reveal who
  * the previous viewer was; they describe how the device's owner likes
  * the chrome to look. If the product contract ever tightens to "every
- * logout returns a factory-default shell", expand this list.
+ * logout returns a factory-default shell", expand this function.
  */
-const IDENTITY_BOUND_KEYS: ReadonlyArray<string> = [
-  // Last-viewed Settings sub-section — identity-bound because it
-  // reveals what the previous viewer was looking at when they signed
-  // out. Defaulting back to the wizard-recommended landing tab is
-  // strictly safer than inheriting.
-  'silverhand:settings-section',
-];
-
 function clearViewerLocalState(): void {
-  // 1. In-memory + disk for the place-memory maps.
   clearPlaceMemory();
-  // 2. App-session avatar blob cache — revoke every cached object URL so the
-  //    next signed-in viewer never inherits the previous session's avatars and
-  //    the blob memory is released (#task:1321).
   clearAvatarBlobCache();
-  // 3. Other identity-bound localStorage keys. Wrap each removal so a
-  //    quota error on one doesn't strand the others.
-  try {
-    for (const key of IDENTITY_BOUND_KEYS) {
-      localStorage.removeItem(key);
-    }
-  } catch {
-    // Quota / disabled storage — nothing to do, in-memory state is
-    // already cleared above.
-  }
+  clearSettingsSection();
 }
 
 const meKey = ['me'] as const;

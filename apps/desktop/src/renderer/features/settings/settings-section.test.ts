@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * fresh copy.
  */
 
-type StorageStub = Pick<Storage, 'getItem' | 'setItem'>;
+type StorageStub = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 function stubGlobalStorage(storage: StorageStub | null): void {
   const scope = globalThis as { localStorage?: unknown };
@@ -32,6 +32,9 @@ function workingStorage(initial: string | null = null): StorageStub {
     setItem: (_key, next) => {
       value = next;
     },
+    removeItem: () => {
+      value = null;
+    },
   };
 }
 
@@ -42,6 +45,9 @@ function unusableStorage(): StorageStub {
       throw new Error('storage unavailable');
     },
     setItem: () => {
+      throw new Error('storage unavailable');
+    },
+    removeItem: () => {
       throw new Error('storage unavailable');
     },
   };
@@ -110,5 +116,29 @@ describe('settings-section store — aiming survives unusable storage', () => {
     store.persistSettingsSection('account');
     stubGlobalStorage(workingStorage('connection'));
     expect(store.readSettingsSection()).toBe('account');
+  });
+});
+
+describe('settings-section store — logout does not hand the section to the next viewer', () => {
+  it('clears memory and disk, so the next viewer starts on Appearance', async () => {
+    // Viewer A signs out on Account; viewer B signs in inside the same
+    // renderer process, where the singleton would otherwise outlive the
+    // session and be served ahead of the emptied storage key.
+    const storage = workingStorage();
+    const store = await loadStore(storage);
+    store.persistSettingsSection('account');
+    expect(storage.getItem('silverhand:settings-section')).toBe('account');
+
+    store.clearSettingsSection();
+
+    expect(store.readSettingsSection()).toBe('appearance');
+    expect(storage.getItem('silverhand:settings-section')).toBeNull();
+  });
+
+  it('clears the section even when storage refuses the removal', async () => {
+    const store = await loadStore(unusableStorage());
+    store.persistSettingsSection('account');
+    expect(() => store.clearSettingsSection()).not.toThrow();
+    expect(store.readSettingsSection()).toBe('appearance');
   });
 });
