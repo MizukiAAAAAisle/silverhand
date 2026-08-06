@@ -253,6 +253,35 @@
   box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
 }
 
+/* ── Settings sub-nav rows — the same poster sticker, off the sidebar ──
+   `features/settings/SettingsPage.tsx` gives its sub-nav the app row
+   vocabulary (shiki 2026-08-06「跟 computer rail side nav 同样的效果」), but
+   those rows sit in the content card, so the two `aside[data-sidebar]` rules
+   above can't reach them. Border colour and both grounds already arrive
+   through tokens (`--border-row-*`, `--bg-option-hover` = pale lime,
+   `--bg-row-selected` = lime); what's missing in forza6 is the ink drop
+   shadow that makes a row read as a sticker, plus the descendant text-token
+   re-restore so the section icon stays near-black on the lime wedge.
+
+   Scoped to `[data-settings-nav]` rather than folded into the rules above:
+   widening those to every `.sidebar-row-border` would also repaint
+   `ArchivedChannelsPanel` (deliberately a different hover language, see
+   global.css §Row-state border) and `AgentActivityPane` (no sticker lift by
+   design). */
+[data-theme='forza6']
+  [data-settings-nav]
+  .sidebar-row-border.text-text-on-selected {
+  --text-primary: #0A0A0A;
+  --text-secondary: #0A0A0A;
+  --text-muted: rgba(0, 0, 0, 0.62);
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+}
+[data-theme='forza6']
+  [data-settings-nav]
+  .sidebar-row-border:not(.text-text-on-selected):hover {
+  box-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+}
+
 /* `bg-success` status dot in SELECTED row (lime wedge): default PR-1
    `--success #3F7A1B` deep lime collapses on lime wedge. Override
    to near-black so the 1.5px dot reads as a HUD marker on lime.

@@ -202,12 +202,31 @@ const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }
 };
 
 /** Page-internal vertical nav. The settings sub-nav is *secondary*
- *  navigation (the user already chose Settings from the rail). Rows
- *  follow the app-wide selected-row vocabulary: hover paints a pale
- *  `--bg-option-hover` preview, the selected row a bright
- *  `--bg-row-selected` fill + `--text-on-selected` ink — the same
- *  two-step hierarchy as the channel sidebar / task board, with radius
- *  on `--control-radius`. */
+ *  navigation (the user already chose Settings from the rail), but its rows
+ *  are rows — so they carry the app-wide row vocabulary verbatim (shiki
+ *  2026-08-06「给 setting page 的 side nav 加上 computer rail side nav 同样的
+ *  效果。三主题都是」): a `sidebar-row-border` stroke that is transparent at
+ *  rest and painted on hover / selected, `--row-radius` geometry, a pale
+ *  `--bg-option-hover` hover preview and the bright `--bg-row-selected` fill
+ *  + `text-text-on-selected` ink. Same three-state ladder as ComputersPanel's
+ *  `SidebarRow`; because the stroke is always reserved, no state shifts the
+ *  label.
+ *
+ *  These rows live in the content card, NOT inside an `aside[data-sidebar]`,
+ *  so the per-theme row painting that keys on that ancestor cannot reach them
+ *  — same situation as `AgentActivityPane`. Two consequences, both load-
+ *  bearing: the border colours are consumed as the `--border-row-*` tokens
+ *  inline (`border-accent` would resolve to forza6's brand pink and clash
+ *  with the lime selection ground), and the row carries `data-row-selected`,
+ *  which is the hook studio-light / slack-dark already use for their content-
+ *  area selected-row variants. forza6's poster-sticker shadow is scoped to
+ *  `[data-settings-nav]` in forza6-components.css.
+ *
+ *  Hover ground stays `--bg-option-hover`, not the `--bg-row-hover` that
+ *  `SidebarRow` reads: forza6 defines `--bg-row-hover` as a magenta mix that
+ *  only ever resolves to pale lime under the sidebar's own override, while
+ *  `--bg-option-hover` IS that pale lime at the theme root (studio-light maps
+ *  both to the same #E9EEF6). */
 function SettingsSubNav({
   section,
   onSelect,
@@ -218,6 +237,7 @@ function SettingsSubNav({
   return (
     <aside
       aria-label="Settings sections"
+      data-settings-nav
       className="flex h-full w-44 shrink-0 flex-col py-4 pr-2"
     >
       <nav className="flex flex-col gap-0.5">
@@ -229,12 +249,15 @@ function SettingsSubNav({
               key={id}
               type="button"
               aria-current={selected ? 'page' : undefined}
+              data-row-selected={selected || undefined}
               onClick={() => onSelect(id)}
               className={cn(
-                'flex w-full items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors',
+                // `px-2` + the reserved 2px stroke keeps the label's 10px
+                // optical inset from before the border existed.
+                'sidebar-row-border flex w-full items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
                 selected
-                  ? 'bg-[var(--bg-row-selected)] font-medium text-[color:var(--text-on-selected)]'
-                  : 'text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+                  ? 'border-[var(--border-row-selected,var(--accent))] bg-[var(--bg-row-selected)] font-medium text-text-on-selected'
+                  : 'border-transparent text-text-secondary hover:border-[var(--border-row-hover,var(--accent))] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
               )}
             >
               {icon}
