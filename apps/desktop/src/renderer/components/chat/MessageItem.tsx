@@ -907,7 +907,14 @@ function ActorMessageItem({
       >
         {canReact ? (
           <ReactionPicker
-            align="end"
+            // The cluster itself is mirrored (`left-2` above), so the picker's
+            // growth direction has to mirror with it: a popover always opens
+            // from the trigger's own edge INTO the row, never out of it.
+            // `end` grows leftward, `start` rightward — so the left-hand
+            // cluster of an own message takes `start` (shiki 2026-08-06
+            // 「user message 的 reaction 在左侧,如果 popover 也往左,那么就
+            // 超出了」, #task:1840).
+            align={alignRight ? 'start' : 'end'}
             onOpenChange={setReactionPickerOpen}
             onPick={emoji =>
               toggleReaction.mutate({

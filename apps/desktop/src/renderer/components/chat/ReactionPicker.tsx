@@ -22,6 +22,10 @@ export interface ReactionPickerProps {
    *  collapse out from under the (portaled) picker — the four-pit nested-
    *  overlay guard (see notes/user-preferences.md). */
   onOpenChange?: (open: boolean) => void;
+  /** Which trigger edge the grid grows from: `start` grows rightward, `end`
+   *  leftward. Callers whose trigger is mirrored for own (`user-right`)
+   *  messages must mirror this too, so the grid always opens into the message
+   *  row rather than out of it (#task:1840). */
   align?: 'start' | 'center' | 'end';
 }
 

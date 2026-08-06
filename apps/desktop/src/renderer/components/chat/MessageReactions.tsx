@@ -59,6 +59,7 @@ export function MessageReactions({
           key={agg.emoji}
           messageId={message.id}
           agg={agg}
+          alignRight={alignRight}
           interactive={canReact}
           onClick={() => onReact(agg.emoji, agg.viewer_reacted)}
         />
@@ -88,11 +89,14 @@ export function MessageReactions({
 function ReactionChip({
   messageId,
   agg,
+  alignRight,
   onClick,
   interactive,
 }: {
   messageId: string;
   agg: ReactionAggregateDto;
+  /** Only to mirror the reactor card's growth direction — see its `align`. */
+  alignRight: boolean;
   onClick: () => void;
   interactive: boolean;
 }): JSX.Element {
@@ -147,7 +151,11 @@ function ReactionChip({
       </HoverCard.Trigger>
       <HoverCard.Portal>
         <HoverCard.Content
-          align="start"
+          // Same rule as the two pickers: the row is mirrored (`justify-end`
+          // on an own message), so its chips sit against the row's right
+          // edge and the card has to grow leftward from there instead of
+          // outward (#task:1840).
+          align={alignRight ? 'end' : 'start'}
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
