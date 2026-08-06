@@ -40,7 +40,9 @@ function buildPlatformPrompt(
   });
 }
 
-function prompt(): string {
+function prompt(
+  overrides: Partial<Parameters<typeof buildPlatformPrompt>[0]> = {},
+): string {
   return buildPlatformPrompt({
     agentId: 'agent-1',
     agentName: 'Cindy',
@@ -58,6 +60,7 @@ function prompt(): string {
       sessionTitle: 'member activity',
       members: [],
     },
+    ...overrides,
   });
 }
 
@@ -113,8 +116,15 @@ describe('buildPlatformPrompt', () => {
   });
 
   it('keeps the static standing manual within the first-stage size budget', () => {
-    const byteLength = new TextEncoder().encode(prompt()).length;
-    expect(byteLength).toBeLessThanOrEqual(18 * 1024);
+    // Measure the shipping shape: `activeProfilePromptDir` in
+    // packages/host/src/daemon/prompt-context.ts always resolves to `.`, so the
+    // budget must be asserted against that render — the legacy
+    // `./.silverhand/agents/<id>` coordinate the other cases use only exists to
+    // exercise path normalization.
+    const byteLength = new TextEncoder().encode(
+      prompt({ activeProfileDir: '.' }),
+    ).length;
+    expect(byteLength).toBeLessThanOrEqual(19 * 1024);
   });
 
   it('renders the DM workspace line with the local L1 root', () => {

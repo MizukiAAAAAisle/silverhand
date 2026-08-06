@@ -65,7 +65,8 @@ on them being present.
 5. **Workspace & Memory** — persistent cwd semantics, L1/L2 by scope,
    MEMORY-as-index, progressive disclosure, and checkpoint discipline.
 6. **Collaboration Policy** — When to speak / How to report.
-7. **Work Coordination** — Tasks → Threads → Channels → Members.
+7. **Work Coordination** — Tasks → Acceptance Summary → Splitting work → Threads →
+   Cross-computer work → Channels → Members.
 8. **Capabilities** — Attachments, History and search, Schedules.
 9. **Tool Reference (silverhand CLI)** — injected (`renderSilverhandCliManual`):
    compact CLI contract + generated Domain → subcommand index + pitfalls.
@@ -157,6 +158,100 @@ be a deliberate, called-out decision — never a side effect of rewording.
 - **Reference grammar summary** — the prompt keeps the short `@<handle>`,
   `#conv:<id>`, and `#task:<n>` distinction because malformed sigils silently
   render inert. Detailed examples belong in `silverhand message --help`.
+- **Acceptance Summary in the task body** — a non-trivial task moving to
+  `in_review` carries ONE canonical Acceptance Summary (scope, key decisions,
+  actual behavior changes, verification, residual risks/human decisions),
+  revised in place. The body is definition + acceptance record; discussion stays
+  in chat or the source thread. Without "revise in place" the body accretes a
+  per-round repair log and stops being independently reviewable. The heading names
+  the artifact, not an activity: an activity-named heading ("Review Handoff") reads
+  as governing every review a human asks for, while this section governs only the
+  task body at `in_review` (shiki, 2026-08-06). Keep heading and term identical —
+  a second name for the same artifact is drift.
+- **Boundary reporting across computers** — an agent iterates on its own
+  computer and reports once at a stable boundary; it does not follow another
+  workstream's intermediate activity or ask for a walkthrough of state it cannot
+  inspect. Portable evidence — text or an attachment — is the handoff; the
+  authority for "a local path is not portable" is the Operating Contract
+  `computer=` bullet, and it must not be restated elsewhere. A local commit is
+  deliberately NOT in that enumeration: another computer cannot read a commit
+  object that has not reached a shared remote, and pushing is not an agent's
+  action.
+- **The follow-state guidance is a principle, not a rule, and the announce-then-
+  unfollow order is load-bearing** — it lives in `### Threads`: follow state stays
+  aligned with your part in the work, unfollowing is silent, you announce the
+  departure before unfollowing, and a later mention brings you back. Four things
+  about that shape are decided, not stylistic:
+  1. **No conditions.** Earlier drafts scoped it — first to threads *where only
+     agents are working* and a participant brought in *for a single question*,
+     then to a *temporary participant* who declares no remaining work depends on
+     them. Ruled out by shiki (2026-08-06): "两版都有点太死板了，应该提供一个理念，
+     而不是一个规则", and on the risk of an agent leaving too early, "我可以接受判断
+     失误，可以实验". Whether an agent is still part of the work is its own
+     judgment; enumerating the situations in which it may leave states the
+     conclusion for it. Do not reintroduce a condition clause.
+  2. **The criterion is your part in the work, not how active you are.** An agent
+     waiting on someone else's delivery is idle this round yet still part of the
+     work; a criterion phrased as "active participation" would tell it to leave.
+     Keep the criterion about the work, not about recent output.
+  3. **The order is mechanism, not manners.** `applyThreadFollowEffects`
+     (`packages/backend/src/services/conversation-message/thread-follow.ts`)
+     registers the author of **every** reply as a follower (`source='reply'`), so
+     announcing *after* unfollowing silently re-follows the announcer and the
+     guidance executes as a no-op. The sentence order is what preserves this;
+     never rewrite it as "unfollow, then announce".
+  4. **The thread root's author needs no written exception.** That author is
+     re-registered on every reply (`source='target_author'`, same file) and so
+     cannot leave; a principle addressed to one's part in the work simply does not
+     fit them, whereas a rule would have had to carve them out.
+  5. **The recall sentence stays plain.** "A later mention brings you back" was
+     chosen by shiki (2026-08-06) over spelling out the two effects (follow state
+     restored, replies missed while unfollowed delivered). The mechanism belongs
+     to `silverhand thread --help`, and the sentence only has to make departure
+     feel reversible.
+
+  Accepted residual: an agent may misjudge and leave while a human still wants it.
+  The mitigation is the announcement — the departure is stated, and one mention
+  brings the agent back. This is shiki's ruling, not an oversight.
+
+**Deliberately excluded (#task:1825) — do not "restore" these as omissions:**
+
+- **Thread as a computer isolation boundary.** An earlier proposal keyed threads
+  to a computer ("one thread per computer", "don't open computer-specific threads
+  when only one computer is involved"). Rejected on the model, not on budget:
+  thread delivery is governed by conversation membership and follower state,
+  neither of which has a computer dimension (`computer=` is a property of each
+  message), so a computer-keyed thread would promise a locality the system cannot
+  implement. The settled model (shiki, 2026-08-06) is that locality-first work
+  remains a legitimate *means* — a focused thread keeps one computer's iteration
+  off the main line and reduces cross-machine spectating of intermediate states —
+  but a thread is never the isolation container, which is why `### Cross-computer
+  work` prescribes boundary reporting and mentions a thread only as an option.
+- **Implementation mechanics.** Wake-up cost of a thread reply, the follower
+  table, delivery fan-out (shiki, 2026-08-06: agents need not perceive that
+  opening a thread is not free). The prompt states observable behavior; the
+  mechanism lives in code and here.
+- **"Agree interfaces and acceptance criteria before local work begins."**
+  Real, but the human schedules work decomposition and contract negotiation
+  (shiki, 2026-08-06); the prompt does not add a pre-work gate. Acceptance
+  criteria already belong to the task definition.
+- **Claim-timing refinements** — "an unassigned todo is a candidate, not an
+  assignment", "claim only what you start now", "never reserve future work"
+  (shiki, 2026-08-06: not added). `### Tasks` Rules 1–5 remain the sole
+  authority on claiming.
+- **A standing "re-verify shared state before you assert it" rule.** Drafted as an
+  Operating Contract invariant, removed by shiki (2026-08-06). His ruling: "most
+  single-computer scenarios do not need this stated." The supporting analysis is
+  this review's, not his — the discipline is real, but its trigger is a shared
+  working tree, so a manual injected into every session pays for it in every turn.
+  Verification discipline belongs to each agent's own memory, not to the standing
+  contract. Anyone re-pricing this entry re-does the cost analysis; only the
+  ruling is settled.
+- **"Coordinates that expire do not belong in durable surfaces."** Removed by
+  shiki (2026-08-06) as redundant. Which rules already cover it (this review's
+  enumeration): the Operating Contract `computer=` bullet rules when another
+  computer's path is usable, and `## Memory` routes commits to git. Restating it
+  under `### What to remember` bought a third phrasing of two existing rules.
 
 ## 4. Security-critical code — never weaken
 
@@ -215,9 +310,18 @@ and injects metadata only — never note bodies.
   from the resulting CLI groups. Adding a fourth hand-written inventory is a
   design regression.
 - **Progressive disclosure is measured.** The first-stage static standing
-  manual must stay at or below 18KB UTF-8 with a minimal injected tail. Size is
+  manual must stay at or below 19KB UTF-8 with a minimal injected tail. Size is
   an upper bound, not a target to fill: content may be smaller when every
-  removed detail has a reachable `--help` or error-hint home.
+  removed detail has a reachable `--help` or error-hint home. The bound is an
+  internal tripwire, not a protocol limit — raising it is a per-turn context
+  cost decision for the product owner, and each raise records what it bought
+  (18KB → 19KB, #task:1825: the collaboration paradigms below). **The assertion
+  measures the shipping shape.** Production's `activeProfilePromptDir`
+  (`packages/host/src/daemon/prompt-context.ts`) always resolves to `.`, so the
+  budget case renders with `.`; the legacy `./.silverhand/agents/<id>` coordinate
+  survives only in the cases that exercise path normalization. Asserting on that
+  retired coordinate would tighten the bound by an accidental ~100 B while
+  leaving the number that actually ships unmeasured.
 - **No "platform" as a generic noun.** It bleeds into agent speech as a verbal
   tic (see known-issues §1). Say "Silverhand" or name the concrete thing.
 
@@ -233,6 +337,16 @@ and injects metadata only — never note bodies.
   Memory section and the injection blocks (`renderInjectedFile`, the memory
   notes catalog, `renderWorkspaceMemoryIndex`) must agree with the L1/L2
   contract there.
+- **Thread delivery/follow semantics ↔ `### Threads` / `### Cross-computer
+  work`.** Those sections assume thread delivery is governed by conversation
+  membership and follower state — with no computer dimension — that unfollow
+  stops only future delivery, that the author of every reply is re-followed, and
+  that the thread root's author is therefore unable to leave. If
+  `packages/backend/src/services/conversation-message/thread-follow.ts`
+  changes any of those, revisit both sections, the announce-then-unfollow order in
+  the follow-state guidance, and the exclusion recorded in §3: the absence of a
+  computer dimension in membership and follower state is what keeps a computer
+  axis out.
 
 ## 7. Test discipline
 
@@ -252,7 +366,7 @@ The test file is `packages/backend/tests/drivers/platform-prompt.test.ts`.
   that have CLI-flag equivalents; the generated domain-index guard projects
   every manifest command into the prompt. Keep all three.
 - **Structure and budget are contracts, not prose locks.** Assert the leading H1,
-  complete top-level heading order from §2, and the 18KB upper bound. Do not
+  complete top-level heading order from §2, and the 19KB upper bound. Do not
   assert exact paragraph wording.
 - **Watch line-wrapping.** The template literal's source line breaks become real
   newlines in the output. A multi-word substring split across a wrap will fail a
@@ -274,7 +388,7 @@ Before landing a platform-prompt edit:
 - [ ] CLI command index entries keep full command names.
 - [ ] Command discovery changes originate in the shared manifest, not a parallel
       list.
-- [ ] Minimal static prompt remains within the 18KB UTF-8 budget.
+- [ ] Minimal static prompt remains within the 19KB UTF-8 budget.
 - [ ] `docs/cli-system.md` updated iff a CLI fact changed (§6).
 - [ ] No Markdown code span broken across a source line.
 - [ ] `pnpm --filter @silverhand/shared typecheck` clean.

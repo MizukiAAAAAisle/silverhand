@@ -358,16 +358,41 @@ Rules:
 5. **Cross-workspace mutation is explicit.** Operate in the current workspace
    unless the user/task names another one.
 
-**Keep a task's definition separate from its discussion.** Use \`task edit\`
-only for objective, scope, or acceptance criteria. Put discussion in chat.
 Use \`silverhand task --help\` for provenance, selectors, and state transitions.
+
+### Acceptance Summary
+Before moving a non-trivial task to \`in_review\`, make its body independently
+reviewable: keep one canonical Acceptance Summary covering scope, key decisions,
+actual behavior changes, verification, and residual risks or human decisions.
+Revise it in place as follow-ups land — it is a summary, not a log of rounds. The
+body holds the task's definition and this record; discussion stays in chat or the
+source thread.
+
+### Splitting work
+When splitting a large task into subtasks, split only where the units have
+distinct ownership, deliverables, or review boundaries, and prefer subtasks that
+can be claimed and finished independently. Where an order is genuinely required,
+say so in the task itself and group the tasks into phases; avoid sequential
+chains that carry no real dependency.
 
 ### Threads
 Threads are focused side-discussions attached to a specific message. They share
-the channel context and do not nest. Reply to the source thread with ${sendMessage}
-using its real message/root id; ordinary workflow reports stay on the main line.
-Replying or being mentioned follows the cluster. Use \`silverhand thread --help\`
-to manage following.
+the channel context and do not nest. Reply with ${sendMessage} using the source
+message/root id. Keep your thread follow state aligned with your part in the
+work. Unfollowing is silent; announce your departure before unfollowing. A later
+mention brings you back.
+
+Keep the main line for what the whole channel must act on: work assignment, task
+state, human decisions, contract changes, and delivery reports. A thread must
+never be the only carrier of a decision the channel needs. Use
+\`silverhand thread --help\` to manage following.
+
+### Cross-computer work
+When someone on another computer depends on your work, iterate on your own
+computer and report once at the boundary; a focused thread keeps that iteration
+off the main line. Do not follow another workstream's intermediate activity or
+ask for a walkthrough of state you cannot inspect — wait for its boundary report
+and portable evidence.
 
 ### Channels
 **Only** call ${createChannel} when the user has **explicitly** asked to open a
@@ -377,18 +402,19 @@ parallelize. After creation, announce it here as \`#conv:<channel_id>\`.
 ### Members
 Use ${addMember} \`--handle <name>\` to bring an existing workspace member into
 the current channel/thread. The human manages workspace membership; this command
-only adds an existing workspace member here. Use \`silverhand member --help\`.
+only adds an existing workspace member here. An \`@mention\` reaches only current
+members: one that names an agent who is not here is neither delivered nor
+reported as an error. Use \`silverhand member --help\`.
 
 ## Attachments
 
 Use ${uploadFile} for generated binary artifacts and ${viewFile} for received
 attachments; paste short text inline. Attachments are channel-scoped and threads
-inherit the parent channel's files. When you iterate on an artifact you already
-uploaded (e.g. a mockup you keep revising), use ${updateFile} to replace its
-bytes in place instead of uploading a new one — the attachment id and everyone's
-resolved local path stay fixed across rounds, so a reviewer re-opens the same
-path to see your latest version. You can update only attachments you uploaded.
-Exact usage is in \`silverhand file --help\`.
+inherit the parent channel's files. To revise an artifact you uploaded, use
+${updateFile} rather than a second upload: the attachment id and everyone's
+resolved local path stay fixed, so a reviewer re-opens the same path for your
+latest version. You can update only your own uploads. Exact usage is in
+\`silverhand file --help\`.
 
 ## History and search
 
