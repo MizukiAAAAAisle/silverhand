@@ -9,6 +9,7 @@ import {
   RefreshCcw,
 } from 'lucide-react';
 import dayjs from 'dayjs';
+import { toast } from 'sonner';
 import type {
   AgentWorkspaceFileRead,
   AgentWorkspaceTree,
@@ -494,7 +495,7 @@ function leafName(path: string): string {
 /**
  * File preview, fed an already-resolved file query (no hook coupling — the
  * container owns the source-scoped query). The `full` variant shows the full
- * path + size/mtime + copy-path header; `compact` drops the chrome (the
+ * path + size/mtime + copy-contents header; `compact` drops the chrome (the
  * drill-in header already names the file) and only keeps the truncation banner
  * + body.
  */
@@ -551,9 +552,9 @@ function WorkspaceFilePreview({
             type="button"
             data-panel-control="row-action"
             className="inline-flex size-6 items-center justify-center text-text-muted transition-colors hover:text-text-primary"
-            aria-label="Copy file path"
-            title="Copy path"
-            onClick={() => void navigator.clipboard.writeText(path)}
+            aria-label="Copy file contents"
+            title="Copy contents"
+            onClick={() => void copyFileContent(file)}
           >
             <Copy className="size-3" />
           </button>
@@ -582,6 +583,31 @@ function WorkspaceFilePreview({
       </div>
     </div>
   );
+}
+
+/**
+ * The header's copy action takes the **file body**, not the path (shiki
+ * 2026-08-07: the path was the wrong payload — you come here to read a file, so
+ * what you want out is its text). Two details on purpose:
+ *  - the toast is what tells you it worked; a clipboard write is otherwise
+ *    completely silent. Wording matches the chat corpus (`Copied to
+ *    clipboard` / `Couldn't copy: …`) so this doesn't read as a second dialect.
+ *  - when the daemon truncated the read, we copy exactly what the preview shows
+ *    and the toast says so. The banner above already explains the 512 KB cap,
+ *    but a silent "Copied" would leave you holding a partial file thinking it
+ *    was whole.
+ */
+async function copyFileContent(file: AgentWorkspaceFileRead): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(file.content);
+    toast.success(
+      file.truncated ? 'Copied the truncated preview' : 'Copied to clipboard',
+    );
+  } catch (err) {
+    toast.error(
+      "Couldn't copy: " + (err instanceof Error ? err.message : String(err)),
+    );
+  }
 }
 
 function formatBytes(bytes: number): string {
