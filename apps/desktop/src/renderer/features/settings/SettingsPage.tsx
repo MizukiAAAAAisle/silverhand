@@ -5,6 +5,8 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  AlignLeft,
+  AlignRight,
   Check,
   Code2,
   KeyRound,
@@ -24,6 +26,12 @@ import {
 } from '@/features/common/DestructiveAction';
 import { cn } from '@/lib/cn';
 import { useAppearance } from '@/hooks/useAppearance';
+import {
+  MESSAGE_LAYOUT_MODES,
+  setMessageLayoutMode,
+  useMessageLayoutMode,
+  type MessageLayoutMode,
+} from '@/components/chat/useMessageLayoutMode';
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -285,9 +293,10 @@ function AppearancePane({
             id="settings-appearance"
             icon={<Palette className="size-4" />}
             title="Appearance"
-            description="Choose the visual theme used across the workspace shell and chat UI."
+            description="Choose the visual theme and how chat messages are arranged."
           >
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-4">
+              <div className="grid gap-3 sm:grid-cols-2">
               {THEME_IDS.map(id => {
                 const meta = THEME_META[id];
                 const active = appearance.theme === id;
@@ -372,6 +381,8 @@ function AppearancePane({
                   </button>
                 );
               })}
+              </div>
+              <MessageAlignmentControl />
             </div>
           </SettingsSection>
 
@@ -417,6 +428,83 @@ function AppearancePane({
         </div>
       </div>
     </section>
+  );
+}
+
+/** Message alignment — the user-side switch for `useMessageLayoutMode`
+ *  (shiki 2026-08-06「这个 mode 没有真实的用户侧开关,把他做到设置页中」,
+ *  #task:1841).
+ *
+ *  It sits in Appearance rather than in a section of its own: one row does
+ *  not carry a section header, and "how the app looks" already covers row
+ *  arrangement. Unlike the theme controls it takes no props — the mode is a
+ *  module store (a chat row is the reader and this is the writer, so the
+ *  value cannot live in either surface's `useState`), and reading it here
+ *  through the same hook is what makes the selection and every mounted
+ *  message row flip together.
+ *
+ *  Two named options rather than a checkbox: both alignments are real
+ *  layouts with a name, and the labels state the scope that an on/off box
+ *  would leave the user guessing at. Recipe is the app's two-option
+ *  radiogroup (see `CreateChannelDialog`) — selected paints the app-wide
+ *  selected-row pair (`--bg-row-selected` / `--border-row-selected`), the
+ *  same vocabulary as the sub-nav beside it, so it never invents a second
+ *  way to say "this one". */
+const MESSAGE_LAYOUT_META: Record<
+  MessageLayoutMode,
+  { label: string; icon: typeof AlignLeft }
+> = {
+  'all-left': { label: 'All left', icon: AlignLeft },
+  'user-right': { label: 'Mine right', icon: AlignRight },
+};
+
+function MessageAlignmentControl(): JSX.Element {
+  const mode = useMessageLayoutMode();
+  return (
+    <div
+      data-settings-card
+      className="grid gap-2 rounded-[8px] border border-border-subtle bg-bg-floating p-3"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-text-primary">
+            Message alignment
+          </h3>
+          <p className="truncate text-xs text-text-muted">
+            Only your own messages move
+          </p>
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="Message alignment"
+          className="flex shrink-0 gap-2"
+        >
+          {MESSAGE_LAYOUT_MODES.map(id => {
+            const meta = MESSAGE_LAYOUT_META[id];
+            const selected = id === mode;
+            const Icon = meta.icon;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => setMessageLayoutMode(id)}
+                className={cn(
+                  'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus',
+                  selected
+                    ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+                    : 'border-border-subtle bg-[var(--bg-base)] text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+                )}
+              >
+                <Icon className="size-3.5" />
+                {meta.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 
