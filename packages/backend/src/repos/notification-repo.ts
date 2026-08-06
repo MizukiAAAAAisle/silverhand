@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import type { NotificationDto, NotificationKind, NotificationRow } from '@silverhand/shared';
 import { prepareObserved } from '../observability/observed-statement.js';
+import { LIVE_CONVERSATION_PREDICATE } from './conversation-liveness.js';
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -114,7 +115,18 @@ export class NotificationRepo {
     return rows.map(rowToDto);
   }
 
-  /** Aggregate unread counts by natural workspace/sidebar scope. */
+  /**
+   * Aggregate unread counts by natural workspace/sidebar scope.
+   *
+   * Deliberately NOT gated on conversation liveness (#task:1839 review): what
+   * this count means — "every unread notification" vs "live attention with a
+   * navigable anchor" — is unadjudicated public API behavior with no consumer
+   * today, and it cannot be made to agree with
+   * {@link latestUnreadByWorkspace} by a liveness filter anyway (an anchorless
+   * `agent_start_failed` in a live conversation counts here and can never be
+   * pointed at). Deciding it belongs with the notifications panel, together
+   * with the anchorless / list / mark-all semantics.
+   */
   unreadCountsByWorkspace(userId?: string | null): Map<string, number> {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
@@ -139,8 +151,25 @@ export class NotificationRepo {
   }
 
   /**
-   * Per-sidebar-scope pointer to the most recent unread notification.
-   * Skips rows missing conversation/message ids.
+   * Per-sidebar-scope pointer to the most recent unread notification — the
+   * renderer's jump target when a workspace is selected.
+   *
+   * Two invariants, both #task:1839:
+   *  - Liveness ({@link LIVE_CONVERSATION_PREDICATE}): never point at a
+   *    conversation whose lifecycle has ended. Archiving a channel does not
+   *    delete its notifications, so without this an archived channel keeps
+   *    hijacking plain workspace clicks. Orphans (conversation deleted →
+   *    `conversation_id` NULL) fail closed: an unknowable destination is not a
+   *    destination. This gate is scoped to the POINTER — the counts above keep
+   *    their existing meaning.
+   *  - Determinism: `created_at` is not unique, so the winner is picked by
+   *    `(created_at, id)` in ONE pass with ROW_NUMBER. The previous shape
+   *    joined the aggregate MAX back onto the table, which returned every row
+   *    sharing that millisecond — letting an anchorless notification win and
+   *    hand back a `message_id` typed non-null but actually NULL.
+   *
+   * Rows missing conversation/message ids stay excluded: this pointer's whole
+   * contract is a navigable anchor.
    */
   latestUnreadByWorkspace(
     userId?: string | null,
@@ -153,7 +182,7 @@ export class NotificationRepo {
     }
   > {
     const userPredicate =
-      userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';
+      userId === undefined || userId === null ? 'n.user_id IS NULL' : 'n.user_id = ?';
     const args = userId == null ? [] : [userId];
     const rows = prepareObserved<
         typeof args,
@@ -166,32 +195,29 @@ export class NotificationRepo {
       >(
         this.db,
         'notifications.latest_unread_by_workspace',
-        `SELECT
-           COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
-           n.conversation_id,
-           n.message_id,
-           m.thread_root_id AS thread_root_id
-         FROM notifications n
-         JOIN conversations c ON c.id = n.conversation_id
-         LEFT JOIN messages m ON m.id = n.message_id
-         JOIN (
+        `SELECT scope_id, conversation_id, message_id, thread_root_id
+         FROM (
            SELECT
-             COALESCE(n2.workspace_id, c2.workspace_id) AS scope_id,
-             MAX(n2.created_at) AS mx
-           FROM notifications n2
-           JOIN conversations c2 ON c2.id = n2.conversation_id
+             COALESCE(n.workspace_id, c.workspace_id) AS scope_id,
+             n.conversation_id AS conversation_id,
+             n.message_id AS message_id,
+             m.thread_root_id AS thread_root_id,
+             ROW_NUMBER() OVER (
+               PARTITION BY COALESCE(n.workspace_id, c.workspace_id)
+               ORDER BY n.created_at DESC, n.id DESC
+             ) AS rn
+           FROM notifications n
+           JOIN conversations c ON c.id = n.conversation_id
+           LEFT JOIN messages m ON m.id = n.message_id
            WHERE ${userPredicate}
-             AND n2.read_at IS NULL
-             AND n2.conversation_id IS NOT NULL
-             AND n2.message_id IS NOT NULL
-           GROUP BY scope_id
-         ) latest
-           ON latest.scope_id = COALESCE(n.workspace_id, c.workspace_id)
-          AND latest.mx = n.created_at
-         WHERE ${userPredicate}
-           AND n.read_at IS NULL`,
+             AND n.read_at IS NULL
+             AND n.conversation_id IS NOT NULL
+             AND n.message_id IS NOT NULL
+             AND ${LIVE_CONVERSATION_PREDICATE}
+         )
+         WHERE rn = 1`,
       )
-      .all(...args, ...args);
+      .all(...args);
     const out = new Map<
       string,
       {
@@ -292,6 +318,8 @@ export class NotificationRepo {
     return rows.map(r => r.id);
   }
 
+  /** Total unread for the viewer. Same open question as
+   *  {@link unreadCountsByWorkspace}: not gated on conversation liveness. */
   unreadCount(userId?: string | null): number {
     const userPredicate =
       userId === undefined || userId === null ? 'user_id IS NULL' : 'user_id = ?';

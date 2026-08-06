@@ -61,6 +61,16 @@ describe('Notifications routes — characterization (P15 prep)', () => {
     return r.message.id;
   };
 
+  // Force a `created_at` collision. Notifications minted in the same tick
+  // already collide in production; pinning it makes the tie deterministic to
+  // assert instead of timing-dependent.
+  const sameCreatedAt = (ids: string[]) => {
+    const stmt = t!.ctx.db.prepare(
+      `UPDATE notifications SET created_at = 1700000000000 WHERE id = ?`,
+    );
+    for (const id of ids) stmt.run(id);
+  };
+
   it('GET /api/notifications lists the viewer notifications; unread + limit filters apply', async () => {
     t = buildTestApp();
     const { workspaceId } = await createWs('n-list');
@@ -225,5 +235,127 @@ describe('Notifications routes — characterization (P15 prep)', () => {
     t = buildTestApp();
     const res = await http(t).post('/api/notifications/read', {});
     expect(res.status).toBe(400);
+  });
+
+  // ── #task:1839 — liveness + deterministic latest ────────────────────────
+  //
+  // Behavior falsifiers for THIS read path. Activity's own archive/orphan
+  // matrix lives in activity-lifecycle-conformance.test.ts; both now compose
+  // the same `LIVE_CONVERSATION_PREDICATE`, but sharing the constant is not
+  // evidence — each path asserts its own result.
+
+  type UnreadSummary = {
+    total: number;
+    by_workspace: Record<string, number>;
+    latest_by_workspace: Record<
+      string,
+      { conversation_id: string; message_id: string; thread_root_id: string | null }
+    >;
+  };
+  const unreadSummary = () =>
+    http(t!).json<UnreadSummary>(http(t!).get('/api/notifications/unread'));
+
+  it('archiving a conversation removes its notification from the jump pointer', async () => {
+    t = buildTestApp();
+    const { workspaceId, conversationId } = await createWs('n-archived');
+    seed(workspaceId, conversationId, await postMsg(conversationId));
+
+    const live = await unreadSummary();
+    expect(live.latest_by_workspace[workspaceId]?.conversation_id).toBe(conversationId);
+
+    // Archive through the real route, exactly as the channel UI does.
+    const archived = await http(t).patch(`/api/channels/${conversationId}/archive`, {
+      archived: true,
+    });
+    expect(archived.status).toBe(200);
+
+    // Archiving ends the channel's lifecycle: selecting the workspace must no
+    // longer be hijacked into it.
+    const after = await unreadSummary();
+    expect(after.latest_by_workspace[workspaceId]).toBeUndefined();
+    // The counts keep their existing meaning — gating them is a separate,
+    // unadjudicated product question (#task:1839 review). Pinned here so a
+    // future change to it is a deliberate one.
+    expect(after.by_workspace[workspaceId]).toBe(1);
+    expect(after.total).toBe(1);
+  });
+
+  it('an orphaned notification (conversation deleted → conversation_id NULL) is not a jump target', async () => {
+    t = buildTestApp();
+    const { workspaceId, conversationId } = await createWs('n-orphan');
+    seed(workspaceId, conversationId, await postMsg(conversationId));
+    expect((await unreadSummary()).latest_by_workspace[workspaceId]).toBeDefined();
+
+    // The end-state `ON DELETE SET NULL` leaves behind: the row survives, its
+    // destination does not. Characterization, not a fix: the pointer's INNER
+    // JOIN on conversations already drops these. Pinned because the liveness
+    // gate now states the rule explicitly — if that join ever loosens to a LEFT
+    // JOIN, the rule must still hold rather than degrade to a workspace guess.
+    t.ctx.db
+      .prepare(`UPDATE notifications SET conversation_id = NULL WHERE user_id = ?`)
+      .run(t.viewerUserId);
+
+    const after = await unreadSummary();
+    expect(after.latest_by_workspace[workspaceId]).toBeUndefined();
+    expect(after.by_workspace[workspaceId]).toBe(1);
+  });
+
+  // Both values are in the production id domain: `newId()` is
+  // `randomBytes(12).toString('base64url')`, i.e. 16 base64url chars. `z` is
+  // the alphabet's highest character and `0` a low one, so the ordering below
+  // is a property of real ids — not of an out-of-domain character.
+  const HIGH_ID = 'zzzzzzzzzzzzzzzz';
+  const LOW_ID = '0000000000000000';
+  const setId = (from: string, to: string) => {
+    t!.ctx.db.prepare(`UPDATE notifications SET id = ? WHERE id = ?`).run(to, from);
+  };
+
+  it('same-millisecond anchorless + anchored: the pointer is the anchored row', async () => {
+    t = buildTestApp();
+    const { workspaceId, conversationId } = await createWs('n-same-ms-anchorless');
+    const messageId = await postMsg(conversationId);
+    const anchored = seed(workspaceId, conversationId, messageId);
+    const anchorless = new NotificationRepo(t.ctx.db).insert({
+      kind: 'agent_start_failed',
+      userId: t.viewerUserId,
+      workspaceId,
+      conversationId,
+      messageId: null,
+    });
+    // Give the anchorless row the WINNING tie-break key, so its exclusion is
+    // proven by the query's contract — "the pointer needs an anchor" — and not
+    // by luck of the draw.
+    setId(anchored.id, LOW_ID);
+    setId(anchorless.id, HIGH_ID);
+    sameCreatedAt([LOW_ID, HIGH_ID]);
+
+    const res = await unreadSummary();
+    // `message_id` is typed non-null; the tie must never resolve to the row
+    // that has none.
+    expect(res.latest_by_workspace[workspaceId]).toMatchObject({
+      conversation_id: conversationId,
+      message_id: messageId,
+    });
+  });
+
+  it('same-millisecond anchored rows: the winner is the tie-break key, stable across calls', async () => {
+    t = buildTestApp();
+    const { workspaceId, conversationId } = await createWs('n-same-ms-anchored');
+    const older = seed(workspaceId, conversationId, await postMsg(conversationId));
+    const winner = seed(workspaceId, conversationId, await postMsg(conversationId));
+    // `created_at` is not a unique key, so it cannot decide alone. Pin the
+    // tie-break by giving the intended winner the higher id — a query that
+    // leaves the tie to scan order would return `older` instead.
+    setId(older.id, LOW_ID);
+    setId(winner.id, HIGH_ID);
+    sameCreatedAt([LOW_ID, HIGH_ID]);
+
+    // Same tie, same answer, every call.
+    for (let i = 0; i < 3; i++) {
+      const res = await unreadSummary();
+      expect(res.latest_by_workspace[workspaceId]?.message_id).toBe(
+        winner.message_id,
+      );
+    }
   });
 });

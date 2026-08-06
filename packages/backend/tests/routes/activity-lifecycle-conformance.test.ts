@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ACTIVITY_ITEM_KINDS, type ActivityItemKind } from '@silverhand/shared';
 import {
   ACTIVITY_SOURCE_IDS,
-  LIVE_CONVERSATION_PREDICATE,
   type ActivitySourceId,
 } from '../../src/read-model/activity.js';
+import { LIVE_CONVERSATION_PREDICATE } from '../../src/repos/conversation-liveness.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 // #task:1410 — Class A hardening: Activity source × lifecycle conformance.

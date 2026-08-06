@@ -38,6 +38,7 @@
 // directed tier first, most-recent-first within a tier.
 import type { BackendContext } from '../context.js';
 import { prepareObserved } from '../observability/observed-statement.js';
+import { LIVE_CONVERSATION_PREDICATE } from '../repos/conversation-liveness.js';
 import {
   apiPaths,
   DEFAULT_CHANNEL_ATTENTION_MODE,
@@ -62,21 +63,20 @@ export interface ListActivityParams {
 const PREVIEW_MAX = 140;
 
 /**
- * The single lifecycle gate every Activity source composes: an item is visible
- * ONLY while its conversation is live — the row EXISTS and is NOT archived.
- * Defining it once (instead of re-typing `c.archived_at IS NULL` per query) is
- * the structural fix behind #task:1409 — that bug was one assembly path (the
- * directed query) silently missing the filter the other path (positional) had.
- * A new Activity source that references the conversation as `c` interpolates
- * THIS, and `activity-lifecycle-conformance.test.ts` fails the archived/orphan
- * matrix if any source omits it.
+ * Activity's lifecycle gate is {@link LIVE_CONVERSATION_PREDICATE}, defined in
+ * `repos/conversation-liveness.ts`: an item is visible ONLY while its
+ * conversation is live. Every Activity source that joins the conversation as
+ * `c` interpolates THAT constant — never a hand-written `archived_at IS NULL` —
+ * and `activity-lifecycle-conformance.test.ts` fails the archived/orphan matrix
+ * if any source omits it.
  *
- * `c.id IS NOT NULL` is load-bearing only for a LEFT JOIN (the directed query):
- * it drops notifications whose conversation was deleted → `conversation_id` set
- * NULL by `ON DELETE SET NULL`, i.e. orphans. On an INNER JOIN (the positional
- * query) it is a harmless tautology, kept so both sources read ONE predicate.
+ * Defining it once (instead of re-typing the filter per query) is the
+ * structural fix behind #task:1409: that bug was one assembly path (the
+ * directed query) silently missing the filter the other path (positional) had.
+ * #task:1839 moved the definition out to a neutral module so the notification
+ * jump pointer reads the SAME authority without this read model becoming a
+ * dependency of the repos layer.
  */
-export const LIVE_CONVERSATION_PREDICATE = `c.id IS NOT NULL AND c.archived_at IS NULL`;
 
 function preview(text: string | null | undefined): string | null {
   if (!text) return null;
