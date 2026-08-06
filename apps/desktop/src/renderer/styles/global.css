@@ -1365,7 +1365,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    and inside the chat header's member chips, which forza6 deliberately
    grounds on `--bg-elevated` itself. Any fixed surface token is therefore
    invisible somewhere (the old `--bg-elevated` fill vanished on forza6's
-   pale-lime sidebars; the `bg-bg-row-hover` / `bg-bg-muted` classes other
+   sidebar carriers; the `bg-bg-row-hover` / `bg-bg-muted` classes other
    call sites used to carry were never generated at all — those two tokens
    are still unmapped, and those sites now read `bg-bg-inset` below,
    #task:1833). A translucent ink is one step off WHATEVER is behind it, and
@@ -1408,8 +1408,9 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    An ink wash rather than a `--bg-*` surface token, for the reason recorded
    under §Avatar ground: these areas sit on `--bg-floating` cards in the
    gates but also on the settings pane and the attachments panel, and forza6
-   grounds whole regions on pale lime — any fixed surface token is invisible
-   somewhere. A translucent ink is one step off WHATEVER is behind it and
+   grounds whole regions on its own sidebar carriers — any fixed surface
+   token is invisible somewhere. A translucent ink is one step off WHATEVER
+   is behind it and
    follows the theme for free: it darkens the white cards in studio-light and
    forza6, and lightens slack-dark's `#2C2D30`, which is what "recessed"
    means in each. 7% sits in the same register as the themes' own code

@@ -40,8 +40,10 @@
        = SPACE bottom: frame + titlebar + TaskRef chip surface +
          input focus state. Magenta brackets the active (focused)
          + the chrome (frame), but no longer claims selected items.
-     Pale lime tint `#F4F8E8 / #EEF3DC`
-       = READ/NAV CARRIER: sidebar + NavRail rail bg.
+     Paper family `#FAFBF6 / #F6F7F1 / #F1F2EC`
+       = READ/NAV CARRIER: NavRail rail bg + the two sidebar grounds,
+         one warm-white stock in three steps (#task:1867; was a pale
+         lime tint, which competed with the acid-lime selection).
      Acid lime `#D4F523`
        = SELECTED + INLINE CODE: the "you-are-here" wedge in
         NavRail/sidebar + the markdown-body inline code chip.
@@ -153,24 +155,28 @@
 }
 
 /* ── NavRail right border — 2px ink poster骨架 (P2 v6.4 #task:917) ──
-   White paper NavRail (`--forza6-paper #FAFBF6`) sits next to pale-
-   lime channels-sidebar (`#F4F8E8`) — both浅色, only ~3% lightness
-   apart. A 2px ink right border on NavRail establishes the panel
-   boundary as a poster sticker骨架 instead of relying on background
-   lightness alone — same near-black structural vocabulary as the
-   selected lime wedge frame, inline-code chip, channel-actions
-   button frames, and chat header `#` sticker. Together they form
-   the v6.4 "poster sticker family": every chrome element earns its
-   identity by sitting inside a 1.5–2px ink frame. */
+   White paper NavRail (`--forza6-paper #FAFBF6`) sits next to the
+   sidebar carrier, which since #task:1867 is the SAME paper family
+   only ~1.5% lighter apart (#F6F7F1) — the two panels have no
+   lightness boundary left at all. This 2px ink right border is
+   therefore load-bearing, not decorative: it establishes the panel
+   boundary as a poster sticker骨架 — same near-black structural
+   vocabulary as the selected lime wedge frame, inline-code chip,
+   channel-actions button frames, and chat header `#` sticker.
+   Together they form the v6.4 "poster sticker family": every chrome
+   element earns its identity by sitting inside a 1.5–2px ink frame. */
 [data-theme='forza6'] nav[aria-label='App sections'] {
   border-right: 2px solid var(--forza6-ink);
 }
 
-/* ── Sidebar token bundle — pale lime carrier, dark ink ──
+/* ── Sidebar token bundle — paper carrier, dark ink ──
    `--bg-row-selected` is the festive lime selection wedge for the whole app
    now (defined at the forza6 root), so it is NOT redefined here anymore —
-   this scope only carries the sidebar's pale-lime surface ladder + dark text
-   tokens. `--text-on-selected` likewise comes from root (#0A0A0A). */
+   this scope only carries the sidebar's paper surface ladder + dark text
+   tokens. `--text-on-selected` likewise comes from root (#0A0A0A).
+   The carriers went from pale lime to hueless paper in #task:1867 (rationale
+   at their declaration in forza6.css); this scope is unchanged by that — it
+   only re-points the two bg tokens at whatever the carriers are. */
 [data-theme='forza6'] aside[data-sidebar] {
   --bg-channels-sidebar: var(--forza6-carrier-channels);
   --bg-sessions-sidebar: var(--forza6-carrier-sessions);
@@ -247,7 +253,7 @@
    header inherits `--font-sans` from the cascade. Uppercase + 0.16em
    tracking still differentiates the header from row text without
    switching faces. Color cascades from the redefined `--text-muted:
-   #4F5F5C` (5.88:1+ AA on both pale lime tints). */
+   #4F5F5C` (≥5.9:1 AA on both paper carriers). */
 [data-theme='forza6']
   aside[data-sidebar] section > header {
   letter-spacing: 0.16em;
@@ -781,9 +787,10 @@
    Fix: every `<Pin />` / `<PinOff />` icon carries `data-pin-icon`,
    and inside `.text-accent` (the pinned-not-selected button state)
    we flip its currentColor to forza6 ink. v6.5 first tried cyan as
-   a "marked important" cool callout, but cyan on pale-lime sidebar
-   read as a foreign accent that competed with the lime carrier
-   itself. Ink is the same near-black that already structures every
+   a "marked important" cool callout, but cyan on the sidebar ground
+   read as a foreign accent that competed with the carrier itself
+   (that ground is paper rather than pale lime since #task:1867 —
+   ink is still the answer, because pinned is structure, not a hue). Ink is the same near-black that already structures every
    poster sticker (sidebar `#` chip, chat header `#` chip, NavRail
    selected wedge frame, inline-code chip) — so pinned reads as "this
    row got STAMPED" rather than "this row is on fire", which fits the
@@ -1830,7 +1837,7 @@
                 ComputersPanel sidebar rows revert to plain icons —
                 v6.6 first stickered them too but shiki review "不需要
                 改", they read fine as plain glyphs against the small
-                pale-lime sidebar row.
+                paper sidebar row.
 
    Color allocation lock-in (post v6.7.1):
      yellow + ink → channel `#` AND tasks ✓ identity. v6.7 first tried
@@ -1887,7 +1894,7 @@
    icon. The 80×80 outer footprint comes from the consumer's existing
    `size-20` Tailwind class; we only repaint the surface in forza6.
    No border (deep-teal vs ink would only ~1.4:1 contrast — too weak
-   to read); the 2px ink box-shadow on pale-lime / cool-white grounds
+   to read); the 2px ink box-shadow on paper / cool-white grounds
    gives the chip its frame. Paper-on-teal-deep ≈ 7.6:1 AA + AAA
    Large. */
 [data-theme='forza6'] [data-host-hero] {

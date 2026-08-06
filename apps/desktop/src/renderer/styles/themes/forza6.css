@@ -99,16 +99,35 @@
      Solution: NavRail flips to the white family —
      - Solves "太黑" (white is the brightest possible NavRail).
      - Strong contrast against teal chrome (white/teal ≈ 4.7:1).
-     - Matches forza6 暖色系 (lime / pink / yellow / pale-米黄
-       sidebars) — paper warm-white is the暖系 family member chrome
-       teal needs as a counterweight.
+     - Matches forza6 暖色系 (lime / pink / yellow spot colours) —
+       paper warm-white is the暖系 family member chrome teal needs
+       as a counterweight. As of #task:1867 the sidebars joined this
+       same paper family (see the carriers below), so rail + panels
+       now read as one stock and the ink borders do the separating.
      Pure #FFFFFF reads cold/锐利; #FAFBF6 (R+1,G+0,B-9 from white)
      keeps the warm tilt without yellowing into "cream". A 2px ink
-     right border (forza6-components.css) prevents NavRail / pale-
-     lime sidebar visual merge. */
+     right border (forza6-components.css) prevents NavRail / sidebar
+     visual merge — load-bearing, see that block. */
   --forza6-paper: #FAFBF6;           /* poster paper white — NavRail bg (v6.4) */
-  --forza6-carrier-channels: #F4F8E8;/* pale-lime channels-sidebar carrier */
-  --forza6-carrier-sessions: #EEF3DC;/* pale-lime sessions-sidebar carrier */
+  /* Chrome ground = ONE paper in three steps (shiki 2026-08-07,
+     #task:1867 "方向 A"). Both carriers used to be pale lime
+     (#F4F8E8 / #EEF3DC), i.e. a desaturated copy of the selection
+     wedge `--forza6-lime` — a saturated hue serves exactly one
+     semantic, so a lime ground was eating the响度 of the lime
+     selected/hover rows sitting on it. They are now hueless warm
+     paper: each step is `--forza6-paper` minus an equal amount on
+     R/G/B, so the whole chrome keeps the paper's warm tilt (G>R>B)
+     and only lightness distinguishes the panels. Ladder is
+     deliberately shallow (paper → −4 → −9) per shiki「整体再偏白
+     一点,尤其 channel sidebar」— the panel boundary is carried by
+     the ink borders, not by lightness. Consumers via
+     `--bg-channels-sidebar` / `--bg-sessions-sidebar` re-pointed in
+     forza6-components.css §Sidebar token bundle: -channels paints
+     every OUTER list pane (workspaces / members / computers /
+     activity / settings nav), -sessions only the inner channels
+     sidebar. */
+  --forza6-carrier-channels: #F6F7F1;/* outer list-pane carrier — paper −4 */
+  --forza6-carrier-sessions: #F1F2EC;/* channels-sidebar carrier — paper −9 */
   /* ── Backgrounds (cool-neutral ladder for chat read area) ── */
   --bg-base: #F7F8F6;
   --bg-primary: #ECEEEB;
@@ -206,7 +225,8 @@
      v5.x's pale-lime carrier (which collapsed onto channels-sidebar)
      was right about "navrail uses light surface" — wrong about
      which light. Right border (forza6-components.css) carries 2px
-     ink against the pale-lime sidebar. */
+     ink against the sidebar, which since #task:1867 is the same
+     paper family and only 4/255 lighter apart. */
   --text-nav-rail: var(--forza6-ink);
   --text-nav-rail-hover: var(--forza6-ink);
   --bg-nav-rail-hover: rgba(0, 0, 0, 0.06);
@@ -239,7 +259,9 @@
      wedge still paints lime over this via forza6-components.css
      (lime fill + ink border on white = ink icon 14.8:1 AAA on
      lime fill). Right border (forza6-components.css) carries 2px
-     ink against the pale-lime sidebar to prevent visual merge. */
+     ink against the sidebar to prevent visual merge — since
+     #task:1867 the sidebars are paper too, so that border is the
+     only thing separating rail from panel. */
   --bg-nav-rail: var(--forza6-paper);
   --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
   --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 4%, var(--bg-base));
