@@ -118,9 +118,17 @@ export function MessageRowContent({
           centred — and it inherits into every block the markdown renderer
           emits: list markers, table cells, and `pre` lines all flip too
           (shiki 2026-08-06「user-right side 感觉很奇怪」). Alignment is a
-          property of the container here, not of the paragraph. */}
+          property of the container here, not of the paragraph.
+
+          Which is why the prose gets its OWN box (`w-fit ml-auto`) instead of
+          inheriting the column's width: the column is as wide as its widest
+          child, and an attachment strip or a code block is usually wider than
+          the words above it. Left-aligned text in a box sized by something
+          else dangles in mid-row; a shrink-to-fit box keeps a short message
+          flush with the right edge and only lets prose that actually wraps
+          reach the 85% cap — where a straight left edge is what we want. */}
       <div data-message-body className="text-sm text-text-primary">
-        {body}
+        <div className={alignRight ? 'ml-auto w-fit' : undefined}>{body}</div>
         {attachments}
       </div>
 
