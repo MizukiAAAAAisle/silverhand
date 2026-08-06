@@ -138,7 +138,19 @@ export function MessageRowContent({
           predicate. Colour + corner are per-theme tokens (see §Own-message
           bubble in global.css); only the padding is stated here, because
           spacing is this layout's business and the token cluster's is
-          identity. */}
+          identity. The `max-w-full` on that box is load-bearing, not
+          belt-and-braces: `w-fit` is `width: fit-content`, whose floor is the
+          content's MIN-content width, and a code fence's `pre`
+          (`white-space: pre`, `overflow-wrap: normal`) has a min-content width
+          of its LONGEST LINE. Without the cap a long fence pushes the bubble
+          straight past the column's `max-w-[85%]` and the row overflows the
+          chat pane (#task:1852). Prose never showed this because
+          `.markdown-body` sets `overflow-wrap: anywhere`, which DOES lower
+          min-content; `pre` and `table` are the two blocks that opt out, and
+          both already carry `max-width: 100%` + their own `overflow: auto`, so
+          capping the bubble is what hands them a definite width to scroll
+          inside. Left-aligned messages were never affected — there the prose
+          box is a plain block at the column's width. */}
       <div data-message-body className="text-sm text-text-primary">
         {/* `body` is null on an attachment-only message (Composer allows
             sending one) — without that the bubble would render as an empty
@@ -147,7 +159,7 @@ export function MessageRowContent({
           <div
             className={
               alignRight
-                ? 'ml-auto w-fit rounded-[var(--message-bubble-radius)] bg-[var(--bg-message-bubble)] px-3 py-2'
+                ? 'ml-auto w-fit max-w-full rounded-[var(--message-bubble-radius)] bg-[var(--bg-message-bubble)] px-3 py-2'
                 : undefined
             }
           >
