@@ -35,6 +35,7 @@ import {
 } from '@silverhand/shared';
 import type { LocalHostWsAttachment } from '../../../preload/api';
 import { api, ApiError } from '@/lib/api';
+import { rejectHostLabel } from './host-label';
 
 // Re-export the shared proxy DTO so feature consumers (HostDetailView) keep a
 // single import surface off this hooks module without reaching past it — the
@@ -570,17 +571,26 @@ export function useAgentOnlineByHost(hostIds: string[]): Map<string, boolean> {
  * `name` stays the stable identifier set at claim time). On success we
  * invalidate `hostsKey` so the sidebar list re-renders the new label.
  *
- * Schema-guard the input client-side so a typo in the InlineRename
- * component fails fast in dev instead of surfacing as a 400 in the UI
- * (the server still enforces the same 256-char cap; this just keeps the
- * boundary loud-and-early). Server-side, the repo trims+slices to 64 and
- * maps empty → null, so a clear-on-blank flow works without a separate
+ * Guard the input against the shared schema before the request so a
+ * refusal reaches the user as a sentence instead of a 400 (`./host-label`
+ * owns the wording; the rule stays in `UpdateHostInputSchema`, which the
+ * server applies too). Over-long labels are REJECTED, not reshaped
+ * (#task:1849 — the repo used to silently truncate to 64 and return
+ * 200 with a value the user never typed). Empty → null is still mapped
+ * server-side, so a clear-on-blank flow works without a separate
  * "Clear" mutation: send `{ display_label: null }` to clear.
  */
 export function useUpdateHostMutation(hostId: string) {
   const qc = useQueryClient();
   return useMutation<HostDto, Error, UpdateHostMutationVars>({
     mutationFn: async (vars: UpdateHostMutationVars): Promise<HostDto> => {
+      // `safeParse` + our own sentence, not `parse`: a raw ZodError
+      // message is a JSON blob, and both write faces render this
+      // rejection to the user (the inline rename error row and the
+      // create dialog's naming step). The rule itself stays in the
+      // schema — `rejectHostLabel` only picks the wording.
+      const rejection = rejectHostLabel(vars.display_label);
+      if (rejection) throw new Error(rejection);
       const body: UpdateHostInput = UpdateHostInputSchema.parse(vars);
       const raw = await api<unknown>(apiPaths.host(hostId), {
         method: 'PATCH',

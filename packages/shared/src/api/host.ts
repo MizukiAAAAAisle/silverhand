@@ -15,6 +15,40 @@ export const HostLifecycleStatusSchema = z.enum([
 ]);
 export type HostLifecycleStatus = z.infer<typeof HostLifecycleStatusSchema>;
 
+/**
+ * Canonical length bound for a Computer's user-facing display label
+ * (`hosts.display_label`), in UTF-16 code units — the unit `z.string()
+ * .max()` counts.
+ *
+ * shiki 2026-08-06 (#task:1849) fixed it at 64 and ruled out silent
+ * truncation. What this constant serves:
+ *   - `HostClaimOrCreateInputSchema.label` and
+ *     `UpdateHostInputSchema.display_label` — the two writers;
+ *   - the repo's write invariant (`normalizeDisplayLabel` throws past
+ *     the bound instead of the `slice(0, 64)` it used to do, so reaching
+ *     that depth over-long means the API boundary was bypassed);
+ *   - fitting SYSTEM-derived defaults at their producer (the desktop's
+ *     hostname-derived claim label) — a user's own input is refused, but
+ *     failing closed on a machine-supplied default would block claiming
+ *     the local computer entirely;
+ *   - the client-side rejection copy.
+ *
+ * It must NOT become a DOM `maxLength`. Both schemas judge the TRIMMED
+ * string while a length attribute caps the RAW input: they are different
+ * phases, so capping raw input at this number cuts a padded paste short
+ * and persists a name the user never typed — the same silent rewrite the
+ * server just stopped doing, one layer up. The name fields therefore
+ * carry no length attribute and refuse with a reason instead
+ * (`features/hosts/host-label`, and `features/common/display-name` for
+ * the sibling field).
+ *
+ * Deliberately NOT `ENTITY_NAME_MAX_LENGTH`: that constant bounds
+ * handles/entity names and is counted in code points
+ * (`Array.from(name).length`). Equal numbers today, different units —
+ * sharing them would make astral-plane input disagree across layers.
+ */
+export const HOST_DISPLAY_LABEL_MAX_LENGTH = 64;
+
 //
 // Single source-of-truth shape for every host the user owns. Both the
 // owner-filtered `GET /api/hosts` list and the `POST /api/hosts/claim-
@@ -70,14 +104,21 @@ export type HostDto = z.infer<typeof HostDtoSchema>;
  *  `name`). Empty/whitespace-only strings are coerced to `null` server-side. */
 export const UpdateHostInputSchema = z
   .object({
-    /** v36 rename input. The schema cap is intentionally LOOSER than the
-     *  repo's `normalizeDisplayLabel` (trim + slice to 64) so a user who
-     *  types past the visible limit gets a silent auto-truncate in a
-     *  single round-trip — not a 400. Anything wildly larger than the UI
-     *  could plausibly emit IS rejected so a buggy renderer / direct
-     *  curl can't spam multi-KB strings into the column. (Cindy
-     *  `oJ-mzKP7kbXtHUTe` slice-1 review nit #2.) */
-    display_label: z.string().max(256).nullable(),
+    /** v36 rename input, bounded by `HOST_DISPLAY_LABEL_MAX_LENGTH`.
+     *
+     *  The cap used to be deliberately looser than the repo's normalizer
+     *  (schema 256 vs a `slice(0, 64)` on write) so that typing past the
+     *  visible limit auto-truncated in one round-trip instead of 400-ing.
+     *  shiki reversed that in #task:1849: silently returning 200 with a
+     *  value the user did not type is worse than a rejection, so every
+     *  layer now shares this bound and over-long input is refused.
+     *  `.trim()` stays — trimming plus empty-string → `null` is the
+     *  documented clear-on-blank path, not a rewrite of a valid value. */
+    display_label: z
+      .string()
+      .trim()
+      .max(HOST_DISPLAY_LABEL_MAX_LENGTH)
+      .nullable(),
   })
   .strict();
 export type UpdateHostInput = z.infer<typeof UpdateHostInputSchema>;
@@ -372,7 +413,17 @@ export type HostProxyConfigOfflineResponse = z.infer<
 
 export const HostClaimOrCreateInputSchema = z.object({
   installation_id: z.string().uuid(),
-  label: z.string().trim().min(1).max(128).optional(),
+  /** Claim-time display label — the same column as
+   *  `UpdateHostInputSchema.display_label`, so it shares the same bound.
+   *  Callers that derive this from a system value (the desktop main
+   *  process defaults it to the OS hostname) must fit it themselves;
+   *  claiming a computer must not fail because the machine name is long. */
+  label: z
+    .string()
+    .trim()
+    .min(1)
+    .max(HOST_DISPLAY_LABEL_MAX_LENGTH)
+    .optional(),
   current_host_id: z.string().min(1).optional(),
 }).strict();
 export type HostClaimOrCreateInput = z.infer<typeof HostClaimOrCreateInputSchema>;

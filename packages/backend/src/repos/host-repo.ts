@@ -1,5 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
+import { HOST_DISPLAY_LABEL_MAX_LENGTH } from '@silverhand/shared';
 import type {
   HostDto,
   HostKind,
@@ -503,13 +504,26 @@ function normalizeHostName(value: string): string {
 /**
  * v36: display-label normalization. UI-facing field — much looser than
  * `name`: keep user-typed characters as-is (CJK, spaces, casing all
- * fine) but trim whitespace, cap length, and coerce empty → null so
- * the renderer's `display_label ?? name` fallback fires.
+ * fine) but trim whitespace and coerce empty → null so the renderer's
+ * `display_label ?? name` fallback fires.
+ *
+ * Length is NOT normalized here. This used to `slice(0, 64)`, which made
+ * the write layer silently return a value the caller never sent
+ * (#task:1849). Every production caller now arrives through a schema
+ * bounded by `HOST_DISPLAY_LABEL_MAX_LENGTH`, so an over-long label at
+ * this depth means a caller bypassed the contract: throw and let it
+ * surface as a 500 rather than quietly storing something else.
  */
 function normalizeDisplayLabel(
   value: string | null | undefined,
 ): string | null {
   if (value === null || value === undefined) return null;
-  const trimmed = value.trim().slice(0, 64);
+  const trimmed = value.trim();
+  if (trimmed.length > HOST_DISPLAY_LABEL_MAX_LENGTH) {
+    throw new Error(
+      `display_label exceeds ${HOST_DISPLAY_LABEL_MAX_LENGTH} characters `
+        + `(got ${trimmed.length}) — validate at the API boundary before writing`,
+    );
+  }
   return trimmed.length > 0 ? trimmed : null;
 }

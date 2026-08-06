@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { HOST_DISPLAY_LABEL_MAX_LENGTH } from '@silverhand/shared';
 import { HostRepo, LOCAL_HOST_NAME } from '../../src/repos/host-repo.js';
 import { openTestDb } from '../utils/db.js';
 
@@ -323,11 +324,24 @@ describe('HostRepo', () => {
     const renamed = repo.updateDisplayLabel(host.id, 'Studio Desk');
     expect(renamed?.display_label).toBe('Studio Desk');
 
-    // Trim + cap at 64 chars (silent normalization, NOT an error — keeps
-    // the renderer's rename UX a single round-trip).
-    const long = 'A'.repeat(120);
-    const trimmed = repo.updateDisplayLabel(host.id, `   ${long}   `);
-    expect(trimmed?.display_label).toBe('A'.repeat(64));
+    // Trims surrounding whitespace, and measures the bound on the trimmed
+    // value — padding around a max-length label is a valid write.
+    const atMax = 'A'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH);
+    const trimmed = repo.updateDisplayLabel(host.id, `   ${atMax}   `);
+    expect(trimmed?.display_label).toBe(atMax);
+
+    // Past the bound THROWS (#task:1849). This depth used to
+    // `slice(0, 64)`, which returned a value the caller never sent; every
+    // production caller now arrives through a schema carrying the same
+    // bound, so reaching here over-long means the boundary was bypassed.
+    expect(() =>
+      repo.updateDisplayLabel(
+        host.id,
+        'A'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 1),
+      ),
+    ).toThrow(/display_label exceeds/);
+    // The failed write left the previous value intact.
+    expect(repo.get(host.id)?.display_label).toBe(atMax);
 
     // Empty / whitespace-only → null (renderer falls back to `name`).
     expect(repo.updateDisplayLabel(host.id, '   ')?.display_label).toBeNull();

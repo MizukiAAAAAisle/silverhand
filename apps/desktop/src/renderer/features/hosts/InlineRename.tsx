@@ -30,6 +30,17 @@
  * Single source of error: we DO NOT take an `errorMessage` prop. The
  * parent's mutation result reaches us through `onCommit`'s rejection.
  *
+ * **No DOM length cap (#task:1849).** The field used to carry a
+ * `maxLength` (default 128, a bound nothing else shared). It is gone,
+ * and deliberately not replaced by the schema's 64: `display_label` is
+ * bounded AFTER `.trim()`, so a `maxLength` would cut a padded paste at
+ * the raw code-unit count and persist a name the user never typed — a
+ * silent client-side rewrite, which is exactly what shiki's ruling
+ * removed from the server. Length is now refused loudly like every
+ * other rule, with the reason arriving through `onCommit` (see
+ * `rejectHostLabel` in `./host-label`). Same shape as the display-name
+ * editors in `features/common/display-name`.
+ *
  * Layout/styling is deliberately bare so the host header can swap
  * typography per surface. Tokens used are existing
  * (`text-text-primary` / `text-text-muted` / `--control-radius`); no
@@ -62,10 +73,6 @@ export interface InlineRenameProps {
   fallbackForEdit?: string;
   /** Accessible label for the rename trigger / input. */
   ariaLabel: string;
-  /** Max length passed to the input element; the API has its own cap
-   *  on top of this (currently 256). Defaults to 128 — comfortable for
-   *  any plausible computer label. */
-  maxLength?: number;
   /** Async commit. Receives the trimmed string (empty → null to
    *  signal "clear"). Resolve to exit edit mode; reject to surface
    *  the message inline without losing the draft. */
@@ -103,7 +110,6 @@ export function InlineRename({
   placeholder,
   fallbackForEdit,
   ariaLabel,
-  maxLength = 128,
   onCommit,
 }: InlineRenameProps): JSX.Element {
   const [editing, setEditing] = useState(false);
@@ -186,7 +192,6 @@ export function InlineRename({
             type="text"
             value={draft}
             disabled={pending}
-            maxLength={maxLength}
             onChange={e => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
             onBlur={() => void commit()}

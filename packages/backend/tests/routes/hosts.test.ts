@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  HOST_DISPLAY_LABEL_MAX_LENGTH,
   HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
@@ -92,6 +93,24 @@ describe('host routes', () => {
         hostId: body.host_id,
         userId: t.viewerUserId,
       });
+  });
+
+  it('rejects a claim label past HOST_DISPLAY_LABEL_MAX_LENGTH', async () => {
+    // Claim is the OTHER writer of `display_label` (it lands as
+    // `preferredName`), so its own bound has to be the same one — an
+    // over-long label used to be accepted here at 128 and then silently
+    // sliced on write (#task:1849). Desktop main clamps the hostname-
+    // derived default before it gets here; a caller-supplied label is
+    // refused rather than reshaped.
+    t = buildTestApp({ ownedLocalHostUserIds: [] });
+    const userToken = t.ctx.authSessions.issueSession({
+      userId: t.viewerUserId,
+    }).userToken;
+    const res = await sessionHttp(t, userToken).post(apiPaths.hostClaimOrCreate, {
+      installation_id: '33333333-3333-4333-8333-333333333333',
+      label: 'A'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 1),
+    });
+    expect(res.status).toBe(400);
   });
 
   it('reuses the existing host without minting a token when desktop already has one', async () => {
@@ -2225,39 +2244,61 @@ describe('host routes', () => {
       expect(body.host.display_label).toBeNull();
     });
 
-    it('auto-truncates over-long labels via the repo (single round-trip UX)', async () => {
-      // Schema allows up to 256; the repo trims+slices to 64. A 200-char
-      // input should land as the first 64 chars, NOT as a 400.
+    it('accepts a label at exactly HOST_DISPLAY_LABEL_MAX_LENGTH', async () => {
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
       }).userToken;
       const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
-      const long = 'A'.repeat(200);
+      const atMax = 'A'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH);
       const res = await sessionHttp(t, userToken).patch(
         apiPaths.host(host!.id),
-        { display_label: long },
+        { display_label: atMax },
       );
       expect(res.status).toBe(200);
       const body = await res.json() as { host: { display_label: string | null } };
-      expect(body.host.display_label).toBe('A'.repeat(64));
+      // Stored verbatim — the bound is inclusive and nothing reshapes it.
+      expect(body.host.display_label).toBe(atMax);
     });
 
-    it('rejects display_label past the hard cap (256 chars)', async () => {
-      // Anything well past the UI's plausible cap is rejected — protects
-      // the column from a buggy renderer / direct curl spamming KB-class
-      // strings (Cindy slice-1 nit #2 boundary).
+    it('rejects one character past the bound instead of truncating', async () => {
+      // shiki's ruling (#task:1849) reversed the old auto-truncate: the
+      // schema used to allow 256 while the repo sliced to 64, so a 65-256
+      // char label came back 200 with a value the user never typed. Every
+      // layer now shares HOST_DISPLAY_LABEL_MAX_LENGTH and the route says no.
+      t = buildTestApp();
+      const userToken = t.ctx.authSessions.issueSession({
+        userId: t.viewerUserId,
+      }).userToken;
+      const repo = new HostRepo(t.ctx.db);
+      const host = repo.getOwnedLocalForUser(t.viewerUserId);
+      const before = host!.display_label;
+      const res = await sessionHttp(t, userToken).patch(
+        apiPaths.host(host!.id),
+        { display_label: 'A'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 1) },
+      );
+      expect(res.status).toBe(400);
+      // Rejected means UNWRITTEN — not "written truncated".
+      expect(repo.get(host!.id)!.display_label).toBe(before);
+    });
+
+    it('measures the bound after trimming (padding is not a rejection)', async () => {
+      // The schema trims before `.max()`, which is why the renderer's input
+      // carries no DOM length cap: a raw-length cap would cut this paste
+      // short and persist a shorter name than the user pasted.
       t = buildTestApp();
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
       }).userToken;
       const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
-      const tooBig = 'A'.repeat(257);
+      const atMax = 'B'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH);
       const res = await sessionHttp(t, userToken).patch(
         apiPaths.host(host!.id),
-        { display_label: tooBig },
+        { display_label: `  ${atMax}  ` },
       );
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(200);
+      const body = await res.json() as { host: { display_label: string | null } };
+      expect(body.host.display_label).toBe(atMax);
     });
 
     it('returns 404 for cross-user host (no enumeration)', async () => {

@@ -20,6 +20,7 @@ import {
 } from './hooks';
 import { ConnectionCommandCard } from './ConnectionCommandCard';
 import { computerCopy } from './computer-copy';
+import { rejectHostLabel } from './host-label';
 
 interface NewComputerDialogProps {
   open: boolean;
@@ -64,6 +65,7 @@ export function NewComputerDialog({
   const [created, setCreated] = useState<HostCreateResponse | null>(null);
   const [name, setName] = useState('');
   const [finalizeError, setFinalizeError] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
   const startedRef = useRef(false);
   // Set true when the dialog is closed before the daemon attaches. The
   // in-flight create reads it on resolve so a computer minted AFTER the
@@ -158,6 +160,17 @@ export function NewComputerDialog({
     // keep the user in the dialog to retry, not close (which would cancel
     // the draft).
     if (!label) return;
+    // Validate the draft against the shared schema BEFORE committing
+    // (#task:1849). This field carries no DOM length cap on purpose — one
+    // would silently cut a pasted name — so an over-long name has to come
+    // back as a reason the user can act on, not as the generic
+    // "couldn't finish setting up" line (which is for real failures).
+    const rejection = rejectHostLabel(label);
+    if (rejection) {
+      setNameError(rejection);
+      return;
+    }
+    setNameError(null);
     setFinalizeError(false);
     // Categorical: from the moment we start committing, the draft is being
     // promoted to a real computer — a close must never delete it (see
@@ -251,10 +264,24 @@ export function NewComputerDialog({
               <Input
                 id="computer-name"
                 value={name}
-                onChange={e => setName(e.target.value)}
+                onChange={e => {
+                  setName(e.target.value);
+                  setNameError(null);
+                }}
                 placeholder={computerCopy.namePlaceholder}
+                aria-invalid={nameError ? true : undefined}
+                aria-describedby={nameError ? 'computer-name-error' : undefined}
                 autoFocus
               />
+              {nameError ? (
+                <p
+                  id="computer-name-error"
+                  role="alert"
+                  className="text-sm text-error"
+                >
+                  {nameError}
+                </p>
+              ) : null}
             </div>
             {finalizeError ? (
               <p className="text-sm text-error">{computerCopy.finalizeFailed}</p>

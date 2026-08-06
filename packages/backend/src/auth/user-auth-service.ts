@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Database as Db } from 'better-sqlite3';
 import type { AuthSignupInput } from '@silverhand/shared';
+import { DISPLAY_NAME_MAX_LENGTH } from '@silverhand/shared';
 import { isParticipantHandleAvailable } from '../application/name-availability.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
@@ -215,7 +216,15 @@ function displayNameFromEmailLocalPart(localPart: string): string {
     .replace(/[._-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return (normalized || 'User').slice(0, 64);
+  // Fit the SYSTEM-derived default to the same bound `DisplayNameSchema`
+  // enforces on user-supplied names (#task:1849 swept the duplicated
+  // literals): this value never passes through that schema — signup
+  // writes it straight to the row — so a bare `64` here would be a second
+  // authority on the field's length. Trailing trim runs after the cut in
+  // case it lands mid-space, matching the schema's own `.trim()`.
+  return (normalized || 'User')
+    .slice(0, DISPLAY_NAME_MAX_LENGTH)
+    .trim();
 }
 
 function isEmailConflict(err: unknown): boolean {

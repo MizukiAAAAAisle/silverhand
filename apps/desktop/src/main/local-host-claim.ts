@@ -13,6 +13,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {
   DaemonHostConfigSchema,
+  HOST_DISPLAY_LABEL_MAX_LENGTH,
   HostClaimOrCreateInputSchema,
   apiPaths,
   type DaemonHostConfig,
@@ -112,14 +113,43 @@ export function removeDaemonHostConfig(daemonConfigPath: string): void {
   }
 }
 
+/** Fit the machine name to the claim contract's `label` bound.
+ *
+ *  The default label is a SYSTEM value, so this side has to make it fit:
+ *  `label` is `trim().min(1).max(HOST_DISPLAY_LABEL_MAX_LENGTH)`
+ *  (#task:1849) and a long machine name — a corporate FQDN, say — would
+ *  otherwise throw inside `buildHostClaimInput` and block claiming the
+ *  local computer entirely. Truncating a hostname-derived default is
+ *  safe (the user can rename the computer afterwards); refusing to claim
+ *  is not.
+ *
+ *  Returns `null` when nothing usable survives (an empty or
+ *  whitespace-only hostname), because `min(1)` would reject `''` just as
+ *  hard as an over-long string. The caller then omits `label` — the
+ *  claim route treats an absent label as "no preferred name" and the
+ *  server picks the stable default name.
+ *
+ *  Trailing trim runs AFTER the slice: cutting at the bound can land
+ *  mid-whitespace, and we want to send exactly what the schema keeps. */
+export function defaultClaimLabel(machineName: string): string | null {
+  const fitted = machineName
+    .trim()
+    .slice(0, HOST_DISPLAY_LABEL_MAX_LENGTH)
+    .trim();
+  return fitted.length > 0 ? fitted : null;
+}
+
 export function buildHostClaimInput(input: {
   installationId: string;
   existingConfig: DaemonHostConfig | null;
   label?: string;
 }): HostClaimOrCreateInput {
+  // A label the caller passed explicitly is left alone so an over-long
+  // one fails loudly at its source instead of being silently reshaped.
+  const label = input.label ?? defaultClaimLabel(hostname());
   return HostClaimOrCreateInputSchema.parse({
     installation_id: input.installationId,
-    label: input.label ?? hostname(),
+    ...(label !== null ? { label } : {}),
     ...(input.existingConfig
       ? { current_host_id: input.existingConfig.host_id }
       : {}),

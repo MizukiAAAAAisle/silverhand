@@ -9,12 +9,17 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { apiPaths } from '@silverhand/shared';
+import {
+  HOST_DISPLAY_LABEL_MAX_LENGTH,
+  HostClaimOrCreateInputSchema,
+  apiPaths,
+} from '@silverhand/shared';
 import {
   applyRevokeSideEffects,
   applyRotateSideEffects,
   assertApiProxyPath,
   buildHostClaimInput,
+  defaultClaimLabel,
   isMainManagedHostPath,
   isTokenBearingHostClaimPath,
   loadOrCreateInstallationId,
@@ -108,6 +113,36 @@ describe('desktop local host claim helpers', () => {
       installation_id: '55555555-5555-4555-8555-555555555555',
       current_host_id: 'host-local',
     });
+  });
+
+  it('fits a system hostname to the claim label bound', () => {
+    // #task:1849 tightened `label` to HOST_DISPLAY_LABEL_MAX_LENGTH. The
+    // hostname-derived DEFAULT must be fitted here, or a long machine
+    // name (corporate FQDN) would throw inside `buildHostClaimInput` and
+    // block claiming the local computer entirely.
+    const long = `${'h'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH + 40)}.corp.example.com`;
+    expect(defaultClaimLabel(long)).toBe(
+      'h'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH),
+    );
+    // Whatever it returns must satisfy the schema the claim input parses
+    // against — that is the property that actually protects claiming.
+    expect(
+      HostClaimOrCreateInputSchema.safeParse({
+        installation_id: '66666666-6666-4666-8666-666666666666',
+        label: defaultClaimLabel(long),
+      }).success,
+    ).toBe(true);
+
+    // A short name passes through untouched; padding is trimmed.
+    expect(defaultClaimLabel('  Studio Mac  ')).toBe('Studio Mac');
+    // Cutting at the bound can land mid-whitespace — don't send that.
+    expect(
+      defaultClaimLabel(`${'a'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH - 1)} tail`),
+    ).toBe('a'.repeat(HOST_DISPLAY_LABEL_MAX_LENGTH - 1));
+    // Nothing usable → null, so the caller omits `label` rather than
+    // sending an empty string the schema's `min(1)` would refuse.
+    expect(defaultClaimLabel('   ')).toBeNull();
+    expect(defaultClaimLabel('')).toBeNull();
   });
 
   it('marks every main-managed host route as not renderer-proxyable', () => {

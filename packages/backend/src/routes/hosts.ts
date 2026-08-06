@@ -776,10 +776,11 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
   // stable identifier set at claim time.
   // Owner-only; 404 on cross-user / missing (no enumeration); the route
   // also refuses revoked hosts so a renamed-then-revoked workflow can't
-  // silently mutate audit history. Body validation is loose (256-char
-  // cap) — the repo's `normalizeDisplayLabel` does trim + slice-to-64 +
-  // empty→null in one round-trip, so a user typing past the visible
-  // field length gets auto-truncation rather than a 400.
+  // silently mutate audit history. Body validation carries the shared
+  // `HOST_DISPLAY_LABEL_MAX_LENGTH` bound and an over-long label is a 400
+  // (#task:1849 — the repo used to trim + slice-to-64, returning 200 with
+  // a value the caller never sent). `normalizeDisplayLabel` still maps
+  // empty/whitespace-only → null, which is the clear-the-label path.
   app.patch(apiPaths.host(':id'), async c => {
     const userId = requireSessionBearerUser(c, ctx);
     if (userId instanceof Response) return userId;
