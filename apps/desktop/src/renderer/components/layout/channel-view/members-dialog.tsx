@@ -408,7 +408,14 @@ export function ChannelMembersDialog({
                 consequence worth spending a sentence on before a click. */}
             {confirmCopy ? (
               <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
-                <p className="text-sm leading-relaxed text-text-primary">
+                {/* `break-words`: this sentence quotes the `@handle`, and a
+                    handle is one unbreakable run of up to
+                    `ENTITY_NAME_MAX_LENGTH` characters — wider than this
+                    column, with no space or hyphen for the line breaker to
+                    use. Everywhere else a handle appears it truncates; here it
+                    must stay whole, so the wrap opportunity has to be forced
+                    (#task:1836). */}
+                <p className="break-words text-sm leading-relaxed text-text-primary">
                   {confirmCopy}
                 </p>
               </div>

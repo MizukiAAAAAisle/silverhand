@@ -101,7 +101,17 @@ export const DialogContent = forwardRef<
         // put, and nothing has to reserve space it doesn't need.
         // 15vh (shiki), proportional so a short window keeps the whole shell
         // on screen.
-        'fixed left-1/2 top-[15vh] z-50 grid w-full max-w-md -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none',
+        // `grid-cols-[minmax(0,1fr)]`, not the default `auto` column: an auto
+        // track's min sizing function is `auto`, which floors the track at its
+        // items' MIN-CONTENT width. One unbreakable string inside — a long
+        // display name in the members roster (#task:1836) — then pushed the
+        // track past `max-w-*` while the shell itself stayed put, so the
+        // content spilled out of the frame and every `w-full` child (search
+        // field, footer button) stretched with it. A `0` min sizing function
+        // removes that floor, and the items' own `truncate` / `min-w-0` do the
+        // rest. Non-overflowing dialogs are unaffected: a stretched auto track
+        // and a `1fr` track both resolve to the content box.
+        'fixed left-1/2 top-[15vh] z-50 grid w-full max-w-md grid-cols-[minmax(0,1fr)] -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none',
         className,
       )}
       {...props}
