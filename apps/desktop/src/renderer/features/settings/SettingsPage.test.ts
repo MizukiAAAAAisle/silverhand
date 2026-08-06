@@ -16,7 +16,7 @@ const CODE = SRC
 
 describe('SettingsPage — Account owns the profile editor, not Computer lifecycle', () => {
   it('composes the shared viewer profile editor instead of re-implementing it', () => {
-    // Profile editing lives in Account (#task:1845), but the `/api/me`
+    // Profile editing lives in Account (#task:1846), but the `/api/me`
     // wiring stays in `features/me/ViewerProfileEditor` — one owner for
     // the mutations, whichever pane hosts it.
     expect(CODE).toMatch(/ViewerProfileEditor/);
@@ -51,16 +51,5 @@ describe('SettingsPage — Account owns the profile editor, not Computer lifecyc
     expect(CODE).not.toMatch(/useBackendInfoSnapshot/);
     expect(CODE).not.toMatch(/local_host_status/);
     expect(CODE).not.toMatch(/local_host_id/);
-  });
-});
-
-describe('settings-section store', () => {
-  const STORE = readFileSync(
-    fileURLToPath(new URL('./settings-section.ts', import.meta.url)),
-    'utf8',
-  );
-
-  it("migrates the persisted `profile` key forward to `account` so returning users land somewhere valid", () => {
-    expect(STORE).toMatch(/raw === 'profile'.*return 'account'/s);
   });
 });

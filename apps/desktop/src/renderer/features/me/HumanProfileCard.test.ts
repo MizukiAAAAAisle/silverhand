@@ -48,7 +48,7 @@ function render(user: UserDto, viewerId: string): string {
 }
 
 describe('HumanProfileCard mounts no write surface', () => {
-  // Profile editing moved to Settings > Account (#task:1845). The card is
+  // Profile editing moved to Settings > Account (#task:1846). The card is
   // read-only for EVERY user now — the viewer included — so `/api/me`
   // keeps exactly one long-lived ownership site.
   it('non-self viewer gets no editable affordances', () => {

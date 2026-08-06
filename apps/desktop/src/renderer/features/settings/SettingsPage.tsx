@@ -54,7 +54,7 @@ import {
 } from '@/settings/font-presets';
 import {
   persistSettingsSection,
-  readPersistedSettingsSection,
+  readSettingsSection,
   type SettingsSection,
 } from './settings-section';
 import { ConnectionPane } from './ConnectionPane';
@@ -143,7 +143,7 @@ export function SettingsPage(): JSX.Element {
   } = useAppearance();
 
   const [section, setSection] = useState<SettingsSection>(
-    readPersistedSettingsSection,
+    readSettingsSection,
   );
   useEffect(() => {
     persistSettingsSection(section);

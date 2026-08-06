@@ -27,7 +27,7 @@ interface HumanProfileCardProps {
  *
  * Editing display name and avatar moved to Settings > Account (shiki
  * 2026-08-06:「现在这个交互不符合大部分的 IM 直觉,很多用户找不到。放到
- * account 中会更好」, #task:1845). This card therefore mounts NO write
+ * account 中会更好」, #task:1846). This card therefore mounts NO write
  * surface at all: no picker, no inline input, no `/api/me` mutation
  * hooks. `/api/me` still has exactly one long-lived ownership site
  * (`ViewerProfileEditor`); it just lives where people look for their own
@@ -117,9 +117,10 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
 /**
  * Route to the editor. Occupies the slot the pencil used to hold, and
  * says where it goes — a bare pencil here would promise inline editing
- * that this card no longer has. Aiming Settings at Account is a
- * persisted-section write plus `toSettings()`, because settings sections
- * have no URL slot.
+ * that this card no longer has. Aiming Settings at Account is a section
+ * write plus `toSettings()`, because settings sections have no URL slot;
+ * the write is best-effort in storage but always lands in memory, so the
+ * navigation cannot miss Account.
  */
 function EditInSettingsButton(): JSX.Element {
   const nav = useNav();
