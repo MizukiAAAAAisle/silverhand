@@ -15,13 +15,22 @@
  * every access is best-effort. An aim that depended on the disk write
  * would turn a storage failure into a dead click.
  */
-export type SettingsSection = 'appearance' | 'account' | 'connection';
+export type SettingsSection = 'account' | 'appearance' | 'connection';
 
+/**
+ * Nav order, and with it the section Settings opens on when nothing is
+ * stored: Account first (shiki 2026-08-06:「Account 放第一个,Appearance
+ * 放第二个」). The default follows the order deliberately — a first item
+ * that is never the landing tab splits "top of the list" from "where you
+ * land" for no gain. A returning viewer's stored section still wins.
+ */
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
-  'appearance',
   'account',
+  'appearance',
   'connection',
 ];
+
+const DEFAULT_SECTION: SettingsSection = SETTINGS_SECTIONS[0]!;
 
 const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
 
@@ -33,7 +42,7 @@ function loadPersistedSection(): SettingsSection {
     raw = localStorage.getItem(SETTINGS_SECTION_KEY);
   } catch {
     // Unavailable storage — the default section is a fine starting point.
-    return 'appearance';
+    return DEFAULT_SECTION;
   }
   // Migrate retired sections so returning users land somewhere valid.
   // `server` / `hosts` folded into Connection; `proxy` moved to the
@@ -46,7 +55,7 @@ function loadPersistedSection(): SettingsSection {
   if (raw === 'profile') return 'account';
   return SETTINGS_SECTIONS.includes(raw as SettingsSection)
     ? (raw as SettingsSection)
-    : 'appearance';
+    : DEFAULT_SECTION;
 }
 
 /** The section Settings opens on: this session's choice, else the stored one. */

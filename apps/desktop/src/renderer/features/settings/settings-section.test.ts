@@ -58,9 +58,12 @@ afterEach(() => {
 });
 
 describe('settings-section store — where Settings opens', () => {
-  it('opens on Appearance when nothing is stored', async () => {
+  it('opens on the first nav section when nothing is stored', async () => {
+    // Landing default is derived from `SETTINGS_SECTIONS[0]`, so this
+    // pins the derivation, not the literal: Account leads the sub-nav.
     const store = await loadStore(workingStorage());
-    expect(store.readSettingsSection()).toBe('appearance');
+    expect(store.readSettingsSection()).toBe(store.SETTINGS_SECTIONS[0]);
+    expect(store.readSettingsSection()).toBe('account');
   });
 
   it('opens on the stored section', async () => {
@@ -81,21 +84,23 @@ describe('settings-section store — where Settings opens', () => {
       expect(store.readSettingsSection()).toBe('connection');
     }
     const unknown = await loadStore(workingStorage('nonsense'));
-    expect(unknown.readSettingsSection()).toBe('appearance');
+    expect(unknown.readSettingsSection()).toBe('account');
   });
 });
 
 describe('settings-section store — aiming survives unusable storage', () => {
   it('still opens on the aimed section when the write throws', async () => {
+    // Aimed at a NON-default section on purpose: aiming at the landing
+    // default would pass even if the aim were dropped entirely.
     const store = await loadStore(unusableStorage());
-    expect(() => store.persistSettingsSection('account')).not.toThrow();
-    expect(store.readSettingsSection()).toBe('account');
+    expect(() => store.persistSettingsSection('connection')).not.toThrow();
+    expect(store.readSettingsSection()).toBe('connection');
   });
 
-  it('opens on Appearance when the read throws, without propagating', async () => {
+  it('opens on the default section when the read throws, without propagating', async () => {
     const store = await loadStore(unusableStorage());
     expect(() => store.readSettingsSection()).not.toThrow();
-    expect(store.readSettingsSection()).toBe('appearance');
+    expect(store.readSettingsSection()).toBe('account');
   });
 
   it('honours a second aim after the user moved elsewhere in Settings', async () => {
@@ -120,25 +125,27 @@ describe('settings-section store — aiming survives unusable storage', () => {
 });
 
 describe('settings-section store — logout does not hand the section to the next viewer', () => {
-  it('clears memory and disk, so the next viewer starts on Appearance', async () => {
-    // Viewer A signs out on Account; viewer B signs in inside the same
+  it('clears memory and disk, so the next viewer starts on the default', async () => {
+    // Viewer A signs out on Connection; viewer B signs in inside the same
     // renderer process, where the singleton would otherwise outlive the
     // session and be served ahead of the emptied storage key.
+    // Viewer A's section is deliberately NOT the default, or a stale
+    // singleton would be indistinguishable from a clean reset.
     const storage = workingStorage();
     const store = await loadStore(storage);
-    store.persistSettingsSection('account');
-    expect(storage.getItem('silverhand:settings-section')).toBe('account');
+    store.persistSettingsSection('connection');
+    expect(storage.getItem('silverhand:settings-section')).toBe('connection');
 
     store.clearSettingsSection();
 
-    expect(store.readSettingsSection()).toBe('appearance');
+    expect(store.readSettingsSection()).toBe('account');
     expect(storage.getItem('silverhand:settings-section')).toBeNull();
   });
 
   it('clears the section even when storage refuses the removal', async () => {
     const store = await loadStore(unusableStorage());
-    store.persistSettingsSection('account');
+    store.persistSettingsSection('connection');
     expect(() => store.clearSettingsSection()).not.toThrow();
-    expect(store.readSettingsSection()).toBe('appearance');
+    expect(store.readSettingsSection()).toBe('account');
   });
 });

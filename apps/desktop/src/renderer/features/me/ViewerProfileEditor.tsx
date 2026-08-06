@@ -1,21 +1,16 @@
-import { useState } from 'react';
-import { Lock, User as UserIcon } from 'lucide-react';
+import { useId, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { Loader2, User as UserIcon } from 'lucide-react';
 import { validateAvatarFile, type UserDto } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 import { AvatarPickerButton } from '@/components/AvatarPickerButton';
 import { AVATAR_PX } from '@/components/avatar-scale';
-import { EditPencilButton } from '@/features/common/EditPencilButton';
-import { InlineText } from '@/features/common/InlineText';
-import {
-  useClearAvatar,
-  useUpdateProfile,
-  useUploadAvatar,
-  useViewerAvatarObjectUrl,
-} from './hooks';
+import { Button } from '@/components/ui/button';
+import { Input, Label } from '@/components/ui/input';
+import { useUpdateProfile, useUploadAvatar, useViewerAvatarObjectUrl } from './hooks';
 
 /**
- * The viewer's own display name + avatar editor — the single writing
- * surface for `/api/me`.
+ * The viewer's own profile editor — the single writing surface for
+ * `/api/me`.
  *
  * It lives in Settings > Account (shiki 2026-08-06:「现在这个交互不符合
  * 大部分的 IM 直觉,很多用户找不到。放到 account 中会更好」). It used to be
@@ -29,22 +24,71 @@ import {
  * refused server-side (`requireViewerUserId`), and the read-only view of
  * another human is `HumanProfileCard`'s job.
  *
- * Layout deliberately minimal — no card chrome, no "Profile" heading:
- * an avatar next to a name is self-labelling, and the pane header
- * already says Account.
+ * ## Shape: identity summary, then a labelled form
  *
- * Backend contract:
- *   - `PATCH /api/me` accepts `display_name` only (handles are permanent).
- *   - `POST/DELETE /api/me/avatar` upload / clear.
+ * Top block is read-only identity (avatar, display name, `@handle`);
+ * below the rule is the form, one labelled field per row. The summary
+ * shows the PERSISTED name, not the draft — it is how the viewer appears
+ * to everyone else, so it may not preview an unsaved edit.
+ *
+ * ## Saving: one action for the form, the avatar apart from it
+ *
+ * shiki 2026-08-06:「我希望 saved 是整体一个动作」+「avatar 是独立的没
+ * 问题。其他的保持整体」. So:
+ *   - Every writable text field is a local draft until `Save Profile`,
+ *     which submits them together. Today that is `display_name` alone,
+ *     but the button is the form's action, not the field's — a second
+ *     writable column joins this submit rather than growing its own
+ *     control. `InlineText`'s per-field pencil/Save is deliberately gone
+ *     from this surface (it remains right for the agent profile cards,
+ *     where each section is edited on its own).
+ *   - Picking an image IS the avatar commit: the OS file dialog is
+ *     already an explicit act, and staging bytes for a later Save would
+ *     make the one Save straddle two endpoints (`PATCH /api/me` +
+ *     `POST /api/me/avatar`) and therefore able to half-succeed. Keeping
+ *     the avatar out of the form makes Save exactly one row update, so
+ *     "all or nothing" holds by construction with no new endpoint
+ *     (@Cindy / @Alice 2026-08-06). New writable fields keep that
+ *     property only while they land on the `users` row.
+ *
+ * ## Not on this surface
+ *   - `Email` / `VERIFIED` from shiki's reference layout: `UserDto`
+ *     carries no email, and address verification does not exist as a
+ *     flow — email is credential-plane state (`user_auth_identities`),
+ *     deliberately excluded from the profile read model (@Alice
+ *     2026-08-06; shiki:「email 先不做」).
+ *   - Clearing the avatar. `DELETE /api/me/avatar` stays live in the
+ *     backend (shiki:「保留 backend api,前端先去掉消费」) but has no
+ *     entry point here: picking a new image is the whole avatar
+ *     interaction, and a second control under a 56px square costs more
+ *     attention than the action is worth (shiki:「把头像下面那个 remove
+ *     去掉」).
+ *   - Editing `@handle`. It is decided once at registration; the field
+ *     is read-only (still selectable, so it can be copied) and the label
+ *     row says so.
  */
 export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const update = useUpdateProfile();
   const upload = useUploadAvatar();
-  const clear = useClearAvatar();
   const avatarObjectUrl = useViewerAvatarObjectUrl();
+  const nameFieldId = useId();
+  const handleFieldId = useId();
 
-  const [nameEditing, setNameEditing] = useState(false);
+  // `null` = pristine, i.e. "whatever the server says". Not seeded from
+  // the dto, so a name changed on another device flows straight through
+  // while untouched, and no effect has to guess whether a draft is worth
+  // keeping (#task:1846).
+  const [draftName, setDraftName] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const nameValue = draftName ?? user.display_name;
+  const nextName = nameValue.trim();
+  const canSave =
+    draftName !== null
+    && nextName.length > 0
+    && nextName !== user.display_name
+    && !update.isPending;
 
   const onPickAvatar = async (file: File): Promise<void> => {
     setAvatarError(null);
@@ -60,97 +104,156 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
     }
   };
 
-  const onClearAvatar = async (): Promise<void> => {
-    setAvatarError(null);
+  const onSubmit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault();
+    if (!canSave) return;
+    setSaveError(null);
     try {
-      await clear.mutateAsync();
+      await update.mutateAsync({ display_name: nextName });
+      // Back to pristine: the fresh dto is now the field's value, so the
+      // button disables itself without a second source of truth.
+      setDraftName(null);
     } catch (err) {
-      setAvatarError(formatAvatarMutationError(err));
+      setSaveError(formatProfileSaveError(err));
     }
   };
 
-  const avatarPending = upload.isPending || clear.isPending;
+  const onNameKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    // Escape discards the draft — the counterpart of Enter submitting
+    // through the form. Neither blur nor navigation saves.
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      setDraftName(null);
+      setSaveError(null);
+    }
+  };
+
   const hasAvatar = user.avatar_url != null;
 
   return (
-    <div className="flex items-start gap-4">
-      <div className="flex flex-col items-center gap-1.5">
-        <AvatarPickerButton
-          size={AVATAR_PX['3xl']}
-          label={hasAvatar ? 'Edit' : 'Add'}
-          onPick={file => void onPickAvatar(file)}
-          disabled={avatarPending}
-          ariaLabel={hasAvatar ? 'Change avatar' : 'Add avatar'}
-          className="border border-border-subtle"
-        >
-          <span data-avatar-ground className="grid size-full place-items-center">
-            {avatarObjectUrl ? (
-              // eslint-disable-next-line jsx-a11y/img-redundant-alt
-              <img
-                src={avatarObjectUrl}
-                alt="Your avatar"
-                className="size-full object-cover"
-              />
-            ) : (
-              <UserIcon className="size-7 text-text-muted" />
-            )}
-          </span>
-        </AvatarPickerButton>
-        {hasAvatar ? (
-          <button
-            type="button"
-            onClick={() => void onClearAvatar()}
-            disabled={avatarPending}
-            className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center gap-3">
+          <AvatarPickerButton
+            size={AVATAR_PX['3xl']}
+            label={hasAvatar ? 'Edit' : 'Add'}
+            onPick={file => void onPickAvatar(file)}
+            disabled={upload.isPending}
+            ariaLabel={hasAvatar ? 'Change avatar' : 'Add avatar'}
+            className="border border-border-subtle"
           >
-            Remove
-          </button>
-        ) : null}
-      </div>
-
-      <div className="min-w-0 flex-1">
-        {/* The pencil is anchored to the name rather than to a section
-            header (there is no section header on this pane), and stays
-            in the DOM while editing so the row height doesn't jump. */}
-        <div className="flex min-w-0 items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <InlineText
-              value={user.display_name}
-              ariaLabel="Display name"
-              editing={nameEditing}
-              onExitEdit={() => setNameEditing(false)}
-              className="font-serif text-base font-semibold leading-tight"
-              onCommit={async next => {
-                await update.mutateAsync({ display_name: next });
-              }}
-            />
+            <span data-avatar-ground className="grid size-full place-items-center">
+              {avatarObjectUrl ? (
+                // eslint-disable-next-line jsx-a11y/img-redundant-alt
+                <img
+                  src={avatarObjectUrl}
+                  alt="Your avatar"
+                  className="size-full object-cover"
+                />
+              ) : (
+                <UserIcon className="size-7 text-text-muted" />
+              )}
+            </span>
+          </AvatarPickerButton>
+          <div className="min-w-0">
+            <p className="truncate font-serif text-base font-semibold leading-tight text-text-primary">
+              {user.display_name}
+            </p>
+            <p className="truncate font-mono text-xs text-text-muted">
+              @{user.name}
+            </p>
           </div>
-          <EditPencilButton
-            onClick={() => setNameEditing(true)}
-            ariaLabel="Edit display name"
-            hidden={nameEditing}
-          />
-        </div>
-        <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
-          <span className="font-mono">@{user.name}</span>
-          <Lock className="size-3" />
-          <span>name is permanent</span>
         </div>
         {avatarError ? (
           <p
             role="alert"
-            className="mt-2 text-[11px] leading-snug text-error"
+            className="text-[11px] leading-snug text-error"
             data-testid="human-avatar-error"
           >
             {avatarError}
           </p>
         ) : null}
-        {update.isError ? (
-          <p className="mt-2 text-xs text-error">{String(update.error)}</p>
-        ) : null}
       </div>
+
+      <form
+        onSubmit={event => void onSubmit(event)}
+        className="flex flex-col gap-4 border-t border-border-subtle pt-5"
+      >
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor={nameFieldId}>Display Name</Label>
+          <Input
+            id={nameFieldId}
+            value={nameValue}
+            maxLength={128}
+            disabled={update.isPending}
+            onChange={event => setDraftName(event.target.value)}
+            onKeyDown={onNameKeyDown}
+          />
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <Label htmlFor={handleFieldId}>Username</Label>
+            <span className="text-[11px] text-text-muted">permanent</span>
+          </div>
+          {/* Read-only rather than disabled: the handle is worth copying,
+              and the inset fill plus the label marker already say it
+              can't be edited. The `@` sits in its own cell so the value
+              reads as the bare name it is everywhere else. */}
+          <div className="flex h-9 items-stretch overflow-hidden rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border-subtle bg-bg-inset">
+            <span
+              aria-hidden
+              className="grid w-9 shrink-0 place-items-center border-r-[length:var(--control-border-width)] border-border-subtle font-mono text-sm text-text-muted"
+            >
+              @
+            </span>
+            <input
+              id={handleFieldId}
+              readOnly
+              value={user.name}
+              className="min-w-0 flex-1 bg-transparent px-3 font-mono text-sm text-text-secondary outline-none"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Button type="submit" size="sm" disabled={!canSave} className="self-start">
+            {update.isPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : null}
+            Save Profile
+          </Button>
+          {saveError ? (
+            <p role="alert" className="text-xs text-error">
+              {saveError}
+            </p>
+          ) : null}
+        </div>
+      </form>
     </div>
   );
+}
+
+/**
+ * Map a failed `PATCH /api/me` to a one-line user-facing message. Only
+ * the arms a viewer can act on are named; everything else keeps the
+ * status code so a report is diagnosable.
+ */
+export function formatProfileSaveError(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.kind === 'backend_unreachable') {
+      return 'Server unreachable. Check the connection and try again.';
+    }
+    switch (err.status) {
+      case 400:
+        return 'This display name was rejected. Try a different one.';
+      case 401:
+        return 'Sign-in expired. Reload the app and try again.';
+      default:
+        return `Failed to save profile (HTTP ${err.status}).`;
+    }
+  }
+  return 'Failed to save profile.';
 }
 
 /**

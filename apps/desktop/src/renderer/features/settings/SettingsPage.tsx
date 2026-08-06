@@ -53,6 +53,7 @@ import {
   type FontPreset,
 } from '@/settings/font-presets';
 import {
+  SETTINGS_SECTIONS,
   persistSettingsSection,
   readSettingsSection,
   type SettingsSection,
@@ -191,6 +192,15 @@ export function SettingsPage(): JSX.Element {
   );
 }
 
+/** Label + icon per section. Order is NOT here: the nav walks
+ *  `SETTINGS_SECTIONS`, which is also what the landing default is derived
+ *  from, so reordering the sub-nav can't drift from where Settings opens. */
+const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }> = {
+  account: { label: 'Account', icon: <KeyRound className="size-3.5" /> },
+  appearance: { label: 'Appearance', icon: <Palette className="size-3.5" /> },
+  connection: { label: 'Connection', icon: <Server className="size-3.5" /> },
+};
+
 /** Page-internal vertical nav. The settings sub-nav is *secondary*
  *  navigation (the user already chose Settings from the rail). Rows
  *  follow the app-wide selected-row vocabulary: hover paints a pale
@@ -205,30 +215,21 @@ function SettingsSubNav({
   section: SettingsSection;
   onSelect: (next: SettingsSection) => void;
 }): JSX.Element {
-  const items: ReadonlyArray<{
-    id: SettingsSection;
-    label: string;
-    icon: ReactNode;
-  }> = [
-    { id: 'appearance', label: 'Appearance', icon: <Palette className="size-3.5" /> },
-    { id: 'account', label: 'Account', icon: <KeyRound className="size-3.5" /> },
-    { id: 'connection', label: 'Connection', icon: <Server className="size-3.5" /> },
-  ];
-
   return (
     <aside
       aria-label="Settings sections"
       className="flex h-full w-44 shrink-0 flex-col py-4 pr-2"
     >
       <nav className="flex flex-col gap-0.5">
-        {items.map(item => {
-          const selected = item.id === section;
+        {SETTINGS_SECTIONS.map(id => {
+          const { label, icon } = SECTION_CHROME[id];
+          const selected = id === section;
           return (
             <button
-              key={item.id}
+              key={id}
               type="button"
               aria-current={selected ? 'page' : undefined}
-              onClick={() => onSelect(item.id)}
+              onClick={() => onSelect(id)}
               className={cn(
                 'flex w-full items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors',
                 selected
@@ -236,8 +237,8 @@ function SettingsSubNav({
                   : 'text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
               )}
             >
-              {item.icon}
-              <span>{item.label}</span>
+              {icon}
+              <span>{label}</span>
             </button>
           );
         })}
