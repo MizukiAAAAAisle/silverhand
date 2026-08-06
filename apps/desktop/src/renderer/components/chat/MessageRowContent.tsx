@@ -110,12 +110,16 @@ export function MessageRowContent({
         </header>
       ) : null}
 
-      <div
-        data-message-body
-        className={
-          'text-sm text-text-primary ' + (alignRight ? 'text-right' : '')
-        }
-      >
+      {/* The BLOCK moves to the right edge in `user-right` mode (the row is
+          `flex-row-reverse` and this column hugs its content under
+          `max-w-[85%]`); the TEXT inside it does not. `text-align: right` on
+          prose gives a ragged LEFT edge — every line after the first starts at
+          an unpredictable x, so a two-line message reads as if it were
+          centred — and it inherits into every block the markdown renderer
+          emits: list markers, table cells, and `pre` lines all flip too
+          (shiki 2026-08-06「user-right side 感觉很奇怪」). Alignment is a
+          property of the container here, not of the paragraph. */}
+      <div data-message-body className="text-sm text-text-primary">
         {body}
         {attachments}
       </div>
