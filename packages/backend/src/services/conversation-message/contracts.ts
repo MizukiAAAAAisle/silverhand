@@ -71,13 +71,18 @@ export interface SendMessageResult {
    *  and this return — there is no second, projection-less payload shape. */
   committed: MessageEventPayload;
   targetConversationId: string;
-  /** Stream head at the moment BEFORE this message was inserted. Only set
-   *  for agent `freshnessBypass` sends: the daemon uses it as the merge
-   *  prerequisite for the sender's own seq — once its observed cursor
-   *  covers everything freshness-relevant below the forced message, the
-   *  own seq joins the watermark (countgame P1: without this, a bypass in
-   *  a quiet stream leaves the sender permanently stale on its own head).
-   *  Carried uniformly for main-line AND thread-reply sends. */
+  /** Stream head at the moment BEFORE this message was inserted. Set for an
+   *  agent send whose insert SKIPPED the freshness CAS — an explicit
+   *  `freshnessBypass`, or a loose first touch that carried no
+   *  `seenUpToSeq` — because in both cases nothing proved the sender covers
+   *  the stream, so the daemon needs a merge prerequisite for its own seq:
+   *  once its observed cursor covers everything below this message, the own
+   *  seq joins the watermark. Without it, such a send in a quiet stream
+   *  leaves the sender permanently stale on its own head (countgame P1,
+   *  #task:1854). Absent for a passing CAS (the sender already covers the
+   *  stream) and for a cross-conversation send (the sender keeps no cursor
+   *  for the target's stream). Carried uniformly for main-line AND
+   *  thread-reply sends. */
   streamHeadBeforeSend?: number;
 }
 

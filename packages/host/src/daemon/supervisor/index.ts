@@ -837,29 +837,45 @@ export class Supervisor implements SupervisorContract {
       },
       'runtime freshness observed seq advanced',
     );
-    this.drainBypassMerges(handle, streamKey);
+    this.drainSkippedCasMerges(handle, streamKey);
     // A stale-receive waiter (#task:1614) may now prove `already_admitted`.
     this.wakePullWaiter(handle);
   }
 
-  /** Countgame P1 (bypass hole): merge the agent's own forced seqs into
-   *  the watermark once real admission evidence covers their prerequisite
-   *  head. Iterative (a merged own seq can satisfy the next entry's
-   *  prerequisite — chained bypasses). Own seqs need no admission
-   *  evidence: the sender authored them. */
-  private drainBypassMerges(handle: RuntimeHandle, streamKey: string): void {
-    const entries = handle.pendingBypassMergeByStream.get(streamKey);
+  /** Countgame P1 / #task:1854 (skipped-CAS hole): merge the agent's own seqs
+   *  from sends that bypassed or skipped the per-stream CAS into the watermark
+   *  once real admission evidence covers their prerequisite head. Iterative (a
+   *  merged own seq can satisfy the next entry's prerequisite — chained
+   *  skips). Own seqs need no admission evidence: the sender authored them. */
+  private drainSkippedCasMerges(handle: RuntimeHandle, streamKey: string): void {
+    const entries = handle.pendingSkippedCasMergeByStream.get(streamKey);
     if (!entries || entries.length === 0) return;
     let current = handle.observedSeqByStream.get(streamKey);
-    if (current === undefined) return;
     let changed = true;
     while (changed) {
       changed = false;
       for (let i = 0; i < entries.length; i += 1) {
         const entry = entries[i]!;
-        if (entry.prereq <= (current as number)) {
+        // Absence of a cursor is NOT "covers nothing" — the same present/absent
+        // discipline the send path keeps (Cindy/Norman on #task:1854). A
+        // `prereq === 0` entry is the backend's proof that the stream was EMPTY
+        // before the insert (`streamHeadLatestSeq` returns 0 when no head row
+        // exists), so there is nothing to cover and the baseline is a literal
+        // 0. That is the COMMON first touch — first reply in a cluster, first
+        // message in a channel — and reading absence as "nothing covered"
+        // parked it forever.
+        //
+        // The baseline stays a LITERAL 0 (Norman's fence): never
+        // `pendingAdmissionSeqByStream` (a pending seq must not become a merge
+        // prerequisite) and never the own seq (that would swallow an unread
+        // gap). A `prereq > 0` entry with no cursor still blocks — we have
+        // never read what we skipped past.
+        const baseline: number | undefined =
+          current ?? (entry.prereq === 0 ? 0 : undefined);
+        if (baseline === undefined) continue;
+        if (entry.prereq <= baseline) {
           entries.splice(i, 1);
-          if (entry.ownSeq > (current as number)) {
+          if (entry.ownSeq > baseline) {
             current = decodeObservedSeq(entry.ownSeq);
             handle.observedSeqByStream.set(streamKey, current);
             this.logger.warn(
@@ -868,7 +884,7 @@ export class Supervisor implements SupervisorContract {
                 action: 'freshness_observed_seq_advanced',
                 conversationId: handle.conversationId,
                 agent_id: handle.agentId,
-                source: 'bypass_own_seq_merged',
+                source: 'skipped_cas_own_seq_merged',
                 stream_key: streamKey,
                 observed_seq: entry.ownSeq,
                 merge_prereq: entry.prereq,
@@ -882,7 +898,7 @@ export class Supervisor implements SupervisorContract {
       }
     }
     if (entries.length === 0) {
-      handle.pendingBypassMergeByStream.delete(streamKey);
+      handle.pendingSkippedCasMergeByStream.delete(streamKey);
     }
   }
 
@@ -1388,34 +1404,57 @@ export class Supervisor implements SupervisorContract {
     // `--reply-to` of either resolves to the right stream.
     const resolvedRoot =
       typeof json['thread_root_id'] === 'string' ? json['thread_root_id'] : null;
-    if (threadTargetMessageId) {
-      const stream = resolvedRoot
-        ? `thread:${resolvedRoot}`
-        : replyTargetStreamKey(threadTargetMessageId, null);
-      this.rememberReplyTargetStream(handle, threadTargetMessageId, stream);
-      this.rememberReplyTargetStream(handle, messageId, stream);
+    // The stream this send actually landed in, per the backend's own root
+    // resolution. For a loose first touch this is the ONLY place it exists:
+    // `targetStreamKey` is undefined precisely because we could not resolve
+    // the target before sending. Undefined for a main-line send, where
+    // `targetStreamKey` is already MAIN_STREAM_KEY.
+    const resolvedThreadStreamKey =
+      threadTargetMessageId !== undefined
+        ? resolvedRoot
+          ? `thread:${resolvedRoot}`
+          : replyTargetStreamKey(threadTargetMessageId, null)
+        : undefined;
+    if (
+      threadTargetMessageId !== undefined
+      && resolvedThreadStreamKey !== undefined
+    ) {
+      this.rememberReplyTargetStream(
+        handle,
+        threadTargetMessageId,
+        resolvedThreadStreamKey,
+      );
+      this.rememberReplyTargetStream(handle, messageId, resolvedThreadStreamKey);
     }
-    // Observed-advance asymmetry (Cindy ruling): a send into a KNOWN
-    // stream proves — via the per-stream CAS the backend just ran — there
-    // is no unseen gap, so advance that stream's observed to our own
-    // message. An UNKNOWN-target send only records the mapping above;
-    // advancing observed for a stream we have never read would defeat the
-    // dumb-loop guard.
+    // Observed-advance asymmetry (Cindy ruling): a send the backend gated with
+    // the per-stream CAS proves — by that CAS passing — there is no unseen gap
+    // below our own message, so that stream's observed advances to our own
+    // seq.
     //
-    // A `freshness_bypass` (--anyway) success proves NOTHING (Cindy
-    // countgame P1-B): no CAS ran, so jumping observed to our own seq
+    // A send that SKIPPED the CAS proves NOTHING (Cindy countgame P1-B), and
+    // there are two such sends: an explicit `freshness_bypass` (--anyway) and
+    // a loose first touch, which omits seen+stream_key because we had never
+    // observed the target stream. For either, jumping observed to our own seq
     // would silently swallow every unseen message in between (live trace:
     // 11→15/11→16 across an unadmitted 12–14) and permanently disarm the
-    // guard. The forced message lands, but the cursor holds — the gap
-    // stays armed until real admission evidence covers it.
+    // guard. The message lands, but the cursor holds — the gap stays armed
+    // until real admission evidence covers it.
     //
-    // The own seq is NOT abandoned, though (Cindy follow-up P1): the
-    // sender is excluded from its own fan-out, so nothing ever delivers
-    // seq S back — holding forever would leave a permanent self-made
-    // freshness hole (quiet stream: observed converges to the pre-bypass
-    // head while head = S). The backend tells us the head at insert time
-    // (`stream_head_before` = everything relevant we skipped); once
-    // observed covers it, the own seq merges via `drainBypassMerges`.
+    // The own seq is NOT abandoned either (Cindy follow-up P1): the sender is
+    // excluded from its own fan-out, so nothing ever delivers seq S back —
+    // holding forever would leave a permanent self-made freshness hole (quiet
+    // stream: observed converges to the pre-send head while head = S, so every
+    // later send 409s against itself). The backend tells us the head at insert
+    // time (`stream_head_before` = everything relevant we skipped); once
+    // observed covers it, the own seq merges via `drainSkippedCasMerges`.
+    //
+    // #task:1854: the loose-first-touch half of this used to fall through both
+    // branches, which is exactly the self-stale hole — a first touch of a
+    // quiet cluster succeeded and then locked itself out of that cluster
+    // forever. It is the SAME shape as a bypass (no CAS ran), so it merges
+    // through the same queue. A response without `stream_head_before` (older
+    // backend, or a send whose seq belongs to a stream we keep no cursor for)
+    // queues nothing and keeps the pre-fix hold.
     if (
       !params.freshness_bypass &&
       useFreshnessBoundary &&
@@ -1427,23 +1466,24 @@ export class Supervisor implements SupervisorContract {
         messageSeq,
         'message_send_commit',
       );
-    } else if (
-      params.freshness_bypass &&
-      targetStreamKey !== undefined &&
-      typeof messageSeq === 'number'
-    ) {
+    } else if (typeof messageSeq === 'number') {
+      const mergeStreamKey = targetStreamKey ?? resolvedThreadStreamKey;
       const headBefore = json['stream_head_before'];
-      if (typeof headBefore === 'number' && Number.isSafeInteger(headBefore)) {
+      if (
+        mergeStreamKey !== undefined &&
+        typeof headBefore === 'number' &&
+        Number.isSafeInteger(headBefore)
+      ) {
         const entries =
-          handle.pendingBypassMergeByStream.get(targetStreamKey) ?? [];
+          handle.pendingSkippedCasMergeByStream.get(mergeStreamKey) ?? [];
         entries.push({ prereq: headBefore, ownSeq: messageSeq });
-        // Bounded: chained bypasses beyond the cap drop the OLDEST entry —
-        // degradation is the pre-fix behavior for that seq (recoverable
-        // via any later message), never unbounded growth.
+        // Bounded: chained skipped-CAS sends beyond the cap drop the OLDEST
+        // entry — degradation is the pre-fix behavior for that seq
+        // (recoverable via any later message), never unbounded growth.
         while (entries.length > 32) entries.shift();
-        handle.pendingBypassMergeByStream.set(targetStreamKey, entries);
+        handle.pendingSkippedCasMergeByStream.set(mergeStreamKey, entries);
         // No gap at all (or already caught up): merge immediately.
-        this.drainBypassMerges(handle, targetStreamKey);
+        this.drainSkippedCasMerges(handle, mergeStreamKey);
       }
     }
     handle.pendingStaleEvent = null;
@@ -2242,7 +2282,7 @@ export class Supervisor implements SupervisorContract {
       lastDeliveredSeqPath: spawnPrep.lastDeliveredSeqPath,
       observedSeqByStream: new Map(),
       pendingAdmissionSeqByStream: new Map(),
-      pendingBypassMergeByStream: new Map(),
+      pendingSkippedCasMergeByStream: new Map(),
       replyTargetStreamByMessageId: new Map(),
       defaultReplyTarget: CHANNEL_DEFAULT_REPLY_TARGET,
       pendingDefaultReplyTarget: undefined,

@@ -5435,7 +5435,10 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       expect(postedBodies[0]).not.toHaveProperty('stream_key');
 
       // The success taught the daemon mGhost's stream → a follow-up reply
-      // is now known and carries seen 0 (observed was never advanced).
+      // is now known and carries seen 0: this response carried no
+      // `stream_head_before`, so there was no merge prerequisite to converge
+      // through and observed was never advanced (#task:1854 keeps this the
+      // behavior for a backend that withholds the field).
       const followup = await supervisor.agentMessageSend({
         conversation_id: 'c1',
         agent_id: 'a1',
@@ -5456,6 +5459,479 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       }).catch(() => undefined);
     }
   });
+
+  it('#task:1854 falsifier: a loose first-touch thread send merges its own seq once the skipped head is admitted (no permanent self-stale)', async () => {
+    const { supervisor, events } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    // Stateful backend for the `thread:mGhost` stream. A send carrying
+    // stream_key is CAS-gated at the exact head; a loose send (no fields)
+    // skips the CAS and therefore comes back WITH the pre-insert head as the
+    // merge prerequisite — the real backend's `skippedFreshnessReason` rule.
+    let threadHead = 41;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+        const skippedCas = body['stream_key'] === undefined;
+        if (!skippedCas && body['seen_up_to_seq'] !== threadHead) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: `stale-${threadHead}`,
+                  seen_up_to_seq: body['seen_up_to_seq'],
+                  current_seq: threadHead,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        const headBefore = threadHead;
+        threadHead += 1;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${threadHead}`,
+            message_seq: threadHead,
+            thread_root_id: 'mGhost',
+            ...(skippedCas ? { stream_head_before: headBefore } : {}),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+
+      // First touch of a cluster this daemon has never observed: loose send,
+      // no CAS, own seq 42 filed against the skipped head 41.
+      const loose = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'first touch of an unseen cluster',
+        target: { kind: 'thread', message_id: 'mGhost' },
+      });
+      expect(loose).toMatchObject({ ok: true, message_id: 'm42' });
+      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
+      expect(postedBodies[0]).not.toHaveProperty('stream_key');
+
+      // Arm 1 — no swallow: the own seq does NOT jump observed on its own.
+      // Nothing has been observed in this cluster yet, so the queued merge
+      // waits for real admission evidence covering head 41.
+      //
+      // Arm 2 — no permanent hole: the sender is excluded from its own
+      // fan-out, so seq 42 never arrives by inbox. When seq 41 is admitted,
+      // observed must converge THROUGH the prerequisite to 42; pre-fix it
+      // stalled at 41 with head 42 and every later send in this cluster 409'd
+      // against the sender's own message, forever.
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [41],
+        kind: 'message',
+        text: 'the reply we had skipped past',
+        delivered_up_to_seq: 41,
+        deliveries: [
+          {
+            delivery_id: 41,
+            message_id: 'mReply41',
+            seq: 41,
+            thread_root_id: 'mGhost',
+            delivery_kind: 'turn',
+          },
+        ],
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 41);
+
+      const converged = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'second reply in the same cluster',
+        target: { kind: 'thread', message_id: 'mGhost' },
+      });
+      expect(converged).toMatchObject({ ok: true, message_id: 'm43' });
+      expect(postedBodies[1]?.['stream_key']).toBe('thread:mGhost');
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(42);
+      expect(threadHead).toBe(43);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('#task:1854 falsifier: a first main-line send before any delivery merges its own seq once the skipped head is admitted', async () => {
+    const { supervisor, events } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    let mainHead = 9;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+        const skippedCas = body['stream_key'] === undefined;
+        if (!skippedCas && body['seen_up_to_seq'] !== mainHead) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: `stale-${mainHead}`,
+                  seen_up_to_seq: body['seen_up_to_seq'],
+                  current_seq: mainHead,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        const headBefore = mainHead;
+        mainHead += 1;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${mainHead}`,
+            message_seq: mainHead,
+            thread_root_id: null,
+            ...(skippedCas ? { stream_head_before: headBefore } : {}),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+
+      // An agent that speaks before it has read anything (schedule fire,
+      // self-init) has never observed `main`, so this is the main-line shape
+      // of the same first touch: loose send, own seq 10 against head 9.
+      const loose = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'first thing I ever say',
+      });
+      expect(loose).toMatchObject({ ok: true, message_id: 'm10' });
+      expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
+      expect(postedBodies[0]).not.toHaveProperty('stream_key');
+
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [9],
+        kind: 'message',
+        text: 'main-line history we had skipped past',
+        delivered_up_to_seq: 9,
+        deliveries: [
+          {
+            delivery_id: 9,
+            message_id: 'mMain9',
+            seq: 9,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+          },
+        ],
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 9);
+
+      const converged = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'second thing I say',
+      });
+      expect(converged).toMatchObject({ ok: true, message_id: 'm11' });
+      expect(postedBodies[1]?.['stream_key']).toBe('main');
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(10);
+      expect(mainHead).toBe(11);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('#task:1854 boundary: a mid-turn delivery neither raises observed nor merges the own seq; the next turn boundary does both', async () => {
+    const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits');
+    const { supervisor, events } = makeSupervisorWithDriver(driver);
+    const postedBodies: Record<string, unknown>[] = [];
+    let threadHead = 41;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+        const skippedCas = body['stream_key'] === undefined;
+        if (!skippedCas && body['seen_up_to_seq'] !== threadHead) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: `stale-${threadHead}`,
+                  seen_up_to_seq: body['seen_up_to_seq'],
+                  current_seq: threadHead,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        const headBefore = threadHead;
+        threadHead += 1;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${threadHead}`,
+            message_seq: threadHead,
+            thread_root_id: 'mGhost',
+            ...(skippedCas ? { stream_head_before: headBefore } : {}),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      // A main-line delivery makes the turn active without touching the
+      // cluster under test, so the cluster's own evidence lands mid-turn.
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [5],
+        kind: 'message',
+        text: 'unrelated main-line message',
+        delivered_up_to_seq: 5,
+        deliveries: [
+          {
+            delivery_id: 5,
+            message_id: 'mMain5',
+            seq: 5,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+          },
+        ],
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 5);
+
+      const loose = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'first touch of an unseen cluster',
+        target: { kind: 'thread', message_id: 'mGhost' },
+      });
+      expect(loose).toMatchObject({ ok: true, message_id: 'm42' });
+
+      // Evidence for head 41 arrives MID-TURN → pending admission only
+      // (#1471). It must not raise observed, and it must not satisfy the
+      // merge prerequisite: a pending seq is not yet precedent context for
+      // anything the model does in this turn (Cindy).
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [41],
+        kind: 'message',
+        text: 'the reply we had skipped past',
+        delivered_up_to_seq: 41,
+        deliveries: [
+          {
+            delivery_id: 41,
+            message_id: 'mReply41',
+            seq: 41,
+            thread_root_id: 'mGhost',
+            delivery_kind: 'turn',
+          },
+        ],
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 41);
+
+      // The stream is now KNOWN (the loose send taught it), so this send is
+      // CAS-gated — and declares seen 0: not 41 (pending is not observed) and
+      // not 42 (no merge off a pending seq). An explicitly named target never
+      // borrows `max(observed, pending)`; that is only for a target the
+      // pending delivery itself derived.
+      const blocked = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'mid-turn reply',
+        target: { kind: 'thread', message_id: 'mGhost' },
+      });
+      expect(blocked.ok).toBe(false);
+      expect(postedBodies[1]?.['stream_key']).toBe('thread:mGhost');
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(0);
+
+      // Cross the turn boundary: pending promotes to observed 41, which
+      // covers the prerequisite, which merges the own seq 42 — the same
+      // convergence, one boundary later. Seq-less tick deliveries flush the
+      // preset parse events without touching observed themselves.
+      setNextParse([{ kind: 'turn_end' }]);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [90], kind: 'message',
+        text: 'tick1', spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitFor(() =>
+        events.some(
+          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end',
+        ),
+      );
+      setNextParse([{ kind: 'thinking', text: 'new turn' }]);
+      await supervisor.deliver({
+        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [91], kind: 'message',
+        text: 'tick2', spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitFor(() =>
+        events.some(
+          e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'thinking',
+        ),
+      );
+
+      const converged = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'post-boundary reply',
+        target: { kind: 'thread', message_id: 'mGhost' },
+      });
+      expect(converged).toMatchObject({ ok: true, message_id: 'm43' });
+      expect(
+        postedBodies[postedBodies.length - 1]?.['seen_up_to_seq'],
+      ).toBe(42);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  // #task:1854 review (Cindy MUST FIX, Norman reachability): `prereq = 0` is
+  // the COMMON first touch, not an edge case — `streamHeadLatestSeq` returns 0
+  // when no head row exists yet, i.e. whenever the agent is the first replier
+  // in a cluster (or the first speaker in a channel). Reading "no cursor" as
+  // "covers nothing" parked that merge forever, so the send that succeeded
+  // still self-staled on its own head with no later delivery able to help.
+  // Both arms therefore assert convergence WITHOUT any delivery at all. The
+  // `prereq > 0` counterpart (still blocked until real evidence arrives) is
+  // covered by the two falsifiers above.
+  for (const arm of [
+    {
+      label: 'an empty thread cluster',
+      streamKey: 'thread:mRoot',
+      threadRootId: 'mRoot' as string | null,
+      target: { kind: 'thread' as const, message_id: 'mRoot' },
+    },
+    {
+      label: 'an empty main line',
+      streamKey: 'main',
+      threadRootId: null as string | null,
+      target: undefined,
+    },
+  ]) {
+    it(`#task:1854 falsifier: a first touch of ${arm.label} (head 0) merges its own seq immediately, with no later delivery`, async () => {
+      const { supervisor, events } = makeSupervisor();
+      const postedBodies: Record<string, unknown>[] = [];
+      let head = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          postedBodies.push(body);
+          const skippedCas = body['stream_key'] === undefined;
+          if (!skippedCas && body['seen_up_to_seq'] !== head) {
+            return new Response(
+              JSON.stringify({
+                error: {
+                  code: 'conflict',
+                  message: 'message stale',
+                  details: {
+                    subkind: 'message_stale',
+                    conversation_id: 'c1',
+                    stale_event_id: `stale-${head}`,
+                    seen_up_to_seq: body['seen_up_to_seq'],
+                    current_seq: head,
+                    newer_messages: [],
+                  },
+                },
+              }),
+              { status: 409, headers: { 'content-type': 'application/json' } },
+            );
+          }
+          // Empty stream: the head BEFORE the insert is 0 — the backend's proof
+          // that there was nothing to cover.
+          const headBefore = head;
+          head += 1;
+          return new Response(
+            JSON.stringify({
+              message_id: `m${head}`,
+              message_seq: head,
+              thread_root_id: arm.threadRootId,
+              ...(skippedCas ? { stream_head_before: headBefore } : {}),
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }),
+      );
+      try {
+        await supervisor.start(baseStartParams);
+        await waitForRuntimeReady(events);
+
+        const first = await supervisor.agentMessageSend({
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          content: 'first message in an empty stream',
+          ...(arm.target ? { target: arm.target } : {}),
+        });
+        expect(first).toMatchObject({ ok: true, message_id: 'm1' });
+        expect(postedBodies[0]).not.toHaveProperty('seen_up_to_seq');
+        expect(postedBodies[0]).not.toHaveProperty('stream_key');
+
+        // prereq 0 is satisfied the moment it is queued: nothing precedes our
+        // own message, so the watermark is our own seq — no swallow, and no
+        // dependency on anyone else ever speaking in this stream.
+        const second = await supervisor.agentMessageSend({
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          content: 'second message in the same stream',
+          ...(arm.target ? { target: arm.target } : {}),
+        });
+        expect(second).toMatchObject({ ok: true, message_id: 'm2' });
+        expect(postedBodies[1]?.['stream_key']).toBe(arm.streamKey);
+        expect(postedBodies[1]?.['seen_up_to_seq']).toBe(1);
+        expect(head).toBe(2);
+      } finally {
+        vi.unstubAllGlobals();
+        await supervisor.stop({
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          mode: 'hard',
+        }).catch(() => undefined);
+      }
+    });
+  }
 
   it('records a pulled cluster boundary (agent_stream_observed) so a later reply-to carries seen=maxSeq', async () => {
     const { supervisor } = makeSupervisor();

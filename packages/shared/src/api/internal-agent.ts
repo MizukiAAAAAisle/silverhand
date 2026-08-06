@@ -106,11 +106,15 @@ export const AgentSendMessageOutputSchema = z.object({
    *  uses it to learn the reply-target stream of the new message and of
    *  the message it replied to. */
   thread_root_id: z.string().nullable(),
-  /** Present only on `freshness_bypass` sends: the stream head just
-   *  before this message was inserted. The daemon merges the sender's
-   *  own seq into its observed watermark once real admission evidence
-   *  covers this value — without it, a bypass in a quiet stream leaves
-   *  the sender permanently stale on its own head. */
+  /** Present when this insert SKIPPED the per-stream freshness check — an
+   *  explicit `freshness_bypass`, or a loose first touch that carried no
+   *  `seen_up_to_seq` — and carries the stream head just before the message
+   *  was inserted. The daemon merges the sender's own seq into its observed
+   *  watermark once real admission evidence covers this value. Without it, a
+   *  CAS-skipping send in a quiet stream leaves the sender permanently stale
+   *  on its own head: nothing ever delivers its own message back to it.
+   *  Absent when the CAS ran (the sender already covers the stream) and for a
+   *  cross-conversation send (the sender tracks no cursor there). */
   stream_head_before: z.number().int().nonnegative().optional(),
 });
 export type AgentSendMessageOutput = z.infer<typeof AgentSendMessageOutputSchema>;

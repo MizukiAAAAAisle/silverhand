@@ -180,15 +180,10 @@ export class ConversationMessageService {
         this.assertStreamKeyConsistent(input, threadRootId);
         const attachmentRefs = input.attachmentRefs ?? [];
         const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentRefs);
-        // Merge prerequisite for a bypass send (countgame P1): the head at
-        // insert time is exactly "everything freshness-relevant the sender
-        // skipped past". The daemon merges the sender's own seq into its
-        // watermark once observed covers this value.
-        const streamHeadBeforeSend =
-          input.actor.kind === 'agent' && input.freshnessBypass
-            ? this.messages.streamHeadLatestSeq(targetConversation.id, threadRootId)
-            : null;
-        const { message, skippedFreshnessReason } =
+        // `streamHeadBeforeSend` is the merge prerequisite owed to an agent
+        // whose insert skipped the freshness CAS; the insert helper owns both
+        // that decision and the pre-insert head read (see its docs).
+        const { message, skippedFreshnessReason, streamHeadBeforeSend } =
           this.insertMessageWithFreshnessIfApplicable({
             input,
             sourceConversationId: sourceConversation.id,
@@ -369,8 +364,8 @@ export class ConversationMessageService {
 
     // The caller-facing result reuses the SAME committed payload. Built once
     // here so both send branches (thread-reply / main-line) return an identical
-    // shape — `streamHeadBeforeSend` rides uniformly (it is a bypass-send
-    // transaction pre-value, independent of thread vs main-line; the old
+    // shape — `streamHeadBeforeSend` rides uniformly (it is a pre-insert value
+    // of the addressed stream, independent of thread vs main-line; the old
     // thread-reply early return dropped it, stranding a freshnessBypass thread
     // reply on its own head — countgame P1).
     const result: SendMessageResult = {
@@ -488,7 +483,11 @@ export class ConversationMessageService {
     targetConversationId: string;
     threadRootId: string | null;
     snapshots: NonNullable<Parameters<MessageRepo['insertForConversation']>[0]['attachments']>;
-  }): { message: MessageDto; skippedFreshnessReason: string | null } {
+  }): {
+    message: MessageDto;
+    skippedFreshnessReason: string | null;
+    streamHeadBeforeSend: number | null;
+  } {
     const { input } = params;
     const base = {
       conversationId: params.targetConversationId,
@@ -500,29 +499,74 @@ export class ConversationMessageService {
       threadRootId: params.threadRootId,
     };
 
+    // Every agent send that skips the CAS owes the sender a merge prerequisite:
+    // the stream head just BEFORE this row is exactly what the skip stepped
+    // over, and the daemon merges its own seq into its watermark once real
+    // admission evidence covers that value. Without it the sender is
+    // permanently stale on its own head in a quiet stream — nothing ever
+    // delivers its own seq back to it (#task:1854 generalises what the
+    // `--anyway` path already needed).
+    //
+    // Deciding "did the CAS run" and reading the head are ONE act, and it
+    // lives here: the head must predate the insert while the skip is this
+    // function's own branch, so a caller-side copy of the predicate would be a
+    // second authority that silently drifts back into self-stale.
+    const insertWithoutFreshness = (opts: {
+      reason: string;
+      prerequisite: boolean;
+    }): {
+      message: MessageDto;
+      skippedFreshnessReason: string;
+      streamHeadBeforeSend: number | null;
+    } => {
+      const streamHeadBeforeSend = opts.prerequisite
+        ? this.messages.streamHeadLatestSeq(
+            params.targetConversationId,
+            params.threadRootId,
+          )
+        : null;
+      return {
+        message: this.messages.insertForConversation(base),
+        skippedFreshnessReason: opts.reason,
+        streamHeadBeforeSend,
+      };
+    };
+
     if (input.actor.kind !== 'agent') {
+      // Users carry no per-stream cursor, so there is nothing to merge into.
       return {
         message: this.messages.insertForConversation(base),
         skippedFreshnessReason: null,
+        streamHeadBeforeSend: null,
       };
     }
     if (input.freshnessBypass) {
-      return {
-        message: this.messages.insertForConversation(base),
-        skippedFreshnessReason: 'freshness_bypass_explicit',
-      };
+      return insertWithoutFreshness({
+        reason: 'freshness_bypass_explicit',
+        prerequisite: true,
+      });
     }
     if (params.sourceConversationId !== params.targetConversationId) {
-      return {
-        message: this.messages.insertForConversation(base),
-        skippedFreshnessReason: 'cross_target_send',
-      };
+      // Cross-conversation send: the sender's cursor governs the conversation
+      // it is attached to, not this one. Its own seq here belongs to a stream
+      // it keeps no cursor for, so there is no watermark to merge into —
+      // handing back a prerequisite would only invite the daemon to file
+      // foreign seq numbers under its local stream. Unreachable today
+      // (`self` is the only scalar target left, so target === source); the
+      // branch states the rule for the model, not for a live path.
+      return insertWithoutFreshness({
+        reason: 'cross_target_send',
+        prerequisite: false,
+      });
     }
     if (input.seenUpToSeq === undefined) {
-      return {
-        message: this.messages.insertForConversation(base),
-        skippedFreshnessReason: 'missing_seen_up_to_seq',
-      };
+      // Loose first touch: the daemon has never observed this stream, so it
+      // omitted the CAS fields rather than claim a false `seen`. The send is
+      // allowed, and this is the case that most needs the prerequisite.
+      return insertWithoutFreshness({
+        reason: 'missing_seen_up_to_seq',
+        prerequisite: true,
+      });
     }
 
     const result = this.messages.insertForConversationIfFresh({
@@ -530,7 +574,13 @@ export class ConversationMessageService {
       seenUpToSeq: input.seenUpToSeq,
     });
     if (result.ok) {
-      return { message: result.message, skippedFreshnessReason: null };
+      // The CAS proved `seen == head`, so the sender already covers everything
+      // before its own row: it advances its watermark directly, no merge owed.
+      return {
+        message: result.message,
+        skippedFreshnessReason: null,
+        streamHeadBeforeSend: null,
+      };
     }
 
     throw new MessageFreshnessGuardError(

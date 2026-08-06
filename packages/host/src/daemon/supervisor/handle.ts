@@ -252,14 +252,18 @@ export interface RuntimeHandle {
    *  writes. Each value is an {@link ObservedSeq}, minted at the daemon
    *  observation boundary (delivery admit / stale response / send commit). */
   observedSeqByStream: Map<string, ObservedSeq>;
-  /** Deferred watermark merges for the agent's own `--anyway` sends
-   *  (countgame P1): a bypass inserts seq S with the stream head at P
-   *  (everything freshness-relevant the sender skipped). S itself never
-   *  comes back through the inbox (sender excluded from fan-out), so once
-   *  observed >= P the own seq merges into the watermark — otherwise the
-   *  sender is permanently stale on its own head in a quiet stream.
+  /** Deferred watermark merges for the agent's own sends that skipped the
+   *  per-stream CAS (countgame P1 `--anyway`, and #task:1854 loose first
+   *  touch): such a send inserts seq S with the stream head at P (everything
+   *  freshness-relevant the sender skipped). S itself never comes back
+   *  through the inbox (sender excluded from fan-out), so once observed >= P
+   *  the own seq merges into the watermark — otherwise the sender is
+   *  permanently stale on its own head in a quiet stream.
    *  In-memory, bounded, dropped with the handle. */
-  pendingBypassMergeByStream: Map<string, Array<{ prereq: number; ownSeq: number }>>;
+  pendingSkippedCasMergeByStream: Map<
+    string,
+    Array<{ prereq: number; ownSeq: number }>
+  >;
   /** High-water seq, per stream, for a batch delivered mid-turn but not
    *  yet admitted as precedent context for a new model action. Flushed
    *  into `observedSeqByStream` at the next turn boundary. */

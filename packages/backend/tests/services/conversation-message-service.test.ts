@@ -1159,6 +1159,86 @@ describe('ConversationMessageService.sendMessage', () => {
     }
   });
 
+  it('a loose first-touch send (no seenUpToSeq) returns stream_head_before too — every skipped CAS owes the merge prerequisite (#task:1854)', async () => {
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'root question',
+      });
+      const threadReply = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'a reply the agent never observed',
+        threadRootId: root.id,
+      });
+      // Trap value: a main-line head ABOVE the thread head. A prerequisite
+      // captured with a null (main-line) scope would be this seq.
+      const mainGap = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'unrelated main-line gap',
+      });
+      expect(mainGap.seq).toBeGreaterThan(threadReply.seq);
+
+      // The daemon has never observed this cluster, so it omits BOTH freshness
+      // fields rather than claim a false `seen`. The insert therefore skips the
+      // CAS — and, exactly like a bypass, proves nothing about what the sender
+      // covers. Without the prerequisite the sender is stuck: nothing ever
+      // delivers its own seq back to it, so its next send in this cluster
+      // 409s against its own message forever.
+      const firstTouch = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'first touch of an unseen cluster',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      expect(firstTouch.committed.message.thread_root_id).toBe(root.id);
+      expect(firstTouch.streamHeadBeforeSend).toBe(threadReply.seq);
+      expect(firstTouch.streamHeadBeforeSend).not.toBe(mainGap.seq);
+
+      // Same on the main line: an agent that speaks before reading anything.
+      const mainFirstTouch = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'first thing I ever say',
+      });
+      expect(mainFirstTouch.streamHeadBeforeSend).toBe(mainGap.seq);
+
+      // A user send has no per-stream cursor, so there is nothing to merge.
+      const fromUser = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'human line',
+      });
+      expect(fromUser.streamHeadBeforeSend).toBeUndefined();
+
+      // The COMMON first touch: first reply in a cluster that has none yet, so
+      // the thread head is 0 while the main-line head is well above it. Zero
+      // must be RETURNED, not treated as "no value" — the daemon reads it as
+      // "nothing to cover" and merges the own seq immediately (Cindy/Norman
+      // review of #task:1854).
+      const quietRoot = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        content: 'a root nobody has replied to',
+      });
+      const firstReply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'first reply in an empty cluster',
+        target: { kind: 'thread', message_id: quietRoot.id },
+      });
+      expect(firstReply.committed.message.thread_root_id).toBe(quietRoot.id);
+      expect(firstReply.streamHeadBeforeSend).toBe(0);
+      expect(quietRoot.seq).toBeGreaterThan(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('logs explicit stale retry reasons without making telemetry a send gate', async () => {
     const t = bootstrap();
     try {
