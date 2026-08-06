@@ -711,14 +711,6 @@
      define them explicitly (no fallback leak — see §3.1 关键 3).
      ============================================================ */
 
-  /* `--bg-pattern-image` —
-     Inline SVG of overlapping translucent triangles. Other themes set
-     this to `none` so the chrome stays flat. Components that want the
-     festival texture apply it as `background-image: var(--bg-pattern-image)`
-     (modulated by `--bg-pattern-opacity` if needed via overlay). */
-  --bg-pattern-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='140' viewBox='0 0 160 140'><g fill='none'><polygon points='0,0 80,0 40,70' fill='rgba(255,255,255,0.05)'/><polygon points='80,0 160,0 120,70' fill='rgba(255,255,255,0.03)'/><polygon points='40,70 120,70 80,140' fill='rgba(255,255,255,0.06)'/><polygon points='0,140 40,70 0,70' fill='rgba(255,255,255,0.04)'/><polygon points='160,70 160,140 120,70' fill='rgba(255,255,255,0.04)'/></g></svg>");
-  --bg-pattern-opacity: 1;
-
   /* `--accent-2` — electric cyan (info / link / 3rd-tier pill).
      Forza is a three-accent system; collapsing to one accent loses the
      pink/lime/cyan triad that defines the festival look.

@@ -193,8 +193,6 @@ describe('theme markdown token cascade contract', () => {
       '--system-message-size',
       // forza6-introduced identity tokens
       '--font-display',
-      '--bg-pattern-image',
-      '--bg-pattern-opacity',
       '--accent-2',
       '--text-on-accent-2',
       '--bg-structure-dark',

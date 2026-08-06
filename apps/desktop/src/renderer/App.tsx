@@ -1929,14 +1929,13 @@ function RegisteredAppShell(): JSX.Element {
       <div
         className="flex min-w-0 flex-1 overflow-hidden"
         style={{
-          // Frame layer. `backgroundColor` paints the frame fill; the
-          // separate `backgroundImage` lets a theme overlay a texture
-          // (forza6 = translucent triangles) without disturbing the
-          // color. Other themes resolve `--bg-pattern-image` to `none`,
-          // so this write is universal-but-inert outside forza6 — see
-          // `docs/design-new-theme.md` §3.1.3.
+          // Frame layer: `--bg-app` fills the gutter around the panels.
+          // There used to be a second `backgroundImage` write here for a
+          // per-theme texture slot (`--bg-pattern-image`); forza6 was the
+          // only theme that ever filled it, and both the texture and the
+          // slot were retired in #task:1871 — the poster language is
+          // carried by ink frames and flat paper, not a background weave.
           backgroundColor: 'var(--bg-app, transparent)',
-          backgroundImage: 'var(--bg-pattern-image, none)',
           padding: '0 var(--frame-padding, 0) var(--frame-padding, 0)',
           gap: 'var(--frame-padding, 0)',
         }}

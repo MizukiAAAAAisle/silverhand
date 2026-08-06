@@ -370,8 +370,6 @@
      every theme MUST define these explicitly so a forza6 → studio-light
      switch doesn't leak the festival values). ── */
   --font-display: var(--font-sans);
-  --bg-pattern-image: none;
-  --bg-pattern-opacity: 0;
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
   /* 深板岩结构色 = NavRail 的那一块（整个主题只有一种"深"），workspace 方块

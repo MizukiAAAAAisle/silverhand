@@ -1,11 +1,10 @@
 /* ================================================================
    Theme: Forza6 — Component-layer specialization (PR-2)
 
-   This file ONLY contains `[data-theme='forza6']`-scoped overrides.
-   The triangle pattern on the app frame (#1 in the PR-2 plan) is
-   the ONE universal-but-inert change — `App.tsx` writes
-   `backgroundImage: var(--bg-pattern-image, none)`, warm three
-   themes resolve to `none`.
+   This file ONLY contains `[data-theme='forza6']`-scoped overrides —
+   with no exception. The app frame used to carry a triangle texture
+   through a universal-but-inert `background-image` write in `App.tsx`;
+   both the texture and its token slot were retired in #task:1871.
 
    Token-layer values live in `forza6.css`. This file does NOT do any
    root-level token reassignment (the bare `[data-theme='forza6'] {}`
@@ -55,8 +54,8 @@
        not yellow. Token still defined in forza6.css for future use.
 
    Architectural rules (unchanged from earlier):
-   - Every selector `[data-theme='forza6']`-scoped except the inert
-     triangle pattern on App.tsx.
+   - Every selector `[data-theme='forza6']`-scoped, no exception
+     (the App.tsx frame write that used to be one is gone, #task:1871).
    - Stable hooks only: `data-sidebar`, `data-titlebar`, `aria-current`,
      `data-task-ref`.
    - Sidebar text/bg tokens redefined at `aside[data-sidebar]` so

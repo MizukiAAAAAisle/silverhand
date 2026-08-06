@@ -104,13 +104,13 @@ apps/desktop/src/renderer/
 
 ### 3.1.3 Loud-festival theme family tokens
 
-海报 / festival 风格主题族用的一组扩展 token（重压字体、几何身份纹理、第二 accent、黑色结构层、深底荧光 metadata）。**每个主题都必须显式定义这 8 个 token** —— 单 accent / 无纹理 / 无黑结构的主题可以全部退化成现有 sibling（`appearance.test.ts` 锁定）。这是 §3.1 关键规则 3 的硬约束：不显式定义就会从 `:root` 默认主题漏过来，切主题再切回会残留纹理 / 第二 accent / 黑结构条。
+海报 / festival 风格主题族用的一组扩展 token（重压字体、第二 accent、黑色结构层、深底荧光 metadata）。**每个主题都必须显式定义这 6 个 token** —— 单 accent / 无黑结构的主题可以全部退化成现有 sibling（`appearance.test.ts` 锁定）。这是 §3.1 关键规则 3 的硬约束：不显式定义就会从 `:root` 默认主题漏过来，切主题再切回会残留第二 accent / 黑结构条。
+
+> 曾经还有一对 `--bg-pattern-image` / `--bg-pattern-opacity`（frame 层的几何身份纹理，forza6 是唯一填过它的主题）。纹理与槽位都在 #task:1871 退役：`App.tsx` frame 层不再写 `background-image`，三个主题都不再声明它。要再给某个主题加常驻背景纹理，重新引入槽位、别复活旧值。
 
 | Token | 含义 | 退化规则（warm/single-accent 主题） |
 |---|---|---|
 | `--font-display` | 重压窄体大写字体栈（chrome 标题、segment、status pill）| `var(--font-sans)` |
-| `--bg-pattern-image` | 持续在场的几何身份纹理（几何 SVG data URL）| `none` |
-| `--bg-pattern-opacity` | 纹理强度 | `0` |
 | `--accent-2` | 第二 accent（info / 链接 / 3 档信息）| `var(--accent)` |
 | `--text-on-accent-2` | `--accent-2` 上的文字 | `var(--text-on-accent)` |
 | `--bg-structure-dark` | 黑色结构层（segment 容器 / member-strip / now-playing / titlebar tint / tool-card header / popover header / workspace-tile）| `var(--text-primary)`（浅色主题用 text-primary 当近黑）|

@@ -364,11 +364,9 @@
   --duration: 200ms;
 
   /* ── Compat: forza6-introduced tokens (design-new-theme §3 关键 3) ──
-     slack-dark 是单 accent / 无纹理 / 无黑结构主题，全部退化到 sibling，
+     slack-dark 是单 accent / 无黑结构主题，全部退化到 sibling，
      避免 forza6 → slack-dark 切换时 festival 值漏过来。 */
   --font-display: var(--font-sans);
-  --bg-pattern-image: none;
-  --bg-pattern-opacity: 0;
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
   /* dark 主题下"近黑结构层"应该比 bg-base 更深 —— 用一档真黑给契约
