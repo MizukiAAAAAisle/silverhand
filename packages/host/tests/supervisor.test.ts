@@ -5297,6 +5297,112 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     }
   });
 
+  it('resolves a delivered reply canonical root so self-authored thread seqs advance the same CAS boundary', async () => {
+    const { supervisor, events } = makeSupervisor();
+    const postedBodies: Record<string, unknown>[] = [];
+    let threadHead = 507;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        postedBodies.push(body);
+
+        // Stateful backend head: a known-stream send succeeds only at the
+        // exact CAS boundary. An unknown first-touch send omits both fields
+        // and is intentionally allowed, matching Case A loose semantics.
+        if (
+          body['stream_key'] !== undefined
+          && body['seen_up_to_seq'] !== threadHead
+        ) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  conversation_id: 'c1',
+                  stale_event_id: `stale-${threadHead}`,
+                  seen_up_to_seq: body['seen_up_to_seq'],
+                  current_seq: threadHead,
+                  newer_messages: [],
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }
+
+        threadHead += 1;
+        return new Response(
+          JSON.stringify({
+            message_id: `m${threadHead}`,
+            message_seq: threadHead,
+            thread_root_id: 'mRoot',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+    try {
+      await supervisor.start(baseStartParams);
+      await waitForRuntimeReady(events);
+      await supervisor.deliver({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        delivery_ids: [507],
+        kind: 'message',
+        text: 'reply already in the thread',
+        delivered_up_to_seq: 507,
+        deliveries: [
+          {
+            delivery_id: 507,
+            message_id: 'mReply507',
+            seq: 507,
+            thread_root_id: 'mRoot',
+            delivery_kind: 'turn',
+          },
+        ],
+        spawn_options: baseStartParams.options,
+      }, { owner: 'test-owner' });
+      await waitForDeliveryConsumed(events, 507);
+
+      // The root did not arrive in this batch, but the reply named it as the
+      // canonical root. The first reply-to-root must therefore be a protected
+      // send at the observed thread head, not an unknown-target loose send.
+      const first = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'first agent reply',
+        target: { kind: 'thread', message_id: 'mRoot' },
+      });
+      expect(first).toMatchObject({ ok: true, message_id: 'm508' });
+      expect(postedBodies[0]?.['stream_key']).toBe('thread:mRoot');
+      expect(postedBodies[0]?.['seen_up_to_seq']).toBe(507);
+
+      // A successful protected send advances observed to the sender's own
+      // seq. The sender never receives its own fanout, so this is the only
+      // path that prevents a permanent self-made stale gap.
+      const second = await supervisor.agentMessageSend({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        content: 'second agent reply',
+        target: { kind: 'thread', message_id: 'mRoot' },
+      });
+      expect(second).toMatchObject({ ok: true, message_id: 'm509' });
+      expect(postedBodies[1]?.['stream_key']).toBe('thread:mRoot');
+      expect(postedBodies[1]?.['seen_up_to_seq']).toBe(508);
+      expect(threadHead).toBe(509);
+    } finally {
+      vi.unstubAllGlobals();
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('omits seen+stream_key for an unknown reply target (Case A loose) and never advances observed', async () => {
     const { supervisor } = makeSupervisor();
     const postedBodies: Record<string, unknown>[] = [];

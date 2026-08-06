@@ -1265,8 +1265,25 @@ export class Supervisor implements SupervisorContract {
     }
     const threadTargetMessageId =
       effectiveTarget.kind === 'thread' ? effectiveTarget.messageId : undefined;
-    const targetStreamKey = threadTargetMessageId
+    const cachedTargetStreamKey = threadTargetMessageId
       ? handle.replyTargetStreamByMessageId.get(threadTargetMessageId)
+      : undefined;
+    // A canonical root resolves to `thread:<root>` without an LRU entry once
+    // that stream has actually been observed. Only member→root is
+    // non-derivable and needs replyTargetStreamByMessageId. This keeps a long
+    // session from turning an observed root back into Case A merely because
+    // its cache entry was evicted; a truly unseen target still has neither a
+    // cache entry nor an observed stream and remains loose first-touch.
+    const observedCanonicalRootStreamKey = threadTargetMessageId
+      ? `thread:${threadTargetMessageId}`
+      : undefined;
+    const observedRootTargetStreamKey =
+      observedCanonicalRootStreamKey !== undefined
+      && handle.observedSeqByStream.has(observedCanonicalRootStreamKey)
+        ? observedCanonicalRootStreamKey
+        : undefined;
+    const targetStreamKey = threadTargetMessageId
+      ? cachedTargetStreamKey ?? observedRootTargetStreamKey
       : MAIN_STREAM_KEY;
     const targetKnown = targetStreamKey !== undefined;
     const targetObserved =

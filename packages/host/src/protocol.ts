@@ -963,9 +963,12 @@ export type RuntimeStateDto = z.infer<typeof RuntimeStateDtoSchema>;
  * delivered inbox row; the entry set MUST match the batch's
  * `delivery_ids` exactly (daemon hard-rejects a mismatch — text and
  * metadata must not drift). `thread_root_id === null` ⇒ the message lives
- * on the main line. `delivery_kind` is decided at delivery creation and is
- * per-delivery, never batch-level (a spawn-with-batch can mix historical
- * `observe` rows with the current `turn` row). The scalar
+ * on the main line. A non-null root both locates the delivered reply and
+ * proves that `thread:<thread_root_id>` is an observed canonical-root stream;
+ * member-message ids still need the daemon's bounded member→root cache.
+ * `delivery_kind` is decided at delivery creation and is per-delivery, never
+ * batch-level (a spawn-with-batch can mix historical `observe` rows with the
+ * current `turn` row). The scalar
  * `delivered_up_to_seq` stays as a legacy/diagnostic high-water; observed
  * authority is this array, advanced per stream.
  */
