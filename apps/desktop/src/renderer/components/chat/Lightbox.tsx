@@ -28,6 +28,34 @@ const STEP = 1.25;
 /** Horizontal + vertical padding of the image well (`p-3` = 12px each side),
  *  subtracted from the container's client box to get the fit area. */
 const WELL_PADDING = 24;
+/** The shell's outer caps. They bound BOTH states: the ceiling the hugging
+ *  (`fit-content`) box may grow to, and — because a frozen box is a px value
+ *  measured before the window could change — the clamp that keeps a frozen
+ *  shell inside a window the user has since made smaller. */
+const SHELL_MAX_WIDTH = 'min(920px, 88vw)';
+const SHELL_MAX_HEIGHT = '82vh';
+/** Header + footer + the well's padding, as an approximation used only for the
+ *  RESTING image caps (the real chrome measures ~110px). It keeps a
+ *  fit-to-window image from overflowing the shell's own `82vh` ceiling, which
+ *  would put the well into scroll while still at 100%. */
+const SHELL_CHROME = '7rem';
+/**
+ * Floors for the hug (shiki 2026-08-06「给一个最小尺寸」/「有时候确实太窄了,
+ * 观感不好」). The shell hugging the image is right for the resting view, but a
+ * hug is also the pan viewport once the image is magnified, and a tall narrow
+ * photo, a 32px icon or a 1200×80 banner hugs down to a sliver that reads as a
+ * broken card and cannot be panned in.
+ *
+ * The width floor goes on the SHELL (it is the card's own proportion, and the
+ * footer's intrinsic width — ~396px — is not enough of one); the height floor
+ * goes on the WELL, since the header and footer add their own height on top.
+ *
+ * Both are `min(fixed, viewport)` because a floor must yield to a small window:
+ * the shell is `overflow-hidden` under `82vh`, so a floor that outlived the
+ * window would push the footer out of the frame instead of shrinking the well.
+ */
+const SHELL_MIN_WIDTH = 'min(40rem, 60vw)';
+const WELL_MIN_HEIGHT = 'min(15rem, 40vh)';
 
 const clamp = (v: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, v));
@@ -39,15 +67,32 @@ const clamp = (v: number, min: number, max: number): number =>
  * a close icon on the right), the image well, and a bottom action bar
  * (zoom controls left, Copy/Download right).
  *
- * The shell is a FIXED `min(920px, 88vw)` × `82vh` viewport (it does not
- * grow with the image). At rest the image is fit-to-window inside the well.
+ * The shell hugs the fitted image — `fit-content` under the
+ * `min(920px, 88vw)` / `82vh` caps — so a small image gets a compact card
+ * instead of sitting in an 82vh-tall empty well (shiki 2026-08-06
+ * 「图片很小的时候会显得很高」). It hugs no tighter than its floors —
+ * `SHELL_MIN_WIDTH` and `WELL_MIN_HEIGHT` — so the card keeps a readable
+ * proportion and the zoom + Copy/Download controls are never squeezed.
+ *
+ * Its size is a function of the IMAGE, never of zoom. The frame the user is
+ * looking through does not move when they magnify what is inside it — the
+ * desktop image-viewer idiom, and the two rejected alternatives were both
+ * shiki's: a shell that grew step after step with the image and then stalled at
+ * the cap (2026-07-22), and one that jumped to the full capped viewport the
+ * moment zoom left 100% (2026-08-06 「放大图片的时候,previewer 突然放大很奇怪」).
+ * So on the way into zoom the box is FROZEN at the size it is already rendered
+ * at — a measured px value, which makes the freeze visually a no-op — and the
+ * magnified image overflows into the `overflow-auto` well instead. Reset-to-fit
+ * thaws it back to hugging.
+ *
  * Zoom (pinch / slider / `+` `−` buttons / `+` `−` `0` keys) sets the image's
  * *actual* rendered size to `fit × scale`, so past 100% it overflows the
- * `overflow-auto` well and the user scrolls both axes (or drags) to inspect
- * detail (shiki 2026-07-22). Zoom keeps the viewport centre fixed. Trackpad
- * pinch is enabled per-frame only while open (macOS Electron disables it by
- * default); a plain wheel / swipe is left to scroll the well. Backdrop click +
- * Escape close (Radix defaults).
+ * well and the user scrolls both axes (or drags) to inspect detail. Zoom keeps
+ * the viewport centre fixed. Small images are never scaled UP to fill the well
+ * (`k ≤ 1`): these are mostly screenshots, where 1:1 pixels are the point.
+ * Trackpad pinch is enabled per-frame only while open (macOS Electron disables
+ * it by default); a plain wheel / swipe is left to scroll the well. Backdrop
+ * click + Escape close (Radix defaults).
  *
  * Copy reuses the `export:copyPng` IPC (`copyPngExport`): we fetch the
  * blob bytes behind `src` and let main build an NSImage + write the OS
@@ -73,6 +118,10 @@ export function Lightbox({
   const [scale, setScale] = useState(1);
   const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
   const [dragging, setDragging] = useState(false);
+  // The shell's frozen box while zoomed, in px, measured off the hugging shell
+  // on the way in (see the docblock). `null` = hugging.
+  const [frozenBox, setFrozenBox] = useState<{ w: number; h: number } | null>(null);
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const wellRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const scaleRef = useRef(1);
@@ -91,6 +140,7 @@ export function Lightbox({
   useEffect(() => {
     setScale(1);
     setFit(null);
+    setFrozenBox(null);
     pendingCenterRef.current = null;
   }, [open, src]);
 
@@ -118,6 +168,24 @@ export function Lightbox({
   }, [open, computeFit]);
 
   const setZoom = useCallback((raw: number): void => {
+    const next = clamp(raw, MIN_SCALE, MAX_SCALE);
+    // Freeze / thaw the shell BEFORE the new scale renders, in the same batch,
+    // so the larger image never gets a frame in which it could grow the hugging
+    // box. The size is READ from the live box rather than computed, which is
+    // what makes the freeze invisible: the shell keeps exactly the geometry it
+    // already had. Rounded to whole device pixels — `margin: auto` centering of
+    // a fractional width would land the raster image mid-pixel and blur it.
+    if (next > MIN_SCALE) {
+      const shell = shellRef.current;
+      if (shell) {
+        const r = shell.getBoundingClientRect();
+        // First zoom step of a session wins; later steps must not re-measure a
+        // box that scroll/overflow has since had a say in.
+        setFrozenBox(prev => prev ?? { w: Math.round(r.width), h: Math.round(r.height) });
+      }
+    } else {
+      setFrozenBox(null);
+    }
     const c = wellRef.current;
     if (c) {
       const sw = c.scrollWidth || 1;
@@ -127,7 +195,7 @@ export function Lightbox({
         fy: (c.scrollTop + c.clientHeight / 2) / sh,
       };
     }
-    setScale(clamp(raw, MIN_SCALE, MAX_SCALE));
+    setScale(next);
   }, []);
 
   // After the image resizes (scale or fit changed), re-centre the scroll on
@@ -257,18 +325,25 @@ export function Lightbox({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="fixed inset-0 z-[90] bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
+          ref={shellRef}
           data-modal-shell
           onKeyDown={onKeyDown}
-          // FIXED-size viewport (not `h-fit w-fit` hugging the image): the
-          // previewer stays one stable size, and zoom overflows the well into
-          // scroll rather than growing the shell (shiki 2026-07-22 — hugging
-          // made the whole modal grow with the image, then stall once it hit
-          // the cap). Centered with `fixed inset-0 + margin:auto` (not
-          // translate-50%): margin-auto keeps the box on whole device pixels so
-          // the raster image stays crisp, whereas a 50% translate on an odd
-          // size lands mid-pixel and blurs it (shiki "有时候图片不清晰").
+          // The shell's size is a function of the IMAGE, never of zoom (see the
+          // component docblock): it hugs the fitted image under the caps, and
+          // zoom freezes that exact box in px rather than resizing it.
+          // Centered with `fixed inset-0 + margin:auto` (not translate-50%):
+          // margin-auto keeps the box on whole device pixels so the raster image
+          // stays crisp, whereas a 50% translate on an odd size lands mid-pixel
+          // and blurs it (shiki "有时候图片不清晰"). `fit-content` is what makes
+          // that trick shrink-to-fit — plain `auto` would stretch to `inset: 0`.
           className="fixed inset-0 z-[91] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating shadow-xl focus:outline-none"
-          style={{ width: 'min(920px, 88vw)', height: '82vh' }}
+          style={{
+            width: frozenBox ? `${frozenBox.w}px` : 'fit-content',
+            height: frozenBox ? `${frozenBox.h}px` : 'fit-content',
+            minWidth: SHELL_MIN_WIDTH,
+            maxWidth: SHELL_MAX_WIDTH,
+            maxHeight: SHELL_MAX_HEIGHT,
+          }}
         >
           <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
@@ -286,11 +361,19 @@ export function Lightbox({
           {/* Image well. `flex` + child `m-auto` (NOT justify/items-center)
               centers the image in both axes when it fits, yet lets scroll
               reach every edge once it overflows — the standard fix for
-              "flex centering clips overflow". The well itself is sized by
-              the shell caps; only the image grows past it. */}
+              "flex centering clips overflow". Which side sizes which flips with
+              the shell: while hugging, the well's CONTENT sizes the shell (the
+              grow factor is inert there, since there is no free space to
+              distribute) but never below the floors; once the shell is
+              frozen for zoom it sizes the well instead, and the magnified image
+              overflows into scroll. The explicit `minHeight` also does the job
+              `min-h-0` used to: it replaces this flex item's automatic minimum
+              size, so the well shrinks to its floor under a magnified image
+              rather than pushing the footer out of the frame. */}
           <div
             ref={attachWell}
-            className="flex min-h-0 flex-1 overflow-auto bg-bg-elevated p-3"
+            className="flex flex-1 overflow-auto bg-bg-elevated p-3"
+            style={{ minHeight: WELL_MIN_HEIGHT }}
           >
             <img
               ref={imgRef}
@@ -305,9 +388,10 @@ export function Lightbox({
               // Explicit `fit × scale` size (once measured) so the image
               // genuinely overflows the well past 100% and native scroll
               // engages. Before the first measure, fall back to the viewport
-              // caps + object-contain so the first paint already fits (the
-              // caps subtract the modal chrome from the 82vh / min(920,88vw)
-              // shell — this is also what keeps a tall image fully visible).
+              // caps + object-contain so the first paint already fits — and at
+              // rest that is also what the hugging shell measures itself
+              // against, so a fit-to-window image can never put the well into
+              // scroll while still at 100%.
               className="m-auto block shrink-0 select-none object-contain"
               style={
                 fit
@@ -323,8 +407,8 @@ export function Lightbox({
                       cursor: zoomed ? (dragging ? 'grabbing' : 'grab') : 'default',
                     }
                   : {
-                      maxWidth: 'calc(min(920px, 88vw) - 1.5rem)',
-                      maxHeight: 'calc(82vh - 7rem)',
+                      maxWidth: `calc(${SHELL_MAX_WIDTH} - ${WELL_PADDING}px)`,
+                      maxHeight: `calc(${SHELL_MAX_HEIGHT} - ${SHELL_CHROME})`,
                     }
               }
             />
