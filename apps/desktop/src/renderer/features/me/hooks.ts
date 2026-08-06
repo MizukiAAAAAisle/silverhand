@@ -439,17 +439,14 @@ export function useUploadAvatar() {
   });
 }
 
-/** DELETE /api/me/avatar — clears the avatar pointer + blob. */
-export function useClearAvatar() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: () =>
-      api<UserDto>(apiPaths.meAvatar, { method: 'DELETE' }),
-    onSuccess: dto => {
-      cacheViewer(qc, dto);
-    },
-  });
-}
+/*
+ * `DELETE /api/me/avatar` has no renderer hook. The route and main's
+ * `DELETE meAvatar → user-dto` session sync stay in place (shiki
+ * 2026-08-06:「保留 backend api,前端先去掉消费」), but the only avatar
+ * interaction the UI offers is picking a new image, so a clearing
+ * mutation here would have no call site. Re-add it with the entry point
+ * that needs it, not ahead of one.
+ */
 
 /**
  * Resolve the viewer's avatar to a renderable object URL.

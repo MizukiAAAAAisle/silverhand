@@ -88,7 +88,6 @@ describe('HumanProfileCard source — no /api/me ownership', () => {
     // under two owners again.
     expect(CODE).not.toMatch(/\buseUpdateProfile\b/);
     expect(CODE).not.toMatch(/\buseUploadAvatar\b/);
-    expect(CODE).not.toMatch(/\buseClearAvatar\b/);
     expect(CODE).not.toMatch(/AvatarPickerButton/);
     expect(CODE).not.toMatch(/\bInlineText\b/);
   });

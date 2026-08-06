@@ -22,7 +22,6 @@ describe('SettingsPage — Account owns the profile editor, not Computer lifecyc
     expect(CODE).toMatch(/ViewerProfileEditor/);
     expect(CODE).not.toMatch(/\buseUpdateProfile\b/);
     expect(CODE).not.toMatch(/\buseUploadAvatar\b/);
-    expect(CODE).not.toMatch(/\buseClearAvatar\b/);
     expect(CODE).not.toMatch(/\buseViewerAvatarObjectUrl\b/);
     expect(CODE).not.toMatch(/AvatarPickerButton/);
     expect(CODE).not.toMatch(/validateAvatarFile/);
