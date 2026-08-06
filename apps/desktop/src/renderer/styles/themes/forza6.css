@@ -153,7 +153,18 @@
      reads as "thin teal frame" rather than a full poster border. */
   --bg-app: var(--forza6-poster-teal);
   --frame-padding: 4px;
-  --card-radius: 6px;          /* tighter than warm 8px — Forza tile feel */
+  --card-radius: 2px;          /* shiki 2026-08-07「我想改成 2px」— hard-cut tile */
+  /* The frame's two BOTTOM corners are not tiles: they are the app
+     window's own corners, which macOS clips on its own arc. A 2px tile
+     corner sitting inside that arc reads as a chip in the frame, so the
+     two cards that own those corners follow this radius instead —
+     roughly concentric with the window arc (window radius minus the
+     4px `--frame-padding` the card is inset by), which is the one number
+     to nudge if the fit looks off. Consumers: `NavRail.tsx` (bottom-left,
+     always the rail) and `global.css` §App frame corners (bottom-right,
+     whichever card is last in the section row). Declared ONLY here — the
+     other themes resolve those consumers back to `--card-radius`. */
+  --app-corner-radius: 10px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
   --splitter-bg: transparent;
   --splitter-offset: calc((var(--frame-padding) + 4px) / -2);

@@ -1314,6 +1314,46 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   border-radius: var(--control-radius);
 }
 
+/* ── App frame corners (shiki 2026-08-07) ─────────────────────────────
+   `--card-radius` is the TILE radius — every card inside the frame. The
+   frame's two BOTTOM corners are not tiles: they are the application
+   window's own corners, clipped by the OS on its own arc, so the card
+   that happens to sit in one has to follow the window instead (see
+   `--app-corner-radius` in `themes/forza6.css`).
+
+     bottom-LEFT  → always the NavRail, so it is owned inline in
+                    `NavRail.tsx`: the rail is unconditionally the
+                    frame's first item, there is no position to resolve.
+     bottom-RIGHT → whichever card is LAST in the section row, and that
+                    owner moves: Settings' `main`, TasksSection, the
+                    Saved / Search / Archived views, the ActivityView
+                    while no channel is picked, and inside chat the
+                    ChannelView alone vs. the SplitPane's right pane. No
+                    component can know that about itself, so this rule
+                    reads it off the DOM instead — `:last-child` of the
+                    mounted section layer IS the frame's right edge.
+
+   Two dependencies, both deliberate:
+     - `!important`: cards apply their radius as an INLINE `borderRadius`
+       shorthand (the card recipe — radius + `--card-shadow`), which a
+       normal stylesheet declaration cannot beat. This is the one place
+       that must win over it.
+     - clipping: when the last child is a layout wrapper rather than a
+       painted card (chat → the SplitPane root), rounding the wrapper is
+       what rounds the corner, because it is `overflow-hidden` and clips
+       the pane inside. Don't drop `overflow-hidden` from SplitPane's
+       root or panes.
+
+   Universal but inert outside forza6: only `themes/forza6.css` declares
+   `--app-corner-radius`, so the other themes resolve this back to their
+   own `--card-radius` and nothing moves. */
+[data-section-layer] > *:last-child {
+  border-bottom-right-radius: var(
+    --app-corner-radius,
+    var(--card-radius, 0)
+  ) !important;
+}
+
 /* ── Avatar ground (#task:1699) ───────────────────────────────────────
    Every avatar square — uploaded image or fallback glyph/initial — sits on
    this one fill, so a person without an uploaded image still reads as the

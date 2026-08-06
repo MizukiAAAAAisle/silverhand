@@ -34,6 +34,11 @@ import type { ReactNode } from 'react';
  * Toggling only `display` never moves a child in the tree, so React preserves
  * the section's component instances (no remount, no lost scroll/state) across
  * the show↔hide flip.
+ *
+ * The `data-section-layer` hook is how `global.css` §App frame corners finds
+ * the frame's right edge: this wrapper's `:last-child` IS the card sitting in
+ * the app window's bottom-right corner, whichever section is mounted. Keep the
+ * attribute if you touch this component.
  */
 export function SectionLayer({
   visible,
@@ -42,5 +47,9 @@ export function SectionLayer({
   visible: boolean;
   children: ReactNode;
 }): JSX.Element {
-  return <div style={{ display: visible ? 'contents' : 'none' }}>{children}</div>;
+  return (
+    <div data-section-layer="" style={{ display: visible ? 'contents' : 'none' }}>
+      {children}
+    </div>
+  );
 }

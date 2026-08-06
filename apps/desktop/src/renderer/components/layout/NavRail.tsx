@@ -93,6 +93,16 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         borderRadius: 'var(--card-radius, 0)',
         boxShadow: 'var(--card-shadow, none)',
         overflow: 'hidden',
+        // The rail is unconditionally the frame's first item, so its
+        // bottom-left corner IS the app window's bottom-left corner. At a
+        // 2px tile radius that corner reads as a chip inside the arc the
+        // OS clips the window on, so it follows the app corner while the
+        // other three stay tiles. Only forza6 declares
+        // `--app-corner-radius`; elsewhere this resolves back to
+        // `--card-radius` and nothing changes. The frame's bottom-RIGHT
+        // owner varies by section, so it is resolved structurally in
+        // `global.css` §App frame corners instead of inline.
+        borderBottomLeftRadius: 'var(--app-corner-radius, var(--card-radius, 0))',
       }}
     >
       {ITEMS.map(item => {
