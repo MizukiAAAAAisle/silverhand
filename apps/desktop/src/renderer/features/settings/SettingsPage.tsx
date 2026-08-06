@@ -9,16 +9,21 @@ import {
   AlignRight,
   Check,
   Code2,
-  KeyRound,
   LogOut,
   Loader2,
   Palette,
   RotateCcw,
   Server,
+  Settings,
   Type,
+  User,
 } from 'lucide-react';
 import { Input, Label } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import {
+  SidebarRow,
+  SidebarSection,
+} from '@/components/layout/sidebar-shared';
 import { CONTROL_HOVER_LIFT } from '@/features/common/ControlInkBorder';
 import {
   destructiveAction,
@@ -40,6 +45,7 @@ import {
   useViewerUser,
 } from '@/features/me/hooks';
 import { ViewerProfileEditor } from '@/features/me/ViewerProfileEditor';
+import { SettingsHeading } from './SettingsHeading';
 import {
   DEFAULT_MARKDOWN_FONT_SIZE,
   FONT_SIZE_MAX,
@@ -150,84 +156,119 @@ export function SettingsPage(): JSX.Element {
     persistSettingsSection(section);
   }, [section]);
 
-  return (
-    <main
-      className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
-      style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
-      }}
-    >
-      <header className="flex h-[var(--titlebar-height)] shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-5">
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="font-serif text-sm font-semibold text-text-primary">
-            Settings
-          </span>
-          <span className="truncate text-xs text-text-muted">
-            Application preferences, account access, and server connection.
-          </span>
-        </div>
-      </header>
+  /* Two islands, exactly the Computers / Members shape (shiki 2026-08-06
+     「采用 computer rail 那种两栏 island 布局方式」): the section list is its
+     own card at `--sidebar-width`, the panes are the content card, and the
+     app frame's own `gap: var(--frame-padding)` separates them. Rendered as a
+     fragment because `SectionLayer` is `display: contents` — the two cards are
+     siblings in the frame's flex row, like `aside[data-sidebar="computers"]`
+     and `HostDetailView`.
 
-      <div className="flex min-h-0 flex-1 justify-center">
-        <div className="flex w-full min-w-0 max-w-[60rem]">
-          <SettingsSubNav section={section} onSelect={setSection} />
-          {section === 'appearance' ? (
-            <AppearancePane
-              appearance={appearance}
-              setTheme={setTheme}
-              setMarkdownFont={setMarkdownFont}
-              setMarkdownFontSize={setMarkdownFontSize}
-              resetMarkdownText={resetMarkdownText}
-              resetMarkdownFontSize={resetMarkdownFontSize}
-            />
-          ) : section === 'account' ? (
-            <AccountPane />
-          ) : (
-            <ConnectionPane />
-          )}
+     This replaces the in-card left column of the first round: as a real
+     `aside[data-sidebar]` the list inherits every per-theme sidebar rule
+     (carrier ground, ink ladder, row sticker states) instead of needing a
+     parallel `[data-settings-nav]` scope and a `--bg-settings-nav` token — the
+     ground and the rows are now the rail's, not a copy of it. */
+  return (
+    <>
+      <SettingsRail section={section} onSelect={setSection} />
+      <main
+        className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
+        style={{
+          borderRadius: 'var(--card-radius, 0)',
+          boxShadow: 'var(--card-shadow, none)',
+        }}
+      >
+        {/* The card header names the OPEN pane, not the page (shiki 2026-08-06
+            「右侧的 header 不要固定写 "settings" 文案,还是跟着选中的 nav 切换」)
+            — master/detail, like `HostDetailView` titling the selected computer.
+            Shape is the app's content-card header (Activity / Saved / Archived
+            Channels): accent glyph + serif name, nothing else. Both glyph and
+            name come from `SECTION_CHROME`, the same source the rail rows read,
+            so the header can't drift from the row it mirrors.
+
+            The old section-agnostic sentence ("Application preferences, account
+            access, and server connection.") is gone with the fixed title: per
+            section it would only restate the pane's own description. The panes
+            keep their own headings — shiki 2026-08-06「顶 header 给
+            Appearance/Account 不意味着下面的 h2 就要去掉」: this strip is section
+            chrome at titlebar scale, the pane's h2 opens its content. */}
+        <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-5">
+          <span className="flex shrink-0 items-center text-accent">
+            {SECTION_CHROME[section].icon}
+          </span>
+          <span className="font-serif text-sm font-semibold text-text-primary">
+            {SECTION_CHROME[section].label}
+          </span>
+        </header>
+
+        {/* The pane column stays centred inside its card at the width it has
+            always had (`max-w-[49rem]` = the old centred `60rem` pair minus the
+            nav's 11rem), so no pane's content width changes as the nav moves
+            out. `min-h-0` on both wrappers is what lets AppearancePane's own
+            `overflow-y-auto` scroll instead of stretching the page. */}
+        <div className="flex min-h-0 min-w-0 flex-1 justify-center">
+          <div className="flex min-h-0 w-full min-w-0 max-w-[49rem] flex-col">
+            {section === 'appearance' ? (
+              <AppearancePane
+                appearance={appearance}
+                setTheme={setTheme}
+                setMarkdownFont={setMarkdownFont}
+                setMarkdownFontSize={setMarkdownFontSize}
+                resetMarkdownText={resetMarkdownText}
+                resetMarkdownFontSize={resetMarkdownFontSize}
+              />
+            ) : section === 'account' ? (
+              <AccountPane />
+            ) : (
+              <ConnectionPane />
+            )}
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </>
   );
 }
 
-/** Label + icon per section. Order is NOT here: the nav walks
+/** Label + icon per section. Order is NOT here: the rail walks
  *  `SETTINGS_SECTIONS`, which is also what the landing default is derived
- *  from, so reordering the sub-nav can't drift from where Settings opens. */
+ *  from, so reordering the rail can't drift from where Settings opens.
+ *
+ *  Account's glyph is the person, not a key (shiki 2026-08-06「Account 换个
+ *  icon,不要用这个🔑」+「Account 用这个 lucide user」): the pane is the viewer's
+ *  own identity — avatar, display name, username, sign-out — and a key reads as
+ *  credentials/permissions, a thing this pane does not hold. Bare `User`, not
+ *  the circled variant: the rail rows and the card header are all bare glyphs
+ *  (gear, palette, server), so an enclosed one would read as its own chrome.
+ *  Same glyph the AccountPane heading shows. */
 const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }> = {
-  account: { label: 'Account', icon: <KeyRound className="size-3.5" /> },
+  account: { label: 'Account', icon: <User className="size-3.5" /> },
   appearance: { label: 'Appearance', icon: <Palette className="size-3.5" /> },
   connection: { label: 'Connection', icon: <Server className="size-3.5" /> },
 };
 
-/** Page-internal vertical nav. The settings sub-nav is *secondary*
- *  navigation (the user already chose Settings from the rail), but its rows
- *  are rows — so they carry the app-wide row vocabulary verbatim (shiki
- *  2026-08-06「给 setting page 的 side nav 加上 computer rail side nav 同样的
- *  效果。三主题都是」): a `sidebar-row-border` stroke that is transparent at
- *  rest and painted on hover / selected, `--row-radius` geometry, a pale
- *  `--bg-option-hover` hover preview and the bright `--bg-row-selected` fill
- *  + `text-text-on-selected` ink. Same three-state ladder as ComputersPanel's
- *  `SidebarRow`; because the stroke is always reserved, no state shifts the
- *  label.
+/** The Settings rail — one of the app's two-card sections, structurally
+ *  identical to Computers / Members: an `aside[data-sidebar]` island at
+ *  `--sidebar-width` on the sidebar carrier ground, with the frame's own gap
+ *  separating it from the content card (shiki 2026-08-06「采用 computer rail
+ *  那种两栏 island 布局方式」).
  *
- *  These rows live in the content card, NOT inside an `aside[data-sidebar]`,
- *  so the per-theme row painting that keys on that ancestor cannot reach them
- *  — same situation as `AgentActivityPane`. Two consequences, both load-
- *  bearing: the border colours are consumed as the `--border-row-*` tokens
- *  inline (`border-accent` would resolve to forza6's brand pink and clash
- *  with the lime selection ground), and the row carries `data-row-selected`,
- *  which is the hook studio-light / slack-dark already use for their content-
- *  area selected-row variants. forza6's poster-sticker shadow is scoped to
- *  `[data-settings-nav]` in forza6-components.css.
+ *  Rows are the shared `SidebarRow`, not a look-alike — the whole point of
+ *  living inside `aside[data-sidebar]` is that the per-theme row painting
+ *  (reserved stroke, `--border-row-*` colours, carrier hover ground, forza6's
+ *  poster-sticker shadow, the dark-on-lime descendant ink) keys on that
+ *  ancestor and now reaches these rows for free. Nothing here restates it.
  *
- *  Hover ground stays `--bg-option-hover`, not the `--bg-row-hover` that
- *  `SidebarRow` reads: forza6 defines `--bg-row-hover` as a magenta mix that
- *  only ever resolves to pale lime under the sidebar's own override, while
- *  `--bg-option-hover` IS that pale lime at the theme root (studio-light maps
- *  both to the same #E9EEF6). */
-function SettingsSubNav({
+ *  Header is the shared `SidebarSection` (shiki 2026-08-06「setting side nav
+ *  顶部给一个 settings 文案」) — same uppercase muted label as COMPUTERS /
+ *  AGENTS / CHANNELS, same gear as the NavRail entry that opens this section.
+ *  No count: three fixed sections, so a number states nothing. It also gives
+ *  the word a fixed home now that the content card's title follows the
+ *  selection instead of saying "Settings".
+ *
+ *  `aria-current` marks the open pane for AT; `SidebarRow`'s `selected`
+ *  carries the visual state. */
+function SettingsRail({
   section,
   onSelect,
 }: {
@@ -237,34 +278,34 @@ function SettingsSubNav({
   return (
     <aside
       aria-label="Settings sections"
-      data-settings-nav
-      className="flex h-full w-44 shrink-0 flex-col py-4 pr-2"
+      data-sidebar="settings"
+      className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
+      style={{
+        borderRadius: 'var(--card-radius, 0)',
+        boxShadow: 'var(--card-shadow, none)',
+        overflow: 'hidden',
+      }}
     >
-      <nav className="flex flex-col gap-0.5">
-        {SETTINGS_SECTIONS.map(id => {
-          const { label, icon } = SECTION_CHROME[id];
-          const selected = id === section;
-          return (
-            <button
-              key={id}
-              type="button"
-              aria-current={selected ? 'page' : undefined}
-              data-row-selected={selected || undefined}
-              onClick={() => onSelect(id)}
-              className={cn(
-                // `px-2` + the reserved 2px stroke keeps the label's 10px
-                // optical inset from before the border existed.
-                'sidebar-row-border flex w-full items-center gap-2 border px-2 py-1.5 text-left text-sm transition-colors',
-                selected
-                  ? 'border-[var(--border-row-selected,var(--accent))] bg-[var(--bg-row-selected)] font-medium text-text-on-selected'
-                  : 'border-transparent text-text-secondary hover:border-[var(--border-row-hover,var(--accent))] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
-              )}
-            >
-              {icon}
-              <span>{label}</span>
-            </button>
-          );
-        })}
+      <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
+        <SidebarSection
+          label="SETTINGS"
+          icon={<Settings className="size-3.5" />}
+        >
+          {SETTINGS_SECTIONS.map(id => {
+            const { label, icon } = SECTION_CHROME[id];
+            const selected = id === section;
+            return (
+              <SidebarRow
+                key={id}
+                icon={icon}
+                title={label}
+                selected={selected}
+                aria-current={selected ? 'page' : undefined}
+                onClick={() => onSelect(id)}
+              />
+            );
+          })}
+        </SidebarSection>
       </nav>
     </aside>
   );
@@ -296,7 +337,6 @@ function AppearancePane({
             id="settings-appearance"
             icon={<Palette className="size-4" />}
             title="Appearance"
-            description="Choose the visual theme and how chat messages are arranged."
           >
             <div className="grid gap-4">
               <div className="grid gap-3 sm:grid-cols-2">
@@ -393,7 +433,6 @@ function AppearancePane({
             id="settings-markdown-text"
             icon={<Type className="size-4" />}
             title="Markdown Text"
-            description="Customize message body typography without changing the rest of the app chrome."
           >
             <div className="grid gap-4">
               <SharedFontSizeControl
@@ -572,12 +611,13 @@ function AccountPane(): JSX.Element {
   }
 
   return (
+    // The pane keeps its own h2 even though the card header now reads "Account"
+    // (shiki 2026-08-06「顶 header 给 Appearance/Account 不意味着下面的 h2 就要
+    // 去掉」): the header is section chrome at titlebar scale, the h2 opens the
+    // pane's content — two levels, not one word twice. Same heading object as
+    // Appearance / Connection, chip included (shiki:「同一个风格」).
     <section className="flex min-w-0 flex-1 flex-col gap-5 px-5 py-5">
-      <header className="flex flex-col gap-1">
-        <h2 className="font-serif text-base font-semibold text-text-primary">
-          Account
-        </h2>
-      </header>
+      <SettingsHeading icon={<User className="size-4" />} title="Account" />
 
       <div className="flex max-w-2xl flex-col gap-6">
         <ViewerProfileEditor user={dto} />
@@ -886,17 +926,27 @@ function MarkdownFontControl({
   );
 }
 
+/** One titled group inside a pane. Title / icon are REQUIRED even though the
+ *  card header now names the open section (shiki 2026-08-06「顶 header 给
+ *  Appearance/Account 不意味着下面的 h2 就要去掉」): the header is section chrome
+ *  at titlebar scale, this is where the pane's content opens. Making them
+ *  optional to skip the first group's heading was the wrong read of that
+ *  duplication, and a knob nobody should use is the next misuse.
+ *
+ *  No description line — the group's own controls state their scope (shiki
+ *  2026-08-06「h2 下的 description 去掉」).
+ *
+ *  The heading itself is the shared {@link SettingsHeading} — the same object
+ *  the Account and Connection panes open with. */
 function SettingsSection({
   id,
   icon,
   title,
-  description,
   children,
 }: {
   id: string;
   icon: ReactNode;
   title: string;
-  description: string;
   children: ReactNode;
 }): JSX.Element {
   return (
@@ -908,22 +958,7 @@ function SettingsSection({
       // job. Spacing is the parent's `space-y-8` alone.
       className="scroll-mt-6 grid gap-4"
     >
-      <div className="flex items-start gap-3">
-        <span
-          data-settings-icon-chip
-          className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary"
-        >
-          {icon}
-        </span>
-        <div className="min-w-0">
-          <h2 className="font-serif text-base font-semibold text-text-primary">
-            {title}
-          </h2>
-          <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-            {description}
-          </p>
-        </div>
-      </div>
+      <SettingsHeading icon={icon} title={title} />
       <div className="min-w-0">{children}</div>
     </section>
   );

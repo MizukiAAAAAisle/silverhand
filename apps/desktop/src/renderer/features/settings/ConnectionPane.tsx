@@ -32,11 +32,12 @@
  */
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Save } from 'lucide-react';
+import { Loader2, Save, Server } from 'lucide-react';
 import type { DesktopProfileSaveWithTestResult } from '../../../preload/api';
 import { Button } from '@/components/ui/button';
 import { Input, Label } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
+import { SettingsHeading } from './SettingsHeading';
 import {
   backendInfoKey,
   hostsKey,
@@ -363,15 +364,14 @@ export function ConnectionPane(): JSX.Element {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-6 px-5 py-5">
-      <header className="flex flex-col gap-1">
-        <h2 className="font-serif text-base font-semibold text-text-primary">
-          Connection
-        </h2>
-        <p className="max-w-prose text-xs text-text-muted">
-          The server this app connects to. Computers are managed under the
-          Computers panel.
-        </p>
-      </header>
+      {/* Same heading object as Appearance / Account, chip included (shiki
+          2026-08-06「Appearance h2 前面都给了 icon,connection / Account 也给,
+          同一个风格」), title only — the description line is gone with the rest
+          of them (shiki「h2 下的 description 去掉」). The routing sentence it
+          carried ("Computers are managed under the Computers panel") went with
+          it: the Computer Rail is a top-level destination of its own, and this
+          pane's only control is the address field, which needs no gloss. */}
+      <SettingsHeading icon={<Server className="size-4" />} title="Connection" />
 
       <div className="flex flex-col gap-3">
         <div className="flex flex-col items-start gap-1">
