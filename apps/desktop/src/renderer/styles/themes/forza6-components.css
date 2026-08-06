@@ -77,51 +77,22 @@
    token block is the single source of truth (no more silent
    component-layer override of dead root tokens). */
 
-/* ── Titlebar — same magenta as frame, scattered hard slivers ──
-   shiki `tAkNayaDiv8uWASp` "只有 2-3 片大的，斜的那种感觉" → v4
-   centered comet trails → v5.4a `hqjj_4Q_0AbHAc-z` "左侧不要纹理，
-   只在中间偏右，硬朗，像被截断" → v5.4b `HWsimlwFND4d8qcG`
-   "太靠右了，中间也需要几个，截面可以宽点，形态角度各异，不要太
-   规则".
+/* ── Titlebar — white ink ladder on the magenta frame ──
+   No texture: the scattered hard slivers this rule used to paint
+   (a right-anchored 600×28 SVG slab of five uneven black
+   parallelograms, v5.4b) are REMOVED — shiki 2026-08-07
+   「forza6 主题中 data-theme='forza6'] header[data-titlebar='app'] 有一个
+   background image，去掉」. Don't re-add them: the frame's flat magenta
+   is the poster ground on its own, and the slivers only competed with
+   the titlebar's actual content (window title, section chrome). The
+   `background-repeat` / `-position` / `-size` triple went with the
+   image — they existed only to anchor that slab.
 
-   v5.4b strategy:
-     - viewBox `0 0 600 28` is the wider pattern slab. With
-       `background-position: right center` + `background-size:
-       auto 100%`, the slab anchors to the titlebar's right edge
-       and naturally extends ~600px leftward. On any window wide
-       enough to fit it, the texture occupies "middle-to-right"
-       rather than only the rightmost ~220px (v5.4a regression).
-     - Five slivers, deliberately uneven:
-         1. wide forward parallelogram      x=90..175 (top), 90..120 (bot)
-         2. backward parallelogram          x=215..270 (different tilt)
-         3. single sharp triangle, apex up  x=320..360 (no parallel)
-         4. mid-size forward parallelogram  x=400..470
-         5. bigger forward parallelogram    x=510..580 (heaviest, near right)
-       Mixing forward / backward / single-triangle keeps the rhythm
-       irregular — "形态角度各异，不要太规则".
-     - All vertices that should be "cut by titlebar" sit at y=-4 or
-       y=32, outside the viewBox 0..28 — so the SVG renderer clips
-       them to the viewBox edge, producing the "三角形中间被截断"
-       effect shiki asked for.
-     - Fill `rgba(0,0,0,0.22)` — slightly softer than v5.4a's 0.24
-       since there are now 5 slivers; same hardness, less stacking.
-     - Left side (incl. macOS traffic lights) stays clean teal:
-       right-anchored slab + 600px width naturally leaves x<window-600
-       untouched on any reasonably wide window.
-
-   P2 v6.3 (#task:917): chrome bg reverted from v6.2's #1E5E55 back
-   to v6.1's #329E86 — shiki "整体太黑了". The v6.2 deepening was
-   wrong: poster brightness is the chrome's primary signal, the
-   v6.1 problem was「色彩对撞缺失」not「too bright」. Saturated mid-
-   teal #329E86 reads as "festival poster ground" — exactly what
-   the reference posters' chrome IS. White on `#329E86` ≈ 4.78:1 AA;
-   `--text-muted` at `rgba(255,255,255,0.78)` ≈ 3.7:1 (large bold
-   display caps clear the AA-large bar). */
+   What stays is the ink ladder: over the saturated magenta frame the
+   titlebar's text must be white rather than the theme's near-black
+   body ink, and hover must be a white wash rather than the pale-lime
+   row hover. */
 [data-theme='forza6'] header[data-titlebar='app'] {
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='28' viewBox='0 0 600 28'><g fill='rgba(0,0,0,0.22)'><polygon points='90,32 145,-4 175,-4 120,32'/><polygon points='270,32 215,-4 230,-4 250,32'/><polygon points='320,-4 360,32 340,32'/><polygon points='400,32 445,-4 470,-4 425,32'/><polygon points='510,-4 555,32 580,32 530,-4'/></g></svg>");
-  background-repeat: no-repeat;
-  background-position: right center;
-  background-size: auto 100%;
   --text-muted: rgba(255, 255, 255, 0.78);
   --text-primary: #FFFFFF;
   --text-secondary: rgba(255, 255, 255, 0.92);
