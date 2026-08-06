@@ -547,26 +547,49 @@ export class TaskStore {
     return row ?? null;
   }
 
-  /** Human assignment write — ownership ONLY. `agentId === null` clears the
-   *  assignee. `status` / `closed_at` are never touched: "this is (no longer)
-   *  @X's" is not "this work restarted / reopened", so an `in_review` task
-   *  keeps its place in the human approval queue. Both assignee columns are
-   *  written every time — the row must never carry two assignees (the schema
-   *  CHECK), and the DTO exposes a single `assignee`, so a migrated
-   *  user-assigned row has to be overridden / cleared as well. */
-  setAssignee(taskId: string, agentId: string | null): void {
+  /** Human dispatch (assign / reassign): set the assignee AND start a `todo`
+   *  task. Handing a `todo` task to an agent IS dispatching the work, so the row
+   *  must not be left in `todo + assignee` — that state has no exit (`task
+   *  status` cannot walk `todo → in_progress`, §3.2, and the agent's own
+   *  `assignSelf` refuses an already-assigned row). A task that is already
+   *  `in_progress` / `in_review` only changes hands: reassignment is not a
+   *  restart, so an `in_review` task keeps its place in the human approval
+   *  queue. Both assignee columns are written every time — the row must never
+   *  carry two assignees (the schema CHECK), and the DTO exposes a single
+   *  `assignee`, so a migrated user-assigned row has to be overridden as well.
+   *  Terminal rows never reach here (the caller refuses them, §4.4). */
+  dispatchToAgent(taskId: string, agentId: string): void {
     prepareObserved(
         this.db,
-        'tasks.set_assignee',
-        `UPDATE tasks SET assignee_agent_id = ?, assignee_user_id = NULL WHERE id = ?`,
+        'tasks.dispatch_to_agent',
+        `UPDATE tasks
+         SET assignee_agent_id = ?,
+             assignee_user_id = NULL,
+             status = CASE WHEN status = 'todo' THEN 'in_progress' ELSE status END
+         WHERE id = ?`,
       )
       .run(agentId, taskId);
   }
 
+  /** Human unassign — ownership ONLY. `status` / `closed_at` are never touched:
+   *  "this is no longer @X's" is not "this work restarted / reopened", so an
+   *  `in_review` task keeps its place in the human approval queue and a
+   *  dispatched task does not rewind to `todo` (only the agent's own release
+   *  does that — `releaseToTodo`). Both columns are cleared: a migrated
+   *  user-assigned row has to end up unowned too. */
+  clearAssignee(taskId: string): void {
+    prepareObserved(
+        this.db,
+        'tasks.clear_assignee',
+        `UPDATE tasks SET assignee_agent_id = NULL, assignee_user_id = NULL WHERE id = ?`,
+      )
+      .run(taskId);
+  }
+
   /** Agent self-release: drop the assignee AND return the task to the pool
    *  (`todo`, no close timestamp) — the agent is declaring it stopped working,
-   *  so the workflow rewinds with the assignment. The human board's
-   *  assignment writes go through `setAssignee`, which never does this. */
+   *  so the workflow rewinds with the assignment. The human unassign write goes
+   *  through `clearAssignee`, which never does this. */
   releaseToTodo(taskId: string): void {
     prepareObserved(
         this.db,

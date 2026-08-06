@@ -252,10 +252,11 @@ export function readConversationMemberChangeMetadata(
  *    is bumped to `in_progress`, while `in_progress` / `in_review` are left as
  *    they are. So `task_status = 'in_progress'` is the common case, not the
  *    contract — read the field, don't assume the prior was `todo`.
- *  - `subtype = task_claim`, `actor.kind = 'user'`: a human assign / reassign.
- *    This is an OWNERSHIP write: `task_assignee` is the new owner and
- *    `task_status` is the UNCHANGED current status (any non-terminal value).
- *    Not a transition.
+ *  - `subtype = task_claim`, `actor.kind = 'user'`: a human assign / reassign —
+ *    a DISPATCH. `task_assignee` is the new owner, and a `todo` task is started
+ *    in the same write, so `task_status = 'in_progress'`; a task already
+ *    `in_progress` / `in_review` only changes hands and keeps its status. Read
+ *    the field: the prior status is not derivable here either.
  *  - `subtype = task_unclaim`, `actor.kind = 'agent'`: the agent's self-release,
  *    a workflow verb — it returns the task to the pool, so
  *    `task_status = 'todo'` and `task_assignee = null`. The prior status was any
@@ -273,9 +274,10 @@ export function readConversationMemberChangeMetadata(
  *    Fired ONLY on a real canonical change; a same-value save emits nothing.
  *
  * The human/agent split above is the wire face of `docs/tasks-design.md §4.4`:
- * a human's assign / unassign touches ownership only; only the agent's own
- * claim / unclaim may move the workflow at all. Legacy events predating the
- * actor field have no `actor.kind` to branch on — degrade, don't guess.
+ * a human's assign dispatches (ownership + starting a `todo` task), a human's
+ * unassign touches ownership only, and rewinding the workflow stays exclusive to
+ * the agent's own claim / unclaim. Legacy events predating the actor field have
+ * no `actor.kind` to branch on — degrade, don't guess.
  *
  * `task_id` (v60+) is the canonical task-aggregate id for per-task event
  * lookup. The legacy `task_message_id` (pre-v60 events) held the old

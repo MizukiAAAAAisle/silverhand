@@ -524,7 +524,7 @@ describe('TaskService.claimTask — agent actor', () => {
 });
 
 describe('TaskService.claimTask — user actor', () => {
-  it('user claim with agentId on todo task → assignee set, status STAYS todo', async () => {
+  it('user claim with agentId on todo task → assignee set AND status in_progress (dispatch)', async () => {
     const t = bootstrap();
     try {
       const created = await createTask(t, t.alice.id, 'x');
@@ -536,10 +536,42 @@ describe('TaskService.claimTask — user actor', () => {
       });
       expect(r.success).toBe(true);
       const fresh = refetch(t, id);
-      // Assignee and Status are orthogonal on the human board: assigning is an
-      // ownership write, it does not start the work.
-      expect(fresh?.status).toBe('todo');
+      // Handing a `todo` task to an agent IS dispatching it: `todo + assignee`
+      // has no legal exit (`task status` cannot walk `todo → in_progress` and
+      // `assignSelf` refuses an assigned row), so the two writes are atomic.
+      expect(fresh?.status).toBe('in_progress');
       expect(fresh?.assignee?.id).toBe(t.bob.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('user claim on an in_review task only changes hands (dispatch never rewinds)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.alice.id, 'x');
+      const id = taskId(created);
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        status: 'in_review',
+      });
+
+      const r = await t.service.claimTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        assignee: { agentId: t.alice.id },
+      });
+      expect(r.success).toBe(true);
+      const fresh = refetch(t, id);
+      // Reassignment is not a restart: pulling this back to `in_progress` would
+      // drop it out of the human approval queue.
+      expect(fresh?.status).toBe('in_review');
+      expect(fresh?.assignee?.id).toBe(t.alice.id);
     } finally {
       t.cleanup();
     }
@@ -565,6 +597,8 @@ describe('TaskService.claimTask — user actor', () => {
       const fresh = refetch(t, id);
       expect(fresh?.assignee?.type).toBe('agent');
       expect(fresh?.assignee?.id).toBe(t.bob.id);
+      // Still a dispatch: a migrated `todo` row is started as well.
+      expect(fresh?.status).toBe('in_progress');
     } finally {
       t.cleanup();
     }
@@ -1656,6 +1690,69 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       expect(meta!.task_status).toBe('in_review');
       expect(meta!.task_assignee!.id).toBe(t.alice.id);
       expect(meta!.actor.kind).toBe('agent');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('task_claim by a user on a todo task reports the DISPATCHED status (in_progress)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.bob.id, 'task-dispatch-meta');
+      const id = taskId(created);
+
+      await t.service.claimTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        assignee: { agentId: t.alice.id },
+      });
+
+      const rows = fetchSystemMetadata(t, 'task_claim');
+      expect(rows.length).toBe(1);
+      const meta = readTaskSystemMetadata(rows[0]!);
+      expect(meta).not.toBeNull();
+      // The woken assignee reads its work state off this event, so the after-state
+      // must be the dispatched one — reporting `todo` would tell the agent the
+      // task is still unstarted while the row says otherwise.
+      expect(meta!.task_status).toBe('in_progress');
+      expect(meta!.task_assignee!.id).toBe(t.alice.id);
+      expect(meta!.actor.kind).toBe('user');
+      expect(refetch(t, id)?.status).toBe('in_progress');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('task_claim by a user on an in_review task reports in_review (reassignment is not a restart)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await createTask(t, t.bob.id, 'task-reassign-meta');
+      const id = taskId(created);
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+      await t.service.updateStatus({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        status: 'in_review',
+      });
+
+      await t.service.claimTask({
+        actor: { kind: 'user', userId: 'local' },
+        by: { taskId: id },
+        assignee: { agentId: t.bob.id },
+      });
+
+      const rows = fetchSystemMetadata(t, 'task_claim');
+      // Two claim events: alice's self-claim, then the human reassignment. Pick
+      // the human one by actor rather than by row order.
+      expect(rows.length).toBe(2);
+      const metas = rows.map(r => readTaskSystemMetadata(r));
+      const meta = metas.find(m => m?.actor.kind === 'user');
+      expect(meta).toBeDefined();
+      expect(meta!.task_status).toBe('in_review');
+      expect(meta!.task_assignee!.id).toBe(t.bob.id);
     } finally {
       t.cleanup();
     }

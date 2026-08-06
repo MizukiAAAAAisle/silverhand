@@ -214,11 +214,12 @@ export function useUpdateTaskStatus() {
  * two hooks would let those drift.
  *
  * The renderer never predicts what the write does to the STATUS, and never
- * implies one: in the management UI Assignee and Status are two ORTHOGONAL fields
- * (shiki 2026-07-29, backend contract in #task:1712) — an assignment write
- * changes ownership only, while workflow coupling (claim → `in_progress`,
- * unclaim → `todo`) lives on an agent's own CLI verbs. Either way the surface
- * re-reads and shows what the server settled on — invalidate, never patch.
+ * implies one: assigning a `todo` task DISPATCHES it (the server starts it in the
+ * same write — `todo + assignee` has no legal exit), reassigning a running or
+ * in-review task only changes hands, and clearing the assignee never rewinds the
+ * workflow (backend contract in `docs/tasks-design.md` §4.4, shiki 2026-08-06).
+ * Either way the surface re-reads and shows what the server settled on —
+ * invalidate, never patch.
  *
  * `done` / `closed` refuse BOTH arms (409): assignment on a terminal task is
  * frozen server-side, which is why the surface offers the control only on a

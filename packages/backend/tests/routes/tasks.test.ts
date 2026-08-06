@@ -469,7 +469,7 @@ describe('Tasks (PR-T1)', () => {
     expect(recipients.has(agentIds.bob!)).toBe(true);
   });
 
-  it('human POST /api/tasks/:taskId/claim requires agent_id and assigns WITHOUT touching status', async () => {
+  it('human POST /api/tasks/:taskId/claim requires agent_id and DISPATCHES a todo task', async () => {
     t = buildTestApp();
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
@@ -492,8 +492,9 @@ describe('Tasks (PR-T1)', () => {
     expect(claim.success).toBe(true);
 
     const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    // Ownership write only — the task is still waiting to be started.
-    expect(listed.tasks[0].status).toBe('todo');
+    // Assigning a `todo` task hands out the work, so the row leaves `todo` in the
+    // same write — `todo + assignee` would have no legal exit for the assignee.
+    expect(listed.tasks[0].status).toBe('in_progress');
     expect(listed.tasks[0].assignee?.id).toBe(agentIds.bob);
   });
 

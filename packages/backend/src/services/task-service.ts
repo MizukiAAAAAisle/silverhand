@@ -557,7 +557,11 @@ export class TaskService {
           reason: "agent is not a member of this task's conversation",
         }) };
       }
-      this.store.setAssignee(row.id, assignee.agentId);
+      // Human dispatch: handing a `todo` task to an agent starts it, in the same
+      // transaction as the assignment — `todo + assignee` has no legal exit.
+      // A task already running or in review only changes hands.
+      const nextStatus: TaskStatus = row.status === 'todo' ? 'in_progress' : row.status;
+      this.store.dispatchToAgent(row.id, assignee.agentId);
       return {
         success: true,
         conversationId: row.conversation_id,
@@ -566,9 +570,7 @@ export class TaskService {
           taskId: row.id,
           taskNumber: row.task_number,
           title: row.title,
-          // Assignment-only write: the human board edits Assignee and Status as
-          // two orthogonal fields, so assigning never advances the workflow.
-          status: row.status,
+          status: nextStatus,
           assignee: this.assigneeDtoForAgent(assignee.agentId),
           closedAt: row.closed_at,
           sourceMessageId: row.source_message_id,
@@ -719,9 +721,10 @@ export class TaskService {
           reason: row.status === 'closed' ? 'task is closed' : 'task is done',
         } };
       }
-      // Assignment-only write: `status` / `closed_at` are deliberately left
-      // untouched, so the event payload echoes the row as it stands.
-      this.store.setAssignee(row.id, null);
+      // Unassign is ownership-only: `status` / `closed_at` are deliberately left
+      // untouched (a dispatched task does not rewind), so the event payload
+      // echoes the row as it stands.
+      this.store.clearAssignee(row.id);
       return {
         success: true,
         conversationId: row.conversation_id,

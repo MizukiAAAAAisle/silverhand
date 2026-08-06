@@ -29,8 +29,10 @@ import { type RendererProps, useUserResolver } from './shared';
  *    `→ pill`); `<dot> <actor> moved <chip> → <status pill>` for status
  *    transitions. PR-9 unified actor position to the front across the
  *    subtypes (@shiki feedback msg `UoJ6LPHDpJCHYVFe`). The claim/unclaim
- *    VERB branches on `actor.kind`: an agent claims/unclaims (workflow),
- *    a human assigns/unassigns (ownership) — see `TaskEventBody`. A
+ *    VERB branches on `actor.kind`: an agent claims/unclaims (its own
+ *    workflow move), a human assigns/unassigns from the board — where an
+ *    assign DISPATCHES the work and an unassign is ownership-only, so the
+ *    two are not symmetric; see `TaskEventBody`. A
  *    `task_create` carrying `cross_conversation` reads
  *    `<actor> filed <chip> from another conversation` (origin deliberately
  *    unnamed — see `TaskEventBody`).
@@ -118,15 +120,21 @@ function TaskEventBody({
   // `task_claim` / `task_unclaim` mean two different things depending on WHO
   // acted (`docs/tasks-design.md` §4.4, wire contract in
   // `TaskSystemMetadataSchema`): an AGENT is taking or releasing the job
-  // (claimed / unclaimed — a workflow verb), while a HUMAN is writing ownership
-  // from the board (assigned / unassigned — status is untouched). Saying "shiki
-  // claimed #task" for an assignment to someone else states the wrong fact.
-  // A human assign also names the new owner, since that is the whole content of
-  // the write.
-  const humanOwnershipWrite =
+  // (claimed / unclaimed — a workflow verb), while a HUMAN is assigning or
+  // unassigning from the board. Saying "shiki claimed #task" for an assignment
+  // to someone else states the wrong fact.
+  // The two human arms are NOT symmetric: an assign DISPATCHES the work — a
+  // `todo` task is started in the same write, so `task_status` can arrive here as
+  // `in_progress` (shiki 2026-08-06, §4.4) — while an unassign writes ownership
+  // only. Neither the verb nor the dot has to branch on that: the verb names the
+  // ACTION and the dot renders the after-state `task_status` the server settled
+  // on, so this surface never predicts a status.
+  // A human assign also names the new owner, since that is the rest of the
+  // write's content.
+  const humanAssignmentWrite =
     meta.actor.kind === 'user' &&
     (subtype === 'task_claim' || subtype === 'task_unclaim');
-  if (humanOwnershipWrite) {
+  if (humanAssignmentWrite) {
     const assignee = meta.task_assignee;
     return (
       <>
