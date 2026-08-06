@@ -891,13 +891,17 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    slider value and does NOT double-apply the way an `em` chained onto the
    already-scaled `.markdown-body` would).
 
-   This unscoped rule is the DEFAULT / lighter size — offset 2px, i.e. 12px at
-   the 14px default. It governs the system-message chrome (activity clusters /
+   This rule is the family's ONLY size — offset 2px, i.e. 12px at the 14px
+   default, in prose and in the system-message chrome alike (activity clusters /
    `.system-message-row`), which shiki wants kept lighter than running text
-   (2026-08-01 "system message 更 light,需要保持 12"). The IN-PROSE chips
-   override up to full body size in the `.markdown-body` block below — prose
-   text is 14px and the chip should match it there. Two offsets, two knobs:
-   change this one for system chips, the `.markdown-body` one for prose.
+   (2026-08-01 "system message 更 light,需要保持 12"). Prose chips were briefly
+   raised to full body size (offset 0px) on 2026-08-01 "正文其他文字是 14,有保持
+   一致的需求"; that override is gone again per shiki 2026-08-06「conversation 中的
+   channel chip font size 从 14 改到 12」 — the same call as 2026-07-21 ("channel
+   chip 字体从 14 换成 12,和 task chip 一致"), whose rationale is why the whole
+   family moved together rather than the channel chip alone: a chip reading a
+   notch off its siblings in the same sentence is the defect that ruling names.
+   One offset, one knob — change it here and every reference chip follows.
 
    line-height is intentionally NOT set — the chip inherits `.markdown-body`'s
    line-height, matching inline code so the reference chips share one line
@@ -915,29 +919,21 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 2px);
 }
 
-/* In-prose reference chips match the running text at FULL body size (offset
-   0px → 14px at the default), and fix their vertical alignment. Prose text is
-   14px and an in-line chip reads as part of the sentence, so it takes the same
-   size (shiki 2026-08-01 "正文其他文字是 14,有保持一致的需求" — distinct from the
-   lighter 12px system-message chips governed by the base rule above). This
-   split re-adopts the full-prose size the 2026-07-30 experiment tried, but now
-   scoped to prose only (that experiment was reverted whole in #task:1758;
-   history: the family also sat at 12px per #1192 / #1721). Do NOT hardcode
-   14px: the calc subtracts from the Appearance token so the chip still tracks
-   the slider; the 0px offset is the prose knob.
+/* In-prose reference chips: baseline alignment only — size comes from the
+   family rule above, in prose as everywhere else.
 
-   Baseline alignment: these chips are `inline-flex` and grow to fill the
-   prose line-height box; with the flex default `align-items` the glyph centres
-   in the line box and floats above the prose baseline, reading as sitting
-   higher than the words around it (shiki #task:1732; measured over CDP against
-   the running app). `baseline` aligns the flex box on its text baseline; the
-   icon keeps its own `self-center` (align-self overrides the container) so it
-   stays vertically centred against the label. Scoped to `.markdown-body` so
-   the system chrome — which stays 12px via the base rule — is untouched. */
+   These chips are `inline-flex` and grow to fill the prose line-height box;
+   with the flex default `align-items` the glyph centres in the line box and
+   floats above the prose baseline, reading as sitting higher than the words
+   around it (shiki #task:1732; measured over CDP against the running app).
+   `baseline` aligns the flex box on its text baseline; the icon keeps its own
+   `self-center` (align-self overrides the container) so it stays vertically
+   centred against the label. Scoped to `.markdown-body` because only there is
+   the chip in a prose line — the system chrome lays its chips out itself and
+   the `.system-message-row` variant sets an explicit `height`. */
 .markdown-body [data-task-ref],
 .markdown-body [data-channel-ref-state],
 .markdown-body [data-conversation-ref] {
-  font-size: calc(var(--appearance-markdown-font-size, var(--md-prose-size, 14px)) - 0px);
   align-items: baseline;
 }
 
