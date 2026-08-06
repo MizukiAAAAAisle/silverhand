@@ -35,9 +35,11 @@ import {
 import {
   isBackendUnreachable,
   isRegistrationRequired,
+  isUpdateRequired,
   useLogout,
   useViewerUser,
 } from '@/features/me/hooks';
+import { ViewerProfileEditor } from '@/features/me/ViewerProfileEditor';
 import {
   DEFAULT_MARKDOWN_FONT_SIZE,
   FONT_SIZE_MAX,
@@ -50,6 +52,11 @@ import {
   PROSE_FONT_PRESETS,
   type FontPreset,
 } from '@/settings/font-presets';
+import {
+  persistSettingsSection,
+  readPersistedSettingsSection,
+  type SettingsSection,
+} from './settings-section';
 import { ConnectionPane } from './ConnectionPane';
 
 /** 4-color swatch preview and display name for each theme. */
@@ -125,35 +132,6 @@ const THEME_META: Record<
   },
 };
 
-/** Which sub-page of Settings is visible. The picker lives in the
- *  page-internal sub-nav; selection is local React state, persisted to
- *  localStorage so a refresh stays put. (No URL routing yet — settings
- *  deep-links are rare and the URL slot belongs to the chat router.) */
-type SettingsSection = 'appearance' | 'account' | 'connection';
-const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
-  'appearance',
-  'account',
-  'connection',
-];
-const SETTINGS_SECTION_KEY = 'silverhand:settings-section';
-
-function readPersistedSection(): SettingsSection {
-  if (typeof localStorage === 'undefined') return 'appearance';
-  const raw = localStorage.getItem(SETTINGS_SECTION_KEY);
-  // Migrate retired sections so returning users land somewhere valid.
-  // `server` / `hosts` folded into Connection; `proxy` moved to the
-  // Computers/Host detail surface because proxy affects runtime hosts,
-  // not app-level settings. `profile` was renamed to `account` after
-  // identity editing moved to Members > Human Profile — a returning
-  // user who left the app on `profile` lands on Account rather than
-  // on an empty section.
-  if (raw === 'server' || raw === 'hosts' || raw === 'proxy') return 'connection';
-  if (raw === 'profile') return 'account';
-  return SETTINGS_SECTIONS.includes(raw as SettingsSection)
-    ? (raw as SettingsSection)
-    : 'appearance';
-}
-
 export function SettingsPage(): JSX.Element {
   const {
     appearance,
@@ -164,10 +142,11 @@ export function SettingsPage(): JSX.Element {
     resetMarkdownFontSize,
   } = useAppearance();
 
-  const [section, setSection] = useState<SettingsSection>(readPersistedSection);
+  const [section, setSection] = useState<SettingsSection>(
+    readPersistedSettingsSection,
+  );
   useEffect(() => {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(SETTINGS_SECTION_KEY, section);
+    persistSettingsSection(section);
   }, [section]);
 
   return (
@@ -508,34 +487,39 @@ function MessageAlignmentControl(): JSX.Element {
   );
 }
 
-/** Account pane — user-session operations only. Log out ends the
- *  current sign-in on this computer; Computer lifecycle (revoke,
- *  refresh credentials, delete) lives on Computer Detail
- *  (`features/hosts/HostDetailView`) because sessions are user-level
- *  and independent of Computer lifecycle. Display name and avatar
- *  edits live on `HumanProfileCard` in the Members panel, so
- *  `/api/me` mutations have exactly one long-lived surface.
+/** Account pane — the viewer's own profile plus user-session
+ *  operations. Display name and avatar editing lives here (shiki
+ *  2026-08-06: the Members panel didn't match IM intuition and users
+ *  couldn't find it); `ViewerProfileEditor` owns the `/api/me` writes,
+ *  so this pane composes the surface rather than re-implementing it, and
+ *  the Members card is read-only — one long-lived ownership site, moved,
+ *  not duplicated. Computer lifecycle (revoke, refresh credentials,
+ *  delete) stays on Computer Detail (`features/hosts/HostDetailView`)
+ *  because sessions are user-level and independent of it.
  *
  *  Log out wears the DESTRUCTIVE rank (shiki 2026-07-26: "Settings → Account 的
  *  Log out,用 Delete 语义,因为也是 danger 操作") — red frame on paper, the same
  *  `DESTRUCTIVE_TRIGGER` recipe as `Delete computer` / `Revoke`, not a solid fill
  *  (this is a settings page, and a filled red would out-rank every other pane's
- *  primary). It is the only action on the pane, so the red is not competing with
- *  anything; what it buys is that the one irreversible-feeling verb in Settings
- *  is not dressed as a reversible one. */
+ *  primary). What the red buys is that the one irreversible-feeling verb in
+ *  Settings is not dressed as a reversible one; the profile block above it
+ *  carries no accent at all, so the two never compete. */
 function AccountPane(): JSX.Element {
   const viewer = useViewerUser();
   const logout = useLogout();
   const [error, setError] = useState<string | null>(null);
 
-  // AccountPane only mounts after registration (App.tsx gates the shell
-  // behind <RegistrationGate />), so any `registration_required` shape
-  // here is a transient race during refetch. Narrow once and treat it
-  // as `undefined` for the rest of the pane.
+  // AccountPane only mounts after registration and below the update
+  // gate (App.tsx gates the shell behind <RegistrationGate /> /
+  // <UpdateRequiredGate />), so any marker shape here is a transient
+  // race during refetch. Narrow once to the real user row — the profile
+  // editor needs it — and treat every marker as `undefined` for the
+  // rest of the pane.
   const dto =
     viewer.data
     && !isRegistrationRequired(viewer.data)
     && !isBackendUnreachable(viewer.data)
+    && !isUpdateRequired(viewer.data)
       ? viewer.data
       : undefined;
 
@@ -571,32 +555,36 @@ function AccountPane(): JSX.Element {
         </h2>
       </header>
 
-      <div className="flex max-w-2xl flex-col gap-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-text-secondary">Log out</p>
-            <p className="text-[11px] text-text-muted">
-              Ends the current sign-in on this computer.
-            </p>
+      <div className="flex max-w-2xl flex-col gap-6">
+        <ViewerProfileEditor user={dto} />
+
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-text-secondary">Log out</p>
+              <p className="text-[11px] text-text-muted">
+                Ends the current sign-in on this computer.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void onLogout()}
+              disabled={logout.isPending}
+              {...destructiveAction(DESTRUCTIVE_TRIGGER)}
+            >
+              {logout.isPending ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <LogOut className="size-3.5" />
+              )}
+              Log out
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void onLogout()}
-            disabled={logout.isPending}
-            {...destructiveAction(DESTRUCTIVE_TRIGGER)}
-          >
-            {logout.isPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <LogOut className="size-3.5" />
-            )}
-            Log out
-          </Button>
+          {error ? (
+            <p className="text-xs text-error" role="alert">{error}</p>
+          ) : null}
         </div>
-        {error ? (
-          <p className="text-xs text-error" role="alert">{error}</p>
-        ) : null}
       </div>
     </section>
   );

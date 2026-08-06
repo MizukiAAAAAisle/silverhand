@@ -14,29 +14,24 @@ const CODE = SRC
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 
-describe('SettingsPage — Account holds Log out only, no Computer lifecycle', () => {
-  it('does not import the /api/me mutation hooks (edit surface moved to Members > Human Profile)', () => {
+describe('SettingsPage — Account owns the profile editor, not Computer lifecycle', () => {
+  it('composes the shared viewer profile editor instead of re-implementing it', () => {
+    // Profile editing lives in Account (#task:1845), but the `/api/me`
+    // wiring stays in `features/me/ViewerProfileEditor` — one owner for
+    // the mutations, whichever pane hosts it.
+    expect(CODE).toMatch(/ViewerProfileEditor/);
     expect(CODE).not.toMatch(/\buseUpdateProfile\b/);
     expect(CODE).not.toMatch(/\buseUploadAvatar\b/);
     expect(CODE).not.toMatch(/\buseClearAvatar\b/);
     expect(CODE).not.toMatch(/\buseViewerAvatarObjectUrl\b/);
-  });
-
-  it('does not import avatar picker primitives (no editing controls in this pane)', () => {
     expect(CODE).not.toMatch(/AvatarPickerButton/);
     expect(CODE).not.toMatch(/validateAvatarFile/);
-    expect(CODE).not.toMatch(/AVATAR_MAX_SIZE_LABEL/);
   });
 
   it('holds no Members navigation coupling (Account stands alone)', () => {
-    // Account is not a wayfinding surface for Members; carrying a link
-    // in either direction would drift back into a second ownership site.
+    // Account is not a wayfinding surface for Members; the one link
+    // between them points this way (Members → Account), not back.
     expect(CODE).not.toMatch(/toMembersUser/);
-    expect(CODE).not.toMatch(/id="profile-display-name"/);
-  });
-
-  it("migrates the persisted `profile` key forward to `account` so returning users land somewhere valid", () => {
-    expect(CODE).toMatch(/raw === 'profile'.*return 'account'/s);
   });
 
   it('holds only the session-scope Log out action — no Computer lifecycle', () => {
@@ -56,5 +51,16 @@ describe('SettingsPage — Account holds Log out only, no Computer lifecycle', (
     expect(CODE).not.toMatch(/useBackendInfoSnapshot/);
     expect(CODE).not.toMatch(/local_host_status/);
     expect(CODE).not.toMatch(/local_host_id/);
+  });
+});
+
+describe('settings-section store', () => {
+  const STORE = readFileSync(
+    fileURLToPath(new URL('./settings-section.ts', import.meta.url)),
+    'utf8',
+  );
+
+  it("migrates the persisted `profile` key forward to `account` so returning users land somewhere valid", () => {
+    expect(STORE).toMatch(/raw === 'profile'.*return 'account'/s);
   });
 });

@@ -1,22 +1,15 @@
-import { useEffect, useState } from 'react';
 import dayjs from 'dayjs';
-import { Lock, User as UserIcon } from 'lucide-react';
-import { validateAvatarFile, type UserDto } from '@silverhand/shared';
-import { ApiError } from '@/lib/api';
-import { AvatarPickerButton } from '@/components/AvatarPickerButton';
-import { AVATAR_PX } from '@/components/avatar-scale';
+import { Lock, Pencil, User as UserIcon } from 'lucide-react';
+import type { UserDto } from '@silverhand/shared';
+import { useNav } from '@/router';
 import {
   MetadataList,
   ProfileSection,
 } from '@/features/common/ProfileSummarySections';
-import { EditPencilButton } from '@/features/common/EditPencilButton';
-import { InlineText } from '@/features/common/InlineText';
+import { persistSettingsSection } from '@/features/settings/settings-section';
 import {
-  useClearAvatar,
   isBackendUnreachable,
   isUpdateRequired,
-  useUpdateProfile,
-  useUploadAvatar,
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from './hooks';
@@ -30,34 +23,30 @@ interface HumanProfileCardProps {
 }
 
 /**
- * Human profile card. Section shape mirrors `AgentProfileCard`:
- * Identity holds the editable display-name (Identity-header pencil) +
- * avatar picker + locked handle; Metadata is the tight `<dl>` of
- * created/updated/id. Every edit is explicit (Enter or Save; blur
- * preserves the draft) so a stray click on the page can't silently
- * PATCH — same contract as the agent profile card.
+ * Human profile card — read-only for every user, including the viewer.
  *
- * Editing display name and avatar for the viewer's own profile lives
- * only on this card; the Settings pane is Account-only (session
- * operations). Keeping one editing surface avoids two long-lived
- * ownership sites for the same `/api/me` capabilities.
+ * Editing display name and avatar moved to Settings > Account (shiki
+ * 2026-08-06:「现在这个交互不符合大部分的 IM 直觉,很多用户找不到。放到
+ * account 中会更好」, #task:1845). This card therefore mounts NO write
+ * surface at all: no picker, no inline input, no `/api/me` mutation
+ * hooks. `/api/me` still has exactly one long-lived ownership site
+ * (`ViewerProfileEditor`); it just lives where people look for their own
+ * profile.
  *
- * Backend contract:
- *   - `PATCH /api/me` accepts `display_name` only (names are permanent).
- *   - `POST/DELETE /api/me/avatar` upload / clear.
- *   - All three key off `requireViewerUserId(c)`; a non-self edit
- *     attempt 403s server-side. The renderer-side gate
- *     (`canEditUserProfile`) is a UI-affordance hide, not the security
- *     boundary.
+ * What stays here is directory information — identity as others see it,
+ * plus the created/updated/id metadata. On the viewer's own card the
+ * Identity header carries a route to the editor instead of a pencil, so
+ * arriving here with intent to edit is not a dead end.
+ *
+ * Cross-user editing was never possible: `PATCH /api/me` and the avatar
+ * routes key off `requireViewerUserId(c)`. `canEditUserProfile` now gates
+ * only the wayfinding affordance.
  */
 export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const { data: viewer } = useViewerUser();
   const viewerForPermissions =
     viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
-  const canEdit = canEditUserProfile(viewerForPermissions, user);
-  const update = useUpdateProfile();
-  const upload = useUploadAvatar();
-  const clear = useClearAvatar();
+  const isOwnProfile = canEditUserProfile(viewerForPermissions, user);
   // Multi-human: pick the avatar resolver by viewer match so visiting
   // another human's profile renders THEIR avatar, not the viewer's. Self
   // continues to use the viewer-cached path (works even before /api/users
@@ -70,135 +59,31 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   const otherAvatar = useUserAvatarObjectUrl({ userId: isSelf ? null : user.id });
   const avatarObjectUrl = isSelf ? viewerAvatar : otherAvatar;
 
-  const [nameEditing, setNameEditing] = useState(false);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
-
-  // Clear avatar error when switching users — stale "Avatar must be
-  // PNG…" text shouldn't follow from one profile to the next.
-  useEffect(() => {
-    setAvatarError(null);
-  }, [user.id]);
-
-  const onPickAvatar = async (file: File): Promise<void> => {
-    setAvatarError(null);
-    const validation = validateAvatarFile(file);
-    if (validation) {
-      setAvatarError(validation.message);
-      return;
-    }
-    try {
-      await upload.mutateAsync({ file });
-    } catch (err) {
-      setAvatarError(formatAvatarMutationError(err));
-    }
-  };
-
-  const onClearAvatar = async (): Promise<void> => {
-    setAvatarError(null);
-    try {
-      await clear.mutateAsync();
-    } catch (err) {
-      setAvatarError(formatAvatarMutationError(err));
-    }
-  };
-
-  const avatarPending = upload.isPending || clear.isPending;
-  const hasAvatar = user.avatar_url != null;
-
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
-      {!canEdit ? <ReadOnlyNotice /> : null}
+      {!isOwnProfile ? <ReadOnlyNotice /> : null}
 
       <ProfileSection
         title="Identity"
-        titleAdornment={
-          canEdit ? (
-            <EditPencilButton
-              onClick={() => setNameEditing(true)}
-              ariaLabel="Edit display name"
-              hidden={nameEditing}
-            />
-          ) : null
-        }
+        titleAdornment={isOwnProfile ? <EditInSettingsButton /> : null}
       >
-        {/* `items-start` keeps the avatar column (avatar + Remove +
-            optional error) top-aligned with the name column so the name
-            input never dips below the avatar's top edge. */}
         <div className="flex items-start gap-4">
-          {canEdit ? (
-            <div className="flex flex-col items-center gap-1.5">
-              <AvatarPickerButton
-                size={AVATAR_PX['3xl']}
-                label={hasAvatar ? 'Edit' : 'Add'}
-                onPick={file => void onPickAvatar(file)}
-                disabled={avatarPending}
-                ariaLabel={hasAvatar ? 'Change avatar' : 'Add avatar'}
-                className="border border-border-subtle"
-              >
-                <span data-avatar-ground className="grid size-full place-items-center">
-                  {avatarObjectUrl ? (
-                    // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                    <img
-                      src={avatarObjectUrl}
-                      alt="Your avatar"
-                      className="size-full object-cover"
-                    />
-                  ) : (
-                    <UserIcon className="size-7 text-text-muted" />
-                  )}
-                </span>
-              </AvatarPickerButton>
-              {hasAvatar ? (
-                <button
-                  type="button"
-                  onClick={() => void onClearAvatar()}
-                  disabled={avatarPending}
-                  className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
-                >
-                  Remove
-                </button>
-              ) : null}
-              {avatarError ? (
-                <p
-                  role="alert"
-                  className="text-[11px] leading-snug text-error"
-                  data-testid="human-avatar-error"
-                >
-                  {avatarError}
-                </p>
-              ) : null}
-            </div>
-          ) : (
-            <span data-avatar-ground className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle">
-              {avatarObjectUrl ? (
-                // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                <img
-                  src={avatarObjectUrl}
-                  alt={user.display_name || user.name}
-                  className="size-full object-cover"
-                />
-              ) : (
-                <UserIcon className="size-7 text-text-muted" />
-              )}
-            </span>
-          )}
-          <div className="min-w-0 flex-1">
-            {canEdit ? (
-              <InlineText
-                value={user.display_name}
-                ariaLabel="Display name"
-                editing={nameEditing}
-                onExitEdit={() => setNameEditing(false)}
-                className="font-serif text-lg font-semibold leading-tight"
-                onCommit={async next => {
-                  await update.mutateAsync({ display_name: next });
-                }}
+          <span data-avatar-ground className="grid size-14 place-items-center overflow-hidden rounded-none border border-border-subtle">
+            {avatarObjectUrl ? (
+              // eslint-disable-next-line jsx-a11y/img-redundant-alt
+              <img
+                src={avatarObjectUrl}
+                alt={user.display_name || user.name}
+                className="size-full object-cover"
               />
             ) : (
-              <div className="font-serif text-lg font-semibold leading-tight text-text-primary">
-                {user.display_name || user.name}
-              </div>
+              <UserIcon className="size-7 text-text-muted" />
             )}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="font-serif text-lg font-semibold leading-tight text-text-primary">
+              {user.display_name || user.name}
+            </div>
             <div className="mt-1 flex items-center gap-1.5 text-xs text-text-muted">
               <span className="font-mono">@{user.name}</span>
               <Lock className="size-3" />
@@ -225,18 +110,39 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
           ]}
         />
       </ProfileSection>
-
-      {update.isError && canEdit ? (
-        <div className="text-xs text-error">{String(update.error)}</div>
-      ) : null}
     </div>
   );
 }
 
 /**
- * Single-source-of-truth read-only message. Mirrors the agent
- * equivalent — no `@<id>` substitution because there is no users-by-id
- * lookup yet.
+ * Route to the editor. Occupies the slot the pencil used to hold, and
+ * says where it goes — a bare pencil here would promise inline editing
+ * that this card no longer has. Aiming Settings at Account is a
+ * persisted-section write plus `toSettings()`, because settings sections
+ * have no URL slot.
+ */
+function EditInSettingsButton(): JSX.Element {
+  const nav = useNav();
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        persistSettingsSection('account');
+        nav.toSettings();
+      }}
+      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] px-1 py-0.5 text-[11px] text-text-muted transition-colors hover:text-text-primary"
+      title="Edit in Settings"
+    >
+      <Pencil className="size-3" />
+      Edit in Settings
+    </button>
+  );
+}
+
+/**
+ * Single-source-of-truth read-only message for another human's profile.
+ * Mirrors the agent equivalent — no `@<id>` substitution because there is
+ * no users-by-id lookup yet.
  */
 function ReadOnlyNotice(): JSX.Element {
   return (
@@ -248,48 +154,4 @@ function ReadOnlyNotice(): JSX.Element {
       Only this user can edit their profile.
     </p>
   );
-}
-
-/**
- * Map a failed `/api/me/avatar` mutation to a one-line user-facing
- * message. Mirrors `formatAvatarMutationError` in `EditableAgentAvatar`
- * but localized for the user surface.
- */
-export function formatAvatarMutationError(err: unknown): string {
-  if (err instanceof ApiError) {
-    const code = parseErrorCode(err.body);
-    switch (code) {
-      case 'avatar_too_large':
-        return 'Avatar must be 5 MB or smaller.';
-      case 'avatar_unsupported_type':
-        return 'Avatar must be a PNG, JPEG, GIF, or WEBP image.';
-      case 'avatar_missing':
-        return 'Avatar file is empty.';
-      case 'avatar_storage_failed':
-        return 'Storage backend failed to write the avatar. Try again.';
-      default:
-        break;
-    }
-    switch (err.status) {
-      case 401:
-        return 'Sign-in expired. Reload the app and try again.';
-      case 403:
-        return 'You no longer have permission to edit this profile.';
-      case 404:
-        return 'This profile no longer exists.';
-      default:
-        return `Failed to update avatar (HTTP ${err.status}).`;
-    }
-  }
-  return 'Failed to update avatar.';
-}
-
-function parseErrorCode(body: string): string | null {
-  if (!body) return null;
-  try {
-    const parsed = JSON.parse(body) as { code?: unknown };
-    return typeof parsed.code === 'string' ? parsed.code : null;
-  } catch {
-    return null;
-  }
 }
