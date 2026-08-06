@@ -131,7 +131,18 @@
      stay magenta. Keep the two tokens distinct. */
   --bg-selected: var(--brand-primary);
   --bg-floating: #FFFFFF;
-  --bg-chat: #F7F8F6;
+  /* Reading ground (chat / activity / search / settings panes). Was #F7F8F6
+     — literally `--bg-base`, the top rung of the cool-neutral ramp — which
+     shiki read as 灰 (2026-08-06「channel chat 背景色现在有点灰,调白一点」).
+     Lift the rung, do NOT re-tint it: the first attempt moved the ground
+     into the paper family (#FCFDF8, `--forza6-paper`'s warm tilt) and he
+     caught it immediately —「也不要太暖呢?看着好像还比之前暖了」. So the
+     read area stays on its own cool-neutral ladder (G one above R=B, the
+     same relation #F7F8F6 had), four points brighter. NOT #FFFFFF: the
+     composer and every floating overlay are `--bg-floating` white and need
+     the ground to stay a step below them, otherwise the composer's identity
+     falls entirely to its 1px border. */
+  --bg-chat: #FBFCFB;
 
   /* ── Card frame —
      Frame padding exposes `--bg-app` around the chat panel. P2 v6
