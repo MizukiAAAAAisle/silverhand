@@ -142,6 +142,13 @@ export function FavoritesGroup(props: {
 
   if (items.length === 0) return null;
 
+  // Collapsed STARRED, open conversation starred: keep that one row (see
+  // `SidebarSection.selectionPath`). Not the sortable wrapper — a single row has
+  // nothing to reorder — but the row itself is unchanged, menu included.
+  const selectedFavorite = props.selectedChannelId
+    ? ordered.find(i => i.entity_id === props.selectedChannelId)
+    : undefined;
+
   return (
     <SidebarSection
       label="STARRED"
@@ -150,6 +157,20 @@ export function FavoritesGroup(props: {
       collapsible
       defaultExpanded
       persistId="starred"
+      selectionPath={
+        selectedFavorite ? (
+          <li>
+            <FavoriteRow
+              item={selectedFavorite}
+              selectedChannelId={props.selectedChannelId}
+              attention={byChannel.get(selectedFavorite.entity_id)}
+              workspaceMuted={mutedByWorkspace.get(selectedFavorite.workspace_id)}
+              onSelectConversation={props.onSelectConversation}
+              onUnstar={() => unstar.mutate(selectedFavorite)}
+            />
+          </li>
+        ) : null
+      }
       action={
         <SortModeMenu
           mode={mode}

@@ -7,8 +7,9 @@ import { describe, expect, it } from 'vitest';
  * the SSOT, and every surface that shows a thread — list, detail header,
  * collapse toggle, a message's thread entry / reply badge, a quoted thread
  * reference, the activity thread-root — imports `ThreadIcon`, never a raw lucide
- * glyph. The source-message locate (`ExternalLink`) and NavRail's Chat tab glyph
- * (the compound `MessagesSquare`) are separate concepts, not thread consumers.
+ * glyph. The source-message locate (`ExternalLink`) and the compound
+ * `MessagesSquare` (NavRail's Chat tab, the sidebar's DM group header) are
+ * separate concepts, not thread consumers.
  * WHICH glyph `ThreadIcon` aliases is a reversible visual choice (verified by
  * dogfood), so it is not locked here — only the SSOT routing is.
  */

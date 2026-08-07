@@ -7,7 +7,18 @@
 // collapsed workspace renders nothing and this subtree fetches nothing; expanding
 // mounts the component and its three queries fire together. The sort menu is a
 // sibling in the header and is likewise rendered only while expanded — mounting it
-// collapsed would re-introduce the request (it reads the same `channelsKey` cache).
+// collapsed would re-introduce the request (it reads the same `channelsKey` cache),
+// and in `selectedOnly` (below) a single row has no order to choose.
+//
+// ONE EXCEPTION, bounded to the workspace you are currently in: collapsing the
+// branch that holds the open channel keeps that ONE row on screen
+// (`selectedOnly`), so this subtree stays mounted there and its three queries stay
+// armed while collapsed. That is the price of the invariant "the selected row is
+// always visible in the sidebar" (shiki, 2026-08-08) — the sidebar otherwise shows
+// no selection at all while the main pane shows that channel. It is bounded: at
+// most one branch in the whole tree can hold the selection, it is the workspace
+// the user is looking at (its caches are warm), and every OTHER collapsed
+// workspace stays fully lazy.
 //
 // SCOPED CLAIM, on purpose (@Cindy, #task:1889): this is "the subtree mounts no
 // queries of its own", NOT "a collapsed workspace is request-free" and NOT
@@ -130,6 +141,11 @@ interface WorkspaceChannelsProps {
   /** Create a channel in THIS workspace — the empty-state action, and the
    *  compensation for `/chat/w/:id` having no highlight of its own. */
   onCreateChannel: (workspaceId: string) => void;
+  /** Collapsed branch that holds the open channel: render THAT row and nothing
+   *  else — no drag, no sort, no empty-state action (see the file header). A
+   *  starred selection is already excluded from this list and shows in STARRED,
+   *  so it correctly renders nothing here. */
+  selectedOnly?: boolean;
 }
 
 /**
@@ -149,6 +165,7 @@ export function WorkspaceChannels({
   selectedChannelId,
   onSelectChannel,
   onCreateChannel,
+  selectedOnly = false,
 }: WorkspaceChannelsProps): JSX.Element {
   const { data: items = [] } = useChannelsForWorkspace(workspaceId, workspaceKind);
   const { data: viewerSort } = useChannelSortState(workspaceId, workspaceKind);
@@ -203,6 +220,36 @@ export function WorkspaceChannels({
     getCreatedAt: c => c.created_at,
   });
   const ordered = orderedGroups.channels;
+
+  // The collapsed branch that holds the open channel keeps exactly that row (see
+  // the file header). Placed BEFORE the empty-state arm on purpose: a collapsed
+  // branch must not offer "New channel" — the one thing it is still allowed to
+  // say is where you are. No sortable wrapper either: a single row has nothing to
+  // reorder, and the grab cursor would promise an ordering this branch is not
+  // showing. The right-click menu comes along unchanged, because the row is the
+  // same row — this state hides siblings, it does not downgrade the survivor.
+  if (selectedOnly) {
+    const pinned = ordered.find(c => c.id === selectedChannelId);
+    if (!pinned) return <></>;
+    return (
+      <li>
+        <ChannelRow
+          channel={pinned}
+          selected
+          onClick={() => onSelectChannel(pinned.id, workspaceId)}
+          onStar={(channelId, starred) => starChannel.mutate({ channelId, starred })}
+          onArchive={(channelId, archived) =>
+            archiveChannel.mutate({ channelId, archived, workspaceId })
+          }
+          archivePending={archiveChannel.isPending}
+          workspaceKind={workspaceKind}
+          unreadCount={unreadByChannel[pinned.id] ?? 0}
+          attention={attentionByChannel.get(pinned.id)}
+          workspaceMuted={workspaceMuted}
+        />
+      </li>
+    );
+  }
 
   if (ordered.length === 0) {
     // An expanded workspace with nothing to show offers the action instead of a

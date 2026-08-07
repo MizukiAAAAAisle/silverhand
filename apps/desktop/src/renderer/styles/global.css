@@ -232,8 +232,9 @@ html, body, #root {
    that hover into a lime fill + drop shadow.
    Its consumers are the sidebar's two UNPAINTED lines — the collapsible section
    header and the workspace / DM header row. Both are labels with a disclosure
-   affordance rather than rooms: hovering them shows only the icon → chevron swap
-   (header) or an ink lift (instance row), never a fill (shiki, 2026-08-08).
+   affordance rather than rooms: hovering them swaps the glyph for the disclosure
+   triangle (plus an ink lift on the instance row), never a fill (shiki,
+   2026-08-08).
    Use this whenever something needs the row grid but must stay unpainted; do NOT
    add state rules to it — that is what `.sidebar-row-border` is for. */
 .sidebar-row-gutter {

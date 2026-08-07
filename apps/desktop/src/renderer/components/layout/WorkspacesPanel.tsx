@@ -1,8 +1,9 @@
 import { Fragment, useEffect, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { Plus } from 'lucide-react';
-import { DirectMessageIcon } from '@/components/icons/DirectMessageIcon';
+import { MessagesSquare, Plus } from 'lucide-react';
+import { DisclosureTriangle } from '@/components/icons/DisclosureTriangle';
+import { Button } from '@/components/ui/button';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
   SortableGroup,
@@ -67,8 +68,9 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
    *  Kept on the group for the empty-state messaging. */
   kind: WorkspaceUiKind;
   workspaces: WorkspaceItem[];
-  /** The workspace the primary pane is in — used ONLY to decide which parent
-   *  reveal-on-navigate expands. It never highlights a row (#task:1889). */
+  /** The workspace the primary pane is in — decides which parent
+   *  reveal-on-navigate expands, and which collapsed branch still shows the open
+   *  channel's row. It never highlights a row (#task:1889). */
   selectedWorkspaceId: string | null;
   /** The open conversation. The single selection object of the whole tree: at
    *  most one CHANNEL row FILLs, and no container row ever does. */
@@ -137,21 +139,22 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
 /** The GROUP header's semantic glyph — the thing shiki asked for on
  *  STARRED / WORKSPACES / DM: identity at rest, chevron on hover. The three must
  *  read as one family, so all three are stroke glyphs at the same optical
- *  weight: `Star` / `DirectMessageIcon` (two oval chat bubbles) / a serif
+ *  weight: `Star` / `MessagesSquare` (Slack's double bubble for DMs) / a serif
  *  `W` at NORMAL weight — the semibold `W` sat visibly heavier than two 2px
  *  lucide strokes beside it (shiki, 2026-08-08).
  *
- *  The DM glyph is hand-drawn rather than lucide's `MessagesSquare`: square
- *  bubbles are the THREAD vocabulary (`ThreadIcon`), so the compound square read
- *  as a thread index here. Ovals are what tell the two concepts apart (shiki,
- *  2026-08-08).
+ *  A hand-drawn oval-bubble glyph was tried here and rejected on looks (shiki,
+ *  2026-08-08). The concern it answered — square bubbles are the THREAD
+ *  vocabulary (`ThreadIcon`) — is carried by the COMPOUND form instead: the
+ *  thread glyph is the single `MessageSquare`, so two stacked bubbles stay a
+ *  distinct word (and the same one NavRail's Chat tab uses).
  *
  *  Deliberately WITHOUT `data-workspace-icon`: that hook is the themed poster
  *  badge for a workspace INSTANCE, and a muted section header is not one (see
  *  app-layout.md §9 on not inventing a second primitive — this reuses the header
  *  vocabulary rather than the row's). */
 function sectionGlyphFor(kind: WorkspaceUiKind): JSX.Element {
-  if (kind === 'dm') return <DirectMessageIcon className="size-3.5" />;
+  if (kind === 'dm') return <MessagesSquare className="size-3.5" />;
   return (
     <span className="inline-flex size-3.5 shrink-0 items-center justify-center font-serif text-[14px] leading-none">
       W
@@ -185,6 +188,18 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
     dmAgentAvatarUrls,
   };
 
+  // Collapsed group, open conversation inside it: keep that ONE channel row and
+  // nothing else (`app-layout.md` §3). The branch's own header row is NOT kept —
+  // its only action is a collapse that would no longer change anything, and which
+  // workspace you are in is on the titlebar. Reuses the branch's own
+  // `selectedOnly` render, so the surviving row is the same row with the same
+  // indent, fill and menu. A starred selection resolves to nothing here and shows
+  // in STARRED instead, where it actually lives.
+  const selectedBranch =
+    selectedChannelId !== null && selectedWorkspaceId !== null
+      ? workspaces.find(w => w.id === selectedWorkspaceId)
+      : undefined;
+
   return (
     <SidebarSection
       label={label}
@@ -195,6 +210,18 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
       collapsible
       defaultExpanded={defaultExpanded ?? true}
       persistId={persistId}
+      selectionPath={
+        selectedBranch ? (
+          <WorkspaceChannels
+            workspaceId={selectedBranch.id}
+            workspaceKind={selectedBranch.kind}
+            selectedChannelId={selectedChannelId}
+            onSelectChannel={onSelectChannel}
+            onCreateChannel={onCreateChannel}
+            selectedOnly
+          />
+        ) : null
+      }
     >
       {workspaces.length === 0 ? (
         <li className="px-2 py-2 text-xs text-text-muted">{emptyHint ?? 'Empty'}</li>
@@ -259,7 +286,14 @@ function SortableWorkspaceItem({
     <li
       ref={setNodeRef}
       style={sortableItemStyle({ transform, transition, isDragging })}
-      className="touch-none"
+      // `group/wsbranch` spans the header row AND its channels: the row's
+      // right-side actions (sort, `+`) are revealed by pointing anywhere in the
+      // BRANCH, not just at its header (shiki, 2026-08-08) — same reveal scope
+      // the group headers use, one level down. The header keeps its own narrower
+      // `group/ws` for the glyph swap: a triangle appearing on the parent while
+      // the pointer is on a child would say the wrong thing about what is under
+      // the cursor.
+      className="touch-none group/wsbranch"
     >
       <WorkspaceBranch
         workspace={workspace}
@@ -284,10 +318,11 @@ function SortableWorkspaceItem({
  * Collapse state persists per workspace under the shared section vocabulary
  * (`silverhand:layout.sidebar-section.ws.<id>`), so the shape of the tree survives
  * a restart. REVEAL-ON-NAVIGATE: navigating to a channel expands its parent (and
- * writes that through), which is what makes the FILL reachable — a collapsed
- * parent is never given a stand-in "you are here" marker. The effect keys on
- * `selectedChannelId`, not on `expanded`, so a deliberate collapse while the
- * channel stays open is not immediately undone.
+ * writes that through). The effect keys on `selectedChannelId`, not on `expanded`,
+ * so a deliberate collapse while the channel stays open is not immediately undone
+ * — and that collapse keeps the open channel's row on screen by itself
+ * (`selectedOnly`), which is how the FILL stays reachable without ever pinning the
+ * branch open or handing the header a stand-in marker.
  */
 function WorkspaceBranch({
   workspace,
@@ -317,7 +352,7 @@ function WorkspaceBranch({
         onToggle={() => setExpanded()}
         dragHandleProps={dragHandleProps}
       />
-      {expanded ? (
+      {expanded || mustReveal ? (
         <ul className="space-y-0.5">
           <WorkspaceChannels
             workspaceId={workspace.id}
@@ -325,6 +360,14 @@ function WorkspaceBranch({
             selectedChannelId={ctx.selectedChannelId}
             onSelectChannel={ctx.onSelectChannel}
             onCreateChannel={ctx.onCreateChannel}
+            // Collapsed, but this is the branch you are IN: keep the open
+            // channel's row and drop the rest (shiki, 2026-08-08). Collapse
+            // stays a working control — the rejected alternative was pinning the
+            // branch open, which turns a header row whose ONLY action is collapse
+            // into a focusable, pressable no-op. What it costs is this branch's
+            // three queries staying armed while collapsed; bounded to one branch,
+            // and to the workspace whose caches are already warm.
+            selectedOnly={!expanded}
           />
         </ul>
       ) : null}
@@ -359,7 +402,12 @@ function WorkspaceHeaderRow({
       : workspace.name;
   const icon = rowIconFor(workspace, ctx);
   const unread = workspace.unread;
-  // Hover-revealed actions. Keyboard reachability comes from `focus-visible` — on
+  // Hover-revealed actions, scoped to the whole BRANCH (`group/wsbranch` on the
+  // sortable `<li>`): pointing at any channel keeps its parent's sort / `+` up
+  // (shiki, 2026-08-08) — you reach for them while reading the list, not while
+  // reading its header, and a `+` that hides the moment you move down toward the
+  // channels is a target you have to re-acquire.
+  // Keyboard reachability comes from `focus-visible` — on
   // the control itself, or on a descendant for the wrappers whose focusable part is
   // a menu trigger. NOT `group-focus-within`: Chromium focuses a <button> on
   // mousedown, so clicking the workspace header (a collapse toggle) left the row's
@@ -370,7 +418,7 @@ function WorkspaceHeaderRow({
   // open — otherwise it vanishes from under an open Radix popover the moment the
   // pointer leaves the row.
   const hoverOnly =
-    'opacity-0 transition-opacity group-hover/ws:opacity-100 '
+    'opacity-0 transition-opacity group-hover/wsbranch:opacity-100 '
     + 'focus-visible:opacity-100 [&:has(:focus-visible)]:opacity-100 '
     + '[&:has([data-state=open])]:opacity-100';
 
@@ -383,31 +431,57 @@ function WorkspaceHeaderRow({
         // `sidebar-row-gutter` twin reserves the same stroke for column alignment
         // but takes none of `.sidebar-row-border`'s state paint (in forza6 that
         // hover is a lime fill + drop shadow, which made this line compete with a
-        // real selection). Hover lifts the ink and nothing else (shiki,
-        // 2026-08-08). The indent puts it on the OUTER column — flush with its
-        // group header, because the one available step is spent below this row
-        // instead: its channels are what needs position to be readable as a
-        // block (shiki, 2026-08-08).
+        // real selection). Hover lifts the ink and swaps the glyph for the
+        // disclosure triangle — nothing else (shiki, 2026-08-08). The indent puts
+        // it on the OUTER column — flush with its group header, because the one
+        // available step is spent below this row instead: its channels are what
+        // needs position to be readable as a block (shiki, 2026-08-08).
+        //
+        // Resting ink is `text-text-secondary`, NOT muted: muted is the group
+        // LABEL's weight, and wearing it made the parent row read as a caption —
+        // lighter than its own channel children, so the line that is actually a
+        // control looked like the one thing on screen you cannot press (shiki:
+        // 「可点击提示不强」, 2026-08-08).
         'sidebar-row-gutter group/ws flex h-7 w-full items-stretch pr-2 ' +
         OUTER_GLYPH_INSET +
         ' ' +
-        'text-text-muted hover:text-text-primary'
+        'text-text-secondary hover:text-text-primary'
       }
     >
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex min-w-0 flex-1 items-center text-left text-[12.5px] font-medium"
+        className="group/wstoggle flex min-w-0 flex-1 items-center text-left text-[12.5px] font-medium"
       >
-        {/* The workspace's own identity glyph, and it HOLDS STILL. The icon↔chevron
-            swap belongs to the three GROUP headers only (shiki, 2026-08-08): an
-            avatar / workspace icon is who this row IS, and swapping identity out
-            from under the pointer is a different thing from swapping a section's
-            decorative anchor. The row is still the collapse toggle — the expanded
-            state is read off the children, and the indent shows the depth. */}
-        <span className="flex size-4 shrink-0 items-center justify-center">
-          {icon}
+        {/* Identity at rest, disclosure triangle on hover / keyboard focus — the
+            SAME swap the three group headers use. The rule is drawn by CAPABILITY,
+            not by kind: every row that owns an `aria-expanded` (regular workspace
+            AND DM home — one `WorkspaceHeaderRow` serves both) swaps, and the leaf
+            rows (channel / STARRED) never do, because their glyph is not a hinge.
+            Until 2026-08-08 no instance row swapped at all, which left this line's
+            only affordance an ink lift: it said "hoverable", never "collapses"
+            (shiki: 「可点击提示不强」). A PERMANENT triangle was the other candidate
+            and was rejected — it needs its own column, and keeping the one indent
+            step then costs every channel another 12px in an already narrow list
+            (docs/app-layout.md §3).
+            Structure mirrors the group header: the fading wrapper carries no theme
+            hook, so a theme that paints the icon (forza6's `[data-workspace-icon]`
+            ink square, an agent avatar) can never win a specificity race against
+            the fade and leave both glyphs stacked. */}
+        <span className="relative flex size-4 shrink-0 items-center justify-center">
+          <span className="inline-flex items-center transition-opacity group-hover/ws:opacity-0 group-focus-visible/wstoggle:opacity-0">
+            {icon}
+          </span>
+          <span
+            aria-hidden
+            className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/ws:opacity-100 group-focus-visible/wstoggle:opacity-100"
+          >
+            <DisclosureTriangle
+              direction={expanded ? 'down' : 'right'}
+              className="size-3.5"
+            />
+          </span>
         </span>
         <span className="ml-2 min-w-0 truncate">{title}</span>
       </button>
@@ -432,18 +506,26 @@ function WorkspaceHeaderRow({
             <ChannelSortMenu workspaceId={workspace.id} workspaceKind={workspace.kind} />
           </span>
         ) : null}
-        <button
-          type="button"
-          onClick={() => ctx.onCreateChannel(workspace.id)}
-          aria-label={`New channel in ${title}`}
-          title="New channel"
-          className={
-            'flex size-5 items-center justify-center text-text-muted hover:text-text-primary ' +
-            hoverOnly
-          }
-        >
-          <Plus className="size-3.5" />
-        </button>
+        {/* Same recipe as the sort trigger beside it — one `ghost` icon Button at
+            h-6 w-6, so resting ink and hover fill come from one place (shiki,
+            2026-08-08: the `+` had no hover background and sat at a different
+            resting colour). Two sibling actions on one row differ by glyph and
+            command only. The reveal lives on a WRAPPER, as it does for the sort
+            menu: `hoverOnly` sets `transition-opacity`, which would otherwise
+            merge away the Button's own `transition-colors` and make the hover
+            fill snap while its neighbour's fades. */}
+        <span className={hoverOnly}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            onClick={() => ctx.onCreateChannel(workspace.id)}
+            aria-label={`New channel in ${title}`}
+            title="New channel"
+          >
+            <Plus className="size-3.5" />
+          </Button>
+        </span>
       </span>
     </div>
   );

@@ -127,11 +127,12 @@ export function useSidebarSectionExpanded(
  * STARRED than under its parent. That is just "indent = depth" — in STARRED the
  * row's parent IS the group.
  *
- * There is no permanent chevron gutter: a collapsible GROUP HEADER's own glyph
- * slot is where its chevron appears on hover, so the header keeps the tool rows'
- * column instead of paying a column for a control that is only reachable while
- * you point at it. Instance rows (a workspace, a DM) do NOT swap — their avatar /
- * workspace icon is identity and must hold still (shiki, 2026-08-08).
+ * There is no permanent chevron gutter: a disclosure row's own glyph slot is
+ * where its triangle appears on hover, so the row keeps the tool rows' column
+ * instead of paying a column for a control that is only reachable while you
+ * point at it. The swap is drawn by CAPABILITY, not by kind — every row that
+ * owns an `aria-expanded` swaps (group headers AND the workspace / DM header
+ * rows), and the leaf rows (channel, STARRED) never do (shiki, 2026-08-08).
  *
  * The section margin and the per-theme row border (`--sidebar-row-border-width`)
  * are already in the box, so only the indent step is these classes' job — a
@@ -169,6 +170,15 @@ interface SectionProps {
    *  is the storage identity of this section, so renaming it resets every
    *  user's choice. Omit for session-only collapse. */
   persistId?: string;
+  /** What a COLLAPSED section renders in place of its body: the row for the
+   *  currently open conversation, when it lives in this section (`null`
+   *  otherwise). Collapsing must never leave the sidebar with no selection while
+   *  the main pane is showing that conversation, so every container keeps exactly
+   *  the selected leaf and drops everything else (shiki, 2026-08-08 —
+   *  `app-layout.md` §3). The leaf ALONE, not the chain down to it: an
+   *  intermediate row here would be a header whose only action is a collapse that
+   *  can no longer do anything, and which workspace it is is on the titlebar. */
+  selectionPath?: ReactNode;
   children: ReactNode;
 }
 
@@ -181,6 +191,7 @@ export function SidebarSection({
   collapsible = false,
   defaultExpanded = true,
   persistId,
+  selectionPath,
   children,
 }: SectionProps): JSX.Element {
   const [expanded, toggleExpanded] = useSidebarSectionExpanded(
@@ -188,6 +199,10 @@ export function SidebarSection({
     defaultExpanded,
   );
   const showBody = !collapsible || expanded;
+  // Collapsed, but the open conversation lives in here: keep that one row (see
+  // `selectionPath`). Same `<ul>` as the body, so the surviving row sits where it
+  // always sat instead of being re-homed into a second kind of list.
+  const body = showBody ? children : selectionPath;
 
   return (
     // `group/sectionscope` spans the header AND the body: the right-side actions
@@ -204,7 +219,7 @@ export function SidebarSection({
         expanded={expanded}
         onToggle={() => toggleExpanded()}
       />
-      {showBody ? <ul className="space-y-0.5">{children}</ul> : null}
+      {body ? <ul className="space-y-0.5">{body}</ul> : null}
     </section>
   );
 }
@@ -239,13 +254,17 @@ export function SidebarSectionHeader({
 }: SectionHeaderProps): JSX.Element {
   // A COLLAPSIBLE section that carries an icon is a tree container row (shiki's
   // Slack reference, #task:1889): its icon slot IS the collapse control's home —
-  // semantic glyph at rest, chevron while the pointer is on the header or the
+  // semantic glyph at rest, triangle while the pointer is on the header or the
   // toggle has keyboard focus. So it sits on the section glyph column with the
   // tool rows instead of paying a separate chevron gutter, which is what lets
   // Search / Saved / Archived line up with STARRED / WORKSPACES / DM.
   //
+  // Both collapsible callers (STARRED, WORKSPACES / DM) pass an icon, so the
+  // icon-less fallback below has no consumer today; it stays as the API's
+  // answer for a collapsible section that has no glyph to swap.
+  //
   // `group-focus-visible`, not `group-focus`: Chromium focuses a <button> on
-  // mousedown, so plain focus would leave the chevron showing after a click.
+  // mousedown, so plain focus would leave the triangle showing after a click.
   const swapGlyph = collapsible && icon !== undefined;
 
   // The right-side actions (sort menu, `+`) of a TREE GROUP are hover-revealed,
@@ -269,8 +288,9 @@ export function SidebarSectionHeader({
   // The collapse affordance. A TREE GROUP gets a solid disclosure triangle
   // (shiki, 2026-08-08) — it is revealed in place of the group's identity icon on
   // hover, so it has to read as "operate me" in one look, and a filled triangle's
-  // direction IS the state. The plain chevron-only headers (Members / Computers /
-  // Settings) are not tree nodes and keep lucide's caret.
+  // direction IS the state. lucide's caret is only the icon-less fallback (see
+  // `swapGlyph`); the panels' own headers (Members / Computers / Settings) are
+  // not collapsible at all and render icon + label with no disclosure glyph.
   const chevron = swapGlyph ? (
     <DisclosureTriangle
       direction={expanded ? 'down' : 'right'}
@@ -343,12 +363,12 @@ export function SidebarSectionHeader({
           className={
             'group/sectiontoggle flex flex-1 items-center h-6 text-left ' +
             // A GROUP HEADER is a label, not a row. Its only hover feedback is the
-            // icon → chevron swap above — no background, no border, no ink change
+            // icon → triangle swap above — no background, no border, no ink change
             // (shiki, 2026-08-08). Hence `sidebar-row-gutter`, which reserves the
             // row stroke for column alignment but carries none of the row state
             // paint (`.sidebar-row-border:hover` is a lime fill in forza6). The
-            // plain chevron-only header (Members / Computers / Settings) is not a
-            // tree node and keeps its own padding + hover ink.
+            // icon-less fallback is off the tree column, so it keeps its own
+            // padding + hover ink.
             (swapGlyph
               ? 'sidebar-row-gutter ' + OUTER_GLYPH_INSET
               : 'px-2 hover:text-text-secondary')
