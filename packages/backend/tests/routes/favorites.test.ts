@@ -89,11 +89,9 @@ describe('GET /api/favorites', () => {
       // The PARENT workspace — no longer the entity itself (#task:1888).
       workspace_id: wsId,
       title: 'general',
-      // Parent identity is server-resolved so the renderer joins nothing: a
-      // regular workspace has no icon storage and no runtime → monogram recipe.
+      // Parent identity is server-resolved so the renderer joins nothing. It is
+      // TEXT only — there is no parent glyph/runtime field (#task:1888).
       parent_title: 'eng',
-      parent_icon_url: null,
-      parent_runtime: null,
       // No non-system messages yet → caught-up rollup is 0 (not null).
       unread_count: 0,
     });
@@ -144,25 +142,8 @@ describe('GET /api/favorites', () => {
       workspace_id: dmWsId,
       // Agent-home parent → identity comes from the bound agent.
       parent_title: 'rover', // agent name (no display_name set)
-      parent_icon_url: null, // no avatar set
-      parent_runtime: 'claude',
     });
     expect(typeof dm.title).toBe('string');
-  });
-
-  it('builds parent_icon_url from the agent-home parent avatar', async () => {
-    t = buildTestApp();
-    const agentId = await makeAgent(t, 'rover');
-    const { dmChannelId } = dmOf(t, agentId);
-    expect((await http(t).post(`/api/channels/${dmChannelId}/star`)).status).toBe(200);
-
-    // Give the agent an avatar (both columns set per the CHECK constraint).
-    t.ctx.db
-      .prepare(`UPDATE agents SET avatar_storage_key = 'k', avatar_content_type = 'image/png', updated_at = 4242 WHERE id = ?`)
-      .run(agentId);
-
-    const dm = (await favorites(t)).find(i => i.entity_id === dmChannelId);
-    expect(dm.parent_icon_url).toBe(`/api/agents/${agentId}/avatar?v=4242`);
   });
 
   // Membership ≡ the star endpoint's own live set: a browseable PUBLIC channel the

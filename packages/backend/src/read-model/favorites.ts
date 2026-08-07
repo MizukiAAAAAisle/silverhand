@@ -68,13 +68,11 @@
 // membership) plus the conversation-level reachability above, expressed as SQL.
 import type { BackendContext } from '../context.js';
 import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
-import {
-  apiPaths,
-  type FavoriteRowDto,
-  type ListFavoritesDto,
-  type RuntimeKind,
-  type SortMode,
-  type ViewerSortEntryDto,
+import type {
+  FavoriteRowDto,
+  ListFavoritesDto,
+  SortMode,
+  ViewerSortEntryDto,
 } from '@silverhand/shared';
 
 export interface ListFavoritesParams {
@@ -96,9 +94,6 @@ interface ConversationFavoriteRow {
   owner_agent_id: string | null;
   agent_display_name: string | null;
   agent_name: string | null;
-  agent_runtime: RuntimeKind | null;
-  agent_avatar_key: string | null;
-  agent_updated_at: number | null;
 }
 
 /** The kind-qualified favorites sort key — the renderer row/drag key AND the
@@ -140,10 +135,7 @@ export function listFavorites(
          w.name               AS workspace_name,
          w.owner_agent_id     AS owner_agent_id,
          a.display_name       AS agent_display_name,
-         a.name               AS agent_name,
-         a.runtime            AS agent_runtime,
-         a.avatar_storage_key AS agent_avatar_key,
-         a.updated_at         AS agent_updated_at
+         a.name               AS agent_name
        FROM user_sort_entry use
        JOIN conversations c ON c.id = use.entity_id
        JOIN workspaces w ON w.id = c.workspace_id
@@ -220,14 +212,13 @@ export function listFavorites(
 
   for (const r of conversationRows) {
     const key = favoriteKey(r.kind, r.entity_id);
-    // PARENT identity. An agent-home parent is identified by its bound agent
-    // (avatar + runtime + display name); a regular workspace has no icon storage
-    // (parent_icon_url stays null → renderer monogram) and no runtime. The glyph
-    // recipe is chosen from these fields, never inferred from `kind`.
-    const parentAvatarUrl =
-      r.owner_agent_id && r.agent_avatar_key
-        ? `${apiPaths.agentAvatar(r.owner_agent_id)}?v=${r.agent_updated_at ?? 0}`
-        : null;
+    // PARENT identity is TEXT only: the workspace name, or the bound agent's
+    // display name / handle for an agent home. An image-based source cue
+    // (parent avatar + runtime badge) shipped with #task:1888 and was removed
+    // the same day — every regular parent rendered the same `W`, so it
+    // disambiguated nothing while taking the row's loudest element. The parent
+    // now reaches the user through the row's tooltip (shiki: 「接受同名」,
+    // 2026-08-08), so two same-named channels may look identical at rest.
     const parentTitle = r.owner_agent_id
       ? r.agent_display_name?.trim()
         ? r.agent_display_name
@@ -240,8 +231,6 @@ export function listFavorites(
       workspace_id: r.workspace_id,
       title: r.title,
       parent_title: parentTitle,
-      parent_icon_url: parentAvatarUrl,
-      parent_runtime: r.owner_agent_id ? r.agent_runtime : null,
       starred_at: r.starred_at,
       created_at: r.created_at,
       unread_count: unreadByConversation[r.entity_id] ?? 0,

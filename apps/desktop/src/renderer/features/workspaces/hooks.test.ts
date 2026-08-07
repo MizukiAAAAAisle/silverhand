@@ -515,8 +515,6 @@ describe('removeWorkspaceFromFavorites (#task:1404, conversation rows since #tas
     workspace_id: workspaceId, // the PARENT, not the row itself
     title: conversationId,
     parent_title: workspaceId,
-    parent_icon_url: null,
-    parent_runtime: null,
     starred_at: 1,
     created_at: 1,
     unread_count: 3,

@@ -35,7 +35,7 @@
 // endpoints; those still return the FULL visible set (other consumers need it),
 // and the sidebar derives the parent-side exclusion.
 import { z } from 'zod';
-import { ConversationKindSchema, RuntimeKindSchema } from '../db/schema.js';
+import { ConversationKindSchema } from '../db/schema.js';
 import { ViewerSortStateDtoSchema } from './sort.js';
 
 /**
@@ -84,20 +84,13 @@ export const FavoriteRowDtoSchema = z.object({
    *  row; the bound agent's display name (falling back to its handle, then the
    *  workspace name) for a 'dm_channel' row. The STARRED list is global and this
    *  product has duplicate channel names by design (several workspaces each with
-   *  a `#general`), so a row without its parent would be unidentifiable. */
+   *  a `#general`), so this is the row's disambiguator. Its contractual weight is
+   *  TOOLTIP DISAMBIGUATION (shiki, 2026-08-08 「接受同名」): two same-named rows
+   *  are allowed to look identical at rest, and the parent is what tells them
+   *  apart on hover. There is deliberately NO parent glyph/runtime field — an
+   *  image-based source cue was tried and removed (every regular parent rendered
+   *  the same `W`), so the parent reaches the user as TEXT or not at all. */
   parent_title: z.string(),
-  /** The PARENT's server-resolved icon URL (relative path + `?v=updated_at`
-   *  cache-buster, UserDto/AgentDto convention). Non-null ONLY when the parent is
-   *  an agent home whose agent has an avatar. null ⇒ the renderer falls back on
-   *  `parent_runtime` (non-null → runtime badge avatar) and then on a
-   *  `parent_title` monogram. Regular workspaces have no icon storage, so their
-   *  rows are always null here. Deliberately DATA-driven: the glyph recipe is
-   *  chosen from these two fields, not inferred from `kind` (nothing in the schema
-   *  forces "dm_channel ⟺ agent-home parent"). */
-  parent_icon_url: z.string().nullable(),
-  /** The PARENT agent's runtime — non-null only for an agent-home parent. Feeds
-   *  the renderer's AgentAvatar fallback badge when `parent_icon_url` is null. */
-  parent_runtime: RuntimeKindSchema.nullable(),
   /** The star timestamp (home list's `starred_at`). Display/debug only — the
    *  flat-list ORDER comes from `viewer_sort` (recent → `last_accessed_at`,
    *  manual → `rank`), NOT from this field, and recent's tiebreak is

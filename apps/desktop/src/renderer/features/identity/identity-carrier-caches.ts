@@ -189,12 +189,12 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
   },
   {
     // A favorite row snapshots its PARENT's identity: `read-model/favorites.ts`
-    // joins `agents.display_name / avatar_storage_key / runtime / updated_at`
-    // into `parent_title` / `parent_icon_url` / `parent_runtime`, and
-    // `FavoritesPanel` renders those fields directly instead of re-resolving by
-    // id (Cindy #task:1703; fields re-scoped to the parent by #task:1888). Since
+    // joins `agents.display_name / name` into `parent_title`, and
+    // `FavoritesPanel` renders that field directly instead of re-resolving by
+    // id (Cindy #task:1703; fields re-scoped to the parent by #task:1888, and
+    // the parent avatar/runtime fields deleted once the row led with `#`). Since
     // a STARRED row no longer appears under its parent, this invalidation is the
-    // ONLY convergence path for that label / avatar / runtime — do not drop it.
+    // ONLY convergence path for that label — do not drop it.
     id: 'favorites',
     kinds: ['agent'],
     filter: { queryKey: favoritesKey },

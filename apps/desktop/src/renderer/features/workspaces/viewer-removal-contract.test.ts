@@ -68,8 +68,6 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       workspace_id: workspaceId,
       title: `#${conversationId}`,
       parent_title: workspaceId,
-      parent_icon_url: null,
-      parent_runtime: null,
       starred_at: 1,
       created_at: 1,
       unread_count: 0,

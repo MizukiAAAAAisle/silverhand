@@ -27,9 +27,8 @@ the CONVERSATION, not its container. Two changes, both model-level:
 - **Favorites/STARRED is now a flat global list of CONVERSATIONS** (`channel` /
   `dm_channel`, projected from `list_key='channels:<ws_id>'`). A starred
   conversation MOVES out of its workspace's list into Favorites; each row carries
-  its **PARENT's** identity (`workspace_id`, `parent_title`, `parent_icon_url`,
-  `parent_runtime`) so a global short list stays identifiable and the renderer
-  joins nothing.
+  its **PARENT's** identity (`workspace_id`, `parent_title`) so a global short
+  list stays identifiable and the renderer joins nothing.
 - **A workspace / DM container star is demoted to an in-group PIN.** It no longer
   moves anything: the container stays a live, reorderable member of its rail kind
   group and is merely pinned to the top of it. Containers are outside the
@@ -448,18 +447,21 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
 - Each row carries **server-resolved** display identity, its own AND its
   **PARENT's** (Activity `preview_sender` precedent), so the renderer does **zero**
   local workspace/agent-cache join — a favorite whose parent context is not loaded
-  (a collapsed, never-opened workspace) still renders a title, a parent name and a
-  parent glyph.
+  (a collapsed, never-opened workspace) still renders a title and a parent name.
   Fields:
   `{ kind, favorite_key, entity_id, workspace_id, title, parent_title,
-  parent_icon_url|null, parent_runtime|null, starred_at, created_at,
-  unread_count|null }`. `title` is the conversation's own bare title (no `#`
-  sigil, no parent prefix — the renderer composes those); `workspace_id` is the
+  starred_at, created_at, unread_count|null }`. `title` is the conversation's own
+  bare title (no `#` sigil, no parent prefix — the renderer composes those);
+  `workspace_id` is the
   **PARENT** (since #1888 it is NOT `entity_id`); `parent_title` is the workspace
   name, or the bound agent's display name → handle → workspace name for an
-  agent-home parent. The glyph recipe is chosen from `parent_icon_url` +
-  `parent_runtime` (DATA-driven — never inferred from `kind`, since nothing in the
-  schema forces "dm_channel ⟺ agent-home parent"). `unread_count` = the
+  agent-home parent. The parent is **TEXT only**: an image source cue
+  (`parent_icon_url` / `parent_runtime`) shipped with #1888 and was deleted the
+  same day — every regular parent rendered the same `W`, so it disambiguated
+  nothing while taking the row's loudest element. The row now leads with the
+  channel's own `#` and the parent reaches the user through the tooltip; shiki
+  accepted that two same-named rows look identical at rest (「接受同名」,
+  2026-08-08). `unread_count` = the
   conversation's unread rollup (#task:1254 / #task:1888 — from the SAME canonical
   `ConversationReadRepo` `ROLLUP_UNREAD` predicate an in-tree channel row uses, so
   STARRED ≡ in-tree; 0 when caught up, renderer badges `> 0`). The conversation left
@@ -469,12 +471,10 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
 - **kind is the conversation's own kind** (the list adds none) and does NOT select
   an endpoint — every row unstars through `DELETE /api/channels/:entity_id/star`,
   which derives the storage `list_key` server-side, so the renderer never builds one:
-  - `channel` — a starred regular channel; its parent is a regular workspace, which
-    has no icon storage ⇒ `parent_icon_url` always null ⇒ renderer monogram.
+  - `channel` — a starred regular channel; its parent is a regular workspace.
   - `dm_channel` — a starred conversation in an agent's home workspace (the DM
-    stream, its Onboarding thread, its Mentions inbox); `parent_title` /
-    `parent_icon_url` / `parent_runtime` resolve from the parent's bound
-    `owner_agent_id`.
+    stream, its Onboarding thread, its Mentions inbox); `parent_title` resolves
+    from the parent's bound `owner_agent_id`.
   - There is **no `workspace` / `dm` kind** — a container's star pins it inside its
     own rail kind group, never a global-Favorites row.
 - **Membership contract** (read-model enforces; written here, not hidden in SQL):

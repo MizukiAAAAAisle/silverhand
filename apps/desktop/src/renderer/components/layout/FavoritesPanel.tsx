@@ -67,9 +67,10 @@ const FAVORITES_GROUP = 'favorites';
  * that theory was wrong in practice, because `WorkspaceIcon`'s regular branch is a
  * literal `W`, so every regular parent rendered the SAME badge and disambiguated
  * nothing while taking the loudest element in the section (shiki: 「starred 的 icon
- * 不对」, 2026-08-08). Source now reaches the user through the row's `title`. The
- * DTO still carries `parent_icon_url` / `parent_runtime`; restoring a source cue is
- * rendering them again beside the `#`, quietly (no poster hook).
+ * 不对」, 2026-08-08). Source now reaches the user through the row's `title` and its
+ * tooltip (`parent_title`) — shiki accepted that two same-named rows look identical
+ * at rest (「接受同名」, 2026-08-08), so the DTO's parent glyph/runtime fields were
+ * deleted; a source cue would have to be re-designed, not just re-rendered.
  *
  * BADGE (#task:1875 contract, @Cindy MUST FIX on #task:1889): the row must NOT paint
  * `FavoriteRowDto.unread_count` directly — that number is POSITIONAL only. It goes

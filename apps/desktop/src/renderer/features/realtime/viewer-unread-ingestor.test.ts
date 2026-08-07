@@ -86,8 +86,6 @@ function favRow(
     workspace_id: workspaceId,
     title: conversationId,
     parent_title: workspaceId,
-    parent_icon_url: null,
-    parent_runtime: null,
     starred_at: 0,
     created_at: 0,
     unread_count: unread,
