@@ -1,7 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { MessagesSquare, Plus } from 'lucide-react';
+import { LayoutGrid, MessagesSquare, Plus } from 'lucide-react';
 import { DisclosureTriangle } from '@/components/icons/DisclosureTriangle';
 import { Button } from '@/components/ui/button';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
@@ -143,11 +143,19 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
 /** The GROUP header's semantic glyph — the thing shiki asked for on
  *  STARRED / WORKSPACES / DM: identity at rest, chevron on hover. The three must
  *  read as one family, so all three are stroke glyphs at the same optical
- *  weight: `Star` / `MessagesSquare` (Slack's double bubble for DMs) / a serif
- *  `W` at NORMAL weight — the semibold `W` sat visibly heavier than two 2px
- *  lucide strokes beside it (shiki, 2026-08-08).
+ *  weight: `Star` / `MessagesSquare` (Slack's double bubble for DMs) /
+ *  `LayoutGrid` (four tiles = a set of spaces).
  *
- *  A hand-drawn oval-bubble glyph was tried here and rejected on looks (shiki,
+ *  WORKSPACES is NOT a `W` (shiki, 2026-08-08: 「和后面的 label W 重复了」). A
+ *  letterform beside the word it is the first letter of says nothing the label has
+ *  not already said, and it stuttered a second time against the rows below, where
+ *  every regular workspace's own badge is a literal `W`. `LayoutGrid` is also the
+ *  only candidate with no enclosing square: `MessagesSquare` one row down and
+ *  `Archive` in the tools group both are, and at 14px a third outlined box would
+ *  have read as the same word. `Layers` was unavailable — it is the compaction
+ *  glyph (`ComposerActivityHeader`) and the Saved filter's "all".
+ *
+ *  A hand-drawn oval-bubble glyph was tried for DM and rejected on looks (shiki,
  *  2026-08-08). The concern it answered — square bubbles are the THREAD
  *  vocabulary (`ThreadIcon`) — is carried by the COMPOUND form instead: the
  *  thread glyph is the single `MessageSquare`, so two stacked bubbles stay a
@@ -159,11 +167,7 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
  *  vocabulary rather than the row's). */
 function sectionGlyphFor(kind: WorkspaceUiKind): JSX.Element {
   if (kind === 'dm') return <MessagesSquare className="size-3.5" />;
-  return (
-    <span className="inline-flex size-3.5 shrink-0 items-center justify-center font-serif text-[14px] leading-none">
-      W
-    </span>
-  );
+  return <LayoutGrid className="size-3.5" />;
 }
 
 export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
