@@ -85,12 +85,10 @@
 
   /* ── Nav rail / sidebar (Slack 双 chrome 模型) ──
      NavRail + Sidebar 都用 #19171D（最深，Slack 风格的 column nav
-     一致冷黑）；SessionsSidebar 用 #1A1D21（轻微抬亮，预告进入 chat 读区）；
-     chat = #1A1D21 与 sessions 同色，保证从 sidebar → chat 没有突跳。
+     一致冷黑）；chat = #1A1D21，保证从 sidebar → chat 没有突跳。
      不走 oklab 渐变（Slack 是直接的 2-tone 切分，不是连续色线）。 */
   --bg-nav-rail: #19171D;
   --bg-channels-sidebar: #19171D;
-  --bg-sessions-sidebar: #1A1D21;
 
   /* ── Islands (code blocks) ──
      low-luminance HUD —— 比 chat 表面更深，syntax 才能跳出。带轻微冷

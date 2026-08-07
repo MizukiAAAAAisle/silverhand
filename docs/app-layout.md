@@ -94,8 +94,8 @@ Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar
 
 - **Sidebar 仅在 NavRail = `chat` 时显示**。NavRail = `members` / `computers` 时，本列被相应的 MembersPanel / ComputersPanel 替换（仍占同样宽度、同底色）。
 - **一个 splitter、一个 collapse pane。** 显隐与宽度都是全局 layout preference，不随 workspace 切换；titlebar 按钮和键盘 chord（`⌘\`）双向同步，隐藏时 splitter 也跟着卸载。宽度经 CSS var 引用，drag 改值不触发 transition；splitter 是窄可点击区，hover 变色，drag 期间整个文档加 col-resize + 禁选中。
-- **只有一级缩进，且不留常驻 chevron 沟。** 全树两条 glyph 列，相距一个 16px 缩进步：**组列**（工具行 + 三个组头 STARRED / WORKSPACES / DM）与**内容列**（workspace / DM 头行、它们下面的 channel 行、STARRED 行）。树结构上有四层，但**逐层缩进不做**——这一列本来就窄，阶梯会把宽度花在留白上、读起来层级过多；channel 与它的 workspace 头行**同列**，位置由上方的头行与折叠态表达。
-- **icon↔chevron 原位替换只属于那三个组头。** 组头平时显示语义 icon，hover / keyboard focus 时原位换成折叠 chevron，因此折叠控件不额外占一列，顶部三项与组头同列。组头 hover **只做这一次图标替换**：不加背景、不加边框、不变字色。三个组头 icon 是同一族的等重描边字形——`Star` / `MessagesSquare`（DM，Slack 的双气泡）/ 常规字重的衬线 `W`；均不带 `data-workspace-icon`（那是 workspace 实例的主题化贴纸，组头不是实例）。
+- **只有一级缩进，且不留常驻折叠沟。** 全树两条 glyph 列，相距一个 16px 缩进步：**外列**（工具行、三个组头 STARRED / WORKSPACES / DM、workspace / DM 头行、STARRED 行）与**内列**（只有 workspace / DM 下面的 channel 行）。树结构上有四层，但**逐层缩进不做**——这一列本来就窄，阶梯会把宽度花在留白上、读起来层级过多。唯一那一步花在 channel 上：组头本身已经由排印（全大写、字距、更小、muted、尾随计数）读作标签，而 workspace 行与 channel 行同尺寸、同字重、同色、同高且都可点，同列时一个 workspace 与它下面九个 channel 会读成一条平铺的长串；缩进 channel 之后，每个 workspace 的子集就是一个有边界的块。代价是已接受的：同一个 channel 在 STARRED 里比在父下更靠外——那正是「缩进 = 深度」，在 STARRED 里它的父就是那个组。
+- **icon↔三角原位替换只属于那三个组头。** 组头平时显示语义 icon，hover / keyboard focus 时原位换成**实心的折叠三角**（`components/icons/DisclosureTriangle.tsx`；折叠向右、展开向下），因此折叠控件不额外占一列，顶部三项与组头同列。三角是填充而非描边：填充形状每像素的视觉重量高于描边，所以它的外形刻意比同槽的 2px 描边字形小一圈（24 网格里约 11×9、形心正落在中心），否则 hover 态会比静止态更重。开合关系是「实心三角 = 可开合的铰链、方向即状态」，chevron 更像「下面还有内容」的滚动提示；不做 tree node 的那几个组头（Members / Computers / Settings）仍用 lucide caret。组头 hover **只做这一次图标替换**：不加背景、不加边框、不变字色。三个组头 icon 是同一族的等重描边字形——`Star` / `DirectMessageIcon`（DM，两枚椭圆气泡）/ 常规字重的衬线 `W`；均不带 `data-workspace-icon`（那是 workspace 实例的主题化贴纸，组头不是实例）。DM 那枚是手绘的（`components/icons/DirectMessageIcon.tsx`），不用 lucide 的 `MessagesSquare`：方角气泡是 **thread** 的字形（`ThreadIcon`），复合方角气泡贴在 DM 上会让两个概念在 14px 下互相押韵，读成 thread 索引；椭圆是区分二者的那一笔。
 - **三个组头右侧的 action（排序 / `+`）hover 才显示，范围是整组。** 常驻会让三份 chrome 与行争视线，而这是「安排一次」的控件；揭示范围取组头**或组内任一行**——排序菜单是读列表时才想起来的东西，不是读标题时。键盘那一半用 `:has(:focus-visible)`（不是 `focus-within`，Chromium mousedown 就上焦点），菜单开着时用 `:has([data-state=open])` 钉住。侧栏之外的 panel（Members / Computers）保留常驻 `+`。
 - **实例行的身份图标永不替换、也不铺 hover 底色。** workspace / DM 头行显示自己的头像 / workspace icon 并**保持不动**——身份不能在指针下被换掉；它是分组线不是房间，hover 只提字色，`.sidebar-row-border` 的状态涂装（forza6 下是柠檬底 + 投影）不参与，改用只保留描边宽度、不带状态的 `.sidebar-row-gutter`。填充留给唯一的选区：当前打开的 channel。
 - **workspace 头行 = 折叠开关**：不导航、不改高亮、不改 titlebar 上下文。折叠态逐 workspace 持久化。children 按展开态**懒挂载**——折叠的 workspace 不挂载它自己的 channels / unread / modes 查询。（这不等于「该 workspace 零请求」：STARRED 订阅**全部可见 workspace**的 scope，且其中的 regular channel 会拉取父 workspace 的 attention modes。）
@@ -105,7 +105,7 @@ Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar
 - **STARRED 是独立组，只装会话**；starred 会话必须先从其父的 `channels` 组里排除，再交给排序/拖拽，否则同一行出现两次。折叠头徽章不因搬家做减法。
 - **Slide 动画**：sidebar 收起/展开走 apple-feel 缓动的两层结构（layout 层收缩 + paint 层 transform 滑出），rapid toggle 自动 cancel 旧动画、reverse mid-closing 直接翻回展开。隐藏的 surface 加 `inert` + `aria-hidden="true"`，移出 a11y 树并禁焦。**`prefers-reduced-motion` 同时关 CSS transition 和 JS 状态机的延迟**（短路到同步 mount/unmount）。
 - Saved 是**全局唯一入口**（不分 workspace），点击进入 §6 的 Saved List View；期间 sidebar 仍显示让用户能切回去。
-- **Group header 整行可点击**（含 chevron + label + count），右侧的 `+` action 是独立按钮——避免点错触发折叠。
+- **Group header 整行可点击**（含折叠三角 + label + count），右侧的 `+` action 是独立按钮——避免点错触发折叠。
 
 ---
 

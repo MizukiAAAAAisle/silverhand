@@ -175,10 +175,9 @@
    tokens. `--text-on-selected` likewise comes from root (#0A0A0A).
    The carriers went from pale lime to hueless paper in #task:1867 (rationale
    at their declaration in forza6.css); this scope is unchanged by that — it
-   only re-points the two bg tokens at whatever the carriers are. */
+   only re-points the bg token at whatever the carrier is. */
 [data-theme='forza6'] aside[data-sidebar] {
   --bg-channels-sidebar: var(--forza6-carrier-channels);
-  --bg-sessions-sidebar: var(--forza6-carrier-sessions);
   --text-primary: var(--forza6-ink);
   --text-secondary: #1A1F1E;
   --text-muted: #4F5F5C;
@@ -779,36 +778,6 @@
   padding: 0;
   border-radius: 0;
   opacity: 0.85;
-}
-
-/* ── PIN icon — ink black, NOT festival pink (v6.5, #task:917) ──
-   NOTE: no consumer left — the inline pin button retired when pin became
-   star (context-menu only), so `[data-pin-icon]` matches nothing today.
-   Kept pending a theme-channel sweep; the rationale below is the reason
-   pinned-state ink beat a hue, should the state ever come back.
-   Historically both sidebar columns rendered the
-   inline pin button (visible on hover, persistent when pinned) and
-   colour it via Tailwind class branches. The pinned-but-not-selected
-   case lands on `text-accent` → resolves to `--brand-primary` (festival
-   magenta) — same colour as the `#` channel sticker, which dilutes
-   the `#` identity (shiki "节日粉淡化了前面 # 号粉色效果").
-
-   Fix: every `<Pin />` / `<PinOff />` icon carries `data-pin-icon`,
-   and inside `.text-accent` (the pinned-not-selected button state)
-   we flip its currentColor to forza6 ink. v6.5 first tried cyan as
-   a "marked important" cool callout, but cyan on the sidebar ground
-   read as a foreign accent that competed with the carrier itself
-   (that ground is paper rather than pale lime since #task:1867 —
-   ink is still the answer, because pinned is structure, not a hue). Ink is the same near-black that already structures every
-   poster sticker (sidebar `#` chip, chat header `#` chip, NavRail
-   selected wedge frame, inline-code chip) — so pinned reads as "this
-   row got STAMPED" rather than "this row is on fire", which fits the
-   poster vocabulary better. Pink stays exclusive to `#` (channel
-   identity). The other three pin-button states (selected+pinned →
-   text-on-selected, selected+hover-not-pinned → text-on-selected,
-   not-selected+not-pinned → muted ink) are untouched. */
-[data-theme='forza6'] .text-accent [data-pin-icon] {
-  color: var(--forza6-ink);
 }
 
 /* ── Sidebar unread badge — square poster sticker (v6.5c, #task:917) ──

@@ -1,7 +1,8 @@
 import { Fragment, useEffect, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { MessagesSquare, Plus } from 'lucide-react';
+import { Plus } from 'lucide-react';
+import { DirectMessageIcon } from '@/components/icons/DirectMessageIcon';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
   SortableGroup,
@@ -9,7 +10,7 @@ import {
   sortableItemStyle,
 } from '@/components/layout/list-drag-sort';
 import {
-  CHILD_GLYPH_INSET,
+  OUTER_GLYPH_INSET,
   SidebarSection,
   MutedMarker,
   UnreadBadge,
@@ -140,16 +141,21 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
 /** The GROUP header's semantic glyph — the thing shiki asked for on
  *  STARRED / WORKSPACES / DM: identity at rest, chevron on hover. The three must
  *  read as one family, so all three are stroke glyphs at the same optical
- *  weight: `Star` / `MessagesSquare` (Slack's double-bubble for DMs) / a serif
+ *  weight: `Star` / `DirectMessageIcon` (two oval chat bubbles) / a serif
  *  `W` at NORMAL weight — the semibold `W` sat visibly heavier than two 2px
  *  lucide strokes beside it (shiki, 2026-08-08).
+ *
+ *  The DM glyph is hand-drawn rather than lucide's `MessagesSquare`: square
+ *  bubbles are the THREAD vocabulary (`ThreadIcon`), so the compound square read
+ *  as a thread index here. Ovals are what tell the two concepts apart (shiki,
+ *  2026-08-08).
  *
  *  Deliberately WITHOUT `data-workspace-icon`: that hook is the themed poster
  *  badge for a workspace INSTANCE, and a muted section header is not one (see
  *  app-layout.md §9 on not inventing a second primitive — this reuses the header
  *  vocabulary rather than the row's). */
 function sectionGlyphFor(kind: WorkspaceUiKind): JSX.Element {
-  if (kind === 'dm') return <MessagesSquare className="size-3.5" />;
+  if (kind === 'dm') return <DirectMessageIcon className="size-3.5" />;
   return (
     <span className="inline-flex size-3.5 shrink-0 items-center justify-center font-serif text-[14px] leading-none">
       W
@@ -399,10 +405,12 @@ function WorkspaceHeaderRow({
         // but takes none of `.sidebar-row-border`'s state paint (in forza6 that
         // hover is a lime fill + drop shadow, which made this line compete with a
         // real selection). Hover lifts the ink and nothing else (shiki,
-        // 2026-08-08). The indent puts it on the CHILD column — one 16px step in
-        // from its group header, which is what shows it is a child of that group.
+        // 2026-08-08). The indent puts it on the OUTER column — flush with its
+        // group header, because the one available step is spent below this row
+        // instead: its channels are what needs position to be readable as a
+        // block (shiki, 2026-08-08).
         'sidebar-row-gutter group/ws flex h-7 w-full items-stretch pr-2 ' +
-        CHILD_GLYPH_INSET +
+        OUTER_GLYPH_INSET +
         ' ' +
         'text-text-muted hover:text-text-primary'
       }

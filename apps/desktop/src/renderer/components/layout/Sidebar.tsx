@@ -20,7 +20,7 @@ import {
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
-import { SECTION_GLYPH_INSET } from './sidebar-shared';
+import { OUTER_GLYPH_INSET } from './sidebar-shared';
 import { partitionRailWorkspaces, pinStarredFirst } from '@/lib/home-grouping';
 
 interface SidebarProps {
@@ -188,17 +188,17 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * fading a discrete committed state is the flicker (#task:1162). Keeps
           * all three sidebar row classes (rail / channel / tool) one row-language.
           *
-          * Their glyphs sit on the SECTION column (`SECTION_GLYPH_INSET`,
-          * #task:1889) — the same x as a workspace / DM header's icon, which is what
-          * lets the three of them line up with the tree instead of floating in
-          * their own gutter. */}
+          * Their glyphs sit on the OUTER column (`OUTER_GLYPH_INSET`,
+          * #task:1889) — the same x as a group header and as a workspace / DM
+          * header row, which is what lets the three of them line up with the tree
+          * instead of floating in their own gutter. */}
         <div className="mb-3 space-y-0.5">
           <button
             type="button"
             onClick={props.onSelectSearch}
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
-                SECTION_GLYPH_INSET,
+                OUTER_GLYPH_INSET,
               props.searchActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -213,7 +213,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             onClick={props.onSelectSaved}
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
-                SECTION_GLYPH_INSET,
+                OUTER_GLYPH_INSET,
               props.savedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -244,7 +244,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             onClick={props.onSelectArchived}
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
-                SECTION_GLYPH_INSET,
+                OUTER_GLYPH_INSET,
               props.archivedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',

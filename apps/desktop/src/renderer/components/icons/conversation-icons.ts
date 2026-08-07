@@ -10,7 +10,9 @@ import { MessageSquare, type LucideIcon } from 'lucide-react';
  *
  * Not part of this vocabulary: `ExternalLink` (locate a source message) and
  * NavRail's Chat tab glyph (the compound `MessagesSquare`) — separate concepts,
- * never thread consumers. Change the glyph here, once, and every thread surface
+ * never thread consumers. The DM group header is a third: it uses
+ * `DirectMessageIcon` (oval bubbles) precisely so it does NOT rhyme with the
+ * square thread bubble. Change the glyph here, once, and every thread surface
  * follows.
  */
 export const ThreadIcon: LucideIcon = MessageSquare;

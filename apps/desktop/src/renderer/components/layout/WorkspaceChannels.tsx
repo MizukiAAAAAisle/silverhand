@@ -40,7 +40,7 @@ import {
 } from '@/components/menus/AppContextMenu';
 import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
 import {
-  CHILD_GLYPH_INSET,
+  NESTED_GLYPH_INSET,
   UnreadBadge,
   copyConversationName,
 } from '@/components/layout/sidebar-shared';
@@ -214,7 +214,7 @@ export function WorkspaceChannels({
           onClick={() => onCreateChannel(workspaceId)}
           className={
             'flex h-7 w-full items-center gap-1.5 text-left text-[12px] text-text-muted hover:text-text-primary ' +
-            CHILD_GLYPH_INSET
+            NESTED_GLYPH_INSET
           }
         >
           <Plus className="size-3.5 shrink-0" />
@@ -393,14 +393,17 @@ function ChannelRow({
     <div
       data-row-selected={selected || undefined}
       className={
-        // The CHILD glyph column (#task:1889): this row's `#` sits one indent
-        // step in from the group header — the SAME column as its own workspace
-        // header, not a second step further. A per-level staircase was tried and
-        // rejected: in a column this narrow it spends the width on whitespace and
-        // reads as too many levels (shiki, 2026-08-08). What locates this row is
-        // the header above it plus the collapse state, not its x.
+        // The NESTED glyph column (#task:1889): a channel under a workspace is
+        // the ONLY row in the tree that indents. The tree has exactly one step to
+        // spend and it is spent here, because this is the only boundary position
+        // alone can carry — a workspace row and a channel row are the same size,
+        // weight, colour and height, so on one column a workspace and its nine
+        // channels read as one flat run. Indented, each workspace's children are
+        // a block whose edges are the boundary (shiki, 2026-08-08). A per-level
+        // staircase stays rejected: in a column this narrow it spends the width
+        // on whitespace and reads as too many levels.
         'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
-        CHILD_GLYPH_INSET +
+        NESTED_GLYPH_INSET +
         ' ' +
         // No `transition-colors`: selected/hover switch instantly (#task:1162).
         // Selected is a discrete, already-committed state — fading it over 150ms

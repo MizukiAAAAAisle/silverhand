@@ -8,6 +8,7 @@ import {
 import { BellOff, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { DisclosureTriangle } from '@/components/icons/DisclosureTriangle';
 
 /**
  * "Copy name" for a conversation row. Shared because a starred channel now has TWO
@@ -105,21 +106,26 @@ export function useSidebarSectionExpanded(
 /**
  * The sidebar's TWO glyph columns (#task:1889, shiki's Slack reference).
  *
- *   section:  tool rows + the three group headers (STARRED / WORKSPACES / DM)
- *   child:    everything under a group header — workspace / DM headers, the
- *             channels beneath them, STARRED rows
+ *   outer:   tool rows, the three group headers, and everything a GROUP holds
+ *            directly — workspace / DM headers and STARRED rows
+ *   nested:  the channels under a workspace / DM header
  *
  * One 16px step, and only one. The tree is four levels deep by structure, but
  * indenting each level would spend the whole narrow column on whitespace and
- * make the list read as a staircase (shiki: 「否则层级太多」, 2026-08-08). So a
- * channel sits on the SAME column as its workspace header rather than one step
- * further in — the workspace header above it, its own `#` sticker and the
- * collapse state are what say where it lives; the indent is reserved for the one
- * distinction that has to survive a glance: group header vs group content.
+ * make the list read as a staircase (shiki: 「否则层级太多」, 2026-08-08). So the
+ * question is which single distinction gets the step, and it goes to the one
+ * where POSITION IS THE ONLY CUE LEFT: a group header is already a label by
+ * typography (uppercase, tracked, muted, smaller, trailing count), but a
+ * workspace row and a channel row are the same size, weight, colour and height,
+ * and both are clickable — with them on one column a workspace and its nine
+ * channels read as one flat run, and where one workspace's children end is
+ * carried by the leading glyph alone. Indenting the channels turns each
+ * workspace's children into a block whose edges ARE the boundary.
  *
- * The column is by DEPTH-CLASS, not entity kind: a STARRED conversation and a
- * workspace header are both a group's direct child, so they share it even though
- * one is a room and the other a container.
+ * The cost, accepted: tool rows, group headers, workspace / DM rows and STARRED
+ * rows all share the outer column, and the same channel sits further out in
+ * STARRED than under its parent. That is just "indent = depth" — in STARRED the
+ * row's parent IS the group.
  *
  * There is no permanent chevron gutter: a collapsible GROUP HEADER's own glyph
  * slot is where its chevron appears on hover, so the header keeps the tool rows'
@@ -131,8 +137,8 @@ export function useSidebarSectionExpanded(
  * are already in the box, so only the indent step is these classes' job — a
  * hardcoded absolute x would be wrong in any theme that changes the border.
  */
-export const SECTION_GLYPH_INSET = 'pl-1';
-export const CHILD_GLYPH_INSET = 'pl-5';
+export const OUTER_GLYPH_INSET = 'pl-1';
+export const NESTED_GLYPH_INSET = 'pl-5';
 
 interface SectionProps {
   label: string;
@@ -260,7 +266,17 @@ export function SidebarSectionHeader({
       'group-hover/sectionscope:opacity-100 [&:has(:focus-visible)]:opacity-100 ' +
       '[&:has([data-state=open])]:opacity-100'
     : 'flex items-center';
-  const chevron = expanded ? (
+  // The collapse affordance. A TREE GROUP gets a solid disclosure triangle
+  // (shiki, 2026-08-08) — it is revealed in place of the group's identity icon on
+  // hover, so it has to read as "operate me" in one look, and a filled triangle's
+  // direction IS the state. The plain chevron-only headers (Members / Computers /
+  // Settings) are not tree nodes and keep lucide's caret.
+  const chevron = swapGlyph ? (
+    <DisclosureTriangle
+      direction={expanded ? 'down' : 'right'}
+      className="size-3.5"
+    />
+  ) : expanded ? (
     <ChevronDown className="size-3.5" />
   ) : (
     <ChevronRight className="size-3.5" />
@@ -334,7 +350,7 @@ export function SidebarSectionHeader({
             // plain chevron-only header (Members / Computers / Settings) is not a
             // tree node and keeps its own padding + hover ink.
             (swapGlyph
-              ? 'sidebar-row-gutter ' + SECTION_GLYPH_INSET
+              ? 'sidebar-row-gutter ' + OUTER_GLYPH_INSET
               : 'px-2 hover:text-text-secondary')
           }
           aria-expanded={expanded}

@@ -65,8 +65,7 @@ apps/desktop/src/renderer/
 | `--bg-island` | 岛屿底色（代码块、JSON、终端、表格） | 中性灰，与主基调形成材质对比 |
 | `--bg-island-deep` | 表头、嵌套岛屿 | 比 island 略深 |
 | `--bg-nav-rail` | NavRail（最左 icon 栏）底色 | 主题最强的一档信号色，或退化成 `var(--bg-primary)`（详见 §9） |
-| `--bg-channels-sidebar` | 频道列表栏底色 | 与 nav-rail 同色家族、saturation 低一档；或退化 |
-| `--bg-sessions-sidebar` | 会话列表栏底色 | 同色系最浅；或退化 |
+| `--bg-channels-sidebar` | 侧栏列表面底色（侧栏树 / members / computers / activity / settings nav） | 与 nav-rail 同色家族、saturation 低一档；或退化 |
 | `--bg-nav-rail-hover` | NavRail icon hover 底色 | 与 `--bg-nav-rail` 成对；深色 nav 用浅混色，浅色 nav 用深混色 |
 | `--bg-row-selected` | Workspace / Channel / Search / Saved row 选中底色 | 必须从 sidebar 底色中跳出 |
 | `--bg-row-hover` | 同一组 row 的 hover 底色 | selected 的弱一级，不应比 selected 更抢眼 |
@@ -426,36 +425,35 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 
 ## 9. 左侧 chrome 的纵向色梯度（per-theme 二选一）
 
-应用左侧从外到内有 **4 个纵向区域**：
+应用左侧从外到内有 **3 个纵向区域**：
 
 ```
-NavRail  →  Sidebar (channels) → SessionsSidebar  →  ChatArea
-最左 icon       频道列表             会话列表           读区
+NavRail  →  Sidebar  →  ChatArea
+最左 icon    会话树        读区
 ```
 
-主题对这 4 块的色彩处理可以走两条路。
+主题对这 3 块的色彩处理可以走两条路。
 
 ### 9.1 平铺派（可选退化）
 
-NavRail / channels / sessions 三块 chrome 全部 `var(--bg-primary)`，跟 chat 主区 `var(--bg-base)` 形成"框 vs 内容"的二分。简单、安全，但当 4 块同色时**眼睛抓不住焦点** —— 这是早期实测过的真实问题。适用：极简、低饱和、想让 chrome 完全隐形的主题。
+NavRail 与 sidebar 两块 chrome 全部 `var(--bg-primary)`，跟 chat 主区 `var(--bg-base)` 形成"框 vs 内容"的二分。简单、安全，但当各块同色时**眼睛抓不住焦点** —— 这是早期实测过的真实问题。适用：极简、低饱和、想让 chrome 完全隐形的主题。
 
 ### 9.2 梯度派（当前推荐）
 
-把 4 块安排在一条 oklab 色线上，每往内一档稀释一次：NavRail 直接取 `--brand-primary`（色线最饱和端、"主信号"），channels / sessions 两档各用 `color-mix(in oklab, brand, var(--bg-base))` 按递减比例稀释（往内一档比例更低），chat 主区落到色线另一端 `--bg-base`（最浅，读区）。具体混合比例是 per-theme 手感调参，写在主题 CSS 里，不在本文固定。
+把 3 块安排在一条 oklab 色线上，每往内一档稀释一次：NavRail 直接取 `--brand-primary`（色线最饱和端、"主信号"），sidebar 用 `color-mix(in oklab, brand, var(--bg-base))` 稀释一档，chat 主区落到色线另一端 `--bg-base`（最浅，读区）。具体混合比例是 per-theme 手感调参，写在主题 CSS 里，不在本文固定。
 
-视觉效果：从主题身份色 → 低饱和 sidebar → 更浅 sidebar → 读区纸色的连续过渡，**没有 hue 跳**，只有 saturation + lightness 同步衰减。
+视觉效果：从主题身份色 → 低饱和 sidebar → 读区纸色的连续过渡，**没有 hue 跳**，只有 saturation + lightness 同步衰减。
 
 为什么用 `color-mix(in oklab, ...)`：oklab 是感知均匀色空间，比 sRGB 插值出的中间色更"自然" —— 尤其亮色到深色之间的过渡不会出灰泥色。
 
 **调节口子**：
-- 想换 base hue（橘 / 蓝 / 绿），改 `--brand-primary` 一个值，三档全部跟着重算
-- 想 channels 更柔，把百分比调低
-- 想 sessions 几乎隐形，把百分比调更低
-- 整体加深，两个百分比一起往上提
+- 想换 base hue（橘 / 蓝 / 绿），改 `--brand-primary` 一个值，各档全部跟着重算
+- 想 sidebar 更柔，把百分比调低
+- 整体加深，把百分比往上提
 
 **踩过的坑**：
-- channels / sessions **各选一种独立 hue** 会导致 saturation 断层 + 温度断层，不协调。统一到一条色线后顺滑。
-- "新主题不定义这三个 token" 会让 sidebar 瞬变透明黑 —— 必须显式 fallback 到 `var(--bg-primary)`。
+- NavRail 与 sidebar **各选一种独立 hue** 会导致 saturation 断层 + 温度断层，不协调。统一到一条色线后顺滑。
+- "新主题不定义这些 token" 会让 sidebar 瞬变透明黑 —— 必须显式 fallback 到 `var(--bg-primary)`。
 
 ---
 
@@ -476,7 +474,7 @@ NavRail 项 / channel / DM / session 这种**一级导航 row**，用同一套�
 3. **border color 默认可同色，但由两个 token 控制**（`--border-row-hover` / `--border-row-selected`，见 §3.5.1）。背景承担 hover→selected 的 emphasis 梯度，边只决定 geometry。推荐设成同色，但有需要时（selected 想用更深锚色）也能各走各。
 
 **适用范围**：
-- ✅ 一级导航 row —— NavRail 项、Sidebar 的 channel / DM 项、SessionsSidebar 会话项、Workspaces / Members / Computers 等 `aside[data-sidebar]` 作用域内的导航 row
+- ✅ 一级导航 row —— NavRail 项、Sidebar 的 workspace / DM / channel 行、Workspaces / Members / Computers 等 `aside[data-sidebar]` 作用域内的导航 row
 - ❌ 行内按钮 / toolbar / dropdown trigger（用各自的状态系统）
 - ❌ Saved / 分组 header 等"动作"性质而非"导航选中"性质的按钮（继续用 `bg-bg-hover`）
 - ❌ 主内容区的 row —— 即便复用 `.sidebar-row-border` 类只是为了拿宽度，也**不**自动接 row-state border 契约，走自己的 hover 词汇。需要纳入时给显式 hook 并补到 §3.5.1。

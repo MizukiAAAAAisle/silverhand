@@ -29,7 +29,7 @@ import {
   useListDragSort,
 } from '@/components/layout/list-drag-sort';
 import {
-  CHILD_GLYPH_INSET,
+  OUTER_GLYPH_INSET,
   SidebarSection,
   UnreadBadge,
   copyConversationName,
@@ -265,12 +265,13 @@ function FavoriteRow({
     <div
       data-row-selected={isPrimary || undefined}
       className={
-        // A STARRED row is a CHILD row: its leading glyph sits on the same column as
-        // a channel `#` under an expanded workspace, one indent step right of the
-        // container rows. It had been on `px-2` — 12px left of every other row in
-        // the tree, which is what made the section read as a separate list.
+        // A STARRED row sits on the OUTER column: its parent IS the group, so it is
+        // flush with the STARRED header and with the workspace / DM rows below —
+        // the single indent step is spent on channels nested under a workspace.
+        // Not `px-2`, which was 12px left of every other row in the tree and made
+        // the section read as a separate list.
         'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
-        CHILD_GLYPH_INSET +
+        OUTER_GLYPH_INSET +
         ' ' +
         rowBg
       }

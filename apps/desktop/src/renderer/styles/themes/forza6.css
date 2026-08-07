@@ -118,16 +118,15 @@
      paper: each step is `--forza6-paper` minus an equal amount on
      R/G/B, so the whole chrome keeps the paper's warm tilt (G>R>B)
      and only lightness distinguishes the panels. Ladder is
-     deliberately shallow (paper → −4 → −9) per shiki「整体再偏白
+     deliberately shallow (paper → −4) per shiki「整体再偏白
      一点,尤其 channel sidebar」— the panel boundary is carried by
-     the ink borders, not by lightness. Consumers via
-     `--bg-channels-sidebar` / `--bg-sessions-sidebar` re-pointed in
-     forza6-components.css §Sidebar token bundle: -channels paints
-     every OUTER list pane (workspaces / members / computers /
-     activity / settings nav), -sessions only the inner channels
-     sidebar. */
-  --forza6-carrier-channels: #F6F7F1;/* outer list-pane carrier — paper −4 */
-  --forza6-carrier-sessions: #F1F2EC;/* channels-sidebar carrier — paper −9 */
+     the ink borders, not by lightness. Consumed via
+     `--bg-channels-sidebar`, re-pointed in forza6-components.css
+     §Sidebar token bundle: it paints every list pane (the sidebar
+     tree / members / computers / activity / settings nav). The
+     second, darker carrier retired with the inner channels column
+     (#task:1889). */
+  --forza6-carrier-channels: #F6F7F1;/* list-pane carrier — paper −4 */
   /* ── Backgrounds (cool-neutral ladder for chat read area) ── */
   --bg-base: #F7F8F6;
   --bg-primary: #ECEEEB;
@@ -264,7 +263,6 @@
      only thing separating rail from panel. */
   --bg-nav-rail: var(--forza6-paper);
   --bg-channels-sidebar: color-mix(in oklab, var(--brand-primary) 8%, var(--bg-base));
-  --bg-sessions-sidebar: color-mix(in oklab, var(--brand-primary) 4%, var(--bg-base));
 
   /* ── Islands (code blocks) — near-black navy HUD ground ── */
   --bg-island: var(--forza6-code-island);
