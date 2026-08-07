@@ -68,9 +68,11 @@ pnpm perf:client profile \
 
 The `profile --mode release-profile` command automatically swaps the shared
 `better-sqlite3` native binding to Electron's ABI through the repository's
-cached native-binding helper. A preceding Node test, `pnpm install`, or rebuild
-can replace that binary; do not run `electron-vite preview` directly and assume
-the active ABI is still correct.
+cached native-binding helper. It also rebuilds the host daemon bundle before
+launch so the one-shot migration preflight cannot lag behind the source tree.
+A preceding Node test, `pnpm install`, or rebuild can replace the native binary;
+do not run `electron-vite preview` directly and assume the active ABI is still
+correct.
 
 The profile command has three write guards:
 

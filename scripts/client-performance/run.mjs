@@ -123,6 +123,7 @@ async function runOwnedProfile(options) {
   const scenario = await loadScenario(scenarioPath);
   assertInteractiveCompatibility(scenario, options);
   if (mode === 'release-profile') {
+    await prepareHostBundle();
     await prepareElectronBinding();
   }
   const child = launchProfileProcess({ mode, profileDir, port, executable: options.executable });
@@ -160,8 +161,26 @@ async function runOwnedProfile(options) {
 }
 
 async function prepareElectronBinding() {
-  console.log('Preparing better-sqlite3 for Electron ABI…');
-  const child = spawn('bash', [join(import.meta.dirname, 'prepare-electron-binding.sh')], {
+  await runPreparation(
+    'Preparing better-sqlite3 for Electron ABI…',
+    'Electron ABI preparation',
+    'bash',
+    [join(import.meta.dirname, 'prepare-electron-binding.sh')],
+  );
+}
+
+async function prepareHostBundle() {
+  await runPreparation(
+    'Building the host daemon bundle used by release-profile…',
+    'Host daemon build',
+    'pnpm',
+    ['--filter', '@silverhand/host', 'build'],
+  );
+}
+
+async function runPreparation(message, label, program, args) {
+  console.log(message);
+  const child = spawn(program, args, {
     cwd: ROOT,
     env: process.env,
     stdio: 'inherit',
@@ -171,7 +190,7 @@ async function prepareElectronBinding() {
     child.once('exit', resolvePromise);
   });
   if (exitCode !== 0) {
-    throw new Error(`Electron ABI preparation failed with exit code ${String(exitCode)}`);
+    throw new Error(`${label} failed with exit code ${String(exitCode)}`);
   }
 }
 
