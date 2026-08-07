@@ -104,6 +104,30 @@ test('scenario validation rejects duplicate phase ids and unknown actions', () =
       }),
     /action.sidebar must be/,
   );
+
+  assert.throws(
+    () =>
+      validateScenario({
+        schema_version: 1,
+        id: 'bad-sidebar-reverse',
+        title: 'bad sidebar reverse',
+        phases: [
+          {
+            id: 'reverse',
+            label: 'reverse',
+            settle_ms: 0,
+            observe_ms: 0,
+            action: {
+              kind: 'sidebar-reverse',
+              sidebar: 'workspace',
+              visible: true,
+              interval_ms: -1,
+            },
+          },
+        ],
+      }),
+    /action.interval_ms must be a non-negative integer/,
+  );
 });
 
 test('fixture interpolation fails closed on unknown keys', () => {

@@ -103,7 +103,15 @@ export function interpolate(value, fixture) {
 
 function validateAction(action, label) {
   if (!isRecord(action)) throw new Error(`${label}: action must be an object`);
-  const allowed = new Set(['navigate', 'click', 'type', 'scroll', 'sidebar', 'manual']);
+  const allowed = new Set([
+    'navigate',
+    'click',
+    'type',
+    'scroll',
+    'sidebar',
+    'sidebar-reverse',
+    'manual',
+  ]);
   if (!allowed.has(action.kind)) throw new Error(`${label}: unsupported action ${String(action.kind)}`);
   if (action.kind === 'navigate') requireNonEmptyString(action.path, `${label}: action.path`);
   if (action.kind === 'click' || action.kind === 'type' || action.kind === 'scroll') {
@@ -113,13 +121,19 @@ function validateAction(action, label) {
   if (action.kind === 'scroll' && !Number.isFinite(action.delta_y)) {
     throw new Error(`${label}: action.delta_y must be finite`);
   }
-  if (action.kind === 'sidebar') {
+  if (action.kind === 'sidebar' || action.kind === 'sidebar-reverse') {
     if (action.sidebar !== 'workspace' && action.sidebar !== 'channel') {
       throw new Error(`${label}: action.sidebar must be workspace or channel`);
     }
     if (typeof action.visible !== 'boolean') {
       throw new Error(`${label}: action.visible must be boolean`);
     }
+  }
+  if (
+    action.kind === 'sidebar-reverse' &&
+    (!Number.isInteger(action.interval_ms) || action.interval_ms < 0)
+  ) {
+    throw new Error(`${label}: action.interval_ms must be a non-negative integer`);
   }
   if (action.kind === 'manual') requireNonEmptyString(action.instruction, `${label}: action.instruction`);
 }

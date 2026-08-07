@@ -1,4 +1,5 @@
 import { type SidebarPane, useSidebarPane } from './useSidebarPane';
+import { SIDEBAR_KEEP_MOUNTED } from '@/sidebar-performance-experiment';
 
 /**
  * Top-level layout preferences. Each sidebar owns its own animated
@@ -24,10 +25,12 @@ export function useLayoutSettings(): {
   const workspaceSidebar = useSidebarPane({
     storageKey: WORKSPACE_SIDEBAR_KEY,
     defaultVisible: true,
+    keepMounted: SIDEBAR_KEEP_MOUNTED,
   });
   const channelSidebar = useSidebarPane({
     storageKey: CHANNEL_SIDEBAR_KEY,
     defaultVisible: true,
+    keepMounted: SIDEBAR_KEEP_MOUNTED,
   });
 
   return {

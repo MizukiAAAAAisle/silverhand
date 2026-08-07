@@ -10,6 +10,13 @@ const allowInsecureRemote =
   process.env.SILVERHAND_DESKTOP_ALLOW_INSECURE_REMOTE === '1';
 const packagedDefaultServerUrl =
   process.env.SILVERHAND_DESKTOP_DEFAULT_SERVER_URL ?? '';
+const sidebarPerfVariant = process.env.SILVERHAND_SIDEBAR_PERF_VARIANT ?? 'baseline';
+
+if (!['baseline', 'keep-mounted', 'compositor-isolation'].includes(sidebarPerfVariant)) {
+  throw new Error(
+    `SILVERHAND_SIDEBAR_PERF_VARIANT must be baseline, keep-mounted, or compositor-isolation (got: ${sidebarPerfVariant})`,
+  );
+}
 
 function readMinifySetting(): false | 'oxc' {
   const raw = process.env.SILVERHAND_MINIFY;
@@ -113,6 +120,9 @@ export default defineConfig({
       __SILVERHAND_DESKTOP_DEFAULT_SERVER_URL__: JSON.stringify(
         packagedDefaultServerUrl,
       ),
+      // Performance-harness-only A/B. Production builds omit the env var and
+      // therefore compile the existing baseline behavior.
+      __SILVERHAND_SIDEBAR_PERF_VARIANT__: JSON.stringify(sidebarPerfVariant),
     },
     resolve: {
       alias: {

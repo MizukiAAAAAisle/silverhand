@@ -29,6 +29,10 @@ import { VerticalSplitter } from '@/components/layout/VerticalSplitter';
 import { useAppearance } from '@/hooks/useAppearance';
 import { useLayoutSettings } from '@/hooks/useLayoutSettings';
 import {
+  SIDEBAR_ANIMATE_LAYOUT,
+  SIDEBAR_PERFORMANCE_VARIANT,
+} from '@/sidebar-performance-experiment';
+import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
@@ -2207,7 +2211,12 @@ function RegisteredAppShell(): JSX.Element {
           <>
             <div
               className="sidebar-slot"
-              data-animating={workspaceSidebarPane.transitioning ? 'true' : undefined}
+              data-animating={
+                SIDEBAR_ANIMATE_LAYOUT && workspaceSidebarPane.transitioning
+                  ? 'true'
+                  : undefined
+              }
+              data-performance-variant={SIDEBAR_PERFORMANCE_VARIANT}
               style={{
                 flexBasis: workspaceSidebarVisible
                   ? 'var(--sidebar-width)'
@@ -2321,7 +2330,12 @@ function RegisteredAppShell(): JSX.Element {
               <>
                 <div
                   className="sidebar-slot"
-                  data-animating={channelSidebarPane.transitioning ? 'true' : undefined}
+                  data-animating={
+                    SIDEBAR_ANIMATE_LAYOUT && channelSidebarPane.transitioning
+                      ? 'true'
+                      : undefined
+                  }
+                  data-performance-variant={SIDEBAR_PERFORMANCE_VARIANT}
                   style={{
                     flexBasis: channelSidebarVisible
                       ? 'var(--channels-sidebar-width)'

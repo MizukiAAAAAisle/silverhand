@@ -1208,6 +1208,15 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
     flex-basis var(--sidebar-anim-ms) var(--sidebar-ease),
     margin-right var(--sidebar-anim-ms) var(--sidebar-ease);
 }
+/* Performance isolation only. The slot commits its terminal flex-basis in one
+   layout pass while the retained surface remains visible outside the collapsed
+   slot and animates on the compositor. This deliberately exposes a visual
+   layout jump; it measures the no-per-frame-layout floor and is not a proposed
+   production interaction. */
+.sidebar-slot[data-performance-variant='compositor-isolation'] {
+  overflow: visible;
+  z-index: 1;
+}
 .sidebar-surface {
   height: 100%;
   transform: translate3d(-100%, 0, 0);

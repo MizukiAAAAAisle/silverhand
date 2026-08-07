@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "id": "sidebar-ab",
+  "title": "Sidebar animation A/B isolation",
+  "phases": [
+    {
+      "id": "chat-prime",
+      "label": "Prime the seeded chat surface",
+      "settle_ms": 500,
+      "observe_ms": 500,
+      "action": {
+        "kind": "navigate",
+        "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}"
+      }
+    },
+    { "id": "setup-channel-hidden", "label": "Precondition channel sidebar hidden", "settle_ms": 250, "observe_ms": 100, "action": { "kind": "sidebar", "sidebar": "channel", "visible": false } },
+    { "id": "workspace-hide-1", "label": "Workspace sidebar hide 1", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": false } },
+    { "id": "workspace-show-1", "label": "Workspace sidebar show 1", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": true } },
+    { "id": "workspace-hide-2", "label": "Workspace sidebar hide 2", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": false } },
+    { "id": "workspace-show-2", "label": "Workspace sidebar show 2", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": true } },
+    { "id": "workspace-hide-3", "label": "Workspace sidebar hide 3", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": false } },
+    { "id": "workspace-show-3", "label": "Workspace sidebar show 3", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": true } },
+    { "id": "workspace-hide-4", "label": "Workspace sidebar hide 4", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": false } },
+    { "id": "workspace-show-4", "label": "Workspace sidebar show 4", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": true } },
+    { "id": "workspace-hide-5", "label": "Workspace sidebar hide 5", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": false } },
+    { "id": "workspace-show-5", "label": "Workspace sidebar show 5", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "workspace", "visible": true } },
+    { "id": "workspace-reverse", "label": "Workspace sidebar rapid reverse", "settle_ms": 250, "observe_ms": 300, "action": { "kind": "sidebar-reverse", "sidebar": "workspace", "visible": false, "interval_ms": 70 } },
+    { "id": "channel-hide-1", "label": "Channel sidebar hide 1", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": false } },
+    { "id": "channel-show-1", "label": "Channel sidebar show 1", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": true } },
+    { "id": "channel-hide-2", "label": "Channel sidebar hide 2", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": false } },
+    { "id": "channel-show-2", "label": "Channel sidebar show 2", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": true } },
+    { "id": "channel-hide-3", "label": "Channel sidebar hide 3", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": false } },
+    { "id": "channel-show-3", "label": "Channel sidebar show 3", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": true } },
+    { "id": "channel-hide-4", "label": "Channel sidebar hide 4", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": false } },
+    { "id": "channel-show-4", "label": "Channel sidebar show 4", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": true } },
+    { "id": "channel-hide-5", "label": "Channel sidebar hide 5", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": false } },
+    { "id": "channel-show-5", "label": "Channel sidebar show 5", "settle_ms": 250, "observe_ms": 250, "action": { "kind": "sidebar", "sidebar": "channel", "visible": true } },
+    { "id": "channel-reverse", "label": "Channel sidebar rapid reverse", "settle_ms": 250, "observe_ms": 300, "action": { "kind": "sidebar-reverse", "sidebar": "channel", "visible": false, "interval_ms": 70 } }
+  ]
+}

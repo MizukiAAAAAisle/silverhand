@@ -704,7 +704,7 @@ function phaseSource(phaseId, action, settleMs, observeMs) {
     };
     // Make a directional sidebar phase reproducible even though visibility is
     // persisted across runs. Preconditioning is deliberately outside the probe.
-    if (action.kind === 'sidebar') {
+    if (action.kind === 'sidebar' || action.kind === 'sidebar-reverse') {
       const button = sidebarButton(action.sidebar);
       if (!(button instanceof HTMLButtonElement)) {
         throw new Error(`sidebar toggle did not resolve: ${action.sidebar}`);
@@ -743,10 +743,24 @@ function phaseSource(phaseId, action, settleMs, observeMs) {
         throw new Error(`sidebar toggle did not resolve: ${action.sidebar}`);
       }
       button.click();
+    } else if (action.kind === 'sidebar-reverse') {
+      const button = sidebarButton(action.sidebar);
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error(`sidebar toggle did not resolve: ${action.sidebar}`);
+      }
+      // Three toggles exercise open/close reversal twice and finish at the
+      // requested terminal visibility. The aggregate phase intentionally has
+      // no synthetic action-to-paint number; frame gaps and long tasks cover
+      // the full interrupted transition.
+      button.click();
+      await wait(action.interval_ms);
+      button.click();
+      await wait(action.interval_ms);
+      button.click();
     } else if (action.kind !== 'manual') {
       throw new Error(`unsupported action ${action.kind}`);
     }
-    if (action.kind !== 'manual') {
+    if (action.kind !== 'manual' && action.kind !== 'sidebar-reverse') {
       await paint();
       actionToPaintMs = performance.now() - startedAt;
     }
@@ -765,6 +779,8 @@ function rendererMetadataSource() {
     prefers_reduced_motion: matchMedia('(prefers-reduced-motion: reduce)').matches,
     user_agent: navigator.userAgent,
     language: navigator.language,
+    sidebar_performance_variant:
+      document.querySelector('.sidebar-slot')?.getAttribute('data-performance-variant') ?? null,
   }))()`;
 }
 

@@ -50,6 +50,9 @@ interface UseSidebarPaneOptions {
   storageKey: string;
   /** Default visible value when storage is empty or unreadable. */
   defaultVisible: boolean;
+  /** Performance A/B only: retain the subtree after close so show does not
+   * synchronously mount it on the click critical path. */
+  keepMounted?: boolean;
 }
 
 export interface SidebarPane {
@@ -100,6 +103,7 @@ function prefersReducedMotion(): boolean {
 export function useSidebarPane({
   storageKey,
   defaultVisible,
+  keepMounted = false,
 }: UseSidebarPaneOptions): SidebarPane {
   const [state, setState] = useState<PaneState>(() => {
     const v = readVisible(storageKey, defaultVisible);
@@ -153,13 +157,15 @@ export function useSidebarPane({
         // "from" value and the transition collapses to a zero-frame jump.
         // If it's still mounted (we were mid-closing), reuse the existing
         // surface and let CSS reverse the in-flight transform interpolation.
-        flushSync(() => {
+        const enter = () => {
           setState(s =>
             s.phase === 'open' || s.phase === 'closing'
               ? { phase: 'open', visible: true }
               : { phase: 'opening', visible: true },
           );
-        });
+        };
+        if (keepMounted) enter();
+        else flushSync(enter);
         // Two rAFs to guarantee a paint in the `opening` (translate -100%)
         // state before flipping to `open` (translate 0). One rAF can fire
         // before paint in some cases; two is the well-known safe pattern
@@ -194,7 +200,7 @@ export function useSidebarPane({
         }, SIDEBAR_ANIM_MS);
       }
     },
-    [storageKey],
+    [keepMounted, storageKey],
   );
 
   // Keep `visible` accessible to the latest `toggle` without re-creating
@@ -207,7 +213,7 @@ export function useSidebarPane({
 
   return {
     visible: state.visible,
-    present: state.phase !== 'closed',
+    present: keepMounted || state.phase !== 'closed',
     surfaceState: state.phase === 'open' ? 'open' : 'closed',
     transitioning: state.phase === 'opening' || state.phase === 'closing',
     setVisible,
