@@ -38,8 +38,9 @@ function rowToDto(
     dm_channel_ids_json: _dmChannelIdsJson,
     sort_group: _sortGroup,
     sort_name: _sortName,
-    // `pinned_at` is a vestigial column (#task:1209): pin/star is per-viewer
-    // sort state now (user_sort_entry.starred_at), so the shared column is no
+    // `pinned_at` is a vestigial column (#task:1209): pin/star became per-viewer
+    // sort state (user_sort_entry.starred_at), and a workspace lost even that
+    // when the container star was retired (#task:1899). The shared column is no
     // longer read/written and must never reach the wire. Strip it here.
     pinned_at: _pinnedAt,
     ...workspace

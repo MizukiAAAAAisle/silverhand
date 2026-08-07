@@ -12,19 +12,17 @@
 // SCOPE — CONSUMER CONTRACT. This endpoint emits CONVERSATIONS only: `kind` ∈
 // {'channel','dm_channel'}, i.e. the viewer's stars from a conversation list
 // (`list_key='channels:<ws_id>'`). A WORKSPACE / DM container is NOT a
-// global-Favorites member: starring one PINS it at the top of its own rail kind
-// group (an ordering marker — the rail composes it from that list's own
-// `starred_at`), it never moves into this list. Mixing granularities would put
-// parents in a short list whose row count then grows with their children; the
-// single-column sidebar therefore stars leaves only. Note there is no separate
-// "Mentions" kind: a Mentions inbox is a `dm_channel` in the agent's own home
-// workspace, so it is covered by `kind='dm_channel'`.
+// global-Favorites member, and since #task:1899 is not starrable at all. Mixing
+// granularities would put parents in a short list whose row count then grows with
+// their children; the single-column sidebar therefore stars leaves only. Note
+// there is no separate "Mentions" kind: a Mentions inbox is a `dm_channel` in the
+// agent's own home workspace, so it is covered by `kind='dm_channel'`.
 //
 // Each row is id-keyed (`entity_id`); its display identity is server-resolved
 // (Activity `preview_sender` precedent) so the renderer does ZERO local
 // workspace/agent-cache join — a favorite whose PARENT context is not currently
-// loaded (a collapsed, never-opened workspace) still renders with a title, a
-// parent name and a parent glyph, never a blank subtitle.
+// loaded (a collapsed, never-opened workspace) still renders with a title and a
+// parent name, never a blank subtitle.
 //
 // Favorites is EXCLUSIVE, not an additive overlay (#task:1252): a starred
 // conversation appears here AND is REMOVED from its parent's children — Slack-style
@@ -44,8 +42,8 @@ import { ViewerSortStateDtoSchema } from './sort.js';
  *   - 'channel'     — a regular channel in a regular workspace.
  *   - 'dm_channel'  — a conversation in an agent's own home workspace (the DM
  *                     stream, its Onboarding thread, its Mentions inbox).
- * A WORKSPACE / DM container is never a global favorite (its star pins it inside
- * its own rail group — see the header), so there is no 'workspace' / 'dm' kind.
+ * A WORKSPACE / DM container is never a global favorite — since #task:1899 it
+ * cannot be starred at all — so there is no 'workspace' / 'dm' kind.
  * `kind` does NOT select the unstar endpoint: every row unstars through
  * `DELETE /api/channels/:entity_id/star`, which derives the storage list_key
  * server-side, so the renderer never constructs one.

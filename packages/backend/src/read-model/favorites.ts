@@ -11,10 +11,8 @@
 // (`list_key='channels:<ws_id>'`), i.e. `kind='channel'` and `kind='dm_channel'`
 // (the latter covers an agent home's DM stream, its Onboarding thread and its
 // Mentions inbox — "Mentions" is a dm_channel, not a kind of its own). A
-// WORKSPACE / DM container is NOT a global-Favorites member: starring one PINS it
-// at the top of its own rail kind group (an ordering marker read off the rail's
-// own `viewer_sort.starred_at`), never hoisted into this flat global list.
-// Containers are simply outside this bounded context.
+// WORKSPACE / DM container is NOT a global-Favorites member, and since #task:1899
+// cannot be starred at all: containers are simply outside this bounded context.
 //
 // ORDERING (#task:1252 C) is the one thing Favorites stores for itself: a
 // first-class viewer-scoped sort state under `list_key='favorites'` — a flat,

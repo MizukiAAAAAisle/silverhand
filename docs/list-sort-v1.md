@@ -29,9 +29,10 @@ the CONVERSATION, not its container. Two changes, both model-level:
   conversation MOVES out of its workspace's list into Favorites; each row carries
   its **PARENT's** identity (`workspace_id`, `parent_title`) so a global short
   list stays identifiable and the renderer joins nothing.
-- **A workspace / DM container star is demoted to an in-group PIN.** It no longer
-  moves anything: the container stays a live, reorderable member of its rail kind
-  group and is merely pinned to the top of it. Containers are outside the
+- **A workspace / DM container star is demoted to an in-group PIN**
+  (**superseded — retired entirely by #task:1899, see the next block**). It no
+  longer moves anything: the container stays a live, reorderable member of its rail
+  kind group and is merely pinned to the top of it. Containers are outside the
   Favorites bounded context — mixing granularities would put parents in a short
   list whose row count then grows with their children.
 
@@ -43,6 +44,32 @@ now survives a star toggle. Pre-#1888 `favorites` ordering rows keyed
 `workspace:`/`dm:` are unreachable orphans, deliberately neither migrated nor
 deleted (the population changed, so an old arrangement of containers has no
 meaning to preserve).
+
+**Revision — the container star is RETIRED (#task:1899, 2026-08-08,
+shiki-approved).** #task:1888 left the workspace / DM star alive as an in-group
+PIN. That half is now deleted outright: **only a CONVERSATION can be starred.**
+
+The reason is modelling, not cleanup. One field, `user_sort_entry.starred_at`,
+was carrying two unrelated concepts — on a conversation it is MEMBERSHIP of the
+global STARRED list (a move between lists), on a container it was "hoist me
+inside my kind group". The container half was never expressed in this document's
+own vocabulary: a list orders by `mode` (recent | manual) over `rank`, and the
+pin made the rail order secretly `f(mode, rank, starred_at)` — a per-entity
+override of a list-wide mode, with no menu that could show it and no defined
+precedence against `recent`. It also silently ate drags: a manual reorder that
+placed an unstarred container above a starred one could not be honoured. With it
+gone the rail is exactly `f(mode, rank)`, and star has exactly one meaning.
+
+What changed: `POST|DELETE /api/workspaces/:id/star` is **unregistered** (both
+verbs now 404), `apiPaths.workspaceStar` is deleted, and the star route no longer
+dispatches on `list_key` — `starResponse` / `favoriteKeyForHome` folded into the
+single `channelStar` handler. The rail's reorder validation is unchanged: its
+star-exclusion set was already empty. Existing `list_key='workspaces'` rows with
+a non-null `starred_at` are left in place as **inert orphans** (same call as the
+#1888 ordering orphans): nothing writes them, nothing reads them, and the
+favorites projection has never included the rail. The sections below describe
+the as-built conversation-only model; the container pin survives only where this
+note explains it.
 
 ## Model
 
@@ -60,9 +87,8 @@ Two concerns, two scopes:
   atomically (`order ⟹ manual`, see API), so drag works from any mode. How many
   scopes a list has depends on the list kind (see hard groups below):
   - **workspace rail** — mode is **per hard-group**: the `dm` and `regular`
-    sections each carry their own toggle. Scope = the group key. Star is NOT a
-    rail group (#task:1888: a container's star only PINS it at the top of its own
-    kind group), so it has no rail mode scope.
+    sections each carry their own toggle. Scope = the group key. There is no star
+    on the rail at all (#task:1899), so no star group and no star mode scope.
   - **conversation list** — mode is **list-wide** (one toggle for the whole list),
     unchanged. Scope = the sentinel `''`.
 - **per-entity state** — `rank` (manual order) + `last_accessed_at`
@@ -89,21 +115,20 @@ partitioned **live at sort time** — never baked into a storage bucket key.
 
 Hard groups (sort-time partition; manual drag is within a group, never across).
 The lists partition on **different axes**, and **star is not a hard group in any
-list** (#task:1888) — it is either an EXCLUSION (the entity lives in another list)
-or a within-group PIN:
+list** (#task:1888) — where it exists at all it is an EXCLUSION (the entity lives
+in another list):
 
-- workspace rail: `dm` / `regular` — by **kind** only. A starred workspace/DM
-  stays a live, reorderable member of its kind group and is merely **pinned** to
-  the top of it (#task:1888) — it is neither excluded nor a group of its own. DM
-  (agent_home) workspaces are starrable (`canStar = (regular || agent_home) &&
-  !archived`) — star is per-viewer view state (`user_sort_entry.starred_at`), gated
-  by can-view, never a shared aggregate field. Archived workspaces are out of
-  sorting scope entirely.
+- workspace rail: `dm` / `regular` — by **kind** only. A container **cannot be
+  starred** (#task:1899): the rail has no star axis, so its order is `mode` over
+  `rank` and nothing else. Archived workspaces are out of sorting scope entirely.
 - conversation list (`channels:<ws_id>`): a **single hard group `channels`**. A
   conversation star is **exclusive** (#task:1888) — the starred conversation MOVES
   to the global Favorites/STARRED list and is reordered there, so it is EXCLUDED
   from this group's reorder (it stays in the payload and remains a valid
   star/touch target). One **list-wide** mode. Threads are out of sorting scope.
+  Star is per-viewer view state (`user_sort_entry.starred_at`), gated by can-view,
+  never a shared aggregate field; archived conversations are out of scope, so
+  `canStar = !archived`.
 
 **Single-source partition (no drift).** The home endpoints (`GET /api/workspaces`,
 `/api/workspaces/:id/channels`) return the FULL visible set + `viewer_sort` (they
@@ -113,9 +138,8 @@ the starred conversations, which now render in STARRED) from the **same payload'
 `viewer_sort.entries[].starred_at`, never by joining `GET /api/favorites`. The
 backend's reorder validation excludes those same conversations using the **same
 fact** (`user_sort_entry.starred_at`, via `listStarredEntityIds`) — so display and
-validation are 同源 and cannot diverge. This home-EXCLUSION applies to
-**conversations only**. The rail reads the same `starred_at` fact but does NOT
-exclude — a starred workspace/DM stays in its kind group, pinned to the top of it.
+validation are 同源 and cannot diverge. This applies to **conversations only**:
+the rail has no star to read, so its exclusion set is empty by construction.
 
 **Rank asymmetry on star/unstar (deliberate).** `rank` is the viewer's deliberate
 placement in THAT list. Since #task:1888 no list hard-partitions by star, so a
@@ -125,8 +149,7 @@ always preserved** (`SortRepo` + `routes/sort.ts` — the route applies the poli
 - **home rank PRESERVED on star** (`setStarred`; the route does NOT clear). A
   conversation star MOVES it out of its workspace list, so its home rank is a
   harmless orphan while starred and is RESTORED to its arranged position when it
-  returns home on unstar. On the rail the entity does not move at all, so its rank
-  simply keeps holding its place in its kind group.
+  returns home on unstar.
 - **FAVORITES rank CLEARED on unstar** (`clearFavoriteRank`). Leaving Favorites is
   a *voluntary* removal, so its arranged position is discarded — a later re-star
   re-enters fresh (recent/tail), never silently jumping to a stale favorites slot.
@@ -136,10 +159,10 @@ pin cleared all viewers' ranks via the now-removed `clearEntityRank`).
 
 ### Renderer composition (pure helper)
 
-`live partition (rail: agent_home→dm / regular→regular — by KIND only, a starred
-workspace/DM merely PINNED to the top of its group; conversation list → the single
-group `channels`, with the starred conversations EXCLUDED to the global Favorites
-list)` → within each group by **that scope's** mode
+`live partition (rail: agent_home→dm / regular→regular — by KIND only, no star
+anywhere on the rail; conversation list → the single group `channels`, with the
+starred conversations EXCLUDED to the global Favorites list)` → within each group
+by **that scope's** mode
 (`sortModeOf(state, group?)` — group omitted ⇒ scope `''`):
 
 - `recent` → `last_accessed_at DESC` (NULLs last).
@@ -254,28 +277,27 @@ stray rail star-scope row is likewise an orphan that resets to `recent`.
 entity) view state, the same grain as `rank` / `last_accessed_at`, so it joins
 this table rather than a new one (one cohesive "viewer's list view state"
 aggregate). `SortRepo.setStarred` upserts it (mechanism only — it just flips
-`starred_at`; the **rank policy is applied by the route**). Since #task:1888 the
-policy is uniform: **the HOME `rank` is always PRESERVED**, because no list
-hard-partitions by star, so a star never moves an entity across groups within one
-list. On the **conversation list** the starred conversation moves OUT to global
-Favorites and its home rank is an orphan restored on unstar-return; on the **rail**
-the container does not move at all and keeps its place in its kind group. Clearing
-either would silently corrupt the viewer's arranged home order. (The converse —
+`starred_at`; the **rank policy is applied by the route**). Since #task:1899 the
+only starrable entity is a CONVERSATION, so the only list that writes this column
+is a `channels:<ws_id>` home list, and the policy there is: **the HOME `rank` is
+always PRESERVED**. The starred conversation moves OUT to global Favorites and its
+home rank is an orphan restored on unstar-return; clearing it would silently
+corrupt the viewer's arranged home order. (The converse —
 `clearFavoriteRank` on unstar — drops the `list_key='favorites'` rank, a voluntary
 removal.) `SortRepo.clearRank`, which existed only for the old
 `starred | unstarred` cross-group move, was **deleted** with its last caller.
+Pre-#1899 `list_key='workspaces'` rows with a non-null `starred_at` are inert
+orphans: nothing writes them and nothing reads them.
 **No seed:** the old global
 `workspaces.pinned_at` / `conversations.pinned_at` columns are NOT migrated into
 per-user stars — they go vestigial (still present, append-only; no longer read or
 written; stripped from every DTO so they never reach the wire).
 
-**`starred_at` is presence, not a sort key (#task:1209 / #task:1888).** Non-null
-marks the entity as starred; what that DOES to the home list depends on the list
-kind. On the **conversation list** it means "MOVED to the global Favorites list and
-HIDDEN from this list" — the list reads it to EXCLUDE the conversation. On the
-**rail** it means "pinned to the top of its own kind group" — the container stays
-a full member, the rail reads it only to hoist it within that group.
-Either way it does **not** order anything.
+**`starred_at` is presence, not a sort key (#task:1209 / #task:1888 / #task:1899).**
+Non-null marks the entity as starred, which only a CONVERSATION can be. It means
+"MOVED to the global Favorites list and HIDDEN from this list" — the conversation
+list reads it to EXCLUDE the conversation. The rail never reads it.
+It does **not** order anything.
 Within-group order (home OR favorites) is governed by that group's mode like every
 other hard group — `recent` → `last_accessed_at`, `manual` → `rank`. Letting
 `starred_at` silently drive order would make the sort menu a lie and add a third
@@ -301,7 +323,7 @@ Read state is carried **inline** on the list responses — no separate GET:
 `viewer_sort.modes` is a **per-scope map** (`Record<scope, 'recent'|'manual'>`,
 sparse — an absent scope means `recent`). Conversation lists carry the single scope
 `''`; the rail carries up to `dm` / `regular` (star is not a rail scope — a
-container's star only pins it inside its kind group). Read with the renderer
+container cannot be starred at all, #task:1899). Read with the renderer
 helper `sortModeOf(state, group?)` — group omitted ⇒ scope `''` (so channel call
 sites are unchanged), rail passes its section group.
 
@@ -309,14 +331,13 @@ sites are unchanged), rail passes its section group.
 last_accessed_at, starred_at }` (#task:1209). `starred_at` is the **only** source
 of an entity's starred state — the entity DTOs no longer carry `pinned_at`, so the
 renderer reads star straight off these entries (no fallback to any aggregate
-field). `starred_at`'s effect on the home list depends on the list (#task:1888):
-on the **conversation list** it is the home-EXCLUSION signal — a non-null entry
-means the conversation has MOVED to the global Favorites/STARRED list, so the list
-hides it; on the **rail** it is the in-group PIN signal — a starred workspace/DM
-stays a full member of its kind group, hoisted to the top of it. Either way the
-home payload still carries the entity
-(shared consumers need the full set); the renderer derives partition/exclusion
-from `starred_at` in the same payload.
+field). On the **conversation list** `starred_at` is the home-EXCLUSION signal — a
+non-null entry means the conversation has MOVED to the global Favorites/STARRED
+list, so the list hides it; the home payload still carries the entity
+(shared consumers need the full set) and the renderer derives the exclusion from
+`starred_at` in the same payload. On the **rail** the field is inert: containers
+lost their star (#task:1899), so a non-null there is a pre-#1899 orphan that
+nothing reads.
 
 Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 (touch excepted):
@@ -335,9 +356,8 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
   against live kind/star state. On the **conversation list** it **excludes starred
   conversations** (they live in the global Favorites list, reordered there — an
   `ordered_ids` that includes a starred conversation is a 400). On the **rail**
-  there is **no exclusion** (#task:1888): a starred workspace/DM is a full member
-  of its kind group, so the whole group — starred member included — is the legal
-  set, and OMITTING it is the partial-submission 400. It rejects
+  the exclusion set is empty by construction (#task:1899: no container star), so
+  the whole kind group is the legal set. It rejects
   partial/extra/duplicate (400) — a partial submission would leave other members'
   ranks stale and collide within the group, so it is not a
   patch. On success it rewrites
@@ -357,22 +377,22 @@ Mutations return the authoritative `{ viewer_sort }` for optimistic reconcile
 Personal ⭐ star (#task:1209) — entity-scoped, can-view gated, viewer-scoped
 write. Star is sort-context state, so these routes live in the sort app (not the
 entity files), reusing `resolveListGroups` as the can-view + non-archived +
-sortable gate. The old admin-gated `/pin` routes were **deleted** (no alias):
+sortable gate. The old admin-gated `/pin` routes were **deleted** (no alias), and
+since #task:1899 there is exactly ONE starrable entity kind, so exactly one pair:
 
-- `POST  /api/workspaces/:id/star` / `DELETE /api/workspaces/:id/star`
 - `POST  /api/channels/:id/star`   / `DELETE /api/channels/:id/star`
-  → all return the FULL `{ viewer_sort }` for the affected list (same shape
-  mode/order return, never a single entry) so the renderer reconciles star
-  alongside rank/mode in one state. The **rank policy on a toggle is uniform**
-  since #task:1888 (no list hard-partitions by star, so a toggle is never a
-  cross-group move):
-  - **home rank PRESERVED** on both lists. A conversation star is a MOVE OUT to
-    Favorites (rank a harmless orphan, restored on unstar-return); a container star
-    does not move it at all (rank keeps holding its place in its kind group).
+  → both return the FULL `{ viewer_sort }` for the affected `channels:<ws_id>`
+  list (same shape as the mode/order return, never a single entry) so the renderer
+  reconciles star alongside rank/mode in one state.
+  - **home rank PRESERVED** on star: it is a MOVE OUT to Favorites, so the rank is
+    a harmless orphan restored on unstar-return.
   - **on unstar** the route additionally calls `clearFavoriteRank` to drop the
-    `list_key='favorites'` rank orphan (voluntary removal). Only a list with a
-    global-Favorites projection has one — `favoriteKeyForHome` returns null for the
-    rail, so a container unstar touches no favorites row.
+    `list_key='favorites'` rank orphan (voluntary removal).
+
+  The container pair `POST|DELETE /api/workspaces/:id/star` is **retired**
+  (#task:1899) — both verbs 404, and `apiPaths.workspaceStar` no longer exists.
+  With one starrable kind left, the handler no longer dispatches on `list_key`
+  (`starResponse` / `favoriteKeyForHome` folded into it).
 
   A target not in the live visible set ⇒ 404 (not found / archived); a list the
   viewer can't see ⇒ 403.
@@ -383,18 +403,18 @@ scope ⇒ default `recent`; channel lists use the single sentinel scope `''`).
 
 ## Favorites — the global STARRED list, exclusive of home (#task:1252 / #task:1888)
 
-> **SCOPE (定稿, shiki 2026-08-07, #task:1888).** The global Favorites/STARRED list
-> collects **CONVERSATIONS only** — `kind ∈ {channel, dm_channel}`, projected from
-> the per-workspace conversation lists (`list_key='channels:<ws_id>'`). A
-> **workspace / DM container is outside this bounded context**: starring one PINS
-> it at the top of its own rail kind group, never hoisting it into this flat
-> top-level list. Rationale: the single-column sidebar stars **leaves**, because
+> **SCOPE (定稿, shiki 2026-08-07, #task:1888; narrowed by #task:1899).** The global
+> Favorites/STARRED list collects **CONVERSATIONS only** — `kind ∈ {channel,
+> dm_channel}`, projected from the per-workspace conversation lists
+> (`list_key='channels:<ws_id>'`). A **workspace / DM container is outside this
+> bounded context**, and since #task:1899 it cannot be starred at all, so the
+> question of hoisting one in here no longer arises. Rationale: the single-column
+> sidebar stars **leaves**, because
 > mixing granularities would put parents in a short list whose row count then grows
 > with their children. There is no `workspace` / `dm` kind, field, or branch in the
-> Favorites read-model — a container's star lives entirely in the `workspaces` sort
-> list. (This supersedes the 2026-07-01 workspace/DM-only scope, which the
-> single-column sidebar inverted.) Note "Mentions" is not a kind: a Mentions inbox
-> is a `dm_channel` in the agent's own home workspace.
+> Favorites read-model. (This supersedes the 2026-07-01 workspace/DM-only scope,
+> which the single-column sidebar inverted.) Note "Mentions" is not a kind: a
+> Mentions inbox is a `dm_channel` in the agent's own home workspace.
 
 The sidebar's `STARRED` section is the viewer's **global Favorites**: a flat
 list of the conversations the viewer has starred. It is **exclusive** — a
@@ -475,8 +495,8 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   - `dm_channel` — a starred conversation in an agent's home workspace (the DM
     stream, its Onboarding thread, its Mentions inbox); `parent_title` resolves
     from the parent's bound `owner_agent_id`.
-  - There is **no `workspace` / `dm` kind** — a container's star pins it inside its
-    own rail kind group, never a global-Favorites row.
+  - There is **no `workspace` / `dm` kind** — a container has no star at all
+    (#task:1899), so it can never produce a global-Favorites row.
 - **Membership contract** (read-model enforces; written here, not hidden in SQL):
   a row appears **iff the viewer can still reach the conversation AND neither it nor
   its workspace is archived** — the star endpoint's own reachability arms,
@@ -505,8 +525,8 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
 - **Exclusive — moved out of home, NOT an additive overlay (#task:1252).** A
   starred conversation appears in Favorites **and is REMOVED from its parent's
   children** — Slack-style move, no duplication. (A workspace/DM container is not in
-  this list at all; its star is a within-group pin — see *Single-value rank, live
-  hard-grouping*.) This is the deliberate
+  this list at all, and since #task:1899 has no star to begin with.) This is the
+  deliberate
   reversal of the earlier additive-overlay design: duplication bred inconsistency
   (e.g. a divergent unread badge in two places). The home list excludes the entity
   by reading `starred_at` off its OWN inline `viewer_sort` (single-source — never
@@ -535,16 +555,15 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   multi-surface (desktop + web + standalone), same human across surfaces; local
   storage would split per surface. localStorage v0 and recent-**active** were
   considered and rejected as fallbacks only.
-- Star's effect is **per list kind** (#task:1888, 定稿):
-  - **conversation list** — star is **exclusive**: a starred conversation MOVES to
-    the global Favorites/STARRED list and is removed from its parent's children.
-    Star is NOT a hard group; the list has the single group `channels`.
-  - **workspace rail (workspace/DM)** — star is a **pin**: the container stays a
-    live, reorderable member of its kind group, hoisted to the top of it. Containers
-    never enter the global Favorites list.
+- Star has exactly **one** meaning and exactly **one** subject (#task:1888 定稿,
+  narrowed by #task:1899): the subject is a **CONVERSATION**, and the effect is
+  **exclusive** — a starred conversation MOVES to the global Favorites/STARRED list
+  and is removed from its parent's children. Star is NOT a hard group; the list has
+  the single group `channels`. The **workspace rail has no star axis**: containers
+  cannot be starred, so the rail is ordered by `mode` over `rank` alone and nothing
+  ever enters Favorites from it.
   Sort mode only orders *within* a group. "Pin/Pinned 📌" is reserved for a future
-  SHARED axis and must not reuse the star storage/routes. (Note the rail's *visual*
-  hoist is a within-group presentation of a personal star — not the shared 📌.)
+  SHARED axis and must not reuse the star storage/routes.
 - Favorites ordering is its OWN axis (`list_key='favorites'`, #task:1252 C), not the
   home-list rank and not a revival of any home `starred` hard group. Storing
   membership for Favorites is still a non-goal — `starred_at` in the home list is the

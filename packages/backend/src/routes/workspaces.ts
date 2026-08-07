@@ -1,5 +1,5 @@
 // This file owns the workspace collection surface: workspace lifecycle / metadata
-// (list / get / create / update / archive / pin / delete) plus the workspace's
+// (list / get / create / update / archive / delete) plus the workspace's
 // CHANNEL COLLECTION — list active channels, list archived channels, and create a
 // channel. The seam is the URL aggregate: `/api/workspaces/:id/...` is the
 // workspace surface;

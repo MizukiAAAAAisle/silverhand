@@ -135,11 +135,6 @@ export const apiPaths = {
    *  registered before `workspace(:id)` so it is not shadowed. */
   workspaceNameAvailability: '/api/workspaces/name-availability',
   workspace: (id: string) => `/api/workspaces/${id}`,
-  /** Personal ⭐ star toggle for the workspace rail (#task:1209). POST = star,
-   *  DELETE = unstar. Viewer-scoped (writes the caller's sort state), gated by
-   *  can-view — NOT shared/admin governance. Replaced the old admin-gated
-   *  shared `/pin` route. */
-  workspaceStar: (id: string) => `/api/workspaces/${id}/star`,
   /** Per-(viewer, workspace) attention MUTE suppressor (#task:1870). Owned by the
    *  Attention bounded context (served by the same route module as
    *  `conversationAttentionPreference`), URL-grouped here because the scope is the
@@ -258,8 +253,8 @@ export const apiPaths = {
    *  (#task:1252, re-scoped by #task:1888; docs/list-sort-v1.md): a starred
    *  CONVERSATION lives here and is moved OUT of its workspace's list. A read
    *  projection of `user_sort_entry.starred_at` across every conversation list
-   *  (`channels:<ws_id>`) — the workspace rail does NOT contribute, since a
-   *  container's star only PINS it inside its own kind group — plus the viewer's
+   *  (`channels:<ws_id>`) — the workspace rail cannot contribute, since a
+   *  container has no star at all (#task:1899) — plus the viewer's
    *  `list_key='favorites'` ordering state. The authoritative display order comes
    *  from `viewer_sort` (recent → home last_accessed_at / manual → rank); raw
    *  `items` order is only a deterministic fallback, NOT pre-sorted by starred_at.

@@ -26,11 +26,11 @@ export interface SortRouteDeps {
  * Per-user (viewer-scoped) list sort mutations (#task:1147). The backend
  * persists preferences only; the renderer composes the final order. Group
  * membership for a reorder is validated against LIVE kind/star state — the
- * backend rejects cross-group / unknown ids rather than guessing. Star is
- * EXCLUSIVE for exactly one list kind (#task:1888): a starred CONVERSATION has
- * moved to the global Favorites list and is not reorderable in its own
- * workspace's list; a starred workspace/DM merely PINS inside its rail kind group
- * and stays reorderable there.
+ * backend rejects cross-group / unknown ids rather than guessing. Star applies
+ * to CONVERSATIONS only (#task:1899) and is EXCLUSIVE (#task:1888): a starred
+ * conversation has moved to the global Favorites list and is not reorderable in
+ * its own workspace's list. Containers (workspace / DM home) have no star axis
+ * at all — the rail orders by mode + rank and nothing else.
  *
  * Read state is carried inline on the list responses (see workspaces route),
  * so there is no GET here.
@@ -40,9 +40,9 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   const { ctx, workspaces, conversations, sort } = deps;
 
   /** The legal hard groups for a list kind.
-   *  - workspace rail: partitions by KIND only (`dm` / `regular`). Star is NOT a
-   *    rail group — a starred workspace/DM stays in its kind group, pinned to the
-   *    top by the renderer (#task:1888, docs/list-sort-v1.md).
+   *  - workspace rail: partitions by KIND only (`dm` / `regular`). There is no
+   *    star on a container at all (#task:1899), so star is neither a rail group
+   *    nor an input to the rail's order.
    *  - conversation list: a SINGLE group (`channels`). Star is not a group here
    *    either — a starred conversation MOVES to the global Favorites/STARRED list
    *    (#task:1888) and is excluded from this group's reorder. One list-wide mode
@@ -90,10 +90,10 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   /**
    * Resolve the live, viewer-visible entities of a list to their hard group.
    * `groups` is the FULL visible set (so the `viewer_sort` it backs carries every
-   * entity's `starred_at`). The `starred` set is the reorder-EXCLUSION subset —
+   * entity's state). The `starred` set is the reorder-EXCLUSION subset —
    * entities that live in a DIFFERENT list and so are not reorderable here:
-   *   - workspaces: NOTHING is excluded — a starred workspace/DM stays in its kind
-   *     group (star pins it there, #task:1888), so the set is EMPTY.
+   *   - workspaces: NOTHING is excluded, and nothing can be starred at all
+   *     (#task:1899), so the set is EMPTY.
    *   - channels: a starred CONVERSATION has MOVED to the global STARRED list
    *     (#task:1888 exclusive) and is reordered there, so it is excluded from this
    *     workspace's single group (but stays a valid star/touch target and keeps
@@ -110,10 +110,11 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     const principal = getUserPrincipal(c);
     const groups = new Map<string, SortGroup>();
     if (listKey === 'workspaces') {
-      // Workspace rail partitions by KIND (`dm` / `regular`). Star is neither a
-      // group nor an exclusion here (#task:1888): a starred workspace/DM stays a
-      // live, reorderable member of its kind group and is merely pinned to the
-      // top of it by the renderer, so the exclusion set is EMPTY.
+      // Workspace rail partitions by KIND (`dm` / `regular`). A container has no
+      // star (#task:1899): it is neither a group nor an exclusion here, so the
+      // exclusion set is EMPTY. Any pre-#1899 `starred_at` row on a workspace is
+      // an inert orphan — `getState` still echoes the field (it is generic
+      // per-entity state), and nothing on the rail reads it.
       for (const ws of workspaces.list()) {
         if (ws.archived_at != null) continue;
         if (!canViewWorkspace(ctx, principal, ws.id)) continue;
@@ -173,19 +174,6 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     };
   }
 
-  /** The kind-qualified global-Favorites key for a HOME (list_key, entity_id) —
-   *  the `entity_id` under `user_sort_entry.list_key='favorites'`. Mirrors the
-   *  favorites read-model's key: the CONVERSATION's own kind (#task:1888).
-   *  Returns null for a list_key with no global Favorites projection (the
-   *  workspace rail — a container's star pins it inside its own kind group and
-   *  never creates a favorites row). */
-  function favoriteKeyForHome(listKey: string, entityId: string): string | null {
-    if (!listKey.startsWith('channels:')) return null;
-    const channel = conversations.getChannelLike(entityId);
-    if (!channel) return null;
-    return favoriteKey(channel.kind, entityId);
-  }
-
   app.put(apiPaths.sortMode, async c => {
     const principal = getUserPrincipal(c);
     const body = await c.req.json().catch(() => ({}));
@@ -234,7 +222,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const { list_key: listKey, group, ordered_ids: orderedIds } = parsed.data;
-    // The group must be a legal hard group for THIS list kind (e.g. 'pinned'
+    // The group must be a legal hard group for THIS list kind (e.g. 'starred'
     // is not a workspace-rail group). Catches a malformed client even when
     // ordered_ids is empty (which would otherwise no-op through as 200).
     if (!legalGroups(listKey).includes(group)) {
@@ -251,8 +239,8 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // viewer-visible entity of this list that currently sits in `group` AND is
     // not in the reorder-exclusion set. For a conversation list that set holds the
     // starred conversations (moved to global STARRED, reordered there —
-    // #task:1888); for the rail it is empty (a starred workspace/DM stays a
-    // reorderable member of its kind group), so the rail is validated by group
+    // #task:1888); for the rail it is empty BY CONSTRUCTION (a container has no
+    // star at all since #task:1899), so the rail is validated by group
     // membership alone.
     for (const id of orderedIds) {
       if (resolved.groups.get(id) !== group || resolved.starred.has(id)) {
@@ -338,13 +326,25 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
    * in the set is 404 / 403. The response is the FULL `viewer_sort` for the
    * list (same shape mode/order return) so the renderer reconciles star
    * alongside rank/mode in one state — never a single entry.
+   *
+   * CONVERSATIONS ONLY (#task:1899, shiki-approved). A workspace / DM container
+   * was starrable too until this route's sibling was retired, and that made one
+   * field mean two things: on a conversation `starred_at` is MEMBERSHIP in the
+   * global STARRED list (a move), on a container it was "hoist me inside my rail
+   * kind group" — a per-entity override of a list-wide mode that the sort
+   * vocabulary (mode + rank) never modelled, so the rail's order was secretly
+   * `f(mode, rank, starred_at)`. One meaning left; the rail is back to
+   * `f(mode, rank)` and the whole star surface is a single entry point, which is
+   * why the list_key dispatch this used to need is gone.
    */
-  function starResponse(
-    c: AppContext,
-    listKey: string,
-    entityId: string,
-    starred: boolean,
-  ) {
+  function channelStar(c: AppContext, starred: boolean) {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'channel id required' }, 400);
+    // Resolve the channel's workspace to build its sidebar list_key; the
+    // can-view gate then runs through resolveListGroups on that list.
+    const channel = conversations.getChannelLike(id);
+    if (!channel) return c.json({ error: 'channel not found' }, 404);
+    const listKey = `channels:${channel.workspace_id}`;
     const principal = getUserPrincipal(c);
     const resolved = resolveListGroups(c, listKey);
     if (!resolved.ok) {
@@ -353,45 +353,26 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
         resolved.status,
       );
     }
-    if (!resolved.groups.has(entityId)) {
-      // Not a live, viewer-visible, non-archived entity of this list.
+    if (!resolved.groups.has(id)) {
+      // Not a live, viewer-visible, non-archived conversation of this list.
       return c.json({ error: 'not found' }, 404);
     }
-    sort.setStarred(principal.userId, listKey, entityId, starred);
-    // Rank policy on a star toggle. No list hard-partitions by star any more
-    // (#task:1888), so a star never moves an entity ACROSS groups within one list
-    // and the home rank is always kept: on the rail the entity does not move at
-    // all, and a conversation's home rank survives as an orphan that restores when
-    // it comes back. What an UNSTAR must drop is the FAVORITES rank — unstar is a
-    // voluntary removal from that list, so a later re-star re-enters fresh instead
-    // of jumping to a stale favorites slot. See clearFavoriteRank.
+    sort.setStarred(principal.userId, listKey, id, starred);
+    // Rank policy on a star toggle. Star is not a hard group here (#task:1888),
+    // so the HOME rank is always kept: it survives as an orphan while the
+    // conversation lives in STARRED and restores when it comes back. What an
+    // UNSTAR must drop is the FAVORITES rank — unstar is a voluntary removal
+    // from that list, so a later re-star re-enters fresh instead of jumping to a
+    // stale favorites slot. The key mirrors the favorites read-model: the
+    // CONVERSATION's own kind (#task:1888).
     if (!starred) {
-      const favKey = favoriteKeyForHome(listKey, entityId);
-      if (favKey) sort.clearFavoriteRank(principal.userId, favKey);
+      sort.clearFavoriteRank(principal.userId, favoriteKey(channel.kind, id));
     }
     return c.json({
       viewer_sort: sort.getState(principal.userId, listKey, resolved.groups.keys()),
     });
   }
 
-  function workspaceStar(c: AppContext, starred: boolean) {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'workspace id required' }, 400);
-    return starResponse(c, 'workspaces', id, starred);
-  }
-
-  function channelStar(c: AppContext, starred: boolean) {
-    const id = c.req.param('id');
-    if (!id) return c.json({ error: 'channel id required' }, 400);
-    // Resolve the channel's workspace to build its sidebar list_key; the
-    // can-view gate then runs through resolveListGroups on that list.
-    const channel = conversations.getChannelLike(id);
-    if (!channel) return c.json({ error: 'channel not found' }, 404);
-    return starResponse(c, `channels:${channel.workspace_id}`, id, starred);
-  }
-
-  app.post(apiPaths.workspaceStar(':id'), c => workspaceStar(c, true));
-  app.delete(apiPaths.workspaceStar(':id'), c => workspaceStar(c, false));
   app.post(apiPaths.channelStar(':id'), c => channelStar(c, true));
   app.delete(apiPaths.channelStar(':id'), c => channelStar(c, false));
 

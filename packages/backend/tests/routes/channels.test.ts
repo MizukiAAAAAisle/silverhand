@@ -209,59 +209,6 @@ describe('workspace metadata and membership routes', () => {
     expect(rename.metadata.new_name).toBe(renamed);
   });
 
-  it('stars and unstars regular workspaces (per-viewer sort state)', async () => {
-    t = buildTestApp();
-    const first = await (
-      await http(t).post('/api/workspaces', { name: 'star-first' })
-    ).json() as any;
-    const second = await (
-      await http(t).post('/api/workspaces', { name: 'star-second' })
-    ).json() as any;
-
-    // Star returns the FULL viewer_sort for the list (not a single entry, not
-    // the workspace DTO) — star is per-viewer view state, not an entity field.
-    const star = await http(t).post(`/api/workspaces/${first.workspace.id}/star`);
-    expect(star.status).toBe(200);
-    const starred = await star.json() as any;
-    expect(starred.viewer_sort.list_key).toBe('workspaces');
-    expect(
-      starred.viewer_sort.entries.find((e: any) => e.entity_id === first.workspace.id)?.starred_at,
-    ).toBeTruthy();
-
-    expect(
-      (await http(t).post(`/api/workspaces/${second.workspace.id}/star`)).status,
-    ).toBe(200);
-
-    const unstar = await http(t).del(`/api/workspaces/${first.workspace.id}/star`);
-    expect(unstar.status).toBe(200);
-    const unstarred = await unstar.json() as any;
-    expect(
-      unstarred.viewer_sort.entries.find(
-        (e: any) => e.entity_id === first.workspace.id,
-      )?.starred_at ?? null,
-    ).toBeNull();
-  });
-
-  it('rejects starring archived workspaces', async () => {
-    t = buildTestApp();
-    const created = await (
-      await http(t).post('/api/workspaces', { name: 'archived-star' })
-    ).json() as any;
-    const archive = await http(t).patch(
-      `/api/workspaces/${created.workspace.id}/archive`,
-      { archived: true },
-    );
-    expect(archive.status).toBe(200);
-
-    // Archived workspaces are out of the sorting scope → not in the live set.
-    expect(
-      (await http(t).post(`/api/workspaces/${created.workspace.id}/star`)).status,
-    ).toBe(404);
-    expect(
-      (await http(t).del(`/api/workspaces/${created.workspace.id}/star`)).status,
-    ).toBe(404);
-  });
-
   it('adds and removes workspace members', async () => {
     t = buildTestApp();
     const workspace = await (

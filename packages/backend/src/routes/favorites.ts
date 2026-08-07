@@ -2,8 +2,8 @@
 // docs/list-sort-v1.md). A read-side projection over the `sort` bounded context:
 // the viewer's flat global STARRED list, projected from the stars recorded in
 // each workspace's own conversation list (`list_key='channels:<ws_id>'`). A
-// workspace / DM container star is NOT a member — it only pins the container
-// inside its rail kind group. Owns no write side: the only star endpoint that
+// workspace / DM container has no star at all (#task:1899), so the rail cannot
+// contribute rows. Owns no write side: the only star endpoint that
 // feeds this list is `/api/channels/:id/star`; this only reads.
 //
 // Auth/principal is inherited from the parent api app middleware.

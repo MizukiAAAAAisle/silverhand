@@ -5,8 +5,8 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 // Favorites read-model (#task:1252, re-scoped by #task:1888): the viewer's flat
 // global STARRED list, a read projection of `user_sort_entry.starred_at` for the
 // per-workspace CONVERSATION lists (`list_key='channels:<ws_id>'`). A workspace /
-// DM container star is NOT a global favorite — it only pins the container inside
-// its own rail kind group. See packages/backend/src/read-model/favorites.ts.
+// DM container cannot be starred at all (#task:1899); a pre-#1899 container row
+// is inert. See packages/backend/src/read-model/favorites.ts.
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const r = await http(t).post('/api/agents', { name, runtime: 'claude' });
@@ -70,14 +70,23 @@ describe('GET /api/favorites', () => {
     t = null;
   });
 
-  it('projects a starred channel with server-resolved PARENT identity; a workspace star is NOT a global favorite', async () => {
+  it('projects a starred channel with server-resolved PARENT identity; a pre-#1899 container star row stays inert', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const chId = await makeChannel(t, wsId, 'general', agentId);
 
     expect((await http(t).post(`/api/channels/${chId}/star`)).status).toBe(200);
-    expect((await http(t).post(`/api/workspaces/${wsId}/star`)).status).toBe(200);
+    // A container can no longer be starred through any route (#task:1899), so the
+    // only way such a row can exist is as a leftover from before the retirement.
+    // Those are deliberately neither migrated nor deleted, which is only safe if
+    // they are unreachable — write one directly and prove it projects nothing.
+    t.ctx.db
+      .prepare(
+        `INSERT INTO user_sort_entry (user_id, list_key, entity_id, rank, last_accessed_at, starred_at)
+         VALUES ('local', 'workspaces', ?, NULL, NULL, ?)`,
+      )
+      .run(wsId, Date.now());
 
     const items = await favorites(t);
     const ch = items.find(i => i.entity_id === chId);
@@ -97,16 +106,15 @@ describe('GET /api/favorites', () => {
     });
     expect(typeof ch.starred_at).toBe('number');
 
-    // #task:1888: the global STARRED list holds CONVERSATIONS only. A container
-    // star merely PINS the workspace inside its own rail kind group, so it is not
-    // projected here — while its star row still exists in user_sort_entry.
-    expect(items.find(i => i.entity_id === wsId)).toBeUndefined();
+    // The orphan row is still on disk…
     const wsStar = t.ctx.db
       .prepare(
         `SELECT COUNT(*) AS n FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ? AND starred_at IS NOT NULL`,
       )
       .get(wsId) as any;
     expect(wsStar.n).toBe(1);
+    // …and reaches nothing: the global STARRED list holds CONVERSATIONS only.
+    expect(items.find(i => i.entity_id === wsId)).toBeUndefined();
   });
 
   it('orders rows by starred_at DESC (most-recently-starred first)', async () => {

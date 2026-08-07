@@ -39,8 +39,6 @@
   "PUT /api/sort/mode",
   "PUT /api/sort/order",
   "POST /api/sort/touch",
-  "POST /api/workspaces/:id/star",
-  "DELETE /api/workspaces/:id/star",
   "POST /api/channels/:id/star",
   "DELETE /api/channels/:id/star",
   "GET /api/favorites",

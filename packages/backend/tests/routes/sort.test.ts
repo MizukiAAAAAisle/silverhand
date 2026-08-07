@@ -92,8 +92,7 @@ describe('PUT /api/sort/mode', () => {
     expect(res.status).toBe(200);
     const modes = ((await res.json()) as any).viewer_sort.modes;
     expect(modes.regular).toBe('manual');
-    // Only the toggled scope is written — `pinned` / `dm` stay at default.
-    expect(modes.pinned).toBeUndefined();
+    // Only the toggled scope is written — the sibling scope `dm` stays at default.
     expect(modes.dm).toBeUndefined();
 
     const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
@@ -367,7 +366,7 @@ describe('PUT /api/sort/order', () => {
     const a = await makeWorkspace(t, 'alpha', agentId);
     const b = await makeWorkspace(t, 'beta', agentId);
 
-    // Drag the (unpinned) `regular` rail section.
+    // Drag the `regular` rail section.
     const wsList = (await (await http(t).get('/api/workspaces')).json()) as any;
     const regularIds = wsList.workspaces
       .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
@@ -382,8 +381,7 @@ describe('PUT /api/sort/order', () => {
     expect(res.status).toBe(200);
     const modes = ((await res.json()) as any).viewer_sort.modes;
     expect(modes.regular).toBe('manual');
-    // The `pinned` / `dm` sections keep their own (default) mode — no rail-wide flip.
-    expect(modes.pinned).toBeUndefined();
+    // The sibling `dm` section keeps its own (default) mode — no rail-wide flip.
     expect(modes.dm).toBeUndefined();
   });
 
@@ -529,53 +527,82 @@ describe('star/unstar rank handling — home rank preserved everywhere (#task:18
     expect(rowOf(c1)?.starred_at ?? null).toBeNull();
   });
 
-  it('a starred workspace STAYS a reorderable member of its rail kind group (star only PINS it, #task:1888)', async () => {
+  it('the container star endpoint is GONE — a workspace / DM cannot be starred (#task:1899)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const regularWs = await makeWorkspace(t, 'eng', agentId);
+    const list = (await (await http(t).get('/api/workspaces')).json()) as any;
+    const dmWs = list.workspaces.find(
+      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
+    );
+    expect(dmWs).toBeTruthy();
+
+    // Retired, not soft-disabled: the route is unregistered, so both kinds and
+    // both verbs answer 404. `starred_at` on the rail is now write-unreachable —
+    // which is what makes the rail's order exactly f(mode, rank).
+    for (const id of [regularWs, dmWs.id]) {
+      expect((await http(t).post(`/api/workspaces/${id}/star`, undefined)).status).toBe(404);
+      expect((await http(t).del(`/api/workspaces/${id}/star`)).status).toBe(404);
+    }
+
+    // The conversation star is untouched — it is the only star left, and it
+    // still answers with the FULL `viewer_sort` for the conversation's HOME list
+    // (not a single entry, not the entity DTO) so the renderer reconciles star
+    // alongside rank/mode in one state.
+    const chId = await makeChannel(t, regularWs, 'general', agentId);
+    const star = await http(t).post(`/api/channels/${chId}/star`, undefined);
+    expect(star.status).toBe(200);
+    const body = (await star.json()) as any;
+    expect(body.viewer_sort.list_key).toBe(`channels:${regularWs}`);
+    expect(
+      body.viewer_sort.entries.find((e: any) => e.entity_id === chId)?.starred_at,
+    ).toBeTruthy();
+  });
+
+  it('rejects starring an archived conversation (out of the sorting scope)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const c1 = await makeChannel(t, wsId, 'one', agentId);
+    expect((await http(t).patch(`/api/channels/${c1}/archive`, { archived: true })).status).toBe(200);
+
+    // `resolveListGroups`'s live set IS the gate, so an archived target is not
+    // found — on both verbs, which is what keeps an unstar affordance honest.
+    expect((await http(t).post(`/api/channels/${c1}/star`, undefined)).status).toBe(404);
+    expect((await http(t).del(`/api/channels/${c1}/star`)).status).toBe(404);
+  });
+
+  it('the rail reorders on its WHOLE kind group — no star group, no star exclusion', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const regularWs = await makeWorkspace(t, 'eng', agentId);
     await makeWorkspace(t, 'eng2', agentId);
 
-    // The agent's auto-provisioned DM (agent_home) workspace.
-    const before = (await (await http(t).get('/api/workspaces')).json()) as any;
-    const dmWs = before.workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
-    );
-    expect(dmWs).toBeTruthy();
+    // `starred` was never a rail group and cannot become one.
+    expect(
+      (await http(t).put('/api/sort/order', {
+        list_key: 'workspaces',
+        group: 'starred',
+        ordered_ids: [regularWs],
+      })).status,
+    ).toBe(400);
 
-    // Star one regular ws + the DM. Neither leaves the rail: a container's star
-    // pins it at the top of its own kind group, it never enters global Favorites.
-    expect((await http(t).post(`/api/workspaces/${dmWs.id}/star`, undefined)).status).toBe(200);
-    expect((await http(t).post(`/api/workspaces/${regularWs}/star`, undefined)).status).toBe(200);
-
-    // `starred` is not a legal workspaces rail group → reorder rejected.
-    const starredReorder = await http(t).put('/api/sort/order', {
-      list_key: 'workspaces',
-      group: 'starred',
-      ordered_ids: [dmWs.id, regularWs],
-    });
-    expect(starredReorder.status).toBe(400);
-
-    // The starred workspace is still a live rail row carrying its `starred_at`…
     const list = (await (await http(t).get('/api/workspaces')).json()) as any;
     const regularIds = list.workspaces
       .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
       .map((w: any) => w.id);
     expect(regularIds).toContain(regularWs);
-    expect(
-      list.viewer_sort.entries.find((e: any) => e.entity_id === regularWs)?.starred_at,
-    ).not.toBeNull();
 
-    // …and the WHOLE kind group — starred member included — is the legal reorder
-    // set: the star is an in-group pin, not a move to another list.
+    // The whole kind group is the legal set…
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'workspaces',
         group: 'regular',
-        ordered_ids: regularIds, // contains the starred regularWs
+        ordered_ids: regularIds,
       })).status,
     ).toBe(200);
 
-    // Omitting the starred member is now the PARTIAL submission → rejected.
+    // …and omitting a member is a partial submission → rejected.
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'workspaces',
@@ -583,63 +610,5 @@ describe('star/unstar rank handling — home rank preserved everywhere (#task:18
         ordered_ids: regularIds.filter((id: string) => id !== regularWs),
       })).status,
     ).toBe(400);
-  });
-
-  it('a starred workspace creates NO global-Favorites row (containers are outside that context)', async () => {
-    t = buildTestApp();
-    const agentId = await makeAgent(t, 'alice');
-    const wsId = await makeWorkspace(t, 'eng', agentId);
-    expect((await http(t).post(`/api/workspaces/${wsId}/star`, undefined)).status).toBe(200);
-
-    const favs = (await (await http(t).get('/api/favorites')).json()) as any;
-    expect(favs.items).toEqual([]);
-  });
-
-  it('starring/unstarring a workspace PRESERVES its manual rail rank (#task:1252)', async () => {
-    t = buildTestApp();
-    const agentId = await makeAgent(t, 'alice');
-    const wsA = await makeWorkspace(t, 'enga', agentId);
-    await makeWorkspace(t, 'engb', agentId);
-
-    const list = (await (await http(t).get('/api/workspaces')).json()) as any;
-    const regularIds = list.workspaces
-      .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
-      .map((w: any) => w.id);
-    // Manually order the regular group (dense ranks, wsA first → rank 0).
-    await http(t).put('/api/sort/order', {
-      list_key: 'workspaces',
-      group: 'regular',
-      ordered_ids: [wsA, ...regularIds.filter((id: string) => id !== wsA)],
-    });
-    const rankOf = (body: any) =>
-      body.viewer_sort.entries.find((e: any) => e.entity_id === wsA)?.rank ?? null;
-    expect(rankOf(await (await http(t).get('/api/workspaces')).json())).toBe(0);
-
-    // Star wsA → on the rail star does NOT change its group, so rank survives.
-    expect((await http(t).post(`/api/workspaces/${wsA}/star`, undefined)).status).toBe(200);
-    const afterStar = (await (await http(t).get('/api/workspaces')).json()) as any;
-    expect(rankOf(afterStar)).toBe(0);
-    expect(
-      afterStar.viewer_sort.entries.find((e: any) => e.entity_id === wsA)?.starred_at,
-    ).not.toBeNull();
-
-    // Unstar also preserves the rank.
-    expect((await http(t).del(`/api/workspaces/${wsA}/star`)).status).toBe(200);
-    expect(rankOf(await (await http(t).get('/api/workspaces')).json())).toBe(0);
-  });
-
-  it('a DM workspace can be unstarred (cross-kind unstar)', async () => {
-    t = buildTestApp();
-    const agentId = await makeAgent(t, 'alice');
-    const list = (await (await http(t).get('/api/workspaces')).json()) as any;
-    const dmWs = list.workspaces.find(
-      (w: any) => w.workspace_kind === 'agent_home' && w.owner_agent_id === agentId,
-    );
-    expect((await http(t).post(`/api/workspaces/${dmWs.id}/star`, undefined)).status).toBe(200);
-    expect((await http(t).del(`/api/workspaces/${dmWs.id}/star`)).status).toBe(200);
-    const after = (await (await http(t).get('/api/workspaces')).json()) as any;
-    expect(
-      after.viewer_sort.entries.find((e: any) => e.entity_id === dmWs.id)?.starred_at ?? null,
-    ).toBeNull();
   });
 });

@@ -267,16 +267,7 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
   // Personal ⭐ star (#task:1209) — per-viewer sort state, NOT shared
   // governance. Replaced the old admin-gated `/pin` routes; the gate is
   // can-view of the entity, the write is scoped to the calling viewer.
-  {
-    method: 'POST',
-    path: '/api/workspaces/:id/star',
-    reason: 'personal star — current-viewer sort state (user_sort_entry.starred_at), can-view gate, not governance',
-  },
-  {
-    method: 'DELETE',
-    path: '/api/workspaces/:id/star',
-    reason: 'personal unstar — current-viewer sort state, can-view gate, not governance',
-  },
+  // CONVERSATIONS only since #task:1899 — the container arm was retired.
   {
     method: 'POST',
     path: '/api/channels/:id/star',

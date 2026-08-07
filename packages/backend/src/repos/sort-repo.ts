@@ -63,7 +63,7 @@ export class SortRepo {
 
   /**
    * Upsert one scope's sort mode. `scope` is '' for a list-wide list (channel
-   * sidebar) or a hard group ('pinned'|'dm'|'regular') for a per-section list
+   * sidebar) or a hard group ('dm'|'regular') for a per-section list
    * (workspace rail). The caller (route) derives scope from list_key + group
    * and validates it; the repo just persists.
    */
@@ -88,7 +88,7 @@ export class SortRepo {
    * ranks exist while the mode still reads 'recent' (which would make the mode
    * label lie). `scope` is the mode axis the drag belongs to ('' list-wide for
    * channels; the dragged group for the rail) — only that scope flips, so
-   * dragging the rail's `pinned` section leaves `dm`/`regular` modes untouched.
+   * dragging the rail's `dm` section leaves the `regular` mode untouched.
    * Preserves each row's last_accessed_at. Other groups' rows are untouched —
    * grouping is a sort-time concern, so cross-group rank values never interact.
    * Caller validates group membership + derives scope first.
@@ -141,13 +141,11 @@ export class SortRepo {
   /**
    * Toggle THIS viewer's personal ⭐ star on an entity (#task:1209), scoped to
    * the acting viewer (never global — the old pin cleared all viewers' ranks).
-   * Recent-opened (last_accessed_at) and `rank` are always preserved: since
-   * #task:1888 no list hard-partitions by star, so a star never moves an entity
-   * across groups WITHIN a list and its home rank stays meaningful.
-   *   - a conversation list: star is a MOVE OUT to the global Favorites list, so
-   *     the home rank is a harmless orphan that RESTORES on unstar.
-   *   - the rail (workspace/DM): star only PINS the entity inside its own kind
-   *     group, so it keeps its place in that group's manual order.
+   * The only starrable entity is a CONVERSATION (#task:1899), so `listKey` is
+   * always a `channels:<ws_id>` home list. Recent-opened (last_accessed_at) and
+   * `rank` are always preserved: star does not partition that list (#task:1888),
+   * it MOVES the conversation out to the global Favorites list, so the home rank
+   * is a harmless orphan that RESTORES on unstar.
    * The Favorites placement is the converse of the home rank — see
    * `clearFavoriteRank` (unstar is a voluntary favorites-removal → discarded).
    */
@@ -208,10 +206,9 @@ export class SortRepo {
    *     list's reorder validation rejects it as a `channels` member. (The route
    *     intersects with the list's live membership first, so a stale star row for
    *     a gone/archived conversation never enters the exclusion set.)
-   *   - workspace rail (`workspaces`): does NOT call this. A starred
-   *     workspace/DM stays a live, reorderable member of its KIND group
-   *     (`dm` / `regular`) and is merely pinned to the top of it, so the rail's
-   *     exclusion set is empty by construction.
+   *   - workspace rail (`workspaces`): does NOT call this. A container cannot be
+   *     starred at all (#task:1899), so the rail's exclusion set is empty by
+   *     construction.
    *   - `favorites`: does NOT call this either — that list IS the starred set.
    * No list PARTITIONS by star any more: the old `starred | unstarred` hard
    * groups are gone (see docs/list-sort-v1.md, #task:1888 revision).
