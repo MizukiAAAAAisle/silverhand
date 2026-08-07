@@ -255,9 +255,11 @@ export const apiPaths = {
    *  (the data model is global; v1 UI is per-workspace). */
   activity: '/api/activity',
   /** The viewer's flat global Favorites — the EXCLUSIVE global STARRED list
-   *  (#task:1252, docs/list-sort-v1.md): a starred entity lives here and is moved
-   *  OUT of its home list. A read projection of `user_sort_entry.starred_at`
-   *  UNIONed across the workspace rail + every channel sidebar, plus the viewer's
+   *  (#task:1252, re-scoped by #task:1888; docs/list-sort-v1.md): a starred
+   *  CONVERSATION lives here and is moved OUT of its workspace's list. A read
+   *  projection of `user_sort_entry.starred_at` across every conversation list
+   *  (`channels:<ws_id>`) — the workspace rail does NOT contribute, since a
+   *  container's star only PINS it inside its own kind group — plus the viewer's
    *  `list_key='favorites'` ordering state. The authoritative display order comes
    *  from `viewer_sort` (recent → home last_accessed_at / manual → rank); raw
    *  `items` order is only a deterministic fallback, NOT pre-sorted by starred_at.
