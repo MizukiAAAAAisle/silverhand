@@ -47,11 +47,10 @@ const FAVORITES_GROUP = 'favorites';
  * a first-class SORTABLE list (#task:1254).
  *
  * SCOPE (#task:1888, shiki-approved #task:1887): STARRED holds CONVERSATIONS only —
- * `channel` and `dm_channel`. A starred CONTAINER (workspace / DM home) is NOT here:
- * its star merely pins it at the top of its own rail group. The flip from the
- * previous model is deliberate: what you want permanently in reach is the handful of
- * rooms you actually work in, and a flat global list of containers just read as a
- * second rail.
+ * `channel` and `dm_channel`. Containers (workspace / DM home) have no star at all
+ * (#task:1900), so the list cannot receive one. The flip from the previous model is
+ * deliberate: what you want permanently in reach is the handful of rooms you actually
+ * work in, and a flat global list of containers just read as a second rail.
  *
  * EXCLUSIVE (load-bearing — mirrors shared `api/favorites.ts` + docs/list-sort-v1.md):
  * a starred conversation appears HERE and NOWHERE else, MOVED out of its parent's

@@ -3,7 +3,6 @@ import {
   excludeStarredChannels,
   isStarredAt,
   partitionRailWorkspaces,
-  pinStarredFirst,
 } from './home-grouping';
 
 describe('isStarredAt', () => {
@@ -15,11 +14,11 @@ describe('isStarredAt', () => {
   });
 });
 
-describe('partitionRailWorkspaces (#task:1888 — kind split only, star no longer excludes)', () => {
+describe('partitionRailWorkspaces (#task:1888 — kind split only; containers have no star, #task:1900)', () => {
   const ws = (
     id: string,
-    over: { kind?: 'regular' | 'dm'; archived?: boolean; starred_at?: number | null } = {},
-  ) => ({ id, kind: over.kind ?? 'regular', archived: over.archived, starred_at: over.starred_at ?? null });
+    over: { kind?: 'regular' | 'dm'; archived?: boolean } = {},
+  ) => ({ id, kind: over.kind ?? 'regular', archived: over.archived });
 
   it('splits workspaces by kind and keeps input order within a group', () => {
     const { dms, regular } = partitionRailWorkspaces([
@@ -32,21 +31,10 @@ describe('partitionRailWorkspaces (#task:1888 — kind split only, star no longe
     expect(dms.map(w => w.id)).toEqual(['d1', 'd2']);
   });
 
-  it('KEEPS starred containers in their kind group (#task:1888 — star is a pin, not a move)', () => {
-    const { dms, regular } = partitionRailWorkspaces([
-      ws('r1'),
-      ws('r2', { starred_at: 1000 }),
-      ws('d1', { kind: 'dm', starred_at: 2000 }),
-      ws('d2', { kind: 'dm' }),
-    ]);
-    expect(regular.map(w => w.id)).toEqual(['r1', 'r2']);
-    expect(dms.map(w => w.id)).toEqual(['d1', 'd2']);
-  });
-
   it('DROPS archived workspaces entirely (#task:1889 — no ARCHIVED group in the tree)', () => {
     const { regular, dms } = partitionRailWorkspaces([
       ws('a1', { archived: true }),
-      ws('a2', { archived: true, starred_at: 5 }),
+      ws('a2', { archived: true }),
       ws('ad', { kind: 'dm', archived: true }),
       ws('r1'),
     ]);
@@ -78,26 +66,6 @@ describe('partitionRailWorkspaces (#task:1888 — kind split only, star no longe
     // it. It must still be watched: that is where a star waits to be restored.
     const { allVisibleIds } = partitionRailWorkspaces([ws('empty')]);
     expect(allVisibleIds).toEqual(['empty']);
-  });
-});
-
-describe('pinStarredFirst (#task:1888 rail pin — ordering, never membership)', () => {
-  const ws = (id: string, starred_at: number | null = null) => ({ id, starred_at });
-
-  it('hoists starred to the front, preserving relative order on both sides', () => {
-    const out = pinStarredFirst([ws('a'), ws('b', 20), ws('c'), ws('d', 10)]);
-    expect(out.map(w => w.id)).toEqual(['b', 'd', 'a', 'c']);
-  });
-
-  it('never adds or drops members — the reordered set is a permutation', () => {
-    const input = [ws('a', 1), ws('b'), ws('c', 2)];
-    const out = pinStarredFirst(input);
-    expect([...out].map(w => w.id).sort()).toEqual(['a', 'b', 'c']);
-    expect(input.map(w => w.id)).toEqual(['a', 'b', 'c']); // input untouched
-  });
-
-  it('leaves an all-unstarred group in place', () => {
-    expect(pinStarredFirst([ws('a'), ws('b')]).map(w => w.id)).toEqual(['a', 'b']);
   });
 });
 

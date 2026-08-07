@@ -16,7 +16,7 @@ import {
   isViewerWorkspacesChangedPayload,
   patchHumanMemberRole,
   removeHumanMemberFromList,
-  setStarredOptimistic,
+  setChannelStarredOptimistic,
   sortCacheAdapter,
   sortConversationList,
   viewerRemovedWorkspaceId,
@@ -79,49 +79,19 @@ describe('sortConversationList', () => {
   });
 });
 
-describe('setStarredOptimistic', () => {
+describe('setChannelStarredOptimistic', () => {
   const vs = (entries: ViewerSortStateDto['entries']): ViewerSortStateDto => ({
-    list_key: 'workspaces',
+    list_key: 'channels:w1',
     modes: {},
     entries,
   });
 
-  it('container star stamps starred_at and PRESERVES the home rank (star is an in-group pin)', () => {
-    // A container's star only pins it at the top of its own group — same list, same
-    // group — so clearing the rank would discard a position the pin does not replace.
-    const next = setStarredOptimistic(
-      vs([{ entity_id: 'a', rank: 3, last_accessed_at: 100, starred_at: null }]),
-      'a',
-      true,
-    );
-    expect(next.entries[0]).toMatchObject({
-      entity_id: 'a',
-      rank: 3,
-      last_accessed_at: 100,
-    });
-    expect(next.entries[0]?.starred_at).not.toBeNull();
-  });
-
-  it('container unstar nulls starred_at and PRESERVES the home rank', () => {
-    const next = setStarredOptimistic(
-      vs([{ entity_id: 'a', rank: 5, last_accessed_at: 7, starred_at: 999 }]),
-      'a',
-      false,
-    );
-    expect(next.entries[0]).toEqual({
-      entity_id: 'a',
-      rank: 5,
-      last_accessed_at: 7,
-      starred_at: null,
-    });
-  });
-
-  it('conversation star PRESERVES the home rank too (#task:1888 — STARRED is a different list)', () => {
-    // A conversation's star is an exclusive MOVE into `list_key='favorites'`, so its
+  it('star PRESERVES the home rank (#task:1888 — STARRED is a different list)', () => {
+    // A channel's star is an exclusive MOVE into `list_key='favorites'`, so its
     // `channels:*` rank survives as an orphan and unstar drops it back into the slot
     // it had. No caller clears rank any more — the backend's `SortRepo.clearRank` is
     // gone as well.
-    const next = setStarredOptimistic(
+    const next = setChannelStarredOptimistic(
       vs([{ entity_id: 'c', rank: 4, last_accessed_at: 100, starred_at: null }]),
       'c',
       true,
@@ -134,8 +104,8 @@ describe('setStarredOptimistic', () => {
     expect(next.entries[0]?.starred_at).not.toBeNull();
   });
 
-  it('conversation unstar restores the original home slot (rank intact)', () => {
-    const next = setStarredOptimistic(
+  it('unstar restores the original home slot (rank intact)', () => {
+    const next = setChannelStarredOptimistic(
       vs([{ entity_id: 'c', rank: 2, last_accessed_at: 7, starred_at: 999 }]),
       'c',
       false,
@@ -149,7 +119,7 @@ describe('setStarredOptimistic', () => {
   });
 
   it('creates a rank-null entry when the viewer had no prior state', () => {
-    const next = setStarredOptimistic(vs([]), 'b', true);
+    const next = setChannelStarredOptimistic(vs([]), 'b', true);
     expect(next.entries).toHaveLength(1);
     expect(next.entries[0]).toMatchObject({
       entity_id: 'b',
@@ -160,7 +130,7 @@ describe('setStarredOptimistic', () => {
   });
 
   it('leaves other entries untouched', () => {
-    const next = setStarredOptimistic(
+    const next = setChannelStarredOptimistic(
       vs([
         { entity_id: 'a', rank: 1, last_accessed_at: null, starred_at: null },
         { entity_id: 'b', rank: 2, last_accessed_at: null, starred_at: null },

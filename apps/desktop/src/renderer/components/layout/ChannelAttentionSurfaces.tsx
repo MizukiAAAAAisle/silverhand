@@ -97,8 +97,8 @@ export function ChannelAttentionMenuItems({
 }
 
 /**
- * The workspace mute suppressor as ONE toggle item, mirroring Star/Unstar in the
- * same menu — a boolean gets a toggle, not a submenu of two options.
+ * The workspace mute suppressor as ONE toggle item — a boolean gets a toggle, not
+ * a submenu of two options. Since #task:1900 it is the container menu's only item.
  *
  * REGULAR workspaces only: an `agent_home` (DM) workspace can never carry a
  * suppressor row (DB trigger), because a DM is directed-grade and has no ambient

@@ -447,19 +447,16 @@ export function useArchiveWorkspace() {
   });
 }
 
-/** Optimistically flip one entity's `starred_at` in a viewer-sort cache:
- *  star → stamp now, unstar → null. The home manual `rank` is always PRESERVED
- *  (#task:1888 removed the one case that cleared it, mirroring the backend, where
- *  `SortRepo.clearRank` is gone):
- *   - a CONVERSATION's star is an exclusive MOVE into the global STARRED list, a
- *     DIFFERENT `list_key='favorites'`, so its `channels:*` rank survives as an
- *     orphan and unstar drops it back into its original home slot. The favorites
- *     list's own rank is cleared server-side by the unstar route, not here.
- *   - a CONTAINER's star is an in-group PIN — same list, same group, ordering only,
- *     so clearing rank would throw away a position the pin does not replace.
- *  A brand-new entry has no prior rank, so its rank starts null regardless.
+/** Optimistically flip one CHANNEL's `starred_at` in its `channels:<ws>` viewer-sort
+ *  cache: star → stamp now, unstar → null. Star belongs to conversations only —
+ *  containers have none (#task:1900) — so this is the whole star surface.
+ *  The home manual `rank` is always PRESERVED: a channel's star is an exclusive MOVE
+ *  into the global STARRED list, a DIFFERENT `list_key='favorites'`, so its
+ *  `channels:*` rank survives as an orphan and unstar drops it back into its original
+ *  home slot. The favorites list's own rank is cleared server-side by the unstar
+ *  route, not here. A brand-new entry has no prior rank, so its rank starts null.
  *  Pure. (#task:1209, #task:1252, #task:1254, #task:1888) */
-export function setStarredOptimistic(
+export function setChannelStarredOptimistic(
   viewerSort: ViewerSortStateDto,
   entityId: string,
   starred: boolean,
@@ -474,52 +471,6 @@ export function setStarredOptimistic(
         { entity_id: entityId, rank: null, last_accessed_at: null, starred_at: starredAt },
       ];
   return { ...viewerSort, entries };
-}
-
-/** Star / unstar a workspace for the current viewer (#task:1209). Star is a
- *  PERSONAL favorite, exposed only via `viewer_sort.entries[].starred_at`
- *  (never a shared aggregate), so this mutation reconciles the rail's inline
- *  `viewerSort` cache — NOT an entity DTO. Optimistic (instant STARRED membership
- *  flip; under the EXCLUSIVE model the row MOVES out of its dm/regular home group
- *  into STARRED, but its home rank is kept as an orphan so unstar restores the
- *  original slot — #task:1254), rolled back on error, reconciled from the
- *  server's full `viewer_sort`. */
-export function useStarWorkspace() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ id, starred }: { id: string; starred: boolean }) => {
-      const res = await api<{ viewer_sort: ViewerSortStateDto }>(
-        apiPaths.workspaceStar(id),
-        { method: starred ? 'POST' : 'DELETE' },
-      );
-      return res.viewer_sort;
-    },
-    onMutate: async ({ id, starred }) => {
-      await qc.cancelQueries({ queryKey: workspacesKey });
-      const prev = qc.getQueryData<WorkspaceListPayload>(workspacesKey);
-      if (prev) {
-        qc.setQueryData<WorkspaceListPayload>(workspacesKey, {
-          ...prev,
-          // Star MOVES the workspace/DM into STARRED and out of its dm/regular
-          // home group, but preserve its home manual rank so unstar restores the
-          // original slot (#task:1254).
-          viewerSort: setStarredOptimistic(prev.viewerSort, id, starred),
-        });
-      }
-      return { prev };
-    },
-    onError: (_e, _v, ctx) => {
-      if (ctx?.prev) qc.setQueryData(workspacesKey, ctx.prev);
-    },
-    onSuccess: viewerSort => {
-      qc.setQueryData<WorkspaceListPayload>(workspacesKey, prev =>
-        prev ? { ...prev, viewerSort } : prev,
-      );
-      // STARRED is the global Favorites overlay (#task:1253) — starring/unstarring
-      // a workspace changes its membership, so refresh the favorites read-model.
-      void qc.invalidateQueries({ queryKey: ['favorites'] });
-    },
-  });
 }
 
 /** Channel sidebar list cache, now carrying the viewer's inline sort state
@@ -1054,7 +1005,7 @@ export function useStarChannel(workspaceId: string | null) {
           ...prev,
           // Home `rank` is preserved (#task:1888): STARRED is a different list, so
           // unstar must drop the channel back into the slot it had here.
-          viewerSort: setStarredOptimistic(prev.viewerSort, channelId, starred),
+          viewerSort: setChannelStarredOptimistic(prev.viewerSort, channelId, starred),
         });
       }
       return { prev };

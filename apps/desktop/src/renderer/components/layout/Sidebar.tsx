@@ -21,7 +21,7 @@ import {
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
 import { OUTER_GLYPH_INSET } from './sidebar-shared';
-import { partitionRailWorkspaces, pinStarredFirst } from '@/lib/home-grouping';
+import { partitionRailWorkspaces } from '@/lib/home-grouping';
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
@@ -47,7 +47,6 @@ interface SidebarProps {
    *  parent workspace is explicit: the handler owns the cross-workspace open
    *  (remembered layout restore included), STARRED never a second nav model. */
   onSelectConversation: (workspaceId: string, conversationId: string) => void;
-  onStarWorkspace: (workspaceId: string, starred: boolean) => void;
   onCreateWorkspace: () => void;
   /** When true, the Saved view is the active main view — channel rows
    *  appear unselected and the Saved entry highlights instead. */
@@ -79,12 +78,12 @@ function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
 }
 
 export function Sidebar(props: SidebarProps): JSX.Element {
-  // Home rail groups by KIND (DM / regular). Since #task:1888 a starred container is
-  // NOT removed here — star demoted to an in-group pin, applied after the sort hook
-  // (`pinStarredFirst`) so the drag group keeps the same member set the backend
-  // validates against. Archived workspaces are dropped outright (#task:1889): the
-  // top-level `Archived` entry is the one archive index. `props.workspaces` is the
-  // RAW full visible set; these are the home projections (see lib/home-grouping).
+  // Home rail groups by KIND (DM / regular). Containers have exactly ONE ordering
+  // authority — the viewer's sort mode plus manual drag (#task:1900: the container
+  // star was a second one, applied on top of the drag, and it is gone). Archived
+  // workspaces are dropped outright (#task:1889): the top-level `Archived` entry is
+  // the one archive index. `props.workspaces` is the RAW full visible set; these are
+  // the home projections (see lib/home-grouping).
   //
   // `allVisibleIds` comes out of the SAME call, not a second derivation: it is
   // STARRED's freshness scope (every workspace the viewer can see, archived
@@ -102,10 +101,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // STABLE union of every DM agent (across dm / regular / archived) from the RAW
   // workspace set. Resolving over the raw set (not the home projection) keeps the
   // map identical across renders — so no avatar tears down + refetches (the flash
-  // shiki saw came from per-section resolution churning on star). Since #task:1888
-  // a container star only PINS the row inside its own group, but the raw set is
-  // still the right basis: it is the one input that never changes with ordering.
-  // #task:1146
+  // shiki saw came from per-section resolution churning when a row moved). The raw
+  // set is the right basis because it is the one input that never changes with
+  // ordering. #task:1146
   const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const agentsById = props.agentsById;
     if (!agentsById) return [];
@@ -138,12 +136,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     getCreatedAt: w => w.created_at,
     modeScopeOf: g => g,
   });
-  // Pin starred containers to the top of their own group (#task:1888). AFTER the
-  // sort hook on purpose: the viewer's sort mode orders within the pin, and the set
-  // is untouched so a whole-group reorder still submits exactly the group's live
-  // members.
-  const orderedDms = pinStarredFirst(orderedGroups.dm);
-  const orderedRegular = pinStarredFirst(orderedGroups.regular);
+  const orderedDms = orderedGroups.dm;
+  const orderedRegular = orderedGroups.regular;
 
   // Each rail section owns its own sort menu (reads + writes that group's scope)
   // and its own single-group drag config.
@@ -283,7 +277,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selectedChannelId={props.selectedChannelId}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
-          onStarWorkspace={props.onStarWorkspace}
           headerAction={
             <span className="flex items-center">
               {sortMenuFor('regular')}
@@ -320,7 +313,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           selectedChannelId={props.selectedChannelId}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
-          onStarWorkspace={props.onStarWorkspace}
           emptyHint="Creating an agent opens a DM"
           agentsById={props.agentsById}
           dmAgentAvatarUrls={dmAgentAvatarUrls}

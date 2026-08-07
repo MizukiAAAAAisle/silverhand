@@ -11,8 +11,8 @@ describe('pickWorkspaceToRestore', () => {
   });
 
   it('restores the remembered workspace regardless of list order', () => {
-    // Even if the remembered workspace sorts last (e.g. not in the starred
-    // group), it still wins over `workspaces[0]`.
+    // Even if the remembered workspace sorts last, it still wins over
+    // `workspaces[0]`.
     expect(pickWorkspaceToRestore(ws('a', 'b', 'c'), 'c')).toBe('c');
   });
 

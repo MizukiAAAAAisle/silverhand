@@ -113,7 +113,7 @@ Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar
 
 右键菜单一律用 Radix context-menu，**不使用原生菜单**；所有菜单 token 收敛到单一共享组件（容器 / item / separator），并另导出一套共享 token 的 dropdown 供「点击打开」的 action menu（如 ChannelView header 的 more 菜单）复用。
 
-- **Workspace / DM 头行**：Star / Unstar + Notifications（mute 仅 regular workspace——DM 是 directed-grade，结构上不可 mute）。**容器 star 只排序、不搬家**（#task:1888）：它把行钉到自己那一组的顶部，不移进 STARRED——STARRED 只装会话。菜单结构住单一共享组件（`WorkspaceContextMenu`）；两个 action 都不可用时不渲染空菜单、直接没有右键菜单。**没有 Open in Finder / Copy path**——workspace 不承载本地路径（§2、[`workspace-layout-relocation-v1.md` §3.5](./workspace-layout-relocation-v1.md)）。
+- **Workspace / DM 头行**：只有 Notifications（mute 仅 regular workspace——DM 是 directed-grade，结构上不可 mute）⇒ DM 头行没有右键菜单。**容器没有 Star**（#task:1900）：Star 只属于会话，含义唯一 = 搬进全局 STARRED。容器曾用同一个词表示「组内置顶」，一是同一枚图标按行的类型给出两种结果，二是它在已有 manual 拖拽的列表上加了第二套排序权威——且置顶是在排序之后套上去的，把未加星的行拖到加星行之上会静默弹回。容器顺序 = `f(mode, rank)`。菜单结构住单一共享组件（`WorkspaceContextMenu`）；无可用 action 时不渲染空菜单。**没有 Open in Finder / Copy path**——workspace 不承载本地路径（§2、[`workspace-layout-relocation-v1.md` §3.5](./workspace-layout-relocation-v1.md)）。
 - **Channel row**：Star（**单向**——树里的 channel 列表已把 starred 会话排除，没有 Unstar 状态可达）、Notifications、Archive/Restore（top-level channel-like `channel` / `dm_channel`，member-gated）；Copy name 全部可用。（sidebar 只列 channel-like、无 thread 行——见 §3。）
 - **STARRED row**：Unstar（唯一的取消入口——父列表已不持有该行）、Notifications、Copy name。**没有 Archive**：归档是容器侧的组织动作，而 starred 行是「搬走的那一份」，在这里归档会让行同时从两处消失。
 - **ChannelView header more**：保持 dropdown 交互（不改右键）。Rename / Archive / Restore 按 channel-like 同构（`channel` / `dm_channel`；rename 另需未 closed）——DM channel 与 regular channel 走同一套入口。

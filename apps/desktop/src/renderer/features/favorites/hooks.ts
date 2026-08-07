@@ -3,9 +3,9 @@
 // the sidebar's STARRED section as a GLOBAL, viewer-scoped FLAT list of the
 // viewer's starred conversations — `kind` ∈ {'channel','dm_channel'}, the
 // `user_sort_entry.starred_at` set under `list_key='channels:<ws_id>'`. A
-// WORKSPACE / DM container is NOT here: starring one PINS it at the top of its own
-// rail kind group (ordering only, composed from the rail's own `starred_at`), it
-// never moves into this list.
+// WORKSPACE / DM container cannot be here because containers have no star at all
+// (#task:1900) — star is a conversation-only action, and its one meaning is
+// membership of this list.
 //
 // Storage split (#task:1252 C — do NOT collapse back to "zero storage"):
 //   - MEMBERSHIP is a read projection with NO storage of its own — a row is in

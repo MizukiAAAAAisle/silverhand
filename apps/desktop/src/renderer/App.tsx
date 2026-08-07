@@ -86,8 +86,6 @@ import {
   useWorkspaces,
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
-  useWorkspaceSortState,
-  useStarWorkspace,
   useArchiveChannel,
   useRenameChannel,
   useLeaveChannel,
@@ -381,7 +379,7 @@ function RegisteredAppShell(): JSX.Element {
   // "Chat" navrail item routes to bare `/chat` (no workspaceId), so on the
   // way back the auto-pick below must restore the workspace the user last had
   // open instead of snapping to `workspaces[0]`. This one is persisted so an
-  // app restart can land back on a starred workspace that does not sort first
+  // app restart can land back on a workspace that does not sort first
   // (#task:1222/#task:1229).
   const lastSelectedWorkspaceId = useRef<string | null>(getLastWorkspaceId());
   const lastSelectedMessageReadKey = useRef<string | null>(null);
@@ -467,22 +465,6 @@ function RegisteredAppShell(): JSX.Element {
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
   );
-  // Star (the personal ⭐ favorite) lives only in the viewer's sort state, not
-  // on the workspace DTOs (#task:1209). Join `starred_at` by id here — the
-  // composition root has both the list items and the viewer sort — so the rail
-  // keeps reading a per-item `starred_at` and re-pins instantly when a star toggle
-  // reconciles the inline `viewerSort` cache. The CHANNEL half of this join moved
-  // into `WorkspaceChannels` with #task:1889: the merged tree renders many
-  // workspaces' channels at once, so one map per expanded workspace belongs to the
-  // subtree that fetched that workspace's list, not up here.
-  const { data: workspaceSort } = useWorkspaceSortState();
-  const workspaceStarredAt = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const e of workspaceSort?.entries ?? []) {
-      if (e.starred_at !== null) m.set(e.entity_id, e.starred_at);
-    }
-    return m;
-  }, [workspaceSort]);
   const { data: archivedChannels = [] as ChannelListItem[], status: archivedChannelsStatus, fetchStatus: archivedChannelsFetchStatus } = useArchivedChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
@@ -564,7 +546,6 @@ function RegisteredAppShell(): JSX.Element {
     workspaceIds: visibleWorkspaceIds,
     selectedWorkspaceId,
   });
-  const starWorkspace = useStarWorkspace();
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
   const renameChannel = useRenameChannel(selectedWorkspaceId ?? null);
   const leaveChannel = useLeaveChannel(selectedWorkspaceId ?? null);
@@ -2258,7 +2239,6 @@ function RegisteredAppShell(): JSX.Element {
                       muted:
                         attentionBadges?.muted_workspace_ids?.includes(w.id) ??
                         false,
-                      starred_at: workspaceStarredAt.get(w.id) ?? null,
                       archived: w.archived_at !== null,
                       created_at: w.created_at,
                     }))}
@@ -2284,9 +2264,6 @@ function RegisteredAppShell(): JSX.Element {
                     // row, instead of a bare jump.
                     onSelectConversation={(workspaceId, conversationId) =>
                       handleSelectChannel(conversationId, workspaceId)
-                    }
-                    onStarWorkspace={(workspaceId, starred) =>
-                      starWorkspace.mutate({ id: workspaceId, starred })
                     }
                     onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
                     savedActive={view === 'saved'}

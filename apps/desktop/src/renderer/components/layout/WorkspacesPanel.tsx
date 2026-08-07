@@ -27,7 +27,6 @@ export interface WorkspaceItem {
   name: string;
   kind: WorkspaceUiKind;
   dm_agent_id: string | null;
-  starred_at?: number | null;
   active?: boolean;
   /** Unread mention notifications scoped to this workspace. Falsy / 0
    *  hides the badge. */
@@ -40,7 +39,7 @@ export interface WorkspaceItem {
   muted?: boolean;
   /** True for soft-archived workspaces. Since #task:1889 an archived workspace is
    *  NOT in this tree at all — the top-level `Archived` page (#task:1890) is the
-   *  single archive index — so this only gates the star action below. */
+   *  single archive index. */
   archived?: boolean;
   /** Creation time — stable fallback/tiebreak for the viewer sort modes
    *  (#task:1146). */
@@ -54,8 +53,7 @@ export interface WorkspaceItem {
  *  `Sidebar`); this just carries the per-row callbacks down. */
 export interface WorkspaceSortConfig<GroupKey extends SortGroup = SortGroup> {
   /** Sub-group render order. Each rail section now drives a single group:
-   *  `['dm']` or `['regular']` (a starred ws/DM is PINNED inside its own group,
-   *  never moved to another one — #task:1888). */
+   *  `['dm']` or `['regular']` — one flat, drag-ordered list per kind. */
   order: GroupKey[];
   /** The hard group a workspace lives in (by kind: dm | regular). */
   groupKeyOf: (workspace: WorkspaceItem) => GroupKey;
@@ -77,7 +75,6 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   selectedChannelId: string | null;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
-  onStarWorkspace?: (id: string, starred: boolean) => void;
   /** Optional `+` button. DM groups omit this — DM workspaces are
    *  auto-created when an agent is provisioned. Ignored when `headerAction`
    *  is set (the caller composes its own action cluster, e.g. sort + add). */
@@ -96,13 +93,13 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
   /** Lookup of all workspace agents, keyed by id. DM workspace rows resolve
    *  their `dm_agent_id` here for the agent's runtime + display name. The
    *  avatar object URLs themselves come via `dmAgentAvatarUrls` (resolved ONCE
-   *  at the rail level, not per-section) so star/unstar moving a DM between
-   *  sections doesn't churn every avatar. Optional so callers without agent
-   *  context still get a sane fallback. #task:919 / #task:1146 */
+   *  at the rail level, not per-section) so reordering a DM never churns an
+   *  avatar. Optional so callers without agent context still get a sane
+   *  fallback. #task:919 / #task:1146 */
   agentsById?: ReadonlyMap<string, AgentDto>;
   /** Resolved DM-agent avatar object URLs, keyed by agent id. Owned by the
    *  parent (`Sidebar`) over the STABLE union of all rail DM agents, so this
-   *  map is identical across star/unstar/reorder — no per-section refetch flash
+   *  map is identical across reorders — no per-section refetch flash
    *  (#task:1146). */
   dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
   /** Drag-sort wiring. Required since #task:1889 — the last non-sortable caller
@@ -117,7 +114,6 @@ interface RailRowContext {
   selectedChannelId: string | null;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
-  onStarWorkspace?: (id: string, starred: boolean) => void;
   agentsById?: ReadonlyMap<string, AgentDto>;
   dmAgentAvatarUrls: ReadonlyMap<string, string | null>;
 }
@@ -163,19 +159,6 @@ function sectionGlyphFor(kind: WorkspaceUiKind): JSX.Element {
   );
 }
 
-function canStarWorkspace(workspace: WorkspaceItem, ctx: RailRowContext): boolean {
-  // Both regular workspaces and DMs can be starred (#task:1209 / #task:1252 /
-  // #task:1254). Since #task:1888 a CONTAINER star does not move the row: it pins
-  // it to the top of its own group (ordering, not membership). Archived rows never
-  // star. The backend star route accepts regular | agent_home; the gate here just
-  // mirrors that.
-  return (
-    (workspace.kind === 'regular' || workspace.kind === 'dm') &&
-    !workspace.archived &&
-    !!ctx.onStarWorkspace
-  );
-}
-
 export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   label,
   kind,
@@ -184,7 +167,6 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   selectedChannelId,
   onSelectChannel,
   onCreateChannel,
-  onStarWorkspace,
   onAdd,
   headerAction,
   emptyHint,
@@ -199,7 +181,6 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
     selectedChannelId,
     onSelectChannel,
     onCreateChannel,
-    onStarWorkspace,
     agentsById,
     dmAgentAvatarUrls,
   };
@@ -377,8 +358,6 @@ function WorkspaceHeaderRow({
       ? dmRecognitionName(workspace.name, dmAgent)
       : workspace.name;
   const icon = rowIconFor(workspace, ctx);
-  const canStar = canStarWorkspace(workspace, ctx);
-  const isStarred = isWorkspaceStarred(workspace);
   const unread = workspace.unread;
   // Hover-revealed actions. Keyboard reachability comes from `focus-visible` — on
   // the control itself, or on a descendant for the wrappers whose focusable part is
@@ -481,9 +460,6 @@ function WorkspaceHeaderRow({
     >
       <WorkspaceContextMenu
         trigger={row}
-        canStar={canStar}
-        isStarred={isStarred}
-        onToggleStar={() => ctx.onStarWorkspace?.(workspace.id, !isStarred)}
         muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}
       />
     </div>
@@ -496,8 +472,4 @@ function WorkspaceHeaderRow({
  *  and an archived workspace isn't being listened to at all. */
 function canMuteWorkspace(workspace: WorkspaceItem): boolean {
   return workspace.kind === 'regular' && !workspace.archived;
-}
-
-export function isWorkspaceStarred(workspace: WorkspaceItem): boolean {
-  return workspace.starred_at !== null && workspace.starred_at !== undefined;
 }

@@ -46,8 +46,8 @@ export function resolveEffectiveAttentionMode(
  * so no write can be built from a fabricated current.
  *
  * The labels carry no "workspace" suffix (shiki 2026-08-07): the item sits in the
- * workspace's own context menu beside Star/Unstar, so the object is already named
- * by where the menu was opened — repeating it only lengthens the row.
+ * workspace's own context menu, so the object is already named by where the menu
+ * was opened — repeating it only lengthens the row.
  */
 export function resolveWorkspaceMuteToggle(muted: boolean | undefined): {
   label: string;
