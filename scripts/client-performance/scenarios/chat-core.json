@@ -83,8 +83,8 @@
       "action": { "kind": "sidebar", "sidebar": "channel", "visible": true }
     },
     {
-      "id": "channel-reentry",
-      "label": "Re-enter the same channel with warm caches",
+      "id": "navigate-away-to-tasks",
+      "label": "Navigate away from Chat to Task",
       "settle_ms": 150,
       "observe_ms": 1000,
       "action": {
