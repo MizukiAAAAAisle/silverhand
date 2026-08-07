@@ -19,6 +19,8 @@ export function summarizePhase(raw) {
   return {
     action_to_paint_ms: finiteOrNull(raw.actionToPaintMs),
     measured_ms: finiteOrNull(raw.measuredMs),
+    renderer_started_at_ms: finiteOrNull(raw.rendererStartedAtMs),
+    renderer_ended_at_ms: finiteOrNull(raw.rendererEndedAtMs),
     frames: frameGaps.length,
     frame_gap_ms: summarizeDistribution(frameGaps),
     frames_over_16_7_ms: frameGaps.filter(value => value > 16.7).length,

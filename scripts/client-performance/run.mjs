@@ -212,7 +212,7 @@ async function runScenario(context) {
       const prepared = interpolateAction(phase.action, fixture);
       const raw = await evaluate(
         client,
-        phaseSource(prepared, phase.settle_ms, phase.observe_ms),
+        phaseSource(phase.id, prepared, phase.settle_ms, phase.observe_ms),
       );
       const summary = summarizePhase(raw);
       phases.push({ id: phase.id, label: phase.label, action: prepared, metrics: summary });
@@ -511,6 +511,7 @@ function installProbeSource() {
     const state = {
       active: false,
       startedAt: 0,
+      phaseId: null,
       frameGapsMs: [],
       longTasksMs: [],
       eventDurationsMs: [],
@@ -555,9 +556,11 @@ function installProbeSource() {
     const heap = () => performance.memory?.usedJSHeapSize ?? null;
     const nodes = () => document.getElementsByTagName('*').length;
     globalThis.__silverhandClientPerfV1 = {
-      reset() {
+      reset(phaseId) {
         state.active = true;
         state.startedAt = performance.now();
+        state.phaseId = phaseId;
+        performance.mark(`silverhand-perf:${phaseId}:start`);
         state.frameGapsMs = [];
         state.longTasksMs = [];
         state.eventDurationsMs = [];
@@ -567,10 +570,14 @@ function installProbeSource() {
         state.lastFrameAt = null;
       },
       snapshot(actionToPaintMs) {
+        const endedAt = performance.now();
         state.active = false;
+        performance.mark(`silverhand-perf:${state.phaseId}:end`);
         return {
           actionToPaintMs,
-          measuredMs: performance.now() - state.startedAt,
+          measuredMs: endedAt - state.startedAt,
+          rendererStartedAtMs: state.startedAt,
+          rendererEndedAtMs: endedAt,
           frameGapsMs: [...state.frameGapsMs],
           longTasksMs: [...state.longTasksMs],
           eventDurationsMs: [...state.eventDurationsMs],
@@ -592,8 +599,8 @@ function installProbeSource() {
   }})()`;
 }
 
-function phaseSource(action, settleMs, observeMs) {
-  return `(${async function execute(action, settleMs, observeMs) {
+function phaseSource(phaseId, action, settleMs, observeMs) {
+  return `(${async function execute(phaseId, action, settleMs, observeMs) {
     const probe = globalThis.__silverhandClientPerfV1;
     if (!probe) throw new Error('performance probe is not installed');
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -617,7 +624,7 @@ function phaseSource(action, settleMs, observeMs) {
         await wait(300);
       }
     }
-    probe.reset();
+    probe.reset(phaseId);
     let actionToPaintMs = null;
     const startedAt = performance.now();
     if (action.kind === 'navigate') {
@@ -655,7 +662,7 @@ function phaseSource(action, settleMs, observeMs) {
     await wait(settleMs);
     await wait(observeMs);
     return probe.snapshot(actionToPaintMs);
-  }})(${JSON.stringify(action)}, ${settleMs}, ${observeMs})`;
+  }})(${JSON.stringify(phaseId)}, ${JSON.stringify(action)}, ${settleMs}, ${observeMs})`;
 }
 
 function rendererMetadataSource() {
@@ -698,6 +705,7 @@ async function beginTrace(client, outputPath) {
     transferMode: 'ReturnAsStream',
     categories: [
       'blink',
+      'blink.user_timing',
       'cc',
       'devtools.timeline',
       'toplevel',

@@ -18,6 +18,8 @@ test('summarizePhase keeps raw-performance axes separate', () => {
     summarizePhase({
       actionToPaintMs: 24.222,
       measuredMs: 1000,
+      rendererStartedAtMs: 42.111,
+      rendererEndedAtMs: 1042.111,
       frameGapsMs: [8, 17, 34, 51],
       longTasksMs: [60, 90],
       eventDurationsMs: [8, 24],
@@ -30,6 +32,8 @@ test('summarizePhase keeps raw-performance axes separate', () => {
     {
       action_to_paint_ms: 24.22,
       measured_ms: 1000,
+      renderer_started_at_ms: 42.11,
+      renderer_ended_at_ms: 1042.11,
       frames: 4,
       frame_gap_ms: { count: 4, p50: 17, p95: 51, p99: 51, max: 51 },
       frames_over_16_7_ms: 3,
