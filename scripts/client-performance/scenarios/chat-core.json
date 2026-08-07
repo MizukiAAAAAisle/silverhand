@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "id": "chat-core",
+  "title": "Chat core renderer path",
+  "phases": [
+    {
+      "id": "channel-cold-navigation",
+      "label": "Navigate into the seeded message-heavy channel",
+      "settle_ms": 250,
+      "observe_ms": 1500,
+      "action": {
+        "kind": "navigate",
+        "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}"
+      }
+    },
+    {
+      "id": "composer-input",
+      "label": "Populate the chat composer",
+      "settle_ms": 100,
+      "observe_ms": 800,
+      "action": {
+        "kind": "type",
+        "selector": "[data-composer-input]",
+        "text": "Renderer performance probe — deterministic composer payload."
+      }
+    },
+    {
+      "id": "history-scroll",
+      "label": "Scroll upward through message history",
+      "settle_ms": 0,
+      "observe_ms": 2500,
+      "action": {
+        "kind": "manual",
+        "instruction": "After pressing Enter, continuously scroll upward in the message pane for about two seconds. This phase intentionally reports frame gaps/long tasks only; manual action→paint is null."
+      }
+    },
+    {
+      "id": "channel-reentry",
+      "label": "Re-enter the same channel with warm caches",
+      "settle_ms": 150,
+      "observe_ms": 1000,
+      "action": {
+        "kind": "navigate",
+        "path": "/tasks"
+      }
+    },
+    {
+      "id": "channel-warm-navigation",
+      "label": "Navigate back to chat with warm caches",
+      "settle_ms": 150,
+      "observe_ms": 1200,
+      "action": {
+        "kind": "navigate",
+        "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}"
+      }
+    }
+  ]
+}

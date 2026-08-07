@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "id": "task-core",
+  "title": "Task board core renderer path",
+  "phases": [
+    {
+      "id": "board-navigation",
+      "label": "Open the all-workspace task board",
+      "settle_ms": 250,
+      "observe_ms": 1500,
+      "action": {
+        "kind": "navigate",
+        "path": "/tasks"
+      }
+    },
+    {
+      "id": "task-detail-open",
+      "label": "Open the first seeded task detail",
+      "settle_ms": 150,
+      "observe_ms": 1000,
+      "action": {
+        "kind": "click",
+        "selector": "[data-tasks-board] [data-task-number]"
+      }
+    },
+    {
+      "id": "board-reset",
+      "label": "Close task detail by returning to the board route",
+      "settle_ms": 150,
+      "observe_ms": 800,
+      "action": {
+        "kind": "navigate",
+        "path": "/tasks"
+      }
+    },
+    {
+      "id": "task-drag",
+      "label": "Drag a seeded task between columns",
+      "settle_ms": 0,
+      "observe_ms": 3000,
+      "action": {
+        "kind": "manual",
+        "instruction": "After pressing Enter, drag one task card across columns for about two seconds, then return it to its original column before releasing. This exercises drag animation without changing fixture state. Manual action→paint is intentionally null."
+      }
+    },
+    {
+      "id": "chat-task-switch",
+      "label": "Leave the task board for the seeded chat",
+      "settle_ms": 150,
+      "observe_ms": 1000,
+      "action": {
+        "kind": "navigate",
+        "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}"
+      }
+    },
+    {
+      "id": "task-warm-navigation",
+      "label": "Return to the task board with warm caches",
+      "settle_ms": 150,
+      "observe_ms": 1200,
+      "action": {
+        "kind": "navigate",
+        "path": "/tasks"
+      }
+    }
+  ]
+}
