@@ -166,9 +166,10 @@ describe('TaskFilterBar — trigger glyphs stay height-uniform (#task:1437)', ()
           workspaceOptions,
           channelOptions,
           allChannelsLabel: 'All channels',
-          assigneeOptions: [],
-          creatorOptions: [],
-          hasUnassigned: false,
+          people: {
+            known: true,
+            value: { assignees: [], creators: [], hasUnassigned: false },
+          },
         }),
       ),
     );

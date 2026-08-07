@@ -5,6 +5,9 @@ import {
   type CreateTasksResult,
   type MessageDto,
   type TaskAssigneeDto,
+  type TaskBoardColumnDto,
+  type TaskBoardCountsDto,
+  type TaskBoardFacetsDto,
   type TaskDetailDto,
   type TaskEditResult,
   type TaskMutationResult,
@@ -12,8 +15,10 @@ import {
   type TaskSummaryDto,
 } from '@silverhand/shared';
 import { TaskStore } from './task/store.js';
+import { TaskBoardReader, type TaskBoardColumnRequest } from './task/board.js';
 import { TaskAccessControl } from './task/access.js';
 import { TaskBroadcaster, type TaskEventArgs } from './task/broadcaster.js';
+import type { TaskBoardPopulationFilters } from '../repos/task-board-population.js';
 import {
   failClaim,
   mutationFailure,
@@ -109,6 +114,7 @@ export class TaskService {
   private readonly agents: TaskServiceOptions['agents'];
   private readonly canUseCapability: AgentCapabilityChecker;
   private readonly store: TaskStore;
+  private readonly board: TaskBoardReader;
   private readonly access: TaskAccessControl;
   private readonly broadcaster: TaskBroadcaster;
 
@@ -121,6 +127,7 @@ export class TaskService {
       db: opts.db,
       conversations: opts.conversations,
     });
+    this.board = new TaskBoardReader({ db: opts.db });
     this.access = new TaskAccessControl({
       agents: opts.agents,
       conversations: opts.conversations,
@@ -146,6 +153,25 @@ export class TaskService {
 
   getById(taskId: string, actor: TaskActor): TaskSummaryDto | null {
     return this.store.getById(taskId, actor);
+  }
+
+  // ── Human board reads (#task:1884) ──────────────────────────────
+  //
+  // Three bounded faces replacing the board's fetch-all. They are HUMAN-only
+  // (the viewer gate is a `conversation_users` membership semi-join, not the
+  // agent lane's workspace equality) and carry no lifecycle policy — hence a
+  // straight delegation to `TaskBoardReader`.
+
+  boardColumn(req: TaskBoardColumnRequest): TaskBoardColumnDto {
+    return this.board.column(req);
+  }
+
+  boardCounts(filters: TaskBoardPopulationFilters): TaskBoardCountsDto {
+    return this.board.counts(filters);
+  }
+
+  boardFacets(viewerUserId: string): TaskBoardFacetsDto {
+    return this.board.facets(viewerUserId);
   }
 
   // ── Create ──────────────────────────────────────────────────────
@@ -1218,6 +1244,37 @@ export class TaskService {
     const row = this.store.fetchTaskByNumber(authorizedWorkspaceId, taskNumber);
     if (!row) return null;
     return this.store.fetchTaskDetail(row.id, actor, authorizedWorkspaceId);
+  }
+
+  /**
+   * Human point lookup by the workspace-scoped BUSINESS key
+   * `(workspace_id, task_number)` — the identity an inline `#task:<n>` sigil
+   * carries. Returns null when no such task exists OR when the viewer cannot see
+   * the task's conversation.
+   *
+   * The workspace id is the LOOKUP key, never an authorization claim: it is not
+   * passed on as `authorizedWorkspaceId`, so the gate is the store's per-viewer
+   * conversation visibility. A caller naming a workspace it has no part in
+   * therefore gets the SAME null as a caller naming a task number that was never
+   * allocated — the two are indistinguishable by construction, not by a
+   * remembered convention at the route.
+   *
+   * ONE bounded read (#task:1891): the store keys the summary projection
+   * straight off `uniq_tasks_workspace_number`. It deliberately does NOT compose
+   * `fetchTaskByNumber` + `getById` — that resolves the number through the
+   * mutation-path column set (which reads `t.content`) and then re-reads the row
+   * to project it, so a message full of sigils would pay two queries and one
+   * unwanted body per pill. Summary rather than detail for the same reason:
+   * detail would ship every task's full `content` and resolve a per-viewer `nav`
+   * once per pill. `UserActor` in the signature, because the by-number read an
+   * agent gets is the one above — that one authorizes the workspace first.
+   */
+  getTaskSummaryByNumber(
+    workspaceId: string,
+    taskNumber: number,
+    actor: UserActor,
+  ): TaskSummaryDto | null {
+    return this.store.getByNumber(workspaceId, taskNumber, actor);
   }
 
   // ── Broadcast helper ───────────────────────────────────────────

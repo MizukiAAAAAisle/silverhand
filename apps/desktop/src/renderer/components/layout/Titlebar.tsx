@@ -58,8 +58,10 @@ interface TitlebarProps {
    *  Click opens the workspace-wide tasks drawer (4-column kanban). */
   onOpenTasks?: () => void;
   /** Active-task count for the workspace — drives the small badge next to
-   *  the Tasks button. Hidden when 0 / undefined. */
-  taskCount?: number;
+   *  the Tasks button. Hidden when 0 / undefined, and equally when `null`: the
+   *  counts face has not answered, and 16px of chrome has no honest way to say
+   *  that (#task:1885). */
+  taskCount?: number | null;
   workspaceSidebarVisible: boolean;
   channelSidebarVisible: boolean;
   onToggleWorkspaceSidebar: () => void;

@@ -1,116 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import type { TaskSummaryDto } from '@silverhand/shared';
 import {
-  applyTaskFilters,
   applyWorkspaceCascade,
-  collectAssignees,
-  collectCreators,
   DEFAULT_TASK_FILTERS,
+  personFilterKey,
   taskFiltersEqual,
   type TaskFilters,
 } from './taskFilters';
 
-function task(overrides: Partial<TaskSummaryDto>): TaskSummaryDto {
-  return {
-    id: 'm1',
-    task_number: 1,
-    workspace_id: 'ws1',
-    workspace_name: 'ws',
-    channel_id: 'ch1',
-    channel_name: 'chan',
-    thread_root_id: null,
-    conversation: { id: 'ch1', title: 'chan' },
-    status: 'todo',
-    title: 'a task',
-    assignee: null,
-    creator: { type: 'user', id: 'u1', name: 'Shiki' },
-    created_at: 1000,
-    closed_at: null,
-    ...overrides,
-  };
-}
-
-const byWorkspace = (t: TaskSummaryDto, id: string): boolean => t.workspace_id === id;
-
-describe('applyTaskFilters', () => {
-  const tasks = [
-    task({ id: 'a', workspace_id: 'ws1' }),
-    task({ id: 'b', workspace_id: 'ws2' }),
-    task({
-      id: 'c',
-      workspace_id: 'ws1',
-      assignee: { type: 'agent', id: 'ag1', name: 'Alice' },
-    }),
-  ];
-
-  it('returns all tasks at default filters', () => {
-    expect(applyTaskFilters(tasks, DEFAULT_TASK_FILTERS, byWorkspace)).toHaveLength(3);
+describe('personFilterKey', () => {
+  // The collision property the whole person axis rests on. It used to be
+  // asserted through `applyTaskFilters`, which was retired with the fetch-all
+  // list (#task:1892) — the property is not: agent and user ids share no
+  // namespace guarantee, so a key built from the id ALONE would make an agent
+  // and a user with the same id one selection here, in `taskFiltersEqual`, and
+  // in the wire params derived from them.
+  it('keys a person by {type,id} so agent/user ids do not collide', () => {
+    expect(personFilterKey({ kind: 'person', person: { type: 'agent', id: 'shared' } })).not.toBe(
+      personFilterKey({ kind: 'person', person: { type: 'user', id: 'shared' } }),
+    );
   });
 
-  it('filters by channel via the supplied predicate', () => {
-    const f: TaskFilters = { ...DEFAULT_TASK_FILTERS, channelId: 'ws1' };
-    expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.id)).toEqual([
-      'a',
-      'c',
-    ]);
-  });
-
-  it('filters by workspace directly on task.workspace_id (#task:1387)', () => {
-    const f: TaskFilters = { ...DEFAULT_TASK_FILTERS, workspaceId: 'ws2' };
-    expect(applyTaskFilters(tasks, f, byWorkspace).map(t => t.id)).toEqual([
-      'b',
-    ]);
-  });
-
-  it('filters assignee=unassigned vs a specific person', () => {
-    const unassigned: TaskFilters = {
-      ...DEFAULT_TASK_FILTERS,
-      assignee: { kind: 'unassigned' },
-    };
-    expect(applyTaskFilters(tasks, unassigned, byWorkspace).map(t => t.id)).toEqual([
-      'a',
-      'b',
-    ]);
-
-    const person: TaskFilters = {
-      ...DEFAULT_TASK_FILTERS,
-      assignee: { kind: 'person', person: { type: 'agent', id: 'ag1' } },
-    };
-    expect(applyTaskFilters(tasks, person, byWorkspace).map(t => t.id)).toEqual([
-      'c',
-    ]);
-  });
-
-  it('keys person filters by {type,id} so agent/user ids do not collide', () => {
-    const collide = [
-      task({ id: 'x', creator: { type: 'agent', id: 'shared', name: 'A' } }),
-      task({ id: 'y', creator: { type: 'user', id: 'shared', name: 'U' } }),
-    ];
-    const f: TaskFilters = {
-      ...DEFAULT_TASK_FILTERS,
-      creator: { kind: 'person', person: { type: 'user', id: 'shared' } },
-    };
-    expect(applyTaskFilters(collide, f, byWorkspace).map(t => t.id)).toEqual(['y']);
-  });
-});
-
-describe('collectAssignees / collectCreators', () => {
-  it('dedupes assignees and sorts by name', () => {
-    const tasks = [
-      task({ assignee: { type: 'agent', id: 'b', name: 'Bob' } }),
-      task({ assignee: { type: 'agent', id: 'a', name: 'Ann' } }),
-      task({ assignee: { type: 'agent', id: 'b', name: 'Bob' } }),
-      task({ assignee: null }),
-    ];
-    expect(collectAssignees(tasks).map(o => o.name)).toEqual(['Ann', 'Bob']);
-  });
-
-  it('skips system creators (no selectable person)', () => {
-    const tasks = [
-      task({ creator: { type: 'system', id: null, name: 'system' } }),
-      task({ creator: { type: 'user', id: 'u1', name: 'Shiki' } }),
-    ];
-    expect(collectCreators(tasks).map(o => o.name)).toEqual(['Shiki']);
+  it('gives the two non-person values their own keys', () => {
+    expect(personFilterKey({ kind: 'any' })).toBe('any');
+    expect(personFilterKey({ kind: 'unassigned' })).toBe('unassigned');
   });
 });
 

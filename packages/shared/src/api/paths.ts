@@ -367,14 +367,43 @@ export const apiPaths = {
   notificationsUnread: '/api/notifications/unread',
   notificationsRead: '/api/notifications/read',
 
-  // tasks — human-facing list + mutation endpoints. Per
-  // docs/tasks-design.md. Path key = task id (`tasks.id`); a task is a
-  // first-class aggregate, not a message (v60).
-  // Method-distinguished collection route: GET = board list;
-  // POST = human panel direct-create (`HumanCreateTaskInput`, sourceless,
-  // membership + open fail-closed). Both delegate to the one actor-agnostic
-  // `taskService` — the human create shares the agent CLI's create semantics.
+  // tasks — human-facing task collection. Per docs/tasks-design.md. Path key =
+  // task id (`tasks.id`); a task is a first-class aggregate, not a message
+  // (v60).
+  // POST-ONLY (#task:1891): human panel direct-create (`HumanCreateTaskInput`,
+  // sourceless, membership + open fail-closed), delegating to the one
+  // actor-agnostic `taskService` — the human create shares the agent CLI's
+  // create semantics. There is NO human GET here: every human read is a bounded
+  // face — the three board faces below for the board, `taskByNumber` for an
+  // inline `#task:<n>` sigil, `/api/tasks/:id` for one task. The agent list
+  // lives on its own internal route and is unaffected.
   tasks: '/api/tasks',
+  // Human task BOARD read faces (#task:1884). Three separate GETs because the
+  // board needs three DISTINCT facts, and each fact gets exactly one carrier:
+  //   taskBoardColumn — one status column's keyset WINDOW (items + next_cursor).
+  //   taskBoardCounts — the authoritative per-status TOTALS (one GROUP BY).
+  //   taskBoardFacets — the filter menus' person option sets.
+  // No face returns another's fact (a window carries no total; counts carry no
+  // items), so a paginated board can never hold two disagreeing copies of one
+  // number. All three interpolate the SAME population predicate
+  // (repos/task-board-population.ts) — including the viewer-visibility gate,
+  // and always INSIDE the query, before that face's LIMIT or aggregate: no face
+  // post-filters rows out of a page it already cut, so narrowing/paging can
+  // never widen what a viewer sees nor shorten a window that has more rows
+  // behind it. These are HUMAN-only
+  // and deliberately NOT reachable through `ListTasksQuerySchema`: that schema
+  // is the AGENT list contract, and board pagination must not enter it.
+  taskBoardColumn: '/api/tasks/board/column',
+  taskBoardCounts: '/api/tasks/board/counts',
+  taskBoardFacets: '/api/tasks/board/facets',
+  // Human POINT LOOKUP by the workspace-scoped BUSINESS key
+  // `(workspace_id, task_number)` — the identity an inline `#task:<n>` sigil
+  // carries, which no other human face can express: the board faces are
+  // status-partitioned and carry no `task_number` axis, and `GET /api/tasks/:id`
+  // needs an id the sigil doesn't have. Symmetric with the agent CLI's
+  // by-number detail read, so a business-key lookup is a face on both sides
+  // rather than a filtered list-of-one (#task:1891).
+  taskByNumber: '/api/tasks/by-number',
   taskClaim: (taskId: string) => `/api/tasks/${taskId}/claim`,
   taskUnclaim: (taskId: string) => `/api/tasks/${taskId}/unclaim`,
   taskStatus: (taskId: string) => `/api/tasks/${taskId}/status`,

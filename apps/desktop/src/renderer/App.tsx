@@ -50,7 +50,12 @@ import { WorkspaceSettingsDialog } from '@/features/workspaces/WorkspaceSettings
 import { TaskDetailDialog } from '@/components/tasks/TaskDetailDialog';
 import { TaskDetailPanel } from '@/components/tasks/TaskDetailPanel';
 import { WorkspaceTasksDrawer } from '@/components/tasks/WorkspaceTasksDrawer';
-import { useTasks } from '@/features/tasks/hooks';
+import { activeTaskCount } from '@/features/tasks/boardAuthority';
+import {
+  useBoardCounts,
+  useTaskBoardRealtime,
+} from '@/features/tasks/useBoard';
+import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
 import {
   EMPTY_REVEAL_SLOT,
   nextRevealSlot,
@@ -633,6 +638,15 @@ function RegisteredAppShell(): JSX.Element {
   useAttentionRealtime();
   const { data: attentionBadges } = useAttentionBadges();
 
+  // ── Task board freshness (#task:1885) ──────────────────────────────────
+  // The ONE `task_changed` listener for every board projection. It lives here
+  // because App is the ancestor of both task surfaces AND of the titlebar badge,
+  // so the projections stay fresh whether a board is mounted or not — and because
+  // a second listener would not be a free dedup: an `invalidateQueries` on a key
+  // that already has data cancels the in-flight refetch and restarts it, costing
+  // one extra round trip per surface per event (see `useTaskBoardRealtime`).
+  useTaskBoardRealtime();
+
   // ── Nav-rail attention dots (#task:1408) ───────────────────────────────
   // A single no-count dot per rail section that has new content, derived from
   // the existing viewer read-models (zero new query/state). Chat = any workspace
@@ -684,17 +698,26 @@ function RegisteredAppShell(): JSX.Element {
   // current workspace so the number matches what the panel will show
   // when opened (default filter = current channel, but the badge is
   // workspace-aggregate to match where the entry lives).
-  const { data: workspaceTasks = [] } = useTasks(
-    selectedWorkspaceId ? { workspace_id: selectedWorkspaceId } : {},
+  //
+  // Read from the counts-only authority face (#task:1884), not from a list: the
+  // number is a server `GROUP BY`, so a badge on a 3,000-task workspace costs one
+  // small response instead of downloading every task to call `.filter().length`
+  // (#task:1885). `activeTaskCount` is the SAME definition a board header uses, so
+  // the two can never disagree about what "active" means.
+  //
+  // `null` while the face has not answered — and the badge is deliberately hidden
+  // then, exactly as it is for a real zero: an unknown count has no honest number
+  // to print in 16px of chrome, and a placeholder there would read as a standing
+  // count of its own. The distinction is kept in the DATA (`activeTaskCount`
+  // returns `number | null`) so the board headers, which have room, can show it.
+  const workspaceTaskCounts = useBoardCounts(
+    useMemo(
+      () => ({ ...DEFAULT_TASK_FILTERS, workspaceId: selectedWorkspaceId }),
+      [selectedWorkspaceId],
+    ),
     { enabled: !!selectedWorkspaceId },
   );
-  // Exclude both terminal statuses: `done` (completed) and `closed`
-  // (shelved). After the closed-as-status cutover `closed` is the 5th
-  // status, so the badge must drop it too — otherwise every shelved task
-  // counts as "active" (matches TasksSection's channelActiveCounts).
-  const workspaceActiveTaskCount = workspaceTasks.filter(
-    t => t.status !== 'done' && t.status !== 'closed',
-  ).length;
+  const workspaceActiveTaskCount = activeTaskCount(workspaceTaskCounts);
 
   const resolveNavWorkspaceId = (
     workspaceId: string | undefined,
@@ -2525,10 +2548,10 @@ function RegisteredAppShell(): JSX.Element {
         onReveal={taskId => {
           // Reveal targets the task surface THAT ALREADY EXISTS here, and every
           // branch performs exactly one navigation (Cindy / Alice BLOCKER 1).
-          // Both boards are cross-workspace (`useTasks({})`), so nothing here
-          // needs the task's own workspace — and moving the user from workspace A
-          // to B because a task lives in B is a location change they didn't ask
-          // for.
+          // Both boards read ONE cross-workspace board (default filters carry no
+          // workspace narrowing), so nothing here needs the task's own workspace
+          // — and moving the user from workspace A to B because a task lives in B
+          // is a location change they didn't ask for.
           //
           // No owner travels with the intent: at most one task surface is on
           // screen, so the branches below are a NAVIGATION decision (which board

@@ -1192,6 +1192,39 @@ export const migrations: Migration[] = [
         END;
     `,
   },
+  {
+    version: 66,
+    name: 'task_board_ordered_access_paths',
+    up: `
+      -- #task:1884 — the human task board reads one status column at a time as a
+      -- keyset window (ORDER BY task_number DESC, id DESC LIMIT n). Bounding the
+      -- ROWS the client renders is only half of it: without an index that is
+      -- already in that order, every window still sorts the whole column, so the
+      -- authority's cost stays proportional to the population, not to the page.
+      --
+      -- Two access paths because the board has two real query shapes and one
+      -- composite cannot serve both: the DEFAULT view is cross-workspace
+      -- ("All workspaces"), where a leading workspace_id column is unusable, and
+      -- the narrowed view filters one workspace first.
+      --
+      -- Column order mirrors the queries exactly: status equality, then the sort
+      -- key. The trailing id column is the unique tiebreak that makes the keyset
+      -- a TOTAL order — task_number is monotonic only per workspace
+      -- (uniq_tasks_workspace_number), so on a cross-workspace board two tasks
+      -- can share a number and a number-only cursor could skip or repeat rows.
+      CREATE INDEX idx_tasks_status_number
+        ON tasks(status, task_number DESC, id DESC);
+
+      CREATE INDEX idx_tasks_workspace_status_number
+        ON tasks(workspace_id, status, task_number DESC, id DESC);
+
+      -- Superseded: idx_tasks_workspace_status(workspace_id, status) is a strict
+      -- PREFIX of the index above, so every lookup it served is served
+      -- identically — keeping it would only add a second b-tree to maintain on
+      -- every task write.
+      DROP INDEX idx_tasks_workspace_status;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

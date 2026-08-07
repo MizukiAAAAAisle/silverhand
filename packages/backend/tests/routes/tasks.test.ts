@@ -3,6 +3,7 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { canPostToConversation, canViewConversation } from '../../src/permissions.js';
 import type { AgentPrincipal } from '../../src/auth/principal.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
+import { configureDatabaseObservation } from '../../src/observability/observed-statement.js';
 import { AGENT_CAPABILITIES } from '@silverhand/shared';
 
 interface SetupResult {
@@ -14,7 +15,13 @@ interface SetupResult {
   agentIds: Record<string, string>;
 }
 
-async function setup(t: TestApp, members = ['alice', 'bob']): Promise<SetupResult> {
+async function setup(
+  t: TestApp,
+  members = ['alice', 'bob'],
+  // Agent names AND workspace names are unique per app, so a case that seeds two
+  // workspaces in ONE app passes distinct values for both.
+  workspaceName = 'eng',
+): Promise<SetupResult> {
   const h = http(t);
   const agentIds: Record<string, string> = {};
   for (const name of members) {
@@ -25,7 +32,7 @@ async function setup(t: TestApp, members = ['alice', 'bob']): Promise<SetupResul
   }
   const ws = (await (
     await h.post('/api/workspaces', {
-      name: 'eng',
+      name: workspaceName,
       member_agent_ids: Object.values(agentIds),
     })
   ).json()) as any;
@@ -49,7 +56,7 @@ describe('Tasks (PR-T1)', () => {
 
   it('create_tasks allocates monotonic per-workspace task_numbers', async () => {
     t = buildTestApp();
-    const { conversationId, agentIds, workspaceId } = await setup(t);
+    const { conversationId, agentIds } = await setup(t);
     const h = http(t);
 
     const r1 = await (
@@ -61,18 +68,12 @@ describe('Tasks (PR-T1)', () => {
     expect(r1.tasks).toHaveLength(2);
     expect(r1.tasks[0].task_number).toBe(1);
     expect(r1.tasks[1].task_number).toBe(2);
-
-    // Human list view picks up both, with correct workspace/channel refs.
-    const h2 = http(t);
-    const all = await (await h2.get('/api/tasks')).json() as any;
-    expect(all.tasks).toHaveLength(2);
-    expect(all.tasks[0].workspace_id).toBe(workspaceId);
-    expect(all.tasks[0].channel_id).toBe(conversationId);
-    expect(all.tasks[0].conversation.id).toBe(conversationId);
-    expect(all.tasks[0].status).toBe('todo');
-    expect(all.tasks[0].assignee).toBeNull();
-    // Newest-first (task_number DESC): #2 'add logout' leads, #1 'fix login' follows.
-    expect(all.tasks.map((x: any) => x.title)).toEqual(['add logout', 'fix login']);
+    // The human-side facts this case used to observe through the unbounded
+    // `GET /api/tasks` (retired in #task:1891) now live where they belong:
+    // `taskJoinedToSummary`'s value wiring in `task-board.test.ts`, the newest-
+    // first delivery order in the board column's ordering cases, and the
+    // agent-created task's conversation/assignee refs in the cross-conversation
+    // claim case below (which reads the agent list face).
   });
 
   // Count conversation messages by author kind — the falsifier for the
@@ -88,6 +89,26 @@ describe('Tasks (PR-T1)', () => {
         .get(conversationId, kind) as { n: number }
     ).n;
 
+  // Sibling falsifier for the TASK half of "zero write" on a rejected create.
+  // Set-level ABSENCE has no read-face carrier (a rejected POST returns no id,
+  // so a single-task read could only assert a tautology) — so it is asserted at
+  // the layer that owns the fact. A conversation-scoped count delta is also
+  // STRONGER than the title-absence check it replaces: it rejects "a row was
+  // written under a different title" too.
+  const countTasks = (conversationId: string): number =>
+    (
+      t!.ctx.db
+        .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE conversation_id = ?`)
+        .get(conversationId) as { n: number }
+    ).n;
+
+  // Read ONE task's post-write state through the surviving single-task face.
+  // The write-path cases below use it as their observation instrument (they used
+  // to read the unbounded list and index `[0]`); a task id is the exact
+  // scope those assertions mean, so this is the layer that owns the fact.
+  const readTask = async (taskId: string): Promise<any> =>
+    ((await (await http(t!).get(`/api/tasks/${taskId}`)).json()) as any).task;
+
   it('human POST /api/tasks returns only the created identity and never fabricates a user message', async () => {
     t = buildTestApp();
     const { conversationId, workspaceId } = await setup(t);
@@ -95,6 +116,7 @@ describe('Tasks (PR-T1)', () => {
 
     const userBefore = countByKind(conversationId, 'user');
     const sysBefore = countByKind(conversationId, 'system');
+    const tasksBefore = countTasks(conversationId);
 
     const res = await h.post('/api/tasks', {
       title: 'panel-created task',
@@ -110,6 +132,10 @@ describe('Tasks (PR-T1)', () => {
     expect(created.task.title).toBe('panel-created task');
     expect(typeof created.task.id).toBe('string');
     expect(typeof created.task.task_number).toBe('number');
+
+    // Exactly one row — the positive arm of the same count the rejected-create
+    // cases assert a zero delta on, so neither side can pass on a blind counter.
+    expect(countTasks(conversationId) - tasksBefore).toBe(1);
 
     // Product contract: the create emits exactly one `task_create` SYSTEM event
     // and zero user-authored message (it is not a user post).
@@ -131,9 +157,14 @@ describe('Tasks (PR-T1)', () => {
     expect(detail.creator.type).toBe('user');
     expect(detail.creator.id).toBe(t!.viewerUserId);
 
-    // Shows up on the human board via the SAME list read as agent-created tasks.
-    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks.map((x: any) => x.title)).toContain('panel-created task');
+    // Shows up on the human board — read through the BOUNDED `todo` column
+    // (#task:1884), which is the human board's read face; the unbounded list no
+    // longer exists (#task:1891). Narrower than the old check by
+    // design: this asserts presence in one status column, not in the whole set.
+    const column = (await (
+      await http(t).get('/api/tasks/board/column?status=todo')
+    ).json()) as any;
+    expect(column.items.map((x: any) => x.title)).toContain('panel-created task');
   });
 
   it('human POST /api/tasks accepts an omitted body (detail content defaults to empty)', async () => {
@@ -195,6 +226,7 @@ describe('Tasks (PR-T1)', () => {
     t = buildTestApp();
     const { conversationId } = await setup(t);
     const sysBefore = countByKind(conversationId, 'system');
+    const tasksBefore = countTasks(conversationId);
     t.ctx.db
       .prepare(`UPDATE conversations SET closed_at = ? WHERE id = ?`)
       .run(Date.now(), conversationId);
@@ -206,8 +238,7 @@ describe('Tasks (PR-T1)', () => {
     expect(res.status).toBe(409);
     expect((await res.json()) as any).toEqual({ success: false, code: 'conversation_closed' });
     // Zero task, zero event.
-    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks.some((x: any) => x.title === 'closed attempt')).toBe(false);
+    expect(countTasks(conversationId) - tasksBefore).toBe(0);
     expect(countByKind(conversationId, 'system') - sysBefore).toBe(0);
   });
 
@@ -215,6 +246,7 @@ describe('Tasks (PR-T1)', () => {
     t = buildTestApp();
     const { conversationId } = await setup(t);
     const sysBefore = countByKind(conversationId, 'system');
+    const tasksBefore = countTasks(conversationId);
     t.ctx.db
       .prepare(`UPDATE conversations SET archived_at = ? WHERE id = ?`)
       .run(Date.now(), conversationId);
@@ -230,8 +262,7 @@ describe('Tasks (PR-T1)', () => {
     });
     // Zero task, zero event — the reject happens in the shared service, so the
     // same invariant holds for the agent create path.
-    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks.some((x: any) => x.title === 'archived attempt')).toBe(false);
+    expect(countTasks(conversationId) - tasksBefore).toBe(0);
     expect(countByKind(conversationId, 'system') - sysBefore).toBe(0);
   });
 
@@ -240,10 +271,13 @@ describe('Tasks (PR-T1)', () => {
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
 
-    await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'shared work' }] },
-    );
+    const created = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'shared work' }] },
+      )
+    ).json()) as any;
+    const taskId = created.tasks[0].id;
 
     const aliceClaim = await (
       await h.post(
@@ -263,12 +297,10 @@ describe('Tasks (PR-T1)', () => {
     expect(bobClaim.results[0].reason).toMatch(/already claimed/);
 
     // After claim, status has auto-advanced to in_progress.
-    const listed = await (
-      await http(t).get('/api/tasks')
-    ).json() as any;
-    expect(listed.tasks[0].status).toBe('in_progress');
-    expect(listed.tasks[0].assignee?.type).toBe('agent');
-    expect(listed.tasks[0].assignee?.id).toBe(agentIds.alice);
+    const claimed = await readTask(taskId);
+    expect(claimed.status).toBe('in_progress');
+    expect(claimed.assignee?.type).toBe('agent');
+    expect(claimed.assignee?.id).toBe(agentIds.alice);
   });
 
   it('cross-conversation claim within same workspace succeeds (#task:530)', async () => {
@@ -382,10 +414,7 @@ describe('Tasks (PR-T1)', () => {
     ).json() as any;
     expect(approve.success).toBe(true);
 
-    const listed = await (
-      await http(t).get('/api/tasks')
-    ).json() as any;
-    expect(listed.tasks[0].status).toBe('done');
+    expect((await readTask(taskId)).status).toBe('done');
   });
 
   it('publishes task_changed realtime events on claim', async () => {
@@ -491,11 +520,11 @@ describe('Tasks (PR-T1)', () => {
     ).json()) as any;
     expect(claim.success).toBe(true);
 
-    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
+    const dispatched = await readTask(taskId);
     // Assigning a `todo` task hands out the work, so the row leaves `todo` in the
     // same write — `todo + assignee` would have no legal exit for the assignee.
-    expect(listed.tasks[0].status).toBe('in_progress');
-    expect(listed.tasks[0].assignee?.id).toBe(agentIds.bob);
+    expect(dispatched.status).toBe('in_progress');
+    expect(dispatched.assignee?.id).toBe(agentIds.bob);
   });
 
   it('human POST /api/tasks/:taskId/unclaim clears the assignee and keeps in_review', async () => {
@@ -524,9 +553,9 @@ describe('Tasks (PR-T1)', () => {
     ).json()) as any;
     expect(unclaim.success).toBe(true);
 
-    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks[0].status).toBe('in_review');
-    expect(listed.tasks[0].assignee).toBeNull();
+    const unclaimed = await readTask(taskId);
+    expect(unclaimed.status).toBe('in_review');
+    expect(unclaimed.assignee).toBeNull();
   });
 
   it('human POST /api/tasks/:taskId/unclaim on a done task → 409 task_done, task untouched', async () => {
@@ -552,9 +581,9 @@ describe('Tasks (PR-T1)', () => {
     const body = (await res.json()) as any;
     expect(body.code).toBe('task_done');
 
-    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks[0].status).toBe('done');
-    expect(listed.tasks[0].assignee?.id).toBe(agentIds.alice);
+    const untouched = await readTask(taskId);
+    expect(untouched.status).toBe('done');
+    expect(untouched.assignee?.id).toBe(agentIds.alice);
   });
 
   // Characterization for the P10 internal-agent factory move (#task:981):
@@ -571,10 +600,13 @@ describe('Tasks (PR-T1)', () => {
     const { sessionId, agentIds } = await setup(t);
     const h = http(t);
 
-    await h.post(
-      `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
-      { tasks: [{ title: 'unclaim me' }] },
-    );
+    const created = (await (
+      await h.post(
+        `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/create`,
+        { tasks: [{ title: 'unclaim me' }] },
+      )
+    ).json()) as any;
+    const taskId = created.tasks[0].id;
     const claim = (await (
       await h.post(
         `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/claim`,
@@ -583,9 +615,9 @@ describe('Tasks (PR-T1)', () => {
     ).json()) as any;
     expect(claim.results[0].success).toBe(true);
     // Sanity: claim auto-advanced to in_progress + assigned to alice.
-    const afterClaim = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(afterClaim.tasks[0].status).toBe('in_progress');
-    expect(afterClaim.tasks[0].assignee?.id).toBe(agentIds.alice);
+    const afterClaim = await readTask(taskId);
+    expect(afterClaim.status).toBe('in_progress');
+    expect(afterClaim.assignee?.id).toBe(agentIds.alice);
 
     const res = await h.post(
       `/internal/conversations/${sessionId}/agents/${agentIds.alice}/tasks/unclaim`,
@@ -595,9 +627,9 @@ describe('Tasks (PR-T1)', () => {
     const body = (await res.json()) as any;
     expect(body.success).toBe(true);
 
-    const afterUnclaim = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(afterUnclaim.tasks[0].status).toBe('todo');
-    expect(afterUnclaim.tasks[0].assignee).toBeNull();
+    const afterUnclaim = await readTask(taskId);
+    expect(afterUnclaim.status).toBe('todo');
+    expect(afterUnclaim.assignee).toBeNull();
   });
 
   it('human POST /api/tasks/:taskId/status can jump to any non-current status', async () => {
@@ -617,8 +649,7 @@ describe('Tasks (PR-T1)', () => {
       await http(t).post(`/api/tasks/${taskId}/status`, { status: 'done' })
     ).json()) as any;
     expect(direct.success).toBe(true);
-    const listed = (await (await http(t).get('/api/tasks')).json()) as any;
-    expect(listed.tasks[0].status).toBe('done');
+    expect((await readTask(taskId)).status).toBe('done');
   });
 
   it('human POST /api/tasks/:taskId/status can close and reopen tasks', async () => {
@@ -650,11 +681,10 @@ describe('Tasks (PR-T1)', () => {
       closed_at: expect.any(Number),
     });
 
-    const closedList = (await (
-      await http(t).get('/api/tasks?status=closed')
-    ).json()) as any;
-    expect(closedList.tasks).toHaveLength(1);
-    expect(closedList.tasks[0]).toMatchObject({
+    // Status + close timestamp are single-task facts, read from the single-task
+    // face. Which status BUCKET a task lands in is the board column's contract
+    // and is pinned there (task-board.test.ts), not re-derived from a filter here.
+    expect(await readTask(taskId)).toMatchObject({
       id: taskId,
       title: 'file later',
       status: 'closed',
@@ -665,9 +695,9 @@ describe('Tasks (PR-T1)', () => {
       await http(t).post(`/api/tasks/${taskId}/status`, { status: 'todo' })
     ).json()) as any;
     expect(reopened.success).toBe(true);
-    const restored = (await (await http(t).get('/api/tasks?status=todo')).json()) as any;
-    expect(restored.tasks).toHaveLength(1);
-    expect(restored.tasks[0].closed_at).toBeNull();
+    const restored = await readTask(taskId);
+    expect(restored.status).toBe('todo');
+    expect(restored.closed_at).toBeNull();
   });
 
   it('agent task list filters by repeated --task-number / --status / --assignee + --limit', async () => {
@@ -1298,5 +1328,177 @@ describe('Task create/edit/detail routes', () => {
     const detail = await (await h.get(`/api/tasks/${taskId}`)).json() as any;
     expect(detail.task.title).toBe('human title');
     expect(detail.task.content).toBe('orig body');
+  });
+
+  // ── GET /api/tasks/by-number (#task:1891) ──────────────────────────
+  //
+  // The human point lookup by the workspace-scoped BUSINESS key, which the
+  // inline `#task:<n>` sigil is the caller for. It is the only human face that
+  // can answer `(workspace_id, task_number)`: the board columns are
+  // status-partitioned and carry no number axis, and `GET /api/tasks/:taskId`
+  // needs an id the sigil does not have.
+  describe('GET /api/tasks/by-number', () => {
+    /** Create one workspace + one agent task in it, and return the ids/numbers
+     *  the assertions need. `member` / `workspaceName` are parameters because
+     *  both are unique per app: the two-workspace case seeds twice in ONE app. */
+    const seedTask = async (
+      app: TestApp,
+      title: string,
+      member = 'alice',
+      workspaceName = 'eng',
+    ): Promise<{ workspaceId: string; conversationId: string; taskId: string; taskNumber: number }> => {
+      const { workspaceId, conversationId, agentIds } = await setup(app, [member], workspaceName);
+      const created = (await (
+        await http(app).post(
+          `/internal/conversations/${conversationId}/agents/${agentIds[member]}/tasks/create`,
+          { tasks: [{ title }] },
+        )
+      ).json()) as any;
+      return {
+        workspaceId,
+        conversationId,
+        taskId: created.tasks[0].id,
+        taskNumber: created.tasks[0].task_number,
+      };
+    };
+
+    it('resolves the business key to that one task', async () => {
+      t = buildTestApp();
+      const { workspaceId, conversationId, taskId, taskNumber } = await seedTask(t, 'sigil target');
+
+      const res = await http(t).get(
+        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber}`,
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as any;
+      expect(body.task).toMatchObject({
+        id: taskId,
+        task_number: taskNumber,
+        title: 'sigil target',
+        workspace_id: workspaceId,
+        channel_id: conversationId,
+        status: 'todo',
+      });
+      // A summary, not a detail: one message can carry many sigils, so the face
+      // deliberately ships neither the full body nor a per-viewer `nav`.
+      expect(body.task.content).toBeUndefined();
+      expect(body.task.nav).toBeUndefined();
+    });
+
+    it('is keyed by workspace, not by number alone: the same number in two workspaces resolves separately', async () => {
+      // task_number is a PER-WORKSPACE sequence, so #1 exists in both places.
+      // This is the falsifier for a lookup that ignores the workspace half of
+      // the key and happens to pass the single-workspace case above.
+      t = buildTestApp();
+      const a = await seedTask(t, 'task in A', 'alice', 'eng');
+      const b = await seedTask(t, 'task in B', 'bob', 'design');
+      expect(a.taskNumber).toBe(b.taskNumber);
+      expect(a.workspaceId).not.toBe(b.workspaceId);
+
+      const inA = (await (
+        await http(t).get(
+          `/api/tasks/by-number?workspace_id=${a.workspaceId}&task_number=${a.taskNumber}`,
+        )
+      ).json()) as any;
+      const inB = (await (
+        await http(t).get(
+          `/api/tasks/by-number?workspace_id=${b.workspaceId}&task_number=${b.taskNumber}`,
+        )
+      ).json()) as any;
+      expect(inA.task.id).toBe(a.taskId);
+      expect(inB.task.id).toBe(b.taskId);
+    });
+
+    it('is fail-closed and leaks no existence: an unallocated number and a task the viewer cannot see are the SAME 404', async () => {
+      t = buildTestApp();
+      const { workspaceId, conversationId, taskNumber } = await seedTask(t, 'hidden');
+
+      const unallocated = await http(t).get(
+        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber + 999}`,
+      );
+
+      // A REAL task, in the workspace the caller correctly names, whose
+      // conversation the viewer is no longer a member of. Naming the right
+      // workspace must not confirm that the number exists in it — the gate is
+      // the viewer's visibility of the task's own conversation, and the query's
+      // `workspace_id` is never taken as an authorized scope.
+      t.ctx.db
+        .prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = ?`)
+        .run(conversationId, t.viewerUserId);
+      const invisible = await http(t).get(
+        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber}`,
+      );
+
+      expect(unallocated.status).toBe(404);
+      expect(invisible.status).toBe(404);
+      expect(await unallocated.json()).toEqual(await invisible.json());
+    });
+
+    it('400s a query missing or malformed on either axis — not a 404', async () => {
+      // A question this face cannot answer is NOT "no such task": the renderer
+      // resolves 404 to a cached `null` (inert sigil), so a bad request that
+      // returned 404 would be cached as a definitive miss.
+      t = buildTestApp();
+      const { workspaceId, taskNumber } = await seedTask(t, 'anything');
+      const h = http(t);
+
+      for (const qs of [
+        `task_number=${taskNumber}`,
+        `workspace_id=${workspaceId}`,
+        `workspace_id=${workspaceId}&task_number=0`,
+        `workspace_id=${workspaceId}&task_number=-1`,
+        `workspace_id=${workspaceId}&task_number=1.5`,
+        `workspace_id=${workspaceId}&task_number=abc`,
+        `workspace_id=&task_number=${taskNumber}`,
+      ]) {
+        const res = await h.get(`/api/tasks/by-number?${qs}`);
+        expect(res.status, qs).toBe(400);
+      }
+    });
+
+    it('is not shadowed by the single-task id route', async () => {
+      // `/api/tasks/:taskId` would swallow the literal `by-number` segment if it
+      // were registered first; the 404-vs-400 distinction proves which handler
+      // ran (the id route has no query contract to violate).
+      t = buildTestApp();
+      await seedTask(t, 'ordering');
+      const res = await http(t).get('/api/tasks/by-number');
+      expect(res.status).toBe(400);
+    });
+
+    it('answers with ONE summary read and never through the resolved/detail read path', async () => {
+      // The mechanical criterion behind "bounded" (#task:1891). The wire shape
+      // cannot carry this fact: a face that resolves the number through the
+      // mutation-path column set (which selects `t.content`) and then re-reads
+      // the row to project a summary returns a byte-identical body while paying
+      // two queries and one unwanted body PER PILL — and a message can carry
+      // many sigils. So assert what actually executed.
+      t = buildTestApp();
+      const { workspaceId, taskNumber } = await seedTask(t, 'observed');
+
+      // `slowStatementMs: 0` makes every observed statement log, which turns the
+      // observability layer into an executed-query recorder. Filtering on the
+      // `tasks.` prefix is sound because the store owns that prefix and the
+      // viewer-visibility gate is an unobserved `db.prepare`.
+      const executed: string[] = [];
+      configureDatabaseObservation(t.ctx.db, {
+        slowStatementMs: 0,
+        logger: {
+          info: () => undefined,
+          error: () => undefined,
+          warn: (obj: unknown) => {
+            const name = (obj as { queryName?: string }).queryName;
+            if (name?.startsWith('tasks.')) executed.push(name);
+          },
+        },
+      });
+
+      const res = await http(t).get(
+        `/api/tasks/by-number?workspace_id=${workspaceId}&task_number=${taskNumber}`,
+      );
+
+      expect(res.status).toBe(200);
+      expect(executed).toEqual(['tasks.get_joined_by_number']);
+    });
   });
 });

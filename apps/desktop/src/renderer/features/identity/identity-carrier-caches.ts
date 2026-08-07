@@ -161,11 +161,16 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     filter: { queryKey: messageReactorsKeyPrefix },
   },
   // Task DTOs carry THREE identity snapshots — `assignee.name`, `creator.name`
-  // (which also feeds the creator filter options via
-  // `taskFilters.collectCreators`) and `last_editor.name` in the detail. All
-  // three are live joins re-resolved on read, so invalidating the task caches
-  // converges them together; re-resolving only the assignee by id would leave
-  // two freshness classes inside one dto (Cindy #task:1703).
+  // and `last_editor.name` in the detail. All three are live joins re-resolved on
+  // read, so invalidating the task caches converges them together; re-resolving
+  // only the assignee by id would leave two freshness classes inside one dto
+  // (Cindy #task:1703).
+  //
+  // `['tasks']` is the ROOT, so this one entry covers all three board faces —
+  // column pages, counts, facets. It got MORE load-bearing when the board became
+  // the only task read (#task:1885/#task:1892): the person filter options are now
+  // a server facet read that carries its own `name` snapshots, where they used to
+  // be aggregated client-side off the rows in hand.
   { id: 'task-lists', kinds: ['agent', 'human'], filter: { queryKey: ['tasks'] } },
   { id: 'task-detail', kinds: ['agent', 'human'], filter: { queryKey: ['task-detail'] } },
   {

@@ -45,10 +45,10 @@ export interface TaskDetailDialogProps {
    *  (App closes it only when no navigation happened). */
   onJump: (target: TaskJumpTarget) => void;
   /** "View in Tasks" — reveal this task's card on whichever task board is on
-   *  screen. Takes the task id ONLY: both boards are cross-workspace
-   *  (`useTasks({})`), so a task id resolves against all of them and the reveal
-   *  needs no workspace of its own. Omitted → the affordance is absent. Same
-   *  ownership rule as `onJump`: the dialog does not close itself. */
+   *  screen. Takes the task id ONLY: both boards read one cross-workspace board,
+   *  so a task id resolves against all of them and the reveal needs no workspace
+   *  of its own. Omitted → the affordance is absent. Same ownership rule as
+   *  `onJump`: the dialog does not close itself. */
   onReveal?: (taskId: string) => void;
 }
 

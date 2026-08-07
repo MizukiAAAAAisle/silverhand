@@ -38,7 +38,13 @@ import { activityKey } from '../attention/hooks';
 import { messageKey } from '../messages/hooks';
 import { savedKey } from '../saved/hooks';
 import { searchKey } from '../search/hooks';
-import { tasksKey } from '../tasks/hooks';
+import {
+  boardColumnKey,
+  boardCountsKey,
+  boardFacetsKey,
+  boardFilterKey,
+} from '../tasks/boardQuery';
+import { DEFAULT_TASK_FILTERS } from '../tasks/taskFilters';
 import { taskDetailKey } from '../tasks/taskDetail';
 import {
   CHANNEL_WORKSPACE_ATTRIBUTION_SOURCES,
@@ -69,6 +75,10 @@ const WS = 'ws-1';
 const OTHER_WS = 'ws-2';
 const LOST = 'ch-lost';
 const KEPT = 'ch-kept';
+
+/** The board's default (All workspaces / all channels) filter key — the shape
+ *  both task surfaces share. */
+const BOARD_FILTER_KEY = boardFilterKey(DEFAULT_TASK_FILTERS);
 
 // ── Production payloads ────────────────────────────────────────────────
 // Typed as the real DTOs, so a seed cannot drift into a convenient shape the
@@ -238,8 +248,23 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
     qc.setQueryData([...savedKey, { workspace_id: WS }], [savedRow('s-gone-2', LOST)]);
   },
   tasks: qc => {
-    qc.setQueryData(tasksKey({}), [taskRow('t-gone', LOST), taskRow('t-keep', KEPT)]);
-    qc.setQueryData(tasksKey({ workspace_id: WS, status: 'todo' }), [taskRow('t-gone', LOST)]);
+    // The board's three faces are the whole of this root now (#task:1892 retired
+    // the fetch-all list): infinite pages of rows, and two server aggregates.
+    qc.setQueryData(boardColumnKey('todo', BOARD_FILTER_KEY), {
+      pages: [
+        { status: 'todo', items: [taskRow('t-gone', LOST)], next_cursor: 'cur-1' },
+        { status: 'todo', items: [taskRow('t-keep', KEPT)], next_cursor: null },
+      ],
+      pageParams: [null, 'cur-1'],
+    });
+    qc.setQueryData(boardCountsKey(BOARD_FILTER_KEY), {
+      counts: { todo: 2, in_progress: 0, in_review: 0, done: 0, closed: 0 },
+    });
+    qc.setQueryData(boardFacetsKey(), {
+      assignees: [],
+      creators: [],
+      has_unassigned: true,
+    });
     qc.setQueryData(taskDetailKey('t-gone'), taskDetail('t-gone', LOST));
     qc.setQueryData(taskDetailKey('t-keep'), taskDetail('t-keep', KEPT));
     qc.setQueryData(['task-by-number', WS, 7], taskRow('t-gone', LOST));
@@ -463,12 +488,41 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
 
       expect(qc.getQueryData(savedKey)).toEqual([savedRow('s-keep', KEPT)]);
       expect(qc.getQueryData([...savedKey, { workspace_id: WS }])).toEqual([]);
-      expect(qc.getQueryData(tasksKey({}))).toEqual([taskRow('t-keep', KEPT)]);
-      expect(qc.getQueryData(tasksKey({ workspace_id: WS, status: 'todo' }))).toEqual([]);
+      // The `tasks` entry is the same form, but its rows now live inside the
+      // board's pages — patched in the test below.
     });
 
-    it('single-object reads of a now-unreadable task are DISCARDED, not trimmed', () => {
+    // Three shapes share the `['tasks', …]` root, so the walk dispatches on
+    // the KEY. Duck-typing them would either crash on the page object or,
+    // worse, silently skip it and leave the lost channel's rows rendered.
+    it('board PAGES are patched; server aggregates are invalidated, not patched', () => {
       const qc = new QueryClient();
+      seedAll(qc);
+      const countsBefore = qc.getQueryData(boardCountsKey(BOARD_FILTER_KEY));
+      handleViewerChannelRemoved(qc, REMOVE_LOST);
+
+      const column = qc.getQueryData(boardColumnKey('todo', BOARD_FILTER_KEY)) as {
+        pages: Array<{ items: TaskSummaryDto[]; next_cursor: string | null }>;
+        pageParams: unknown[];
+      };
+      expect(column.pages.map(p => p.items.map(t => t.id))).toEqual([[], ['t-keep']]);
+      // Cursors are positions in the surviving order, so paging still continues
+      // where it left off — the page list is patched, not re-windowed.
+      expect(column.pageParams).toEqual([null, 'cur-1']);
+      expect(column.pages.map(p => p.next_cursor)).toEqual(['cur-1', null]);
+
+      // A `GROUP BY` result cannot be recomputed from what the client holds (a
+      // local `−1` would invent a number), and nothing in the value says whether
+      // it counted the lost channel — so it is marked for a re-read, keeping the
+      // last authoritative value until the authority answers.
+      expect(qc.getQueryData(boardCountsKey(BOARD_FILTER_KEY))).toEqual(countsBefore);
+      expect(qc.getQueryState(boardCountsKey(BOARD_FILTER_KEY))?.isInvalidated).toBe(
+        true,
+      );
+      expect(qc.getQueryState(boardFacetsKey())?.isInvalidated).toBe(true);
+    });
+
+    it('single-object reads of a now-unreadable task are DISCARDED, not trimmed', () => {      const qc = new QueryClient();
       seedAll(qc);
       handleViewerChannelRemoved(qc, REMOVE_LOST);
 
@@ -678,7 +732,9 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       // listed here (computed root, key assembled from a variable) escapes it.
       expect(rootsIn(`export const savedKey = ['saved'] as const;`)).toEqual(['saved']);
       expect(
-        rootsIn(`export const tasksKey = (f: TaskFilter) =>\n  [\n    'tasks',\n    f.x,\n  ];`),
+        rootsIn(
+          `export const boardColumnKey = (status: TaskStatus, filterKey: string) =>\n  [\n    'tasks',\n    'board',\n  ];`,
+        ),
       ).toEqual(['tasks']);
       expect(rootsIn(`  return useQuery({\n    queryKey: ['presence', ids],\n  });`)).toEqual([
         'presence',
@@ -1140,10 +1196,16 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         savedRow('s-b-keep', KEPT, OTHER_WS),
         savedRow('s-a', 'ch-in-a', WS),
       ]);
-      qc.setQueryData(tasksKey({}), [
-        taskRow('t-b-gone', LOST, OTHER_WS),
-        taskRow('t-a', 'ch-in-a', WS),
-      ]);
+      qc.setQueryData(boardColumnKey('todo', BOARD_FILTER_KEY), {
+        pages: [
+          {
+            status: 'todo',
+            items: [taskRow('t-b-gone', LOST, OTHER_WS), taskRow('t-a', 'ch-in-a', WS)],
+            next_cursor: null,
+          },
+        ],
+        pageParams: [null],
+      });
       qc.setQueryData(messageUnreadByConversationKey(OTHER_WS, 'regular'), {
         by_conversation: { [LOST]: 2 },
         latest_by_conversation: {
@@ -1159,6 +1221,26 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
       const qc = new QueryClient();
       seedForeignWorkspace(qc);
       expect(heldChannelIdsInWorkspace(qc, OTHER_WS)).toEqual(new Set([LOST, KEPT]));
+      expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(['ch-in-a']));
+    });
+
+    // The board keeps its rows in PAGES and is the ONLY task surface that fetches
+    // them (#task:1892 retired the flat list) — an enumeration that reads arrays
+    // alone would report an empty held set and the non-selected workspace would
+    // never converge.
+    it('held ids are enumerated from the board pages', () => {
+      const qc = new QueryClient();
+      qc.setQueryData(boardColumnKey('todo', BOARD_FILTER_KEY), {
+        pages: [
+          {
+            status: 'todo',
+            items: [taskRow('t-b', LOST, OTHER_WS), taskRow('t-a', 'ch-in-a', WS)],
+            next_cursor: null,
+          },
+        ],
+        pageParams: [null],
+      });
+      expect(heldChannelIdsInWorkspace(qc, OTHER_WS)).toEqual(new Set([LOST]));
       expect(heldChannelIdsInWorkspace(qc, WS)).toEqual(new Set(['ch-in-a']));
     });
 
@@ -1187,7 +1269,13 @@ describe('viewer-local channel removal contract (#task:1689)', () => {
         savedRow('s-b-keep', KEPT, OTHER_WS),
         savedRow('s-a', 'ch-in-a', WS),
       ]);
-      expect(qc.getQueryData(tasksKey({}))).toEqual([taskRow('t-a', 'ch-in-a', WS)]);
+      expect(
+        (
+          qc.getQueryData(boardColumnKey('todo', BOARD_FILTER_KEY)) as {
+            pages: Array<{ items: TaskSummaryDto[] }>;
+          }
+        ).pages.map(p => p.items.map(t => t.id)),
+      ).toEqual([['t-a']]);
       expect(qc.getQueryData(messageUnreadByConversationKey(OTHER_WS, 'regular'))).toEqual({
         by_conversation: {},
         latest_by_conversation: {},

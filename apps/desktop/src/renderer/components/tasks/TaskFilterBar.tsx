@@ -29,6 +29,12 @@ import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useRovingList } from '@/features/tasks/taskFilterKeyboard';
 import {
+  mapBoardAuthority,
+  personMenuState,
+  type BoardAuthority,
+  type BoardFacets,
+} from '@/features/tasks/boardAuthority';
+import {
   applyWorkspaceCascade,
   personFilterKey,
   taskFiltersEqual,
@@ -36,6 +42,10 @@ import {
   type PersonOption,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
+
+/** Rows for a population nobody has been told about yet — never rendered as an
+ *  answer; the menu's footer says which non-answer it is. */
+const NO_PEOPLE: PersonOption[] = [];
 
 /**
  * Unified task filter bar — one row that replaces the old channel/
@@ -160,12 +170,18 @@ export interface TaskFilterBarProps {
   channelOptions: ChannelOption[];
   /** Label for the "no channel filter" row, e.g. "All channels". */
   allChannelsLabel: string;
-  assigneeOptions: PersonOption[];
-  creatorOptions: PersonOption[];
-  /** Whether the fetched set has any unassigned task — gates the
-   *  "No assignee" option so it doesn't show when every task is claimed
-   *  (would read as a stray pseudo-person otherwise; shiki feedback). */
-  hasUnassigned: boolean;
+  /**
+   * The person menus' population as the facets face answered it — the AUTHORITY,
+   * not a plain option set.
+   *
+   * An empty set here is a real claim about this viewer ("nobody to filter by"),
+   * so a cold or failed read must not be able to arrive as one: it would present
+   * a transport failure as an empty workspace (#task:1885, Cindy MUST FIX). The
+   * `hasUnassigned` bit rides along for the same reason — it gates the
+   * "No assignee" row, which would otherwise read as a stray pseudo-person when
+   * every task is claimed (shiki feedback).
+   */
+  people: BoardAuthority<BoardFacets>;
   className?: string;
 }
 
@@ -176,9 +192,7 @@ export function TaskFilterBar({
   workspaceOptions,
   channelOptions,
   allChannelsLabel,
-  assigneeOptions,
-  creatorOptions,
-  hasUnassigned,
+  people,
   className,
 }: TaskFilterBarProps): JSX.Element {
   const dirty = !taskFiltersEqual(filters, baselineFilters);
@@ -229,8 +243,8 @@ export function TaskFilterBar({
         icon={<User className="size-3.5" />}
         label="Assignee"
         anyLabel="ALL"
-        options={assigneeOptions}
-        allowUnassigned={hasUnassigned}
+        population={mapBoardAuthority(people, f => f.assignees)}
+        allowUnassigned={people.known && people.value.hasUnassigned}
         value={filters.assignee}
         onChange={assignee => onChange({ ...filters, assignee })}
         {...personDirectory}
@@ -239,7 +253,7 @@ export function TaskFilterBar({
         icon={<PenLine className="size-3.5" />}
         label="From"
         anyLabel="ALL"
-        options={creatorOptions}
+        population={mapBoardAuthority(people, f => f.creators)}
         value={filters.creator}
         onChange={creator => onChange({ ...filters, creator })}
         {...personDirectory}
@@ -797,7 +811,7 @@ function PersonFilterControl({
   icon,
   label,
   anyLabel,
-  options,
+  population,
   allowUnassigned = false,
   value,
   onChange,
@@ -808,12 +822,18 @@ function PersonFilterControl({
   icon: ReactNode;
   label: string;
   anyLabel: string;
-  options: PersonOption[];
+  /** This menu's population, or the reason there is none to show yet. */
+  population: BoardAuthority<PersonOption[]>;
   allowUnassigned?: boolean;
   value: PersonFilter;
   onChange: (next: PersonFilter) => void;
 } & PersonDirectory): JSX.Element {
   const [open, setOpen] = useState(false);
+  // Rows come only from an answered read. The footer below says which of the
+  // three answer-less states this is, so the menu never presents "we have not
+  // been told" as "there is nobody".
+  const state = personMenuState(population);
+  const options = population.known ? population.value : NO_PEOPLE;
   const selectedName = options.find(
     o => personFilterKey({ kind: 'person', person: o.person }) === personFilterKey(value),
   )?.name;
@@ -922,11 +942,15 @@ function PersonFilterControl({
             </OptionRow>
           );
         })}
-        {options.length === 0 ? (
+        {state === 'ready' ? null : (
           <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
-            None yet
+            {state === 'loading'
+              ? 'Loading…'
+              : state === 'failed'
+                ? 'Couldn’t load people'
+                : 'None yet'}
           </p>
-        ) : null}
+        )}
       </FilterPanel>
     </Popover.Root>
   );

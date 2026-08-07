@@ -1,5 +1,3 @@
-import type { TaskSummaryDto } from '@silverhand/shared';
-
 /**
  * Unified task-filter model shared by the global Tasks board
  * (TasksSection) and the workspace drawer (WorkspaceTasksDrawer).
@@ -10,12 +8,16 @@ import type { TaskSummaryDto } from '@silverhand/shared';
  * visibility axis); every other narrowing — channel, assignee, creator —
  * lives in one TaskFilterBar.
  *
- * Filtering is entirely CLIENT-SIDE here: `TaskSummaryDto` already carries
- * `channel_id` / `assignee` / `creator`, lists are
- * unpaginated, and each surface fetches-broadly-then-slices — so no
- * backend query change is needed. Backend `creator_type/creator_id` +
- * assignee `{type,id}` params are a later perf optimization once task
- * volume demands it (the inflection point, not this PR).
+ * This module is now the filter MODEL only: the UI's vocabulary for a
+ * narrowing, plus the pure transitions over it (equality, the
+ * workspace→channel cascade). Applying a narrowing is the SERVER's job —
+ * `boardQuery` maps this model onto the `/api/tasks/board/*` params, and the
+ * board reads back a bounded window per column (#task:1884 / #task:1885). The
+ * client-side `applyTaskFilters` / `collectAssignees` / `collectCreators` that
+ * used to live here were retired with the fetch-all list they sliced
+ * (#task:1892): filtering a full download cannot be bounded, and person
+ * options aggregated from the rows in hand shrink to whatever page the viewer
+ * happened to load.
  */
 
 /** A person reference keyed by `{type,id}` — id alone is unsafe because
@@ -41,11 +43,11 @@ export interface TaskFilters {
   workspaceId: string | null;
   /** Conversation id to narrow to — a channel id (matches that channel and
    *  all its threads) or a thread id (matches only that thread). null = no
-   *  channel narrowing. Both the global pane and the drawer now match by
-   *  `task.channel_id === channelId` (#task:1165 unified them onto one
-   *  cross-workspace board); callers still pass a `matchChannel` predicate
-   *  to `applyTaskFilters` rather than baking channel logic in here, so the
-   *  match stays surface-controlled. */
+   *  channel narrowing. Both surfaces read ONE cross-workspace board
+   *  (#task:1165), and the match is now the server's `channel_id` param
+   *  (`boardQuery.boardFilterParams`) rather than a per-surface predicate —
+   *  a narrowing the server applies is the same for every surface by
+   *  construction, and it is what lets a column stay a bounded window. */
   channelId: string | null;
   assignee: PersonFilter;
   creator: PersonFilter;
@@ -98,97 +100,14 @@ export function applyWorkspaceCascade(
   };
 }
 
-function matchPerson(
-  filter: PersonFilter,
-  person: { type: string; id: string | null } | null,
-): boolean {
-  if (filter.kind === 'any') return true;
-  if (filter.kind === 'unassigned') return person == null;
-  if (person == null) return false;
-  return person.type === filter.person.type && person.id === filter.person.id;
-}
-
-/**
- * Apply the client-side dimensions (workspace / channel / assignee / creator)
- * to a task list.
- *
- * `matchChannel` is supplied by each surface so channel semantics stay
- * surface-controlled. Both the global pane and the drawer match a channel
- * (plus all its threads) by `task.channel_id === channelId`; the predicate
- * stays a parameter so a future surface can refine the match without
- * touching this core. Workspace matches directly on `task.workspace_id`.
- */
-export function applyTaskFilters(
-  tasks: TaskSummaryDto[],
-  filters: TaskFilters,
-  matchChannel: (task: TaskSummaryDto, channelId: string) => boolean,
-): TaskSummaryDto[] {
-  return tasks.filter(task => {
-    if (filters.workspaceId && task.workspace_id !== filters.workspaceId) {
-      return false;
-    }
-    if (filters.channelId && !matchChannel(task, filters.channelId)) {
-      return false;
-    }
-    if (
-      !matchPerson(
-        filters.assignee,
-        task.assignee ? { type: task.assignee.type, id: task.assignee.id } : null,
-      )
-    ) {
-      return false;
-    }
-    if (
-      filters.creator.kind !== 'any' &&
-      !matchPerson(filters.creator, { type: task.creator.type, id: task.creator.id })
-    ) {
-      return false;
-    }
-    return true;
-  });
-}
-
+/** One selectable person in the assignee / creator menus. The `name` is the
+ *  denormalized snapshot the server already put on the row (no profile lookup —
+ *  Cindy boundary); the option SETS themselves are a server facet read
+ *  (`/api/tasks/board/facets`), so they never shrink to the rows a surface
+ *  happens to hold. */
 export interface PersonOption {
   person: PersonRef;
   name: string;
-}
-
-/**
- * Aggregate distinct assignees from a fetched task list — the ONLY
- * candidate source for the assignee filter (no profile lookup; use the
- * denormalized `name`/`id` already on the dto, per Cindy boundary).
- * Sorted by name for stable menu order.
- */
-export function collectAssignees(tasks: TaskSummaryDto[]): PersonOption[] {
-  const seen = new Map<string, PersonOption>();
-  for (const t of tasks) {
-    if (!t.assignee) continue;
-    const key = `${t.assignee.type}:${t.assignee.id}`;
-    if (!seen.has(key)) {
-      seen.set(key, {
-        person: { type: t.assignee.type, id: t.assignee.id },
-        name: t.assignee.name,
-      });
-    }
-  }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/**
- * Aggregate distinct creators from a fetched task list. `system` creators
- * (and any with a null id) are skipped — they aren't a selectable person.
- */
-export function collectCreators(tasks: TaskSummaryDto[]): PersonOption[] {
-  const seen = new Map<string, PersonOption>();
-  for (const t of tasks) {
-    const { type, id, name } = t.creator;
-    if (id == null || (type !== 'agent' && type !== 'user')) continue;
-    const key = `${type}:${id}`;
-    if (!seen.has(key)) {
-      seen.set(key, { person: { type, id }, name });
-    }
-  }
-  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function personFilterKey(f: PersonFilter): string {

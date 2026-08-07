@@ -2,6 +2,7 @@ import {
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
   type QueryClient,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
@@ -9,6 +10,7 @@ import {
   type CreatedTaskIdentity,
   type HumanCreateTaskInput,
   type HumanCreateTaskResult,
+  type TaskBoardColumnDto,
   type TaskChangedEvent,
   type TaskDetailDto,
   type TaskEditResult,
@@ -21,7 +23,7 @@ import {
   onWsFrame,
   subscribeViewerScope,
 } from '@/lib/ws-client';
-import { applyTaskChangedToTaskByNumberCache } from './useTaskByNumber';
+import { classifyTasksCacheKey } from './boardQuery';
 import {
   shouldRefreshTaskDetail,
   shouldRetryTaskDetail,
@@ -29,49 +31,58 @@ import {
   type TaskDetailFrame,
 } from './taskDetail';
 
-/**
- * Tasks live in /api/tasks (per docs/tasks-design.md). The list is
- * filterable by workspace / conversation / status; fetched once per filter
- * combination. Mutations invalidate this cache; workspace/global task views
- * also listen for WS `task_changed` events because agent-side updates can
- * occur from any conversation in the workspace.
- */
-export interface TaskFilter {
-  workspace_id?: string;
-  conversation_id?: string;
-  status?: TaskStatus | 'all';
-}
-
-export const tasksKey = (f: TaskFilter) =>
-  [
-    'tasks',
-    f.workspace_id ?? '*',
-    f.conversation_id ?? '*',
-    f.status ?? 'all',
-  ] as const;
+/** A board column's cached value: pages of rows keyed by opaque cursors. */
+type BoardColumnPages = InfiniteData<TaskBoardColumnDto, string | null>;
 
 /**
  * Settle every task projection of ONE channel the viewer lost (#task:1689).
- * Three key families, two shapes:
  *
- *   - `['tasks', ws, conv, status]` list variants are PATCHED (rows filtered by
- *     `channel_id`): `TaskStore.list`'s user arm joins `EXISTS
- *     conversation_users`, so a refetch returns the list minus those rows — the
- *     patch reproduces that shape without re-windowing the survivors.
+ * Key families and their shapes — the `['tasks', …]` root holds THREE different
+ * values, so the walk dispatches on `classifyTasksCacheKey` and never on the
+ * data's shape (a `.filter` on a page object is a crash, not a miss):
+ *
+ *   - `['tasks','board','column', …]` holds infinite PAGES of rows; each page's
+ *     `items` is filtered by `channel_id`. The server's board read is
+ *     membership-gated by the same `EXISTS conversation_users` predicate, so a
+ *     refetch returns those pages minus those rows — the patch reproduces that
+ *     shape. Page cursors are positions in the surviving order, so they stay
+ *     valid and the window keeps paging.
+ *   - `['tasks','board','counts'|'facets', …]` are server `GROUP BY` aggregates.
+ *     They cannot be patched (a client `−1` would invent a number), so they are
+ *     INVALIDATED — the authority already excludes the lost channel. This is the
+ *     one arm that is not present-only: nothing in the cached value says whether
+ *     it counted the lost channel, so a re-read is the only honest answer.
  *   - `['task-detail', id]` and `['task-by-number', ws, n]` are single-object
  *     caches for a task the viewer can no longer read; a refetch fails rather
  *     than returning a trimmed body, so the query is REMOVED, not patched.
  *
- * PRESENT-ONLY / idempotent throughout: unloaded or non-matching caches are
+ * Otherwise PRESENT-ONLY / idempotent: unloaded or non-matching caches are
  * untouched, so an unrelated channel loss never disturbs an open task board.
  */
 export function removeChannelFromTasks(qc: QueryClient, channelId: string): void {
   for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
-    const prev = qc.getQueryData<TaskSummaryDto[]>(q.queryKey);
-    if (!prev) continue;
-    const next = prev.filter(t => t.channel_id !== channelId);
-    if (next.length === prev.length) continue;
-    qc.setQueryData<TaskSummaryDto[]>(q.queryKey, next);
+    switch (classifyTasksCacheKey(q.queryKey)) {
+      case 'board-column': {
+        const prev = qc.getQueryData<BoardColumnPages>(q.queryKey);
+        if (!prev) break;
+        let changed = false;
+        const pages = prev.pages.map(page => {
+          const items = page.items.filter(t => t.channel_id !== channelId);
+          if (items.length === page.items.length) return page;
+          changed = true;
+          return { ...page, items };
+        });
+        if (!changed) break;
+        qc.setQueryData<BoardColumnPages>(q.queryKey, { ...prev, pages });
+        break;
+      }
+      case 'board-counts':
+      case 'board-facets':
+        void qc.invalidateQueries({ queryKey: q.queryKey, exact: true });
+        break;
+      case 'unknown':
+        break;
+    }
   }
   for (const root of [['task-detail'], ['task-by-number']] as const) {
     for (const q of qc.getQueryCache().findAll({ queryKey: root })) {
@@ -83,17 +94,29 @@ export function removeChannelFromTasks(qc: QueryClient, channelId: string): void
 }
 
 /** Which channels of ONE workspace the task caches still hold rows for
- *  (#task:1689). Read off `workspace_id` + `channel_id` on the row: the global
- *  task board's variant (`['tasks','*','*',…]`) spans every workspace, so the
- *  key alone cannot answer it. */
+ *  (#task:1689). Read off `workspace_id` + `channel_id` on the row: the board's
+ *  default variant spans every workspace, so the key alone cannot answer it.
+ *  Only the column pages carry rows; the two aggregates carry none. */
 export function tasksHeldChannelIds(
   qc: QueryClient,
   workspaceId: string,
 ): string[] {
   const ids = new Set<string>();
-  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
-    for (const t of qc.getQueryData<TaskSummaryDto[]>(q.queryKey) ?? []) {
+  const hold = (rows: readonly TaskSummaryDto[]) => {
+    for (const t of rows) {
       if (t.workspace_id === workspaceId) ids.add(t.channel_id);
+    }
+  };
+  for (const q of qc.getQueryCache().findAll({ queryKey: ['tasks'] })) {
+    switch (classifyTasksCacheKey(q.queryKey)) {
+      case 'board-column':
+        for (const page of qc.getQueryData<BoardColumnPages>(q.queryKey)?.pages ??
+          []) {
+          hold(page.items);
+        }
+        break;
+      default:
+        break;
     }
   }
   for (const root of [['task-detail'], ['task-by-number']] as const) {
@@ -103,75 +126,6 @@ export function tasksHeldChannelIds(
     }
   }
   return [...ids];
-}
-
-export interface UseTasksOptions {
-  enabled?: boolean;
-}
-
-function buildQs(f: TaskFilter): string {
-  const params = new URLSearchParams();
-  if (f.workspace_id) params.set('workspace_id', f.workspace_id);
-  if (f.conversation_id) params.set('conversation_id', f.conversation_id);
-  if (f.status && f.status !== 'all') params.set('status', f.status);
-  const qs = params.toString();
-  return qs ? `?${qs}` : '';
-}
-
-export function useTasks(filter: TaskFilter, opts?: UseTasksOptions) {
-  const qc = useQueryClient();
-  const enabled = opts?.enabled ?? true;
-
-  // The board is the viewer's cross-conversation aggregate. Task changes reach
-  // it via the viewer's private scope (`viewer:<userId>`) — the server fans
-  // `task_changed` out to each human member of the task's conversation, so one
-  // subscription covers every conversation the viewer belongs to across all
-  // workspaces, and a task from a channel the viewer can't see never arrives
-  // (private-task fanout is gated server-side, not filtered here). Same
-  // resolver as viewer-unread / Activity. Per-conversation source-chip
-  // convergence is a separate carrier (`conversation:<id>` in the ingestor).
-  useEffect(() => {
-    if (!enabled) return;
-    const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
-        if (isCurrentViewerScope(frame.scope)) {
-          void qc.invalidateQueries({ queryKey: ['task-by-number'] });
-          void qc.invalidateQueries({ queryKey: ['tasks'] });
-        }
-        return;
-      }
-      if (frame.type !== 'event') return;
-      if (frame.kind !== 'task_changed' || !isCurrentViewerScope(frame.scope)) {
-        return;
-      }
-      const payload = frame.payload as TaskChangedEvent;
-      applyTaskChangedToTaskByNumberCache(qc, payload);
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
-      // `['task-detail', id]` is deliberately NOT refreshed here: the detail
-      // modal is now an app-level surface that opens straight from `?task=`
-      // with no board behind it (#task:1715), so a listener that needs a
-      // mounted board could not keep it fresh. `useTaskDetail` owns that
-      // projection's realtime edge itself — ONE owner per projection.
-    });
-    return () => {
-      sub.unsubscribe();
-      unsub();
-    };
-  }, [enabled, qc]);
-
-  const query = useQuery({
-    queryKey: tasksKey(filter),
-    queryFn: async () => {
-      const res = await api<{ tasks: TaskSummaryDto[] }>(
-        `/api/tasks${buildQs(filter)}`,
-      );
-      return res.tasks;
-    },
-    enabled,
-  });
-
-  return query;
 }
 
 // ── Mutations (human UI overrides) ─────────────────────────────────
@@ -189,11 +143,12 @@ export function useUpdateTaskStatus() {
     },
     onSuccess: (_res, vars) => {
       void qc.invalidateQueries({ queryKey: ['tasks'] });
-      // The board list is NOT the only projection of a status: the open detail
-      // modal reads `['task-detail', id]` and inline `#task:n` sigils read
-      // `['task-by-number']`. Without these two a LOCAL status change only
-      // showed up once the WS `task_changed` echo arrived — and that listener
-      // lives inside `useTasks()`, so it needs a mounted board to fire at all.
+      // The board is NOT the only projection of a status: the open detail modal
+      // reads `['task-detail', id]` and inline `#task:n` sigils read
+      // `['task-by-number']`. Without these two a LOCAL status change only showed
+      // up once the WS `task_changed` echo arrived — a round trip the writer
+      // already knows the answer to, and one the two single-object caches would
+      // otherwise wait on with a stale status on screen.
       void qc.invalidateQueries({
         queryKey: taskDetailKey(vars.taskId),
         exact: true,

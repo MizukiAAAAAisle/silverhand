@@ -1,7 +1,15 @@
-// Human-facing task board: list + claim / unclaim / status overrides + edit
-// (title/content, last-write-wins) + single-task detail read. All
-// handlers delegate to ctx.taskService (the status state machine, edit, and
-// capability gating all live in the service).
+// Human-facing task faces: direct-create + claim / unclaim / status overrides +
+// edit (title/content, last-write-wins) + single-task detail read, the bounded
+// board read faces, and the by-number point lookup. All handlers delegate to
+// ctx.taskService (the status state machine, edit, and capability gating all
+// live in the service).
+//
+// EVERY human read here is bounded (#task:1891): the board reads a status
+// column window, an inline `#task:<n>` sigil reads `by-number`, a modal reads
+// `/:taskId`. The unbounded `GET /api/tasks` that predated them is gone — a
+// human face that returns "as many tasks as the client asks for" has no caller
+// left, and keeping one invites the next consumer to page in memory. The agent
+// list is a separate internal route and still uses `ListTasksQuerySchema`.
 import { Hono } from 'hono';
 import {
   apiPaths,
@@ -9,12 +17,60 @@ import {
   HumanCreateTaskInputSchema,
   HumanEditTaskInputSchema,
   HumanUpdateTaskStatusInputSchema,
-  ListTasksQuerySchema,
+  TASK_BOARD_DEFAULT_LIMIT,
+  TaskBoardColumnQuerySchema,
+  TaskBoardCountsQuerySchema,
+  TaskByNumberQuerySchema,
 } from '@silverhand/shared';
+import type { Context } from 'hono';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
+import type { TaskBoardPopulationFilters } from '../repos/task-board-population.js';
+import { decodeTaskBoardCursor } from '../services/task/board.js';
 import { getUserPrincipal } from '../auth/principal.js';
 import { canPostToConversation } from '../permissions.js';
+
+/** The board filter axes as they arrive on the wire — one reader for all three
+ *  faces, so no face can accidentally honor a different set of axes. */
+function boardFilterQuery(c: Context<AppEnv>): Record<string, string | undefined> {
+  return {
+    workspace_id: c.req.query('workspace_id') || undefined,
+    channel_id: c.req.query('channel_id') || undefined,
+    assignee_type: c.req.query('assignee_type') || undefined,
+    assignee_id: c.req.query('assignee_id') || undefined,
+    creator_type: c.req.query('creator_type') || undefined,
+    creator_id: c.req.query('creator_id') || undefined,
+  };
+}
+
+/** Validated query → population filters. The `{type,id}` pairing is already
+ *  enforced by the schema, so the id is non-null wherever a person type asks
+ *  for one. */
+function boardPopulationFilters(
+  c: Context<AppEnv>,
+  q: {
+    workspace_id?: string | undefined;
+    channel_id?: string | undefined;
+    assignee_type?: 'agent' | 'user' | 'unassigned' | undefined;
+    assignee_id?: string | undefined;
+    creator_type?: 'agent' | 'user' | undefined;
+    creator_id?: string | undefined;
+  },
+): TaskBoardPopulationFilters {
+  return {
+    viewerUserId: getUserPrincipal(c).userId,
+    ...(q.workspace_id !== undefined ? { workspaceId: q.workspace_id } : {}),
+    ...(q.channel_id !== undefined ? { channelId: q.channel_id } : {}),
+    ...(q.assignee_type === 'unassigned'
+      ? { assignee: { type: 'unassigned' as const } }
+      : q.assignee_type !== undefined && q.assignee_id !== undefined
+        ? { assignee: { type: q.assignee_type, id: q.assignee_id } }
+        : {}),
+    ...(q.creator_type !== undefined && q.creator_id !== undefined
+      ? { creator: { type: q.creator_type, id: q.creator_id } }
+      : {}),
+  };
+}
 
 export interface TasksRouteDeps {
   ctx: BackendContext;
@@ -24,34 +80,7 @@ export function createTasksApp(deps: TasksRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const { ctx } = deps;
 
-  // ── Tasks (human-facing list + overrides) ────────────────────────
-  app.get(apiPaths.tasks, c => {
-    const statusValues = (c.req.queries('status') ?? []).filter(s => s !== 'all');
-    const taskNumberValues = c.req.queries('task_number') ?? [];
-    const parsed = ListTasksQuerySchema.safeParse({
-      workspace_id: c.req.query('workspace_id') || undefined,
-      conversation_id: c.req.query('conversation_id') || undefined,
-      status: statusValues.length > 0 ? statusValues : undefined,
-      task_number: taskNumberValues.length > 0 ? taskNumberValues : undefined,
-      assignee_id: c.req.query('assignee_id') || undefined,
-      limit: c.req.query('limit') || undefined,
-    });
-    if (!parsed.success) {
-      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
-    }
-    return c.json({
-      tasks: ctx.taskService.list({
-        actor: getUserPrincipal(c),
-        workspaceId: parsed.data.workspace_id,
-        conversationId: parsed.data.conversation_id,
-        status: parsed.data.status,
-        taskNumbers: parsed.data.task_number,
-        assigneeAgentId: parsed.data.assignee_id,
-        limit: parsed.data.limit,
-      }),
-    });
-  });
-
+  // ── Tasks (human-facing create + overrides) ──────────────────────
   // Human panel direct-create. Shares the ONE actor-agnostic
   // `taskService.createTasks` with the agent CLI — task row + `task_create`
   // system event + `created_event_message_id` backfill in one txn. The
@@ -174,6 +203,88 @@ export function createTasksApp(deps: TasksRouteDeps): Hono<AppEnv> {
     if (result.success) return c.json(result);
     const status = result.code === 'task_not_found' ? 404 : 400;
     return c.json(result, status);
+  });
+
+  // ── Board read faces (#task:1884) ────────────────────────────────
+  //
+  // Registered BEFORE `/api/tasks/:taskId` so `board/...` is never read as a
+  // task id. Human-only, like every route in this file. Each face carries
+  // exactly one fact (window / totals / menus) and all of them interpolate the
+  // same population predicate, viewer visibility included.
+  app.get(apiPaths.taskBoardColumn, c => {
+    const parsed = TaskBoardColumnQuerySchema.safeParse({
+      ...boardFilterQuery(c),
+      status: c.req.query('status'),
+      cursor: c.req.query('cursor') || undefined,
+      limit: c.req.query('limit') || undefined,
+    });
+    if (!parsed.success) {
+      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
+    }
+    // A malformed cursor is a 400, never a silent fall back to the first
+    // window: a scrolling client would then re-request page 1 forever.
+    const cursor =
+      parsed.data.cursor === undefined
+        ? undefined
+        : decodeTaskBoardCursor(parsed.data.cursor);
+    if (parsed.data.cursor !== undefined && cursor === null) {
+      return c.json({ error: 'invalid cursor', code: 'invalid_cursor' }, 400);
+    }
+    return c.json(
+      ctx.taskService.boardColumn({
+        ...boardPopulationFilters(c, parsed.data),
+        status: parsed.data.status,
+        ...(cursor ? { cursor } : {}),
+        limit: parsed.data.limit ?? TASK_BOARD_DEFAULT_LIMIT,
+      }),
+    );
+  });
+
+  app.get(apiPaths.taskBoardCounts, c => {
+    const parsed = TaskBoardCountsQuerySchema.safeParse(boardFilterQuery(c));
+    if (!parsed.success) {
+      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
+    }
+    return c.json(
+      ctx.taskService.boardCounts(boardPopulationFilters(c, parsed.data)),
+    );
+  });
+
+  // No filter params by design: an option set that shrinks when you select from
+  // it cannot be switched away from, so the menus are always computed over the
+  // viewer's whole visible population (see TaskBoardFacetsDtoSchema).
+  app.get(apiPaths.taskBoardFacets, c =>
+    c.json(ctx.taskService.boardFacets(getUserPrincipal(c).userId)),
+  );
+
+  // Point lookup by the workspace-scoped business key. Registered BEFORE
+  // `/api/tasks/:taskId` for the same reason the board faces are: otherwise
+  // `by-number` is read as a task id.
+  //
+  // FAIL-CLOSED, ONE OUTCOME FOR TWO CAUSES: a task number that was never
+  // allocated and a task the viewer cannot see both return 404 with the same
+  // body. The service does not receive the query's `workspace_id` as an
+  // authorized scope — it gates on the viewer's visibility of the task's own
+  // conversation — so naming someone else's workspace cannot confirm that a
+  // task number exists in it.
+  app.get(apiPaths.taskByNumber, c => {
+    const parsed = TaskByNumberQuerySchema.safeParse({
+      workspace_id: c.req.query('workspace_id'),
+      task_number: c.req.query('task_number'),
+    });
+    // A malformed/absent axis is a 400, not a 404: the client asked a question
+    // this face cannot answer, which is different from "no such task" and must
+    // not be cached as a resolved miss.
+    if (!parsed.success) {
+      return c.json({ error: 'invalid query', issues: parsed.error.issues }, 400);
+    }
+    const task = ctx.taskService.getTaskSummaryByNumber(
+      parsed.data.workspace_id,
+      parsed.data.task_number,
+      getUserPrincipal(c),
+    );
+    if (!task) return c.json({ error: 'task not found', code: 'not_found' }, 404);
+    return c.json({ task });
   });
 
   app.get('/api/tasks/:taskId', c => {

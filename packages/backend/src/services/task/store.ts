@@ -18,6 +18,7 @@ import type {
   TaskSummaryDto,
 } from '@silverhand/shared';
 import type { ConversationRepo } from '../../repos/conversation-repo.js';
+import { USER_VISIBLE_TASK_PREDICATE } from '../../repos/task-board-population.js';
 import { prepareObserved } from '../../observability/observed-statement.js';
 import {
   userCanAccessConversation,
@@ -25,6 +26,7 @@ import {
   type MessageRef,
   type ResolvedTaskRow,
   type TaskActor,
+  type UserActor,
 } from './contracts.js';
 
 /** Fresh opaque task identity (same scheme as message ids). */
@@ -32,7 +34,9 @@ function newTaskId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-interface TaskJoinedRow {
+/** The joined row shape both this store and the board read face project from
+ *  (one projection, one DTO — see `taskJoinedToSummary`). */
+export interface TaskJoinedRow {
   id: string;
   conversation_id: string;
   task_number: number;
@@ -56,7 +60,14 @@ interface TaskJoinedRow {
   creator_user_name: string | null;
 }
 
-const SELECT_TASK_JOINED = `
+/** The task-summary SELECT list + joins. Exported because the human board read
+ *  face (`services/task/board.ts`) must project tasks THROUGH THE SAME columns
+ *  and joins — a second hand-written SELECT would be a second projection that
+ *  drifts (e.g. a deleted creator rendering differently in the board than in
+ *  the CLI/list). The `tasks`→`conversations`/`workspaces` joins are INNER and
+ *  cannot drop rows: both columns are NOT NULL with ON DELETE CASCADE, so the
+ *  count face (which needs no joins) describes the same set. */
+export const SELECT_TASK_JOINED = `
   SELECT
     t.id                       AS id,
     t.conversation_id          AS conversation_id,
@@ -130,14 +141,11 @@ export class TaskStore {
       clauses.push('t.workspace_id = ?');
       args.push(effectiveWs);
     } else {
-      clauses.push(
-        `EXISTS (
-          SELECT 1
-            FROM conversation_users cu
-           WHERE cu.conversation_id = t.conversation_id
-             AND cu.user_id = ?
-        )`,
-      );
+      // The human visibility gate is the SHARED constant (also interpolated by
+      // every board read face) — "which tasks may this viewer see" has one
+      // definition, so the CLI/list face and the paginated board can never
+      // disagree about it.
+      clauses.push(USER_VISIBLE_TASK_PREDICATE);
       args.push(filters.actor.userId);
       if (filters.workspaceId) {
         clauses.push('t.workspace_id = ?');
@@ -177,7 +185,42 @@ export class TaskStore {
       'tasks.list_filtered',
       sql,
     ).all(...args);
-    return rows.map(r => this.joinedToSummary(r));
+    return rows.map(r => taskJoinedToSummary(r));
+  }
+
+  /**
+   * ONE gated summary read: the summary projection narrowed by `where`, then the
+   * read-side membership gate, then the row → DTO projection. Every key form a
+   * single-task summary can be looked up by goes through here, so no key gets
+   * its own SELECT (a second projection drifts) or its own gate (a second gate
+   * is a second answer to "may this viewer see it").
+   */
+  private readGatedSummary(
+    queryName: string,
+    where: string,
+    args: (string | number)[],
+    actor: TaskActor,
+    authorizedWorkspaceId?: string,
+  ): TaskSummaryDto | null {
+    const row = prepareObserved<typeof args, TaskJoinedRow>(
+        this.db,
+        queryName,
+        `${SELECT_TASK_JOINED} ${where}`,
+      )
+      .get(...args);
+    if (!row) return null;
+    if (actor.kind === 'agent') {
+      if (authorizedWorkspaceId !== undefined) {
+        if (row.workspace_id !== authorizedWorkspaceId) return null;
+      } else {
+        const conv = this.conversations.get(actor.conversationId);
+        if (!conv) return null;
+        if (row.workspace_id !== conv.workspace_id) return null;
+      }
+    } else if (!userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
+      return null;
+    }
+    return taskJoinedToSummary(row);
   }
 
   /**
@@ -196,25 +239,37 @@ export class TaskStore {
     actor: TaskActor,
     authorizedWorkspaceId?: string,
   ): TaskSummaryDto | null {
-    const row = prepareObserved<[string], TaskJoinedRow>(
-        this.db,
-        'tasks.get_joined_by_id',
-        `${SELECT_TASK_JOINED} WHERE t.id = ?`,
-      )
-      .get(taskId);
-    if (!row) return null;
-    if (actor.kind === 'agent') {
-      if (authorizedWorkspaceId !== undefined) {
-        if (row.workspace_id !== authorizedWorkspaceId) return null;
-      } else {
-        const conv = this.conversations.get(actor.conversationId);
-        if (!conv) return null;
-        if (row.workspace_id !== conv.workspace_id) return null;
-      }
-    } else if (!userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
-      return null;
-    }
-    return this.joinedToSummary(row);
+    return this.readGatedSummary(
+      'tasks.get_joined_by_id',
+      'WHERE t.id = ?',
+      [taskId],
+      actor,
+      authorizedWorkspaceId,
+    );
+  }
+
+  /**
+   * Read a task summary by the workspace-scoped business key `(workspace_id,
+   * task_number)` — the key an inline `#task:<n>` sigil carries. A SINGLE
+   * bounded read on `uniq_tasks_workspace_number`: same projection and same gate
+   * as `getById`, so a pill never pays for the mutation-path column set (which
+   * reads `t.content`) nor for a second query to reach the summary it renders.
+   *
+   * User actor only — the sigil face is human-facing, so the gate is always the
+   * viewer's access to the task's OWN conversation and `workspaceId` is a lookup
+   * key, never an authorization claim.
+   */
+  getByNumber(
+    workspaceId: string,
+    taskNumber: number,
+    actor: UserActor,
+  ): TaskSummaryDto | null {
+    return this.readGatedSummary(
+      'tasks.get_joined_by_number',
+      'WHERE t.workspace_id = ? AND t.task_number = ?',
+      [workspaceId, taskNumber],
+      actor,
+    );
   }
 
   /**
@@ -650,24 +705,28 @@ export class TaskStore {
     };
   }
 
-  private joinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
-    return {
-      id: row.id,
-      task_number: row.task_number,
-      workspace_id: row.workspace_id,
-      workspace_name: row.workspace_name,
-      channel_id: row.conversation_id,
-      channel_name: row.channel_name,
-      thread_root_id: row.thread_root_id,
-      conversation: { id: row.conversation_id, title: row.conversation_title },
-      status: row.status,
-      title: row.title,
-      assignee: assigneeFrom(row),
-      creator: creatorFrom(row),
-      created_at: row.created_at,
-      closed_at: row.closed_at,
-    };
-  }
+}
+
+/** Row → `TaskSummaryDto`. Module-level and exported so the board read face
+ *  reuses THIS projection rather than repeating it (one row shape, one SELECT,
+ *  one DTO). */
+export function taskJoinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
+  return {
+    id: row.id,
+    task_number: row.task_number,
+    workspace_id: row.workspace_id,
+    workspace_name: row.workspace_name,
+    channel_id: row.conversation_id,
+    channel_name: row.channel_name,
+    thread_root_id: row.thread_root_id,
+    conversation: { id: row.conversation_id, title: row.conversation_title },
+    status: row.status,
+    title: row.title,
+    assignee: assigneeFrom(row),
+    creator: creatorFrom(row),
+    created_at: row.created_at,
+    closed_at: row.closed_at,
+  };
 }
 
 /** Build the assignee DTO from a row's assignee columns (name degrades to the

@@ -18,22 +18,28 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { TaskStatus, TaskSummaryDto } from '@silverhand/shared';
 import { cn } from '@/lib/cn';
-import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
+import { useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
 import { useRevealTaskRow } from '@/features/tasks/useRevealTaskRow';
+import { FIRST_COLUMN_WINDOW } from '@/features/tasks/columnWindow';
 import {
-  columnVisibleCount,
-  FIRST_COLUMN_WINDOW,
-} from '@/features/tasks/columnWindow';
+  boardColumnTotal,
+  boardCountLabel,
+} from '@/features/tasks/boardAuthority';
+import {
+  boardColumnCanGrow,
+  boardVisibleItems,
+  useBoardColumns,
+  useBoardCounts,
+  useBoardFacets,
+} from '@/features/tasks/useBoard';
+import { useBoardReveal } from '@/features/tasks/useBoardReveal';
 import {
   useColumnEndSentinel,
   useColumnWindow,
 } from '@/features/tasks/useColumnWindow';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
-  applyTaskFilters,
-  collectAssignees,
-  collectCreators,
   DEFAULT_TASK_FILTERS,
   type TaskFilters,
 } from '@/features/tasks/taskFilters';
@@ -331,43 +337,6 @@ export function WorkspaceTasksDrawer({
   // (#task:1432); both filters stay switchable to All.
   const { workspaceOptions, channelOptions } = useTaskFilterOptions();
 
-  // Fetch the cross-workspace list (all statuses, incl. closed — it's just
-  // the 5th column). The drawer is now the global board with a default
-  // channel focus, so it must fetch every workspace's tasks: selecting an
-  // external channel from the unified dropdown would otherwise yield an
-  // empty list. Channel / assignee / creator are sliced client-side via
-  // applyTaskFilters — a leftover from before the board had an authority read
-  // face (#task:1884 moves these axes server-side).
-  // Shares React Query cache with the pane's identical `useTasks({})` call;
-  // live refresh rides the viewer scope (see `useTasks`).
-  const {
-    data: allTasks = [],
-    isLoading,
-    isFetching,
-    dataUpdatedAt,
-    errorUpdateCount,
-    refetch,
-  } = useTasks({});
-
-  const tasks = useMemo(
-    () =>
-      applyTaskFilters(
-        allTasks,
-        filters,
-        // Channel-scoped: main-line + reply-cluster tasks both resolve to a
-        // real channel through `channel_id`.
-        (task, conversationId) => task.channel_id === conversationId,
-      ),
-    [allTasks, filters],
-  );
-  const updateStatus = useUpdateTaskStatus();
-
-  const assigneeOptions = useMemo(() => collectAssignees(allTasks), [allTasks]);
-  const creatorOptions = useMemo(() => collectCreators(allTasks), [allTasks]);
-  const hasUnassigned = useMemo(() => allTasks.some(t => !t.assignee), [allTasks]);
-
-  const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
-
   // The bound the columns actually render against. A CLOSED drawer is pinned to
   // the first page: the shell stays mounted (translated off-screen) for the whole
   // time a workspace is selected, so its card tree is pure cost while nobody can
@@ -375,18 +344,46 @@ export function WorkspaceTasksDrawer({
   // reopen because the grown state is discarded, not hidden. Growth state itself
   // is left untouched; the OPEN transition re-applies the baseline through
   // `applyFilters`, which resets it anyway.
+  //
+  // Pinning bounds RENDERING only. What stops the closed drawer from READING is
+  // `enabled: open` below — the two are separate because the cache is shared: a
+  // closed drawer may hold five pages the pane fetched, and must still render one.
   const renderWindow = open ? columnWindow : FIRST_COLUMN_WINDOW;
 
+  // Collapse is read here, not only inside the column, because it gates the
+  // queries as well as the body (a collapsed column must fetch nothing). The
+  // store is shared with the pane, so the two surfaces stay in sync.
+  const { isCollapsed, toggle: toggleCollapse } = useKanbanColumnCollapse();
+
+  // The authority read faces (#task:1884), the same three the pane consumes and
+  // through the SAME query keys — one cache per `(status, filter)`, so opening
+  // the drawer over a board the pane already read costs no refetch, and the two
+  // surfaces still cannot inherit each other's render ceiling (that is
+  // `renderWindow`, above).
+  //
+  // `enabled: open` is the drawer's whole cost story: closed, it issues no read
+  // at all — not the columns, not the counts, not the facets. Channel / assignee
+  // / creator are narrowed server-side now, so nothing here slices a full array.
+  const columns = useBoardColumns({
+    filters,
+    enabled: open,
+    window: renderWindow,
+    isCollapsed,
+  });
+  const counts = useBoardCounts(filters, { enabled: open });
+  const people = useBoardFacets({ enabled: open });
+  const updateStatus = useUpdateTaskStatus();
+
   // Make a reveal target renderable: the row may live in another
-  // workspace/channel that the anchored baseline filters out, and a row outside
-  // the render window has no `[data-task-id]` to scroll to either. Closed tasks
-  // are always in the tree (a status column, not a hidden tier), so no
-  // visibility widening is needed. Once widened the view stays widened and the
+  // workspace/channel that the anchored baseline filters out, so widening the
+  // filters back to All is this surface's own obligation (Cindy BLOCKER 10).
+  // Closed tasks are always in the tree (a status column, not a hidden tier), so
+  // no visibility widening is needed. Once widened the view stays widened and the
   // user can re-select.
   //
-  // Both widenings — filters to All, window to the page holding the row — are
-  // written in ONE commit, against the population the reset produces (`allTasks`,
-  // the unfiltered directory) rather than the currently-filtered `tasks`.
+  // Widening is now ONLY the filter reset. The other two ways a held row can go
+  // unrendered — past this surface's window, or on a page nobody fetched — are
+  // not one-shot writes but a walk, owned by `useBoardReveal` below.
   //
   // Called by `useRevealTaskRow` once per intent, BEFORE it trusts the rendered
   // set — so this reacts to the intent's arrival and never to whether the intent
@@ -395,14 +392,7 @@ export function WorkspaceTasksDrawer({
   // that opens the drawer the widening is the last write.
   const ensureRevealRenderable = useCallback(() => {
     applyFilters({ ...DEFAULT_TASK_FILTERS });
-    if (revealTaskId === null || revealTaskId === undefined) return;
-    const found = allTasks.find(t => t.id === revealTaskId);
-    if (!found) return;
-    coverColumnIndex(
-      found.status,
-      allTasks.filter(t => t.status === found.status).indexOf(found),
-    );
-  }, [allTasks, applyFilters, coverColumnIndex, revealTaskId]);
+  }, [applyFilters]);
 
   // A plain card click opens the detail modal (`?task=<id>`, hosted by App);
   // jumping to the conversation is the modal's own explicit action.
@@ -427,23 +417,20 @@ export function WorkspaceTasksDrawer({
   // Focus trap: keep focus inside drawer while open.
   const drawerRef = useRef<HTMLDivElement>(null);
 
-  // Is the reveal target in the collection this drawer RENDERS? Judged on the
-  // post-filter list on purpose: `allTasks` is the cross-workspace directory
-  // behind the board, and a target it holds but the current filters exclude has
-  // no row in the DOM — letting the directory answer this is how a reveal pulses
-  // nothing and consumes itself (Cindy BLOCKER 10). The render window is the
-  // SECOND way a held row can be absent (#task:1885), so it is checked here too;
-  // `ensureRenderable` above widens both, and a still-uncovered row reports
-  // absent rather than being scrolled to nothing.
-  const revealTarget = useMemo(() => {
-    if (revealTaskId === null || revealTaskId === undefined) return null;
-    const found = tasks.find(t => t.id === revealTaskId);
-    if (!found) return null;
-    const index = grouped[found.status].indexOf(found);
-    return index < columnVisibleCount(renderWindow, found.status)
-      ? { status: found.status }
-      : null;
-  }, [grouped, renderWindow, revealTaskId, tasks]);
+  // Where the target is, whether it can still be widened or paged to, and the
+  // evidence clocks of the ONE column that may answer for it — the paged board's
+  // reveal inputs, shared with the pane so neither surface can grow its own
+  // version (`useBoardReveal`). `active: open` is what makes this drawer stand
+  // down: a closed drawer holds no intent (App hands it `null`) and can deliver
+  // nothing.
+  const reveal = useBoardReveal({
+    revealTaskId,
+    active: open,
+    columns,
+    window: renderWindow,
+    grow: growColumn,
+    coverIndex: coverColumnIndex,
+  });
 
   // Scroll + pulse + one-shot consumption, shared with the `/tasks` board so the
   // "absence is only terminal with positive evidence" rule and the pulse's
@@ -452,12 +439,17 @@ export function WorkspaceTasksDrawer({
     revealTaskId,
     active: open,
     rootRef: drawerRef,
-    target: revealTarget,
+    target: reveal.target,
     ensureRenderable: ensureRevealRenderable,
-    isFetching,
-    dataUpdatedAt,
-    errorUpdateCount,
-    refetch,
+    canWiden: reveal.canWiden,
+    onWiden: reveal.widen,
+    canFetch: reveal.canFetch,
+    onPage: reveal.page,
+    authority: reveal.authority,
+    isFetching: reveal.isFetching,
+    dataUpdatedAt: reveal.dataUpdatedAt,
+    errorUpdateCount: reveal.errorUpdateCount,
+    refetch: reveal.refetch,
     onConsumed: onRevealConsumed,
   });
 
@@ -552,9 +544,7 @@ export function WorkspaceTasksDrawer({
               workspaceOptions={workspaceOptions}
               channelOptions={channelOptions}
               allChannelsLabel="ALL"
-              assigneeOptions={assigneeOptions}
-              creatorOptions={creatorOptions}
-              hasUnassigned={hasUnassigned}
+              people={people}
             />
             {/* Create entrance sits right AFTER the filter (shiki): the toolbar's
               * one primary action, so it earns the filled + poster treatment
@@ -585,10 +575,14 @@ export function WorkspaceTasksDrawer({
                 status={col.status}
                 icon={col.icon}
                 iconClass={col.iconClass}
-                tasks={grouped[col.status]}
-                visibleCount={columnVisibleCount(renderWindow, col.status)}
+                items={boardVisibleItems(columns[col.status], renderWindow, col.status)}
+                total={boardColumnTotal(counts, col.status)}
+                hasMore={boardColumnCanGrow(columns[col.status], renderWindow, col.status)}
                 onReachEnd={() => growColumn(col.status)}
-                isLoading={isLoading}
+                isLoading={columns[col.status].isLoading}
+                isError={columns[col.status].isError}
+                collapsed={isCollapsed(col.status)}
+                onToggleCollapse={() => toggleCollapse(col.status)}
                 onCardClick={handleCardClick}
                 onStatusChange={(taskId, status) =>
                   updateStatus.mutate({ taskId, status })
@@ -655,20 +649,6 @@ const COLUMNS: ReadonlyArray<ColumnSpec> = [
   },
 ];
 
-function groupByStatus(
-  tasks: TaskSummaryDto[],
-): Record<TaskStatus, TaskSummaryDto[]> {
-  const out: Record<TaskStatus, TaskSummaryDto[]> = {
-    todo: [],
-    in_progress: [],
-    in_review: [],
-    done: [],
-    closed: [],
-  };
-  for (const t of tasks) out[t.status].push(t);
-  return out;
-}
-
 // ── Kanban column ────────────────────────────────────────────────────
 
 function KanbanColumn({
@@ -676,10 +656,14 @@ function KanbanColumn({
   status,
   icon: Icon,
   iconClass,
-  tasks,
-  visibleCount,
+  items,
+  total,
+  hasMore,
   onReachEnd,
   isLoading,
+  isError,
+  collapsed,
+  onToggleCollapse,
   onCardClick,
   onStatusChange,
   highlightedTaskId,
@@ -688,37 +672,43 @@ function KanbanColumn({
   status: TaskStatus;
   icon: LucideIcon;
   iconClass: string;
-  /** This column's WHOLE list — the header count is the total, not the
-   *  rendered prefix. Only the body is bounded by `visibleCount`. */
-  tasks: TaskSummaryDto[];
-  /** How many rows the body may render (#task:1885). */
-  visibleCount: number;
+  /** The rows this surface may render — the loaded prefix under its own window
+   *  bound, never the whole column. */
+  items: TaskSummaryDto[];
+  /** The column's authoritative total under the current filters (counts face),
+   *  which is what the header shows: bounding the body must not shrink the
+   *  number. `null` while the counts face has not answered — independent of this
+   *  column's own body read, so a loaded body can show its rows with no number,
+   *  and a known total can stand over a failed body. */
+  total: number | null;
+  /** Anything left past the rendered rows — loaded or still on the server. */
+  hasMore: boolean;
   /** The reader reached the end of this column — render one more page. */
   onReachEnd: () => void;
   isLoading: boolean;
+  isError: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (taskId: string, next: TaskStatus) => void;
   highlightedTaskId: string | null;
 }): JSX.Element {
   // Drag-over highlight (#task:779) — mirrors TasksSection.
   const [dragOver, setDragOver] = useState(false);
-  // Per-column collapse (#task:1169) — shared store with the NavRail pane, so
-  // the two surfaces stay in sync within a session. Mirrors TasksSection.
-  const { isCollapsed, toggle } = useKanbanColumnCollapse();
-  const collapsed = isCollapsed(status);
+  // Per-column collapse (#task:1169) — the resolved bit and its toggle arrive
+  // from the drawer, which needs them to gate the reads too. Mirrors
+  // TasksSection.
   const Chevron = collapsed ? ChevronRight : ChevronDown;
-  const visible =
-    visibleCount < tasks.length ? tasks.slice(0, visibleCount) : tasks;
   // A collapsed column renders no body, so it arms no observer — the sentinel
   // isn't in the tree and an unmounted root would grow the window forever.
-  const hasMore = !collapsed && visible.length < tasks.length;
+  const canGrow = !collapsed && hasMore;
   const bodyRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLLIElement>(null);
   useColumnEndSentinel({
     rootRef: bodyRef,
     sentinelRef,
-    hasMore,
-    renderedCount: visible.length,
+    hasMore: canGrow,
+    renderedCount: items.length,
     onReachEnd,
   });
   return (
@@ -764,7 +754,7 @@ function KanbanColumn({
       <button
         type="button"
         data-tasks-column-header
-        onClick={() => toggle(status)}
+        onClick={onToggleCollapse}
         aria-expanded={!collapsed}
         aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${title} column`}
         className="flex w-full shrink-0 cursor-pointer items-center gap-2 border-b border-border-subtle px-3 py-2 text-left transition-colors hover:bg-bg-hover"
@@ -775,23 +765,31 @@ function KanbanColumn({
           {title}
         </span>
         <span className="text-[10px] tabular-nums text-text-muted">
-          {tasks.length}
+          {boardCountLabel(total)}
         </span>
       </button>
       {collapsed ? null : (
-        <div ref={bodyRef} className="min-h-0 flex-auto overflow-y-auto p-2">
+        <div
+          ref={bodyRef}
+          data-tasks-column-body
+          className="min-h-0 flex-auto overflow-y-auto p-2"
+        >
           {isLoading ? (
             <p className="px-2 py-3 text-center text-[11px] text-text-muted">
               Loading…
             </p>
-          ) : tasks.length === 0 && !dragOver ? (
+          ) : isError ? (
+            <p className="px-2 py-3 text-center text-[11px] text-text-muted">
+              Couldn’t load tasks
+            </p>
+          ) : items.length === 0 && !dragOver ? (
             <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
               No {title.toLowerCase()} tasks
             </p>
           ) : (
             <ul className="space-y-1.5">
               {dragOver ? <TaskDropPlaceholder /> : null}
-              {visible.map(t => (
+              {items.map(t => (
                 <li key={t.id}>
                   <TaskCard
                     task={t}
@@ -801,10 +799,12 @@ function KanbanColumn({
                   />
                 </li>
               ))}
-              {/* Tail sentinel — growth is synchronous local state, so there is
-                  nothing to spin on; the next page is simply in the tree on the
-                  following commit. */}
-              {hasMore ? <li ref={sentinelRef} aria-hidden className="h-px" /> : null}
+              {/* Tail sentinel — grows the window as it comes into view, which is
+                  also what asks for the next page (the window drives fetching).
+                  No visual of its own: the rows either arrive on the next commit
+                  (already cached) or with the page, and a spinner pinned to the
+                  tail would flicker on every local growth. */}
+              {canGrow ? <li ref={sentinelRef} aria-hidden className="h-px" /> : null}
             </ul>
           )}
         </div>

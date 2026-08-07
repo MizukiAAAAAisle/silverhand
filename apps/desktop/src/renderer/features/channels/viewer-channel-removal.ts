@@ -63,8 +63,9 @@ import {
 import {
   removeChannelFromTasks,
   tasksHeldChannelIds,
-  tasksKey,
 } from '@/features/tasks/hooks';
+import { boardColumnKey, boardFilterKey } from '@/features/tasks/boardQuery';
+import { DEFAULT_TASK_FILTERS } from '@/features/tasks/taskFilters';
 import {
   messageUnreadHeldChannelIds,
   messageUnreadSummaryKey,
@@ -246,11 +247,17 @@ export const VIEWER_LOCAL_CHANNEL_READ_MODELS: readonly RegisteredChannelReadMod
   }),
   attributedRowFamily<TaskSummaryDto[]>({
     id: 'tasks',
-    key: tasksKey({}),
-    // One entry, three roots: the list variants are patched, the two
+    // The Todo column under the default filters — the key every board mount
+    // creates, and the row-carrying face this entry patches. A representative
+    // key must name a variant that EXISTS: it used to be `tasksKey({})`, whose
+    // fetch-all list was retired with #task:1892.
+    key: boardColumnKey('todo', boardFilterKey(DEFAULT_TASK_FILTERS)),
+    // One entry, three roots: the column pages are patched, the two
     // single-object task reads are discarded, and all three are membership-gated
-    // by the SAME server predicate (`TaskStore.list` / task read → `EXISTS
-    // conversation_users`), so splitting them would only let one drift.
+    // by the SAME server predicate (board / task read → `EXISTS
+    // conversation_users`), so splitting them would only let one drift. The two
+    // board aggregates share the `tasks` root and are invalidated by the same
+    // cleanup — they carry no rows to patch.
     roots: ['tasks', 'task-detail', 'task-by-number'],
     cleanup: (qc, t) => removeChannelFromTasks(qc, t.channelId),
     heldChannelIds: tasksHeldChannelIds,

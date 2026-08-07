@@ -27,6 +27,25 @@ export interface UseRevealTaskRowArgs {
    */
   target: { status: TaskStatus } | null;
   /**
+   * Whether the target is LOADED but outside this surface's window — reachable by
+   * a local window write, with no read involved (see `nextRevealStep`'s
+   * `canWiden`).
+   */
+  canWiden: boolean;
+  /** Widen this surface's window over the loaded row — the `widen` step's action.
+   *  Must move the surface forward on every call. */
+  onWiden: () => void;
+  /**
+   * Whether the target's column may still hold pages the server has not sent (see
+   * `nextRevealStep`'s `canFetch`). A board that reads a bounded window of a paged
+   * face cannot tell "absent" from "not fetched yet" without it.
+   */
+  canFetch: boolean;
+  /** Fetch one more page of the target's column — the `page` step's action.
+   *  Must move the surface forward on every call (a no-op call would leave the
+   *  machine in a state nothing re-triggers). */
+  onPage: () => void;
+  /**
    * Put the target into this surface's rendered set (widen its filters).
    * REQUIRED, with no default: "the delivery is shared but making the row
    * renderable is not" is exactly how the second surface ended up without it, so
@@ -34,15 +53,22 @@ export interface UseRevealTaskRowArgs {
    * BLOCKER 10). Called at most once per intent, before `present` is trusted.
    */
   ensureRenderable: () => void;
-  /** `isFetching` of the list query backing this surface. */
+  /**
+   * WHICH read the three clocks below belong to — the target column's query
+   * identity, or `null` while no column is known to own the target. A change means
+   * the clocks describe a different query, so the round re-baselines rather than
+   * reading the swap as an answer (see `nextRevealEvidence`).
+   */
+  authority: string | null;
+  /** `isFetching` of the reads this round depends on. */
   isFetching: boolean;
-  /** `dataUpdatedAt` of that query — the SUCCESS clock (see
+  /** `dataUpdatedAt` of the TARGET's own column read — the SUCCESS clock (see
    *  `nextRevealEvidence`); a failed read does not move it. */
   dataUpdatedAt: number;
-  /** `errorUpdateCount` of that query — the FAILURE axis, monotone so a settle
-   *  cannot hide inside one millisecond. */
+  /** `errorUpdateCount` of the reads this round depends on — the FAILURE axis,
+   *  monotone so a settle cannot hide inside one millisecond. */
   errorUpdateCount: number;
-  /** Force an authoritative list read (the query's own `refetch`). */
+  /** Force an authoritative read of the target's column (its own `refetch`). */
   refetch: () => void;
   /** Called on a terminal outcome: a successful delivery, or an established
    *  absence. Abandonment is not one — see the note above the effects. */
@@ -64,7 +90,7 @@ export function useRevealTaskRow(args: UseRevealTaskRowArgs): {
   highlightedTaskId: string | null;
 } {
   const { revealTaskId, active, rootRef, target, isFetching, dataUpdatedAt } = args;
-  const { errorUpdateCount } = args;
+  const { canWiden, canFetch, authority, errorUpdateCount } = args;
 
   // The callbacks are read through refs so a caller passing inline closures
   // (`onConsumed={() => setRevealTaskId(null)}`) does not re-run the step
@@ -73,6 +99,10 @@ export function useRevealTaskRow(args: UseRevealTaskRowArgs): {
   refetchRef.current = args.refetch;
   const ensureRef = useRef(args.ensureRenderable);
   ensureRef.current = args.ensureRenderable;
+  const onWidenRef = useRef(args.onWiden);
+  onWidenRef.current = args.onWiden;
+  const onPageRef = useRef(args.onPage);
+  onPageRef.current = args.onPage;
   const onConsumedRef = useRef(args.onConsumed);
   onConsumedRef.current = args.onConsumed;
 
@@ -91,24 +121,34 @@ export function useRevealTaskRow(args: UseRevealTaskRowArgs): {
   const [evidence, setEvidence] = useState(EMPTY_REVEAL_EVIDENCE);
   useEffect(() => {
     setEvidence(prev =>
-      nextRevealEvidence(prev, { revealTaskId, dataUpdatedAt, errorUpdateCount }),
+      nextRevealEvidence(prev, {
+        revealTaskId,
+        authority,
+        dataUpdatedAt,
+        errorUpdateCount,
+      }),
     );
-  }, [revealTaskId, dataUpdatedAt, errorUpdateCount]);
+  }, [revealTaskId, authority, dataUpdatedAt, errorUpdateCount]);
 
   useEffect(() => {
     if (!active || revealTaskId === null) return;
-    // Wait for the evidence slot to re-key onto this intent, so a previous
-    // intent's evidence can never vouch for this one.
+    // Wait for the evidence slot to re-key onto this intent AND onto the read that
+    // may answer for it, so neither a previous intent's evidence nor a clock
+    // belonging to a query that has since been replaced can vouch for this round.
     if (evidence.key !== revealTaskId) return;
+    if (evidence.authority !== authority) return;
 
     const step = nextRevealStep({
       revealing: true,
       ensured: evidence.ensured,
       present: target !== null,
+      canWiden,
       readInFlight: isFetching,
-      readRequested: evidence.requested,
-      readSucceededSince: evidence.succeeded,
       readFailedSince: evidence.failed,
+      authorityKnown: authority !== null,
+      canFetch,
+      readSucceededSince: evidence.succeeded,
+      readRequested: evidence.requested,
       domBudgetSpent: evidence.domMisses >= MAX_REVEAL_DOM_MISSES,
     });
 
@@ -125,8 +165,20 @@ export function useRevealTaskRow(args: UseRevealTaskRowArgs): {
           prev.key === revealTaskId ? { ...prev, ensured: true } : prev,
         );
         return;
+      case 'widen':
+        // A row this surface already holds: no read, no budget, and the covering
+        // write renders it in the next commit.
+        onWidenRef.current();
+        return;
+      case 'page':
+        // Unbudgeted on purpose: fetching a page is progress, not a failed lookup,
+        // so it spends neither the DOM budget nor the one authoritative read. Its
+        // terminators are the column's own end (`canFetch` goes false) and a failed
+        // page, which the machine ranks ahead of this arm.
+        onPageRef.current();
+        return;
       case 'refetch':
-        // One attempt per intent — the machine, not this switch, is what stops a
+        // One attempt per authority — the machine, not this switch, is what stops a
         // second one (`readRequested`), so there is no arm here that can silently
         // become a wait with no terminator.
         setEvidence(prev =>
@@ -170,7 +222,17 @@ export function useRevealTaskRow(args: UseRevealTaskRowArgs): {
       onConsumedRef.current?.();
     });
     return () => cancelAnimationFrame(frame);
-  }, [active, revealTaskId, target, isFetching, evidence, rootRef]);
+  }, [
+    active,
+    revealTaskId,
+    target,
+    canWiden,
+    canFetch,
+    authority,
+    isFetching,
+    evidence,
+    rootRef,
+  ]);
 
   // Voiding a standing intent is NOT this hook's job, and an `active` cleanup
   // cannot do it correctly: `active` says "this surface is mounted and open", not

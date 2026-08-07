@@ -107,11 +107,17 @@ pnpm perf:client profile \
   --scenario task-core
 ```
 
-Available scenarios are `chat-core`, `task-core`, `chat-mount-cycle`, and
-`shell-smoke`. Reports and Chrome traces default to
+Available scenarios are `chat-core`, `task-core`, `task-drawer-cycle`,
+`chat-mount-cycle`, and `shell-smoke`. Reports and Chrome traces default to
 `/tmp/silverhand-client-performance/`; use `--output` to choose another
 directory. Traces open in Chrome DevTools Performance or
 <https://ui.perfetto.dev/>.
+
+`task-drawer-cycle` measures the titlebar drawer specifically: a cold open, a
+column scrolled past its window (which is what asks the authority face for the
+next page), a close, and a Chat re-mount while the closed drawer's shell is
+still in the tree — the phase that shows what a closed drawer costs a mount.
+`sidebar-ab` is a comparison harness rather than a product path.
 
 Use the automated cycle scenario to distinguish one-time cache growth from
 retained heap growth in one renderer. `--retained-heap` invokes V8 garbage

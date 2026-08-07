@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   TaskAssigneeTypeSchema,
   TaskStatusSchema,
+  type TaskStatus,
 } from '../db/schema.js';
 import { MessageSendTargetSchema } from './internal-agent.js';
 import { AgentCapabilitySchema } from './workspace.js';
@@ -178,7 +179,11 @@ export const TaskDetailDtoSchema = TaskSummaryDtoSchema.extend({
 });
 export type TaskDetailDto = z.infer<typeof TaskDetailDtoSchema>;
 
-// GET /api/tasks (human) / /internal/agent/:aid/tasks (agent)
+// GET /internal/agent/:aid/tasks (agent list). Human-side since #task:1891:
+// nothing — the unbounded human `GET /api/tasks` retired once the board faces
+// and the by-number point lookup covered every human read, so this is the AGENT
+// contract alone. Widening it for a human surface would re-create the unbounded
+// face under a new name.
 export const ListTasksQuerySchema = z.object({
   workspace_id: z.string().optional(),
   conversation_id: z.string().optional(),
@@ -194,6 +199,225 @@ export const ListTasksQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).optional(),
 });
 export type ListTasksQuery = z.infer<typeof ListTasksQuerySchema>;
+
+// ── Human task board read faces (#task:1884) ─────────────────────────────
+//
+// The board is a HUMAN, CROSS-WORKSPACE surface (shiki, 2026-08-07): its
+// baseline view is "All workspaces", so `workspace_id` is one optional
+// narrowing axis — never a required scope. `ListTasksQuerySchema` above is the
+// agent CLI's list contract, so NONE of the board's pagination
+// lives there: the board gets its own query schemas and its own routes, and the
+// agent contract is untouched by construction (not by a compatibility matrix).
+//
+// Three faces, three facts, one carrier each (see apiPaths.taskBoard*): a
+// column window carries no totals, counts carry no items, facets carry no
+// tasks. A paginated board therefore cannot hold two disagreeing copies of one
+// number, and the loaded pages are never mistaken for the population.
+
+/** Assignee axis. Omitted = any. `unassigned` means BOTH assignee columns are
+ *  NULL (the aggregate splits one concept across `assignee_agent_id` /
+ *  `assignee_user_id`, so "no assignee" must name both). */
+export const TaskBoardAssigneeFilterTypeSchema = z.enum([
+  'agent',
+  'user',
+  'unassigned',
+]);
+export type TaskBoardAssigneeFilterType = z.infer<
+  typeof TaskBoardAssigneeFilterTypeSchema
+>;
+
+/** Creator axis. Omitted = any. `system` is deliberately absent: a system
+ *  creator has no id and is not a selectable person (the existing filter bar
+ *  already skips it), so it is a value of the DATA, not of this filter. */
+export const TaskBoardCreatorFilterTypeSchema = z.enum(['agent', 'user']);
+export type TaskBoardCreatorFilterType = z.infer<
+  typeof TaskBoardCreatorFilterTypeSchema
+>;
+
+/** The filter axes every board face shares. Kept as a raw field map (not a
+ *  refined schema) so the three query schemas compose from ONE definition —
+ *  a refined schema cannot be `.extend()`ed. */
+const taskBoardFilterFields = {
+  /** Optional workspace narrowing. Absent = the default All-workspaces board. */
+  workspace_id: z.string().min(1).optional(),
+  /** A channel conversation id. Matches that channel AND its threads, because
+   *  a task's `channel_id` is its owning conversation (a thread task's
+   *  conversation IS its channel; the reply cluster is `thread_root_id`). */
+  channel_id: z.string().min(1).optional(),
+  assignee_type: TaskBoardAssigneeFilterTypeSchema.optional(),
+  assignee_id: z.string().min(1).optional(),
+  creator_type: TaskBoardCreatorFilterTypeSchema.optional(),
+  creator_id: z.string().min(1).optional(),
+} as const;
+
+/** `{type,id}` is one value split across two query params, so the pairing is
+ *  validated here — id alone is unsafe (agent and user ids share no namespace
+ *  guarantee) and `unassigned` takes no id. */
+function refineTaskBoardPersonAxes(
+  v: {
+    assignee_type?: TaskBoardAssigneeFilterType;
+    assignee_id?: string;
+    creator_type?: TaskBoardCreatorFilterType;
+    creator_id?: string;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const needsId = v.assignee_type === 'agent' || v.assignee_type === 'user';
+  if (needsId && v.assignee_id === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['assignee_id'],
+      message: 'assignee_id is required when assignee_type is agent|user',
+    });
+  }
+  if (!needsId && v.assignee_id !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['assignee_id'],
+      message: 'assignee_id requires assignee_type agent|user',
+    });
+  }
+  if (v.creator_type !== undefined && v.creator_id === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['creator_id'],
+      message: 'creator_id is required when creator_type is set',
+    });
+  }
+  if (v.creator_type === undefined && v.creator_id !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['creator_type'],
+      message: 'creator_type is required when creator_id is set',
+    });
+  }
+}
+
+/** Default / maximum window size for one board column. The 20-row first screen
+ *  is the product decision (#task:1883); the max bounds a reveal-driven
+ *  catch-up read without letting a caller re-create the fetch-all. */
+export const TASK_BOARD_DEFAULT_LIMIT = 20;
+export const TASK_BOARD_MAX_LIMIT = 200;
+
+/** GET /api/tasks/board/column — ONE status column's window. */
+export const TaskBoardColumnQuerySchema = z
+  .object({
+    ...taskBoardFilterFields,
+    /** Exactly one status: each column pages independently, so one column's
+     *  window can never be eaten by another's rows. */
+    status: TaskStatusSchema,
+    /** Opaque keyset cursor from a previous response's `next_cursor`.
+     *  Omitted = first window. */
+    cursor: z.string().min(1).optional(),
+    limit: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(TASK_BOARD_MAX_LIMIT)
+      .optional(),
+  })
+  .superRefine(refineTaskBoardPersonAxes);
+export type TaskBoardColumnQuery = z.infer<typeof TaskBoardColumnQuerySchema>;
+
+/** GET /api/tasks/board/counts — the authoritative per-status totals. */
+export const TaskBoardCountsQuerySchema = z
+  .object({ ...taskBoardFilterFields })
+  .superRefine(refineTaskBoardPersonAxes);
+export type TaskBoardCountsQuery = z.infer<typeof TaskBoardCountsQuerySchema>;
+
+/**
+ * GET /api/tasks/by-number — human point lookup by the workspace-scoped
+ * business key. Both axes are REQUIRED: `task_number` is only unique per
+ * workspace, so a lookup missing either half is not a point lookup and must be
+ * rejected rather than widened into a scan.
+ *
+ * The response is a single task or 404. `workspace_id` is the LOOKUP key only,
+ * never an authorization claim — the server gates on the viewer's visibility of
+ * the task's own conversation, and a task the viewer cannot see is reported the
+ * same way as one that does not exist.
+ */
+export const TaskByNumberQuerySchema = z.object({
+  workspace_id: z.string().min(1),
+  task_number: z.coerce.number().int().positive(),
+});
+export type TaskByNumberQuery = z.infer<typeof TaskByNumberQuerySchema>;
+
+/**
+ * One column window. Every filter AND the viewer-visibility gate are applied
+ * inside the query BEFORE its `LIMIT`, and `next_cursor` is derived by taking
+ * `limit + 1` rows of that complete filtered population — nothing is dropped
+ * after the page is cut. So a page can only be short because the column ended,
+ * never because rows were filtered out of a full window.
+ *
+ * ORDER IS PART OF THIS CONTRACT: `items` are newest-first by
+ * `(task_number DESC, id DESC)`, and successive pages continue STRICTLY after
+ * the previous page's last item. Concatenating pages in request order therefore
+ * yields the column in exactly that order, so a client renders in delivered
+ * order and MUST NOT re-sort locally: `task_number` is only monotonic per
+ * workspace (the default board is cross-workspace), so a client sorting by
+ * number alone cannot reproduce this total order, and any local sort over the
+ * loaded prefix would disagree with what the next page continues from.
+ *
+ * What the server does own is the CURSOR ENCODING (opaque) and PAGE LENGTH:
+ * `next_cursor === null` stays the client's ONLY end-of-column signal, because
+ * a FULL page can also be the last one.
+ *
+ * Carries NO total: totals are the counts face's fact.
+ */
+export const TaskBoardColumnDtoSchema = z.object({
+  status: TaskStatusSchema,
+  items: z.array(TaskSummaryDtoSchema),
+  next_cursor: z.string().nullable(),
+});
+export type TaskBoardColumnDto = z.infer<typeof TaskBoardColumnDtoSchema>;
+
+// Total by construction: derived from TaskStatusSchema, so a new status is
+// covered without hand-listing it here (no "missing key = 0" compat branch).
+const taskBoardCountShape = Object.fromEntries(
+  TaskStatusSchema.options.map(s => [s, z.number().int().nonnegative()]),
+) as Record<TaskStatus, z.ZodNumber>;
+
+/**
+ * Every status's total under the requested filters — the ONE authority for a
+ * board count. Always all five statuses, so a client never distinguishes
+ * "zero" from "absent", and never maintains a count by `±1` on an event.
+ * Also the count source for the titlebar Tasks badge (workspace-narrowed,
+ * items not fetched), so that number stops being a second authority derived
+ * from a full task download.
+ */
+export const TaskBoardCountsDtoSchema = z.object({
+  counts: z.object(taskBoardCountShape),
+});
+export type TaskBoardCountsDto = z.infer<typeof TaskBoardCountsDtoSchema>;
+
+/** A selectable person in a filter menu. */
+export const TaskBoardPersonOptionSchema = z.object({
+  type: TaskAssigneeTypeSchema,
+  id: z.string(),
+  name: z.string(),
+});
+export type TaskBoardPersonOption = z.infer<typeof TaskBoardPersonOptionSchema>;
+
+/**
+ * The filter menus' option sets, over the viewer's ENTIRE visible task
+ * population.
+ *
+ * Deliberately takes NO filter params. Option sets must not shrink when a
+ * filter is applied — otherwise selecting one person collapses the menu to
+ * that person and the user cannot switch. This also matches the shipped
+ * behavior exactly (both surfaces aggregate the options from the unfiltered
+ * cross-workspace directory, not from the filtered list), so paging cannot
+ * silently narrow a menu to "whoever appeared in the pages we happened to
+ * load".
+ */
+export const TaskBoardFacetsDtoSchema = z.object({
+  assignees: z.array(TaskBoardPersonOptionSchema),
+  creators: z.array(TaskBoardPersonOptionSchema),
+  /** Whether any visible task is unassigned — gates the "No assignee" option
+   *  (shiki: otherwise it reads as a stray pseudo-person). */
+  has_unassigned: z.boolean(),
+});
+export type TaskBoardFacetsDto = z.infer<typeof TaskBoardFacetsDtoSchema>;
 
 // POST /internal/agent/:aid/tasks — create_tasks MCP tool
 export const CreateTasksInputSchema = z.object({
