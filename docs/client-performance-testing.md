@@ -66,6 +66,12 @@ pnpm perf:client profile \
   --scenario chat-core
 ```
 
+The `profile --mode release-profile` command automatically swaps the shared
+`better-sqlite3` native binding to Electron's ABI through the repository's
+cached native-binding helper. A preceding Node test, `pnpm install`, or rebuild
+can replace that binary; do not run `electron-vite preview` directly and assume
+the active ABI is still correct.
+
 The profile command has three write guards:
 
 1. `--profile-dir` must be absolute;

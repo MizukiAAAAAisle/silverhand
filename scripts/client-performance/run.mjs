@@ -122,6 +122,9 @@ async function runOwnedProfile(options) {
   const scenarioPath = scenarioFile(options.scenario);
   const scenario = await loadScenario(scenarioPath);
   assertInteractiveCompatibility(scenario, options);
+  if (mode === 'release-profile') {
+    await prepareElectronBinding();
+  }
   const child = launchProfileProcess({ mode, profileDir, port, executable: options.executable });
   const shutdown = () => {
     if (!child.killed) child.kill('SIGTERM');
@@ -153,6 +156,22 @@ async function runOwnedProfile(options) {
     process.removeListener('SIGINT', shutdown);
     process.removeListener('SIGTERM', shutdown);
     shutdown();
+  }
+}
+
+async function prepareElectronBinding() {
+  console.log('Preparing better-sqlite3 for Electron ABI…');
+  const child = spawn('bash', [join(import.meta.dirname, 'prepare-electron-binding.sh')], {
+    cwd: ROOT,
+    env: process.env,
+    stdio: 'inherit',
+  });
+  const exitCode = await new Promise((resolvePromise, rejectPromise) => {
+    child.once('error', rejectPromise);
+    child.once('exit', resolvePromise);
+  });
+  if (exitCode !== 0) {
+    throw new Error(`Electron ABI preparation failed with exit code ${String(exitCode)}`);
   }
 }
 
