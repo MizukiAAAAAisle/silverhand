@@ -1,8 +1,10 @@
-// Favorites route (#task:1252, docs/list-sort-v1.md). A read-side projection
-// over the `sort` bounded context: the viewer's flat global STARRED list,
-// UNIONed across every list_key. Owns no write side — starring still happens via
-// the per-entity `/api/workspaces/:id/star` and `/api/channels/:id/star`
-// endpoints; this only reads.
+// Favorites route (#task:1252, re-scoped to conversations by #task:1888;
+// docs/list-sort-v1.md). A read-side projection over the `sort` bounded context:
+// the viewer's flat global STARRED list, projected from the stars recorded in
+// each workspace's own conversation list (`list_key='channels:<ws_id>'`). A
+// workspace / DM container star is NOT a member — it only pins the container
+// inside its rail kind group. Owns no write side: the only star endpoint that
+// feeds this list is `/api/channels/:id/star`; this only reads.
 //
 // Auth/principal is inherited from the parent api app middleware.
 import { Hono } from 'hono';

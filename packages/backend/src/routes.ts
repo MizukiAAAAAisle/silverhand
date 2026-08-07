@@ -541,7 +541,8 @@ export function createApiRouter(
   app.route('/', createSortApp({ ctx, workspaces, conversations, sort }));
 
   // Favorites: the viewer's flat global STARRED list (read projection over the
-  // sort context's starred_at, UNIONed across every list_key). Read-only.
+  // sort context's starred_at in each workspace's conversation list; containers
+  // are not members since #task:1888). Read-only.
   app.route('/', createFavoritesApp({ ctx }));
 
   // Client-side diagnostics intake (#task:1664): failures the server cannot
