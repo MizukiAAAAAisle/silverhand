@@ -210,11 +210,13 @@ async function runScenario(context) {
       if (phase.action.kind === 'manual') console.log(phase.action.instruction);
       if (rl) await rl.question('Press Enter when ready to start this phase… ');
       const prepared = interpolateAction(phase.action, fixture);
+      const heapBeforeBytes = await readHeapUsage(client);
       const raw = await evaluate(
         client,
         phaseSource(phase.id, prepared, phase.settle_ms, phase.observe_ms),
       );
-      const summary = summarizePhase(raw);
+      const heapAfterBytes = await readHeapUsage(client);
+      const summary = summarizePhase({ ...raw, heapBeforeBytes, heapAfterBytes });
       phases.push({ id: phase.id, label: phase.label, action: prepared, metrics: summary });
       console.log(formatPhaseSummary(summary));
     }
@@ -516,7 +518,6 @@ function installProbeSource() {
       longTasksMs: [],
       eventDurationsMs: [],
       layoutShiftScore: 0,
-      heapBeforeBytes: null,
       domNodesBefore: null,
       raf: 0,
       lastFrameAt: null,
@@ -553,7 +554,6 @@ function installProbeSource() {
       state.raf = requestAnimationFrame(frame);
     };
     state.raf = requestAnimationFrame(frame);
-    const heap = () => performance.memory?.usedJSHeapSize ?? null;
     const nodes = () => document.getElementsByTagName('*').length;
     globalThis.__silverhandClientPerfV1 = {
       reset(phaseId) {
@@ -565,7 +565,6 @@ function installProbeSource() {
         state.longTasksMs = [];
         state.eventDurationsMs = [];
         state.layoutShiftScore = 0;
-        state.heapBeforeBytes = heap();
         state.domNodesBefore = nodes();
         state.lastFrameAt = null;
       },
@@ -582,8 +581,6 @@ function installProbeSource() {
           longTasksMs: [...state.longTasksMs],
           eventDurationsMs: [...state.eventDurationsMs],
           layoutShiftScore: state.layoutShiftScore,
-          heapBeforeBytes: state.heapBeforeBytes,
-          heapAfterBytes: heap(),
           domNodesBefore: state.domNodesBefore,
           domNodesAfter: nodes(),
         };
@@ -739,6 +736,11 @@ async function evaluate(client, expression) {
     throw new Error(`renderer evaluation failed: ${description}`);
   }
   return result.result.value;
+}
+
+async function readHeapUsage(client) {
+  const usage = await client.send('Runtime.getHeapUsage');
+  return Number.isFinite(usage.usedSize) ? usage.usedSize : null;
 }
 
 async function fetchTargets(endpoint) {
