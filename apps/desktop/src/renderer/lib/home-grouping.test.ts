@@ -88,7 +88,11 @@ describe('excludeStarredChannels (#task:1888 — starred conversations moved to 
 describe('branchHoldsSelectedRow (#task:1901 — which collapsed container keeps the open row)', () => {
   it('holds it for the parent branch of an unstarred selection', () => {
     expect(
-      branchHoldsSelectedRow('w1', { channelId: 'c1', workspaceId: 'w1', starred: false }),
+      branchHoldsSelectedRow('w1', {
+        channelId: 'c1',
+        workspaceId: 'w1',
+        starred: 'unstarred',
+      }),
     ).toBe(true);
   });
 
@@ -97,16 +101,42 @@ describe('branchHoldsSelectedRow (#task:1901 — which collapsed container keeps
     // mounts the branch's channels / sort / modes / unread for a row that
     // `excludeStarredChannels` has already moved out of this list.
     expect(
-      branchHoldsSelectedRow('w1', { channelId: 'c1', workspaceId: 'w1', starred: true }),
+      branchHoldsSelectedRow('w1', {
+        channelId: 'c1',
+        workspaceId: 'w1',
+        starred: 'starred',
+      }),
+    ).toBe(false);
+  });
+
+  it('does NOT hold it while membership is still unknown (cold favorites cache)', () => {
+    // The second falsifiable case: treating "the favorites list has not answered"
+    // as "not starred" makes this true, and a cold start then mounts the parent
+    // branch for a starred selection before unmounting it a round trip later —
+    // requests that cannot be taken back. Waiting costs one deferred paint.
+    expect(
+      branchHoldsSelectedRow('w1', {
+        channelId: 'c1',
+        workspaceId: 'w1',
+        starred: 'unknown',
+      }),
     ).toBe(false);
   });
 
   it('does not hold another workspace’s selection, or none at all', () => {
     expect(
-      branchHoldsSelectedRow('w2', { channelId: 'c1', workspaceId: 'w1', starred: false }),
+      branchHoldsSelectedRow('w2', {
+        channelId: 'c1',
+        workspaceId: 'w1',
+        starred: 'unstarred',
+      }),
     ).toBe(false);
     expect(
-      branchHoldsSelectedRow('w1', { channelId: null, workspaceId: 'w1', starred: false }),
+      branchHoldsSelectedRow('w1', {
+        channelId: null,
+        workspaceId: 'w1',
+        starred: 'unstarred',
+      }),
     ).toBe(false);
   });
 });

@@ -34,7 +34,7 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
-import type { FavoritesWatchScope } from '@/lib/home-grouping';
+import type { FavoritesWatchScope, StarMembership } from '@/lib/home-grouping';
 import {
   isCurrentViewerScope,
   onWsFrame,
@@ -217,15 +217,29 @@ export function useFavoritesList() {
 }
 
 /**
- * Is this conversation in the viewer's STARRED list — i.e. has it MOVED out of its
- * parent's channel list (#task:1888)? `false` while the list is still loading,
- * which errs toward the parent keeping the row: the selection stays visible, and
- * the extra mount ends as soon as the list arrives.
+ * Has this conversation MOVED out of its parent's channel list into STARRED
+ * (#task:1888)? Three states, never a boolean (#task:1901, @Cindy MUST FIX #2):
+ * this list is the only authority on the question, so before it answers there is
+ * no answer, and folding that into "not starred" is a guess the caller then acts
+ * on — the parent branch mounts its three queries and unmounts them a round trip
+ * later, which is precisely the waste the caller exists to avoid.
+ *
+ * PENDING and ERROR are deliberately different. Pending is a bounded wait, so it
+ * stays `'unknown'`. A failure is not bounded, so it falls back to `'unstarred'`,
+ * which restores the COMMON path: a genuinely unstarred selection keeps its row in
+ * its parent. It is NOT a rescue for a genuinely starred one — that row is excluded
+ * from the parent by the parent's own `starred_at` (`excludeStarredChannels`) and
+ * STARRED has no data either, so it stays absent while the list is down, which is
+ * the behaviour a failed favorites list already had. A background refetch after a
+ * success keeps the previous data, so it never re-enters `'unknown'`.
  */
-export function useIsStarredConversation(conversationId: string | null): boolean {
-  const { data } = useFavoritesList();
-  if (conversationId === null) return false;
-  return (data?.items ?? []).some(it => it.entity_id === conversationId);
+export function useStarMembership(conversationId: string | null): StarMembership {
+  const { data, status } = useFavoritesList();
+  if (conversationId === null) return 'unknown';
+  if (!data) return status === 'error' ? 'unstarred' : 'unknown';
+  return data.items.some(it => it.entity_id === conversationId)
+    ? 'starred'
+    : 'unstarred';
 }
 
 /** Minimal WS frame shape {@link decideFavoritesInvalidation} consumes, so the

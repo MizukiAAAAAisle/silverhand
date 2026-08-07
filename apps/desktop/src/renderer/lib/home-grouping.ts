@@ -109,6 +109,19 @@ export function excludeStarredChannels<T extends StarrableItem>(
   return items.filter(c => !isStarredAt(c.starred_at));
 }
 
+/**
+ * Whether the open conversation has moved into global STARRED. THREE states on
+ * purpose: "the favorites list has not answered yet" is not "not starred", and
+ * folding it into `false` is what let a starred selection's parent branch mount on
+ * cold start (#task:1901, @Cindy MUST FIX #2). `'unstarred'` is also the deliberate
+ * fallback when that list FAILS: pending is a bounded wait, a failure is not, and
+ * the fallback restores the COMMON path — a genuinely unstarred selection keeps its
+ * row. It does not rescue a genuinely starred one: that row is excluded from its
+ * parent by the parent's own `starred_at` and STARRED has no data either, so it is
+ * absent for as long as the list is down, exactly as before this change.
+ */
+export type StarMembership = 'starred' | 'unstarred' | 'unknown';
+
 /** The open conversation, as the sidebar's containers see it. `starred` is the
  *  SAME fact `excludeStarredChannels` filters on (`user_sort_entry.starred_at`),
  *  reached through STARRED's own list rather than through the parent's channel
@@ -118,8 +131,7 @@ export interface SelectedConversation {
   channelId: string | null;
   /** The workspace the primary pane is in. */
   workspaceId: string | null;
-  /** Whether the open conversation has moved into global STARRED. */
-  starred: boolean;
+  starred: StarMembership;
 }
 
 /**
@@ -134,11 +146,19 @@ export interface SelectedConversation {
  * sort / modes / unread only to find no row at the end of it. The row must be kept
  * by exactly the container that actually renders it, which is the same rule that
  * decides where the row IS.
+ *
+ * `'unknown'` does NOT mount either: membership is the whole precondition, so
+ * guessing it is guessing the answer. The cost is that on a cold start a collapsed
+ * branch's one row appears after the favorites list resolves rather than in
+ * parallel with it; the alternative — guess "unstarred", mount, then unmount — is
+ * the exact waste this predicate exists to remove, and it cannot be taken back once
+ * the requests are out.
  */
 export function branchHoldsSelectedRow(
   workspaceId: string,
   selected: SelectedConversation,
 ): boolean {
-  if (selected.channelId === null || selected.starred) return false;
+  if (selected.channelId === null) return false;
+  if (selected.starred !== 'unstarred') return false;
   return selected.workspaceId === workspaceId;
 }

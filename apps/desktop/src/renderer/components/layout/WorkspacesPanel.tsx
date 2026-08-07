@@ -354,7 +354,9 @@ function WorkspaceBranch({
   //
   // "Holding" is membership AFTER exclusive-home, not parent-id equality: a starred
   // conversation's row is STARRED's, so this branch keeps nothing and stays
-  // unmounted (`branchHoldsSelectedRow`, #task:1901 @Cindy MUST FIX).
+  // unmounted. Undecided membership does not mount either — the favorites list is
+  // the only authority, and guessing while it loads spends exactly the requests
+  // this gate exists to save (`branchHoldsSelectedRow`, #task:1901 @Cindy MUST FIX).
   const holdsSelection = branchHoldsSelectedRow(workspace.id, ctx.selected);
 
   return (

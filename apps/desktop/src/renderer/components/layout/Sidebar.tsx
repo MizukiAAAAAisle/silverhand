@@ -20,7 +20,7 @@ import {
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
-import { useIsStarredConversation } from '@/features/favorites/hooks';
+import { useStarMembership } from '@/features/favorites/hooks';
 import { OUTER_GLYPH_INSET } from './sidebar-shared';
 import {
   partitionRailWorkspaces,
@@ -129,12 +129,14 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // which collapsed container may keep it (`branchHoldsSelectedRow`). Reading it
   // from the parent's own channel list would be circular — that list is the thing
   // being decided about. A cache observer, not a second owner of the favorites
-  // freshness scope: `FavoritesGroup` below still owns it.
-  const selectedIsStarred = useIsStarredConversation(props.selectedChannelId);
+  // freshness scope: `FavoritesGroup` below still owns it. It is tri-state, and
+  // stays tri-state all the way to the predicate: collapsing "the list hasn't
+  // answered" into "not starred" here would put the guess back (#task:1901).
+  const selectedStar = useStarMembership(props.selectedChannelId);
   const selected: SelectedConversation = {
     channelId: props.selectedChannelId,
     workspaceId: props.selectedWorkspaceId,
-    starred: selectedIsStarred,
+    starred: selectedStar,
   };
 
   // Per-user rail ordering (#task:1146). The whole rail is ONE list; the drag
