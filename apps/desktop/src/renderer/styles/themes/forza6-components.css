@@ -195,10 +195,11 @@
 
    v6.4 update (shiki #task:917): poster sticker drop shadow ON
    selected sidebar rows, mirroring the `[data-conversation-hash-icon]`
-   chat-header chip + `[data-channel-icon]` sidebar chip recipe.
-   Box-shadow doesn't take layout space so adding it on selected
-   doesn't shift surrounding rows. 1.5px ink offset matches the
-   chat header `#` hero投影 size. */
+   chat-header chip recipe. Box-shadow doesn't take layout space so
+   adding it on selected doesn't shift surrounding rows. 1.5px ink
+   offset matches the chat header `#` hero投影 size. Since 2026-08-08
+   the ROW is the only sticker in these lists — the `#` inside it stays
+   a quiet ink glyph (see the `[data-channel-icon]` block below). */
 [data-theme='forza6']
   aside[data-sidebar] .sidebar-row-border.text-text-on-selected {
   --text-primary: #0A0A0A;
@@ -556,8 +557,10 @@
    Every channel `#` renders as the same lucide Hash SVG painted into the
    racing-poster sticker — yellow ground + ink glyph + ink frame + 0 radius +
    hard offset ink shadow (shiki v6.7.1 "黑黄 box", #task:917):
-     - Sidebar `<Hash />` (`[data-channel-icon]`, WorkspaceChannels) — small
-       chip (1px border / 1px shadow), painted in its own rule below.
+     - Sparse content lists (`[data-channel-icon]`: search / archived / task
+       filter / activity / saved) — small chip (1px border / 1px shadow),
+       painted in its own rule below. The dense nav lists opt OUT of the chip
+       entirely, in every state.
      - Chat header (`[data-conversation-hash-icon]`, ChannelView +
        MessageScreenshotView export) — the HERO of the family, scaled up via
        content-box (18px viewport + 4px pad → framed chip ≈28px, ~75% taller
@@ -619,8 +622,7 @@
    filter / activity / saved) KEEP the colour pop — a `#` there is one accent in
    a varied list, not repeated noise (shiki #task:1441: "这些地方需要一些色彩点缀").
    No drop-shadow at rest: the forza6 `#` sticker is FLAT by default; the shadow
-   lift is EARNED (selected row) or SPECIAL (chat-header hero) only — shiki
-   #task:1441. */
+   lift is SPECIAL (chat-header hero) only — shiki #task:1441. */
 [data-theme='forza6'] [data-channel-icon] {
   background-color: var(--forza6-yellow);
   color: var(--forza6-ink);
@@ -632,12 +634,13 @@
 }
 
 /* Dense NAVIGATION lists (the browse tree + agent-activity roster) drop the
-   sticker AT REST — repeated down a long list the yellow fill reads heavy and
-   borrows Tasks' fluorescent yellow as mere row decoration, spending the tasks
-   hue budget. Resting = quiet ink glyph (mirrors warm/slack, which strengthen
-   the `#` by COLOUR alone); the sticker is EARNED by the selected row (below).
-   Scoped to these two containers only — every other surface keeps the pop.
-   (shiki #task:1441)
+   sticker in EVERY state — repeated down a long list the yellow fill reads heavy
+   and borrows Tasks' fluorescent yellow as mere row decoration, spending the
+   tasks hue budget. Quiet ink glyph (mirrors warm/slack, which strengthen the `#`
+   by COLOUR alone); selection is carried by the ROW, not by the icon (see the
+   selected-row note below). Scoped to these two containers only — every other
+   surface keeps the pop. (shiki #task:1441, extended to the selected row
+   2026-08-08)
 
    The container hook is `[data-sidebar='workspaces']` — the ONE browse column
    since #task:1889 folded the channel column into it. It was `'channels'` (the
@@ -657,21 +660,19 @@
   color: var(--forza6-ink);
 }
 
-/* Selected row in those two lists EARNS the sticker back — identity emphasis on
-   the ONE active row: yellow fill + ink frame, FLAT. No drop-shadow: the
-   selected ROW already carries its own poster lift (border + shadow), so a
-   second shadow on the icon just re-stacks weight and reads heavy (shiki
-   #task:1441). The fill + 1.5px ink frame alone distinguish it from the resting
-   quiet glyph. */
-[data-theme='forza6'] [data-sidebar='workspaces'] [data-row-selected] [data-channel-icon],
-[data-theme='forza6'] [data-agent-activity] [data-row-selected] [data-channel-icon] {
-  background-color: var(--forza6-yellow);
-  color: var(--forza6-ink);
-  border: 1.5px solid var(--forza6-ink);
-  border-radius: 0;
-  box-sizing: content-box;
-  padding: 1px;
-}
+/* No selected-row override in those two lists: the `#` stays the quiet ink glyph
+   in every state (shiki, 2026-08-08). The selected ROW is already the sticker —
+   lime fill + ink frame (+ poster shadow in the sidebar) — so re-stickering the
+   icon inside it nests a second ink frame 3px in and reads as two focal points in
+   one row; the default move when something reads heavy is to remove a layer.
+   The harder reason is hue: that chip's fill was `--forza6-yellow`, which in this
+   theme is the TASKS semantic, so a selected channel row was spending the tasks
+   hue budget on nav decoration — the same reason the resting glyph was quieted in
+   the first place (#task:1441), applied to the one state it had been left out of.
+   Dropping the override also removes the old geometry jump: the sticker was
+   content-box + border + padding, so the `#` inflated ~5px on selection and
+   nudged the title. Both dense nav lists lose it together — it was one recipe.
+   The chat-header hero `#` and the sparse content lists are untouched. */
 
 /* Task-filter channel TRIGGER: the sticker identity, TIGHTENED to the shared
    14px trigger-glyph box so it sits height-uniform with its sibling triggers
