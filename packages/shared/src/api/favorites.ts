@@ -104,6 +104,13 @@ export const FavoriteRowDtoSchema = z.object({
    *  Nullable is retained for wire back-compat (a client may still guard
    *  `!= null`). */
   unread_count: z.number().nullable(),
+  // NO tiered badge field here (#task:1875). The tiered badge — "how loudly
+  // should this shout" after the channel tiers and the workspace suppressor —
+  // has exactly ONE carrier, `GET /api/attention/badges`, which is also the only
+  // read face the `attention_badge_updated` frame keeps fresh. A copy on this
+  // row would be a second carrier of the same number on a read face that does
+  // not subscribe to that frame. `unread_count` above answers a DIFFERENT
+  // question ("how many messages are unread") and stays.
 });
 export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
 

@@ -7,7 +7,7 @@ import {
   animateLayoutChanges,
   sortableItemStyle,
 } from '@/components/layout/list-drag-sort';
-import { SidebarSection } from './sidebar-shared';
+import { SidebarSection, MutedMarker, UnreadBadge } from './sidebar-shared';
 import { WorkspaceContextMenu } from './WorkspaceContextMenu';
 import { dmRecognitionName } from '@/lib/workspace-name';
 import { railRowTierClass, railSelectionTier } from '@/lib/rail-selection';
@@ -24,6 +24,12 @@ export interface WorkspaceItem {
   /** Unread mention notifications scoped to this workspace. Falsy / 0
    *  hides the badge. */
   unread?: number;
+  /** True when the viewer has muted this workspace — drives the persistent
+   *  `MutedMarker`. Read from the attention roll-up's `muted_workspace_ids`, the
+   *  same carrier as `unread`, so the row can never disagree with itself about
+   *  one workspace (#task:1870 / #task:1877). Never true for a DM (structurally
+   *  un-mutable). */
+  muted?: boolean;
   /** True for soft-archived workspaces — drives the Archived sidebar
    *  group; the row itself looks the same once you're inside it. */
   archived?: boolean;
@@ -308,17 +314,9 @@ function WorkspaceRow({
         >
           <span className="truncate">{title}</span>
         </span>
+        {workspace.muted ? <MutedMarker /> : null}
         {unread && unread > 0 ? (
-          <span
-            data-sidebar-unread
-            className={
-              'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
-              (isPrimary ? 'bg-bg-floating text-accent' : 'bg-accent text-text-on-accent')
-            }
-            aria-label={`${unread} unread`}
-          >
-            {unread > 99 ? '99+' : unread}
-          </span>
+          <UnreadBadge count={unread} inverted={isPrimary} />
         ) : workspace.active ? (
           <span className="size-1.5 rounded-full bg-success" />
         ) : null}
@@ -332,8 +330,17 @@ function WorkspaceRow({
       canStar={canStar}
       isStarred={isStarred}
       onToggleStar={() => ctx.onStarWorkspace?.(workspace.id, !isStarred)}
+      muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}
     />
   );
+}
+
+/** A row can flip the workspace mute suppressor when it is a REGULAR, non-archived
+ *  workspace. A DM (`agent_home`) is structurally un-mutable — directed-grade
+ *  traffic has no ambient floor to silence, and the DB trigger forbids the row —
+ *  and an archived workspace isn't being listened to at all. */
+function canMuteWorkspace(workspace: WorkspaceItem): boolean {
+  return workspace.kind === 'regular' && !workspace.archived;
 }
 
 export function isWorkspaceStarred(workspace: WorkspaceItem): boolean {

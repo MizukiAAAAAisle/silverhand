@@ -140,6 +140,18 @@ export const apiPaths = {
    *  can-view — NOT shared/admin governance. Replaced the old admin-gated
    *  shared `/pin` route. */
   workspaceStar: (id: string) => `/api/workspaces/${id}/star`,
+  /** Per-(viewer, workspace) attention MUTE suppressor (#task:1870). Owned by the
+   *  Attention bounded context (served by the same route module as
+   *  `conversationAttentionPreference`), URL-grouped here because the scope is the
+   *  workspace. GET resolves the STORED boolean (default `false` when unset);
+   *  nothing sits above the workspace scope, so this value is never "effective"
+   *  in this context's sense — `effective` names only a channel tier that has
+   *  already had this suppressor folded in;
+   *  PUT sets it. It suppresses — never rewrites — each channel's own tier, so
+   *  turning it off restores every channel's stored choice unchanged. Regular
+   *  workspace only (agent-home workspaces 404). Human viewer-scoped. */
+  workspaceAttentionPreference: (id: string) =>
+    `/api/workspaces/${id}/attention-preference`,
   workspaceMembers: (id: string) => `/api/workspaces/${id}/members`,
   workspaceMember: (id: string, agentId: string) =>
     `/api/workspaces/${id}/members/${agentId}`,
@@ -224,12 +236,15 @@ export const apiPaths = {
    *  ONLY by the viewer-scoped `unread_updated` WS signal — never inferred from
    *  message events (unread is server-scored). Human viewer-scoped. */
   conversationUnread: (id: string) => `/api/conversations/${id}/unread`,
-  /** Per-(viewer, channel) ambient attention preference (#task:1227,
-   *  docs/activity-lifecycle-v1.md §9.3). GET resolves the effective mode
-   *  (default applied when unset); PUT is the ONLY surface that writes attention
-   *  state (the channel `所有消息 / 仅提及` control) — it never touches
-   *  delivery/follow. Regular channel only (dm_channel + thread 404 — a DM's
-   *  unread is directed-grade, a thread's ambient is follow-driven). Human
+  /** Per-(viewer, channel) attention mode (#task:1227 / #task:1870,
+   *  docs/activity-lifecycle-v1.md §9.3). **PUT only** — the stored mode's read
+   *  face is `attentionModes`, which carries `mode` beside `effective_mode` for
+   *  every channel in a workspace; a per-channel GET was retired as a second
+   *  carrier of the same fact (#task:1876). PUT sets the channel
+   *  `所有消息 / 仅提及 / 静音` control — one of the two surfaces that write
+   *  attention state (the other is `workspaceAttentionPreference`), and neither
+   *  ever touches delivery/follow. Regular channel only (dm_channel + thread 404 —
+   *  a DM's unread is directed-grade, a thread's ambient is follow-driven). Human
    *  viewer-scoped. */
   conversationAttentionPreference: (id: string) =>
     `/api/conversations/${id}/attention-preference`,
@@ -255,6 +270,21 @@ export const apiPaths = {
    *  retired into this primitive (#task:1232). Owned by the Attention bounded
    *  context; human viewer-scoped. */
   attentionObserve: '/api/attention/observe',
+  /** The viewer's cross-workspace BADGE roll-up (#task:1870) — the tiered
+   *  presentation projection, NOT the raw unread 口径: `all`-tier conversations
+   *  contribute their positional unread, `mentions`/`mute`-tier ones contribute
+   *  only their directed (@me) unread. Deliberately a SEPARATE face from
+   *  `messageUnreadSummary` so no existing "how many unread" answer changes.
+   *  Refreshed by the viewer-scoped `attention_badge_updated` signal (absolute
+   *  per-workspace patch). Read-only, human viewer-scoped, global. */
+  attentionBadges: '/api/attention/badges',
+  /** Every channel tier in ONE workspace in a single read (#task:1870):
+   *  `?workspace_id=…` is REQUIRED — one batch instead of N per-channel GETs for
+   *  the sidebar. Carries each channel's own `mode`, the workspace-suppressed
+   *  `effective_mode`, and its directed unread count (what makes a quiet/silent
+   *  row explainable when the workspace badge is lit). Read-only, human
+   *  viewer-scoped. */
+  attentionModes: '/api/attention/modes',
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
   conversationAgentActivity: (id: string, agentId: string) =>
     `/api/conversations/${id}/agents/${agentId}/activity`,

@@ -14,10 +14,11 @@ import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { BackendLogger } from './context.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 import {
-  buildUnreadUpdatedMessagePayload,
+  publishUnreadUpdatedToViewer,
   singleConversationViewerUserId,
 } from './viewer-scope.js';
 import { ConversationReadRepo } from './repos/conversation-read-repo.js';
+import { AttentionBadgeRepo } from './repos/attention-badge-repo.js';
 
 export interface MentionCcOpts {
   /** The user message that triggered this CC pass. Only `from_kind='user'`
@@ -278,15 +279,17 @@ async function deliverOne(
       wrapped.thread_root_id ?? null,
     )
   ) {
-    opts.events.publishToScope(
-      `viewer:${humanMemberId}`,
-      'unread_updated',
-      buildUnreadUpdatedMessagePayload(
-        new ConversationReadRepo(opts.db),
-        mentionsConversation.id,
-        mentionsConversation.workspace_id,
-        humanMemberId,
-      ),
+    // The `Mentions` DM lives in an `agent_home` workspace, so it carries no
+    // channel tier and no workspace suppressor — its badge IS its positional
+    // unread (#task:1870). Emitted through the co-emitting seam anyway: the
+    // frame pair is one fact, and the DM's own badge still has to move.
+    publishUnreadUpdatedToViewer(
+      opts.events,
+      new AttentionBadgeRepo(opts.db),
+      new ConversationReadRepo(opts.db),
+      mentionsConversation.id,
+      mentionsConversation.workspace_id,
+      humanMemberId,
     );
   }
   if (humanMemberId) {

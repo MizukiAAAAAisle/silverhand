@@ -34,7 +34,7 @@ import type {
   TaskDetailDto,
   TaskSummaryDto,
 } from '@silverhand/shared';
-import { activityKey, channelAttentionPreferenceKey } from '../attention/hooks';
+import { activityKey } from '../attention/hooks';
 import { messageKey } from '../messages/hooks';
 import { savedKey } from '../saved/hooks';
 import { searchKey } from '../search/hooks';
@@ -282,7 +282,6 @@ function seedChannelKeyedSiblings(qc: QueryClient): void {
   both(cid => ['conversations', cid, 'agent-activity', 'agent-1']);
   both(cid => ['conversation-members', cid]);
   both(cid => ['channel-detail', cid]);
-  both(cid => [...channelAttentionPreferenceKey(cid)]);
   both(cid => [...conversationUnreadKey(cid)]);
 }
 

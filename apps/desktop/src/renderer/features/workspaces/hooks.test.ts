@@ -330,7 +330,12 @@ describe('decideViewerSyncInvalidations', () => {
     ).toEqual([['workspaces']]);
   });
 
-  it('invalidates only the workspace list on add', () => {
+  it('also invalidates the attention roll-up on add (re-join restores a mute)', () => {
+    // #task:1870 — the badge NUMBER of a just-joined workspace is necessarily 0,
+    // which is why this used to be list-only. But the roll-up also carries
+    // `muted_workspace_ids`, and a mute preference outlives a membership removal
+    // so a re-join brings the id back with every number still 0. Without this the
+    // rail's muted marker stays missing until an unrelated attention event lands.
     expect(
       decideViewerSyncInvalidations(
         frame({
@@ -338,10 +343,10 @@ describe('decideViewerSyncInvalidations', () => {
           payload: { change: 'added', workspace_id: 'w-1' },
         }),
       ),
-    ).toEqual([['workspaces']]);
+    ).toEqual([['workspaces'], ['attention', 'badges']]);
   });
 
-  it('invalidates only the workspace list on remove', () => {
+  it('invalidates only the workspace list on remove — the purge is the removal contract\'s', () => {
     expect(
       decideViewerSyncInvalidations(
         frame({

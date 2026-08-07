@@ -375,11 +375,19 @@ export class ConversationMessageService {
         ? { streamHeadBeforeSend: txResult.streamHeadBeforeSend }
         : {}),
     };
-    this.delivery.publishUnreadUpdated(txResult.targetConversation.id);
+    // ORDER IS LOAD-BEARING (#task:1870): the mention notification row must be
+    // committed BEFORE the unread frames go out, because `publishUnreadUpdated`
+    // co-emits the tiered badge and the badge's directed term counts unread
+    // `mention_self` rows. Emitting the badge first would ship a value computed
+    // without the mention that just arrived — and since the client holds the
+    // badge with no refetch, that stale value would persist until some unrelated
+    // event happened to arrive, which for a `mentions`/`mute`-tier channel is
+    // exactly the case the tier exists to serve.
     this.delivery.notifyViewerMentionBestEffort(
       txResult.targetConversation,
       txResult.message,
     );
+    this.delivery.publishUnreadUpdated(txResult.targetConversation.id);
 
     if (policy.resolveRun && input.actor.kind === 'agent') {
       this.runtimeHost.resolveRun(

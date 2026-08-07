@@ -58,7 +58,12 @@ import type {
   ListActivityDto,
   ListFavoritesDto,
 } from '@silverhand/shared';
-import { activityKey, removeWorkspaceFromActivity } from '@/features/attention/hooks';
+import {
+  activityKey,
+  attentionBadgesKey,
+  removeWorkspaceFromActivity,
+  removeWorkspaceFromAttentionBadges,
+} from '@/features/attention/hooks';
 import { favoritesKey, removeWorkspaceFromFavorites } from '@/features/favorites/hooks';
 import {
   messageUnreadSummaryKey,
@@ -162,6 +167,15 @@ export const VIEWER_LOCAL_READ_MODELS: readonly RegisteredReadModel[] = [
     // part only this cleanup does.
     cleanup: removeWorkspaceFromMessageUnread,
   }),
+  recordKeyedSummary({
+    id: 'attention-badges',
+    key: attentionBadgesKey(),
+    // The tiered badge roll-up (#task:1870). Same form as the unread summary and a
+    // separate read model, not a duplicate: it answers "how loudly should this
+    // shout" and is what the dock badge shows, so a lost workspace left in the map
+    // keeps the OS badge counting something unreachable.
+    cleanup: removeWorkspaceFromAttentionBadges,
+  }),
 ];
 
 /**
@@ -174,14 +188,21 @@ export const VIEWER_LOCAL_READ_MODELS: readonly RegisteredReadModel[] = [
  */
 export const VIEWER_LOCAL_KEY_CLASSIFICATION = {
   /** Workspace-attributed global-key caches — each maps to a registry entry. */
-  cleaned: ['messageUnreadSummaryKey', 'favoritesKey', 'activityKey'] as const,
+  cleaned: [
+    'messageUnreadSummaryKey',
+    'favoritesKey',
+    'activityKey',
+    'attentionBadgesKey',
+  ] as const,
   exempt: {
     messageUnreadByConversationKey:
       'workspace-keyed (["workspaces", wsId, …]) → layer-1 predicate sweep',
     conversationUnreadKey:
       'conversation-scoped, not workspace-attributed (per-stream unread; conversation removal is a different fact)',
-    channelAttentionPreferenceKey:
-      'conversation-scoped, not workspace-attributed (per-channel attention pref)',
+    workspaceAttentionPreferenceKey:
+      'workspace-keyed (["workspaces", wsId, …]) → layer-1 predicate sweep',
+    attentionModesKey:
+      'workspace-scoped but under the `attention` root, so layer 1 does not match it → dropped by removeWorkspaceFromAttentionBadges',
   } as const,
 };
 

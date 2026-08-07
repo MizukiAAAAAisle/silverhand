@@ -3,23 +3,39 @@
 // user-facing surface/feature name: Activity. Re-exported via api/index.ts →
 // @silverhand/shared. Canonical: docs/activity-lifecycle-v1.md.
 //
-// v1 (②a) defines the ONE write-side aggregate Attention owns: the per-(viewer,
-// channel) ambient preference (the channel `所有消息 / 仅提及` control). It is a
-// user DECISION → owned state (建表准入测试, §4.2); everything else Attention
-// surfaces (positional unread / directed mentions / tasks) is a projection.
+// Attention owns exactly TWO write-side aggregates, both per-viewer user
+// DECISIONS (建表准入测试, §4.2):
+//   1. the per-(viewer, channel) attention mode — the channel
+//      `所有消息 / 仅提及 / 静音` control (#task:1870);
+//   2. the per-(viewer, workspace) mute SUPPRESSOR — a boolean that silences a
+//      whole workspace without erasing any channel's own choice.
+// Everything else Attention surfaces (positional unread / directed mentions /
+// tasks) is a projection, never an Attention-owned copy.
 import { z } from 'zod';
 import { MessageAuthorDtoSchema } from './message-author.js';
 
 /**
- * Channel ambient attention mode (§6 / §13.3). The internal model is a single
- * ambient on/off; the user wording is 所有消息 / 仅提及 (the renderer maps the
+ * Channel attention mode (§6 / §13.3) — ONE mutually-exclusive choice per
+ * (viewer, channel), so it is a single three-value enum rather than an ambient
+ * flag plus a separate `muted` boolean: the illegal combination
+ * (`muted && ambient ON`) must be inexpressible in the type, not merely
+ * unrendered. The user wording is 所有消息 / 仅提及 / 静音 (the renderer maps the
  * label, never the internal word):
  *   - `all`      = ambient ON  → the channel's mainline ambient unread enters
- *                  the Activity list.
- *   - `mentions` = ambient OFF → ambient unread stays an in-place hint only;
- *                  directed claims (@me / task / DM) still enter unconditionally.
+ *                  the Activity list and counts toward the loud badge.
+ *   - `mentions` = ambient OFF → ambient unread stays an in-place hint only
+ *                  (quiet), and only directed claims (@me) count toward the
+ *                  badge. Directed claims still enter Activity unconditionally.
+ *   - `mute`     = ambient OFF and the in-place positional hint is suppressed
+ *                  too (silent). Directed claims are NOT suppressed: @me still
+ *                  enters Activity, still toasts, still notifies. "Mute"
+ *                  silences the AMBIENT channel, never the person addressing you.
+ *
+ * The three values are three loudness levels of ONE badge, not three
+ * eligibilities: `enter()`'s ambient test stays binary (`effective === 'all'`),
+ * and `mentions` / `mute` differ only in how loudly the residue is presented.
  */
-export const CHANNEL_ATTENTION_MODES = ['all', 'mentions'] as const;
+export const CHANNEL_ATTENTION_MODES = ['all', 'mentions', 'mute'] as const;
 export type ChannelAttentionMode = (typeof CHANNEL_ATTENTION_MODES)[number];
 
 /** Channel default = ambient ON (§6: channel → All messages unless opted down).
@@ -27,10 +43,45 @@ export type ChannelAttentionMode = (typeof CHANNEL_ATTENTION_MODES)[number];
  *  path and `enter()` (②c) never disagree on the default. */
 export const DEFAULT_CHANNEL_ATTENTION_MODE: ChannelAttentionMode = 'all';
 
-/** The viewer's effective ambient preference for one channel (GET / PUT
+/** Workspace default = NOT muted. Absence of a stored row resolves to this;
+ *  single source so the read path, `enter()` and the badge projection never
+ *  disagree. */
+export const DEFAULT_WORKSPACE_ATTENTION_MUTED = false;
+
+/** The viewer's STORED mute state for one REGULAR workspace (GET / PUT
+ *  `/api/workspaces/:id/attention-preference`). Not called "effective": in this
+ *  context `effective` means "a channel tier with the workspace suppressor
+ *  folded in", and nothing sits above the workspace scope to fold. Deliberately
+ *  a BOOLEAN, not a
+ *  fourth tier and not an overridable default: the workspace scope is a
+ *  SUPPRESSOR that sits above the channel tier, so it neither needs the channel
+ *  enum's third value nor may it rewrite a channel's own stored choice. Turning
+ *  the workspace mute off restores every channel's tier exactly as it was ⇒ no
+ *  migration, no backfill, no inherit axis. */
+export const WorkspaceAttentionPreferenceDtoSchema = z.object({
+  workspace_id: z.string(),
+  muted: z.boolean(),
+});
+export type WorkspaceAttentionPreferenceDto = z.infer<
+  typeof WorkspaceAttentionPreferenceDtoSchema
+>;
+
+/** PUT body for the viewer's workspace-level mute suppressor. */
+export const SetWorkspaceAttentionPreferenceInputSchema = z.object({
+  muted: z.boolean(),
+});
+export type SetWorkspaceAttentionPreferenceInput = z.infer<
+  typeof SetWorkspaceAttentionPreferenceInputSchema
+>;
+
+/** The channel's OWN STORED ambient tier (GET / PUT
  *  `/api/conversations/:id/attention-preference`). `mode` is always resolved —
  *  the default is applied server-side when no row exists, so the client never
- *  branches on "unset". */
+ *  branches on "unset" — but it is deliberately NOT the effective tier: this
+ *  surface neither reads nor folds the workspace suppressor, because it is the
+ *  face the human WRITES, and what they wrote must come back unchanged even
+ *  while the workspace is muted. {@link ChannelAttentionModeRowDtoSchema} is the
+ *  read face that carries both `mode` and `effective_mode`. */
 export const ChannelAttentionPreferenceDtoSchema = z.object({
   conversation_id: z.string(),
   mode: z.enum(CHANNEL_ATTENTION_MODES),
@@ -39,14 +90,128 @@ export type ChannelAttentionPreferenceDto = z.infer<
   typeof ChannelAttentionPreferenceDtoSchema
 >;
 
-/** PUT body for setting the viewer's ambient preference for a channel. This is
- *  the ONLY surface that writes attention state (§5.2); it never touches
- *  delivery/follow. */
+/** PUT body for setting the viewer's attention mode for a channel. Together with
+ *  the workspace suppressor PUT these are the only surfaces that write attention
+ *  state (§5.2); neither ever touches delivery/follow. */
 export const SetChannelAttentionPreferenceInputSchema = z.object({
   mode: z.enum(CHANNEL_ATTENTION_MODES),
 });
 export type SetChannelAttentionPreferenceInput = z.infer<
   typeof SetChannelAttentionPreferenceInputSchema
+>;
+
+// ─────────────────── Badge projection (#task:1870 B) ───────────────────
+//
+// The three tiers ride a SEPARATE presentation projection with its own
+// archived/liveness guard. The raw positional 口径 (`unread_updated`'s
+// `workspace_unread_count`, the sidebar roll-up, `FavoriteRowDto.unread_count`,
+// the notification panel's `by_workspace`) is deliberately untouched — a tiered
+// badge is an additional face, not a redefinition of unread. Anything that means
+// "how many messages are unread" keeps its old answer; only the new
+// `badge_count` means "how loudly should this workspace shout".
+//
+// badge_count(workspace) =
+//     Σ raw positional unread over `all`-tier conversations   (loud residue)
+//   + Σ unread `mention_self` over `mentions`/`mute`-tier ones (directed residue)
+// The tiers PARTITION the viewer's conversations, so an `all`-tier channel never
+// double-counts an @me: §8's positional count already includes it.
+
+/** `GET /api/attention/badges` — the viewer's cross-workspace badge roll-up.
+ *  `by_workspace` omits workspaces whose badge is 0 (absent ≡ 0), matching the
+ *  notification roll-up's shape. `total` is the sum, i.e. the app-level badge. */
+export const AttentionBadgeRollupDtoSchema = z.object({
+  by_workspace: z.record(z.string(), z.number()),
+  total: z.number(),
+  /** The workspaces the viewer has MUTED (#task:1877), so the rail can mark a
+   *  muted row without a second request. Absent ≡ not muted, exactly like
+   *  `by_workspace`, and scoped to the workspaces the viewer can currently see —
+   *  the mute preference deliberately outlives a workspace removal (a re-join
+   *  restores it), so this list is not "every stored preference".
+   *
+   *  A SIBLING of `by_workspace`, not a field inside it: that map is keyed by
+   *  "has a non-zero badge", and a muted workspace is usually at 0 and therefore
+   *  ABSENT — there would be no entry to hang the flag on, and forcing zeros in
+   *  would destroy the "keys ≡ which workspaces are lit" reading.
+   *
+   *  Not a second authority either: the suppressor row remains the only place
+   *  mute is decided (`PUT /api/workspaces/:id/attention-preference`); this is
+   *  that state projected onto the roll-up, which is why a workspace-level
+   *  `attention_pref_changed` must also invalidate this read. */
+  muted_workspace_ids: z.array(z.string()),
+});
+export type AttentionBadgeRollupDto = z.infer<
+  typeof AttentionBadgeRollupDtoSchema
+>;
+
+/** One channel's resolved tier inside `GET /api/attention/modes`. `mode` is the
+ *  channel's OWN stored (or defaulted) choice; `effective_mode` folds in the
+ *  workspace suppressor — both are carried so the UI can render "muted by the
+ *  workspace" without re-deriving the rule, and so flipping the workspace mute
+ *  off restores a visible per-channel choice.
+ *
+ *  `directed_unread_count` is what makes a quiet/silent row EXPLAINABLE when the
+ *  workspace badge is lit: without it a `mute` channel contributing directed
+ *  residue to the workspace number has no visible cause. */
+export const ChannelAttentionModeRowDtoSchema = z.object({
+  conversation_id: z.string(),
+  mode: z.enum(CHANNEL_ATTENTION_MODES),
+  effective_mode: z.enum(CHANNEL_ATTENTION_MODES),
+  directed_unread_count: z.number().int().nonnegative(),
+});
+export type ChannelAttentionModeRowDto = z.infer<
+  typeof ChannelAttentionModeRowDtoSchema
+>;
+
+/** `GET /api/attention/modes?workspace_id=…` — one batch read of every channel
+ *  tier in ONE workspace, so the sidebar renders N rows without N requests.
+ *  Covers exactly the viewer's member channels in that workspace. */
+export const WorkspaceAttentionModesDtoSchema = z.object({
+  workspace_id: z.string(),
+  /** The workspace suppressor's own stored value (default applied server-side).
+   *  Carried so the UI can label the rows below as "muted by the workspace". */
+  muted: z.boolean(),
+  channels: z.array(ChannelAttentionModeRowDtoSchema),
+});
+export type WorkspaceAttentionModesDto = z.infer<
+  typeof WorkspaceAttentionModesDtoSchema
+>;
+
+/** Viewer-scoped `attention_badge_updated` payload — an ABSOLUTE per-workspace
+ *  badge value, patched into the roll-up cache exactly like
+ *  `unread_updated`'s `workspace_unread_count` (never a delta). It is emitted
+ *  from ALL THREE authoritative update sources, because the badge is a function
+ *  of all three and the consumer never refetches it on its own schedule (no
+ *  polling, `refetchOnWindowFocus: false`; the global 5s `staleTime` only decides
+ *  freshness at mount / invalidation, and this query stays mounted for the app's
+ *  lifetime):
+ *    1. positional unread changing (send / read / observe),
+ *    2. a pref write on either aggregate (channel tier, workspace suppressor),
+ *    3. a directed notification being inserted or marked read.
+ *  Missing any one source does not open a transient window — it FREEZES the
+ *  badge at a wrong value until an unrelated event happens to arrive. Source (3)
+ *  is why this is its own event rather than a field on `unread_updated`: the
+ *  mention row is inserted AFTER that frame is built, so a piggybacked count
+ *  would be computed before the fact it must reflect existed. */
+export const AttentionBadgeUpdatedPayloadSchema = z.object({
+  workspace_id: z.string(),
+  badge_count: z.number().int().nonnegative(),
+});
+export type AttentionBadgeUpdatedPayload = z.infer<
+  typeof AttentionBadgeUpdatedPayloadSchema
+>;
+
+/** Viewer-scoped `attention_pref_changed` payload — IDENTITY only, deliberately
+ *  no resolved value: the tier read face is the single authority, and a value
+ *  here would be a second one (a consumer that patches from the event can then
+ *  disagree with `GET /api/attention/modes`). Consumers re-read the affected
+ *  tier face and the Activity list. `conversation_id` is NULL when the change was
+ *  the workspace suppressor (which re-resolves every channel in the workspace). */
+export const AttentionPrefChangedPayloadSchema = z.object({
+  workspace_id: z.string(),
+  conversation_id: z.string().nullable(),
+});
+export type AttentionPrefChangedPayload = z.infer<
+  typeof AttentionPrefChangedPayloadSchema
 >;
 
 // ───────────────────────────── Activity list (②c) ─────────────────────────────

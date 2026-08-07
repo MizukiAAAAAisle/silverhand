@@ -1,33 +1,31 @@
-import { Check } from 'lucide-react';
+import { Bell, BellOff, Check } from 'lucide-react';
 import type { ChannelAttentionMode } from '@silverhand/shared';
-import { AppContextMenuItem } from '@/components/menus/AppContextMenu';
 import {
-  useChannelAttentionPreference,
+  AppContextMenuItem,
+  AppContextMenuSeparator,
+} from '@/components/menus/AppContextMenu';
+import {
   useSetChannelAttentionPreference,
+  useSetWorkspaceAttentionPreference,
+  useWorkspaceAttentionPreference,
 } from '@/features/attention/hooks';
+import { resolveWorkspaceMuteToggle } from '@/lib/attention-mode';
 
 /**
- * The sidebar context-menu surface of the per-channel `所有消息 / 仅提及`
- * attention preference (#task:1227 §13.3). It writes the per-viewer
- * `ChannelAttentionPreference` — personal view-state, gated only by
- * `canViewConversation` (every member who can see the channel has their own),
- * never an owner/admin role. It deliberately lives ONLY in the context menu,
- * not in the channel settings modal: settings holds channel-level SHARED config
- * (rename / archive — changes everyone sees), whereas this is a per-viewer
- * preference that only reshapes your own Activity projection. Putting a personal
- * preference inside a shared-config panel would mis-signal that it affects all
- * members (shiki + Cindy + Alice, msgs in thread:iCBmcCRydgONVpLd).
+ * The context-menu surfaces of the two Attention write aggregates (#task:1227
+ * §13.3, extended to three tiers + the workspace suppressor in #task:1870).
+ * Both write per-viewer view-state, gated only by "can you see it" — never an
+ * owner/admin role — and neither ever touches Follow / thread delivery
+ * (delivery ⊥ attention, §5.2).
  *
- * Writes never touch Follow / thread delivery (delivery ⊥ attention, §5.2) and
- * emit no `unread_updated`; the mutation hook invalidates `['activity']` only.
+ * They live ONLY in context menus, not in the channel/workspace settings modal:
+ * settings holds SHARED config (rename / archive — changes everyone sees),
+ * whereas these are personal preferences that reshape only your own projection.
+ * Putting a personal preference inside a shared-config panel would mis-signal
+ * that it affects all members (shiki + Cindy + Alice, thread:iCBmcCRydgONVpLd).
  *
- * Render ONLY for `kind === 'channel'` — the backend `getChannel` 404s DM
- * channels and threads, which have no ambient preference.
- *
- * The internal vocabulary (eligibility / ambient / attention) never surfaces;
- * the user only ever sees All messages / Mentions only (§3 / §13.5). Mentions
- * only does NOT mute @you / tasks — those are directed and always enter
- * Activity regardless of this switch (§6).
+ * The internal vocabulary (eligibility / ambient / tier / suppressor) never
+ * surfaces; the user sees only the three labels below (§3 / §13.5).
  */
 export const ATTENTION_OPTIONS: {
   mode: ChannelAttentionMode;
@@ -35,42 +33,112 @@ export const ATTENTION_OPTIONS: {
 }[] = [
   { mode: 'all', label: 'All messages' },
   { mode: 'mentions', label: 'Mentions only' },
+  { mode: 'mute', label: 'Mute' },
 ];
 
 /**
- * Context-menu items for the attention modes — the caller wraps them in an
- * `AppContextMenuSub`. Because Radix `SubContent` mounts its children only
- * while the submenu is open, this component (and its GET) is lazy: it does not
- * fire a request for every channel row, only when the submenu is opened.
+ * Context-menu items for a channel's three attention tiers.
+ *
+ * `mode` comes from the caller's workspace tier batch rather than a per-channel
+ * GET of this channel's preference. That batch is already loaded for the
+ * sidebar's badges, so this is one carrier instead of two — and it also retires
+ * the old pre-load wart, where the menu showed nothing checked until its own GET
+ * resolved and every option then fired a redundant PUT.
+ *
+ * When the workspace suppressor is on, the options stay ENABLED and the channel's
+ * own choice stays checked: muting the workspace silences without rewriting, so
+ * what the user picked here is still their choice and still applies the moment
+ * they un-mute. The caption says what they currently hear instead.
  */
 export function ChannelAttentionMenuItems({
   channelId,
+  mode,
+  workspaceMuted,
 }: {
   channelId: string;
+  /** The channel's OWN stored/defaulted tier. `undefined` before the workspace
+   *  tier batch has loaded — nothing is checked then, deliberately: a fabricated
+   *  "current" swallows a write (current === mode → no-op PUT) while the server
+   *  holds the other value. */
+  mode: ChannelAttentionMode | undefined;
+  /** The workspace suppressor; `undefined` while the batch is unresolved, which
+   *  reads the same as "off" here — the caption is an explanation, so it must not
+   *  appear until the suppressor is actually known to be on. */
+  workspaceMuted: boolean | undefined;
 }): JSX.Element {
-  const { data } = useChannelAttentionPreference(channelId);
   const setPref = useSetChannelAttentionPreference(channelId);
-  // Do NOT fabricate a "current" before the GET resolves — a fallback treated
-  // as authoritative swallows a write (current===mode → no-op PUT) while the
-  // server holds the other value. Pre-load, nothing is checked and every
-  // option fires a PUT (Cindy review, carried over from the popover impl).
-  const resolvedMode = data?.mode;
 
   return (
     <>
       {ATTENTION_OPTIONS.map(o => (
         <AppContextMenuItem
           key={o.mode}
-          icon={
-            o.mode === resolvedMode ? <Check className="size-3.5" /> : null
-          }
+          icon={o.mode === mode ? <Check className="size-3.5" /> : null}
           onSelect={() => {
-            if (o.mode !== resolvedMode) setPref.mutate(o.mode);
+            if (o.mode !== mode) setPref.mutate(o.mode);
           }}
         >
           {o.label}
         </AppContextMenuItem>
       ))}
+      {workspaceMuted ? (
+        <>
+          <AppContextMenuSeparator />
+          {/* States what the viewer currently hears, since it differs from the
+              checked row above. Not an action and not a second control — the
+              suppressor is flipped on the workspace, which is where it applies. */}
+          <AppContextMenuItem icon={null} disabled>
+            Muted by workspace
+          </AppContextMenuItem>
+        </>
+      ) : null}
     </>
+  );
+}
+
+/**
+ * The workspace mute suppressor as ONE toggle item, mirroring Star/Unstar in the
+ * same menu — a boolean gets a toggle, not a submenu of two options.
+ *
+ * REGULAR workspaces only: an `agent_home` (DM) workspace can never carry a
+ * suppressor row (DB trigger), because a DM is directed-grade and has no ambient
+ * traffic to silence. Callers gate on kind; this component fires its GET lazily
+ * with the menu, so a right-click on a DM row costs nothing.
+ *
+ * A toggle cannot be built from an unknown current value — unlike the channel
+ * tiers above, whose three options are absolute assignments that write correctly
+ * regardless. So until the GET resolves the item is DISABLED rather than
+ * defaulted: see `resolveWorkspaceMuteToggle` for why a `false` default silently
+ * turns the user's Unmute into a second `true`.
+ */
+export function WorkspaceMuteMenuItem({
+  workspaceId,
+}: {
+  workspaceId: string;
+}): JSX.Element {
+  const { data } = useWorkspaceAttentionPreference(workspaceId);
+  const setPref = useSetWorkspaceAttentionPreference(workspaceId);
+  const { label, next } = resolveWorkspaceMuteToggle(data?.muted);
+
+  return (
+    <AppContextMenuItem
+      icon={
+        next === false ? (
+          <Bell className="size-3.5" />
+        ) : (
+          <BellOff className="size-3.5" />
+        )
+      }
+      disabled={next === null}
+      onSelect={() => {
+        // Belt and braces with `disabled`: the guarantee is "never write a
+        // fabricated reverse value", and that belongs on the write path, not on a
+        // presentational prop.
+        if (next === null) return;
+        setPref.mutate(next);
+      }}
+    >
+      {label}
+    </AppContextMenuItem>
   );
 }

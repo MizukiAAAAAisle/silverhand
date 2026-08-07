@@ -225,6 +225,11 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
     reason: 'per-viewer ambient attention preference (#task:1227) — personal view state, conversation membership gate (canViewConversation), not governance',
   },
   {
+    method: 'PUT',
+    path: '/api/workspaces/:id/attention-preference',
+    reason: 'per-viewer workspace mute suppressor (#task:1870) — personal view state written only to the calling viewer\'s own row, workspace visibility gate (canViewWorkspace); it changes nothing another member sees and never gates delivery, so it is the workspace-scoped twin of the per-channel preference above, not governance',
+  },
+  {
     method: 'POST',
     path: '/api/channels/:id/threads/:rootMessageId/follow',
     reason: 'thread follow subscription — current-viewer delivery state, view gate, not governance',

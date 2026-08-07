@@ -104,7 +104,11 @@ import {
   useViewerChannelRemovalSync,
 } from '@/features/channels/useViewerChannelRemovalSync';
 import { useChannelMembership } from '@/features/channels/use-channel-membership';
-import { useActivity } from '@/features/attention/hooks';
+import {
+  useActivity,
+  useAttentionBadges,
+  useAttentionRealtime,
+} from '@/features/attention/hooks';
 import {
   useMessageJumpController,
   type MessageJumpTarget,
@@ -600,9 +604,13 @@ function RegisteredAppShell(): JSX.Element {
   const [archivedFilter, setArchivedFilter] = useState<ArchivedFilterState>(ARCHIVED_FILTER_DEFAULT);
   // Per-workspace notification unread count (mention / agent-failure alerts).
   const { data: unreadCounts } = useUnreadCounts();
-  // Global message unread summary across all workspaces — drives workspace
-  // sidebar badges via conversation_reads cursor (not notification system).
-  const { data: messageUnreadSummary } = useMessageUnreadSummary();
+  // Global message unread summary across all workspaces. No longer paints the
+  // workspace rail — the attention badge roll-up below does (#task:1870), since a
+  // muted workspace must not light it. Kept mounted because it is still the
+  // family's `snapshot_required` fallback and the cache the viewer-unread ingestor
+  // patches; the two read-models answer different questions ("how many are
+  // unread" vs "how loudly should this shout") and both stay true.
+  useMessageUnreadSummary();
   // Per-channel message unread counts for the currently selected workspace.
   // Drives channel sidebar badges; replaces the old notification-based counts.
   const { data: messageUnreadData } = useMessageUnreadCounts(
@@ -611,22 +619,33 @@ function RegisteredAppShell(): JSX.Element {
   );
   const channelUnreadCounts = messageUnreadData?.by_conversation;
 
+  // ── Attention badges (#task:1870) ──────────────────────────────────────
+  // The viewer's per-workspace badge roll-up: raw unread for `all` channels plus
+  // the directed residue of quiet/muted ones. It is what the rail rows, the
+  // nav-rail chat dot and the dock badge all show — a muted workspace must not
+  // nag on any of them, and folding the tiers in three places would drift.
+  // `useAttentionRealtime` is the ONE attention subscription; it lives here so
+  // rows can read the roll-up without each installing a listener.
+  useAttentionRealtime();
+  const { data: attentionBadges } = useAttentionBadges();
+
   // ── Nav-rail attention dots (#task:1408) ───────────────────────────────
   // A single no-count dot per rail section that has new content, derived from
-  // the existing viewer read-models (zero new query/state). Chat = any unread
-  // in the message-unread summary (archived already excluded at source by the
-  // rollup, #1403-A — no re-filter here). Activity = the unattended-items list
-  // is non-empty (observe drops handled items, so a non-empty list *is* "has
-  // new"). Both clear naturally as the section's content is observed.
+  // the existing viewer read-models (zero new query/state). Chat = any workspace
+  // with a lit attention badge (archived already excluded at source, #1403-A — no
+  // re-filter here; a muted workspace contributes nothing, #task:1870). Activity =
+  // the unattended-items list is non-empty (observe drops handled items, so a
+  // non-empty list *is* "has new"). Both clear naturally as the section's content
+  // is observed.
   const { data: activityData } = useActivity();
   const navRailDots = deriveNavRailDots({
-    workspaceUnread: messageUnreadSummary?.by_workspace,
+    workspaceUnread: attentionBadges?.by_workspace,
     activityItemCount: activityData?.items.length,
   });
 
   // ── Dock badge sync ────────────────────────────────────────────────────
-  // macOS dock icon shows total unread messages across every workspace.
-  useDockBadge(messageUnreadSummary);
+  // macOS dock icon shows the attention total across every workspace.
+  useDockBadge(attentionBadges?.total);
 
   // ── Secondary pane state ──────────────────────────────────────────────
   // Resolves `?side=<id>` into the descriptor + visible/focused conversation
@@ -2218,7 +2237,13 @@ function RegisteredAppShell(): JSX.Element {
                       name: w.name,
                       kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
                       dm_agent_id: w.dm_agent_id,
-                      unread: messageUnreadSummary?.by_workspace?.[w.id] ?? 0,
+                      unread: attentionBadges?.by_workspace?.[w.id] ?? 0,
+                      // Both row signals come from the ONE roll-up (#task:1870):
+                      // the count and the mute marker must never disagree about
+                      // the same workspace.
+                      muted:
+                        attentionBadges?.muted_workspace_ids?.includes(w.id) ??
+                        false,
                       starred_at: workspaceStarredAt.get(w.id) ?? null,
                       archived: w.archived_at !== null,
                       created_at: w.created_at,

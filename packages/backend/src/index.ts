@@ -57,6 +57,7 @@ import { AgentRepo } from './repos/agent-repo.js';
 import { AttachmentRepo } from './repos/attachment-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
 import { ConversationReadRepo } from './repos/conversation-read-repo.js';
+import { AttentionBadgeRepo } from './repos/attention-badge-repo.js';
 import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { MessageRepo } from './repos/message-repo.js';
 import { NotificationRepo } from './repos/notification-repo.js';
@@ -508,6 +509,7 @@ export async function startBackend(
     workspaces: new WorkspaceRepo(db),
     conversations: new ConversationRepo(db),
     conversationReads: new ConversationReadRepo(db),
+    attentionBadges: new AttentionBadgeRepo(db),
     messages: new MessageRepo(db),
     agents: new AgentRepo(db),
     runtimeHost: ctx.runtimeHost,

@@ -14,6 +14,7 @@ import { ccMentionsFromUserMessage } from '../../mention-cc.js';
 import type { AgentRepo } from '../../repos/agent-repo.js';
 import type { ConversationRepo } from '../../repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../repos/conversation-read-repo.js';
+import { AttentionBadgeRepo } from '../../repos/attention-badge-repo.js';
 import type { ConversationInboxRepo } from '../../repos/conversation-inbox-repo.js';
 import type { MessageRepo } from '../../repos/message-repo.js';
 import type { NotificationRepo } from '../../repos/notification-repo.js';
@@ -49,6 +50,7 @@ export class MessageDeliveryCoordinator {
   private readonly db: Db;
   private readonly conversations: ConversationRepo;
   private readonly conversationReads: ConversationReadRepo;
+  private readonly attentionBadges: AttentionBadgeRepo;
   private readonly conversationInboxes: ConversationInboxRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
@@ -66,6 +68,9 @@ export class MessageDeliveryCoordinator {
     // the same ad-hoc construction) — powers the authoritative unread counts on
     // the `unread_updated` frame (#task:1283).
     this.conversationReads = new ConversationReadRepo(deps.db);
+    // Same stateless-wrapper pattern: the tiered badge (#task:1870) is emitted
+    // alongside every `unread_updated`, so it is built from the same db handle.
+    this.attentionBadges = new AttentionBadgeRepo(deps.db);
     this.conversationInboxes = deps.conversationInboxes;
     this.messages = deps.messages;
     this.agents = deps.agents;
@@ -81,6 +86,7 @@ export class MessageDeliveryCoordinator {
   publishUnreadUpdated(conversationId: string): void {
     publishUnreadUpdatedToConversationViewers(
       this.events,
+      this.attentionBadges,
       this.conversations,
       this.conversationReads,
       conversationId,

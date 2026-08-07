@@ -245,7 +245,7 @@ per-stream 后,`conversation_reads` 每个 (user, conversation) **不再只有�
 
 ## 7. Out of scope(本 doc 不做)
 
-- **Activity/Inbox** 全局入口、channel 两档 attention 偏好(所有消息/仅提及)、DM 作为 personal stream 的 eligibility——都属 Activity task,复用本 doc 的 cursor 但单独交付,**绝不并进 #1226**。
+- **Activity/Inbox** 全局入口、channel attention 档(所有消息/仅提及/静音,#task:1870 起三档)、DM 作为 personal stream 的 eligibility——都属 Activity task,复用本 doc 的 cursor 但单独交付,**绝不并进 #1226**。
 - 「从 Inbox 隐藏」「snooze/done/archive」等 triage / attention 控件。
 
 ## 8. 不变量

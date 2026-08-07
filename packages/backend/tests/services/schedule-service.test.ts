@@ -22,6 +22,7 @@ import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
+import { AttentionBadgeRepo } from '../../src/repos/attention-badge-repo.js';
 
 class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -125,6 +126,7 @@ function bootstrap(
     workspaces,
     conversations,
     conversationReads: new ConversationReadRepo(db),
+    attentionBadges: new AttentionBadgeRepo(db),
     messages,
     agents,
     runtimeHost: fake as unknown as AgentRuntimeHost,

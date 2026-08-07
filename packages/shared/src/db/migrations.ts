@@ -295,12 +295,14 @@ export const migrations: Migration[] = [
     version: 52,
     name: 'channel_attention_preferences',
     // Activity / Attention bounded context (#task:1227, docs/activity-lifecycle-v1.md
-    // §9.1). The ONLY new write-side aggregate Attention owns: a per-(viewer,
+    // §9.1). The FIRST write-side aggregate Attention owns: a per-(viewer,
     // channel) ambient preference — the policy input to `enter()` (§6). It is a
     // user DECISION (the channel `所有消息 / 仅提及` control), not a derived fact,
     // so it legitimately gets its own table (建表准入测试, §4.2). Everything else
     // Attention surfaces is a projection (cursor read-model / notifications /
-    // tasks), never stored.
+    // tasks), never stored. (v65 adds the SECOND and — today — last one, the
+    // per-(viewer, workspace) mute suppressor, and a third `mode` value `'mute'`;
+    // the shape below is v52's, kept verbatim as history.)
     //
     // `mode`:
     //   'all'      = ambient on  → channel mainline ambient unread enters Activity
@@ -1077,6 +1079,117 @@ export const migrations: Migration[] = [
         ON workspaces(name) WHERE workspace_kind = 'regular';
       CREATE INDEX idx_workspaces_pinned_at
         ON workspaces(workspace_kind, pinned_at) WHERE pinned_at IS NOT NULL;
+    `,
+  },
+  {
+    version: 65,
+    name: 'attention_mute_tier_and_workspace_suppressor',
+    // #task:1870 (docs/activity-lifecycle-v1.md §6/§8/§9.1) — the three attention
+    // tiers. Two schema facts land together because they are ONE product decision
+    // and each is meaningless alone:
+    //
+    //   1. `channel_attention_preferences.mode` gains a third value, `'mute'`.
+    //      The channel scope is ONE mutually-exclusive choice, so it stays a
+    //      single enum: `mode` + a separate `muted` boolean would only need an
+    //      ADD COLUMN, but it would make the illegal state
+    //      (`muted` AND ambient on) EXPRESSIBLE and push the invariant from the
+    //      type surface onto the render surface. SQLite cannot ALTER a CHECK, so
+    //      the price of that guarantee is this table rebuild — paid once.
+    //
+    //   2. `workspace_attention_preferences` — the per-(viewer, workspace) mute
+    //      SUPPRESSOR. Deliberately a BOOLEAN, not a fourth tier and not an
+    //      overridable default: it sits ABOVE the channel tier, so un-muting a
+    //      workspace restores every channel's own stored mode unchanged. That is
+    //      what makes this a pure schema addition: no backfill, no inherit axis,
+    //      and not one existing row is re-read or rewritten.
+    //
+    // The suppressor gets its OWN table rather than a column on `workspace_users`
+    // (which governance also writes): it is a viewer's attention decision, so it
+    // is owned state under the same 建表准入 test (§4.2) that admitted the channel
+    // preference, and it must not inherit membership's lifecycle. Attention now
+    // owns exactly TWO write-side aggregates; it still stores no read state and
+    // still never touches delivery (§5.2 — no thread_followers, no wake).
+    //
+    // Scope guards mirror the channel table's `channel_only` backstop: a pref on
+    // an `agent_home` workspace is meaningless dead state (a DM is
+    // directed-grade — it cannot be muted, and it has no ambient tier to
+    // suppress), so the DB fails loud instead of storing it.
+    up: `
+      CREATE TABLE channel_attention_preferences_new (
+        user_id          TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        conversation_id  TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        mode             TEXT NOT NULL CHECK (mode IN ('all', 'mentions', 'mute')),
+        updated_at       INTEGER NOT NULL,
+        PRIMARY KEY (user_id, conversation_id)
+      );
+
+      INSERT INTO channel_attention_preferences_new (
+        user_id, conversation_id, mode, updated_at
+      )
+        SELECT user_id, conversation_id, mode, updated_at
+        FROM channel_attention_preferences;
+
+      DROP TABLE channel_attention_preferences;
+      ALTER TABLE channel_attention_preferences_new
+        RENAME TO channel_attention_preferences;
+
+      CREATE INDEX idx_channel_attention_prefs_conversation
+        ON channel_attention_preferences(conversation_id);
+
+      CREATE TRIGGER channel_attention_prefs_channel_only_insert
+        BEFORE INSERT ON channel_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT kind FROM conversations WHERE id = NEW.conversation_id), ''
+            ) != 'channel'
+            THEN RAISE(ABORT, 'channel_attention_preferences.conversation_id must reference a regular channel')
+          END;
+        END;
+
+      CREATE TRIGGER channel_attention_prefs_channel_only_update
+        BEFORE UPDATE OF conversation_id ON channel_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT kind FROM conversations WHERE id = NEW.conversation_id), ''
+            ) != 'channel'
+            THEN RAISE(ABORT, 'channel_attention_preferences.conversation_id must reference a regular channel')
+          END;
+        END;
+
+      CREATE TABLE workspace_attention_preferences (
+        user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        workspace_id  TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        muted         INTEGER NOT NULL CHECK (muted IN (0, 1)),
+        updated_at    INTEGER NOT NULL,
+        PRIMARY KEY (user_id, workspace_id)
+      );
+
+      CREATE INDEX idx_workspace_attention_prefs_workspace
+        ON workspace_attention_preferences(workspace_id);
+
+      CREATE TRIGGER workspace_attention_prefs_regular_only_insert
+        BEFORE INSERT ON workspace_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT workspace_kind FROM workspaces WHERE id = NEW.workspace_id), ''
+            ) != 'regular'
+            THEN RAISE(ABORT, 'workspace_attention_preferences.workspace_id must reference a regular workspace')
+          END;
+        END;
+
+      CREATE TRIGGER workspace_attention_prefs_regular_only_update
+        BEFORE UPDATE OF workspace_id ON workspace_attention_preferences
+        BEGIN
+          SELECT CASE
+            WHEN COALESCE(
+              (SELECT workspace_kind FROM workspaces WHERE id = NEW.workspace_id), ''
+            ) != 'regular'
+            THEN RAISE(ABORT, 'workspace_attention_preferences.workspace_id must reference a regular workspace')
+          END;
+        END;
     `,
   },
 ];

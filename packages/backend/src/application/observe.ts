@@ -5,8 +5,12 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
+import type { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
 import { canViewConversation } from '../permissions.js';
-import { buildUnreadUpdatedMessagePayload } from '../viewer-scope.js';
+import {
+  publishAttentionBadgeUpdated,
+  publishUnreadUpdatedToViewer,
+} from '../viewer-scope.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
@@ -60,6 +64,10 @@ export type ObserveDeps = {
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
   notifications: NotificationRepo;
+  /** Tiered-badge projection (#task:1870). Reading is one of the three sources
+   *  that move the badge, and a `notification` clear moves it WITHOUT moving any
+   *  cursor — see the directed-only emit below. */
+  attentionBadges: AttentionBadgeRepo;
 };
 
 export type ObserveInput = {
@@ -206,6 +214,12 @@ export async function observe(
   const outcome = deps.ctx.db.transaction(() => {
     const changedConversations = new Set<string>();
     let notificationChanged = false;
+    // Workspaces whose TIERED badge (#task:1870) moved through a directed clear
+    // ONLY — a `notification` source flips `read_at` without touching any
+    // cursor, so no per-conversation frame would carry the new badge. Streams are
+    // absent from this set on purpose: their workspace is already covered by the
+    // co-emitting per-conversation seam.
+    const directedOnlyBadgeWorkspaces = new Set<string>();
     // The notification ids this batch flipped unread→read. Carried out to the
     // badge-variant event so the OS-notification-dismiss projection (#task:1431)
     // can `.close()` exactly these — the client never re-derives read state.
@@ -243,13 +257,30 @@ export async function observe(
           dismissedNotificationIds.push(...clearedIds);
         }
       } else {
+        // Read BEFORE the write: the badge attribution needs the row's anchor,
+        // and `markRead` tells us only whether it flipped.
+        const notification = deps.notifications.get(r.notificationId);
         if (deps.notifications.markRead(r.notificationId, input.viewerUserId)) {
           notificationChanged = true;
           dismissedNotificationIds.push(r.notificationId);
+          // Only `mention_self` in a live conversation feeds the badge's directed
+          // term, and the attribution is the CONVERSATION's workspace (same
+          // column the positional term groups by) — an anchorless
+          // `agent_start_failed` or a CC'd `mention_external` never counted, so
+          // clearing it moves no badge.
+          if (notification?.kind === 'mention_self' && notification.conversation_id) {
+            const conversation = deps.conversations.get(notification.conversation_id);
+            if (conversation) directedOnlyBadgeWorkspaces.add(conversation.workspace_id);
+          }
         }
       }
     }
-    return { changedConversations, notificationChanged, dismissedNotificationIds };
+    return {
+      changedConversations,
+      notificationChanged,
+      dismissedNotificationIds,
+      directedOnlyBadgeWorkspaces,
+    };
   })();
 
   const changed =
@@ -261,25 +292,44 @@ export async function observe(
     // AT MOST ONE badge-variant when any notification `read_at` changed. Both
     // ride the viewer scope. This is the faithful "coalesced" contract under the
     // renderer's two-variant discrimination — not a single literal event.
+    // Orthogonal to both: at most ONE `attention_badge_updated` per touched
+    // workspace (#task:1870) — a different face of the same facts, deduped on the
+    // workspace axis because its value is absolute.
     const effects: PostCommitEffect[] = [];
+    const badgedWorkspaces = new Set<string>();
     for (const conversationId of outcome.changedConversations) {
       const conversation = deps.conversations.get(conversationId);
       if (!conversation) continue;
       const workspaceId = conversation.workspace_id;
+      badgedWorkspaces.add(workspaceId);
       // Enriched message variant (#task:1283): the closure runs POST-COMMIT, so
       // the counts reflect the just-lowered read state — the same authoritative
       // absolutes as arrival, so read/clear patches badges via one shape (no
-      // half-model where read refetches).
+      // half-model where read refetches). The seam co-emits this workspace's
+      // tiered badge (#task:1870); a positional clear lowers both faces.
       effects.push(() =>
-        deps.ctx.events.publishToScope(
-          `viewer:${input.viewerUserId}`,
-          'unread_updated',
-          buildUnreadUpdatedMessagePayload(
-            deps.conversationReads,
-            conversationId,
-            workspaceId,
-            input.viewerUserId,
-          ),
+        publishUnreadUpdatedToViewer(
+          deps.ctx.events,
+          deps.attentionBadges,
+          deps.conversationReads,
+          conversationId,
+          workspaceId,
+          input.viewerUserId,
+        ),
+      );
+    }
+    // Directed-only clears: no cursor moved, so nothing above carried this
+    // workspace's badge. Absolute, so a workspace already badged above needs no
+    // second frame.
+    for (const workspaceId of outcome.directedOnlyBadgeWorkspaces) {
+      if (badgedWorkspaces.has(workspaceId)) continue;
+      badgedWorkspaces.add(workspaceId);
+      effects.push(() =>
+        publishAttentionBadgeUpdated(
+          deps.ctx.events,
+          deps.attentionBadges,
+          workspaceId,
+          input.viewerUserId,
         ),
       );
     }

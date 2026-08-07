@@ -8,19 +8,24 @@ import { apiPaths, MarkNotificationsReadInputSchema } from '@silverhand/shared';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import type { NotificationRepo } from '../repos/notification-repo.js';
+import type { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
 import { requireViewerUserId } from '../auth/principal.js';
 import { timedRouteSpan } from '../observability/route-span.js';
+import { publishAttentionBadgeUpdated } from '../viewer-scope.js';
 
 export interface NotificationsRouteDeps {
   ctx: BackendContext;
   notifications: NotificationRepo;
+  /** Tiered-badge projection (#task:1870): a directed notification going read is
+   *  the third source that moves the badge without moving any unread cursor. */
+  attentionBadges: AttentionBadgeRepo;
 }
 
 export function createNotificationsApp(
   deps: NotificationsRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, notifications } = deps;
+  const { ctx, notifications, attentionBadges } = deps;
 
   // ── Notifications ────────────────────────────────────────────────
   app.get(apiPaths.notifications, c => {
@@ -78,6 +83,16 @@ export function createNotificationsApp(
     }
     const { id, workspace_id, conversation_id, all } = parsed.data;
     const viewerUserId = requireViewerUserId(c);
+    // Tiered badge (#task:1870) BEFORE the write. Diffing two absolute maps is
+    // what lets this route emit exactly the workspaces that moved — including one
+    // that dropped to 0, which an "affected workspaces" set derived from the
+    // cleared rows would report identically but which each of the four filters
+    // would have to compute its own way. Attribution therefore comes from the
+    // badge projection itself (the conversation's workspace), never from
+    // `notifications.workspace_id`, and no filter logic is duplicated here.
+    // This is a user-initiated panel action, not the per-message arrival path, so
+    // the second roll-up scan is affordable.
+    const badgeBefore = attentionBadges.badgeCountsByWorkspace(viewerUserId);
     let marked = 0;
     if (id) {
       const ok = notifications.markRead(id, viewerUserId);
@@ -106,6 +121,21 @@ export function createNotificationsApp(
         'unread_updated',
         { marked },
       );
+      const badgeAfter = attentionBadges.badgeCountsByWorkspace(viewerUserId);
+      for (const workspaceId of new Set([
+        ...Object.keys(badgeBefore),
+        ...Object.keys(badgeAfter),
+      ])) {
+        if ((badgeBefore[workspaceId] ?? 0) === (badgeAfter[workspaceId] ?? 0)) {
+          continue;
+        }
+        publishAttentionBadgeUpdated(
+          ctx.events,
+          attentionBadges,
+          workspaceId,
+          viewerUserId,
+        );
+      }
     }
     return c.json({ marked });
   });

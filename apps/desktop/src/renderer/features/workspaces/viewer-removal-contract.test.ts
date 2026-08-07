@@ -12,7 +12,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
-import { activityKey } from '../attention/hooks';
+import {
+  activityKey,
+  attentionBadgesKey,
+  attentionModesKey,
+} from '../attention/hooks';
 import { favoritesKey } from '../favorites/hooks';
 import {
   messageUnreadByConversationKey,
@@ -100,6 +104,34 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
       by_conversation: { 'c-keep': 5 },
       latest_by_conversation: {},
       total: 5,
+    });
+  },
+  'attention-badges': qc => {
+    qc.setQueryData(attentionBadgesKey(), {
+      by_workspace: { [REMOVED]: 4, [SURVIVOR]: 6 },
+      total: 10,
+      // The mute marker (#task:1877) carries the removed id in a SECOND place
+      // inside the same entry, so seeding both proves the cleanup drops the id
+      // wherever it appears — not just from the count map.
+      muted_workspace_ids: [REMOVED, SURVIVOR],
+    });
+    // The per-workspace tier batch is NOT `['workspaces', …]`-keyed, so the
+    // layer-1 sweep cannot see it — seeding it here is what proves this read
+    // model's cleanup drops it (the removed id sits in the KEY, which
+    // `cacheMentions` checks).
+    qc.setQueryData(attentionModesKey(REMOVED), {
+      workspace_id: REMOVED,
+      muted: false,
+      channels: [
+        { conversation_id: 'c-gone', mode: 'all', effective_mode: 'all', directed_unread_count: 0 },
+      ],
+    });
+    qc.setQueryData(attentionModesKey(SURVIVOR), {
+      workspace_id: SURVIVOR,
+      muted: true,
+      channels: [
+        { conversation_id: 'c-keep', mode: 'all', effective_mode: 'mute', directed_unread_count: 1 },
+      ],
     });
   },
 };
@@ -195,6 +227,7 @@ describe('viewer-local projection removal contract (#task:1412)', () => {
         activityKey: activityKey(),
         favoritesKey,
         messageUnreadSummaryKey,
+        attentionBadgesKey: attentionBadgesKey(),
       };
       // Every cleaned symbol is a known key…
       for (const name of VIEWER_LOCAL_KEY_CLASSIFICATION.cleaned) {

@@ -5,7 +5,7 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { BellOff, ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 /**
@@ -212,6 +212,115 @@ export function SidebarSectionHeader({
   );
 }
 
+/**
+ * Loudness of an unread count badge (#task:1870). NOT three eligibilities —
+ * one badge, three volumes, resolved from the viewer's effective attention mode
+ * for that conversation/workspace:
+ *   - `loud`  (All messages)   = filled `--accent` pill, the attention beacon.
+ *   - `quiet` (Mentions only)  = hairline ring + neutral ink, NO fill. The fact
+ *     is kept, the volume drops one step; reuses the Activity `+N new` count
+ *     vocabulary rather than inventing a second recipe.
+ *   - silent  (Mute)           = no badge at all — callers render nothing, which
+ *     is why there is no `silent` member here (a badge that renders nothing is a
+ *     branch, not a tier).
+ *
+ * Utility-vs-semantic budget: `quiet` deliberately spends NO saturated hue — the
+ * accent fill is the one thing that separates "look here" from "for reference".
+ */
+export type UnreadBadgeTier = 'loud' | 'quiet';
+
+/**
+ * The ONE unread count pill for every sidebar surface (home rail workspace rows,
+ * STARRED rows, channel rows). Extracted in #task:1870: the recipe had been
+ * hand-copied at four call sites and had already drifted — the channel row was
+ * `text-[9px]/leading-[16px]` with no `aria-label` while the other three were
+ * `text-[10px]/h-4` — so a second (quiet) tier would have been copied four times
+ * over a divergent base.
+ *
+ * `inverted` is the selected-row form: on a filled selection the accent pill
+ * would fight the selection fill, so fill and ink swap. Layout (margins,
+ * placement in the row's status slot) stays with the CONSUMER; this component
+ * only owns the badge's own identity — per the shared-hook rule, a component that
+ * also dictates spacing breaks the next consumer.
+ *
+ * `data-sidebar-unread` is the theme painting hook (forza6 repaints the pill as a
+ * square poster sticker); `data-unread-tier` lets a theme scope its treatment to
+ * one volume without re-deriving the tier from colours.
+ */
+export function UnreadBadge({
+  count,
+  tier = 'loud',
+  inverted = false,
+  className,
+}: {
+  count: number;
+  tier?: UnreadBadgeTier;
+  /** Selected/primary row: swap fill and ink so the pill reads on the fill. */
+  inverted?: boolean;
+  className?: string;
+}): JSX.Element | null {
+  if (count <= 0) return null;
+  const skin =
+    tier === 'quiet'
+      ? 'border border-border text-text-secondary'
+      : inverted
+        ? 'bg-bg-floating text-accent'
+        : 'bg-accent text-text-on-accent';
+  return (
+    <span
+      data-sidebar-unread
+      data-unread-tier={tier}
+      className={
+        'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] tabular-nums ' +
+        // Quiet drops the weight too: hairline + regular weight is one coherent
+        // step down, not a ring bolted onto a loud pill.
+        (tier === 'quiet' ? 'font-medium ' : 'font-semibold ') +
+        skin +
+        (className ? ` ${className}` : '')
+      }
+      aria-label={`${count} unread`}
+    >
+      {count > 99 ? '99+' : count}
+    </span>
+  );
+}
+
+/**
+ * The rail's persistent "this workspace is muted" marker (shiki 2026-08-07,
+ * #task:1870). Shared by the home rail row and its STARRED twin because STARRED
+ * is a starred workspace's EXCLUSIVE home — a marker only the rail knew how to
+ * draw would silently vanish the moment you starred a muted workspace.
+ *
+ * ADDITIVE, not subtractive: a channel row expresses silence by dropping to the
+ * muted ink, which works there because the neighbouring loud rows are the
+ * comparison group. The rail has no such group — its rows are already quiet when
+ * nothing is happening, so "dimmer" is isomorphic to "nothing new" and only an
+ * existence marker can say "silenced" (dogfood: shiki could not tell which
+ * workspace was muted). It sits BESIDE the count slot rather than replacing it:
+ * a directed mention legitimately pierces mute, so muted-and-loud is a real
+ * state, not a contradiction.
+ *
+ * Ink: no colour of its own — it inherits the row's `currentColor` and dims it.
+ * That is what keeps it correct in all three themes AND on the selected row
+ * (where the row's ink is `--text-on-selected`, so a fixed grey would sit wrong
+ * on the fill), and it keeps the glyph on the row's own hover transition instead
+ * of jumping colour families. `opacity-60` over the rail's resting
+ * `--text-secondary` lands at ≈40% ink — the "very faint" end shiki asked for,
+ * level with `--text-faint`, this renderer's third-tier text step.
+ *
+ * Identity only, per the shared-component rule: placement and spacing belong to
+ * the consumer's status slot.
+ */
+export function MutedMarker(): JSX.Element {
+  return (
+    <BellOff
+      className="size-3 shrink-0 opacity-60"
+      role="img"
+      aria-label="Muted"
+    />
+  );
+}
+
 interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick' | 'title'> {
   icon?: ReactNode;
   title: ReactNode;
@@ -220,6 +329,9 @@ interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClic
   status?: 'active' | 'idle' | 'crashed' | null;
   /** Unread count pill on the right edge. Falsy / 0 hides it. */
   badge?: number;
+  /** Loudness of {@link badge} — see {@link UnreadBadgeTier}. Mute renders no
+   *  badge, so a muted row passes no `badge` at all. */
+  badgeTier?: UnreadBadgeTier;
   /** Two-line layout: title on top, subtitle stacked below (instead of
    *  inline beside it). Used by richer rows (COMPUTERS: name + lifecycle
    *  label + badge) that don't fit on one line. Default `false` keeps the
@@ -241,6 +353,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
   selected,
   status,
   badge,
+  badgeTier,
   stacked,
   onClick,
   className,
@@ -302,18 +415,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           ) : null}
         </span>
         {badge && badge > 0 ? (
-          <span
-            data-sidebar-unread
-            className={
-              'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
-              (selected
-                ? 'bg-bg-floating text-accent'
-                : 'bg-accent text-text-on-accent')
-            }
-            aria-label={`${badge} unread`}
-          >
-            {badge > 99 ? '99+' : badge}
-          </span>
+          <UnreadBadge count={badge} tier={badgeTier} inverted={selected} />
         ) : status ? (
           <span data-status-pip className={'size-1.5 rounded-full ' + STATUS_DOT[status]} />
         ) : null}

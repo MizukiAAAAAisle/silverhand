@@ -18,27 +18,35 @@
 // read-cleared like a mention (docs/activity-lifecycle-v1.md §5.1, v2).
 //
 // Assembly (§6/§7/§8):
-//   1. directed notifications — `mention_self` + `agent_start_failed` (read_at
-//      NULL); a mention whose stream cursor already passed it is treated as
-//      cleared (§7: cursor-passed ⇒ directed cleared), no stored state.
+//   1. directed notifications — `mention_self` (the EFFECTIVE DIRECTED CLAIM:
+//      unread + anchored + above the anchor's own stream cursor, §7
+//      cursor-passed ⇒ directed cleared — defined once in
+//      `repos/directed-claim-predicate.ts` and shared with the badge / the
+//      per-channel directed count) + `agent_start_failed` (anchorless, cleared
+//      by `read_at` alone).
 //   2. The §7 per-(viewer, message) de-dupe runs in TS: at most one directed
-//      claim per message. The DISTINCT set of directed message ids is then
-//      excluded from the positional query, so §8 (`positional \ directed`) is
-//      computed in SQL — the ambient row's count AND its first-unread
-//      anchor/preview/timestamp are the first NON-directed unread message,
-//      never a message already shown as a mention. Because the positional base
-//      already drops system / the viewer's own messages, a directed message
-//      that wouldn't be ambient is simply absent (no spurious subtraction).
+//      claim per message — the same fourth conjunct the counting faces express
+//      as `COUNT(DISTINCT n.message_id)`. The DISTINCT set of directed message
+//      ids is then excluded from the positional query, so §8
+//      (`positional \ directed`) is computed in SQL — the ambient row's count AND
+//      its first-unread anchor/preview/timestamp are the first NON-directed
+//      unread message, never a message already shown as a mention. Because the
+//      positional base already drops system / the viewer's own messages, a
+//      directed message that wouldn't be ambient is simply absent (no spurious
+//      subtraction).
 //   3. positional streams — per-(conversation, stream) ambient/DM unread,
 //      `enter()`-filtered in SQL (DM always; channel mainline iff the viewer's
-//      effective ChannelAttentionPreference = 'all'; threads iff followed AND
-//      the parent channel's effective ChannelAttentionPreference = 'all' —
-//      follow is a delivery precondition, necessary not sufficient, #task:1268).
+//      EFFECTIVE attention tier = 'all' — the channel's own tier with the
+//      viewer's workspace mute folded in, #task:1870; threads iff followed AND
+//      the parent channel's effective tier = 'all' — follow is a delivery
+//      precondition, necessary not sufficient, #task:1268).
 // Then salience is derived (DM = directed-grade) and the list sorted §13.2:
 // directed tier first, most-recent-first within a tier.
 import type { BackendContext } from '../context.js';
 import { prepareObserved } from '../observability/observed-statement.js';
+import { channelAmbientEntersPredicate } from '../repos/attention-tier-predicates.js';
 import { LIVE_CONVERSATION_PREDICATE } from '../repos/conversation-liveness.js';
+import { EFFECTIVE_DIRECTED_MENTION_PREDICATE } from '../repos/directed-claim-predicate.js';
 import {
   apiPaths,
   DEFAULT_CHANNEL_ATTENTION_MODE,
@@ -186,9 +194,7 @@ interface DirectedNotificationRow extends SenderColumns {
   message_id: string | null;
   thread_root_id: string | null;
   root_content: string | null;
-  message_seq: number | null;
   message_content: string | null;
-  stream_cursor: number;
   conversation_title: string | null;
   workspace_id: string | null;
   payload: string | null;
@@ -252,8 +258,13 @@ type ActivitySource = (ac: ActivityAssemblyContext) => ActivityItemDto[];
  *  context so the positional source can subtract them. */
 const assembleDirectedNotifications: ActivitySource = ac => {
   const { ctx, viewerUserId, wsFilter } = ac;
-  // `stream_cursor` lets us drop a mention the viewer has already read
-  // positionally (§7: cursor-passed ⇒ directed cleared) without storing it.
+  // "Which claims exist" is NOT decided here: the WHERE clause interpolates
+  // EFFECTIVE_DIRECTED_MENTION_PREDICATE (repos/directed-claim-predicate.ts),
+  // the shared definition the badge and the per-channel directed count also
+  // read. It carries §7's cursor rule (a mention the viewer already read
+  // positionally is cleared even while `read_at` is NULL) and the anchor
+  // requirement, so this query no longer needs to select a cursor column and
+  // re-decide in TS.
   const notifRows = prepareObserved<{ viewer: string; ws: string | null }, DirectedNotificationRow>(
       ctx.db,
       'activity.directed_notifications',
@@ -265,14 +276,7 @@ const assembleDirectedNotifications: ActivitySource = ac => {
           n.message_id        AS message_id,
           m.thread_root_id    AS thread_root_id,
           root.content        AS root_content,
-          m.seq               AS message_seq,
           m.content           AS message_content,
-          COALESCE((
-            SELECT cr.last_read_seq FROM conversation_reads cr
-             WHERE cr.user_id = n.user_id
-               AND cr.conversation_id = n.conversation_id
-               AND cr.thread_root_id IS m.thread_root_id
-          ), 0)               AS stream_cursor,
           c.title             AS conversation_title,
           COALESCE(n.workspace_id, c.workspace_id) AS workspace_id,
           n.payload           AS payload,
@@ -284,8 +288,14 @@ const assembleDirectedNotifications: ActivitySource = ac => {
         LEFT JOIN users su ON su.id = m.from_user_id
         LEFT JOIN agents sa ON sa.id = m.from_agent_id
        WHERE n.user_id = @viewer
-         AND n.read_at IS NULL
-         AND n.kind IN ('mention_self', 'agent_start_failed')
+         AND (
+           -- mention_self: the shared effective-directed-claim rule (unread +
+           -- anchored + above the anchor's own stream cursor).
+           ${EFFECTIVE_DIRECTED_MENTION_PREDICATE}
+           -- agent_start_failed: message-anchorless by nature, so it can never
+           -- satisfy the anchored/cursor conjuncts; it clears only by read_at.
+           OR (n.kind = 'agent_start_failed' AND n.read_at IS NULL)
+         )
          -- Directed Activity items are conversation-backed: mentions need a
          -- message anchor and agent failures are message-anchorless, but still
          -- emitted for a concrete conversation. Lifecycle-ended conversations
@@ -297,19 +307,21 @@ const assembleDirectedNotifications: ActivitySource = ac => {
     )
     .all({ viewer: viewerUserId, ws: wsFilter });
 
-  // ── §7 de-dupe directed claims: at most one item per message. Only mentions
-  // are message-anchored directed claims (the task projection was removed in v1,
-  // see the file header); agent_start_failed has no anchor message, so it never
-  // participates in the per-message map (and never excludes an ambient message).
+  // ── §7 de-dupe directed claims: at most one item per message. That rule is
+  // the shared claim definition's fourth conjunct; the counting faces express it
+  // as COUNT(DISTINCT n.message_id), and this item-building face expresses it as
+  // a Map keyed by the SAME column. Only mentions are message-anchored directed
+  // claims (the task projection was removed in v1, see the file header);
+  // agent_start_failed has no anchor message, so it never participates in the
+  // per-message map (and never excludes an ambient message).
   const directedByMessage = new Map<string, ActivityItemDto>();
   const agentFailedItems: ActivityItemDto[] = [];
 
   for (const n of notifRows) {
     if (n.kind === 'mention_self') {
+      // Type narrowing only — the shared predicate already guaranteed an
+      // existing anchor message, and the join above a non-NULL conversation.
       if (!n.conversation_id || !n.message_id) continue;
-      // §7: cursor already past it ⇒ the directed claim is cleared (read_at may
-      // still be NULL pre-observe-collapse — the predicate is the derivation).
-      if (n.message_seq !== null && n.message_seq <= n.stream_cursor) continue;
       // already claimed this message (e.g. a duplicate mention notification).
       if (directedByMessage.has(n.message_id)) continue;
       directedByMessage.set(n.message_id, {
@@ -470,19 +482,19 @@ const assemblePositionalStreams: ActivitySource = ac => {
         AND (
           -- DM mainline: directed-grade, always enters (§5.1).
           (vu.root IS NULL AND c.kind = 'dm_channel')
-          -- Channel mainline: enters when effective ambient pref = 'all'.
+          -- Channel mainline: enters when the EFFECTIVE tier is 'all' — the
+          -- channel's own tier with the viewer's workspace mute folded in
+          -- (#task:1870). The workspace scope is a SUPPRESSOR above the tier, so
+          -- muting a workspace removes its ambient items without touching any
+          -- channel's stored choice; un-muting restores them exactly.
           OR (vu.root IS NULL AND c.kind = 'channel'
-              AND COALESCE((
-                SELECT cap.mode FROM channel_attention_preferences cap
-                 WHERE cap.user_id = @viewer
-                   AND cap.conversation_id = vu.conversation_id
-              ), @channelDefaultMode) = 'all')
+              AND ${channelAmbientEntersPredicate('vu.conversation_id', 'c.workspace_id')})
           -- Thread ambient: aggregate-floor (#task:1268). Requires BOTH the
           -- delivery precondition (viewer follows the cluster) AND the parent
-          -- channel's ambient pref = 'all'. vu.conversation_id IS the parent
+          -- channel's effective tier = 'all'. vu.conversation_id IS the parent
           -- channel for a reply-cluster, so the SAME preference gates mainline
           -- and its threads. follow is a delivery decision and must not force
-          -- ambient on over the viewer's explicit mentions-only pref
+          -- ambient on over the viewer's explicit mentions-only/muted pref
           -- (delivery vs attention); thread @mentions still enter via directed.
           OR (vu.root IS NOT NULL
               AND EXISTS (
@@ -491,11 +503,7 @@ const assemblePositionalStreams: ActivitySource = ac => {
                    AND tf.principal_kind = 'human'
                    AND tf.principal_id = @viewer
               )
-              AND COALESCE((
-                SELECT cap.mode FROM channel_attention_preferences cap
-                 WHERE cap.user_id = @viewer
-                   AND cap.conversation_id = vu.conversation_id
-              ), @channelDefaultMode) = 'all')
+              AND ${channelAmbientEntersPredicate('vu.conversation_id', 'c.workspace_id')})
         )`,
     )
     .all({

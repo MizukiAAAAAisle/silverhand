@@ -6,16 +6,29 @@ import {
 } from '@silverhand/shared';
 
 /**
- * Per-(viewer, channel) ambient attention preference (#task:1227,
- * docs/activity-lifecycle-v1.md §9.1). The Attention bounded context's ONLY
- * owned write-side aggregate — it stores a user DECISION (the channel
- * `所有消息 / 仅提及` control), the policy input to `enter()` (§6). Everything
- * else Attention surfaces is a projection, never stored.
+ * Per-(viewer, channel) attention mode (#task:1227 / #task:1870,
+ * docs/activity-lifecycle-v1.md §9.1). One of the Attention bounded context's
+ * TWO owned write-side aggregates (the other is
+ * `WorkspaceAttentionPreferenceRepo`, the mute suppressor) — it stores a user
+ * DECISION (the channel `所有消息 / 仅提及 / 静音` control), the policy input to
+ * `enter()` (§6). Everything else Attention surfaces is a projection, never
+ * stored.
+ *
+ * This repo answers ONLY "what did the viewer choose for this channel". The
+ * workspace suppressor is folded in by `resolveEffectiveAttentionMode` /
+ * the badge projection's SQL — never here, so a caller can always recover the
+ * channel's own choice (which is what un-muting a workspace must restore).
  *
  * The table stores the viewer's explicit choice (which MAY equal the default —
  * we do not delete-on-default); absence of a row resolves to the default
- * (`DEFAULT_CHANNEL_ATTENTION_MODE` = ambient on). `getEffectiveMode` applies
+ * (`DEFAULT_CHANNEL_ATTENTION_MODE` = ambient on). `getStoredMode` applies
  * that default server-side so callers never branch on "unset".
+ *
+ * NAMING (#task:1870): "stored", not "effective". Since the workspace suppressor
+ * exists, `effective` means exactly one thing across this context — the tier
+ * AFTER the suppressor (`effective_mode`, `resolveEffectiveAttentionMode`,
+ * `effectiveChannelModeExpr`). A second meaning here is how the two faces start
+ * being confused for each other.
  *
  * INVARIANT (§5.2 delivery ⊥ attention): this module never reads or writes
  * `thread_followers` / wake / delivery. It is pure attention-decision storage.
@@ -36,9 +49,9 @@ export class ChannelAttentionPreferenceRepo {
       .get(viewerUserId, conversationId);
   }
 
-  /** Effective mode with the channel default applied — the value `enter()` and
-   *  the GET endpoint consume. */
-  getEffectiveMode(
+  /** The channel's OWN stored tier with the default applied — WITHOUT the
+   *  workspace suppressor. The SQL twin is `storedChannelModeExpr`. */
+  getStoredMode(
     viewerUserId: string,
     conversationId: string,
   ): ChannelAttentionMode {

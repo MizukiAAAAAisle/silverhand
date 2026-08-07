@@ -400,7 +400,7 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     // only a later explicit add writes the mention-only preference.
     expect(deps.channelAttentionPrefs.get('local', channelId)).toBeUndefined();
     expect(
-      deps.channelAttentionPrefs.getEffectiveMode('local', channelId),
+      deps.channelAttentionPrefs.getStoredMode('local', channelId),
     ).toBe('all');
 
     const result = await addConversationMember(deps, {
@@ -412,7 +412,7 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     expect(result.ok).toBe(true);
     expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
     expect(
-      deps.channelAttentionPrefs.getEffectiveMode('teammate', channelId),
+      deps.channelAttentionPrefs.getStoredMode('teammate', channelId),
     ).toBe('mentions');
   });
 
@@ -437,7 +437,7 @@ describe('AddConversationMemberUseCase (application layer)', () => {
 
     expect(result.ok).toBe(true);
     expect(
-      deps.channelAttentionPrefs.getEffectiveMode('teammate', channelId),
+      deps.channelAttentionPrefs.getStoredMode('teammate', channelId),
     ).toBe('all');
   });
 
@@ -468,7 +468,7 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     expect(result.ok).toBe(true);
     expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
     expect(
-      deps.channelAttentionPrefs.getEffectiveMode('teammate', channelId),
+      deps.channelAttentionPrefs.getStoredMode('teammate', channelId),
     ).toBe('all');
   });
 

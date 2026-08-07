@@ -58,10 +58,37 @@ upgrades bypass middleware anyway). `/auth/*`, `/readyz`, and `/internal/*`
 
 ## 3. When to bump — decision rule
 
+**Precondition — "one bump per RELEASED generation, not per breaking change."**
+The epoch names a *shipped* pair, so the question is never "does this diff break
+something?" in the abstract but **"can a peer at the current epoch already exist
+in the field?"** If the current epoch has NOT been published yet, a breaking
+change joins that still-unreleased generation and needs no second bump; both
+artifacts are built from the tree that already carries it, so no admissible
+mismatched pair can be constructed. If it HAS been published, the same change
+needs its own triple.
+
+Check it, don't assume it — the current epoch is a working-tree value and says
+nothing about what shipped:
+
+```
+git show <published-upstream>:packages/shared/src/desktop-server-api-epoch.ts \
+  | grep 'DESKTOP_SERVER_API_EPOCH ='
+```
+
+plus the same question for artifacts built outside that upstream (a packaged
+desktop or a server bundle handed to anyone from a local tree). A local
+single-tree dogfood build does NOT count: it carries both sides and has zero skew
+by construction (§4.2). If either check finds the current epoch in the wild, fall
+back to the rules below.
+
 - **Do NOT bump** for additive, old-side-safe changes: new optional DTO
   field, new endpoint, new optional event field old clients ignore safely.
 - **MUST bump — as an atomic triple** for breaking changes (removing/renaming
-  a required field; changing a discriminant, nullability, pagination/cursor
+  a required field; **adding a REQUIRED response field, or a new endpoint the new
+  client hard-depends on**, once the current epoch is released — a new desktop
+  would then read `undefined` / 404 deep inside a feature instead of being
+  refused at admission, which is exactly the failure mode plan A exists to
+  prevent; changing a discriminant, nullability, pagination/cursor
   semantics, permission semantics old clients would misinterpret; changing
   event ordering guarantees). In the SAME commit as the breaking change set
   ALL THREE constants to the same new value:

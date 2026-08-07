@@ -24,6 +24,8 @@ import { SavedMessageRepo } from './repos/saved-message-repo.js';
 import { SearchRepo } from './repos/search-repo.js';
 import { ConversationReadRepo } from './repos/conversation-read-repo.js';
 import { ChannelAttentionPreferenceRepo } from './repos/channel-attention-preference-repo.js';
+import { WorkspaceAttentionPreferenceRepo } from './repos/workspace-attention-preference-repo.js';
+import { AttentionBadgeRepo } from './repos/attention-badge-repo.js';
 import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
 import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { ConversationRepo } from './repos/conversation-repo.js';
@@ -379,6 +381,8 @@ export function createApiRouter(
   const notifications = new NotificationRepo(ctx.db);
   const conversationReads = new ConversationReadRepo(ctx.db);
   const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(ctx.db);
+  const workspaceAttentionPrefs = new WorkspaceAttentionPreferenceRepo(ctx.db);
+  const attentionBadges = new AttentionBadgeRepo(ctx.db);
   const conversationEvents = new ConversationEventRepo(ctx.db);
   const sort = new SortRepo(ctx.db);
   const users = new UserRepo(ctx.db);
@@ -563,17 +567,21 @@ export function createApiRouter(
     }),
   );
 
-  // Attention bounded context (#task:1227): per-(viewer, channel) ambient
-  // preference (GET/PUT). The Activity list query mounts here once ②c lands.
+  // Attention bounded context (#task:1227): the channel ambient TIER and the
+  // workspace mute SUPPRESSOR (GET/PUT each, #task:1870), the tiered badge read
+  // faces, the Activity list query, and the `observe` eliminate primitive.
   app.route(
     '/',
     createAttentionApp({
       ctx,
       conversations,
       messages,
+      workspaces,
       conversationReads,
       notifications,
       channelAttentionPrefs,
+      workspaceAttentionPrefs,
+      attentionBadges,
     }),
   );
 
@@ -635,7 +643,7 @@ export function createApiRouter(
   app.route('/', createPresenceApp({ ctx, users }));
 
   // Viewer notification routes.
-  app.route('/', createNotificationsApp({ ctx, notifications }));
+  app.route('/', createNotificationsApp({ ctx, notifications, attentionBadges }));
 
   // Human-facing task board routes.
   app.route('/', createTasksApp({ ctx }));

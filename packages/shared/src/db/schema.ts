@@ -587,16 +587,41 @@ export interface ConversationReadRow {
   read_at: number;
 }
 
-/** Per-(viewer, channel) ambient attention preference (#task:1227,
- *  docs/activity-lifecycle-v1.md §9.1). The Attention bounded context's ONLY
- *  owned write-side aggregate. `mode` 'all' = ambient on, 'mentions' = ambient
- *  off; absence of a row = default `'all'`. Regular channel only (a DM's
- *  unread is directed-grade and a thread's ambient is follow-driven, so neither
- *  carries this preference). */
+/** Per-(viewer, channel) attention mode (#task:1227 / #task:1870,
+ *  docs/activity-lifecycle-v1.md §9.1). One of the Attention bounded context's
+ *  TWO owned write-side aggregates (the other is
+ *  {@link WorkspaceAttentionPreferenceRow}). `mode` 'all' = ambient on,
+ *  'mentions' = ambient off with the positional residue still hinted, 'mute' =
+ *  ambient off and the positional hint suppressed too (directed @me is never
+ *  suppressed); absence of a row = default `'all'`. The value set's wire
+ *  authority is `CHANNEL_ATTENTION_MODES` (api/attention.ts) and its storage
+ *  authority is this table's CHECK — the union below is kept literal only to keep
+ *  db/ a leaf module. Regular channel only (a DM's unread is directed-grade and a
+ *  thread's ambient is follow-driven, so neither carries this preference). */
 export interface ChannelAttentionPreferenceRow {
   user_id: string;
   conversation_id: string;
-  mode: 'all' | 'mentions';
+  mode: 'all' | 'mentions' | 'mute';
+  updated_at: number;
+}
+
+/** Per-(viewer, workspace) attention mute SUPPRESSOR (#task:1870) — the second
+ *  Attention-owned write-side aggregate. Deliberately isomorphic to
+ *  {@link ChannelAttentionPreferenceRow} (own table, own PK, own `updated_at`)
+ *  rather than a column on `workspace_users`: it is a viewer's ATTENTION
+ *  decision, not membership state, and hanging it off membership would tie its
+ *  lifecycle to a row that is also written by governance.
+ *
+ *  A boolean, not a third tier: it sits ABOVE the channel tier and suppresses,
+ *  so un-muting the workspace restores every channel's own stored mode
+ *  unchanged. Absence of a row = not muted ⇒ no migration and no backfill.
+ *  Regular workspace only (enforced by trigger, mirroring the channel table's
+ *  `channel_only` guard). */
+export interface WorkspaceAttentionPreferenceRow {
+  user_id: string;
+  workspace_id: string;
+  /** SQLite INTEGER 0/1. */
+  muted: number;
   updated_at: number;
 }
 

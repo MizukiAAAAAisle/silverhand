@@ -330,6 +330,11 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
     reason:
       'cross-workspace archived restore index, server membership-filtered; already invalidated on workspace_channels_changed / snapshot_required and re-read',
   },
+  attention: {
+    verdicts: ['refetch-authoritative'],
+    reason:
+      "['attention','badges'] roll-up + ['attention','modes', wsId] tier batch (#task:1870) — both are server membership-filtered (each JOINs conversation_users) and neither is patchable here: the badge is an absolute per-workspace number this client cannot recompute, and the batch's rows are the server's tier resolution. Settled by invalidate-and-re-read on workspace_channels_changed / snapshot_required — a membership change deliberately emits NO attention_badge_updated frame",
+  },
   'backend-info': { verdicts: ['exempt'], reason: 'backend build info; no conversation axis' },
   'channel-detail': { verdicts: ['swept'], reason: "['channel-detail', cid] → position 1" },
   channels: {
@@ -339,7 +344,7 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<
   },
   conversation: {
     verdicts: ['swept'],
-    reason: "['conversation', cid, …] — per-stream unread, attention preference → position 1",
+    reason: "['conversation', cid, …] — per-stream unread → position 1",
   },
   'conversation-members': {
     verdicts: ['swept'],

@@ -32,6 +32,8 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 10. **read ⊥ triage**(§11):v1 只 read(source-routed);triage(done/snooze/archive)是唯一可被 Activity 拥有的 durable state,**仅 v2**,且命名为 triage 不叫 read。
 11. **surfaced ≠ eliminated**(§5.3.1):anchored directed claim(`mention_self`)的 `read_at` 只能由 **active eliminate intent** 写,**绝不由 passive surface(toast render/auto-hide、conversation focus)写**。passive 写 = 凭空消除(#task:1243 根因)。
 12. **Activity section 右侧 = 复用 chat 的完整 `ChannelView`/`ThreadPanel`,不复制**(§13.7,#1394):Activity 是 NavRail 顶层 rail(非 chat-sidebar 快捷版);唯一 selection SoT = `(workspace, channel, optional thread)`,workspace 从 conversation 派生。「无条件自动同步」= 单一组件权威的结构保证;需在 Activity 单独补一遍某能力 = 结构没改对。
+13. **三档 = 一个 badge 的三级响度,不是三种 eligibility**(§6/§8,#task:1870):`所有消息 / 仅提及 / 静音` 只调 workspace badge 里 ambient 项的权重,`enter()` 的 ambient 判据仍是二值(effective 档 == `所有消息`),directed 永远压过一切。**workspace `静音` 是档位之上的独立 boolean 抑制器**,只在读时折叠成 `effective_mode`,**绝不回写各 channel 的 stored 档** —— 取消静音因此无损、上线无 backfill。
+14. **badge 是 membership-scoped 投影 ⇒ 成员边是它的第四类变更源**(§8/§10,#task:1870):响度变化由三个推送型事件带绝对值送达,**成员边变化不发 badge 帧**,由客户端在既有领域事实(`workspace_channels_changed` / `viewer_workspaces_changed` / `snapshot_required`)上重取。客户端**不会随时间、也不会因 window focus 主动重取**这份 badge(全局 `staleTime: 5s` 只在挂载 / 失效时参与新鲜度判定,`refetchOnWindowFocus: false`,且这是一个 App 生命周期内常驻的 query),所以**漏一类 = 一直错到 remount / 重连 / 另一个失效触发器**,不是短暂不同步。
 
 ---
 
@@ -48,8 +50,12 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 | 多显眼 / 排序权重 | **salience** | 内部 | 派生不落字段(§5.2) |
 | 消除原语 | **`observe(source_ref, position)`** | 内部 | §5.3 |
 | 来源引用 | **source_ref** | 内部 | 标识产生该 claim 的源聚合 + 位置 |
+| channel 自己存的档 | **stored (mode)** | 内部 | `getStoredMode` / `storedChannelModeExpr`;per-channel 控件的读面 |
+| 折叠 workspace 抑制器之后的档 | **effective (mode)** | 内部 | `effective_mode` / `effectiveChannelModeExpr` / `resolveEffectiveAttentionMode`;**`effective` 在本 context 只有这一个意思**(#task:1870) |
+| workspace 级抑制器 | **suppressor** | 内部 | per-(viewer, workspace) boolean,压过该 workspace 全部 stored 档,不改写它们 |
+| workspace 上那个数字 | **badge** | 内部 | 分档加权计数(§8),与 sidebar 的 raw positional 未读是两个口径 |
 
-**硬规:`Attention` / `eligibility` / `claim` / `salience` / `source_ref` 是内部语言,绝不上界面。** 用户只见 **Activity**(列表)+ channel 控件 `所有消息 / 仅提及` + thread `Follow / Unfollow`。(Slack 是命名参考,**非规范源**。)
+**硬规:`Attention` / `eligibility` / `claim` / `salience` / `source_ref` 是内部语言,绝不上界面。** 用户只见 **Activity**(列表)+ channel 控件 `所有消息 / 仅提及 / 静音` + workspace `静音` + thread `Follow / Unfollow`。(Slack 是命名参考,**非规范源**。)
 
 ---
 
@@ -64,7 +70,7 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 
 | 层 | 谁 | 拥有 |
 |---|---|---|
-| **写侧源 context** | Messaging / ConversationReads(per-stream cursor)· Notifications(`read_at`)· Tasks(`task_status` / `task_assignee_*`,存于 `messages`)· **新** ChannelAttentionPreference | **真实 read/决定状态** |
+| **写侧源 context** | Messaging / ConversationReads(per-stream cursor)· Notifications(`read_at`)· Tasks(`task_status` / `task_assignee_*`,存于 `messages`)· **新** ChannelAttentionPreference + WorkspaceAttentionPreference | **真实 read/决定状态** |
 | **读侧 Attention context** | `application/` 读模型 + use cases | **零自有 read 状态**;只投影 + 编排 source-routed 写 |
 
 ### 4.2 建表准入测试(Norman 结晶,canonical)
@@ -116,7 +122,8 @@ shiki 提问:Activity 是不是一个独立 DDD 领域事件,有自己的读和�
 
 - **salience(权重/排序)是派生,不落字段**:从 (来源 kind + event kind + recency) 算(DM/mention 天生高、follow 中)。
 - **delivery ⊥ attention(硬不变量)**:attention 可**读** `thread_followers` 当 ambient 的 `subscribed` 预置(**necessary not sufficient**——followed 只是 thread ambient 进 Activity 的前置,ambient 还需父 channel pref==`all`,§6 aggregate-floor);**绝不回写** delivery/wake/drain。决定性反例:human 在 Activity 侧调偏好,绝不能改 agent wake。
-- v1 唯一会**写** attention state 的用户表面 = channel `所有消息 / 仅提及` → 只写 `ChannelAttentionPreference`,绝不碰 `thread_followers`。thread `Follow/Unfollow` 写的是 **delivery**,被 `enter()` 读作 ambient 的 `subscribed` 预置(necessary not sufficient;不单独决定 Activity)。
+- v1 会**写** attention state 的用户表面 = channel 三档 `所有消息 / 仅提及 / 静音` → 写 `ChannelAttentionPreference`,与 workspace `静音` → 写 `WorkspaceAttentionPreference`(#task:1870);两者都绝不碰 `thread_followers`。thread `Follow/Unfollow` 写的是 **delivery**,被 `enter()` 读作 ambient 的 `subscribed` 预置(necessary not sufficient;不单独决定 Activity)。
+- **`静音` 不是 eligibility 开关(#task:1870)**:它把 channel 调到最低响度,但**不切断定向残余** —— 静音 channel 里 @我那条仍进 Activity、仍计入 workspace badge。**静音了 channel 的人,没有静音那个点名你的人。** 同理,human 侧任何档位组合(channel `静音` ∧ workspace `静音`)都**不影响 agent 的投递与唤醒**——这是本节硬不变量的最强形态,回归见 `backend/tests/routes/attention-badge.test.ts`「delivery ⊥ attention (§5.2)」。
 
 ### 5.3 消除 —— source-routed `observe()`
 
@@ -166,6 +173,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND subscribed(item, m
 - **`ambient`**(我订阅的流里、没直接点我的未读)→ **仅当 `subscribed(item, me)` AND 该聚合 `ambientPref == on` 才进**。
 - **`subscribed`**(delivery 预置):channel 主线 = 我是成员;thread = 我 `followed` 该 cluster;非 followed thread → 不进(留就地提示:Threads list 弱 dot / channel 内)。
 - **`ambientPref` = channel-like 聚合的地板(aggregate-floor,#task:1268):** channel 主线**与其下所有 thread 共享父 channel 的** `ChannelAttentionPreference`。channel → on(默认 `所有消息`;#task:1248 起,旧默认 `仅提及`/off),用户显式设 `仅提及` 才 off。**关键:followed thread 的 ambient 不再由 follow 单方顶成 on——它需 `followed` AND 父 channel pref==on。** follow 是 **delivery 决定**,绝不在 Activity 这个 attention 表面反向覆盖用户显式的 attention 决定(`仅提及`)(§5.2 `delivery ⊥ attention`);follow 仍管 delivery(你照样收/可 pull 该 thread),只是不再强行进 Activity ambient。thread 里 @我经 directed 路径进,`仅提及` channel 里仍亮。**默认值在读时算、不落库**:无显式 `ChannelAttentionPreference` row 的 channel/其 thread 一律取 `所有消息`,无需 migration、无需给存量用户写 row。
+- **三档接入不改这个函数的形状(#task:1870):** `ambientPref(parentChannel) == on` 精确读作 **`effective_mode(parentChannel, viewer) == 所有消息`**,其中 `effective_mode = workspace 抑制器 ? 静音 : stored_mode`。`仅提及` 与 `静音` 在 `enter()` 眼里**同为 off** —— 它们的区别只在 badge 的响度(§8),不在能不能进 Activity。这正是「三档 = 三级响度、不是三种 eligibility」的机械形态:**新增一档只改权重表,永远不给 `enter()` 加分支。**
 
 每加一个表面只填参数,不加特例。
 
@@ -192,6 +200,22 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND subscribed(item, m
 
 **worked edge(两不变量同时成立):** 某 thread 唯一未读 = 一条 @我@10 → sidebar badge = **1**(确实有一条没读)、Activity = **1 条 directed 行 + ambient 行不存在**(`positional\directed = 0`,无双重计数)。那条事在 Activity 里只出现一次、同时 channel 仍被 badge 标记。两头都对。
 
+**第三个面:workspace badge(#task:1870)。** channel 三档上线后,workspace 那颗数字答的是第三个问题 ——「这个 workspace 里有多少件**按我设的响度**该吵我的事?」:
+
+```
+badge(workspace, viewer) = Σ_{effective==所有消息} raw positional unread
+                         + Σ_{effective∈{仅提及,静音}} effective directed claim
+```
+
+- **两项按 effective 档**分区,故 loud channel 里的 @我**只算一次**(它已在第一项的 raw 计数里,第二项只覆盖第一项跳过的会话)。
+- **第二项的计数单位是「有效定向诉求」,不是 notification 行**。一条 `mention_self` 行本身不是一个诉求;诉求 = 四个合取项:未读 `mention_self` **∧** 有锚(所指 message 仍存在)**∧** 锚的 `seq` 高于 viewer 在**该 message 自己那条流**上的 cursor(§7.2 的「cursor 越过 ⇒ directed 也消」,`read_at` 不是第二权威)**∧** **per-message 至多一个**(同一 message 的多条 notification 行是一个诉求)。数行会让「badge 亮着但 Activity 空」和「一条 mention 值 2」都可达 —— 那是同一个问题被两张脸各答一半。
+  **故它只定义一次**:`backend/src/repos/directed-claim-predicate.ts`。**Activity 列表 / workspace badge / per-channel `directed_unread_count` 三张脸原样内插它**,第四个合取项按脸形状表达(计数脸 `COUNT(DISTINCT n.message_id)`、建项脸按 `message_id` 键 Map),但**键必须相同**。谁复制半条规则,谁就制造一个数字不同的第二权威。
+- **静音仍留定向残余**(第二项包含 `静音`):§5.2 的「静音 channel 不等于静音那个人」在算术上的形态。
+- `mention_external` 与无锚的 `agent_start_failed` **不进** badge —— 前者不是本 workspace 的定向诉求,后者无 seq、其消除口另在 §5.3.1。两者都落在上面那条谓词之外**是构造性的**,不靠 badge 侧再补一句排除。
+- **fail-closed 靠共享片段继承**:两项都套 `ROLLUP_UNREAD` / `liveConversationPredicate`,不各自重述 liveness,所以归档、退群不可能从任一项漏出去。
+- **两项都以 membership 为定义域**(都 `JOIN conversation_users`):故 badge 有**两类**自变量 —— 响度(档位)与**成员边**。后者是第四类变更源,见 §10。
+- **原始 positional 口径一个字不改**(sidebar badge、`unread_updated.workspace_unread_count`、`FavoriteRowDto.unread_count`):badge 是**同一 membership 的第二张脸**,不是替换。这也是为什么它走**自己的** `attention_badge_updated` 事件而不去重定义 `unread_updated`(§10)。
+
 ---
 
 ## 9. 数据模型 / API 面
@@ -199,21 +223,31 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND subscribed(item, m
 ### 9.1 写侧聚合
 
 - **不变**:`conversation_reads`(per-stream cursor,`#1226` v51)· `conversation_stream_heads` · `notifications`(`read_at`)。（`messages.task_*` 不再是 Attention 源 —— task 不进 v1 Activity,§5.1。）
-- **唯一新增写侧聚合 = `ChannelAttentionPreference`**(per viewer × channel 的 ambient 档:`所有消息 / 仅提及`)。它是 `enter()` 的 policy 输入,**不是 activity item、不被消除**。是「决定」→ 合法自有表(§4.2)。新增 migration(append-only)。
+- **Attention 恰好拥有两个写侧聚合,都是 per-viewer 的「决定」(§4.2),都不是 activity item、都不被消除:**
+  - **`ChannelAttentionPreference`**(per viewer × channel 的 ambient 档:`所有消息 / 仅提及 / 静音`)。`enter()` 的 policy 输入 + badge 的权重输入。
+  - **`WorkspaceAttentionPreference`**(per viewer × workspace 的 boolean 抑制器,#task:1870)。**不是第四档**:它压过该 workspace 全部 channel 档,但只在读时折叠(`effective_mode`),**不改写任何 stored 档** —— 故上线零 backfill、取消静音精确还原每个 channel 自己选的档。仅 `regular` workspace 可有此行(`agent_home` 是 DM,其未读是 directed-grade;DB trigger 兜底)。
+  - 两者均为新增 migration(append-only)。
+
+  第三档 `静音` 落在 `ChannelAttentionPreference.mode` 的 CHECK 里,不新开表 —— 它是同一个决定的第三个取值,不是新概念。
 
 ### 9.2 读侧:Attention context(`application/` + read-model)
 
 沿用 `docs/use-case-layer-p0-spec.md` 三层。Attention 零自有 read 存储,只投影 + 编排:
 
-- **`listActivity(viewer, scope)`** — query use case。union(positional unread via cursor read-model ∩ `enter()`)+(directed via notifications 投影:mention_self / agent_start_failed),per-(viewer,message) 去重(§7),salience 排序(§5.2)。返回纯 DTO。**task 不在 union 内(v1 移除,§5.1)。**
+- **`listActivity(viewer, scope)`** — query use case。union(positional unread via cursor read-model ∩ `enter()`)+(directed via notifications 投影:mention_self / agent_start_failed),per-(viewer,message) 去重(§7),salience 排序(§5.2)。返回纯 DTO。**task 不在 union 内(v1 移除,§5.1)。** directed 那半边**不自己判定**:内插 §8 那条有效定向诉求谓词(`repos/directed-claim-predicate.ts`),`agent_start_failed` 因无锚只能靠 `read_at` 消除,是显式的第二个分支。
 - **`observe(viewer, source_ref, position)`** — 消除 use case。source-routed(§5.3):stream→advance cursor、mention/agent_fail→置 `notifications.read_at`。（v2 若 task 回归 = notification-backed `task_needs_review`,同样 read-cleared、走 `notifications.read_at` —— 即也经此原语,不是 resolve-cleared、不走 `task_status`。）
-- **`setChannelAttentionPref(viewer, channel, mode)`** — 写 `ChannelAttentionPreference`,**只此一处**写 attention state。
+- **`setChannelAttentionPref(viewer, channel, mode)`** — 写 `ChannelAttentionPreference`。
+- **`setWorkspaceAttentionPref(viewer, workspace, muted)`** — 写 `WorkspaceAttentionPreference`。**这两处是写 attention state 的全部**(#task:1870;原文的「只此一处」已随抑制器落地失效)。
+- **badge 投影(`AttentionBadgeRepo`)** — §8 那条算术的唯一实现。它有三张脸(roll-up endpoint、per-workspace 热路径、事件 payload),**同一份 SQL,不允许任何一张脸自己再算一遍**;**也不允许第四张** —— 别的 read-model(如 favorites)不得再捎一份同一数字,那会是一个没人刷新的第二载体(#task:1875)。`GET /api/attention/modes` 每行捎的 `directed_unread_count` 是**同一诉求谓词的解释性投影**(解释这一行为什么还在贡献 badge),不是第二个 badge 源。
 
 ### 9.3 endpoint(具名,实现期定路径)
 
 - `GET /api/activity?scope=…` → `ListActivityDto`(items[] + 分页 + salience 序)。
 - `POST …/observe`(或复用既有 `mark-read` / notification read 路由,由 `observe()` 收口)—— **不新建 `activity.read` 写表**。
-- `PUT …/channel-attention-pref`。
+- `PUT /api/conversations/:id/attention-preference` —— channel 自己的 **stored** 档,**只有写面**。stored 档的读面**只有**下面那个批量 tier 读面(它同时带 `mode` 与 `effective_mode`);per-channel GET 已退役(#task:1876)—— 同一事实两个读面,迟早有一个面绕过批量读拿到一行 stored 档再与 `effective_mode` 打架。**写是 per-channel 的,因为决定是 per-channel 的**。
+- `GET|PUT /api/workspaces/:id/attention-preference` —— workspace 抑制器(#task:1870)。
+- `GET /api/attention/modes?workspace_id=` —— 一个 workspace 里全部 channel 的 `mode` + `effective_mode` 加 workspace `muted`,**批量一次**:控件是成组渲染的,per-channel GET 会把「为什么它灰着」变成 N 次往返。
+- `GET /api/attention/badges` —— 全 workspace badge 冷启动 roll-up;**0 的 workspace 缺席**(absent ≡ 0),payload 只与「真的在吵」成正比。它另捎一个与 `by_workspace` **平级**的 `muted_workspace_ids: string[]`(#task:1877,rail 上的淡 muted icon 用它;absent ≡ 未静音):**不能挂进 `by_workspace`** —— 那张 map 以「badge 非 0」为键,而静音的 workspace 通常正好是 0、根本没有条目可挂,塞 0 进去会毁掉「keys ≡ 哪些在亮」这条语义。它也**不是第二个状态源**:静音仍只由抑制器行裁定,这里只是把它投到同一份 roll-up 上 ⇒ **workspace 级 `attention_pref_changed` 必须同时失效这张读面**(静音一个 0 徽章的 workspace 不改变任何数字 ⇒ 不会有 badge 帧可发,漏这次失效图标就永远不出现)。**两个成员都按 viewer 当前 membership 收口**:抑制器行只 FK 到 `users` / `workspaces`,把人移出 workspace 只删 `workspace_users`(与该 workspace 的 `conversation_users`)、**故意保留** pref 行 —— re-join 时既有静音决定自然恢复。所以「当前可见」这层收口发生在**读投影**(mute 投影自己 join `workspace_users`),不靠删除级联;单 workspace 那两张脸(`GET /api/attention/modes`、抑制器 GET)带 workspace id、已在路由被 `canViewWorkspace` 收口,跨 workspace 这张不带 id,谓词只能长在查询里。
 
 > CLI 若涉及(`packages/cli` 暂无 activity 命令)须同步 `docs/cli-system.md` + 平台 prompt(CLAUDE.md 纪律)。v1 预计纯 renderer↔backend,无 agent CLI 面。
 
@@ -230,7 +264,14 @@ Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛�
 
 - **message event** 可更新 reply_count / repliers 这类**可乐观维护**的事实,**绝不直接改 Activity unread**(§1 铁律)。
 - 客户端**不靠 message event 猜 unread**、不扫一堆 conversation cache 拼全局 Activity:读 `listActivity` 这一处 server-scored 投影。
-- **channel attention pref(`所有消息 / 仅提及`)写入后** client-driven 失效 `['activity']`(pref 是 `enter()` 的输入,切换即影响该 channel 的 ambient item 进/出);PUT route **不发** `unread_updated`(sidebar roll-up pref-independent,§8)。
+- **channel / workspace attention pref 写入后**(#task:1870,取代原「PUT 不发任何 server event」的写法):PUT 发**两个 viewer-scoped frame,各司其职、互不替代** ——
+  - **`attention_pref_changed`** = **纯身份**(`{workspace_id, conversation_id}`,workspace 级写时 `conversation_id: null`)。它失效那些「以 pref 为函数」的读面(Activity 列表、`GET /api/attention/modes`)。**payload 里绝不带新档位** —— 带了,事件就成了那些读面自己拥有的状态的第二权威。
+  - **`attention_badge_updated`** = **绝对值**(`{workspace_id, badge_count}`)。因为客户端持有这份 badge 且**不会随时间或 window focus 自己重取**(全局 `staleTime: 5s` + `refetchOnWindowFocus: false`,常驻 query),**漏一帧会一直错到 remount / 重连 / 另一个失效触发器**,不是短暂错。
+  - badge 的变更源分**两类,共四种**,少一种就是永久错数字:
+    - **推送型(服务端主动发绝对值)三种**:① 消息/未读变动(与 `unread_updated` 同一 seam 共发,顺序上 `mention_self` 行必须先于 badge 计算落库);② pref 写入;③ 定向 notification 被读掉 —— 后两者**都不移动任何 cursor**,没有一个 `unread_updated` 会顺带捎上它们。
+    - **重取型(客户端自行失效)第四种 = membership 边**:badge 两项都 `JOIN conversation_users`(§8),所以退群 / 被移出 / 重新加入会改变**定义域**而非响度 —— 退群那一刻 badge 应当下降,重新入群则可能把保留下来的定向 notification 重新纳入。**`added` 这一侧不能用「新 workspace 的 badge 必为 0 ⇒ 缺席即正确」打折**:#task:1877 起同一份 roll-up 还捎着 `muted_workspace_ids`,而抑制器行**故意比 membership 活得久** ⇒ re-join 会在数字仍为 0 的情况下让一个 id 重新出现,漏失效则 rail 的 muted icon 不恢复。这里**故意不造专用 backend 事件**(§12:一个领域事实,viewer-local 消费者自行收敛):已有的领域事实就是 channel 边的 **`workspace_channels_changed`**(`workspace:<wid>` scope,add / self-join / self-leave / 第三方移除四条写路径都发,且退出 channel 不会失去 workspace scope ⇒ 当事人收得到)与 workspace 边的 **`viewer_workspaces_changed`**(`viewer:<uid>` scope)。
+    - **renderer 接缝(@Norman)**:在 `workspace_channels_changed`、`viewer_workspaces_changed` 以及 viewer/workspace scope 的 `snapshot_required` 上失效并重取 `['attention','badges']` 与 `['attention','modes',<wid>]`;**不要**等一帧 `attention_badge_updated`,它在成员边变化时不发。多失效是安全的(一次重取),漏失效是永久错数字。**`['favorites']` 不在这条清单里**:favorites 行不带 badge(#task:1875),它自己的 membership 与 `unread_count` 由既有的 removal / list 契约负责。
+  - **原始 positional roll-up 仍然 pref-independent(§8)**:PUT **依旧不发** `unread_updated`。badge 骑自己的事件,正是为了不去动那个口径。
 
 ---
 
@@ -280,9 +321,10 @@ Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛�
 
 ### 13.3 控件表面(write controls — 在哪设置)
 
-- **channel `所有消息 / 仅提及`** = **v1 唯一会写 attention state 的表面** → 只写 `ChannelAttentionPreference`(§9.1)。`所有消息` = ambient on、`仅提及` = ambient off(但 @我 经 directed **永远进**、不受此开关管,§6)。内部模型 = 一个 ambient on/off,用户措辞 = 所有消息 / 仅提及(弃用内部词)。**位置:sidebar channel context menu only(仅 `kind==='channel'`,DM/thread 不显示;v1 不再常占 header,也不进 channel settings modal)** —— 它是 **per-viewer 个人 view-state**,不是 channel 级共享配置,放进 settings modal 会被误读成对所有成员生效(shiki/Cindy/Alice 2026-06-26 收敛);settings/gear 仍只承载 rename/archive 等共享配置。**`静音` / Mute = v2**(§15)。
+- **channel `所有消息 / 仅提及 / 静音`** = 写 attention state 的表面之一 → 只写 `ChannelAttentionPreference`(§9.1)。`所有消息` = ambient on、`仅提及` / `静音` = ambient off(但 @我 经 directed **永远进**、不受此开关管,§6);两者的差别在 workspace badge 的响度(§8),不在 eligibility。内部模型 = 一个三值档,用户措辞 = 所有消息 / 仅提及 / 静音(弃用内部词)。**位置:sidebar channel context menu only(仅 `kind==='channel'`,DM/thread 不显示;v1 不再常占 header,也不进 channel settings modal)** —— 它是 **per-viewer 个人 view-state**,不是 channel 级共享配置,放进 settings modal 会被误读成对所有成员生效(shiki/Cindy/Alice 2026-06-26 收敛);settings/gear 仍只承载 rename/archive 等共享配置。
+- **workspace `静音`** = 第二个 attention-write 表面(#task:1870)→ 只写 `WorkspaceAttentionPreference`。它**不改写**任何 channel 的档,只在读时折叠成 `effective_mode`;被它压住的 channel 控件应显示自己的 stored 档并解释「被 workspace 静音」,而不是假装用户选了 `静音`。呈现由 @Norman 定。
 - **thread `Follow / Unfollow`** = 写 **delivery**(§5.2),**非 attention**;它是 ambient 进 Activity 的 `subscribed` 预置(**necessary not sufficient**——followed thread 的 ambient 还需父 channel pref==`所有消息`,§6 aggregate-floor),follow 本身不单独决定 Activity。v1 二态(镜像 Slack)。**不做**「从 Activity 隐藏」第二控件(attention-only override = v2)。
-- **边界**:attention-write 表面 = channel pref only;follow = delivery-write;**互不写对方**(§5.2 硬不变量)。
+- **边界**:attention-write 表面 = channel 档 + workspace 抑制器;follow = delivery-write;**互不写对方**(§5.2 硬不变量)。
 
 ### 13.4 观察保真度(read-cleared 的「真看到了」)
 
@@ -295,8 +337,8 @@ Activity 是 **viewer-scoped read-model**,所以它的失效信号统一收敛�
 
 ### 13.5 命名 / 对外用词(§3)
 
-- **对外只露**:**Activity** · **所有消息 / 仅提及** · **Follow / Unfollow** · **Mark as read**(read-driven,**不叫 Done**)。
-- **内部、绝不上界面**:Attention · eligibility / `enter()` · salience · claim · `observe` / source_ref · `ChannelAttentionPreference`。
+- **对外只露**:**Activity** · **所有消息 / 仅提及 / 静音** · **Follow / Unfollow** · **Mark as read**(read-driven,**不叫 Done**)。
+- **内部、绝不上界面**:Attention · eligibility / `enter()` · salience · claim · `observe` / source_ref · `ChannelAttentionPreference` / `WorkspaceAttentionPreference` · stored / effective mode · suppressor。
 
 ### 13.6 实现序(见 §12)
 
@@ -329,7 +371,8 @@ Cindy 的 5 条硬标准 = 本 doc 的逐条验收:
 
 ## 15. Out of scope / 证伪点
 
-- **v2:** triage(done/snooze/archive)、channel 第三档 `静音`(应做成更宽的 conversation presentation / notification suppression,不为 Activity 强塞第三档 eligibility)、per-item `IntersectionObserver` 保真度。
+- **v2:** triage(done/snooze/archive)、per-item `IntersectionObserver` 保真度。
+- **已出 scope(#task:1870,2026-08 落地):** channel 第三档 `静音` + workspace `静音`。原文把它列为 v2 并要求「做成更宽的 conversation presentation / notification suppression,不为 Activity 强塞第三档 eligibility」—— **那个约束被遵守了,不是被推翻:** 落地形态恰恰**没有**给 `enter()` 加第三种 eligibility,而是把三档变成同一个 workspace badge 的三级响度(§8),`enter()` 的 ambient 判据仍是二值(§6)。
 - **证伪点(诚实标注):** 唯一会推翻「投影优先」的是 **fan-out 规模** —— 若哪天要给海量 viewer 预算 feed、实时投影算不动,才考虑 materialize per-user feed 并吃那个一致性代价。现在单 SQLite / 单 workspace,投影便宜,**不付这个代价**。规模到了再 revisit(届时仍按 §4.3:物化为可重建读模型,非权威 aggregate)。
 - **Slack 是命名/形态参考,不是规范源。**
 

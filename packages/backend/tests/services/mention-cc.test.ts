@@ -428,8 +428,15 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
       );
 
       const viewerEvents = t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch'));
+      // `unread_updated` and `attention_badge_updated` are ONE fact emitted as
+      // two frames (#task:1870) — the seam that publishes the first always
+      // publishes the second, so the badge can never be left behind by a client
+      // that holds it without refetching. For a `Mentions` DM (an `agent_home`
+      // workspace, which carries neither a channel tier nor the workspace
+      // suppressor) the badge simply equals the positional unread.
       expect(viewerEvents.map(e => e.kind)).toEqual([
         'unread_updated',
+        'attention_badge_updated',
         'notification',
       ]);
       expect(viewerEvents[0]!.payload).toMatchObject({
@@ -437,7 +444,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversation_unread_count: expect.any(Number),
         workspace_unread_count: expect.any(Number),
       });
-      expect(viewerEvents[1]!.payload).toEqual(
+      expect(viewerEvents[2]!.payload).toEqual(
         expect.objectContaining({
           kind: 'mention_external',
           conversation_id: mentionsDm!.id,
@@ -476,8 +483,10 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
       expect(t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch')).map(e => e.kind))
         .toEqual([
           'unread_updated',
+          'attention_badge_updated',
           'notification',
           'unread_updated',
+          'attention_badge_updated',
           'notification',
         ]);
     } finally {
@@ -560,7 +569,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         }),
       ]);
       expect(t.events.replay('viewer:teammate', decodeTransportSeq(0), decodeTransportEpoch('test-epoch')).map(e => e.kind))
-        .toEqual(['unread_updated', 'notification']);
+        .toEqual(['unread_updated', 'attention_badge_updated', 'notification']);
       expect(t.fake.delivered).toHaveLength(0);
       expect(t.logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({

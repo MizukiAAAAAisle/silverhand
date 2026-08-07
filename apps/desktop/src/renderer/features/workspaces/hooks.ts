@@ -28,6 +28,7 @@ import type {
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
 import { favoritesKey } from '@/features/favorites/hooks';
+import { attentionBadgesKey } from '@/features/attention/hooks';
 import {
   recordChannelWorkspace,
   recordChannelWorkspaceRows,
@@ -216,8 +217,20 @@ export interface ViewerSyncFrame {
  *   (replay-gap safety, same as the other viewer consumers).
  * - `viewer_workspaces_changed` event → always `['workspaces']`; for
  *   `role_changed` additionally the workspace's members query (governance
- *   `viewerRole` is sourced there, not from the list).
+ *   `viewerRole` is sourced there, not from the list); for `added` additionally
+ *   the attention badge roll-up (below).
  * - anything else → no invalidation.
+ *
+ * Why `added` reaches the roll-up (#task:1870 / #task:1877, Cindy review): a
+ * workspace the viewer just joined has no unread of their own, so the old reading
+ * was "its badge is necessarily 0, and absent ≡ 0, so the loaded roll-up is
+ * already right". That discount died when the roll-up gained
+ * `muted_workspace_ids`: the mute preference row deliberately OUTLIVES a
+ * membership removal so a re-join restores the viewer's earlier choice, so a
+ * re-join changes the roll-up while every number in it stays 0 — and the rail's
+ * muted marker would stay missing until some unrelated attention event happened
+ * along. `removed` needs nothing here: it is settled by the removal contract's
+ * targeted local purge, which is cheaper than refetching a workspace that is gone.
  *
  * Caller is responsible for the `isCurrentViewerScope(frame.scope)` gate
  * before calling — kept out of the pure fn so it stays dependency-free.
@@ -231,6 +244,9 @@ export function decideViewerSyncInvalidations(
   if (!isViewerWorkspacesChangedPayload(frame.payload)) return [];
   if (frame.payload.change === 'role_changed') {
     return [workspacesKey, membersKey(frame.payload.workspace_id)];
+  }
+  if (frame.payload.change === 'added') {
+    return [workspacesKey, attentionBadgesKey()];
   }
   return [workspacesKey];
 }

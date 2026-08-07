@@ -1,5 +1,9 @@
 import { type ReactNode } from 'react';
-import type { ConversationVisibility } from '@silverhand/shared';
+import {
+  type ChannelAttentionMode,
+  type ChannelAttentionModeRowDto,
+  type ConversationVisibility,
+} from '@silverhand/shared';
 import {
   Archive,
   ArchiveRestore,
@@ -18,7 +22,7 @@ import {
   AppContextMenuSub,
 } from '@/components/menus/AppContextMenu';
 import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
-import { SidebarSectionHeader } from '@/components/layout/sidebar-shared';
+import { SidebarSectionHeader, UnreadBadge } from '@/components/layout/sidebar-shared';
 import { SortModeMenu } from '@/components/layout/SortModeMenu';
 import {
   SortableGroup,
@@ -28,6 +32,8 @@ import {
 } from '@/components/layout/list-drag-sort';
 import { Button } from '@/components/ui/button';
 import { useChannelSortState, useSetSortMode } from '@/features/workspaces/hooks';
+import { useWorkspaceAttentionModes } from '@/features/attention/hooks';
+import { channelRowBadge } from '@/lib/attention-mode';
 import { sortModeOf } from '@/lib/viewer-sort';
 import { partitionHomeChannels } from '@/lib/home-grouping';
 
@@ -108,6 +114,18 @@ export function ChannelsSidebar({
   const { data: viewerSort } = useChannelSortState(workspaceId, workspaceKind);
   const setSortMode = useSetSortMode();
 
+  // ONE batch read of every channel tier in this workspace (#task:1870) — the
+  // badges below need a tier per row, and the right-click menu needs the row's own
+  // stored choice, so a per-channel GET would be both N requests and a second
+  // carrier of the same fact.
+  const { data: attentionModes } = useWorkspaceAttentionModes(workspaceId);
+  const attentionByChannel = new Map(
+    (attentionModes?.channels ?? []).map(c => [c.conversation_id, c]),
+  );
+  // `undefined` until the batch resolves — the third state the row must not
+  // collapse into `false`, or every unresolved row fabricates the loudest tier.
+  const workspaceMuted = attentionModes?.muted;
+
   const listKey = workspaceId ? `channels:${workspaceId}` : null;
   const mode = sortModeOf(viewerSort);
 
@@ -144,6 +162,8 @@ export function ChannelsSidebar({
     archivePending,
     workspaceKind,
     unreadByChannel,
+    attentionByChannel,
+    workspaceMuted,
   };
 
   const renderGroup = (
@@ -241,6 +261,13 @@ interface RowChildProps {
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
   unreadByChannel: Record<string, number>;
+  /** This workspace's channel tiers, keyed by conversation id. Missing key ≡ the
+   *  row has no tier of its own (a `dm_channel`, or the batch hasn't landed). */
+  attentionByChannel: ReadonlyMap<string, ChannelAttentionModeRowDto>;
+  /** The workspace suppressor, `undefined` until the tier batch resolves. Rows keep
+   *  their own stored tier checked while it is on; only the resolved volume
+   *  changes. */
+  workspaceMuted: boolean | undefined;
 }
 
 function ChannelTreeItem({
@@ -252,6 +279,8 @@ function ChannelTreeItem({
   archivePending,
   workspaceKind,
   unreadByChannel,
+  attentionByChannel,
+  workspaceMuted,
 }: { channel: ChannelNode } & RowChildProps): JSX.Element {
   return (
     <li>
@@ -264,6 +293,8 @@ function ChannelTreeItem({
         archivePending={archivePending}
         workspaceKind={workspaceKind}
         unreadCount={unreadByChannel[channel.id] ?? 0}
+        attention={attentionByChannel.get(channel.id)}
+        workspaceMuted={workspaceMuted}
       />
     </li>
   );
@@ -290,6 +321,8 @@ function SortableChannelItem({
   archivePending,
   workspaceKind,
   unreadByChannel,
+  attentionByChannel,
+  workspaceMuted,
 }: { channel: ChannelNode } & RowChildProps): JSX.Element {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } =
     useSortable({ id: channel.id, animateLayoutChanges });
@@ -310,6 +343,8 @@ function SortableChannelItem({
         archivePending={archivePending}
         workspaceKind={workspaceKind}
         unreadCount={unreadByChannel[channel.id] ?? 0}
+        attention={attentionByChannel.get(channel.id)}
+        workspaceMuted={workspaceMuted}
         draggable
       />
     </li>
@@ -325,6 +360,8 @@ function ChannelRow({
   archivePending,
   workspaceKind,
   unreadCount,
+  attention,
+  workspaceMuted,
   draggable,
 }: {
   channel: ChannelNode;
@@ -335,6 +372,11 @@ function ChannelRow({
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind | null;
   unreadCount: number;
+  /** This row's tier from the workspace batch, or `undefined` when it has none —
+   *  see `effectiveMode` below. */
+  attention?: ChannelAttentionModeRowDto;
+  /** The workspace suppressor, `undefined` until the tier batch resolves. */
+  workspaceMuted: boolean | undefined;
   /** Manual mode: show the grab cursor so the row reads as draggable. The
    *  drag listeners live on the parent `<li>`, not here. */
   draggable?: boolean;
@@ -364,6 +406,27 @@ function ChannelRow({
   // Star + attention + archive form the management group; the separator below
   // fences them off from "Copy name" whenever any member action is present.
   const hasManagementMenu = showArchiveMenu || showAttentionMenu;
+
+  // A `dm_channel` carries no tier (the backend 404s it and the batch omits it):
+  // a DM is directed-grade throughout, so it always reads at full volume. For a
+  // real channel the batch row is the ONLY authority — no default is resolved
+  // here, not even once the suppressor is known, because a missing row does not
+  // mean "no stored choice" (the batch COALESCEs that server-side). `undefined`
+  // propagates to the badge, which renders nothing for it.
+  const effectiveMode: ChannelAttentionMode | undefined =
+    channel.kind === 'channel' ? attention?.effective_mode : 'all';
+  // One number per row, and its volume. Non-members have no unread of their own.
+  const badge = isMember
+    ? channelRowBadge({
+        effectiveMode,
+        positionalUnread: unreadCount,
+        directedUnread: attention?.directed_unread_count ?? 0,
+      })
+    : null;
+  // A silenced row says so without being right-clicked — the title drops to the
+  // muted ink. Subtractive on purpose: the row loses emphasis instead of gaining
+  // an icon, and a directed badge still stands out against it.
+  const isSilenced = effectiveMode === 'mute';
 
   const rowBg = selected
     ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
@@ -401,15 +464,18 @@ function ChannelRow({
         />
         <span
           className={
-            'min-w-0 truncate ' + (isClosed ? 'line-through text-text-muted' : '')
+            'min-w-0 truncate ' +
+            (isClosed
+              ? 'line-through text-text-muted'
+              : isSilenced && !selected
+                ? 'text-text-muted'
+                : '')
           }
         >
           {channel.title}
         </span>
-        {isMember && unreadCount > 0 ? (
-          <span data-sidebar-unread className="ml-auto shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent">
-            {unreadCount > 99 ? '99+' : unreadCount}
-          </span>
+        {badge ? (
+          <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
         ) : null}
       </button>
     </div>
@@ -424,11 +490,15 @@ function ChannelRow({
         {isStarred ? 'Unstar' : 'Star'}
       </AppContextMenuItem>
       {/* Per-viewer attention preference — regular channels only (the backend
-          404s dm_channel / thread). Children mount lazily on submenu open, so
-          no GET fires per channel row (#task:1227). */}
+          404s dm_channel / thread). The tier comes from the workspace batch the
+          badges already read, so opening this fires no request of its own. */}
       {showAttentionMenu ? (
-        <AppContextMenuSub icon={<Bell className="size-3.5" />} label="Show in Activity">
-          <ChannelAttentionMenuItems channelId={channel.id} />
+        <AppContextMenuSub icon={<Bell className="size-3.5" />} label="Notifications">
+          <ChannelAttentionMenuItems
+            channelId={channel.id}
+            mode={attention?.mode}
+            workspaceMuted={workspaceMuted}
+          />
         </AppContextMenuSub>
       ) : null}
       {showArchiveMenu ? (

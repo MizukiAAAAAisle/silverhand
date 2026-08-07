@@ -15,6 +15,7 @@ import type { MessageRepo } from '../repos/message-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { publishUnreadUpdatedToConversationViewers } from '../viewer-scope.js';
+import { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
 import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
 
 /**
@@ -188,6 +189,9 @@ interface CreateChannelTxResult {
 
 export class ChannelService {
   private readonly db: Db;
+  /** Stateless wrapper over the same db — the tiered badge (#task:1870) rides
+   *  every `unread_updated` emit, archive/unarchive included. */
+  private readonly attentionBadges: AttentionBadgeRepo;
   private readonly conversations: ConversationRepo;
   private readonly conversationReads: ConversationReadRepo;
   private readonly workspaces: WorkspaceRepo;
@@ -199,6 +203,7 @@ export class ChannelService {
 
   constructor(opts: ChannelServiceOptions) {
     this.db = opts.db;
+    this.attentionBadges = new AttentionBadgeRepo(opts.db);
     this.conversations = opts.conversations;
     this.conversationReads = opts.conversationReads;
     this.workspaces = opts.workspaces;
@@ -508,6 +513,7 @@ export class ChannelService {
     // `viewer:<id>` scope, so no broadcast-invariant risk.
     publishUnreadUpdatedToConversationViewers(
       this.events,
+      this.attentionBadges,
       this.conversations,
       this.conversationReads,
       updated.id,

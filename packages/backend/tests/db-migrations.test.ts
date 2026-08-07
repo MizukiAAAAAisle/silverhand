@@ -2281,4 +2281,192 @@ describe('database migrations', () => {
       }
     });
   });
+
+  describe('v65 attention_mute_tier_and_workspace_suppressor', () => {
+    const now = 1_700_000_000_000;
+
+    // Seed a POPULATED v64 DB — the migration's real input. The `mute` tier
+    // arrives by REBUILDING `channel_attention_preferences` (SQLite cannot ALTER
+    // a CHECK), and a rebuild's two failure modes are invisible to a schema
+    // snapshot: existing rows silently dropped/altered, and triggers not
+    // recreated on the new table. Both are asserted below.
+    function seedV64(db: Database.Database): void {
+      db.exec(`
+        INSERT INTO hosts (id, name, kind, created_at)
+          VALUES ('host_local', 'local', 'local', ${now});
+        INSERT INTO users (id, name, display_name, created_at, updated_at)
+          VALUES
+            ('u_one', 'one', 'One', ${now}, ${now}),
+            ('u_two', 'two', 'Two', ${now}, ${now});
+        INSERT INTO agents
+          (id, name, runtime, host_id, created_by_user_id, created_at, updated_at)
+          VALUES ('agent_home_owner', 'homie', 'claude', 'host_local', 'u_one', ${now}, ${now});
+
+        INSERT INTO workspaces
+          (id, name, description, workspace_kind,
+           owner_agent_id, archived_at, created_at, updated_at, pinned_at, owner_user_id)
+        VALUES
+          ('ws_reg',  'Regular', NULL, 'regular',    NULL, NULL, ${now}, ${now}, NULL, 'u_one'),
+          ('ws_home', 'home',    NULL, 'agent_home', 'agent_home_owner', NULL, ${now}, ${now}, NULL, NULL);
+
+        INSERT INTO conversations
+          (id, workspace_id, kind, title, status, spawned_by_agent_id,
+           closed_at, close_summary, pinned_at, created_at, updated_at,
+           archived_at, latest_message_seq, visibility)
+        VALUES
+          ('c_one', 'ws_reg',  'channel',    'one', 'idle', NULL, NULL, NULL, NULL, ${now}, ${now}, NULL, 0, 'private'),
+          ('c_two', 'ws_reg',  'channel',    'two', 'idle', NULL, NULL, NULL, NULL, ${now}, ${now}, NULL, 0, 'private'),
+          ('c_dm',  'ws_home', 'dm_channel', 'dm',  'idle', NULL, NULL, NULL, NULL, ${now}, ${now}, NULL, 0, 'private');
+
+        -- Both legal v64 tier values, distinct updated_at, and two users on the
+        -- same channel so the composite PK's rows are all observable.
+        INSERT INTO channel_attention_preferences
+          (user_id, conversation_id, mode, updated_at)
+        VALUES
+          ('u_one', 'c_one', 'all',      ${now + 1}),
+          ('u_one', 'c_two', 'mentions', ${now + 2}),
+          ('u_two', 'c_one', 'mentions', ${now + 3});
+      `);
+    }
+
+    it('preserves every stored tier + updated_at, opens the mute tier, and re-arms all four scope triggers', () => {
+      const db = openDbAt(64);
+      try {
+        seedV64(db);
+        // The pre-upgrade state is the v64 contract: 'mute' is NOT yet legal.
+        expect(() =>
+          db.exec(
+            `UPDATE channel_attention_preferences SET mode = 'mute' WHERE conversation_id = 'c_one'`,
+          ),
+        ).toThrow(/CHECK/);
+
+        applyMigrationsThrough(db, 65);
+        expect(
+          db.prepare(`SELECT version FROM _migrations WHERE version = 65`).get(),
+        ).toBeDefined();
+
+        // ── existing rows survive the rebuild BYTE-FOR-BYTE ────────────────
+        // `updated_at` included on purpose: the suppressor is a pure addition
+        // (§6 — no backfill, no re-read), so not one existing row may be
+        // rewritten or re-stamped by this migration.
+        expect(
+          db
+            .prepare(
+              `SELECT user_id, conversation_id, mode, updated_at
+                 FROM channel_attention_preferences
+                ORDER BY user_id, conversation_id`,
+            )
+            .all(),
+        ).toEqual([
+          { user_id: 'u_one', conversation_id: 'c_one', mode: 'all',      updated_at: now + 1 },
+          { user_id: 'u_one', conversation_id: 'c_two', mode: 'mentions', updated_at: now + 2 },
+          { user_id: 'u_two', conversation_id: 'c_one', mode: 'mentions', updated_at: now + 3 },
+        ]);
+
+        // ── the third tier is now writable, and only the three are legal ───
+        db.exec(
+          `UPDATE channel_attention_preferences SET mode = 'mute', updated_at = ${now + 4}
+            WHERE user_id = 'u_one' AND conversation_id = 'c_one'`,
+        );
+        expect(
+          db
+            .prepare<[], { mode: string }>(
+              `SELECT mode FROM channel_attention_preferences
+                WHERE user_id = 'u_one' AND conversation_id = 'c_one'`,
+            )
+            .get()?.mode,
+        ).toBe('mute');
+        expect(() =>
+          db.exec(
+            `INSERT INTO channel_attention_preferences (user_id, conversation_id, mode, updated_at)
+             VALUES ('u_two', 'c_two', 'silent', ${now})`,
+          ),
+        ).toThrow(/CHECK/);
+
+        // ── both channel-only triggers exist ON THE REBUILT TABLE ─────────
+        // A rebuild that forgets to recreate them leaves a table that accepts
+        // meaningless dead state (a pref on a DM), which no fresh-schema
+        // snapshot would notice.
+        expect(() =>
+          db.exec(
+            `INSERT INTO channel_attention_preferences (user_id, conversation_id, mode, updated_at)
+             VALUES ('u_one', 'c_dm', 'mute', ${now})`,
+          ),
+        ).toThrow(/must reference a regular channel/);
+        expect(() =>
+          db.exec(
+            `UPDATE channel_attention_preferences SET conversation_id = 'c_dm'
+              WHERE user_id = 'u_one' AND conversation_id = 'c_two'`,
+          ),
+        ).toThrow(/must reference a regular channel/);
+
+        // ── the rebuilt FK still cascades (declared ≠ wired) ──────────────
+        db.exec(`DELETE FROM conversations WHERE id = 'c_two'`);
+        expect(
+          db
+            .prepare<[], { c: number }>(
+              `SELECT COUNT(*) AS c FROM channel_attention_preferences
+                WHERE conversation_id = 'c_two'`,
+            )
+            .get()?.c,
+        ).toBe(0);
+        expect(db.pragma('foreign_key_check')).toEqual([]);
+
+        // ── the new suppressor table: regular-only on INSERT and UPDATE ───
+        db.exec(
+          `INSERT INTO workspace_attention_preferences (user_id, workspace_id, muted, updated_at)
+           VALUES ('u_one', 'ws_reg', 1, ${now})`,
+        );
+        expect(
+          db
+            .prepare<[], { muted: number }>(
+              `SELECT muted FROM workspace_attention_preferences
+                WHERE user_id = 'u_one' AND workspace_id = 'ws_reg'`,
+            )
+            .get()?.muted,
+        ).toBe(1);
+        // An agent_home workspace hosts DMs, which are directed-grade and have no
+        // ambient tier to suppress — a row there is dead state, so the DB fails
+        // loud rather than storing it.
+        expect(() =>
+          db.exec(
+            `INSERT INTO workspace_attention_preferences (user_id, workspace_id, muted, updated_at)
+             VALUES ('u_one', 'ws_home', 1, ${now})`,
+          ),
+        ).toThrow(/must reference a regular workspace/);
+        expect(() =>
+          db.exec(
+            `UPDATE workspace_attention_preferences SET workspace_id = 'ws_home'
+              WHERE user_id = 'u_one' AND workspace_id = 'ws_reg'`,
+          ),
+        ).toThrow(/must reference a regular workspace/);
+        expect(() =>
+          db.exec(
+            `INSERT INTO workspace_attention_preferences (user_id, workspace_id, muted, updated_at)
+             VALUES ('u_two', 'ws_reg', 2, ${now})`,
+          ),
+        ).toThrow(/CHECK/);
+
+        // ── indexes: the rebuilt table's is reproduced, the new one exists ─
+        expect(
+          db
+            .prepare<[], { name: string }>(
+              `SELECT name FROM sqlite_schema
+                WHERE type = 'index'
+                  AND tbl_name IN ('channel_attention_preferences',
+                                   'workspace_attention_preferences')
+                  AND name NOT LIKE 'sqlite_%'`,
+            )
+            .all()
+            .map(r => r.name)
+            .sort(),
+        ).toEqual([
+          'idx_channel_attention_prefs_conversation',
+          'idx_workspace_attention_prefs_workspace',
+        ]);
+      } finally {
+        db.close();
+      }
+    });
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useViewerWorkspacesSync } from '@/features/workspaces/hooks';
 import { usePresenceSync } from '@/features/presence/hooks';
 import { useAgentSync } from '@/features/agents/agent-sync';
@@ -77,26 +77,20 @@ export function useComposerDraftCleanup(): void {
 }
 
 /**
- * macOS dock badge sync. Sums the per-workspace message-unread summary (which
- * already aggregates `conversation_reads` globally and self-invalidates on
- * viewer-scoped `unread_updated`) into a reactive total. Notification unread
- * (mentions / agent_start_failed) is intentionally excluded — a different
- * concept that would double-count mentions that are also unread messages.
+ * macOS dock badge sync — the app-level face of the viewer's attention badge
+ * roll-up (`AttentionBadgeRollupDto.total`, #task:1870), NOT the raw unread total.
+ * A muted workspace that still bumped the dock would defeat muting, and the
+ * roll-up is the one place the three tiers are already folded in.
+ *
+ * The total arrives pre-summed and is maintained as `Σ by_workspace` by its
+ * carrier, so this does not re-derive it: one fact, one computation. Notification
+ * unread (mentions / agent_start_failed) stays out — a different concept that
+ * would double-count mentions which are also unread messages.
  */
-export function useDockBadge(
-  messageUnreadSummary: { by_workspace: Record<string, number> } | undefined,
-): void {
-  const dockBadgeCount = useMemo(() => {
-    if (!messageUnreadSummary) return 0;
-    let total = 0;
-    for (const n of Object.values(messageUnreadSummary.by_workspace)) {
-      total += n;
-    }
-    return total;
-  }, [messageUnreadSummary]);
+export function useDockBadge(total: number | undefined): void {
   useEffect(() => {
-    void window.silverhand.setBadgeCount(dockBadgeCount);
-  }, [dockBadgeCount]);
+    void window.silverhand.setBadgeCount(total ?? 0);
+  }, [total]);
 }
 
 /**

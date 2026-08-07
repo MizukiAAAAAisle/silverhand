@@ -10,6 +10,7 @@ import {
   type AgentAvatarSource,
 } from '@/features/agents/avatar-hooks';
 import { useFavorites, useUnstarFavorite } from '@/features/favorites/hooks';
+import { useAttentionBadges } from '@/features/attention/hooks';
 import { useSetSortMode } from '@/features/workspaces/hooks';
 import {
   railRowTierClass,
@@ -26,7 +27,7 @@ import {
   useListDragSort,
 } from '@/components/layout/list-drag-sort';
 import { WorkspaceContextMenu } from './WorkspaceContextMenu';
-import { SidebarSection } from './sidebar-shared';
+import { SidebarSection, MutedMarker, UnreadBadge } from './sidebar-shared';
 
 /** The favorites list's own sort namespace. A single FLAT group (`favorites`),
  *  list-wide [recent|manual] toggle — the wire group name must equal the backend
@@ -101,6 +102,12 @@ export function FavoritesGroup(props: {
   );
   const dmAvatarUrls = useAgentAvatarObjectUrls(dmAvatarSources);
 
+  // Badges come from the attention roll-up, resolved ONCE for the section like the
+  // avatars above — never from the favorites row itself: STARRED shows the same
+  // entity as the home rail, so the two must read one carrier or they will
+  // eventually disagree about the same workspace (#task:1870).
+  const { data: attentionBadges } = useAttentionBadges();
+
   // Compose the live order from the favorites `viewer_sort` (recent → home
   // last_accessed_at, manual → rank), reusing the shared drag-sort machine. A
   // single flat group; list-wide mode scope (no `modeScopeOf`), same as the
@@ -147,6 +154,12 @@ export function FavoritesGroup(props: {
                 props.selectedWorkspaceId,
               )}
               dmAvatarUrl={dmAvatarUrls.get(item.entity_id) ?? null}
+              unread={attentionBadges?.by_workspace?.[item.workspace_id] ?? 0}
+              muted={
+                attentionBadges?.muted_workspace_ids?.includes(
+                  item.workspace_id,
+                ) ?? false
+              }
               onSelectWorkspace={props.onSelectWorkspace}
               onUnstar={() => unstar.mutate(item)}
             />
@@ -161,6 +174,12 @@ interface FavoriteRowProps {
   item: FavoriteRowDto;
   tier: RowSelectionTier;
   dmAvatarUrl: string | null;
+  /** This workspace's attention badge from the roll-up. 0 renders nothing. */
+  unread: number;
+  /** Whether the viewer muted this workspace, from the SAME roll-up — STARRED is
+   *  a starred workspace's exclusive home, so it must carry the rail's marker too
+   *  (#task:1870). */
+  muted: boolean;
   onSelectWorkspace: (id: string) => void;
   onUnstar: () => void;
 }
@@ -198,22 +217,22 @@ function FavoriteRow({
   item,
   tier,
   dmAvatarUrl,
+  unread,
+  muted,
   onSelectWorkspace,
   onUnstar,
 }: FavoriteRowProps): JSX.Element {
   const onClick = () => onSelectWorkspace(item.workspace_id);
 
   const isPrimary = tier === 'primary';
-  // Unread badge (#task:1254): STARRED is the EXCLUSIVE home for a starred
-  // workspace/DM, so it must carry the unread signal the home group used to. The
-  // count is server-filled on the cross-workspace read-model
-  // (`FavoriteRowDto.unread_count`, canonical `ConversationReadRepo`:
-  // workspace/dm → workspace rollup) — the renderer can't stitch it (per-channel
-  // unread cache is scoped to the SELECTED workspace, but a starred workspace's
-  // rollup spans its own channels). Contract: `0` = computed, no unread; `null` =
-  // wire back-compat only. Both render nothing; only `> 0` shows the pill.
-  const unread = item.unread_count;
-  const hasUnread = unread != null && unread > 0;
+  // Unread badge (#task:1254 / #task:1870): STARRED is the EXCLUSIVE home for a
+  // starred workspace/DM, so it must carry the signal the home group used to. The
+  // number is the workspace's ATTENTION badge, resolved by the section from the
+  // roll-up — the renderer can't stitch it per-channel (that cache is scoped to the
+  // selected workspace, while a starred workspace's roll-up spans its own
+  // channels), and a muted workspace must read 0 here exactly as it does on the
+  // rail.
+  const hasUnread = unread > 0;
   // No `transition-colors`: selection is a discrete committed state — fading it
   // is the leaving-row "flicker" (mirrors WorkspaceRow / ChannelRow, #task:1162).
   // One binary tier vocabulary shared with the home rail (#task:1254).
@@ -247,21 +266,13 @@ function FavoriteRow({
         >
           {item.title}
         </span>
+        {muted ? <MutedMarker /> : null}
         {hasUnread ? (
           // Rightmost fixed status slot — the SAME pill as the home rail
-          // (`data-sidebar-unread`): accent pill when resting, inverse
-          // (`bg-bg-floating text-accent`) on the selected row. Never invents a
-          // Favorites-specific badge (#task:1254).
-          <span
-            data-sidebar-unread
-            className={
-              'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums ' +
-              (isPrimary ? 'bg-bg-floating text-accent' : 'bg-accent text-text-on-accent')
-            }
-            aria-label={`${unread} unread`}
-          >
-            {unread > 99 ? '99+' : unread}
-          </span>
+          // (`UnreadBadge`, hook `data-sidebar-unread`): accent when resting,
+          // inverted on the selected row. Never invents a Favorites-specific
+          // badge (#task:1254).
+          <UnreadBadge count={unread} inverted={isPrimary} />
         ) : null}
       </button>
     </div>
@@ -273,6 +284,10 @@ function FavoriteRow({
       canStar
       isStarred
       onToggleStar={onUnstar}
+      // A starred row is never archived (archived rows can't star), so the only
+      // gate left is kind: a DM is structurally un-mutable. Same rule as the home
+      // rail's `canMuteWorkspace` — one entity, one menu.
+      muteWorkspaceId={item.kind === 'workspace' ? item.workspace_id : null}
     />
   );
 }

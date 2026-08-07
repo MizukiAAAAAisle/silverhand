@@ -833,6 +833,17 @@
   box-shadow: 1px 1px 0 var(--forza6-ink);
 }
 
+/* v-#task:1870: the QUIET tier (Mentions only) keeps the square poster geometry
+   and the ink border — it is still the same sticker family — but drops the 1px
+   投影. The shadow is the "lift" budget, and lift is exactly what separates the
+   beacon from the reference count; a quiet badge that still lifts reads as loud
+   with a missing fill. Same low-end reasoning as [data-thread-unread='dot']
+   below (bare square, no shadow). The renderer already withholds the accent
+   fill, so no colour is overridden here. */
+[data-theme='forza6'] [data-sidebar-unread][data-unread-tier='quiet'] {
+  box-shadow: none;
+}
+
 /* ── Threads-list per-thread unread — forza6 square vocabulary (#task:1226) ──
    ChannelThreadsPanel's ThreadRow maps thread unread to one of two weights
    off `viewer_following`, on a single locked hue (pink `bg-accent`); shape +

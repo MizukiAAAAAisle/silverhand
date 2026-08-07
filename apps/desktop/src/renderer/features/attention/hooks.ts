@@ -9,13 +9,20 @@ import type { QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type {
   ActivityItemDto,
+  AttentionBadgeRollupDto,
+  AttentionBadgeUpdatedPayload,
+  AttentionPrefChangedPayload,
   ChannelAttentionMode,
   ChannelAttentionPreferenceDto,
   ListActivityDto,
   ObserveSource,
+  ServerFrame,
+  WorkspaceAttentionModesDto,
+  WorkspaceAttentionPreferenceDto,
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import { resolveEffectiveAttentionMode } from '@/lib/attention-mode';
 import { activityItemSource, postObserve } from './observe';
 import {
   reconcileUnreadAfterObserveIfRealtimeUnavailable,
@@ -27,39 +34,72 @@ import {
   isCurrentViewerScope,
 } from '@/lib/ws-client';
 
-/** Query key for one channel's per-viewer ambient attention preference. Follows
- *  the read-model keying convention (`['conversation', id, …]`); distinct last
- *  segment from the unread read-model so the two never collide. */
-export const channelAttentionPreferenceKey = (channelId: string) =>
-  ['conversation', channelId, 'attention-preference'] as const;
+/** Query key for the viewer's mute SUPPRESSOR on one workspace. Workspace-KEYED
+ *  in the `['workspaces', id, …]` form on purpose: that is the form layer 1 of the
+ *  viewer-removal contract sweeps, so losing the workspace drops this with no
+ *  registration of its own (see `features/workspaces/viewer-removal-contract.ts`). */
+export const workspaceAttentionPreferenceKey = (workspaceId: string) =>
+  ['workspaces', workspaceId, 'attention-preference'] as const;
+
+/** Query key for ONE workspace's batch of channel tiers. Kept under the
+ *  `['attention','modes']` prefix — unlike the suppressor above — because the
+ *  channel-tier mutation legitimately does not know its workspace and patches by
+ *  scanning that prefix. The cost is that layer 1's `['workspaces', …]` sweep does
+ *  NOT cover it, so {@link removeWorkspaceFromAttentionBadges} drops it explicitly. */
+export const attentionModesKey = (workspaceId: string) =>
+  ['attention', 'modes', workspaceId] as const;
+
+/** Query key for the viewer's cross-workspace badge roll-up. A single global
+ *  entry — the roll-up itself spans every workspace. */
+export const attentionBadgesKey = () => ['attention', 'badges'] as const;
 
 /**
- * The current viewer's resolved ambient attention preference for one REGULAR
- * channel (`GET /api/conversations/:id/attention-preference`). `mode` is always
- * resolved server-side (default applied when no row exists), so the client
- * never branches on "unset".
+ * Write one channel's new tier into every loaded tier batch, re-resolving
+ * `effective_mode` through the SAME rule the server used
+ * ({@link resolveEffectiveAttentionMode}). Patches by SCANNING the
+ * `['attention','modes']` prefix rather than taking a `workspaceId`: the writer
+ * is a channel-scoped mutation that legitimately does not know its workspace,
+ * and a channel appears in at most one batch, so the scan is the cheap correct
+ * shape rather than threading a second id through the call sites.
  *
- * Channel-scoped ONLY: the backend 404s `dm_channel` / `thread` (DM unread is
- * directed-grade and always enters Activity; threads carry no ambient pref, §6
- * / §13.3). Callers MUST gate on `kind === 'channel'` before passing an id.
+ * PRESENT-ONLY: a batch that is not loaded, or that does not hold this channel,
+ * is left alone — the authoritative GET brings the truth.
  */
-export function useChannelAttentionPreference(channelId: string | null) {
-  return useQuery<ChannelAttentionPreferenceDto>({
-    queryKey: channelAttentionPreferenceKey(channelId ?? 'none'),
-    enabled: !!channelId,
-    queryFn: ({ signal }) =>
-      api<ChannelAttentionPreferenceDto>(
-        apiPaths.conversationAttentionPreference(channelId!),
-        { signal },
-      ),
-  });
+function patchChannelModeInLoadedBatches(
+  qc: QueryClient,
+  conversationId: string,
+  mode: ChannelAttentionMode,
+): void {
+  qc.setQueriesData<WorkspaceAttentionModesDto>(
+    { queryKey: ['attention', 'modes'] },
+    prev => {
+      if (!prev) return prev;
+      let hit = false;
+      const channels = prev.channels.map(c => {
+        if (c.conversation_id !== conversationId) return c;
+        hit = true;
+        return {
+          ...c,
+          mode,
+          effective_mode: resolveEffectiveAttentionMode(mode, prev.muted),
+        };
+      });
+      return hit ? { ...prev, channels } : prev;
+    },
+  );
 }
 
 /**
- * Set the viewer's ambient preference for one channel (`PUT …`). This is the
- * ONLY renderer surface that writes attention state (§5.2) — it never touches
- * delivery/follow (`thread_followers`). Optimistic so the toggle feels instant;
- * the server's resolved DTO reconciles on success.
+ * Set the viewer's attention tier for one channel (`PUT …`). This is one of the
+ * two renderer surfaces that write attention state (§5.2) — it never touches
+ * delivery/follow (`thread_followers`).
+ *
+ * The ONE cache this moves is the workspace tier batch: the sidebar row's badge
+ * volume, the dimming and the menu check all read from there, so the per-channel
+ * `GET …/attention-preference` is not a second carrier of the same fact (see
+ * {@link useWorkspaceAttentionModes}). Optimistic so the write feels instant;
+ * rollback is a re-read of the batch rather than a saved snapshot, because the
+ * batch holds N rows and only the server can settle the rest.
  */
 export function useSetChannelAttentionPreference(channelId: string | null) {
   const qc = useQueryClient();
@@ -71,40 +111,407 @@ export function useSetChannelAttentionPreference(channelId: string | null) {
         { method: 'PUT', body: JSON.stringify({ mode }) },
       );
     },
-    onMutate: async (mode): Promise<{ prev?: ChannelAttentionPreferenceDto }> => {
-      if (!channelId) return {};
-      const key = channelAttentionPreferenceKey(channelId);
+    onMutate: async (mode): Promise<void> => {
+      if (!channelId) return;
+      await qc.cancelQueries({ queryKey: ['attention', 'modes'] });
+      patchChannelModeInLoadedBatches(qc, channelId, mode);
+    },
+    onError: () => {
+      // The optimistic re-tier must not survive the failure, and its pre-write
+      // value isn't reconstructable from a snapshot of one row — re-read.
+      void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+      toast.error('Failed to update, please retry');
+    },
+    onSuccess: dto => {
+      patchChannelModeInLoadedBatches(qc, dto.conversation_id, dto.mode);
+      // The tier is an `enter()` input, so flipping it adds/removes this
+      // channel's ambient items from the Activity list — invalidate the (global)
+      // activity query so the list reflects the new eligibility immediately, not
+      // on the next unrelated unread/notification/task event. Backend treats this
+      // as client-driven invalidation (no `unread_updated` for a pref change).
+      void qc.invalidateQueries({ queryKey: ['activity'] });
+      // The tier is a badge input too. The badge has its own absolute event, but
+      // this writer must not depend on that frame arriving to stop showing a
+      // stale count, so re-read the roll-up as well.
+      void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
+    },
+  });
+}
+
+// ───────────────── Workspace mute suppressor + tier batch (#task:1870) ─────────
+
+/**
+ * The viewer's mute suppressor for one REGULAR workspace
+ * (`GET /api/workspaces/:id/attention-preference`). A BOOLEAN, not a fourth
+ * tier: it silences every channel in the workspace without rewriting any
+ * channel's own stored choice, so un-muting restores each one verbatim.
+ *
+ * Regular workspaces only — an `agent_home` (DM) workspace can never carry a row
+ * (DB trigger), so a DM is structurally un-mutable and callers must not offer the
+ * control for one.
+ */
+export function useWorkspaceAttentionPreference(workspaceId: string | null) {
+  return useQuery<WorkspaceAttentionPreferenceDto>({
+    queryKey: workspaceAttentionPreferenceKey(workspaceId ?? 'none'),
+    enabled: !!workspaceId,
+    queryFn: ({ signal }) =>
+      api<WorkspaceAttentionPreferenceDto>(
+        apiPaths.workspaceAttentionPreference(workspaceId!),
+        { signal },
+      ),
+  });
+}
+
+/**
+ * Flip the workspace mute suppressor (`PUT …`). Optimistic on BOTH faces it
+ * moves — its own key and the workspace's tier batch — because muting is a
+ * direct manipulation whose whole point is that N channel rows go quiet at once;
+ * re-resolving them server-side first would show the rows lagging the menu.
+ *
+ * The optimistic tier re-resolution goes through
+ * {@link resolveEffectiveAttentionMode}, the twin of the backend's
+ * `effectiveChannelModeExpr`, so the instant state and the settled state are the
+ * same function of the same two inputs.
+ */
+export function useSetWorkspaceAttentionPreference(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (muted: boolean) => {
+      if (!workspaceId) throw new Error('no workspace');
+      return api<WorkspaceAttentionPreferenceDto>(
+        apiPaths.workspaceAttentionPreference(workspaceId),
+        { method: 'PUT', body: JSON.stringify({ muted }) },
+      );
+    },
+    onMutate: async (
+      muted,
+    ): Promise<{ prev?: WorkspaceAttentionPreferenceDto }> => {
+      if (!workspaceId) return {};
+      const key = workspaceAttentionPreferenceKey(workspaceId);
       await qc.cancelQueries({ queryKey: key });
-      const prev = qc.getQueryData<ChannelAttentionPreferenceDto>(key);
-      // Construct the full DTO (not a spread of `prev`) so the toggle reflects
-      // instantly even when the click lands before the GET has resolved.
-      qc.setQueryData<ChannelAttentionPreferenceDto>(key, {
-        conversation_id: channelId,
-        mode,
+      const prev = qc.getQueryData<WorkspaceAttentionPreferenceDto>(key);
+      // Full DTO, not a spread of `prev`: the toggle must reflect even when the
+      // click lands before the GET resolves (same reason as the channel arm).
+      qc.setQueryData<WorkspaceAttentionPreferenceDto>(key, {
+        workspace_id: workspaceId,
+        muted,
       });
+      patchWorkspaceMutedInLoadedBatch(qc, workspaceId, muted);
       return { prev };
     },
-    onError: (_err, _mode, ctx) => {
-      if (channelId) {
-        const key = channelAttentionPreferenceKey(channelId);
+    onError: (_err, _muted, ctx) => {
+      if (workspaceId) {
+        const key = workspaceAttentionPreferenceKey(workspaceId);
         if (ctx?.prev) qc.setQueryData(key, ctx.prev);
-        // prev may be undefined (write fired before first load) — refetch the
-        // authoritative value rather than leaving a stale optimistic guess.
         void qc.invalidateQueries({ queryKey: key });
+        void qc.invalidateQueries({ queryKey: attentionModesKey(workspaceId) });
       }
       toast.error('Failed to update, please retry');
     },
     onSuccess: dto => {
-      if (channelId) qc.setQueryData(channelAttentionPreferenceKey(channelId), dto);
-      // The ambient mode (all/mentions) is an `enter()` input, so flipping it
-      // adds/removes this channel's ambient items from the Activity list —
-      // invalidate the (global) activity query so the list reflects the new
-      // eligibility immediately, not on the next unrelated unread/notification/
-      // task event. Backend treats this as client-driven invalidation (no
-      // `unread_updated` is emitted for a pref change).
+      qc.setQueryData(workspaceAttentionPreferenceKey(dto.workspace_id), dto);
+      patchWorkspaceMutedInLoadedBatch(qc, dto.workspace_id, dto.muted);
+      // The suppressor is an `enter()` input for every channel in the workspace,
+      // and a badge input for the workspace itself.
       void qc.invalidateQueries({ queryKey: ['activity'] });
+      void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
     },
   });
+}
+
+/** Re-resolve every channel tier in ONE workspace's loaded batch against a new
+ *  suppressor value. `mode` (the stored choice) is deliberately untouched — that
+ *  is what makes un-muting restore each channel's own tier. PRESENT-ONLY. */
+function patchWorkspaceMutedInLoadedBatch(
+  qc: QueryClient,
+  workspaceId: string,
+  muted: boolean,
+): void {
+  qc.setQueryData<WorkspaceAttentionModesDto>(
+    attentionModesKey(workspaceId),
+    prev =>
+      prev
+        ? {
+            ...prev,
+            muted,
+            channels: prev.channels.map(c => ({
+              ...c,
+              effective_mode: resolveEffectiveAttentionMode(c.mode, muted),
+            })),
+          }
+        : prev,
+  );
+}
+
+/**
+ * Every channel tier in ONE workspace in a single read
+ * (`GET /api/attention/modes?workspace_id=…`) — one request for the whole
+ * sidebar instead of N per-row GETs. Each row carries its own `mode`, the
+ * suppressed `effective_mode`, and `directed_unread_count`.
+ *
+ * Live sources: the tier itself moves on `attention_pref_changed`, and
+ * `directed_unread_count` moves on every `notification` insert/read and on
+ * positional reads — all three are handled by the single subscription in
+ * {@link useAttentionRealtime}, which is mounted for the app's lifetime, so this
+ * hook adds no second listener.
+ */
+export function useWorkspaceAttentionModes(workspaceId: string | null) {
+  return useQuery<WorkspaceAttentionModesDto>({
+    queryKey: attentionModesKey(workspaceId ?? 'none'),
+    enabled: !!workspaceId,
+    queryFn: ({ signal }) =>
+      api<WorkspaceAttentionModesDto>(
+        `${apiPaths.attentionModes}?workspace_id=${encodeURIComponent(workspaceId!)}`,
+        { signal },
+      ),
+  });
+}
+
+/**
+ * The viewer's cross-workspace badge roll-up (`GET /api/attention/badges`) — the
+ * ONE carrier of "how loudly should this workspace shout" for every rail and
+ * STARRED row. Do not give another read-model a second badge field for the same
+ * fact (#task:1875 review): one fact reaching a cache two ways has to be kept in
+ * sync forever, which is the drift source the STARRED "exclusive home" rule
+ * already exists to avoid. A row's own `unread_count` is a DIFFERENT question
+ * ("how many are unread", raw positional) and stays where it is.
+ *
+ * `by_workspace` omits zeros (absent ≡ 0) and `total` is their sum — the
+ * app-level badge (macOS dock included: a muted workspace that still bumped the
+ * dock would defeat muting).
+ *
+ * Query ONLY, so any number of rows may call it (React Query dedupes by key).
+ * Its live updates come from {@link useAttentionRealtime}, which must be mounted
+ * ONCE at the app level — without it this roll-up never moves.
+ */
+export function useAttentionBadges() {
+  return useQuery<AttentionBadgeRollupDto>({
+    queryKey: attentionBadgesKey(),
+    queryFn: ({ signal }) =>
+      api<AttentionBadgeRollupDto>(apiPaths.attentionBadges, { signal }),
+  });
+}
+
+/** Extract the workspaceId from a `workspace:<id>` transport scope, or null.
+ *  Local rather than in `ws-frames.ts`'s scope grammar because only this
+ *  consumer parses it back today; the prefix is the same literal the renderer
+ *  subscribes with. Deliberately exact-prefix (never `includes`), so no other
+ *  scope family can masquerade as a workspace. */
+function parseWorkspaceScope(scope: string): string | null {
+  return scope.startsWith('workspace:') ? scope.slice('workspace:'.length) : null;
+}
+
+/**
+ * Apply ONE server frame to the attention caches. Extracted from
+ * {@link useAttentionRealtime} so the frame→invalidation policy is unit-testable
+ * without a DOM: it is a pure function of the frame plus the one fact the module
+ * singleton would otherwise supply (`isViewerScope` — whether this frame's scope
+ * is the current viewer's), which the hook passes in.
+ *
+ * Live events and replayed events flow through here identically; every write is
+ * either an invalidation or the idempotent absolute patch, so a re-delivered
+ * frame cannot accumulate error.
+ */
+export function applyAttentionFrame(
+  qc: QueryClient,
+  frame: ServerFrame,
+  isViewerScope: boolean,
+): void {
+  if (frame.type === 'snapshot_required') {
+    // Reconnect / gap catch-all: "an unknown amount happened in this scope".
+    // BOTH scope families that carry an attention input must re-read, because
+    // either can swallow the event that would otherwise settle the caches:
+    //   - the VIEWER scope carries the badge's own absolute event, the pref
+    //     change and the notification/unread frames the tier batch rides;
+    //   - a WORKSPACE scope carries `workspace_channels_changed`, which is the
+    //     ONLY carrier of the membership input — nothing viewer-scoped restates
+    //     it, so a swallowed one is permanently wrong without this arm.
+    // A workspace gap is confined to that workspace, so only its tier batch is
+    // re-read; the roll-up is one global entry, so it re-reads whole either way.
+    // Any other scope family (conversation / conversation-side / app) carries no
+    // attention input — invalidating on those would turn every unrelated gap
+    // into an attention refetch.
+    if (isViewerScope) {
+      void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
+      void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+      return;
+    }
+    const workspaceId = parseWorkspaceScope(frame.scope);
+    if (workspaceId) {
+      void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
+      void qc.invalidateQueries({ queryKey: attentionModesKey(workspaceId) });
+    }
+    return;
+  }
+  if (frame.type !== 'event') return;
+  // Channel membership is a badge input the badge has no event for: both arms
+  // of the projection join `conversation_users`, so a self-leave or a
+  // third-party removal changes the absolute value.
+  // `workspace_channels_changed` is the existing domain fact for that
+  // transition (§12 — no new event needed, and emitting a badge-specific one
+  // would encode the same fact twice). It is WORKSPACE-scoped, yet it reaches
+  // EVERY workspace the viewer belongs to, not just the selected one:
+  // `useForeignWorkspaceChannelRemovalSync` is mounted for the app's lifetime
+  // and retains `workspace:<id>` for all `visibleWorkspaceIds` (it skips only
+  // the selected workspace's RECONCILE, never the subscription), so this
+  // global listener sees the frame on any of those scopes. That subscription
+  // set is therefore load-bearing for the badge; the fence in
+  // `attention-badge-scope-coverage.test.ts` keeps a later subscription
+  // optimization from narrowing it silently.
+  if (frame.kind === 'workspace_channels_changed') {
+    void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
+    void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+    return;
+  }
+  if (!isViewerScope) return;
+  if (frame.kind === 'attention_badge_updated') {
+    applyBadgeUpdate(qc, frame.payload as AttentionBadgeUpdatedPayload);
+    return;
+  }
+  if (frame.kind === 'attention_pref_changed') {
+    // Identity only, by design — the tier read face is the single authority,
+    // so re-read rather than patch. A null `conversation_id` means the
+    // workspace suppressor moved (which re-resolves every channel in it), so
+    // its own key needs the re-read too; a channel tier lives only in the
+    // batch, so the batch is the whole answer there.
+    const p = frame.payload as AttentionPrefChangedPayload;
+    void qc.invalidateQueries({ queryKey: attentionModesKey(p.workspace_id) });
+    if (p.conversation_id === null) {
+      void qc.invalidateQueries({
+        queryKey: workspaceAttentionPreferenceKey(p.workspace_id),
+      });
+      // …and the roll-up, which now projects the suppressor as
+      // `muted_workspace_ids` for the rail's muted marker (#task:1877). This is
+      // an OBLIGATION of that field, not an optimisation: muting a workspace
+      // that sits at 0 changes no number, so the backend has no badge frame to
+      // send and `applyBadgeUpdate` would early-return on the same value anyway
+      // — miss this and the marker stays missing until some unrelated attention
+      // event happens along: the roll-up is app-lifetime and the client disables
+      // `refetchOnWindowFocus`, so nothing re-reads it on its own.
+      void qc.invalidateQueries({ queryKey: attentionBadgesKey() });
+    }
+    return;
+  }
+  if (frame.kind === 'notification' || frame.kind === 'unread_updated') {
+    // `directed_unread_count` on the tier batch moves with both. The badge
+    // itself does NOT need invalidating here — its own absolute event rides
+    // the same transaction.
+    void qc.invalidateQueries({ queryKey: ['attention', 'modes'] });
+  }
+}
+
+/**
+ * The SINGLE attention realtime subscription — mount once, at the app level,
+ * beside the other app-lifetime subscriptions. Split out from
+ * {@link useAttentionBadges} so the roll-up query can be read by many rows
+ * without forking that many identical listeners.
+ *
+ * It must cover every source the badge and the tier batch are functions of,
+ * because a missed frame is not a transient window: these caches are only
+ * written by these frames, and the client sets `refetchOnWindowFocus: false`, so
+ * a miss FREEZES a wrong number until some unrelated event happens to arrive.
+ *
+ * It subscribes only the VIEWER scope; the workspace scopes it also reacts to are
+ * held by `useForeignWorkspaceChannelRemovalSync` for the app's lifetime, and the
+ * transport already drops any frame for a scope no one desires, so a
+ * `workspace:<id>` frame reaching this listener is by construction a held one.
+ */
+export function useAttentionRealtime(): void {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    const sub = subscribeViewerScope();
+    const unsub = onWsFrame(frame => {
+      const scope = 'scope' in frame ? frame.scope : null;
+      applyAttentionFrame(qc, frame, scope !== null && isCurrentViewerScope(scope));
+    });
+    return () => {
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [qc]); // eslint-disable-line react-hooks/exhaustive-deps
+}
+
+/**
+ * Patch one workspace's ABSOLUTE badge into the roll-up. Never a delta — the
+ * event carries the settled value precisely so a dropped or reordered frame
+ * cannot accumulate error.
+ *
+ * `total` is RECOMPUTED from the map rather than adjusted, so `total = Σ
+ * by_workspace` holds by construction instead of by two matching arithmetic
+ * paths. A zero deletes its entry, keeping the server's "absent ≡ 0" shape (a
+ * stored `0` would make `Object.keys` a wrong answer to "which workspaces are
+ * lit").
+ *
+ * Roll-up not loaded → no-op: the GET is the authority, and inventing a
+ * one-entry map would claim every OTHER workspace is at zero.
+ */
+export function applyBadgeUpdate(
+  qc: QueryClient,
+  payload: AttentionBadgeUpdatedPayload,
+): void {
+  const prev = qc.getQueryData<AttentionBadgeRollupDto>(attentionBadgesKey());
+  if (!prev) return;
+  const by_workspace = { ...prev.by_workspace };
+  if (payload.badge_count > 0) by_workspace[payload.workspace_id] = payload.badge_count;
+  else delete by_workspace[payload.workspace_id];
+  const total = Object.values(by_workspace).reduce((a, b) => a + b, 0);
+  if (
+    total === prev.total &&
+    by_workspace[payload.workspace_id] === prev.by_workspace[payload.workspace_id]
+  ) {
+    return; // idempotent replay — no write, no re-render
+  }
+  qc.setQueryData<AttentionBadgeRollupDto>(attentionBadgesKey(), {
+    by_workspace,
+    total,
+    // The frame carries the NUMBER only; mute is a different fact with its own
+    // event (#task:1877), so carry the held value through untouched rather than
+    // letting a badge patch imply anything about it.
+    muted_workspace_ids: prev.muted_workspace_ids,
+  });
+}
+
+/**
+ * Settle the attention caches when the viewer LOSES a workspace — removed from it,
+ * or it was deleted (#task:1412's contract, the same fact
+ * `removeWorkspaceFrom{Activity,Favorites,MessageUnread}` consume).
+ *
+ * Mandatory, not hygiene: the roll-up feeds the dock badge and the nav-rail dot,
+ * and it is only ever written by its own events. Leaving the lost workspace's
+ * entry behind would keep the OS dock badge counting a workspace the viewer can no
+ * longer open, with no focus refetch to correct it.
+ *
+ * The map delete is the part only this cleanup does; `total` is recomputed as
+ * `Σ by_workspace` — the value a refetch returns — never `prev.total - dropped`,
+ * which would carry a stale offset onto the survivors. The tier batch is dropped
+ * whole (it is per-workspace and can simply go). PRESENT-ONLY and idempotent, like
+ * its siblings.
+ */
+export function removeWorkspaceFromAttentionBadges(
+  qc: QueryClient,
+  workspaceId: string,
+): void {
+  const prev = qc.getQueryData<AttentionBadgeRollupDto>(attentionBadgesKey());
+  if (
+    prev &&
+    (workspaceId in prev.by_workspace ||
+      prev.muted_workspace_ids.includes(workspaceId))
+  ) {
+    const by_workspace = { ...prev.by_workspace };
+    delete by_workspace[workspaceId];
+    qc.setQueryData<AttentionBadgeRollupDto>(attentionBadgesKey(), {
+      by_workspace,
+      total: Object.values(by_workspace).reduce((a, b) => a + b, 0),
+      // A lost workspace's mute marker goes with its count, for the same reason
+      // (#task:1877): nothing refetches this entry, so a leftover id would keep
+      // marking a workspace the viewer can no longer open.
+      muted_workspace_ids: prev.muted_workspace_ids.filter(
+        id => id !== workspaceId,
+      ),
+    });
+  }
+  qc.removeQueries({ queryKey: attentionModesKey(workspaceId) });
 }
 
 // ───────────────────────────── Activity list (②c) ─────────────────────────────

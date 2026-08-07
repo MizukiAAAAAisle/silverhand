@@ -163,6 +163,11 @@ export function listFavorites(
   // rollup (`unreadCountsByWorkspace`), exactly the rail workspace badge.
   const reads = new ConversationReadRepo(ctx.db);
   const unreadByWorkspace = reads.unreadCountsByWorkspace(viewerUserId);
+  // NO tiered badge aggregation here (#task:1875). The tiered badge lives on
+  // `GET /api/attention/badges` alone — that is the face `attention_badge_updated`
+  // keeps fresh, and this read model is not one of its subscribers. Adding a
+  // `badge_count` column here would be a second carrier of the same number that
+  // nothing refreshes. `unread_count` above is a different question and stays.
 
   const pushEntry = (
     key: string,

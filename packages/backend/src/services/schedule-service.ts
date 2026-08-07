@@ -23,6 +23,7 @@ import type { ScheduleRepo } from '../repos/schedule-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { publishUnreadUpdatedToConversationViewers } from '../viewer-scope.js';
+import type { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
 
 /** Reasons a `schedule` request is rejected. The MCP route in PR-2 maps
  *  these to the agent-facing JSON error payload; failure to deliver wakes
@@ -81,6 +82,10 @@ export interface ScheduleServiceOptions {
   /** Authoritative unread read-model for the enriched `unread_updated` frame
    *  (#task:1283). */
   conversationReads: ConversationReadRepo;
+  /** Tiered-badge projection, co-emitted with every `unread_updated`
+   *  (#task:1870). Injected rather than built from a db handle because this
+   *  service is repo-mediated by design and holds none. */
+  attentionBadges: AttentionBadgeRepo;
   messages: MessageRepo;
   agents: AgentRepo;
   runtimeHost: AgentRuntimeHost;
@@ -131,6 +136,7 @@ export class ScheduleService {
   private readonly workspaces: WorkspaceRepo;
   private readonly conversations: ConversationRepo;
   private readonly conversationReads: ConversationReadRepo;
+  private readonly attentionBadges: AttentionBadgeRepo;
   private readonly messages: MessageRepo;
   private readonly agents: AgentRepo;
   private readonly runtimeHost: AgentRuntimeHost;
@@ -151,6 +157,7 @@ export class ScheduleService {
     this.workspaces = opts.workspaces;
     this.conversations = opts.conversations;
     this.conversationReads = opts.conversationReads;
+    this.attentionBadges = opts.attentionBadges;
     this.messages = opts.messages;
     this.agents = opts.agents;
     this.runtimeHost = opts.runtimeHost;
@@ -787,6 +794,7 @@ export class ScheduleService {
     });
     publishUnreadUpdatedToConversationViewers(
       this.events,
+      this.attentionBadges,
       this.conversations,
       this.conversationReads,
       targetConvId,
@@ -856,6 +864,7 @@ export class ScheduleService {
       });
       publishUnreadUpdatedToConversationViewers(
         this.events,
+        this.attentionBadges,
         this.conversations,
         this.conversationReads,
         home.dm_channel_id,
