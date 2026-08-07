@@ -108,6 +108,27 @@ function setUpLegacyState() {
 }
 
 describe('direct daemon startup preflight (#task:1806)', () => {
+  it('converges a newly enrolled computer whose workspace-data root is still absent', async () => {
+    const computersRootDir = join(scratch, 'computers');
+    const slot = resolveComputerSlotFromComputersRoot(computersRootDir, BINDING.host_id);
+    expect(existsSync(slot.workspaceData)).toBe(false);
+
+    await expect(
+      runDirectStartupPreflight({
+        binding: BINDING,
+        computersRootDir,
+        silverhandStateRootDir: join(scratch, 'state'),
+        logDir: join(scratch, 'logs'),
+        alsoStderr: false,
+        initialOutcome: 'already_current',
+        sessionStoreHome: join(scratch, 'home'),
+        env: {},
+      }),
+    ).resolves.toBe('migrated');
+
+    expect(existsSync(join(slot.workspaceData, 'relocation-v1.marker.json'))).toBe(true);
+  });
+
   it('migrates L2 and cwd-scoped sessions before direct daemon bind, then replays as a no-op', async () => {
     const fx = setUpLegacyState();
     const first = await runDirectStartupPreflight({

@@ -1,5 +1,5 @@
-import { readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { resolveAgentWorkspaceBundleDir } from '../agent-materialize/handler.js';
 import {
@@ -494,6 +494,12 @@ function writeRelocationMarkerAtomic(
   };
   const tmp = `${markerPath}.tmp-${process.pid}`;
   try {
+    // A newly enrolled computer can legitimately have neither a retained
+    // registry nor a workspace-data root yet. Empty inventory is already the
+    // migration's documented no-op case, so publish that fact by creating the
+    // managed root before writing the completion marker. Without this, the
+    // second boot of a fresh profile fails with relocation_move_failed.
+    mkdirSync(dirname(markerPath), { recursive: true });
     writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, markerPath);
   } catch (err) {

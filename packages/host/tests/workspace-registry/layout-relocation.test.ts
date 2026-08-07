@@ -658,6 +658,34 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     });
   }
 
+  it('publishes an empty-inventory marker when a new computer has no workspace-data root yet', () => {
+    const workspaceDataRootDir = join(scratch, 'computers', BINDING.host_id, 'workspace-data');
+    expect(probe(workspaceDataRootDir)).toBe('absent');
+
+    const first = runWorkspaceLayoutRelocation({
+      workspaceDataRootDir,
+      agentHomeRootDir: join(scratch, 'computers', BINDING.host_id, 'agents'),
+      currentBinding: BINDING,
+      sessionStoreHome: join(scratch, 'home'),
+      env: {},
+      logger: silentLogger,
+    });
+
+    expect(first).toMatchObject({ status: 'migrated', workspaces: 0, agents: 0, moved: true });
+    expect(probe(join(workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('file');
+
+    expect(
+      runWorkspaceLayoutRelocation({
+        workspaceDataRootDir,
+        agentHomeRootDir: join(scratch, 'computers', BINDING.host_id, 'agents'),
+        currentBinding: BINDING,
+        sessionStoreHome: join(scratch, 'home'),
+        env: {},
+        logger: silentLogger,
+      }),
+    ).toMatchObject({ status: 'already_done', moved: false });
+  });
+
   it('migrates L2 + session, writes the marker last, and replays idempotently', () => {
     const fx = setUp();
     const first = run(fx);
