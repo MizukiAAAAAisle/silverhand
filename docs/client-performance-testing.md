@@ -107,10 +107,26 @@ pnpm perf:client profile \
   --scenario task-core
 ```
 
-Available scenarios are `chat-core`, `task-core`, and `shell-smoke`. Reports and
-Chrome traces default to `/tmp/silverhand-client-performance/`; use `--output`
-to choose another directory. Traces open in Chrome DevTools Performance or
+Available scenarios are `chat-core`, `task-core`, `chat-mount-cycle`, and
+`shell-smoke`. Reports and Chrome traces default to
+`/tmp/silverhand-client-performance/`; use `--output` to choose another
+directory. Traces open in Chrome DevTools Performance or
 <https://ui.perfetto.dev/>.
+
+Use the automated cycle scenario to distinguish one-time cache growth from
+retained heap growth in one renderer. `--retained-heap` invokes V8 garbage
+collection outside each measured phase before both heap samples, so its heap
+deltas are not directly comparable to an ambient-heap report:
+
+```bash
+pnpm perf:client profile \
+  --mode release-profile \
+  --scale standard \
+  --profile-dir /tmp/silverhand-perf-standard \
+  --scenario chat-mount-cycle \
+  --retained-heap \
+  --yes
+```
 
 ## Metrics and reading order
 

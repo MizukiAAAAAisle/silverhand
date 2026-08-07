@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "id": "chat-mount-cycle",
+  "title": "Repeated same-renderer Chat mount and Task return",
+  "phases": [
+    {
+      "id": "task-prime",
+      "label": "Prime the task board before repeated navigation",
+      "settle_ms": 250,
+      "observe_ms": 750,
+      "action": { "kind": "navigate", "path": "/tasks" }
+    },
+    {
+      "id": "chat-mount-1",
+      "label": "Mount the seeded chat (cycle 1)",
+      "settle_ms": 250,
+      "observe_ms": 1000,
+      "action": { "kind": "navigate", "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}" }
+    },
+    {
+      "id": "task-return-1",
+      "label": "Return to the task board (cycle 1)",
+      "settle_ms": 250,
+      "observe_ms": 750,
+      "action": { "kind": "navigate", "path": "/tasks" }
+    },
+    {
+      "id": "chat-mount-2",
+      "label": "Mount the seeded chat (cycle 2)",
+      "settle_ms": 250,
+      "observe_ms": 1000,
+      "action": { "kind": "navigate", "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}" }
+    },
+    {
+      "id": "task-return-2",
+      "label": "Return to the task board (cycle 2)",
+      "settle_ms": 250,
+      "observe_ms": 750,
+      "action": { "kind": "navigate", "path": "/tasks" }
+    },
+    {
+      "id": "chat-mount-3",
+      "label": "Mount the seeded chat (cycle 3)",
+      "settle_ms": 250,
+      "observe_ms": 1000,
+      "action": { "kind": "navigate", "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}" }
+    },
+    {
+      "id": "task-return-3",
+      "label": "Return to the task board (cycle 3)",
+      "settle_ms": 250,
+      "observe_ms": 750,
+      "action": { "kind": "navigate", "path": "/tasks" }
+    },
+    {
+      "id": "chat-mount-4",
+      "label": "Mount the seeded chat (cycle 4)",
+      "settle_ms": 250,
+      "observe_ms": 1000,
+      "action": { "kind": "navigate", "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}" }
+    },
+    {
+      "id": "task-return-4",
+      "label": "Return to the task board (cycle 4)",
+      "settle_ms": 250,
+      "observe_ms": 750,
+      "action": { "kind": "navigate", "path": "/tasks" }
+    },
+    {
+      "id": "chat-mount-5",
+      "label": "Mount the seeded chat (cycle 5)",
+      "settle_ms": 250,
+      "observe_ms": 1000,
+      "action": { "kind": "navigate", "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}" }
+    },
+    {
+      "id": "task-return-5",
+      "label": "Return to the task board (cycle 5)",
+      "settle_ms": 250,
+      "observe_ms": 750,
+      "action": { "kind": "navigate", "path": "/tasks" }
+    }
+  ]
+}

@@ -210,6 +210,8 @@ async function runScenario(context) {
 
   await client.send('Runtime.enable');
   await client.send('Performance.enable');
+  const retainedHeap = options['retained-heap'] === true;
+  if (retainedHeap) await client.send('HeapProfiler.enable');
   await evaluate(client, installProbeSource());
   const browser = await client.send('Browser.getVersion');
   const renderer = await evaluate(client, rendererMetadataSource());
@@ -232,11 +234,13 @@ async function runScenario(context) {
       if (phase.action.kind === 'manual') console.log(phase.action.instruction);
       if (rl) await rl.question('Press Enter when ready to start this phase… ');
       const prepared = interpolateAction(phase.action, fixture);
+      if (retainedHeap) await client.send('HeapProfiler.collectGarbage');
       const heapBeforeBytes = await readHeapUsage(client);
       const raw = await evaluate(
         client,
         phaseSource(phase.id, prepared, phase.settle_ms, phase.observe_ms),
       );
+      if (retainedHeap) await client.send('HeapProfiler.collectGarbage');
       const heapAfterBytes = await readHeapUsage(client);
       const summary = summarizePhase({ ...raw, heapBeforeBytes, heapAfterBytes });
       phases.push({ id: phase.id, label: phase.label, action: prepared, metrics: summary });
@@ -253,6 +257,7 @@ async function runScenario(context) {
     created_at: new Date().toISOString(),
     mode,
     baseline_eligible: mode !== 'dev' && context.profileDir !== undefined,
+    heap_measurement: retainedHeap ? 'post_gc' : 'ambient',
     scenario: { id: scenario.id, title: scenario.title, source: context.scenarioPath },
     fixture: Object.keys(fixture).length === 0 ? null : fixture,
     profile_dir: context.profileDir ?? null,
@@ -282,6 +287,9 @@ function launchProfileProcess({ mode, profileDir, port, executable }) {
     SILVERHAND_DIR: profileDir,
     SILVERHAND_REMOTE_DEBUG_PORT: String(port),
   };
+  // Electron's own CLI uses this variable internally, but inheriting it into
+  // the profiled app makes the Electron binary behave like plain Node.
+  delete env.ELECTRON_RUN_AS_NODE;
   let program;
   let childArgs;
   if (mode === 'release-profile') {
@@ -848,7 +856,7 @@ function parseArgs(values) {
       result[name.slice(3)] = false;
       continue;
     }
-    if (['yes', 'trace'].includes(name)) {
+    if (['yes', 'trace', 'retained-heap'].includes(name)) {
       result[name] = true;
       continue;
     }
@@ -893,6 +901,7 @@ Flags:
   --scale NAME      Isolated fixture size: smoke, standard (default), or stress.
   --output DIR      Report directory (default /tmp/silverhand-client-performance/...).
   --yes             Run phases without the readiness prompt.
+  --retained-heap   Force V8 GC outside each measured phase before heap samples.
   --no-trace        Skip the Chrome trace stream.
 `);
 }
