@@ -55,8 +55,8 @@ describe('sortConversationList', () => {
   it('orders channels by created_at', () => {
     // Star is no longer a shared field on the conversation (#task:1209), so the
     // base sort is creation-time only. Under the exclusive model (#task:1254) a
-    // starred channel is moved to STARRED and excluded from the channel sidebar's
-    // single `unstarred` home group (composed in ChannelsSidebar), not here.
+    // starred channel is moved to STARRED and excluded from its workspace's
+    // single `channels` home group (composed in WorkspaceChannels), not here.
     const first = channel('first', 1);
     const second = channel('second', 2);
     const third = channel('third', 3);
@@ -82,10 +82,9 @@ describe('setStarredOptimistic', () => {
     entries,
   });
 
-  it('workspace/DM star stamps starred_at and PRESERVES the home rank (exclusive move)', () => {
-    // Workspace/DM star is an EXCLUSIVE MOVE into the global STARRED list (a
-    // different list_key), so the home rank survives as an orphan and unstar
-    // restores the original slot. clearRank defaults false.
+  it('container star stamps starred_at and PRESERVES the home rank (star is an in-group pin)', () => {
+    // A container's star only pins it at the top of its own group — same list, same
+    // group — so clearing the rank would discard a position the pin does not replace.
     const next = setStarredOptimistic(
       vs([{ entity_id: 'a', rank: 3, last_accessed_at: 100, starred_at: null }]),
       'a',
@@ -99,7 +98,7 @@ describe('setStarredOptimistic', () => {
     expect(next.entries[0]?.starred_at).not.toBeNull();
   });
 
-  it('workspace/DM unstar nulls starred_at and PRESERVES the home rank (restores original slot)', () => {
+  it('container unstar nulls starred_at and PRESERVES the home rank', () => {
     const next = setStarredOptimistic(
       vs([{ entity_id: 'a', rank: 5, last_accessed_at: 7, starred_at: 999 }]),
       'a',
@@ -113,35 +112,33 @@ describe('setStarredOptimistic', () => {
     });
   });
 
-  it('channel star CLEARS the home rank (cross-hard-group move; clearRank=true)', () => {
-    // Channel star crosses this sidebar's starred|unstarred hard groups within the
-    // SAME list. A single rank is meaningful only inside one group, so it must be
-    // cleared — the channel enters the new group unranked (recent/created_at
-    // tiebreak) and the user can drag it there (#task:1210 rank P1).
+  it('conversation star PRESERVES the home rank too (#task:1888 — STARRED is a different list)', () => {
+    // A conversation's star is an exclusive MOVE into `list_key='favorites'`, so its
+    // `channels:*` rank survives as an orphan and unstar drops it back into the slot
+    // it had. No caller clears rank any more — the backend's `SortRepo.clearRank` is
+    // gone as well.
     const next = setStarredOptimistic(
       vs([{ entity_id: 'c', rank: 4, last_accessed_at: 100, starred_at: null }]),
       'c',
       true,
-      true,
     );
     expect(next.entries[0]).toMatchObject({
       entity_id: 'c',
-      rank: null,
+      rank: 4,
       last_accessed_at: 100,
     });
     expect(next.entries[0]?.starred_at).not.toBeNull();
   });
 
-  it('channel unstar CLEARS the home rank too (crossing back to unstarred)', () => {
+  it('conversation unstar restores the original home slot (rank intact)', () => {
     const next = setStarredOptimistic(
       vs([{ entity_id: 'c', rank: 2, last_accessed_at: 7, starred_at: 999 }]),
       'c',
       false,
-      true,
     );
     expect(next.entries[0]).toEqual({
       entity_id: 'c',
-      rank: null,
+      rank: 2,
       last_accessed_at: 7,
       starred_at: null,
     });
@@ -499,39 +496,45 @@ describe('removeWorkspaceFromMessageUnread (#task:1404)', () => {
 
 // #task:1404 — favorites is the THIRD viewer-local projection of the same
 // `viewer_workspaces_changed(removed)` fact (Cindy elevated this from a flag to
-// blocking): a starred workspace/DM must drop its row, else "list gone + unread
-// gone + favorites still there" becomes the next ghost. Row membership only, no
-// refetch.
-describe('removeWorkspaceFromFavorites (#task:1404)', () => {
-  const favRow = (workspaceId: string): FavoriteRowDto => ({
-    kind: 'workspace',
-    favorite_key: `workspace:${workspaceId}`,
-    entity_id: workspaceId,
-    workspace_id: workspaceId, // a workspace/DM row's workspace_id === entity_id
-    title: workspaceId,
-    icon_url: null,
-    runtime: null,
+// blocking): a starred row under a lost workspace must drop, else "list gone +
+// unread gone + favorites still there" becomes the next ghost. Since #task:1888 a
+// row is a CONVERSATION and `workspace_id` is its PARENT, so one lost workspace can
+// drop SEVERAL rows. Row membership + their orphan sort entries only, no refetch.
+describe('removeWorkspaceFromFavorites (#task:1404, conversation rows since #task:1888)', () => {
+  const favRow = (conversationId: string, workspaceId: string): FavoriteRowDto => ({
+    kind: 'channel',
+    favorite_key: `channel:${conversationId}`,
+    entity_id: conversationId,
+    workspace_id: workspaceId, // the PARENT, not the row itself
+    title: conversationId,
+    parent_title: workspaceId,
+    parent_icon_url: null,
+    parent_runtime: null,
     starred_at: 1,
     created_at: 1,
     unread_count: 3,
   });
 
-  it('drops the matching favorite row, keeps others and viewer_sort untouched', () => {
+  it('drops every row under the removed parent, plus their orphan sort entries', () => {
     const qc = new QueryClient();
-    const viewer_sort: ViewerSortStateDto = {
-      list_key: 'favorites',
-      modes: {},
-      entries: [],
-    };
     qc.setQueryData<ListFavoritesDto>(favoritesKey, {
-      items: [favRow('w-1'), favRow('w-2')],
-      viewer_sort,
+      items: [favRow('c-1', 'w-1'), favRow('c-2', 'w-1'), favRow('c-3', 'w-2')],
+      viewer_sort: {
+        list_key: 'favorites',
+        modes: {},
+        entries: [
+          { entity_id: 'channel:c-1', rank: 1, last_accessed_at: null, starred_at: 1 },
+          { entity_id: 'channel:c-3', rank: 2, last_accessed_at: null, starred_at: 1 },
+        ],
+      },
     });
     removeWorkspaceFromFavorites(qc, 'w-1');
     const next = qc.getQueryData<ListFavoritesDto>(favoritesKey);
-    expect(next?.items.map(i => i.workspace_id)).toEqual(['w-2']);
-    // viewer_sort is left byte-identical (orphan rank entries are harmless).
-    expect(next?.viewer_sort).toBe(viewer_sort);
+    // Both of w-1's conversations gone; the other parent's row survives.
+    expect(next?.items.map(i => i.entity_id)).toEqual(['c-3']);
+    // A sort entry keyed by a removed row's `favorite_key` would let the id survive
+    // in cache — the whole-cache removal invariant #task:1412 closed.
+    expect(next?.viewer_sort.entries.map(e => e.entity_id)).toEqual(['channel:c-3']);
   });
 
   it('is idempotent: list not loaded / no matching row → no write', () => {
@@ -541,7 +544,7 @@ describe('removeWorkspaceFromFavorites (#task:1404)', () => {
     expect(qc.getQueryData(favoritesKey)).toBeUndefined();
     // Loaded but no matching row → the cached object is left in place (no write).
     const loaded: ListFavoritesDto = {
-      items: [favRow('w-2')],
+      items: [favRow('c-3', 'w-2')],
       viewer_sort: { list_key: 'favorites', modes: {}, entries: [] },
     };
     qc.setQueryData<ListFavoritesDto>(favoritesKey, loaded);

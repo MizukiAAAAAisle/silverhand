@@ -11,7 +11,6 @@ import {
 } from '@/features/hosts/hooks';
 import { MembersPanel } from '@/components/layout/MembersPanel';
 import { Sidebar } from '@/components/layout/Sidebar';
-import { ChannelsSidebar } from '@/components/layout/ChannelsSidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
 import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
 import { SectionLayer } from '@/components/layout/SectionLayer';
@@ -88,9 +87,7 @@ import {
   useChannelsForWorkspace,
   useArchivedChannelsForWorkspace,
   useWorkspaceSortState,
-  useChannelSortState,
   useStarWorkspace,
-  useStarChannel,
   useArchiveChannel,
   useRenameChannel,
   useLeaveChannel,
@@ -257,11 +254,7 @@ const TOAST_MOBILE_OFFSET = {
 } as const;
 
 function RegisteredAppShell(): JSX.Element {
-  const {
-    layout,
-    toggleWorkspaceSidebar,
-    toggleChannelSidebar,
-  } = useLayoutSettings();
+  const { layout, toggleWorkspaceSidebar } = useLayoutSettings();
 
   // Global mount-once realtime/visibility sync (5 app-scope WS consumers),
   // lifted to a hook so the shell stays a thin composition root. See
@@ -272,22 +265,17 @@ function RegisteredAppShell(): JSX.Element {
   const shutdownStep = useShutdownProgress();
   useComposerDraftCleanup();
 
-  // Sidebar widths persist across launches and mirror into CSS vars so
+  // Sidebar width persists across launches and mirrors into a CSS var so
   // existing `var(--sidebar-width)` consumers (Titlebar pad, Sidebar
-  // <aside>) re-flow without prop-drilling.
+  // <aside>) re-flow without prop-drilling. ONE column since #task:1889 — the
+  // merged tree took over the retired `--channels-sidebar-width`'s range (up to
+  // 400) because it now carries channels too; its own width memory is gone.
   const sidebar = useResizableWidth({
     storageKey: 'silverhand.layout.sidebar-width',
     defaultWidth: 240,
     min: 200,
-    max: 360,
-    cssVar: '--sidebar-width',
-  });
-  const channelsSidebar = useResizableWidth({
-    storageKey: 'silverhand.layout.channels-sidebar-width',
-    defaultWidth: 240,
-    min: 200,
     max: 400,
-    cssVar: '--channels-sidebar-width',
+    cssVar: '--sidebar-width',
   });
   // Activity-section list width — its OWN resizable column (#task:1394,
   // shiki). Deliberately NOT the chat `--sidebar-width` rail slot: reusing it
@@ -322,13 +310,16 @@ function RegisteredAppShell(): JSX.Element {
     agentPanelId,
   } = route;
   const workspaceSidebarPane = layout.workspaceSidebar;
-  const channelSidebarPane = layout.channelSidebar;
   const workspaceSidebarVisible = workspaceSidebarPane.visible;
-  const channelSidebarVisible = channelSidebarPane.visible;
 
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [newComputerOpen, setNewComputerOpen] = useState(false);
-  const [createChannelOpen, setCreateChannelOpen] = useState(false);
+  // Which workspace a new channel is being created in — `null` closes the dialog.
+  // Since #task:1889 the merged tree's rows are cross-workspace, so the target is
+  // carried explicitly instead of being implied by "the current workspace".
+  const [createChannelWorkspaceId, setCreateChannelWorkspaceId] = useState<
+    string | null
+  >(null);
   const [workspaceSettingsOpen, setWorkspaceSettingsOpen] = useState(false);
   // The Chat/Activity task drawer's MEMORY bit — "the user wants this panel
   // open", not "the panel is on screen". Visibility is derived from it below
@@ -359,16 +350,11 @@ function RegisteredAppShell(): JSX.Element {
     primePhaseFor,
   } = useMessageJumpController();
 
-  // Chat-only: the ⌘\ / ⌘⇧\ chords toggle the workspace/channel browse
-  // sidebars, which exist only in chat. Gating on `appSection === 'chat'` keeps
-  // the keyboard path on the same section boundary as the (hidden-in-activity)
-  // titlebar toggles, so Activity has no browse-sidebar control path at all
-  // (#task:1394, Cindy review).
-  useLayoutKeyboardShortcuts(
-    toggleWorkspaceSidebar,
-    toggleChannelSidebar,
-    appSection === 'chat',
-  );
+  // Chat-only: the ⌘\ chord toggles the browse sidebar, which exists only in
+  // chat. Gating on `appSection === 'chat'` keeps the keyboard path on the same
+  // section boundary as the (hidden-in-activity) titlebar toggle, so Activity has
+  // no browse-sidebar control path at all (#task:1394, Cindy review).
+  useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, appSection === 'chat');
 
   // App menu's "Settings…" item (Cmd+,) — main process focuses the window and
   // pushes this; renderer just navigates.
@@ -431,6 +417,13 @@ function RegisteredAppShell(): JSX.Element {
     [agents],
   );
   const selectedWorkspace = workspaces.find(w => w.id === selectedWorkspaceId) ?? null;
+  // The workspace a pending channel creation targets — resolved off the id the
+  // tree row handed over, so `+` on a row the primary pane is NOT in still creates
+  // in the right place (#task:1889).
+  const createChannelWorkspace =
+    createChannelWorkspaceId === null
+      ? null
+      : (workspaces.find(w => w.id === createChannelWorkspaceId) ?? null);
   // Titlebar name for a DM = the bound agent's raw display name, resolved the
   // SAME way as the rail (`dmRecognitionName`, shared so they can't drift) so
   // the header reads like the person, not `@handle` (#task:1768). Regular
@@ -475,15 +468,14 @@ function RegisteredAppShell(): JSX.Element {
     selectedWorkspace?.kind ?? null,
   );
   // Star (the personal ⭐ favorite) lives only in the viewer's sort state, not
-  // on the workspace/channel DTOs (#task:1209). Join `starred_at` by id here —
-  // the composition root has both the list items and the viewer sort — so the
-  // sidebars keep reading a per-item `starred_at` and re-group instantly when a
-  // star toggle reconciles the inline `viewerSort` cache.
+  // on the workspace DTOs (#task:1209). Join `starred_at` by id here — the
+  // composition root has both the list items and the viewer sort — so the rail
+  // keeps reading a per-item `starred_at` and re-pins instantly when a star toggle
+  // reconciles the inline `viewerSort` cache. The CHANNEL half of this join moved
+  // into `WorkspaceChannels` with #task:1889: the merged tree renders many
+  // workspaces' channels at once, so one map per expanded workspace belongs to the
+  // subtree that fetched that workspace's list, not up here.
   const { data: workspaceSort } = useWorkspaceSortState();
-  const { data: channelSort } = useChannelSortState(
-    selectedWorkspaceId,
-    selectedWorkspace?.kind ?? null,
-  );
   const workspaceStarredAt = useMemo(() => {
     const m = new Map<string, number>();
     for (const e of workspaceSort?.entries ?? []) {
@@ -491,13 +483,6 @@ function RegisteredAppShell(): JSX.Element {
     }
     return m;
   }, [workspaceSort]);
-  const channelStarredAt = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const e of channelSort?.entries ?? []) {
-      if (e.starred_at !== null) m.set(e.entity_id, e.starred_at);
-    }
-    return m;
-  }, [channelSort]);
   const { data: archivedChannels = [] as ChannelListItem[], status: archivedChannelsStatus, fetchStatus: archivedChannelsFetchStatus } = useArchivedChannelsForWorkspace(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
@@ -580,7 +565,6 @@ function RegisteredAppShell(): JSX.Element {
     selectedWorkspaceId,
   });
   const starWorkspace = useStarWorkspace();
-  const starChannel = useStarChannel(selectedWorkspaceId ?? null);
   const archiveChannel = useArchiveChannel(selectedWorkspaceId ?? null);
   const renameChannel = useRenameChannel(selectedWorkspaceId ?? null);
   const leaveChannel = useLeaveChannel(selectedWorkspaceId ?? null);
@@ -620,13 +604,13 @@ function RegisteredAppShell(): JSX.Element {
   // patches; the two read-models answer different questions ("how many are
   // unread" vs "how loudly should this shout") and both stay true.
   useMessageUnreadSummary();
-  // Per-channel message unread counts for the currently selected workspace.
-  // Drives channel sidebar badges; replaces the old notification-based counts.
+  // Per-channel message unread counts for the currently selected workspace. Sidebar
+  // badges moved to `WorkspaceChannels` with #task:1889 (per-workspace, mounted with
+  // the expanded subtree); this stays for the in-conversation consumers below.
   const { data: messageUnreadData } = useMessageUnreadCounts(
     selectedWorkspaceId,
     selectedWorkspace?.kind ?? null,
   );
-  const channelUnreadCounts = messageUnreadData?.by_conversation;
 
   // ── Attention badges (#task:1870) ──────────────────────────────────────
   // The viewer's per-workspace badge roll-up: raw unread for `all` channels plus
@@ -1967,9 +1951,7 @@ function RegisteredAppShell(): JSX.Element {
         }
         taskCount={workspaceActiveTaskCount}
         workspaceSidebarVisible={workspaceSidebarVisible}
-        channelSidebarVisible={channelSidebarVisible}
         onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
-        onToggleChannelSidebar={toggleChannelSidebar}
         chromeMode={appSection === 'activity' ? 'activity' : 'chat'}
       />
       <div
@@ -2282,7 +2264,27 @@ function RegisteredAppShell(): JSX.Element {
                     }))}
                     agentsById={agentsById}
                     selectedWorkspaceId={selectedWorkspaceId}
-                    onSelectWorkspace={handleSelectWorkspace}
+                    // The tree's ONE selection object. Carries forward the
+                    // secondary-pane preference the retired channel column owned:
+                    // highlight the secondary's row ONLY when it lives in the
+                    // workspace the primary is in — a cross-workspace `?side` id
+                    // leaves the primary's row filled instead of ghost-filling a
+                    // same-id row under a different parent.
+                    selectedChannelId={
+                      secondaryDescriptor?.status === 'resolved' &&
+                      secondaryDescriptor.workspaceId === selectedWorkspaceId
+                        ? secondaryDescriptor.id
+                        : selectedChannelId
+                    }
+                    onSelectChannel={handleSelectChannel}
+                    onCreateChannel={setCreateChannelWorkspaceId}
+                    // STARRED is global, so the parent workspace is explicit —
+                    // `handleSelectChannel` then opens a starred channel in another
+                    // workspace with the SAME remembered-layout restore as its home
+                    // row, instead of a bare jump.
+                    onSelectConversation={(workspaceId, conversationId) =>
+                      handleSelectChannel(conversationId, workspaceId)
+                    }
                     onStarWorkspace={(workspaceId, starred) =>
                       starWorkspace.mutate({ id: workspaceId, starred })
                     }
@@ -2352,93 +2354,6 @@ function RegisteredAppShell(): JSX.Element {
               />
             ) : (
               <>
-                <div
-                  className="sidebar-slot"
-                  data-animating={
-                    SIDEBAR_ANIMATE_LAYOUT && channelSidebarPane.transitioning
-                      ? 'true'
-                      : undefined
-                  }
-                  data-performance-variant={SIDEBAR_PERFORMANCE_VARIANT}
-                  style={{
-                    flexBasis: channelSidebarVisible
-                      ? 'var(--channels-sidebar-width)'
-                      : '0px',
-                    marginRight: channelSidebarVisible
-                      ? '0px'
-                      : 'calc(-1 * var(--frame-padding, 0px))',
-                  }}
-                  {...(channelSidebarVisible ? {} : { inert: '' })}
-                  aria-hidden={channelSidebarVisible ? undefined : true}
-                >
-                  {channelSidebarPane.present ? (
-                    <div
-                      className="sidebar-surface"
-                      data-state={channelSidebarPane.surfaceState}
-                      style={{ width: 'var(--channels-sidebar-width)' }}
-                    >
-                      <ChannelsSidebar
-                        workspaceName={selectedWorkspace?.name ?? null}
-                        workspaceId={selectedWorkspaceId}
-                        channels={activeChannels.map(s => ({
-                          id: s.id,
-                          title: s.title,
-                          kind: s.kind,
-                          visibility: s.visibility,
-                          is_member: s.is_member,
-                          status:
-                            s.status === 'active' || s.status === 'crashed' ? s.status : 'idle',
-                          closed_at: s.closed_at,
-                          starred_at: channelStarredAt.get(s.id) ?? null,
-                          archived_at: s.archived_at,
-                          created_at: s.created_at,
-                        }))}
-                        workspaceKind={selectedWorkspace?.kind === 'dm' ? 'dm' : (selectedWorkspace ? 'regular' : null)}
-                        // PR-2: highlight the secondary pane's row in
-                        // the sidebar ONLY when the secondary lives in
-                        // the currently selected workspace. Cross-
-                        // workspace `?side` ids (different workspace
-                        // than the primary's sidebar shows) leave the
-                        // primary's row highlighted instead — otherwise
-                        // we'd ghost-highlight a row that doesn't exist
-                        // in this sidebar, or worse, highlight a
-                        // same-id-different-workspace row.
-                        selectedChannelId={
-                          secondaryDescriptor?.status === 'resolved' &&
-                          secondaryDescriptor.workspaceId === selectedWorkspaceId
-                            ? secondaryDescriptor.id
-                            : selectedChannelId
-                        }
-                        onSelectChannel={handleSelectChannel}
-                        onStarChannel={(channelId, starred) =>
-                          starChannel.mutate({ channelId, starred })
-                        }
-                        onArchiveChannel={(channelId, archived) => {
-                          archiveChannel.mutate({
-                            channelId,
-                            archived,
-                            workspaceId: selectedWorkspaceId ?? undefined,
-                          });
-                        }}
-                        onCreateChannel={
-                          appSection === 'chat' && view === 'channel' && selectedWorkspace
-                            ? () => setCreateChannelOpen(true)
-                            : undefined
-                        }
-                        archivePending={archiveChannel.isPending}
-                        unreadByChannel={channelUnreadCounts ?? {}}
-                      />
-                    </div>
-                  ) : null}
-                </div>
-                {/* Splitter mounted across the full present lifecycle (see
-                  * the workspace-sidebar block for rationale). */}
-                {channelSidebarPane.present ? (
-                  <VerticalSplitter
-                    onPointerDown={channelsSidebar.startResize}
-                    active={channelsSidebar.isDragging}
-                  />
-                ) : null}
                 {/* Heavy conversation pane — the only part of the chat section
                   * kept on `deferredSection`. While the deferred value hasn't
                   * caught up to 'chat' (i.e. we just entered chat and the shell
@@ -2491,12 +2406,17 @@ function RegisteredAppShell(): JSX.Element {
         onCreated={hostId => setSelectedHostId(hostId)}
       />
       <CreateChannelDialog
-        open={createChannelOpen}
-        onOpenChange={setCreateChannelOpen}
-        workspaceId={selectedWorkspaceId}
-        workspaceKind={selectedWorkspace?.kind ?? null}
+        // Target workspace comes from the row that opened the dialog, not from the
+        // route (#task:1889) — a `+` on any row in the merged tree creates there,
+        // and the new channel is opened in ITS parent, not the current one.
+        open={createChannelWorkspaceId !== null}
+        onOpenChange={open => {
+          if (!open) setCreateChannelWorkspaceId(null);
+        }}
+        workspaceId={createChannelWorkspaceId}
+        workspaceKind={createChannelWorkspace?.kind ?? null}
         onCreated={id => {
-          if (selectedWorkspaceId) nav.toChannel(selectedWorkspaceId, id);
+          if (createChannelWorkspaceId) nav.toChannel(createChannelWorkspaceId, id);
         }}
       />
       <WorkspaceSettingsDialog

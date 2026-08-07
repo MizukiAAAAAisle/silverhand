@@ -58,33 +58,36 @@ const SEEDS: Record<string, (qc: QueryClient) => void> = {
     });
   },
   favorites: qc => {
-    const row = (workspaceId: string) => ({
-      kind: 'workspace' as const,
-      favorite_key: `workspace:${workspaceId}`,
-      entity_id: workspaceId,
+    // A favorite row is a CONVERSATION since #task:1888; `workspace_id` is its
+    // PARENT — which is what makes the removed workspace present here, and what the
+    // cleanup filters on (one lost workspace can drop SEVERAL rows).
+    const row = (conversationId: string, workspaceId: string) => ({
+      kind: 'channel' as const,
+      favorite_key: `channel:${conversationId}`,
+      entity_id: conversationId,
       workspace_id: workspaceId,
-      title: workspaceId,
-      icon_url: null,
-      runtime: null,
+      title: `#${conversationId}`,
+      parent_title: workspaceId,
+      parent_icon_url: null,
+      parent_runtime: null,
       starred_at: 1,
       created_at: 1,
       unread_count: 0,
     });
     qc.setQueryData(favoritesKey, {
-      items: [row(REMOVED), row(SURVIVOR)],
+      items: [row('c-gone', REMOVED), row('c-keep', SURVIVOR)],
       // The real DTO carries sort entries whose `entity_id` is the row's
-      // `favorite_key` (composite `<kind>:<wsId>`). An empty `entries` here was
-      // the false-green Cindy flagged: the removed workspace lingers in the sort
-      // state even after the rows are gone. Seed composite + a legacy BARE id so
-      // both cleanup branches (removedKeys ∋ entity_id, entity_id === wsId) are
-      // exercised, plus the survivor's own entry to prove it is untouched.
+      // `favorite_key`. An empty `entries` here was the false-green Cindy flagged,
+      // so seed the removed row's entry plus the survivor's. Note the entry key can
+      // no longer CONTAIN the parent id (`channel:<cid>`), so this arm of the
+      // whole-cache invariant went vacuous with #task:1888 — the orphan-entry drop
+      // is asserted directly in `features/favorites` instead.
       viewer_sort: {
         list_key: 'favorites',
         modes: {},
         entries: [
-          { entity_id: `workspace:${REMOVED}`, rank: 1, last_accessed_at: 1, starred_at: 1 },
-          { entity_id: REMOVED, rank: 2, last_accessed_at: 1, starred_at: 1 },
-          { entity_id: `workspace:${SURVIVOR}`, rank: 3, last_accessed_at: 1, starred_at: 1 },
+          { entity_id: 'channel:c-gone', rank: 1, last_accessed_at: 1, starred_at: 1 },
+          { entity_id: 'channel:c-keep', rank: 2, last_accessed_at: 1, starred_at: 1 },
         ],
       },
     });

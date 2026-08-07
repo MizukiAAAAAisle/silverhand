@@ -147,7 +147,7 @@ export function buildChannelFilterOptions(
 
 /** The `#` glyph for channel-filter dropdown rows — a sticker-variant
  *  {@link ChannelIcon} so it picks up the theme's `#` sticker recipe, the same
- *  identity `#` as ChannelsSidebar. The compact filter TRIGGER uses the
+ *  identity `#` as the sidebar's channel rows. The compact filter TRIGGER uses the
  *  utility variant instead (no sticker hook → can't inflate; #task:1437). The
  *  source (workspace / DM agent) is conveyed by the subtitle, not the icon
  *  (shiki #task:1165). */

@@ -1,4 +1,4 @@
-# List sort v1 — per-user workspace rail & channel sidebar ordering
+# List sort v1 — per-user workspace & channel list ordering
 
 Status: backend landed (#task:1147); renderer (#task:1146, Norman) consumes this
 contract. Design converged with @Cindy (review) + @Norman (renderer) and
@@ -36,7 +36,7 @@ the CONVERSATION, not its container. Two changes, both model-level:
   Favorites bounded context — mixing granularities would put parents in a short
   list whose row count then grows with their children.
 
-Consequences carried through the sections below: the channel sidebar's
+Consequences carried through the sections below: the channel list's
 `starred | unstarred` hard groups are GONE (one group `channels`; the star is an
 exclusion, not a partition), no list hard-partitions by star any more, so
 `SortRepo.clearRank` lost its only caller and was **deleted** — every home rank
@@ -73,7 +73,7 @@ Two concerns, two scopes:
 `list_key` namespaces a list:
 
 - `workspaces` — the workspace rail (one per viewer).
-- `channels:<ws_id>` — one workspace's channel sidebar.
+- `channels:<ws_id>` — one workspace's channel list (its children in the sidebar tree).
 
 ### "Recently used" = recently **opened**, not recently **active**
 
@@ -152,7 +152,7 @@ absent from `entries` joins as both-null.
 #### Drop-frame sync invariant (drag reorder)
 
 The drag-reorder UI must hold one frame-level invariant, learned the hard way
-via CDP (see `apps/desktop/.../ChannelsSidebar.tsx`). Code that conflicts with
+via CDP (see `apps/desktop/.../WorkspaceChannels.tsx`). Code that conflicts with
 it is the bug.
 
 **Reorder in the same React commit as dnd's drag-reset.** On drop, dnd-kit
@@ -412,14 +412,14 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
   Read-only, human viewer-scoped, **global** (no workspace filter, mirroring
   Activity). The backend does not impose an authoritative `items` order (raw item
   order is a deterministic fallback only); the renderer composes the display order
-  from `viewer_sort` with the shared list-sort helper, exactly like the rail /
-  channel sidebar.
+  from `viewer_sort` with the shared list-sort helper, exactly like the workspace /
+  channel lists.
 - **Sortable (#task:1252 C).** Favorites is a first-class sortable list reusing the
   whole `sort` bounded context, NOT the rail's old `workspaces`/`starred` scope
   (that one only ordered workspaces/DMs and made star a rail hard group). Its state
   lives under `list_key='favorites'`:
   - **flat, single group** `'favorites'` — sortable but not sub-partitioned;
-  - **list-wide [recent | manual]** mode (scope `''`, like the channel sidebar) +
+  - **list-wide [recent | manual]** mode (scope `''`, like the channel list) +
     **manual drag** reorder, via `PUT /api/sort/order|mode` with `list_key='favorites'`;
   - **`recent` = recently-OPENED**: it reads each entity's HOME-list
     `last_accessed_at` (so opening a conversation from its workspace updates its
@@ -522,8 +522,9 @@ contrast, Favorites owns: a first-class viewer-scoped sort state under
 - **STARRED owns presence, not behavior (invariant).** Favorites is an INDEX to
   entities, not a second navigation/selection/unread model. Opening a favorite,
   restoring its saved layout, computing its selection highlight, its unread, and
-  its context actions all DELEGATE to the home surface's entry points (the rail /
-  channel sidebar) — Favorites must not build a parallel approximation (a bare
+  its context actions all DELEGATE to the home surface's entry points (the sidebar
+  tree's workspace / channel lists) — Favorites must not build a parallel
+  approximation (a bare
   `nav.toChannel` that skips layout-restore, its own selection predicate, its own
   badge). A divergence here is the root cause class of the #task:1252 dogfood bugs
   (duplication / wrong highlight / lost layout).

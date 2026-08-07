@@ -392,9 +392,10 @@ export type MessageUnreadSummaryDto = z.infer<
  *  consumer keys on, so the client idempotently patches the displayed badge
  *  caches instead of invalidate→whole-list refetch. All values are absolute
  *  (never deltas), from the same `ConversationReadRepo` REST serves.
- *  - `conversation_unread_count` → `by_conversation[conversation_id]`
- *  - `workspace_unread_count`    → `by_workspace[workspace_id]`, `total`,
- *                                   favorites row `unread_count`
+ *  - `conversation_unread_count` → `by_conversation[conversation_id]`, favorites
+ *                                   row `unread_count` (a favorite is a
+ *                                   CONVERSATION since #task:1888)
+ *  - `workspace_unread_count`    → `by_workspace[workspace_id]`, `total`
  *  - `latest_unread` (pointer, not a count) → `latest_by_conversation`;
  *    null ⇒ this conversation has no unread (cleared → delete the key).
  *  The two variants are discriminated SOLELY by `conversation_id` presence:

@@ -1,56 +1,45 @@
-import type { FavoriteKind } from '@silverhand/shared';
-
 /**
- * Unified rail-row selection tier — the single source of truth for which rail
- * row is highlighted (#task:1254, exclusive-Favorites, final model 2026-07-01).
+ * Unified sidebar-row selection tier — the single source of truth for which row is
+ * highlighted (#task:1254, re-scoped by #task:1888, narrowed by #task:1889).
  *
  * Before this, three surfaces computed selection independently and DISAGREED for
- * the same entity: the rail `WorkspaceRow` (`id === selectedWorkspaceId`, no
- * channel guard), the STARRED favorites row, and the channel sidebar — producing
- * the double / wrong highlight shiki hit. Every rail/STARRED row now goes through
- * THIS one function.
+ * the same entity: the rail workspace row (`id === selectedWorkspaceId`, no channel
+ * guard), the STARRED favorites row, and the channel sidebar — producing the double
+ * / wrong highlight shiki hit. Every row now goes through THIS module.
  *
- * SCOPE: the rail + the global STARRED overlay hold WORKSPACE / DM rows ONLY. A
- * channel is a workspace-nested leaf — it lives in its own channel sidebar (a
- * separate column) and never appears in the rail or STARRED, so there is never a
- * competing rail row for it. That collapses the rule to its essence:
+ * ONE row species since #task:1889: the merged tree's selection object is the OPEN
+ * CONVERSATION and nothing else. A workspace / DM header is pure chrome (a collapse
+ * toggle) and never highlights, so the container rule — and the `RailRowRef` shape it
+ * needed — is gone; "which workspace am I in" is answered by which subtree is
+ * expanded around the filled row, not by a second highlight.
  *
- *   a workspace/DM row is `primary` iff it is the selected workspace.
- *
- * Opening any channel under the active workspace keeps that workspace `primary`
- * (the "which workspace am I in" cue) while the channel itself highlights in the
- * channel sidebar. Selecting a workspace/DM directly makes it `primary`. Callers
- * pass `selectedWorkspaceId = null` when a top-level view (Activity / Saved /
- * Search / Archived) owns selection, so nothing in the rail highlights then.
- *
- * (History: a prior revision threaded `selectedChannelId` + a tri-state
- * `selectedChannelStarred` to decide whether an open STARRED channel row stole
- * the highlight from its parent workspace. Channels never enter STARRED in the
- * final model, so that whole apparatus is gone.)
+ * Why the conversation rule lives here (#task:1888): a starred channel MOVED into
+ * STARRED, so it renders in a different section from its unstarred peers. Two
+ * sections painting "is this the open one?" with their own expressions is exactly the
+ * drift this module was created to end — and the acceptance contract is that a
+ * channel looks identical before and after the move.
  */
 export type RowSelectionTier = 'primary' | 'none';
 
-/** Minimal identity a rail/STARRED row needs to resolve its tier. `kind` mirrors
- *  the workspace/DM subset of `FavoriteKind` so a STARRED row and its home-list
- *  twin describe themselves identically. */
-export type RailRowRef = {
-  kind: Extract<FavoriteKind, 'workspace' | 'dm'>;
-  workspaceId: string;
-};
-
-export function railSelectionTier(
-  row: RailRowRef,
-  selectedWorkspaceId: string | null,
+/**
+ * A conversation row's tier: `primary` iff it is the open conversation. Keyed on the
+ * conversation id ALONE — deliberately not on its parent workspace, so a starred
+ * channel in STARRED and the same channel under its container resolve identically
+ * (and a channel does not light up merely because its workspace is selected).
+ */
+export function conversationSelectionTier(
+  conversationId: string,
+  selectedConversationId: string | null,
 ): RowSelectionTier {
-  return selectedWorkspaceId !== null && row.workspaceId === selectedWorkspaceId
+  return selectedConversationId !== null && conversationId === selectedConversationId
     ? 'primary'
     : 'none';
 }
 
 /**
  * The row's visual treatment for a selection tier — the single class vocabulary
- * every rail/STARRED row shares (#task:1254). Binary: exactly one strong
- * highlight, no faint/ambient tier.
+ * every sidebar row shares (#task:1254). Binary: exactly one strong highlight, no
+ * faint/ambient tier.
  *   - `primary` → solid selected fill + accent border + on-selected text. The
  *     `.text-text-on-selected` class is the hook the per-theme border contract
  *     keys on (`aside[data-sidebar] .sidebar-row-border.text-text-on-selected`

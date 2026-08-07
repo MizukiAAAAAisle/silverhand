@@ -1,34 +1,31 @@
 /**
- * Home-list projections under the Favorites model (#task:1254, final 2026-07-01).
+ * Home-list projections under the Favorites model (#task:1254, re-scoped to
+ * CONVERSATIONS by #task:1888).
  *
- * Two DISTINCT star semantics, one predicate (`starred_at`):
- *   - workspace / DM — star MOVES the row out of its home rail group into the
- *     GLOBAL STARRED overlay (Slack "move", not the old additive overlay that
- *     produced shiki's duplicate / drifting-badge bugs). See
- *     `partitionRailWorkspaces`.
- *   - channel — star does NOT leave the workspace: the channel STAYS in its own
- *     channel sidebar and is PINNED to a local `starred` group at the top (a
- *     workspace-nested leaf keeps its parent context; hoisting it into a flat
- *     global peer-group read as weird — shiki dogfood). See
- *     `partitionHomeChannels`. A starred channel NEVER enters global STARRED.
- *
- * Both reduce to: star = "pin in this entity's home surface". The home surface of
- * a workspace/DM is the global rail → global STARRED; the home surface of a
- * channel is its own sidebar → local starred group.
+ * One predicate (`starred_at`), two DISTINCT semantics — and #1888 SWAPPED which
+ * kind gets which:
+ *   - channel / DM channel — star MOVES the row out of its parent's channel list
+ *     into the GLOBAL STARRED list (`FavoritesPanel`). Exclusive: the row renders
+ *     THERE only, never in both places. See `excludeStarredChannels`.
+ *   - workspace / DM container — star does NOT leave the rail. The container STAYS
+ *     in its own rail kind group and is merely PINNED to the top of it: ordering,
+ *     not membership. A container never enters STARRED. See `pinStarredFirst`.
  *
  * SINGLE SOURCE, NO DRIFT: every projection reads each item's `starred_at`, which
  * the composition root (App.tsx) joins onto every item from the SAME
  * `viewer_sort.entries[].starred_at` the backend's reorder validation uses
  * (`SortRepo.listStarredEntityIds`). Display membership and server validation
  * therefore agree by construction — the renderer never joins `GET /api/favorites`
- * or keeps a second starred set.
+ * back onto the channel list or keeps a second starred set.
  *
- * RAW vs HOME: the underlying list query / cache still carries starred entities
- * (Events / Activity and name resolution consume the full visible set). For
- * workspace/DM these projections HIDE the starred ones (they render in STARRED
- * instead) — so "the endpoint returns a starred workspace but the home group
- * doesn't show it" is BY DESIGN. For channels nothing is hidden; the split is
- * only ordering (starred group pinned above unstarred).
+ * Why the asymmetry matters to DRAG, not just to looks: `routes/sort.ts` accepts a
+ * whole-group reorder only when `ordered_ids` is EXACTLY the group's live members.
+ *   - The channel exclusion must therefore happen BEFORE `useListDragSort` sees the
+ *     list, so the submitted set matches the group the server computes.
+ *   - The rail pin must NOT change the set — it reorders what the sort hook already
+ *     ordered, so the submitted ids stay a permutation of the same group and the
+ *     server still validates. Pinning is applied at render, so dropping an
+ *     unstarred container above a starred one visibly settles back below it.
  */
 
 /** Whether an item is starred — the one predicate the projections turn on. */
@@ -43,53 +40,58 @@ interface RailWorkspaceItem {
 }
 
 /**
- * Partition the rail's workspaces into the home hard groups by KIND, excluding
- * starred (non-archived) entities — those render only in STARRED. Archived takes
- * precedence (archived workspaces are never starrable, but the ordering keeps the
- * Archived group authoritative regardless). The input order is preserved within
- * each group, so an upstream sort still holds.
+ * Partition the rail's workspaces into the home hard groups by KIND. Archived rows
+ * are DROPPED, not returned: since #task:1889 the merged tree has no ARCHIVED group
+ * at all — the top-level `Archived` page (#task:1890) is the single archive index —
+ * so an archived workspace is simply not part of the home tree. Starred containers
+ * are NOT excluded (#task:1888): they stay in their kind group and only get pinned
+ * at render, so unlike the channel projection this returns the full non-archived
+ * set. The input order is preserved within each group, so an upstream sort still
+ * holds.
  */
 export function partitionRailWorkspaces<T extends RailWorkspaceItem>(
   items: readonly T[],
-): { dms: T[]; regular: T[]; archived: T[] } {
+): { dms: T[]; regular: T[] } {
   const dms: T[] = [];
   const regular: T[] = [];
-  const archived: T[] = [];
   for (const w of items) {
-    if (w.archived) {
-      archived.push(w);
-      continue;
-    }
-    // Exclusive: a starred workspace/DM is hoisted into STARRED, gone from home.
-    if (isStarredAt(w.starred_at)) continue;
+    if (w.archived) continue;
     if (w.kind === 'dm') dms.push(w);
     else regular.push(w);
   }
-  return { dms, regular, archived };
+  return { dms, regular };
 }
 
-interface HomeChannelItem {
-  starred_at: number | null;
+interface StarrableItem {
+  starred_at?: number | null;
 }
 
 /**
- * The channel sidebar's home list: top-level channels (threads are reply
- * clusters, never nodes) split into a local `starred | unstarred` partition.
- *
- * Unlike workspace/DM, a starred channel is NOT hoisted out — it STAYS in this
- * sidebar, just pinned into the `starred` group above `unstarred`. Both groups
- * are hard sort groups (each its own recent/manual + drag scope, wired in
- * ChannelsSidebar); within a group the viewer's sort mode orders the rows. The
- * input order is preserved within each group, so an upstream sort still holds.
+ * Hoist starred items to the front of one already-ordered rail group, preserving
+ * relative order on both sides. Ordering only — the set is unchanged, which is what
+ * keeps a subsequent whole-group reorder valid (see the module header). Apply AFTER
+ * the sort hook, never before: the viewer's sort mode orders within the pin, not
+ * across it.
  */
-export function partitionHomeChannels<T extends HomeChannelItem>(
-  items: readonly T[],
-): { starred: T[]; unstarred: T[] } {
-  const starred: T[] = [];
-  const unstarred: T[] = [];
-  for (const c of items) {
-    if (isStarredAt(c.starred_at)) starred.push(c);
-    else unstarred.push(c);
+export function pinStarredFirst<T extends StarrableItem>(items: readonly T[]): T[] {
+  const pinned: T[] = [];
+  const rest: T[] = [];
+  for (const it of items) {
+    if (isStarredAt(it.starred_at)) pinned.push(it);
+    else rest.push(it);
   }
-  return { starred, unstarred };
+  return pinned.length === 0 ? [...rest] : [...pinned, ...rest];
+}
+
+/**
+ * The channel sidebar's home list: top-level channels (threads are reply clusters,
+ * never nodes) MINUS the starred ones, which have moved into global STARRED
+ * (#task:1888 — exclusive, so hiding them here is the point, not a bug). One flat
+ * group; the pre-#1888 `starred | unstarred` hard split is gone. Must run before
+ * `useListDragSort` so the drag group matches the server's live member set.
+ */
+export function excludeStarredChannels<T extends StarrableItem>(
+  items: readonly T[],
+): T[] {
+  return items.filter(c => !isStarredAt(c.starred_at));
 }

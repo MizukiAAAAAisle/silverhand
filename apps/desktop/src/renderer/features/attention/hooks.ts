@@ -4,7 +4,7 @@
 // Attention is the read-side projection of the human's "queue waiting on me",
 // distinct from messaging/channels. Canonical: docs/activity-lifecycle-v1.md.
 import { useEffect } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type {
@@ -13,6 +13,7 @@ import type {
   AttentionBadgeUpdatedPayload,
   AttentionPrefChangedPayload,
   ChannelAttentionMode,
+  ChannelAttentionModeRowDto,
   ChannelAttentionPreferenceDto,
   ListActivityDto,
   ObserveSource,
@@ -243,6 +244,23 @@ function patchWorkspaceMutedInLoadedBatch(
   );
 }
 
+/** The (key, fetcher) pair for ONE workspace's tier batch. Both consumers below
+ *  compose it so the key and the request can't drift — that identity is what
+ *  makes them share one cache entry rather than issue two reads. */
+function attentionModesQuery(workspaceId: string): {
+  queryKey: readonly unknown[];
+  queryFn: (ctx: { signal?: AbortSignal }) => Promise<WorkspaceAttentionModesDto>;
+} {
+  return {
+    queryKey: attentionModesKey(workspaceId),
+    queryFn: ({ signal }) =>
+      api<WorkspaceAttentionModesDto>(
+        `${apiPaths.attentionModes}?workspace_id=${encodeURIComponent(workspaceId)}`,
+        { signal },
+      ),
+  };
+}
+
 /**
  * Every channel tier in ONE workspace in a single read
  * (`GET /api/attention/modes?workspace_id=…`) — one request for the whole
@@ -257,14 +275,55 @@ function patchWorkspaceMutedInLoadedBatch(
  */
 export function useWorkspaceAttentionModes(workspaceId: string | null) {
   return useQuery<WorkspaceAttentionModesDto>({
-    queryKey: attentionModesKey(workspaceId ?? 'none'),
+    ...attentionModesQuery(workspaceId ?? 'none'),
     enabled: !!workspaceId,
-    queryFn: ({ signal }) =>
-      api<WorkspaceAttentionModesDto>(
-        `${apiPaths.attentionModes}?workspace_id=${encodeURIComponent(workspaceId!)}`,
-        { signal },
-      ),
   });
+}
+
+/**
+ * The SAME per-workspace tier batches as {@link useWorkspaceAttentionModes},
+ * fanned out over several workspaces at once (#task:1889). The global STARRED
+ * list holds conversations from ANY workspace, so a starred row's tier cannot
+ * come from the selected workspace's batch alone — but it must still come from
+ * the same authority, because the acceptance contract is that a conversation
+ * paints the IDENTICAL {@link channelRowBadge} result before and after it moves
+ * into STARRED.
+ *
+ * Deliberately a `useQueries` over `attentionModesKey(id)` — the very key
+ * {@link useWorkspaceAttentionModes} uses — so React Query dedupes: the selected
+ * workspace's sidebar and this fan-out share one cache entry and there is still
+ * exactly ONE authority for a tier. It likewise adds no listener (realtime is
+ * the single app-lifetime {@link useAttentionRealtime}), and every arm that
+ * invalidates a single batch already keys off the payload's workspace rather
+ * than the selection, so a non-selected workspace's batch stays live with no new
+ * event or subscription.
+ *
+ * `byChannel` is keyed by `conversation_id` across all batches (ids are globally
+ * unique). A conversation ABSENT from it has no tier — the caller must pass
+ * `effective_mode: undefined` and render no badge, never a fabricated tier. The
+ * read is intentionally NOT widened to cover those absences: the server's
+ * population is member `channel`s only, so a starred-but-unjoined public channel
+ * and a `dm_channel` are absent BY DESIGN, exactly as they are in the channel
+ * sidebar today (a `dm_channel`'s rule is the DM row's own: always `'all'`).
+ */
+export function useAttentionModesAcrossWorkspaces(
+  workspaceIds: readonly string[],
+): {
+  byChannel: Map<string, ChannelAttentionModeRowDto>;
+  mutedByWorkspace: Map<string, boolean>;
+} {
+  const results = useQueries({
+    queries: workspaceIds.map(id => attentionModesQuery(id)),
+  });
+  const byChannel = new Map<string, ChannelAttentionModeRowDto>();
+  const mutedByWorkspace = new Map<string, boolean>();
+  for (const r of results) {
+    const batch = r.data;
+    if (!batch) continue;
+    mutedByWorkspace.set(batch.workspace_id, batch.muted);
+    for (const row of batch.channels) byChannel.set(row.conversation_id, row);
+  }
+  return { byChannel, mutedByWorkspace };
 }
 
 /**

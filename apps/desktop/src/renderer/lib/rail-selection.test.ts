@@ -1,34 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { railSelectionTier, type RailRowRef } from './rail-selection';
+import { conversationSelectionTier } from './rail-selection';
 
-describe('railSelectionTier (#task:1254 exclusive, workspace/DM-only binary)', () => {
-  const ws = (id: string): RailRowRef => ({ kind: 'workspace', workspaceId: id });
-  const dm = (id: string): RailRowRef => ({ kind: 'dm', workspaceId: id });
-
-  it('primary when the row is the selected workspace', () => {
-    expect(railSelectionTier(ws('w1'), 'w1')).toBe('primary');
-    expect(railSelectionTier(dm('w1'), 'w1')).toBe('primary');
+describe('conversationSelectionTier (#task:1888 — same verdict in STARRED and under the parent)', () => {
+  it('primary only for the open conversation', () => {
+    expect(conversationSelectionTier('c1', 'c1')).toBe('primary');
+    expect(conversationSelectionTier('c2', 'c1')).toBe('none');
   });
 
-  it('none when the row is not the selected workspace', () => {
-    expect(railSelectionTier(ws('w2'), 'w1')).toBe('none');
-    expect(railSelectionTier(dm('w2'), 'w1')).toBe('none');
+  it('no open conversation → none', () => {
+    expect(conversationSelectionTier('c1', null)).toBe('none');
   });
 
-  it('an open channel does not change the rule — its parent workspace stays primary', () => {
-    // Channels never appear in the rail/STARRED, so opening one under the active
-    // workspace simply leaves that workspace selected (the channel highlights in
-    // the channel sidebar, a separate column). No channel arg reaches this fn.
-    expect(railSelectionTier(ws('w1'), 'w1')).toBe('primary');
-  });
-
-  it('suppressed selection (top-level view owns it) → everything none', () => {
-    expect(railSelectionTier(ws('w1'), null)).toBe('none');
-    expect(railSelectionTier(dm('w1'), null)).toBe('none');
-  });
-
-  it('selecting a workspace: exactly one primary across the rail', () => {
-    const tiers = [ws('w1'), ws('w2'), dm('w3')].map(r => railSelectionTier(r, 'w1'));
-    expect(tiers).toEqual(['primary', 'none', 'none']);
+  it('keys on the conversation alone — a selected parent does not light its children', () => {
+    // The arg is the open CONVERSATION, never a workspace id: passing the parent's
+    // id must not make a child primary.
+    expect(conversationSelectionTier('c1', 'w1')).toBe('none');
   });
 });

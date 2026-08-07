@@ -1,6 +1,5 @@
 import {
   CheckSquare,
-  Columns2,
   PanelLeft,
   PanelLeftDashed,
   Settings,
@@ -9,41 +8,6 @@ import {
 import { ManageMembersPopover } from '@/features/workspaces/ManageMembersPopover';
 
 type WorkspaceUiKind = 'regular' | 'dm';
-
-/**
- * Mirror of `Columns2` with the central divider drawn as four short
- * dashes — same stylistic family as lucide's `PanelLeftDashed`. Used as
- * the "channel sidebar hidden" glyph so the channel toggle communicates
- * its state through the same solid-vs-dashed-divider vocabulary as the
- * workspace toggle (PanelLeft ↔ PanelLeftDashed), just with the divider
- * placed at the center to indicate the SECOND column instead of the
- * first.
- */
-function Columns2Dashed(props: React.SVGProps<SVGSVGElement>): JSX.Element {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      {...props}
-    >
-      <rect width="18" height="18" x="3" y="3" rx="2" />
-      {/* Dashed divider at x=12 — segment positions copied from
-        * `PanelLeftDashed` so the visual rhythm matches. */}
-      <path d="M12 3v2" />
-      <path d="M12 9v1" />
-      <path d="M12 14v1" />
-      <path d="M12 19v2" />
-    </svg>
-  );
-}
 
 interface TitlebarProps {
   workspaceId: string | null;
@@ -63,20 +27,17 @@ interface TitlebarProps {
    *  that (#task:1885). */
   taskCount?: number | null;
   workspaceSidebarVisible: boolean;
-  channelSidebarVisible: boolean;
   onToggleWorkspaceSidebar: () => void;
-  onToggleChannelSidebar: () => void;
   /** Which section's chrome the titlebar frames (#task:1394). `chat` shows the
-   *  two browse-sidebar toggles and offsets the workspace label by the
-   *  COLLAPSIBLE workspace sidebar. `activity` has no browse sidebars — the
-   *  Activity list is the left column — so it hides the toggles and offsets the
-   *  label by `NavRail + Activity-list` width, reading the SAME
-   *  `--activity-list-width` var the list is sized from. That keeps chat-only UI
-   *  state out of the Activity layout AND — because the offset tracks the one
-   *  width source — the label stays aligned above the ChannelView column while
-   *  the user drags the Activity list wider/narrower (no second computed
-   *  offset). With no channel selected the route carries no workspace, so no
-   *  label renders and the offset is inert. */
+   *  browse-sidebar toggle and offsets the workspace label by the COLLAPSIBLE
+   *  sidebar. `activity` has no browse sidebar — the Activity list is the left
+   *  column — so it hides the toggle and offsets the label by
+   *  `NavRail + Activity-list` width, reading the SAME `--activity-list-width`
+   *  var the list is sized from. That keeps chat-only UI state out of the Activity
+   *  layout AND — because the offset tracks the one width source — the label stays
+   *  aligned above the ChannelView column while the user drags the Activity list
+   *  wider/narrower (no second computed offset). With no channel selected the route
+   *  carries no workspace, so no label renders and the offset is inert. */
   chromeMode: 'chat' | 'activity';
 }
 
@@ -85,8 +46,8 @@ interface TitlebarProps {
  * and its primary actions (Settings, Manage Members, New Channel).
  * Workspace info starts after the section-specific left
  * chrome (`chromeWidth`) so it sits directly above the first content
- * column it describes: in chat that's the (collapsible) workspace
- * sidebar; in activity it's the `NavRail + Activity list` offset, which
+ * column it describes: in chat that's the (collapsible) sidebar;
+ * in activity it's the `NavRail + Activity list` offset, which
  * tracks the (resizable) Activity-list width (see `chromeMode`). The leftmost region is an empty drag area that also
  * doubles as the macOS traffic-lights inset. Spans the full window so it
  * doubles as the native title bar (`titleBarStyle: 'hiddenInset'` on
@@ -101,9 +62,7 @@ export function Titlebar({
   onOpenTasks,
   taskCount,
   workspaceSidebarVisible,
-  channelSidebarVisible,
   onToggleWorkspaceSidebar,
-  onToggleChannelSidebar,
   chromeMode,
 }: TitlebarProps): JSX.Element {
   const hasWorkspace = workspaceName !== null;
@@ -111,14 +70,14 @@ export function Titlebar({
   const showSettings = hasWorkspace && workspaceKind !== 'dm' && !!onOpenWorkspaceSettings;
   const showTasks = hasWorkspace && !!onOpenTasks;
   const isArchived = workspaceArchivedAt !== null;
-  // Activity has no browse sidebars — the Activity list IS the left column — so
+  // Activity has no browse sidebar — the Activity list IS the left column — so
   // its label offset is `NavRail + Activity-list` width, read from the SAME
   // `--activity-list-width` var the list is sized from (never the collapsible
-  // chat workspace sidebar). Reading the single width source is what keeps the
+  // chat sidebar). Reading the single width source is what keeps the
   // label aligned above ChannelView as the user drags the list (`app-layout.md
   // §1.1`, #task:1394). Fallback to `--sidebar-width` only guards the var being
   // unset before first layout. Chat keeps the collapsible offset.
-  const showSidebarToggles = chromeMode === 'chat';
+  const showSidebarToggle = chromeMode === 'chat';
   const leftColumnWidth =
     chromeMode === 'activity'
       ? 'var(--activity-list-width, var(--sidebar-width))'
@@ -141,7 +100,7 @@ export function Titlebar({
     >
       {/* Spacer matches the visible left chrome so the workspace info
         * lines up with the next column. The native macOS traffic-lights
-        * and sidebar toggles live inside this region. */}
+        * and the sidebar toggle live inside this region. */}
       <div
         className="relative h-full shrink-0"
         style={{
@@ -149,59 +108,33 @@ export function Titlebar({
         }}
       >
         <div className="absolute left-[var(--titlebar-sidebar-toggle-left)] top-1/2 flex -translate-y-1/2 items-center gap-1">
-          {/* Browse-sidebar toggles are chat-only: Activity has no browse
-            * sidebars (its list is a fixed column), so they're hidden there —
+          {/* The browse-sidebar toggle is chat-only: Activity has no browse
+            * sidebar (its list is a fixed column), so it's hidden there —
             * the empty region still reserves the traffic-lights inset via
-            * `chromeWidth`/`--titlebar-controls-safe-width` (#task:1394). */}
-          {showSidebarToggles ? (
-            <>
-              {/* Workspace toggle uses the Panel-* family so it's visually
-                * distinct from the Channel toggle's Columns/Square family.
-                * State is communicated by *icon shape*, not background colour:
-                * solid panel = visible; dashed panel = hidden. */}
-              <button
-                type="button"
-                onClick={onToggleWorkspaceSidebar}
-                aria-label={
-                  workspaceSidebarVisible
-                    ? 'Hide workspace sidebar'
-                    : 'Show workspace sidebar'
-                }
-                aria-pressed={workspaceSidebarVisible}
-                title="Workspace sidebar (⌘⇧\\)"
-                className={toggleButton}
-              >
-                {workspaceSidebarVisible ? (
-                  <PanelLeft className="size-3.5" />
-                ) : (
-                  <PanelLeftDashed className="size-3.5" />
-                )}
-              </button>
-              {/* Channel toggle mirrors the workspace toggle's vocabulary:
-                * solid divider = visible, dashed divider = hidden. The
-                * difference is divider POSITION — workspace's lives at x=9
-                * (first column boundary), channel's lives at x=12 (second
-                * column boundary), so the two toggles read as "first / second
-                * sidebar" without needing a label. */}
-              <button
-                type="button"
-                onClick={onToggleChannelSidebar}
-                aria-label={
-                  channelSidebarVisible
-                    ? 'Hide channel sidebar'
-                    : 'Show channel sidebar'
-                }
-                aria-pressed={channelSidebarVisible}
-                title="Channel sidebar (⌘\\)"
-                className={toggleButton}
-              >
-                {channelSidebarVisible ? (
-                  <Columns2 className="size-3.5" />
-                ) : (
-                  <Columns2Dashed className="size-3.5" />
-                )}
-              </button>
-            </>
+            * `chromeWidth`/`--titlebar-controls-safe-width` (#task:1394).
+            *
+            * ONE toggle since #task:1889 merged the two browse columns into a
+            * single tree. State is communicated by *icon shape*, not background
+            * colour: solid panel = visible; dashed panel = hidden. The retired
+            * channel toggle's Columns/Square family went with its column — a
+            * second shape family for one pane would read as a missing control. */}
+          {showSidebarToggle ? (
+            <button
+              type="button"
+              onClick={onToggleWorkspaceSidebar}
+              aria-label={
+                workspaceSidebarVisible ? 'Hide sidebar' : 'Show sidebar'
+              }
+              aria-pressed={workspaceSidebarVisible}
+              title="Sidebar (⌘\\)"
+              className={toggleButton}
+            >
+              {workspaceSidebarVisible ? (
+                <PanelLeft className="size-3.5" />
+              ) : (
+                <PanelLeftDashed className="size-3.5" />
+              )}
+            </button>
           ) : null}
         </div>
       </div>

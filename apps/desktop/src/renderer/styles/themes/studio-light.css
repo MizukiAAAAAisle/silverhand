@@ -416,8 +416,8 @@
    左条（committed 的记号）+ 一层极薄阴影（"浮起"）。四边描边转透明 ——
    1px 宽度只作水槽，选中时内容不位移。
    两个选择器覆盖两种行来源：aside 里的行（PINNED / DM / workspaces）要压过
-   global.css 的 `aside[data-sidebar] …`(0,3,1) → (0,4,1)；ChannelsSidebar
-   的行用 Tailwind `border-accent`(0,1,0) 并带 `data-row-selected`。 */
+   global.css 的 `aside[data-sidebar] …`(0,3,1) → (0,4,1)；WorkspaceChannels
+   的 channel 行用 Tailwind `border-accent`(0,1,0) 并带 `data-row-selected`。 */
 [data-theme='studio-light'] aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
 [data-theme='studio-light'] [data-row-selected].sidebar-row-border.text-text-on-selected {
   border-color: transparent;

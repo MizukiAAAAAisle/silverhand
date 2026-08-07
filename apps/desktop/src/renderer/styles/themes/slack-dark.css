@@ -84,7 +84,7 @@
   --bg-row-hover: rgba(255, 255, 255, 0.06);
 
   /* ── Nav rail / sidebar (Slack 双 chrome 模型) ──
-     NavRail + ChannelsSidebar 都用 #19171D（最深，Slack 风格的 column nav
+     NavRail + Sidebar 都用 #19171D（最深，Slack 风格的 column nav
      一致冷黑）；SessionsSidebar 用 #1A1D21（轻微抬亮，预告进入 chat 读区）；
      chat = #1A1D21 与 sessions 同色，保证从 sidebar → chat 没有突跳。
      不走 oklab 渐变（Slack 是直接的 2-tone 切分，不是连续色线）。 */
@@ -457,7 +457,7 @@
 /* sidebar selected row: the brand-blue fill + white text already carry
    "selected" — drop the white border so slack matches warm's borderless
    selected (warm uses a veil + left-bar; slack uses the full brand fill).
-   Two selectors mirror the aside-hosted rows and the ChannelsSidebar
+   Two selectors mirror the aside-hosted rows and the channel-row
    `data-row-selected` variant. */
 [data-theme='slack-dark'] aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
 [data-theme='slack-dark'] [data-row-selected].sidebar-row-border.text-text-on-selected {

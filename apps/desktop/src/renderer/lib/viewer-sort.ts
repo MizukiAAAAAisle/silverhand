@@ -1,10 +1,10 @@
 // Adapter between the wire `viewer_sort` DTO (sparse per-entity state) and the
 // DTO-agnostic pure sorter in `./list-sort`. Components call `sortGroup` per
-// live hard group (channel: starred/unstarred; rail: dm/regular — star is the
-// global Favorites overlay, NOT a rail group, see #task:1252) with
-// the viewer's per-SCOPE mode (see `sortModeOf`). Keeping this here lets the
-// sorter stay free of the sorter's own `@silverhand/shared` dependency. See
-// docs/list-sort-v1.md (#task:1146).
+// live hard group (channel: ONE group since #task:1888 — a starred conversation
+// moves to the global `favorites` list; rail: dm/regular, where star is only an
+// in-group pin applied after sorting) with the viewer's per-SCOPE mode (see
+// `sortModeOf`). Keeping this here lets the sorter stay free of the sorter's own
+// `@silverhand/shared` dependency. See docs/list-sort-v1.md (#task:1146).
 import type { SortGroup, ViewerSortStateDto } from '@silverhand/shared';
 import { sortByMode, type ListSortMode, type SortableEntry } from './list-sort';
 
@@ -27,8 +27,8 @@ export function sortEntryLookup(
 
 /** The viewer's mode for one SCOPE of a list. A scope is an independently
  *  toggleable [recent|manual] axis:
- *    - workspace rail : scope = the hard group (`'dm' | 'regular'`). Star is the
- *      global Favorites overlay (#task:1252), NOT a rail group.
+ *    - workspace rail : scope = the hard group (`'dm' | 'regular'`). Star only
+ *      PINS a container inside its own group (#task:1888), never a scope of its own.
  *    - channel sidebar: scope = `''` (list-wide) — pass no `group`.
  *  Absent stored mode = the default, `recent`. */
 export function sortModeOf(

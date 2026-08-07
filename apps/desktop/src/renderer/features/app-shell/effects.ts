@@ -94,38 +94,35 @@ export function useDockBadge(total: number | undefined): void {
 }
 
 /**
- * Global Cmd+\ / Cmd+Shift+\ shortcut to toggle the channel / workspace
- * sidebars. Ignores modifier-混入 combos (ctrl/alt) so it never hijacks other
- * chords.
+ * Global Cmd+\ shortcut to toggle the browse sidebar. Ignores modifier-混入 combos
+ * (ctrl/alt) so it never hijacks other chords, and ignores Cmd+Shift+\ too: that
+ * was the second (channel) column's chord until #task:1889 merged the two into one
+ * tree, and letting it fall through to the same toggle would keep a retired chord
+ * silently alive.
  *
- * `enabled` scopes the chord to the section that actually owns these two browse
- * sidebars (chat). Activity has no workspace/channel sidebar — its visible
- * toggles are hidden — so the keyboard path must share that same boundary,
- * otherwise the chord silently mutates the (hidden) chat sidebar preference from
- * Activity and the layout jumps on return to chat (#task:1394 review, Cindy). We
- * gate registration rather than early-returning inside the handler so a disabled
- * section also leaves the chord free (no stray `preventDefault`).
+ * `enabled` scopes the chord to the section that actually owns this browse sidebar
+ * (chat). Activity has no browse sidebar — its visible toggle is hidden — so the
+ * keyboard path must share that same boundary, otherwise the chord silently mutates
+ * the (hidden) chat sidebar preference from Activity and the layout jumps on return
+ * to chat (#task:1394 review, Cindy). We gate registration rather than
+ * early-returning inside the handler so a disabled section also leaves the chord
+ * free (no stray `preventDefault`).
  */
 export function useLayoutKeyboardShortcuts(
   toggleWorkspaceSidebar: () => void,
-  toggleChannelSidebar: () => void,
   enabled: boolean,
 ): void {
   useEffect(() => {
     if (!enabled) return;
     const handleKeyDown = (event: KeyboardEvent): void => {
-      if (!event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
       if (event.code !== 'Backslash') return;
       event.preventDefault();
-      if (event.shiftKey) {
-        toggleWorkspaceSidebar();
-      } else {
-        toggleChannelSidebar();
-      }
+      toggleWorkspaceSidebar();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [enabled, toggleChannelSidebar, toggleWorkspaceSidebar]);
+  }, [enabled, toggleWorkspaceSidebar]);
 }
 
 /**

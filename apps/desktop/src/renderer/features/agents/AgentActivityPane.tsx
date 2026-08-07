@@ -214,7 +214,7 @@ function RosterItem({
           // a discrete committed state, instant switch (#task:1162).
           'sidebar-row-border flex w-full items-center gap-1.5 border py-1 pl-2 pr-7 text-left',
           // Foreground pairs with the `--bg-row-selected` fill via
-          // `text-text-on-selected` (same row vocabulary as ChannelsSidebar /
+          // `text-text-on-selected` (same row vocabulary as WorkspaceChannels /
           // WorkspacesPanel): forza6 = ink-on-lime, warm = text-primary,
           // slack = white. The `.text-text-on-selected` border/shadow CSS is
           // `aside[data-sidebar]`-scoped, so on this content-area row the class

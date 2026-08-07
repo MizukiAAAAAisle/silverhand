@@ -1,10 +1,11 @@
-// Favorites bounded context — renderer read/write hooks (#task:1253).
-// Mirrors `@silverhand/shared` `api/favorites.ts`: the left-rail STARRED section
-// promoted to a GLOBAL, viewer-scoped FLAT favorites list of the viewer's starred
-// WORKSPACES / DMs — the `user_sort_entry.starred_at` set under
-// `list_key='workspaces'` only (#task:1254 final). A starred CHANNEL is NOT here:
-// its star pins it locally in its own channel sidebar (`channels:*` starred
-// group), never entering this global list.
+// Favorites bounded context — renderer read/write hooks (#task:1253, re-scoped
+// to CONVERSATIONS by #task:1888). Mirrors `@silverhand/shared` `api/favorites.ts`:
+// the sidebar's STARRED section as a GLOBAL, viewer-scoped FLAT list of the
+// viewer's starred conversations — `kind` ∈ {'channel','dm_channel'}, the
+// `user_sort_entry.starred_at` set under `list_key='channels:<ws_id>'`. A
+// WORKSPACE / DM container is NOT here: starring one PINS it at the top of its own
+// rail kind group (ordering only, composed from the rail's own `starred_at`), it
+// never moves into this list.
 //
 // Storage split (#task:1252 C — do NOT collapse back to "zero storage"):
 //   - MEMBERSHIP is a read projection with NO storage of its own — a row is in
@@ -13,14 +14,15 @@
 //     rank + mode in `user_sort_entry`, written through the SHARED sort hooks
 //     (useSetSortMode / useReorderSort), NOT here.
 // So THIS hook owns: fetch (`useFavorites`) + unstar (`useUnstarFavorite`, a
-// per-entity star DELETE on the workspace endpoint). It does not own favorites
+// per-conversation star DELETE on the channel endpoint). It does not own favorites
 // ordering writes. Canonical: docs/list-sort-v1.md.
 //
 // Favorites is EXCLUSIVE, never an additive overlay (#task:1254): a starred
-// workspace/DM shows HERE only — it has been MOVED out of its home rail group. So
-// unstar invalidates the workspace rail cache not to re-sync a second visible
-// copy, but so the entity REAPPEARS in its home group (and the favorites list
-// drops it); star does the reverse. Single source is `user_sort_entry.starred_at`.
+// conversation shows HERE only — it has been MOVED out of its parent's children.
+// So unstar invalidates the workspace/channel caches not to re-sync a second
+// visible copy, but so the conversation REAPPEARS under its parent (and the
+// favorites list drops it); star does the reverse. Single source is
+// `user_sort_entry.starred_at`.
 import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
@@ -36,6 +38,7 @@ import {
   isCurrentViewerScope,
   onWsFrame,
   subscribeViewerScope,
+  subscribeWsScope,
 } from '@/lib/ws-client';
 
 /** Query key for the viewer's global favorites list. One cache entry (the list
@@ -44,48 +47,56 @@ import {
 export const favoritesKey = ['favorites', 'all'] as const;
 
 /** S1 viewer-unread ingestor patch (#task:1284, doc §6) — write ONE favorite
- *  row's absolute unread from an enriched `unread_updated` frame. Favorites is a
- *  LIST whose membership (which entities are starred) is orthogonal to unread, so
- *  this is PRESENT-ONLY: it writes `unread_count` on the row whose `workspace_id`
- *  matches (0 is written too — a cleared badge), and is a no-op if the row is
- *  absent or the list is not loaded. It NEVER inserts a row and NEVER refetches
- *  (an unread change can't add/remove a favorite; a fallback refetch would turn a
- *  badge tick back into a whole-list refetch — the exact regression this replaces,
- *  Cindy B3). Idempotent: an unchanged count writes nothing. */
+ *  row's absolute unread from an enriched `unread_updated` frame. A favorite is a
+ *  CONVERSATION since #task:1888, so the match is `entity_id === conversation_id`
+ *  and the value is `conversation_unread_count` — the frame's
+ *  `workspace_unread_count` is the PARENT's roll-up and would overstate a row
+ *  whose parent has other unread conversations. Favorites is a LIST whose
+ *  membership (which conversations are starred) is orthogonal to unread, so this is
+ *  PRESENT-ONLY: it writes `unread_count` on the matching row (0 is written too — a
+ *  cleared badge), and is a no-op if the row is absent or the list is not loaded. It
+ *  NEVER inserts a row and NEVER refetches (an unread change can't add/remove a
+ *  favorite; a fallback refetch would turn a badge tick back into a whole-list
+ *  refetch — the exact regression this replaces, Cindy B3). Idempotent: an
+ *  unchanged count writes nothing. */
 export function patchFavoritesUnread(
   qc: QueryClient,
   payload: UnreadUpdatedMessagePayload,
 ): 'patched' | 'unchanged' | 'absent' | 'cold' {
   const prev = qc.getQueryData<ListFavoritesDto>(favoritesKey);
   if (!prev) return 'cold'; // list not loaded → no-op
-  const idx = prev.items.findIndex(it => it.workspace_id === payload.workspace_id);
+  const idx = prev.items.findIndex(it => it.entity_id === payload.conversation_id);
   if (idx < 0) return 'absent'; // no such favorite row → no-op (never insert)
   const row = prev.items[idx];
   if (!row) return 'absent'; // unreachable (idx >= 0) — narrows the index access
-  if (row.unread_count === payload.workspace_unread_count) {
+  if (row.unread_count === payload.conversation_unread_count) {
     return 'unchanged';
   }
   const items = prev.items.slice();
-  items[idx] = { ...row, unread_count: payload.workspace_unread_count };
+  items[idx] = { ...row, unread_count: payload.conversation_unread_count };
   qc.setQueryData<ListFavoritesDto>(favoritesKey, { ...prev, items });
   return 'patched';
 }
 
-/** Drop every favorite row for a workspace the viewer lost access to — removed
+/** Drop every favorite row under a workspace the viewer lost access to — removed
  *  from it, or the workspace deleted (#task:1404). The same
  *  `viewer_workspaces_changed(removed)` fact that drops the `['workspaces']` row
- *  and purges message-unread ALSO invalidates this row's membership: favorites is
- *  the THIRD viewer-local projection of that fact, and a starred workspace/DM
- *  would otherwise linger as a dead row (a row's `workspace_id === entity_id`, so
- *  the deleted workspace's own row is the match). Consume the event's workspace_id,
- *  no refetch: filter out the matching `items` AND drop their orphan
- *  `viewer_sort.entries` (for the favorites list an entry's `entity_id` IS the
- *  row's `favorite_key` = `<kind>:<entity_id>`; a legacy bare workspace id is
- *  tolerated). Leaving the sort entry behind would let the removed id survive in
- *  cache — the whole-cache removal invariant it violates is why #task:1412 fixed
- *  it (Cindy). Local-only: on re-visibility a refetch restores authoritative order.
- *  PRESENT-ONLY / idempotent, mirroring {@link patchFavoritesUnread}: list not
- *  loaded → no-op; nothing matched → no write. */
+ *  and purges message-unread ALSO invalidates these rows' membership: favorites is
+ *  the THIRD viewer-local projection of that fact, and a starred conversation would
+ *  otherwise linger as a dead row. Since #task:1888 a row is a CONVERSATION and
+ *  `workspace_id` is its PARENT, so one lost workspace can drop SEVERAL rows.
+ *  Consume the event's workspace_id, no refetch: filter out the matching `items`
+ *  AND drop their orphan `viewer_sort.entries` (an entry's `entity_id` IS the row's
+ *  `favorite_key` = `<kind>:<entity_id>`). Leaving the sort entry behind would let
+ *  the removed id survive in cache — the whole-cache removal invariant it violates
+ *  is why #task:1412 fixed it (Cindy). That guard used to also match a
+ *  `workspace:<wsId>` composite and a legacy BARE `<wsId>` entry; since #task:1888
+ *  every key here is `channel:`/`dm_channel:`-prefixed and a conversation id never
+ *  contains its parent's, so those two branches have no reachable input and the
+ *  invariant now holds through the row filter alone. Local-only: on re-visibility a
+ *  refetch restores authoritative order. PRESENT-ONLY / idempotent, mirroring
+ *  {@link patchFavoritesUnread}: list not loaded → no-op; nothing matched → no
+ *  write. */
 export function removeWorkspaceFromFavorites(
   qc: QueryClient,
   workspaceId: string,
@@ -101,7 +112,7 @@ export function removeWorkspaceFromFavorites(
   );
   const items = prev.items.filter(it => it.workspace_id !== workspaceId);
   const entries = prev.viewer_sort.entries.filter(
-    e => !removedKeys.has(e.entity_id) && e.entity_id !== workspaceId,
+    e => !removedKeys.has(e.entity_id),
   );
   const changed =
     items.length !== prev.items.length ||
@@ -135,51 +146,81 @@ export function removeWorkspaceFromFavorites(
  * message-variant `unread_updated` is now patched in place by the central
  * viewer-unread ingestor (#task:1284, via {@link patchFavoritesUnread}) — this
  * hook no longer invalidates on it (that would turn a badge tick back into a
- * whole-list refetch). Only a `snapshot_required` (resume/epoch) still refetches
- * authoritatively; membership still changes only on star/unstar. Unread is
- * server-scored — never derived client-side.
+ * whole-list refetch). Unread is server-scored — never derived client-side.
+ *
+ * MEMBERSHIP liveness (#task:1889). Since #task:1888 a row is a CONVERSATION, so
+ * its membership now moves on facts the viewer scope never carries: leaving a
+ * private channel, or archiving one, ends a star's reachability and must drop the
+ * row — otherwise a dead STARRED row survives until remount. Those facts arrive as
+ * `workspace_channels_changed` on the PARENT's workspace scope, so this hook
+ * subscribes to the distinct parents of the rows it is currently showing (the same
+ * shape as `useArchivedChannelsIndex`; no new backend event). A star ADDING a row
+ * needs no arm here — the star mutations invalidate this key directly.
  */
 export function useFavorites() {
   const qc = useQueryClient();
-
-  useEffect(() => {
-    const sub = subscribeViewerScope();
-    const unsub = onWsFrame(frame => {
-      if (frame.type !== 'snapshot_required') return;
-      if (!isCurrentViewerScope(frame.scope)) return;
-      void qc.invalidateQueries({ queryKey: favoritesKey });
-    });
-    return () => {
-      sub.unsubscribe();
-      unsub();
-    };
-  }, [qc]);
-
-  return useQuery<ListFavoritesDto>({
+  const query = useQuery<ListFavoritesDto>({
     queryKey: favoritesKey,
     queryFn: ({ signal }) => api<ListFavoritesDto>(apiPaths.favorites, { signal }),
   });
+
+  // The parents currently represented in the list. Joined into a stable string so
+  // the effect re-subscribes only when the SET changes, not on every refetch.
+  const parentIds = Array.from(
+    new Set((query.data?.items ?? []).map(it => it.workspace_id)),
+  ).sort();
+  const parentKey = parentIds.join(',');
+
+  useEffect(() => {
+    const scopeIds = parentKey ? parentKey.split(',') : [];
+    const subs = scopeIds.map(id => subscribeWsScope(`workspace:${id}`));
+    const sub = subscribeViewerScope();
+    const unsub = onWsFrame(frame => {
+      if (frame.type === 'snapshot_required') {
+        if (
+          isCurrentViewerScope(frame.scope)
+          || scopeIds.some(id => frame.scope === `workspace:${id}`)
+        ) {
+          void qc.invalidateQueries({ queryKey: favoritesKey });
+        }
+        return;
+      }
+      if (frame.type !== 'event') return;
+      if (frame.kind !== 'workspace_channels_changed') return;
+      if (!scopeIds.some(id => frame.scope === `workspace:${id}`)) return;
+      void qc.invalidateQueries({ queryKey: favoritesKey });
+    });
+    return () => {
+      for (const s of subs) s.unsubscribe();
+      sub.unsubscribe();
+      unsub();
+    };
+  }, [qc, parentKey]);
+
+  return query;
 }
 
 /**
- * Unstar one favorite from the rail's context menu. STARRED holds workspace/DM
- * rows only (#task:1254), so this always hits the workspace star endpoint
- * (`entity_id` is the path param; the list_key is derived server-side). It is
- * workspace-agnostic — it correctly unstars a favorite whose home workspace is
- * not the one currently open. Invalidates the favorites list plus the workspace
- * rail so the entity REAPPEARS in its home group (exclusive move — it was hidden
- * from home while starred) and the Star/Unstar menu state flips in lockstep.
+ * Unstar one favorite from its row's context menu. A favorite is a CONVERSATION
+ * (#task:1888), so this always hits the channel star endpoint with the row's
+ * `entity_id`; the storage list_key is derived server-side, which is what makes it
+ * workspace-agnostic — it correctly unstars a favorite whose parent workspace is
+ * not the one currently open. Invalidates the favorites list plus the workspace /
+ * channel caches so the conversation REAPPEARS under its parent (exclusive move —
+ * it was hidden from there while starred) and the Star/Unstar menu state flips in
+ * lockstep.
  */
 export function useUnstarFavorite() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (item: FavoriteRowDto) => {
-      await api<unknown>(apiPaths.workspaceStar(item.entity_id), { method: 'DELETE' });
+      await api<unknown>(apiPaths.channelStar(item.entity_id), { method: 'DELETE' });
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: favoritesKey });
       // Home-surface star indicators. Key mirrors `features/workspaces/hooks`
-      // (`['workspaces']`).
+      // (`['workspaces']` covers the parent's channel list, whose inline
+      // `viewer_sort` carries the `starred_at` the exclusion reads).
       void qc.invalidateQueries({ queryKey: ['workspaces'] });
     },
     onError: () => {

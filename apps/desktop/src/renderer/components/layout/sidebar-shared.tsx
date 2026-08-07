@@ -6,7 +6,23 @@ import {
   type ReactNode,
 } from 'react';
 import { BellOff, ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+
+/**
+ * "Copy name" for a conversation row. Shared because a starred channel now has TWO
+ * row surfaces (#task:1888 — global STARRED and, when unstarred, its parent's list)
+ * and the same action must report itself identically on both; two copies of these
+ * two strings is how toast copy drifts.
+ */
+export async function copyConversationName(name: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(name);
+    toast.success('Name copied');
+  } catch {
+    toast.error("Couldn't copy the name");
+  }
+}
 
 /**
  * Namespace for persisted section-collapse state (#task:1632). The prefix
@@ -54,26 +70,55 @@ function persistExpanded(persistId: string, value: boolean): void {
  * section, the stored choice wins. Read lazily in the initializer so the first
  * paint is already in the restored state (no expanded→collapsed flash).
  * `persistId` is treated as fixed for the section's lifetime; every caller
- * passes a literal.
+ * passes a literal or a value derived from one stable entity id.
+ *
+ * Exported (#task:1889) because the merged sidebar's WORKSPACE HEADER is a
+ * collapse toggle too, persisted per workspace under the same vocabulary
+ * (`persistId = 'ws.<workspaceId>'`) — a second collapse-storage convention for
+ * the same chrome affordance is how the two would drift apart. The setter takes
+ * an optional explicit value so reveal-on-navigate can force EXPANDED (writing
+ * through to storage, exactly as a click would) instead of blind-toggling.
  */
-function useSectionExpanded(
+export function useSidebarSectionExpanded(
   persistId: string | undefined,
   defaultExpanded: boolean,
-): [boolean, () => void] {
+): [boolean, (next?: boolean) => void] {
   const [expanded, setExpanded] = useState(() =>
     persistId === undefined
       ? defaultExpanded
       : readExpanded(persistId, defaultExpanded),
   );
-  const toggle = useCallback(() => {
-    setExpanded(prev => {
-      const next = !prev;
-      if (persistId !== undefined) persistExpanded(persistId, next);
-      return next;
-    });
-  }, [persistId]);
+  const toggle = useCallback(
+    (explicit?: boolean) => {
+      setExpanded(prev => {
+        const next = explicit ?? !prev;
+        if (next === prev) return prev; // no write, no re-render
+        if (persistId !== undefined) persistExpanded(persistId, next);
+        return next;
+      });
+    },
+    [persistId],
+  );
   return [expanded, toggle];
 }
+
+/**
+ * The single identity-glyph column of the merged sidebar (#task:1889). EVERY
+ * glyph in the tree — workspace icon, DM avatar, channel `#`, tool-row glyph —
+ * starts at the same x, and a child row is distinguished from its parent header
+ * not by indentation but by whether the chevron gutter carries anything. So the
+ * inset is a shared constant, not a per-row guess:
+ *
+ *   6px section margin + 2px row border + 4px row padding
+ *     + 12px chevron gutter + 4px gap  =  28px
+ *
+ * Only the last two terms are this class's job (`pl-5` = 20px): the margin is
+ * the section's and the border width is a per-theme token
+ * (`--sidebar-row-border-width`), so a hardcoded 28px total would be wrong in
+ * any theme that changes it. Rows that own a chevron (workspace headers) pay the
+ * 4px padding and draw the gutter themselves instead.
+ */
+export const GLYPH_COLUMN_INSET = 'pl-5';
 
 interface SectionProps {
   label: string;
@@ -113,7 +158,7 @@ export function SidebarSection({
   persistId,
   children,
 }: SectionProps): JSX.Element {
-  const [expanded, toggleExpanded] = useSectionExpanded(
+  const [expanded, toggleExpanded] = useSidebarSectionExpanded(
     collapsible ? persistId : undefined,
     defaultExpanded,
   );
@@ -129,7 +174,7 @@ export function SidebarSection({
         action={action}
         collapsible={collapsible}
         expanded={expanded}
-        onToggle={toggleExpanded}
+        onToggle={() => toggleExpanded()}
       />
       {showBody ? <ul className="space-y-0.5">{children}</ul> : null}
     </section>

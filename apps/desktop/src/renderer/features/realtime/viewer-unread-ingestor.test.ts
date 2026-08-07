@@ -72,15 +72,22 @@ const emptyViewerSort: ListFavoritesDto['viewer_sort'] = {
   entries: [],
 };
 
-function favRow(workspaceId: string, unread: number | null): FavoriteRowDto {
+/** A favorite row is a CONVERSATION since #task:1888 — matched by `entity_id`
+ *  against the frame's `conversation_id`; `workspace_id` is its PARENT. */
+function favRow(
+  conversationId: string,
+  unread: number | null,
+  workspaceId = 'w-1',
+): FavoriteRowDto {
   return {
-    kind: 'workspace',
-    favorite_key: `workspace:${workspaceId}`,
-    entity_id: workspaceId,
+    kind: 'channel',
+    favorite_key: `channel:${conversationId}`,
+    entity_id: conversationId,
     workspace_id: workspaceId,
-    title: workspaceId,
-    icon_url: null,
-    runtime: null,
+    title: conversationId,
+    parent_title: workspaceId,
+    parent_icon_url: null,
+    parent_runtime: null,
     starred_at: 0,
     created_at: 0,
     unread_count: unread,
@@ -223,30 +230,42 @@ describe('patchFavoritesUnread — list-row present-only write', () => {
   });
 
   it('is a no-op (absent) when no row matches — NEVER inserts a row', () => {
-    seed([favRow('w-2', 3)]);
+    seed([favRow('c-2', 3)]);
     const before = qc.getQueryData(favoritesKey);
-    expect(patchFavoritesUnread(qc, payload({ workspace_id: 'w-1' }))).toBe('absent');
+    expect(patchFavoritesUnread(qc, payload({ conversation_id: 'c-1' }))).toBe('absent');
     expect(qc.getQueryData(favoritesKey)).toBe(before); // untouched, no insert
   });
 
-  it('writes the matching row unread_count (patched)', () => {
-    seed([favRow('w-1', 1), favRow('w-2', 3)]);
-    expect(patchFavoritesUnread(qc, payload({ workspace_unread_count: 9 }))).toBe('patched');
+  it('writes the CONVERSATION count on the matching row, not the parent roll-up', () => {
+    seed([favRow('c-1', 1), favRow('c-2', 3)]);
+    expect(
+      patchFavoritesUnread(
+        qc,
+        payload({ conversation_unread_count: 9, workspace_unread_count: 40 }),
+      ),
+    ).toBe('patched');
     const items = qc.getQueryData<ListFavoritesDto>(favoritesKey)!.items;
-    expect(items.find(r => r.workspace_id === 'w-1')?.unread_count).toBe(9);
-    expect(items.find(r => r.workspace_id === 'w-2')?.unread_count).toBe(3); // untouched
+    // 9, never 40 — a row whose parent has other unread conversations would
+    // otherwise overstate its badge (#task:1888).
+    expect(items.find(r => r.entity_id === 'c-1')?.unread_count).toBe(9);
+    expect(items.find(r => r.entity_id === 'c-2')?.unread_count).toBe(3); // untouched
   });
 
   it('CLEAR writes 0 on the row (present-only) — never deletes the row', () => {
-    seed([favRow('w-1', 4)]);
-    expect(patchFavoritesUnread(qc, payload({ workspace_unread_count: 0 }))).toBe('patched');
+    seed([favRow('c-1', 4)]);
+    expect(
+      patchFavoritesUnread(
+        qc,
+        payload({ conversation_unread_count: 0, workspace_unread_count: 3 }),
+      ),
+    ).toBe('patched');
     const items = qc.getQueryData<ListFavoritesDto>(favoritesKey)!.items;
     expect(items).toHaveLength(1); // row still present
     expect(items[0]?.unread_count).toBe(0);
   });
 
   it('is idempotent', () => {
-    seed([favRow('w-1', 1)]);
+    seed([favRow('c-1', 1)]);
     const before = qc.getQueryData(favoritesKey);
     expect(patchFavoritesUnread(qc, payload())).toBe('unchanged');
     expect(qc.getQueryData(favoritesKey)).toBe(before);
@@ -265,7 +284,7 @@ describe('ingestViewerUnreadFrame — routing + single-dispatch fan-out', () => 
       by_workspace: { 'w-1': 1 },
     });
     qc.setQueryData<ListFavoritesDto>(favoritesKey, {
-      items: [favRow('w-1', 1)],
+      items: [favRow('c-1', 1)],
       viewer_sort: emptyViewerSort,
     });
   }
@@ -304,9 +323,12 @@ describe('ingestViewerUnreadFrame — routing + single-dispatch fan-out', () => 
     expect(qc.getQueryData<MessageUnreadByConversationDto>(byConvKey)!.by_conversation['c-1']).toBe(5);
     expect(qc.getQueryData<MessageUnreadByConversationDto>(byConvKey)!.total).toBe(8);
     expect(qc.getQueryData<MessageUnreadSummaryDto>(messageUnreadSummaryKey)!.by_workspace['w-1']).toBe(8);
+    // The favorites row takes the CONVERSATION count (5), while the two
+    // workspace-scoped caches take the roll-up (8) — one frame, three different
+    // correct values.
     expect(
       qc.getQueryData<ListFavoritesDto>(favoritesKey)!.items[0]?.unread_count,
-    ).toBe(8);
+    ).toBe(5);
   });
 
   it('falls back to invalidate on a legacy/malformed message variant (missing counts)', () => {

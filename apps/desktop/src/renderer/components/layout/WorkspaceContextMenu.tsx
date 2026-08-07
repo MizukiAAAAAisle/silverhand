@@ -7,12 +7,14 @@ import {
 import { WorkspaceMuteMenuItem } from './ChannelAttentionSurfaces';
 
 /**
- * The single workspace/DM right-click menu, shared by the home-rail rows
- * (`WorkspaceRow`) and the STARRED rows (`FavoriteRow`). Starring MOVES a
- * workspace out of its home group into STARRED, so the same entity is reached
- * through two components; keeping the menu here means the two can't drift. One
- * entity, one menu: callers only supply the resolved capabilities/handlers, the
- * structure lives here so it can't fork again.
+ * The workspace/DM right-click menu — the container species' menu, mounted on
+ * the tree's header rows (`WorkspaceRow`). STARRED holds CONVERSATIONS only
+ * (#task:1888: a container star pins the row to the top of its own group rather
+ * than moving it), so `FavoriteRow` carries the conversation menu instead and
+ * this one has a single consumer today. It stays a component because the
+ * structure — which capabilities appear, in what order, and the "no capability ⇒
+ * no menu at all" rule — is the part that must not fork; callers supply only the
+ * resolved capabilities/handlers.
  */
 export function WorkspaceContextMenu({
   trigger,

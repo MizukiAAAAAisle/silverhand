@@ -205,8 +205,8 @@
   /* ── Brand (hot magenta) —
      On-brand foregrounds are NEAR-BLACK, not white. White on `#FF2C7A`
      is only 3.56:1 — fails WCAG AA for normal-weight text (sidebar row
-     names are 14px, see Sidebar.tsx:63 / ChannelsSidebar.tsx:254 /
-     WorkspacesPanel.tsx:163; bold doesn't elevate them to "large text"
+     names are 13-14px, see Sidebar.tsx / WorkspaceChannels.tsx /
+     WorkspacesPanel.tsx; bold doesn't elevate them to "large text"
      either). Black on `#FF2C7A` ≈ 5.56:1 → AA pass (not AAA, which
      needs ≥7:1), and aligns with the broader Forza on-color system
      where neon-saturation surfaces pair with `#0A0A0A`. The "white
@@ -243,7 +243,7 @@
 
   /* ── Sidebar identity ladder —
      PR-1 uses LIGHT pink-tinted sidebars so existing sidebar components
-     (Sidebar.tsx / ChannelsSidebar.tsx / WorkspacesPanel.tsx) reading
+     (Sidebar.tsx / WorkspaceChannels.tsx / WorkspacesPanel.tsx) reading
      `text-text-secondary` / `text-text-muted` (which are dark in this
      theme, tuned for the cool-white chat read area) stay readable.
      The mockup's deep-teal sidebar lands in PR-2 alongside forza6-only

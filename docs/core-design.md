@@ -400,7 +400,7 @@ Thread 是**消息的 reply-cluster**,不是独立会话:在某条消息下展�
   IS NULL`。主 channel 列表只显示 main stream(`thread_root_id IS NULL`),root 消息带 reply
   徽标;展开才按 root 过滤加载该 cluster。
 - **一层封顶**:reply 归一到 canonical root,不允许 reply 之上再 reply 成树(写死)。cluster 不是
-  导航树节点,channel sidebar 不展示。
+  导航树节点,sidebar 不展示。
 - **锚定**:human 在某条消息上发起 thread 时写一条 `thread_anchor` 系统消息,把 cluster 绑定到
   被引用的 root;agent 以 `target: thread:<root>` 回复既有 cluster。
 - **freshness / 投递**:main 与 cluster 是同一 conversation 上的两条 stream(`main` =
@@ -866,8 +866,8 @@ DM 平台 prompt 在结构上一致，但 §"Workspace & Memory" 段做调整：
 
 ### Settings 菜单（UI）
 
-- ChannelsSidebar 顶部 header：workspace name（**没有 path 副标题**——workspace 不再有本地路径，
-  relocation-v1 §3.5 裁定删掉所有 workspace-local-path 展示面且不给替代入口），右侧加一个齿轮 icon。点击弹出 dropdown：
+- Titlebar 的 workspace-scoped action 区（`app-layout.md` §2）：workspace name（**没有 path 副标题**——workspace 不再有本地路径，
+  relocation-v1 §3.5 裁定删掉所有 workspace-local-path 展示面且不给替代入口），右侧一个齿轮 icon。点击打开 Workspace settings dialog：
   - Rename workspace… → 输入框 dialog → `PATCH /api/workspaces/:id`
   - Archive → 确认 dialog → `POST /api/workspaces/:id/archive`
   - Delete → 二次确认 dialog（只说明删的是 workspace 本身；**文案里不得出现任何路径**。今天 workspace 删除是纯控制面 + attachment blob 的删除，不下发任何 host-local 清理，agent 的 L2 bundle 留在各自机器上）→ `DELETE /api/workspaces/:id`

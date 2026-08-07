@@ -20,7 +20,8 @@ import {
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
-import { partitionRailWorkspaces } from '@/lib/home-grouping';
+import { GLYPH_COLUMN_INSET } from './sidebar-shared';
+import { partitionRailWorkspaces, pinStarredFirst } from '@/lib/home-grouping';
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
@@ -30,8 +31,22 @@ interface SidebarProps {
    *  the generic User glyph. Optional — when absent, DM rows fall back
    *  to the User icon. #task:919 */
   agentsById?: ReadonlyMap<string, AgentDto>;
+  /** The workspace the primary pane is in. Since #task:1889 it never highlights
+   *  anything — it only decides which parent expands on navigate. */
   selectedWorkspaceId: string | null;
-  onSelectWorkspace: (id: string) => void;
+  /** The open conversation — the tree's ONE selection object: it FILLs its
+   *  channel row (under its parent, or in STARRED when starred). */
+  selectedChannelId: string | null;
+  /** Open a channel in its own workspace (the merged tree's rows are
+   *  cross-workspace, so the parent is always explicit). */
+  onSelectChannel: (channelId: string, workspaceId: string) => void;
+  /** Start channel creation scoped to one workspace — the merged tree has no
+   *  "current" workspace to imply. */
+  onCreateChannel: (workspaceId: string) => void;
+  /** Open a conversation inside a given workspace. STARRED is global, so the
+   *  parent workspace is explicit: the handler owns the cross-workspace open
+   *  (remembered layout restore included), STARRED never a second nav model. */
+  onSelectConversation: (workspaceId: string, conversationId: string) => void;
   onStarWorkspace: (workspaceId: string, starred: boolean) => void;
   onCreateWorkspace: () => void;
   /** When true, the Saved view is the active main view — channel rows
@@ -53,9 +68,10 @@ interface SidebarProps {
 /** The rail is one sortable list (`list_key='workspaces'`) with two live hard
  *  groups by kind (DM / regular); never stored. Each group is its own mode scope
  *  (#task:1146). STARRED is NOT a rail partition — it is the global Favorites
- *  overlay (#task:1253/#task:1254), a separate read-model. Under the EXCLUSIVE
- *  model a starred workspace/DM is MOVED out of these home groups into STARRED
- *  (it appears once, not in both). See docs/list-sort-v1.md. */
+ *  list (#task:1253/#task:1254), a separate read-model, and since #task:1888 it
+ *  holds CONVERSATIONS, so no rail row ever moves into it. A starred container
+ *  stays in its kind group and is only PINNED to the top of it. See
+ *  docs/list-sort-v1.md. */
 type RailGroup = 'dm' | 'regular';
 
 function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
@@ -63,15 +79,13 @@ function railGroupKeyOf(workspace: WorkspaceItem): RailGroup {
 }
 
 export function Sidebar(props: SidebarProps): JSX.Element {
-  // Home rail groups by KIND (DM / regular), plus archived. STARRED is NOT a rail
-  // partition — it is the global Favorites overlay (#task:1253/#task:1254). Under
-  // the EXCLUSIVE model a starred (non-archived) workspace/DM is MOVED into
-  // STARRED and removed from its DM/WORKSPACES home group here, so it appears
-  // exactly once. The exclusion reads each item's `starred_at` (joined upstream
-  // from `viewer_sort.entries[].starred_at` — the same fact the backend's reorder
-  // validation uses), never a second favorites query. `props.workspaces` is the
+  // Home rail groups by KIND (DM / regular). Since #task:1888 a starred container is
+  // NOT removed here — star demoted to an in-group pin, applied after the sort hook
+  // (`pinStarredFirst`) so the drag group keeps the same member set the backend
+  // validates against. Archived workspaces are dropped outright (#task:1889): the
+  // top-level `Archived` entry is the one archive index. `props.workspaces` is the
   // RAW full visible set; these are the home projections (see lib/home-grouping).
-  const { dms: homeDms, regular: homeRegular, archived } = useMemo(
+  const { dms: homeDms, regular: homeRegular } = useMemo(
     () => partitionRailWorkspaces(props.workspaces),
     [props.workspaces],
   );
@@ -114,8 +128,12 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     getCreatedAt: w => w.created_at,
     modeScopeOf: g => g,
   });
-  const orderedDms = orderedGroups.dm;
-  const orderedRegular = orderedGroups.regular;
+  // Pin starred containers to the top of their own group (#task:1888). AFTER the
+  // sort hook on purpose: the viewer's sort mode orders within the pin, and the set
+  // is untouched so a whole-group reorder still submits exactly the group's live
+  // members.
+  const orderedDms = pinStarredFirst(orderedGroups.dm);
+  const orderedRegular = pinStarredFirst(orderedGroups.regular);
 
   // Each rail section owns its own sort menu (reads + writes that group's scope)
   // and its own single-group drag config.
@@ -131,13 +149,12 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     onReorder,
   });
 
-  // Saved / Search / Archived are top-level views (not a workspace) — suppress
-  // the workspace-row highlight so the nav doesn't show a workspace AND a
-  // top-level view both selected (Cindy review). (Activity is now its own
-  // NavRail section, no longer a chat-sidebar entry — #task:1394.)
-  const topLevelViewActive =
-    props.savedActive || props.searchActive || props.archivedActive;
-  const workspaceHighlight = topLevelViewActive ? null : props.selectedWorkspaceId;
+  // Saved / Search / Archived are top-level views, and on those routes there is
+  // no `/w/:id/c/:id` to parse — so `selectedChannelId` is ALREADY null and the
+  // tree already shows no FILL. The old `topLevelViewActive` suppressor existed
+  // only because a container row used to highlight off `selectedWorkspaceId`;
+  // with the workspace header demoted to pure chrome (#task:1889) selection is
+  // one object (the open conversation) and there is nothing left to suppress.
 
   return (
     <aside
@@ -159,13 +176,18 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * No `transition-colors`: these rows carry the SAME selected classes as
           * channel/workspace rows, so selection must commit instantly here too —
           * fading a discrete committed state is the flicker (#task:1162). Keeps
-          * all three sidebar row classes (rail / channel / tool) one row-language. */}
+          * all three sidebar row classes (rail / channel / tool) one row-language.
+          *
+          * Their glyphs sit on the tree's ONE identity column
+          * (`GLYPH_COLUMN_INSET`, #task:1889) — a tool row has no chevron, so it
+          * pays the whole gutter as padding instead of drawing it. */}
         <div className="mb-3 space-y-0.5">
           <button
             type="button"
             onClick={props.onSelectSearch}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm',
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
+                GLYPH_COLUMN_INSET,
               props.searchActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -179,7 +201,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectSaved}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm',
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
+                GLYPH_COLUMN_INSET,
               props.savedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -209,7 +232,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectArchived}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border px-2 h-8 text-left text-sm',
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
+                GLYPH_COLUMN_INSET,
               props.archivedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -220,10 +244,11 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           </button>
         </div>
 
-        {/* STARRED = global Favorites overlay (#task:1253/#task:1254).
-          * Self-contained (owns its read-model, dm-avatar resolution, unstar);
-          * renders nothing when empty. EXCLUSIVE — a starred entity lives HERE
-          * only; it has been removed from the DM/WORKSPACES groups below.
+        {/* STARRED = the global Favorites list (#task:1253/#task:1254), holding
+          * CONVERSATIONS since #task:1888. Self-contained (owns its read-model,
+          * parent-avatar resolution, tier batches, unstar); renders nothing when
+          * empty. EXCLUSIVE — a starred conversation lives HERE only, removed from
+          * its parent's channel list.
           *
           * Every rail section persists its collapse state across restarts
           * (#task:1632) — the rail is nav chrome the user arranges once, so
@@ -232,15 +257,17 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * each section below; STARRED carries its own inside FavoritesGroup,
           * which owns its whole section. */}
         <FavoritesGroup
-          selectedWorkspaceId={workspaceHighlight}
-          onSelectWorkspace={props.onSelectWorkspace}
+          selectedChannelId={props.selectedChannelId}
+          onSelectConversation={props.onSelectConversation}
         />
         <WorkspaceGroup
           label="DM"
           kind="dm"
           workspaces={orderedDms}
-          selectedWorkspaceId={workspaceHighlight}
-          onSelectWorkspace={props.onSelectWorkspace}
+          selectedWorkspaceId={props.selectedWorkspaceId}
+          selectedChannelId={props.selectedChannelId}
+          onSelectChannel={props.onSelectChannel}
+          onCreateChannel={props.onCreateChannel}
           onStarWorkspace={props.onStarWorkspace}
           emptyHint="Creating an agent opens a DM"
           agentsById={props.agentsById}
@@ -253,8 +280,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           label="WORKSPACES"
           kind="regular"
           workspaces={orderedRegular}
-          selectedWorkspaceId={workspaceHighlight}
-          onSelectWorkspace={props.onSelectWorkspace}
+          selectedWorkspaceId={props.selectedWorkspaceId}
+          selectedChannelId={props.selectedChannelId}
+          onSelectChannel={props.onSelectChannel}
+          onCreateChannel={props.onCreateChannel}
           onStarWorkspace={props.onStarWorkspace}
           headerAction={
             <span className="flex items-center">
@@ -284,19 +313,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           sort={sortConfigFor('regular')}
           persistId="workspaces"
         />
-        {archived.length > 0 ? (
-          <WorkspaceGroup
-            label="ARCHIVED"
-            kind="regular"
-            workspaces={archived}
-            selectedWorkspaceId={workspaceHighlight}
-            onSelectWorkspace={props.onSelectWorkspace}
-            defaultExpanded={false}
-            persistId="archived"
-            agentsById={props.agentsById}
-            dmAgentAvatarUrls={dmAgentAvatarUrls}
-          />
-        ) : null}
+        {/* No bottom ARCHIVED group since #task:1889: the top-level `Archived`
+          * entry above is the ONE archive index (#task:1890 gave it archived
+          * WORKSPACES and their restore), so a second, differently-shaped archive
+          * surface in the tree was the duplicate. */}
       </nav>
     </aside>
   );

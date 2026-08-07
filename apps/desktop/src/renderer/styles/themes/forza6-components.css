@@ -557,7 +557,7 @@
    Every channel `#` renders as the same lucide Hash SVG painted into the
    racing-poster sticker — yellow ground + ink glyph + ink frame + 0 radius +
    hard offset ink shadow (shiki v6.7.1 "黑黄 box", #task:917):
-     - Sidebar `<Hash />` (`[data-channel-icon]`, ChannelsSidebar) — small
+     - Sidebar `<Hash />` (`[data-channel-icon]`, WorkspaceChannels) — small
        chip (1px border / 1px shadow), painted in its own rule below.
      - Chat header (`[data-conversation-hash-icon]`, ChannelView +
        MessageScreenshotView export) — the HERO of the family, scaled up via
@@ -776,7 +776,11 @@
 }
 
 /* ── PIN icon — ink black, NOT festival pink (v6.5, #task:917) ──
-   Both `ChannelsSidebar.tsx` and `WorkspacesPanel.tsx` render the
+   NOTE: no consumer left — the inline pin button retired when pin became
+   star (context-menu only), so `[data-pin-icon]` matches nothing today.
+   Kept pending a theme-channel sweep; the rationale below is the reason
+   pinned-state ink beat a hue, should the state ever come back.
+   Historically both sidebar columns rendered the
    inline pin button (visible on hover, persistent when pinned) and
    colour it via Tailwind class branches. The pinned-but-not-selected
    case lands on `text-accent` → resolves to `--brand-primary` (festival

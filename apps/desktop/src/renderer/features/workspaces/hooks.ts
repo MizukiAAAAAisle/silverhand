@@ -132,7 +132,8 @@ export function sortConversationList(items: ChannelListItem[]): ChannelListItem[
   // retired in #task:1303), so ordering is purely by creation time. Star (the
   // personal ⭐ favorite) is not a shared conversation field — it lives in the
   // viewer's `viewer_sort.entries[].starred_at` and is applied downstream
-  // (ChannelsSidebar via `partitionHomeChannels`), not here.
+  // (WorkspaceChannels via `excludeStarredChannels`, which moves the row into the
+  // global STARRED list — #task:1888), not here.
   return [...items].sort((a, b) => a.created_at - b.created_at);
 }
 
@@ -433,33 +434,26 @@ export function useArchiveWorkspace() {
 }
 
 /** Optimistically flip one entity's `starred_at` in a viewer-sort cache:
- *  star → stamp now, unstar → null. `clearRank` picks the rank policy by the
- *  entity's star SEMANTICS (mirrors the backend's `routes/sort.ts` rank policy —
- *  the route decides who clears rank, `SortRepo` stays list-agnostic):
- *   - `false` (workspace/DM, default) — star is an EXCLUSIVE MOVE into the global
- *     STARRED list (a DIFFERENT `list_key='favorites'`), so the home manual
- *     `rank` is PRESERVED as an orphan and unstar drops the entity back into its
- *     original home slot. (The favorites-list rank is a separate list the unstar
- *     route clears server-side, not this home write.)
- *   - `true` (channel) — star moves the entity across the SAME `channels:*` list's
- *     `starred | unstarred` HARD GROUPS. A single `rank` is only meaningful within
- *     one hard group, so carrying it across would pollute the new group's order;
- *     clear it so the entity enters the new group unranked (recent/created_at
- *     tiebreak) and the user can drag to position it there (#task:1210 rank P1).
+ *  star → stamp now, unstar → null. The home manual `rank` is always PRESERVED
+ *  (#task:1888 removed the one case that cleared it, mirroring the backend, where
+ *  `SortRepo.clearRank` is gone):
+ *   - a CONVERSATION's star is an exclusive MOVE into the global STARRED list, a
+ *     DIFFERENT `list_key='favorites'`, so its `channels:*` rank survives as an
+ *     orphan and unstar drops it back into its original home slot. The favorites
+ *     list's own rank is cleared server-side by the unstar route, not here.
+ *   - a CONTAINER's star is an in-group PIN — same list, same group, ordering only,
+ *     so clearing rank would throw away a position the pin does not replace.
  *  A brand-new entry has no prior rank, so its rank starts null regardless.
- *  Pure. (#task:1209, #task:1252, #task:1254) */
+ *  Pure. (#task:1209, #task:1252, #task:1254, #task:1888) */
 export function setStarredOptimistic(
   viewerSort: ViewerSortStateDto,
   entityId: string,
   starred: boolean,
-  clearRank = false,
 ): ViewerSortStateDto {
   const starredAt = starred ? Date.now() : null;
   const entries = viewerSort.entries.some(e => e.entity_id === entityId)
     ? viewerSort.entries.map(e =>
-        e.entity_id === entityId
-          ? { ...e, starred_at: starredAt, ...(clearRank ? { rank: null } : {}) }
-          : e,
+        e.entity_id === entityId ? { ...e, starred_at: starredAt } : e,
       )
     : [
         ...viewerSort.entries,
@@ -871,7 +865,7 @@ export function applyOrderToViewerSort(
  *  React Query's observer notify is microtask-batched, so the cache-driven
  *  reorder lands a frame later (CDP-confirmed B-type desync — the row would
  *  snap to its old slot then jump). Same-frame reordering is owned by the
- *  renderer's `pendingDrop` local state (ChannelsSidebar), set in the same drop
+ *  renderer's `pendingDrop` local state (WorkspaceChannels), set in the same drop
  *  event — do NOT delete `pendingDrop` on the assumption this cache write covers
  *  the frame; it doesn't. See docs/list-sort-v1.md §Renderer composition. The
  *  mutation then persists (no success reconcile — see useReorderSort); errors
@@ -1019,10 +1013,13 @@ export function useCreateChannel(workspaceId: string | null) {
   });
 }
 
-/** Star / unstar a channel for the current viewer (#task:1209). Personal
- *  favorite, mirrored on the channel sidebar's inline `viewerSort` cache only.
- *  Optimistic + reconciled from the server's full `viewer_sort`. No-op when no
- *  workspace is selected (no cache key to reconcile). */
+/** Star / unstar a channel for the current viewer (#task:1209). Personal favorite.
+ *  Since #task:1888 a channel star is an EXCLUSIVE MOVE into the global STARRED
+ *  list, so it reconciles TWO surfaces: this sidebar's inline `viewerSort` (which
+ *  drives the exclusion, so the row leaves/returns instantly) and the favorites
+ *  list itself. Optimistic + reconciled from the server's full `viewer_sort`. No-op
+ *  on the local cache when no workspace is selected (no cache key to reconcile);
+ *  the favorites invalidation still runs. */
 export function useStarChannel(workspaceId: string | null) {
   const qc = useQueryClient();
   return useMutation({
@@ -1041,11 +1038,9 @@ export function useStarChannel(workspaceId: string | null) {
       if (prev) {
         qc.setQueryData<ChannelListPayload>(key, {
           ...prev,
-          // Channel star is a LOCAL move across this sidebar's `starred |
-          // unstarred` hard groups (#task:1254) — clear the home rank so the
-          // channel enters the new group unranked instead of dragging its old
-          // group's position across (`clearRank: true`, mirrors the backend).
-          viewerSort: setStarredOptimistic(prev.viewerSort, channelId, starred, true),
+          // Home `rank` is preserved (#task:1888): STARRED is a different list, so
+          // unstar must drop the channel back into the slot it had here.
+          viewerSort: setStarredOptimistic(prev.viewerSort, channelId, starred),
         });
       }
       return { prev };
@@ -1054,12 +1049,15 @@ export function useStarChannel(workspaceId: string | null) {
       if (workspaceId && ctx?.prev) qc.setQueryData(channelsKey(workspaceId), ctx.prev);
     },
     onSuccess: viewerSort => {
+      // The moved-to / moved-from surface. Membership of the global list is a
+      // projection of `starred_at`, so it can only be refetched — there is no local
+      // row to synthesize (the favorites row carries server-resolved parent identity
+      // and a server-scored unread this cache doesn't have).
+      void qc.invalidateQueries({ queryKey: favoritesKey });
       if (!workspaceId) return;
       qc.setQueryData<ChannelListPayload>(channelsKey(workspaceId), prev =>
         prev ? { ...prev, viewerSort } : prev,
       );
-      // A channel star stays LOCAL to its sidebar (#task:1254 final): channels are
-      // not part of the global Favorites list, so no favorites invalidation here.
     },
   });
 }

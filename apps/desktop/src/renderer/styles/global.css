@@ -110,8 +110,6 @@
   --titlebar-height: 36px;
   --nav-rail-width: 48px;
   --sidebar-width: 240px;
-  --channels-sidebar-width: 240px;
-  --sessions-sidebar-width: var(--channels-sidebar-width);
   --titlebar-sidebar-toggle-left: 78px;
   --titlebar-controls-safe-width: 138px;
 }
@@ -536,7 +534,7 @@ button:disabled { cursor: not-allowed; }
 }
 
 /* Row-state border color (PR-5 token promotion). Sidebar rows
-   (`.sidebar-row-border` class on ChannelsSidebar / WorkspacesPanel /
+   (`.sidebar-row-border` class on WorkspaceChannels / WorkspacesPanel /
    Sidebar / sidebar-shared — all rendered inside an
    `aside[data-sidebar="..."]` wrapper) and NavRail buttons
    (`nav[aria-label='App sections'] button`) share a 2-token contract
