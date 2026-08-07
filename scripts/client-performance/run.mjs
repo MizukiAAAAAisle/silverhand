@@ -222,6 +222,9 @@ async function runScenario(context) {
 
   const interactive = options.yes !== true;
   const rl = interactive ? createInterface({ input: stdin, output: stdout }) : null;
+  if (interactive) {
+    console.log('\nInteractive phase control stays in this terminal; the App window does not show prompts.');
+  }
   const phases = [];
   try {
     for (const phase of scenario.phases) {
