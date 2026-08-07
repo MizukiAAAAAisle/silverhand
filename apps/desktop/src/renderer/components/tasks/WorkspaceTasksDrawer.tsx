@@ -21,6 +21,14 @@ import { cn } from '@/lib/cn';
 import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
 import { useRevealTaskRow } from '@/features/tasks/useRevealTaskRow';
+import {
+  columnVisibleCount,
+  FIRST_COLUMN_WINDOW,
+} from '@/features/tasks/columnWindow';
+import {
+  useColumnEndSentinel,
+  useColumnWindow,
+} from '@/features/tasks/useColumnWindow';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
 import {
   applyTaskFilters,
@@ -250,6 +258,30 @@ export function WorkspaceTasksDrawer({
     [workspaceId, defaultConversationId],
   );
   const [filters, setFilters] = useState<TaskFilters>(baselineFilters);
+  // Render window (#task:1885) — this drawer's OWN bound, not the pane's. The
+  // two surfaces share one query cache but must not share a render ceiling: the
+  // drawer stays mounted for the whole time a workspace is selected, so
+  // inheriting a pane session's grown window is exactly the mount cost this
+  // window exists to remove.
+  const {
+    columnWindow,
+    grow: growColumn,
+    reset: resetColumnWindow,
+    coverIndex: coverColumnIndex,
+  } = useColumnWindow();
+  // Every filter write goes through here. Changing what a column HOLDS resets
+  // what it RENDERS — otherwise a window grown against the previous population
+  // renders a deep prefix of the new one, which reads as "the filter loaded more
+  // results than it has". Kept as an explicit funnel rather than an effect keyed
+  // on `filters` so a reveal's reset and its coverage land in ONE commit (see
+  // `useColumnWindow`).
+  const applyFilters = useCallback(
+    (next: TaskFilters) => {
+      setFilters(next);
+      resetColumnWindow();
+    },
+    [resetColumnWindow],
+  );
   // Baseline re-sync: the drawer's own entry context, re-applied on the OPEN
   // transition and whenever the baseline identity changes. It does NOT consult
   // the reveal intent — a filter state that depends on whether a transient
@@ -257,23 +289,8 @@ export function WorkspaceTasksDrawer({
   // two effects below are split to avoid (Cindy BLOCKER 2).
   useEffect(() => {
     if (!open) return;
-    setFilters(baselineFilters);
-  }, [open, baselineFilters]);
-
-  // Make a reveal target renderable: the row may live in another
-  // workspace/channel that the anchored baseline filters out, and a row that is
-  // filtered out has no `[data-task-id]` to scroll to. Closed tasks are always in
-  // the tree (a status column, not a hidden tier), so no visibility widening is
-  // needed. Once widened the view stays widened and the user can re-select.
-  //
-  // Called by `useRevealTaskRow` once per intent, BEFORE it trusts the rendered
-  // set — so this reacts to the intent's arrival and never to whether the intent
-  // has been consumed yet (Cindy BLOCKER 2). It runs after the baseline effect
-  // above in the same commit (effects run in declaration order), so on a reveal
-  // that opens the drawer the widening is the last write.
-  const ensureRevealRenderable = useCallback(() => {
-    setFilters({ ...DEFAULT_TASK_FILTERS });
-  }, []);
+    applyFilters(baselineFilters);
+  }, [open, baselineFilters, applyFilters]);
 
   const closeDrawer = useCallback(
     (event?: React.SyntheticEvent): void => {
@@ -319,8 +336,8 @@ export function WorkspaceTasksDrawer({
   // channel focus, so it must fetch every workspace's tasks: selecting an
   // external channel from the unified dropdown would otherwise yield an
   // empty list. Channel / assignee / creator are sliced client-side via
-  // applyTaskFilters (channel match spans a channel + its threads, which
-  // the API's single `conversation_id` filter can't express — see #214).
+  // applyTaskFilters — a leftover from before the board had an authority read
+  // face (#task:1884 moves these axes server-side).
   // Shares React Query cache with the pane's identical `useTasks({})` call;
   // live refresh rides the viewer scope (see `useTasks`).
   const {
@@ -351,6 +368,42 @@ export function WorkspaceTasksDrawer({
 
   const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
+  // The bound the columns actually render against. A CLOSED drawer is pinned to
+  // the first page: the shell stays mounted (translated off-screen) for the whole
+  // time a workspace is selected, so its card tree is pure cost while nobody can
+  // see it — pinning is what keeps a Chat mount cheap, and it costs nothing on
+  // reopen because the grown state is discarded, not hidden. Growth state itself
+  // is left untouched; the OPEN transition re-applies the baseline through
+  // `applyFilters`, which resets it anyway.
+  const renderWindow = open ? columnWindow : FIRST_COLUMN_WINDOW;
+
+  // Make a reveal target renderable: the row may live in another
+  // workspace/channel that the anchored baseline filters out, and a row outside
+  // the render window has no `[data-task-id]` to scroll to either. Closed tasks
+  // are always in the tree (a status column, not a hidden tier), so no
+  // visibility widening is needed. Once widened the view stays widened and the
+  // user can re-select.
+  //
+  // Both widenings — filters to All, window to the page holding the row — are
+  // written in ONE commit, against the population the reset produces (`allTasks`,
+  // the unfiltered directory) rather than the currently-filtered `tasks`.
+  //
+  // Called by `useRevealTaskRow` once per intent, BEFORE it trusts the rendered
+  // set — so this reacts to the intent's arrival and never to whether the intent
+  // has been consumed yet (Cindy BLOCKER 2). It runs after the baseline effect
+  // above in the same commit (effects run in declaration order), so on a reveal
+  // that opens the drawer the widening is the last write.
+  const ensureRevealRenderable = useCallback(() => {
+    applyFilters({ ...DEFAULT_TASK_FILTERS });
+    if (revealTaskId === null || revealTaskId === undefined) return;
+    const found = allTasks.find(t => t.id === revealTaskId);
+    if (!found) return;
+    coverColumnIndex(
+      found.status,
+      allTasks.filter(t => t.status === found.status).indexOf(found),
+    );
+  }, [allTasks, applyFilters, coverColumnIndex, revealTaskId]);
+
   // A plain card click opens the detail modal (`?task=<id>`, hosted by App);
   // jumping to the conversation is the modal's own explicit action.
   const handleCardClick = (t: TaskSummaryDto): void => {
@@ -378,13 +431,19 @@ export function WorkspaceTasksDrawer({
   // post-filter list on purpose: `allTasks` is the cross-workspace directory
   // behind the board, and a target it holds but the current filters exclude has
   // no row in the DOM — letting the directory answer this is how a reveal pulses
-  // nothing and consumes itself (Cindy BLOCKER 10). The status comes along
-  // because a collapsed column has to be opened before the row exists.
+  // nothing and consumes itself (Cindy BLOCKER 10). The render window is the
+  // SECOND way a held row can be absent (#task:1885), so it is checked here too;
+  // `ensureRenderable` above widens both, and a still-uncovered row reports
+  // absent rather than being scrolled to nothing.
   const revealTarget = useMemo(() => {
-    if (revealTaskId === null) return null;
+    if (revealTaskId === null || revealTaskId === undefined) return null;
     const found = tasks.find(t => t.id === revealTaskId);
-    return found ? { status: found.status } : null;
-  }, [tasks, revealTaskId]);
+    if (!found) return null;
+    const index = grouped[found.status].indexOf(found);
+    return index < columnVisibleCount(renderWindow, found.status)
+      ? { status: found.status }
+      : null;
+  }, [grouped, renderWindow, revealTaskId, tasks]);
 
   // Scroll + pulse + one-shot consumption, shared with the `/tasks` board so the
   // "absence is only terminal with positive evidence" rule and the pulse's
@@ -488,7 +547,7 @@ export function WorkspaceTasksDrawer({
           <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
             <TaskFilterBar
               filters={filters}
-              onChange={setFilters}
+              onChange={applyFilters}
               baselineFilters={baselineFilters}
               workspaceOptions={workspaceOptions}
               channelOptions={channelOptions}
@@ -527,6 +586,8 @@ export function WorkspaceTasksDrawer({
                 icon={col.icon}
                 iconClass={col.iconClass}
                 tasks={grouped[col.status]}
+                visibleCount={columnVisibleCount(renderWindow, col.status)}
+                onReachEnd={() => growColumn(col.status)}
                 isLoading={isLoading}
                 onCardClick={handleCardClick}
                 onStatusChange={(taskId, status) =>
@@ -616,6 +677,8 @@ function KanbanColumn({
   icon: Icon,
   iconClass,
   tasks,
+  visibleCount,
+  onReachEnd,
   isLoading,
   onCardClick,
   onStatusChange,
@@ -625,7 +688,13 @@ function KanbanColumn({
   status: TaskStatus;
   icon: LucideIcon;
   iconClass: string;
+  /** This column's WHOLE list — the header count is the total, not the
+   *  rendered prefix. Only the body is bounded by `visibleCount`. */
   tasks: TaskSummaryDto[];
+  /** How many rows the body may render (#task:1885). */
+  visibleCount: number;
+  /** The reader reached the end of this column — render one more page. */
+  onReachEnd: () => void;
   isLoading: boolean;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (taskId: string, next: TaskStatus) => void;
@@ -638,6 +707,20 @@ function KanbanColumn({
   const { isCollapsed, toggle } = useKanbanColumnCollapse();
   const collapsed = isCollapsed(status);
   const Chevron = collapsed ? ChevronRight : ChevronDown;
+  const visible =
+    visibleCount < tasks.length ? tasks.slice(0, visibleCount) : tasks;
+  // A collapsed column renders no body, so it arms no observer — the sentinel
+  // isn't in the tree and an unmounted root would grow the window forever.
+  const hasMore = !collapsed && visible.length < tasks.length;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLLIElement>(null);
+  useColumnEndSentinel({
+    rootRef: bodyRef,
+    sentinelRef,
+    hasMore,
+    renderedCount: visible.length,
+    onReachEnd,
+  });
   return (
     <section
       data-tasks-column
@@ -696,7 +779,7 @@ function KanbanColumn({
         </span>
       </button>
       {collapsed ? null : (
-        <div className="min-h-0 flex-auto overflow-y-auto p-2">
+        <div ref={bodyRef} className="min-h-0 flex-auto overflow-y-auto p-2">
           {isLoading ? (
             <p className="px-2 py-3 text-center text-[11px] text-text-muted">
               Loading…
@@ -708,7 +791,7 @@ function KanbanColumn({
           ) : (
             <ul className="space-y-1.5">
               {dragOver ? <TaskDropPlaceholder /> : null}
-              {tasks.map(t => (
+              {visible.map(t => (
                 <li key={t.id}>
                   <TaskCard
                     task={t}
@@ -718,6 +801,10 @@ function KanbanColumn({
                   />
                 </li>
               ))}
+              {/* Tail sentinel — growth is synchronous local state, so there is
+                  nothing to spin on; the next page is simply in the tree on the
+                  following commit. */}
+              {hasMore ? <li ref={sentinelRef} aria-hidden className="h-px" /> : null}
             </ul>
           )}
         </div>

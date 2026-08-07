@@ -470,6 +470,18 @@ describe('every reveal surface widens its own view', () => {
     '../../components/layout/TasksSection.tsx',
   ];
 
+  /** The `revealTarget` derivation only — the block this fence is about. The
+   *  negation below has to be scoped to it: widening (#task:1885) legitimately
+   *  reads the directory to find the target's page, and a file-wide negation
+   *  would forbid that while proving nothing extra about the judgment. */
+  const revealTargetBlock = (src: string): string => {
+    const start = src.indexOf('const revealTarget = useMemo(');
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf('\n  }, [', start);
+    expect(end).toBeGreaterThan(start);
+    return src.slice(start, end);
+  };
+
   for (const rel of surfaces) {
     const src = readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
     const name = rel.slice(rel.lastIndexOf('/') + 1);
@@ -478,10 +490,9 @@ describe('every reveal surface widens its own view', () => {
       expect(src).toContain('ensureRenderable: ensureRevealRenderable');
       expect(src).toContain('setFilters(');
       // `allTasks` is the unfiltered directory; the rendered list is `tasks`.
-      expect(src).toContain('const found = tasks.find(t => t.id === revealTaskId);');
-      expect(src).not.toContain(
-        'const found = allTasks.find(t => t.id === revealTaskId);',
-      );
+      const judgment = revealTargetBlock(src);
+      expect(judgment).toContain('const found = tasks.find(t => t.id === revealTaskId);');
+      expect(judgment).not.toContain('allTasks');
       // Both evidence axes have to actually arrive: a surface that forwards only
       // the success clock leaves a failed read with no terminator on that board.
       expect(src).toContain('errorUpdateCount');

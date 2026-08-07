@@ -13,6 +13,11 @@ import { useTasks, useUpdateTaskStatus } from '@/features/tasks/hooks';
 import { useKanbanColumnCollapse } from '@/features/tasks/useKanbanColumnCollapse';
 import { useRevealTaskRow } from '@/features/tasks/useRevealTaskRow';
 import { useTaskFilterOptions } from '@/features/tasks/useTaskFilterOptions';
+import { columnVisibleCount } from '@/features/tasks/columnWindow';
+import {
+  useColumnEndSentinel,
+  useColumnWindow,
+} from '@/features/tasks/useColumnWindow';
 import {
   applyTaskFilters,
   collectAssignees,
@@ -81,6 +86,23 @@ export const TasksSection = memo(function TasksSection({
   const [filters, setFilters] = useState<TaskFilters>(DEFAULT_TASK_FILTERS);
   const [createOpen, setCreateOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
+  // Per-column render bound, local to THIS surface (#task:1885): the drawer
+  // shares the query cache but not the window, so its scrolling never inflates
+  // this board's mount cost. Every write that changes what the columns hold goes
+  // through `applyFilters` below, which resets the window in the same commit.
+  const {
+    columnWindow,
+    grow: growColumn,
+    reset: resetColumnWindow,
+    coverIndex: coverColumnIndex,
+  } = useColumnWindow();
+  const applyFilters = useCallback(
+    (next: TaskFilters) => {
+      setFilters(next);
+      resetColumnWindow();
+    },
+    [resetColumnWindow],
+  );
   // Workspace + channel options + scope ids come from the SAME hook the
   // drawer uses (#task:1165) so the two surfaces' dropdowns can't drift — DM +
   // regular workspace channels, grouped by data source; regular workspaces for
@@ -112,6 +134,8 @@ export const TasksSection = memo(function TasksSection({
     [allTasks, filters],
   );
 
+  const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
+
   // ── Reveal: this board is a delivery TARGET, not only a source ──────
   //
   // "This board's baseline is All" is NOT "this board's view is always All": the
@@ -121,14 +145,35 @@ export const TasksSection = memo(function TasksSection({
   // `allTasks` still holds it (Cindy BLOCKER 10). So the target is judged on the
   // RENDERED list, and widening is this surface's own obligation, handed to the
   // shared hook as a required argument.
+  //
+  // With a bounded column window there is a SECOND way to hold a task and render
+  // no row for it: the row sits past the window. Widening therefore resets the
+  // filters AND covers the target's index — one commit, so the next pass of the
+  // reveal machine reads a set that already contains the row if this surface can
+  // show it at all. The index is taken from the post-reset population
+  // (`allTasks`, which is what DEFAULT filters yield), never from the currently
+  // filtered list the reset is about to replace.
   const ensureRevealRenderable = useCallback(() => {
-    setFilters(DEFAULT_TASK_FILTERS);
-  }, []);
+    applyFilters(DEFAULT_TASK_FILTERS);
+    if (revealTaskId === null) return;
+    const found = allTasks.find(t => t.id === revealTaskId);
+    if (!found) return;
+    coverColumnIndex(
+      found.status,
+      allTasks.filter(t => t.status === found.status).indexOf(found),
+    );
+  }, [allTasks, applyFilters, coverColumnIndex, revealTaskId]);
   const revealTarget = useMemo(() => {
     if (revealTaskId === null) return null;
     const found = tasks.find(t => t.id === revealTaskId);
-    return found ? { status: found.status } : null;
-  }, [tasks, revealTaskId]);
+    if (!found) return null;
+    // Rendered, not merely held: a row past this column's window has no
+    // `[data-task-id]` to scroll to.
+    const index = grouped[found.status].indexOf(found);
+    return index < columnVisibleCount(columnWindow, found.status)
+      ? { status: found.status }
+      : null;
+  }, [columnWindow, grouped, revealTaskId, tasks]);
   const boardRef = useRef<HTMLDivElement>(null);
   const { highlightedTaskId } = useRevealTaskRow({
     revealTaskId,
@@ -154,8 +199,6 @@ export const TasksSection = memo(function TasksSection({
   // actually has unclaimed tasks (shiki feedback — else it reads as a
   // stray pseudo-person).
   const hasUnassigned = useMemo(() => allTasks.some(t => !t.assignee), [allTasks]);
-
-  const grouped = useMemo(() => groupByStatus(tasks), [tasks]);
 
   const selectedChannelName = filters.channelId
     ? channelOptions.find(o => o.id === filters.channelId)?.label
@@ -205,7 +248,7 @@ export const TasksSection = memo(function TasksSection({
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border-subtle px-4 py-2">
         <TaskFilterBar
           filters={filters}
-          onChange={setFilters}
+          onChange={applyFilters}
           baselineFilters={DEFAULT_TASK_FILTERS}
           workspaceOptions={workspaceOptions}
           channelOptions={channelOptions}
@@ -244,6 +287,8 @@ export const TasksSection = memo(function TasksSection({
             icon={col.icon}
             iconClass={col.iconClass}
             tasks={grouped[col.status]}
+            visibleCount={columnVisibleCount(columnWindow, col.status)}
+            onReachEnd={() => growColumn(col.status)}
             highlightedTaskId={highlightedTaskId}
             onCardClick={t => onOpenTask(t.id)}
             onStatusChange={(taskId, next) =>
@@ -336,6 +381,8 @@ function KanbanColumn({
   icon: Icon,
   iconClass,
   tasks,
+  visibleCount,
+  onReachEnd,
   highlightedTaskId,
   onCardClick,
   onStatusChange,
@@ -344,7 +391,12 @@ function KanbanColumn({
   status: TaskStatus;
   icon: LucideIcon;
   iconClass: string;
+  /** The column's WHOLE list — the header count is the column's total, not the
+   *  rendered slice. */
   tasks: TaskSummaryDto[];
+  /** Render bound for this surface (#task:1885). */
+  visibleCount: number;
+  onReachEnd: () => void;
   highlightedTaskId: string | null;
   onCardClick: (t: TaskSummaryDto) => void;
   onStatusChange: (taskId: string, next: TaskStatus) => void;
@@ -361,6 +413,19 @@ function KanbanColumn({
   const { isCollapsed, toggle } = useKanbanColumnCollapse();
   const collapsed = isCollapsed(status);
   const Chevron = collapsed ? ChevronRight : ChevronDown;
+  // Bounded window: render a prefix, grow it when its tail comes into view.
+  // A collapsed column renders no body, so it also arms no observer.
+  const visible = visibleCount < tasks.length ? tasks.slice(0, visibleCount) : tasks;
+  const hasMore = !collapsed && visible.length < tasks.length;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLLIElement>(null);
+  useColumnEndSentinel({
+    rootRef: bodyRef,
+    sentinelRef,
+    hasMore,
+    renderedCount: visible.length,
+    onReachEnd,
+  });
   return (
     <section
       data-tasks-column
@@ -432,7 +497,7 @@ function KanbanColumn({
         </span>
       </button>
       {collapsed ? null : (
-        <div className="min-h-0 flex-auto overflow-y-auto p-2">
+        <div ref={bodyRef} className="min-h-0 flex-auto overflow-y-auto p-2">
           {tasks.length === 0 && !dragOver ? (
             <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
               No {title.toLowerCase()} tasks
@@ -440,7 +505,7 @@ function KanbanColumn({
           ) : (
             <ul className="space-y-1.5">
               {dragOver ? <TaskDropPlaceholder /> : null}
-              {tasks.map(t => (
+              {visible.map(t => (
                 <li key={t.id}>
                   <TaskCard
                     task={t}
@@ -450,6 +515,11 @@ function KanbanColumn({
                   />
                 </li>
               ))}
+              {/* Tail sentinel — grows the window as it comes into view. It has
+                  no visual of its own: growth is a local slice of an already
+                  loaded page, so a spinner here would announce work that isn't
+                  happening. */}
+              {hasMore ? <li ref={sentinelRef} aria-hidden className="h-px" /> : null}
             </ul>
           )}
         </div>
