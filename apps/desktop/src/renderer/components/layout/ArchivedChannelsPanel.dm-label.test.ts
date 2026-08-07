@@ -17,9 +17,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
+import type { WorkspaceListItem } from '@/features/workspaces/hooks';
 import {
   archivedRowOpenTarget,
   archivedRowWorkspaceLabel,
+  archivedWorkspaceRowLabel,
+  archivedWorkspaceRows,
 } from './ArchivedChannelsPanel';
 
 describe('archivedRowWorkspaceLabel — kind drives the context label', () => {
@@ -81,5 +84,91 @@ describe('archivedRowOpenTarget — opens in the channel\'s OWN workspace', () =
       workspaceId: 'agent-home-ws',
       channelId: 'dm-c',
     });
+  });
+});
+
+/**
+ * #task:1890 — the Archived view becomes the ONLY archive index, so its
+ * workspace section decides whether an archived workspace is reachable at all
+ * (the sidebar's `ARCHIVED` group, today's only selection entry, is retired by
+ * #task:1889). Membership is therefore behavior, not painting: it must key off
+ * `archived_at`, and it must answer to the same filter bar the channel section
+ * uses.
+ */
+describe('archivedWorkspaceRows — membership + shared filters', () => {
+  const ws = (over: Partial<WorkspaceListItem>): WorkspaceListItem => ({
+    id: 'w1',
+    name: 'Engineering',
+    description: null,
+    kind: 'regular',
+    workspace_scope_ids: ['w1'],
+    dm_agent_id: null,
+    dm_channel_ids: [],
+    archived_at: null,
+    created_at: 0,
+    updated_at: 0,
+    ...over,
+  });
+  const all = { workspaceId: null, since: null };
+
+  it('keeps only workspaces with an archive stamp', () => {
+    const rows = archivedWorkspaceRows(
+      [
+        ws({ id: 'live' }),
+        ws({ id: 'gone', archived_at: 5_000 }),
+      ],
+      all,
+    );
+    expect(rows.map(w => w.id)).toEqual(['gone']);
+  });
+
+  it('scopes to the selected workspace filter', () => {
+    const rows = archivedWorkspaceRows(
+      [
+        ws({ id: 'a', archived_at: 5_000 }),
+        ws({ id: 'b', archived_at: 5_000 }),
+      ],
+      { workspaceId: 'b', since: null },
+    );
+    expect(rows.map(w => w.id)).toEqual(['b']);
+  });
+
+  it('applies the archived-date cutoff as a lower bound', () => {
+    const rows = archivedWorkspaceRows(
+      [
+        ws({ id: 'old', archived_at: 1_000 }),
+        ws({ id: 'recent', archived_at: 9_000 }),
+      ],
+      { workspaceId: null, since: 5_000 },
+    );
+    expect(rows.map(w => w.id)).toEqual(['recent']);
+  });
+});
+
+describe('archivedWorkspaceRowLabel — one workspace, one label', () => {
+  const ws = (over: Partial<WorkspaceListItem>): WorkspaceListItem => ({
+    id: 'w1',
+    name: 'Engineering',
+    description: null,
+    kind: 'regular',
+    workspace_scope_ids: ['w1'],
+    dm_agent_id: null,
+    dm_channel_ids: [],
+    archived_at: 5_000,
+    created_at: 0,
+    updated_at: 0,
+    ...over,
+  });
+
+  it('regular workspace shows its bare name', () => {
+    expect(archivedWorkspaceRowLabel(ws({}))).toBe('Engineering');
+  });
+
+  it('DM home converges on the same `@<agent>` handle the channel rows show', () => {
+    // The list shape carries the `dm-` UI prefix (`workspaceToListItem`); the
+    // channel rows' context line arrives bare. Both must read `@Norman`.
+    expect(archivedWorkspaceRowLabel(ws({ kind: 'dm', name: 'dm-Norman' }))).toBe(
+      '@Norman',
+    );
   });
 });

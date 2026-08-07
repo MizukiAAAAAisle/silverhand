@@ -117,7 +117,7 @@ Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar
 - **Channel row**：Pin/Unpin 与 Archive/Restore 对 top-level channel-like（`channel` / `dm_channel`）可用；Copy name 全部可用。（sidebar 只列 channel-like、无 thread 行——见 §4。）
 - **ChannelView header more**：保持 dropdown 交互（不改右键）。Rename / Archive / Restore 按 channel-like 同构（`channel` / `dm_channel`；rename 另需未 closed）——DM channel 与 regular channel 走同一套入口。
 - **归档兜底选择**：归档当前主选 channel 时，主面板按 sidebar 顺序做 **neighbor-aware 兜底**：优先下一条 active top-level，否则上一条，都没有则清空到 workspace 空态（纯函数 + 单测覆盖）。只有归档「主面板正在看的那条」才移动选择；secondary 面板归档 / restore 不抢主选。
-- **Archived Channels 面板**：全局 Archived 是跨 collection 的恢复索引（含 regular `channel` 与 agent_home `dm_channel`）。workspace 过滤 dropdown 按 Workspaces / DMs 两组分组（镜像 Message Search）；列表行统一用 `#` channel glyph（DM 是 channel-like），靠 "DM <agent>" 文字上下文区分。点击 archived DM 行跳到该 DM 的 agent_home workspace + dm_channel（不沿用当前 workspace 上下文）。
+- **Archived 面板**：全局 Archived 是**唯一的归档索引**，一个视图覆盖归档 workspace 与归档 channel（#task:1890）。两段固定顺序 **Workspaces → Channels**（还原 workspace 是还原其内部 channel 的前提），段为空时整段不渲染；两段共用同一组筛选（workspace / archived date）。归档 workspace 段读 `useWorkspaces` 的 raw 集合（`archived_at !== null`，无新接口），行上给 Open（等价于旧 sidebar `ARCHIVED` 分组的选中）与 Restore；还原是非破坏动作，不加确认。channel 段含 regular `channel` 与 agent_home `dm_channel`：workspace 过滤 dropdown 按 Workspaces / DMs 两组分组（镜像 Message Search）；列表行统一用 `#` channel glyph（DM 是 channel-like），靠 `@<agent>` 文字上下文区分（#task:1156）。点击 archived DM 行跳到该 DM 的 agent_home workspace + dm_channel（不沿用当前 workspace 上下文）。
 
 ---
 

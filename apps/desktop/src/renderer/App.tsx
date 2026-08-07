@@ -2348,6 +2348,7 @@ function RegisteredAppShell(): JSX.Element {
                   if (!navWorkspaceId) return;
                   nav.toChannel(navWorkspaceId, channelId);
                 }}
+                onOpenWorkspace={handleSelectWorkspace}
               />
             ) : (
               <>

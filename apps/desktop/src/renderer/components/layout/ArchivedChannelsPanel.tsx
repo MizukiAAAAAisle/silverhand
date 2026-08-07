@@ -2,11 +2,16 @@ import { useMemo } from 'react';
 import dayjs from 'dayjs';
 import { Archive, ArchiveRestore } from 'lucide-react';
 import type { ArchivedChannelListItemDto } from '@silverhand/shared';
+import type { AgentDto } from '@silverhand/shared';
 import { ChannelIcon } from '@/components/ChannelIcon';
+import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import { CollectionItemCard } from '@/components/layout/collection-item-card';
+import { useAgents } from '@/features/agents/hooks';
+import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import {
   useArchiveChannel,
   useArchivedChannelsIndex,
+  useArchiveWorkspace,
   type WorkspaceListItem,
 } from '@/features/workspaces/hooks';
 import { dmWorkspaceLabel } from '@/lib/workspace-name';
@@ -43,6 +48,10 @@ interface ArchivedChannelsPanelProps {
   filter: ArchivedFilterState;
   onFilterChange: (next: ArchivedFilterState) => void;
   onOpenChannel: (workspaceId: string, channelId: string) => void;
+  /** Select an archived workspace — the same handler the retired sidebar
+   *  `ARCHIVED` group used, so opening one from here behaves identically
+   *  (#task:1890). */
+  onOpenWorkspace: (workspaceId: string) => void;
 }
 
 export function ArchivedChannelsPanel({
@@ -50,6 +59,7 @@ export function ArchivedChannelsPanel({
   filter,
   onFilterChange,
   onOpenChannel,
+  onOpenWorkspace,
 }: ArchivedChannelsPanelProps): JSX.Element {
   // App-owned (controlled) filter state so switching panes and returning
   // keeps the selection for the session (#task:1259).
@@ -83,6 +93,20 @@ export function ArchivedChannelsPanel({
     workspaceScopeIds,
   });
   const archiveChannel = useArchiveChannel(null);
+  const archiveWorkspace = useArchiveWorkspace();
+  const workspaceRows = useMemo(
+    () => archivedWorkspaceRows(workspaces, { workspaceId, since }),
+    [workspaces, workspaceId, since],
+  );
+  // Identity for the workspace rows: a DM home shows its agent's avatar, the
+  // same primitive the rail shows — this view REPLACES the sidebar's archived
+  // group, so it must not degrade a DM to the generic glyph.
+  const { data: agents = [] } = useAgents();
+  const agentsById = useMemo(
+    () => new Map<string, AgentDto>(agents.map(a => [a.id, a])),
+    [agents],
+  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const hasFilters = workspaceFilter !== 'all' || dateFilter !== 'all';
 
   return (
@@ -97,9 +121,11 @@ export function ArchivedChannelsPanel({
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <Archive className="size-3.5 text-accent" />
         <span className="font-serif text-sm font-semibold text-text-primary">
-          Archived Channels
+          Archived
         </span>
-        <span className="text-xs tabular-nums text-text-muted">{channels.length}</span>
+        <span className="text-xs tabular-nums text-text-muted">
+          {workspaceRows.length + channels.length}
+        </span>
         {isFetching ? (
           <span className="ml-auto text-xs text-text-muted">Refreshing…</span>
         ) : null}
@@ -126,41 +152,141 @@ export function ArchivedChannelsPanel({
         </div>
       </section>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
+        {/* Workspaces first: restoring a workspace is the precondition for
+          * reaching anything archived inside it. */}
+        {workspaceRows.length > 0 ? (
+          <section>
+            <SectionLabel text="Workspaces" />
+            <ul className="space-y-2">
+              {workspaceRows.map(workspace => (
+                <ArchivedWorkspaceRow
+                  key={workspace.id}
+                  workspace={workspace}
+                  agentsById={agentsById}
+                  agentAvatarUrls={agentAvatarUrls}
+                  restorePending={archiveWorkspace.isPending}
+                  onOpen={() => onOpenWorkspace(workspace.id)}
+                  onRestore={() =>
+                    archiveWorkspace.mutate({
+                      id: workspace.id,
+                      archived: false,
+                    })
+                  }
+                />
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
         {isLoading ? (
           <ListRowsSkeleton withIcon />
-        ) : channels.length === 0 ? (
+        ) : channels.length > 0 ? (
+          <section>
+            <SectionLabel text="Channels" />
+            <ul className="space-y-2">
+              {channels.map(item => (
+                <ArchivedChannelRow
+                  key={item.channel.id}
+                  item={item}
+                  restorePending={archiveChannel.isPending}
+                  onOpen={() => {
+                    const target = archivedRowOpenTarget(item);
+                    onOpenChannel(target.workspaceId, target.channelId);
+                  }}
+                  onRestore={() =>
+                    archiveChannel.mutate({
+                      channelId: item.channel.id,
+                      archived: false,
+                      workspaceId: item.workspace.id,
+                    })
+                  }
+                />
+              ))}
+            </ul>
+          </section>
+        ) : workspaceRows.length === 0 ? (
           <EmptyState
             text={
               hasFilters
-                ? 'No archived channels match these filters'
-                : 'No archived channels'
+                ? 'No archived workspaces or channels match these filters'
+                : 'Nothing archived'
             }
           />
-        ) : (
-          <ul className="space-y-2">
-            {channels.map(item => (
-              <ArchivedChannelRow
-                key={item.channel.id}
-                item={item}
-                restorePending={archiveChannel.isPending}
-                onOpen={() => {
-                  const target = archivedRowOpenTarget(item);
-                  onOpenChannel(target.workspaceId, target.channelId);
-                }}
-                onRestore={() =>
-                  archiveChannel.mutate({
-                    channelId: item.channel.id,
-                    archived: false,
-                    workspaceId: item.workspace.id,
-                  })
-                }
-              />
-            ))}
-          </ul>
-        )}
+        ) : null}
       </div>
     </main>
+  );
+}
+
+function SectionLabel({ text }: { text: string }): JSX.Element {
+  return (
+    <h2 className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wider text-text-secondary">
+      {text}
+    </h2>
+  );
+}
+
+function ArchivedWorkspaceRow({
+  workspace,
+  agentsById,
+  agentAvatarUrls,
+  restorePending,
+  onOpen,
+  onRestore,
+}: {
+  workspace: WorkspaceListItem;
+  agentsById: ReadonlyMap<string, AgentDto>;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  restorePending: boolean;
+  onOpen: () => void;
+  onRestore: () => void;
+}): JSX.Element {
+  const archivedAt = workspace.archived_at
+    ? dayjs(workspace.archived_at).format('YYYY-MM-DD HH:mm')
+    : 'Unknown archive date';
+
+  return (
+    <li>
+      <CollectionItemCard className="flex min-w-0 items-stretch">
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-3 text-left"
+        >
+          <span data-collection-card-icon className="flex size-8 shrink-0 items-center justify-center text-text-muted">
+            <WorkspaceIcon
+              kind={workspace.kind}
+              dmAgentId={workspace.dm_agent_id}
+              agentsById={agentsById}
+              dmAgentAvatarUrls={agentAvatarUrls}
+            />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-text-primary">
+              {archivedWorkspaceRowLabel(workspace)}
+            </span>
+            <span className="mt-1 block text-xs text-text-muted">
+              Archived {archivedAt}
+            </span>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={e => {
+            e.stopPropagation();
+            onRestore();
+          }}
+          disabled={restorePending}
+          className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+          aria-label={`Restore ${archivedWorkspaceRowLabel(workspace)}`}
+          title="Restore workspace"
+        >
+          <ArchiveRestore className="size-3.5" />
+          Restore
+        </button>
+      </CollectionItemCard>
+    </li>
   );
 }
 
@@ -269,4 +395,43 @@ export function archivedRowOpenTarget(item: ArchivedChannelListItemDto): {
   channelId: string;
 } {
   return { workspaceId: item.workspace.id, channelId: item.channel.id };
+}
+
+/**
+ * The archived-workspace section's rows (#task:1890), under the SAME two
+ * filters the channel section uses — one filter bar must not mean two things
+ * in one view.
+ *
+ * Archived-ness is read from `archived_at`, NOT through
+ * `partitionRailWorkspaces`: that projection keys off a joined boolean
+ * `archived` which only the sidebar's `WorkspaceItem` carries (App.tsx maps
+ * `archived_at !== null` into it). Handing it a `WorkspaceListItem` type-checks
+ * and returns an EMPTY archived group — a silent miss — so this face owns its
+ * own predicate.
+ */
+export function archivedWorkspaceRows(
+  workspaces: readonly WorkspaceListItem[],
+  scope: { workspaceId: string | null; since: number | null },
+): WorkspaceListItem[] {
+  return workspaces.filter(workspace => {
+    if (workspace.archived_at === null) return false;
+    if (scope.workspaceId !== null && workspace.id !== scope.workspaceId)
+      return false;
+    if (scope.since !== null && workspace.archived_at < scope.since)
+      return false;
+    return true;
+  });
+}
+
+/** An archived workspace row's own label: `@<agent>` for a DM home, the bare
+ *  name otherwise — the same normalization the channel rows' context line uses
+ *  (`archivedRowWorkspaceLabel`), so one workspace reads identically in both
+ *  sections. `dmWorkspaceLabel` strips the `dm-` UI prefix
+ *  `workspaceToListItem` adds. */
+export function archivedWorkspaceRowLabel(
+  workspace: WorkspaceListItem,
+): string {
+  return workspace.kind === 'dm'
+    ? dmWorkspaceLabel(workspace.name)
+    : workspace.name;
 }

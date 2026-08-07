@@ -416,6 +416,18 @@ export function useArchiveWorkspace() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: workspacesKey });
+      // The archived-channel index carries each row's PARENT archived-ness
+      // (the `archived workspace` marker), so archiving or restoring a
+      // workspace changes rows the Archived view renders beside the workspace
+      // rows (#task:1890).
+      qc.invalidateQueries({ queryKey: ['archived-channels'] });
+      // Favorites membership is the star set INTERSECTED with "not archived"
+      // (`read-model/favorites.ts` filters `w.archived_at IS NULL`), so archive
+      // and restore both change it — while `useFavorites` only refetches on the
+      // viewer snapshot. Without this the STARRED list keeps a dead row after an
+      // archive, and a restored workspace never comes back until remount
+      // (#task:1890; the same seam #task:1889 converges for channels).
+      qc.invalidateQueries({ queryKey: favoritesKey });
     },
   });
 }
