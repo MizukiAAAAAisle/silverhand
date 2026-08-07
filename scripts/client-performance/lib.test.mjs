@@ -75,6 +75,31 @@ test('scenario validation rejects duplicate phase ids and unknown actions', () =
     () => validateScenario({ ...base, phases: [{ ...base.phases[0], action: { kind: 'magic' } }] }),
     /unsupported action/,
   );
+  assert.equal(
+    validateScenario({
+      ...base,
+      phases: [
+        {
+          ...base.phases[0],
+          action: { kind: 'sidebar', sidebar: 'workspace', visible: false },
+        },
+      ],
+    }).phases[0].action.kind,
+    'sidebar',
+  );
+  assert.throws(
+    () =>
+      validateScenario({
+        ...base,
+        phases: [
+          {
+            ...base.phases[0],
+            action: { kind: 'sidebar', sidebar: 'wrong', visible: false },
+          },
+        ],
+      }),
+    /action.sidebar must be/,
+  );
 });
 
 test('fixture interpolation fails closed on unknown keys', () => {

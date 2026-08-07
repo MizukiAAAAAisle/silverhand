@@ -23,6 +23,8 @@ Keep these fixed across runs:
 
 - AC power, Low Power Mode off, no thermal throttling;
 - same Mac, display refresh rate, window size and theme;
+- Reduce Motion off when evaluating sidebar animation (the report records the
+  active media-query value);
 - source tree frozen for the entire trace (no HMR during a measured phase);
 - close unrelated CPU/GPU-heavy apps;
 - one warm-up run, then at least five recorded runs for exploration and ten for
@@ -59,7 +61,8 @@ own an isolated app process and data root:
 pnpm --filter @silverhand/desktop build
 pnpm perf:client profile \
   --mode release-profile \
-  --profile-dir /tmp/silverhand-perf-v1 \
+  --scale standard \
+  --profile-dir /tmp/silverhand-perf-standard \
   --scenario chat-core
 ```
 
@@ -69,9 +72,17 @@ The profile command has three write guards:
 2. its basename must contain `silverhand-perf`;
 3. a non-empty directory must carry the harness marker file.
 
-Only the harness-owned process is seeded. It gets a versioned workspace with
-240 deterministic messages and 120 deterministic tasks; acknowledged progress
-is saved in that isolated renderer profile so an interrupted seed can resume.
+Only the harness-owned process is seeded. Fixture sizes are explicit and each
+scale must use a different isolated profile:
+
+| Scale | Mainline messages | One thread's replies | Tasks | Use |
+| --- | ---: | ---: | ---: | --- |
+| `smoke` | 240 | 50 | 120 | Fast chain validation |
+| `standard` (default) | 2,000 | 450 | 500 | Engineering baseline, including a >400-reply thread |
+| `stress` | 10,000 | 1,200 | 2,000 | Scaling slope / non-virtualized surface detection |
+
+Acknowledged progress is saved in that isolated renderer profile so an
+interrupted seed can resume.
 For a formal baseline after an interrupted seed, discard the isolated profile
 and create a fresh one rather than assuming an in-flight write did not commit.
 Never point this command at a normal dogfood data root.
@@ -82,8 +93,9 @@ inside the `.app`, not the bundle directory):
 ```bash
 pnpm perf:client profile \
   --mode release \
+  --scale standard \
   --executable "apps/desktop/release/mac-arm64/Silverhand.app/Contents/MacOS/Silverhand" \
-  --profile-dir /tmp/silverhand-perf-release-v1 \
+  --profile-dir /tmp/silverhand-perf-release-standard \
   --scenario task-core
 ```
 
@@ -102,7 +114,8 @@ Each phase records:
 - Event Timing duration where Chromium exposes it;
 - cumulative layout shift without recent input;
 - JS heap and DOM-node before/after deltas;
-- a raw Chrome trace for attribution to scripting, style, layout, paint or GPU.
+- a raw Chrome trace with filmstrip screenshots for attribution to scripting,
+  style, layout, paint, GPU, and visible sidebar-animation cadence.
 
 For manual scroll/drag phases, `action_to_paint_ms` is deliberately `null`: the
 harness cannot know the exact physical input timestamp, and inventing one would
@@ -114,10 +127,16 @@ then long-task attribution, then retained heap/DOM growth. A single run is a
 lead, not a verdict. Reproduce it across the recorded run set and use the trace
 to identify the responsible component before changing code.
 
+For scaling, compare the same lane and scenario across `smoke`, `standard`, and
+`stress`; look for the slope rather than treating one large fixture as proof.
+Task-board growth is intentionally included because it is currently a much more
+likely non-virtualized scaling surface than the virtualized chat message list.
+
 ## Current scope
 
-The first harness covers channel load/re-entry, composer rendering, history
-scroll, task-board load, detail open, drag, repeated Chat↔Task navigation and a
+The first harness covers channel load/re-entry, composer rendering, mainline and
+400+ reply-thread scrolling, both browse-sidebar hide/show animations,
+task-board load, detail open, drag, repeated Chat↔Task navigation and a
 lightweight Members/Computers/idle smoke. Live token streaming and very large
 attachment/image decode need a controlled runtime producer, so they remain a
 separate follow-up rather than being simulated with a different rendering path.

@@ -35,6 +35,54 @@
       }
     },
     {
+      "id": "thread-open-400-plus",
+      "label": "Open the seeded 400+ reply thread",
+      "settle_ms": 250,
+      "observe_ms": 1800,
+      "action": {
+        "kind": "navigate",
+        "path": "/chat/w/{{workspaceId}}/c/{{chatChannelId}}?thread={{threadRootId}}"
+      }
+    },
+    {
+      "id": "thread-scroll-400-plus",
+      "label": "Scroll the long thread panel",
+      "settle_ms": 0,
+      "observe_ms": 2500,
+      "action": {
+        "kind": "manual",
+        "instruction": "After pressing Enter, continuously scroll upward in the right-hand thread panel for about two seconds. Manual action→paint is intentionally null."
+      }
+    },
+    {
+      "id": "workspace-sidebar-hide",
+      "label": "Hide the workspace sidebar",
+      "settle_ms": 250,
+      "observe_ms": 500,
+      "action": { "kind": "sidebar", "sidebar": "workspace", "visible": false }
+    },
+    {
+      "id": "workspace-sidebar-show",
+      "label": "Show the workspace sidebar",
+      "settle_ms": 250,
+      "observe_ms": 500,
+      "action": { "kind": "sidebar", "sidebar": "workspace", "visible": true }
+    },
+    {
+      "id": "channel-sidebar-hide",
+      "label": "Hide the channel sidebar",
+      "settle_ms": 250,
+      "observe_ms": 500,
+      "action": { "kind": "sidebar", "sidebar": "channel", "visible": false }
+    },
+    {
+      "id": "channel-sidebar-show",
+      "label": "Show the channel sidebar",
+      "settle_ms": 250,
+      "observe_ms": 500,
+      "action": { "kind": "sidebar", "sidebar": "channel", "visible": true }
+    },
+    {
       "id": "channel-reentry",
       "label": "Re-enter the same channel with warm caches",
       "settle_ms": 150,

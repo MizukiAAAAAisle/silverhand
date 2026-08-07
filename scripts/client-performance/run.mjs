@@ -17,9 +17,13 @@ import {
 const ROOT = resolve(import.meta.dirname, '../..');
 const DEFAULT_CDP = 'http://127.0.0.1:9222';
 const DEFAULT_OUT_ROOT = '/tmp/silverhand-client-performance';
-const PROFILE_MARKER = '.silverhand-client-performance-profile-v1.json';
-const FIXTURE_VERSION = 1;
-const FIXTURE_WORKSPACE = 'client-perf-v1';
+const PROFILE_MARKER = '.silverhand-client-performance-profile-v2.json';
+const FIXTURE_VERSION = 2;
+const FIXTURE_SCALES = Object.freeze({
+  smoke: { chatMessageCount: 240, threadReplyCount: 50, taskCount: 120 },
+  standard: { chatMessageCount: 2_000, threadReplyCount: 450, taskCount: 500 },
+  stress: { chatMessageCount: 10_000, threadReplyCount: 1_200, taskCount: 2_000 },
+});
 
 const [command = 'help', ...argv] = process.argv.slice(2);
 const args = parseArgs(argv);
@@ -111,7 +115,8 @@ async function runOwnedProfile(options) {
   if (mode === 'dev') {
     fail('`profile` owns an isolated production process; use `run --mode dev` for HMR diagnosis');
   }
-  const profileDir = await prepareProfileDir(required(options, 'profile-dir'));
+  const scale = fixtureScale(options.scale);
+  const profileDir = await prepareProfileDir(required(options, 'profile-dir'), scale);
   const port = parsePort(options.port ?? '9233');
   const endpoint = `http://127.0.0.1:${port}`;
   const scenarioPath = scenarioFile(options.scenario);
@@ -128,7 +133,8 @@ async function runOwnedProfile(options) {
     const client = await CdpClient.connect(target.webSocketDebuggerUrl);
     try {
       await waitForAuthenticatedRenderer(client, 30_000);
-      const fixture = await seedFixture(client);
+      const fixture = await seedFixture(client, scale);
+      await waitForRendererIdle(client);
       await runScenario({
         client,
         target,
@@ -247,7 +253,7 @@ function launchProfileProcess({ mode, profileDir, port, executable }) {
   return spawn(program, childArgs, { cwd: ROOT, env, stdio: 'inherit' });
 }
 
-async function prepareProfileDir(raw) {
+async function prepareProfileDir(raw, scale) {
   const dir = resolve(raw);
   if (!isAbsolute(raw)) fail('--profile-dir must be an absolute path');
   if (!basename(dir).includes('silverhand-perf')) {
@@ -262,19 +268,50 @@ async function prepareProfileDir(raw) {
   if (!entries.includes(PROFILE_MARKER)) {
     await writeFile(
       marker,
-      `${JSON.stringify({ schema_version: 1, created_at: new Date().toISOString() }, null, 2)}\n`,
+      `${JSON.stringify(
+        { schema_version: 2, fixture_scale: scale, created_at: new Date().toISOString() },
+        null,
+        2,
+      )}\n`,
       { encoding: 'utf8', mode: 0o600 },
     );
   } else {
     const parsed = JSON.parse(await readFile(marker, 'utf8'));
-    if (parsed.schema_version !== 1) fail(`${marker} has an unsupported schema_version`);
+    if (parsed.schema_version !== 2) fail(`${marker} has an unsupported schema_version`);
+    if (parsed.fixture_scale !== scale) {
+      fail(
+        `${dir} belongs to fixture scale ${String(parsed.fixture_scale)}; ` +
+          `use a different profile directory for ${scale}`,
+      );
+    }
   }
   return dir;
 }
 
-async function seedFixture(client) {
-  console.log('Preparing deterministic chat/task fixture…');
-  return evaluate(client, fixtureSeedSource());
+async function seedFixture(client, scale) {
+  const counts = FIXTURE_SCALES[scale];
+  console.log(
+    `Preparing ${scale} fixture (${counts.chatMessageCount} mainline messages / ` +
+      `${counts.threadReplyCount} thread replies / ${counts.taskCount} tasks)…`,
+  );
+  return evaluate(client, fixtureSeedSource(scale, counts));
+}
+
+async function waitForRendererIdle(client) {
+  await evaluate(
+    client,
+    `(async () => {
+      await new Promise(resolve => {
+        if ('requestIdleCallback' in globalThis) {
+          requestIdleCallback(resolve, { timeout: 5000 });
+        } else {
+          setTimeout(resolve, 1000);
+        }
+      });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return true;
+    })()`,
+  );
 }
 
 async function waitForAuthenticatedRenderer(client, timeoutMs) {
@@ -295,12 +332,12 @@ async function waitForAuthenticatedRenderer(client, timeoutMs) {
   throw new Error(`renderer did not authenticate within ${timeoutMs}ms (last=${JSON.stringify(last)})`);
 }
 
-function fixtureSeedSource() {
+function fixtureSeedSource(scale, counts) {
   const config = JSON.stringify({
     version: FIXTURE_VERSION,
-    workspaceName: FIXTURE_WORKSPACE,
-    chatMessageCount: 240,
-    taskCount: 120,
+    scale,
+    workspaceName: `client-perf-v${FIXTURE_VERSION}-${scale}`,
+    ...counts,
   });
   return `(${async function seed(config) {
     const storageKey = `silverhand.client-performance.fixture.v${config.version}`;
@@ -339,50 +376,111 @@ function fixtureSeedSource() {
       });
       state = {
         version: config.version,
+        scale: config.scale,
         workspaceId: created.workspace.id,
         chatChannelId: created.channel.id,
+        threadRootId: null,
+        threadRepliesSeeded: 0,
         chatMessagesSeeded: 0,
         tasksSeeded: 0,
         complete: false,
       };
       localStorage.setItem(storageKey, JSON.stringify(state));
     }
-    if (state.version !== config.version) throw new Error('fixture state version mismatch');
+    if (state.version !== config.version || state.scale !== config.scale) {
+      throw new Error('fixture state version/scale mismatch');
+    }
     const save = () => localStorage.setItem(storageKey, JSON.stringify(state));
-    for (let index = state.chatMessagesSeeded; index < config.chatMessageCount; index += 1) {
-      const paragraph =
-        index % 7 === 0
-          ? "\n\n- deterministic list item\n- second list item\n\n`const frame = performance.now()`"
-          : '';
-      await request(`/api/channels/${state.chatChannelId}/messages`, {
+    if (!state.threadRootId) {
+      const root = await request(`/api/channels/${state.chatChannelId}/messages`, {
         method: 'POST',
         bodyText: JSON.stringify({
-          content: `Fixture message ${String(index + 1).padStart(3, '0')} — renderer baseline payload.${paragraph}`,
+          content: 'Fixture thread root — long-thread renderer baseline.',
           attachment_ids: [],
         }),
       });
-      state.chatMessagesSeeded = index + 1;
+      if (typeof root?.message?.id !== 'string') {
+        throw new Error('thread root create returned no message id');
+      }
+      state.threadRootId = root.message.id;
+      state.threadRepliesSeeded = 0;
       save();
     }
-    for (let index = state.tasksSeeded; index < config.taskCount; index += 1) {
-      await request('/api/tasks', {
-        method: 'POST',
-        bodyText: JSON.stringify({
-          title: `Fixture task ${String(index + 1).padStart(3, '0')}`,
-          body: `Deterministic task body ${index + 1}.`,
-          conversation_id: state.chatChannelId,
+    for (
+      let batchStart = state.threadRepliesSeeded;
+      batchStart < config.threadReplyCount;
+      batchStart += 16
+    ) {
+      const batchEnd = Math.min(batchStart + 16, config.threadReplyCount);
+      await Promise.all(
+        Array.from({ length: batchEnd - batchStart }, async (_unused, offset) => {
+          const index = batchStart + offset;
+          await request(`/api/channels/${state.chatChannelId}/messages`, {
+            method: 'POST',
+            bodyText: JSON.stringify({
+              content: `Fixture thread reply ${String(index + 1).padStart(4, '0')} — long-thread payload.`,
+              attachment_ids: [],
+              reply_to_message_id: state.threadRootId,
+            }),
+          });
         }),
-      });
-      state.tasksSeeded = index + 1;
+      );
+      state.threadRepliesSeeded = batchEnd;
+      save();
+    }
+    for (
+      let batchStart = state.chatMessagesSeeded;
+      batchStart < config.chatMessageCount;
+      batchStart += 16
+    ) {
+      const batchEnd = Math.min(batchStart + 16, config.chatMessageCount);
+      await Promise.all(
+        Array.from({ length: batchEnd - batchStart }, async (_unused, offset) => {
+          const index = batchStart + offset;
+          const paragraph =
+            index % 7 === 0
+              ? "\n\n- deterministic list item\n- second list item\n\n`const frame = performance.now()`"
+              : '';
+          await request(`/api/channels/${state.chatChannelId}/messages`, {
+            method: 'POST',
+            bodyText: JSON.stringify({
+              content: `Fixture message ${String(index + 1).padStart(5, '0')} — renderer baseline payload.${paragraph}`,
+              attachment_ids: [],
+            }),
+          });
+        }),
+      );
+      state.chatMessagesSeeded = batchEnd;
+      save();
+    }
+    for (let batchStart = state.tasksSeeded; batchStart < config.taskCount; batchStart += 8) {
+      const batchEnd = Math.min(batchStart + 8, config.taskCount);
+      await Promise.all(
+        Array.from({ length: batchEnd - batchStart }, async (_unused, offset) => {
+          const index = batchStart + offset;
+          await request('/api/tasks', {
+            method: 'POST',
+            bodyText: JSON.stringify({
+              title: `Fixture task ${String(index + 1).padStart(4, '0')}`,
+              body: `Deterministic task body ${index + 1}.`,
+              conversation_id: state.chatChannelId,
+            }),
+          });
+        }),
+      );
+      state.tasksSeeded = batchEnd;
       save();
     }
     state.complete = true;
     save();
     return {
       fixtureVersion: state.version,
+      fixtureScale: state.scale,
       workspaceId: state.workspaceId,
       chatChannelId: state.chatChannelId,
+      threadRootId: state.threadRootId,
       chatMessageCount: state.chatMessagesSeeded,
+      threadReplyCount: state.threadRepliesSeeded,
       taskCount: state.tasksSeeded,
     };
   }})(${config})`;
@@ -481,6 +579,25 @@ function phaseSource(action, settleMs, observeMs) {
     if (!probe) throw new Error('performance probe is not installed');
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     const paint = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const sidebarButton = sidebar => {
+      const prefix = sidebar === 'workspace' ? 'Workspace sidebar' : 'Channel sidebar';
+      return [...document.querySelectorAll('button[title]')].find(
+        element => element instanceof HTMLButtonElement && element.title.startsWith(prefix),
+      );
+    };
+    // Make a directional sidebar phase reproducible even though visibility is
+    // persisted across runs. Preconditioning is deliberately outside the probe.
+    if (action.kind === 'sidebar') {
+      const button = sidebarButton(action.sidebar);
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error(`sidebar toggle did not resolve: ${action.sidebar}`);
+      }
+      const currentlyVisible = button.getAttribute('aria-pressed') === 'true';
+      if (currentlyVisible === action.visible) {
+        button.click();
+        await wait(300);
+      }
+    }
     probe.reset();
     let actionToPaintMs = null;
     const startedAt = performance.now();
@@ -503,6 +620,12 @@ function phaseSource(action, settleMs, observeMs) {
       const element = document.querySelector(action.selector);
       if (!(element instanceof HTMLElement)) throw new Error(`selector did not resolve to an element: ${action.selector}`);
       element.scrollBy({ top: action.delta_y, behavior: 'instant' });
+    } else if (action.kind === 'sidebar') {
+      const button = sidebarButton(action.sidebar);
+      if (!(button instanceof HTMLButtonElement)) {
+        throw new Error(`sidebar toggle did not resolve: ${action.sidebar}`);
+      }
+      button.click();
     } else if (action.kind !== 'manual') {
       throw new Error(`unsupported action ${action.kind}`);
     }
@@ -522,6 +645,7 @@ function rendererMetadataSource() {
     viewport: { width: innerWidth, height: innerHeight },
     screen: { width: screen.width, height: screen.height, color_depth: screen.colorDepth },
     hardware_concurrency: navigator.hardwareConcurrency ?? null,
+    prefers_reduced_motion: matchMedia('(prefers-reduced-motion: reduce)').matches,
     user_agent: navigator.userAgent,
     language: navigator.language,
   }))()`;
@@ -561,6 +685,7 @@ async function beginTrace(client, outputPath) {
       'v8',
       'disabled-by-default-devtools.timeline',
       'disabled-by-default-devtools.timeline.frame',
+      'disabled-by-default-devtools.screenshot',
     ].join(','),
   });
   return { completion: complete };
@@ -712,6 +837,14 @@ function requiredMode(options) {
   return mode;
 }
 
+function fixtureScale(value) {
+  const scale = value ?? 'standard';
+  if (typeof scale !== 'string' || !Object.hasOwn(FIXTURE_SCALES, scale)) {
+    fail('--scale must be smoke, standard, or stress');
+  }
+  return scale;
+}
+
 function cdpEndpoint(options) {
   if (options.cdp) return String(options.cdp).replace(/\/$/, '');
   if (options.port) return `http://127.0.0.1:${parsePort(options.port)}`;
@@ -766,8 +899,8 @@ function printHelp() {
 Usage:
   pnpm perf:client targets [--cdp http://127.0.0.1:9222]
   pnpm perf:client run --mode dev --scenario chat-core [--cdp URL] [--workspace-id ID --channel-id ID]
-  pnpm perf:client profile --mode release-profile --profile-dir /tmp/silverhand-perf-v1 --scenario chat-core
-  pnpm perf:client profile --mode release --executable /path/to/Silverhand --profile-dir /tmp/silverhand-perf-v1 --scenario task-core
+  pnpm perf:client profile --mode release-profile --scale standard --profile-dir /tmp/silverhand-perf-standard --scenario chat-core
+  pnpm perf:client profile --mode release --scale stress --executable /path/to/Silverhand --profile-dir /tmp/silverhand-perf-stress --scenario task-core
 
 Modes:
   dev              HMR/CDP diagnosis only; reports are never baseline eligible.
@@ -776,6 +909,7 @@ Modes:
 
 Flags:
   --port N          CDP port for owned profiles (default 9233).
+  --scale NAME      Isolated fixture size: smoke, standard (default), or stress.
   --output DIR      Report directory (default /tmp/silverhand-client-performance/...).
   --yes             Run phases without the readiness prompt.
   --no-trace        Skip the Chrome trace stream.
