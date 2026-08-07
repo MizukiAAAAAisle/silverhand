@@ -170,10 +170,7 @@ export function removeWorkspaceFromFavorites(
  */
 export function useFavorites(watchWorkspaceIds: FavoritesWatchScope) {
   const qc = useQueryClient();
-  const query = useQuery<ListFavoritesDto>({
-    queryKey: favoritesKey,
-    queryFn: ({ signal }) => api<ListFavoritesDto>(apiPaths.favorites, { signal }),
-  });
+  const query = useFavoritesList();
 
   // Joined into a stable string so the effect re-subscribes only when the SET
   // changes, not on every render of the caller's array literal.
@@ -198,6 +195,37 @@ export function useFavorites(watchWorkspaceIds: FavoritesWatchScope) {
   }, [qc, scopeKey]);
 
   return query;
+}
+
+/**
+ * The favorites list as a plain OBSERVER — same cache entry, no freshness
+ * subscription of its own.
+ *
+ * For readers that need to know WHICH conversations are starred without owning the
+ * list: STARRED's membership is also what decides whether a parent branch still
+ * holds a row (`branchHoldsSelectedRow`, #task:1901), and that question is asked
+ * one level above `FavoritesGroup`. Deliberately NOT `useFavorites(scope)` — a
+ * second call would arm a second set of WS subscriptions and invalidate the key
+ * twice per frame, for a caller that only reads. The one owner keeps the scope; the
+ * observers ride its cache.
+ */
+export function useFavoritesList() {
+  return useQuery<ListFavoritesDto>({
+    queryKey: favoritesKey,
+    queryFn: ({ signal }) => api<ListFavoritesDto>(apiPaths.favorites, { signal }),
+  });
+}
+
+/**
+ * Is this conversation in the viewer's STARRED list — i.e. has it MOVED out of its
+ * parent's channel list (#task:1888)? `false` while the list is still loading,
+ * which errs toward the parent keeping the row: the selection stays visible, and
+ * the extra mount ends as soon as the list arrives.
+ */
+export function useIsStarredConversation(conversationId: string | null): boolean {
+  const { data } = useFavoritesList();
+  if (conversationId === null) return false;
+  return (data?.items ?? []).some(it => it.entity_id === conversationId);
 }
 
 /** Minimal WS frame shape {@link decideFavoritesInvalidation} consumes, so the

@@ -108,3 +108,37 @@ export function excludeStarredChannels<T extends StarrableItem>(
 ): T[] {
   return items.filter(c => !isStarredAt(c.starred_at));
 }
+
+/** The open conversation, as the sidebar's containers see it. `starred` is the
+ *  SAME fact `excludeStarredChannels` filters on (`user_sort_entry.starred_at`),
+ *  reached through STARRED's own list rather than through the parent's channel
+ *  query — which is the point: the parent's query is what this decides whether to
+ *  mount. Nothing selected → `channelId: null`. */
+export interface SelectedConversation {
+  channelId: string | null;
+  /** The workspace the primary pane is in. */
+  workspaceId: string | null;
+  /** Whether the open conversation has moved into global STARRED. */
+  starred: boolean;
+}
+
+/**
+ * Does this workspace branch hold the open conversation's ROW — i.e. may a
+ * COLLAPSED branch keep that one row on screen, and pay for the three queries that
+ * takes (#task:1901, @Cindy MUST FIX)?
+ *
+ * The criterion is MEMBERSHIP AFTER exclusive-home, not `workspaceId` equality. A
+ * starred conversation is no longer a member of its parent's list (#task:1888 —
+ * `excludeStarredChannels` drops it) and its row lives in STARRED, so the parent
+ * branch has nothing to keep: matching on the parent alone would mount channels /
+ * sort / modes / unread only to find no row at the end of it. The row must be kept
+ * by exactly the container that actually renders it, which is the same rule that
+ * decides where the row IS.
+ */
+export function branchHoldsSelectedRow(
+  workspaceId: string,
+  selected: SelectedConversation,
+): boolean {
+  if (selected.channelId === null || selected.starred) return false;
+  return selected.workspaceId === workspaceId;
+}

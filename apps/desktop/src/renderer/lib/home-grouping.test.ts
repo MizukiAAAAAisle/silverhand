@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  branchHoldsSelectedRow,
   excludeStarredChannels,
   isStarredAt,
   partitionRailWorkspaces,
@@ -81,5 +82,31 @@ describe('excludeStarredChannels (#task:1888 — starred conversations moved to 
     const input = [node('c1', 1), node('c2'), node('c3', 2)];
     expect(excludeStarredChannels(input).map(c => c.id)).toEqual(['c2']);
     expect(input).toHaveLength(3);
+  });
+});
+
+describe('branchHoldsSelectedRow (#task:1901 — which collapsed container keeps the open row)', () => {
+  it('holds it for the parent branch of an unstarred selection', () => {
+    expect(
+      branchHoldsSelectedRow('w1', { channelId: 'c1', workspaceId: 'w1', starred: false }),
+    ).toBe(true);
+  });
+
+  it('does NOT hold it once the selection is starred — STARRED renders that row', () => {
+    // The falsifiable case: matching on `workspaceId` alone returns true here and
+    // mounts the branch's channels / sort / modes / unread for a row that
+    // `excludeStarredChannels` has already moved out of this list.
+    expect(
+      branchHoldsSelectedRow('w1', { channelId: 'c1', workspaceId: 'w1', starred: true }),
+    ).toBe(false);
+  });
+
+  it('does not hold another workspace’s selection, or none at all', () => {
+    expect(
+      branchHoldsSelectedRow('w2', { channelId: 'c1', workspaceId: 'w1', starred: false }),
+    ).toBe(false);
+    expect(
+      branchHoldsSelectedRow('w1', { channelId: null, workspaceId: 'w1', starred: false }),
+    ).toBe(false);
   });
 });

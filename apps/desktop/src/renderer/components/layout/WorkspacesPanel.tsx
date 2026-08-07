@@ -1,4 +1,4 @@
-import { Fragment, useEffect, type ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
 import { MessagesSquare, Plus } from 'lucide-react';
@@ -20,6 +20,10 @@ import {
 import { ChannelSortMenu, WorkspaceChannels } from './WorkspaceChannels';
 import { WorkspaceContextMenu } from './WorkspaceContextMenu';
 import { dmRecognitionName } from '@/lib/workspace-name';
+import {
+  branchHoldsSelectedRow,
+  type SelectedConversation,
+} from '@/lib/home-grouping';
 
 type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -68,13 +72,14 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
    *  Kept on the group for the empty-state messaging. */
   kind: WorkspaceUiKind;
   workspaces: WorkspaceItem[];
-  /** The workspace the primary pane is in — decides which parent
-   *  reveal-on-navigate expands, and which collapsed branch still shows the open
-   *  channel's row. It never highlights a row (#task:1889). */
-  selectedWorkspaceId: string | null;
-  /** The open conversation. The single selection object of the whole tree: at
-   *  most one CHANNEL row FILLs, and no container row ever does. */
-  selectedChannelId: string | null;
+  /** The open conversation, as one object. NOT three loose props: the workspace
+   *  half only ever answers "which collapsed branch keeps the open row", and that
+   *  answer also depends on whether the row has moved into STARRED — splitting
+   *  them let a call site supply the parent id without the star fact, which is
+   *  exactly the bug `branchHoldsSelectedRow` closes (#task:1901). The channel id
+   *  is still the single FILL authority: at most one CHANNEL row highlights, and
+   *  no container row ever does. */
+  selected: SelectedConversation;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
   /** Optional `+` button. DM groups omit this — DM workspaces are
@@ -112,8 +117,7 @@ interface WorkspaceGroupProps<GroupKey extends SortGroup = SortGroup> {
 /** Per-row context shared by every entry point so a row is the SAME component
  *  regardless of where it is rendered (one entity, one shape). */
 interface RailRowContext {
-  selectedWorkspaceId: string | null;
-  selectedChannelId: string | null;
+  selected: SelectedConversation;
   onSelectChannel: (channelId: string, workspaceId: string) => void;
   onCreateChannel: (workspaceId: string) => void;
   agentsById?: ReadonlyMap<string, AgentDto>;
@@ -166,8 +170,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   label,
   kind,
   workspaces,
-  selectedWorkspaceId,
-  selectedChannelId,
+  selected,
   onSelectChannel,
   onCreateChannel,
   onAdd,
@@ -180,8 +183,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   sort,
 }: WorkspaceGroupProps<GroupKey>): JSX.Element {
   const ctx: RailRowContext = {
-    selectedWorkspaceId,
-    selectedChannelId,
+    selected,
     onSelectChannel,
     onCreateChannel,
     agentsById,
@@ -193,12 +195,10 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   // its only action is a collapse that would no longer change anything, and which
   // workspace you are in is on the titlebar. Reuses the branch's own
   // `selectedOnly` render, so the surviving row is the same row with the same
-  // indent, fill and menu. A starred selection resolves to nothing here and shows
-  // in STARRED instead, where it actually lives.
-  const selectedBranch =
-    selectedChannelId !== null && selectedWorkspaceId !== null
-      ? workspaces.find(w => w.id === selectedWorkspaceId)
-      : undefined;
+  // indent, fill and menu. Same `branchHoldsSelectedRow` the branch itself uses, so
+  // a starred selection resolves to nothing here — its row lives in STARRED, and
+  // this group must not mount a branch that has no row to show (#task:1901).
+  const selectedBranch = workspaces.find(w => branchHoldsSelectedRow(w.id, selected));
 
   return (
     <SidebarSection
@@ -215,7 +215,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
           <WorkspaceChannels
             workspaceId={selectedBranch.id}
             workspaceKind={selectedBranch.kind}
-            selectedChannelId={selectedChannelId}
+            selectedChannelId={selected.channelId}
             onSelectChannel={onSelectChannel}
             onCreateChannel={onCreateChannel}
             selectedOnly
@@ -317,12 +317,12 @@ function SortableWorkspaceItem({
  *
  * Collapse state persists per workspace under the shared section vocabulary
  * (`silverhand:layout.sidebar-section.ws.<id>`), so the shape of the tree survives
- * a restart. REVEAL-ON-NAVIGATE: navigating to a channel expands its parent (and
- * writes that through). The effect keys on `selectedChannelId`, not on `expanded`,
- * so a deliberate collapse while the channel stays open is not immediately undone
- * — and that collapse keeps the open channel's row on screen by itself
- * (`selectedOnly`), which is how the FILL stays reachable without ever pinning the
- * branch open or handing the header a stand-in marker.
+ * a restart. It starts COLLAPSED and only an explicit click changes it — the stored
+ * bit means "I want this open", never "I have been here" (see `holdsSelection`
+ * below). Opening a channel in a collapsed branch does not expand it; the branch
+ * keeps that one row on screen by itself (`selectedOnly`), which is how the FILL
+ * stays reachable without pinning the branch open or handing the header a stand-in
+ * marker.
  */
 function WorkspaceBranch({
   workspace,
@@ -333,15 +333,25 @@ function WorkspaceBranch({
   ctx: RailRowContext;
   dragHandleProps: Record<string, unknown>;
 }): JSX.Element {
-  const [expanded, setExpanded] = useSidebarSectionExpanded(`ws.${workspace.id}`, true);
-  const mustReveal =
-    ctx.selectedChannelId !== null && ctx.selectedWorkspaceId === workspace.id;
-  useEffect(() => {
-    if (mustReveal) setExpanded(true);
-    // Deliberately NOT depending on `expanded`: this reveals on a NAVIGATION, and
-    // must not fight a manual collapse of the workspace you are currently in.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mustReveal, ctx.selectedChannelId]);
+  // FIRST RUN IS COLLAPSED (shiki, 2026-08-08:「只展开 starred/workspace/dm 第一
+  // 级,第二级不展开」). The three group headers open by default, the branches under
+  // them do not: an untouched tree is then a list of workspaces you can read at a
+  // glance instead of every channel of every workspace, and the lazy-mount rule
+  // above pays off on the very first paint rather than only after the user has
+  // collapsed things by hand.
+  const [expanded, setExpanded] = useSidebarSectionExpanded(`ws.${workspace.id}`, false);
+  // Navigation does NOT expand this branch (shiki, 2026-08-08 — the second level
+  // stays collapsed until you open it yourself). It used to: reveal-on-navigate
+  // forced EXPANDED and wrote that through, so the stored bit recorded "you have
+  // been here" rather than "you want this open", and a default of collapsed decayed
+  // back to fully expanded over a few days of use. Nothing is lost by dropping it,
+  // because a collapsed branch holding the open channel already shows that one row
+  // (`selectedOnly`) — the same reveal, without the siblings and without the write.
+  //
+  // "Holding" is membership AFTER exclusive-home, not parent-id equality: a starred
+  // conversation's row is STARRED's, so this branch keeps nothing and stays
+  // unmounted (`branchHoldsSelectedRow`, #task:1901 @Cindy MUST FIX).
+  const holdsSelection = branchHoldsSelectedRow(workspace.id, ctx.selected);
 
   return (
     <>
@@ -352,12 +362,12 @@ function WorkspaceBranch({
         onToggle={() => setExpanded()}
         dragHandleProps={dragHandleProps}
       />
-      {expanded || mustReveal ? (
+      {expanded || holdsSelection ? (
         <ul className="space-y-0.5">
           <WorkspaceChannels
             workspaceId={workspace.id}
             workspaceKind={workspace.kind}
-            selectedChannelId={ctx.selectedChannelId}
+            selectedChannelId={ctx.selected.channelId}
             onSelectChannel={ctx.onSelectChannel}
             onCreateChannel={ctx.onCreateChannel}
             // Collapsed, but this is the branch you are IN: keep the open

@@ -76,30 +76,26 @@ function persistExpanded(persistId: string, value: boolean): void {
  * Exported (#task:1889) because the merged sidebar's WORKSPACE HEADER is a
  * collapse toggle too, persisted per workspace under the same vocabulary
  * (`persistId = 'ws.<workspaceId>'`) — a second collapse-storage convention for
- * the same chrome affordance is how the two would drift apart. The setter takes
- * an optional explicit value so reveal-on-navigate can force EXPANDED (writing
- * through to storage, exactly as a click would) instead of blind-toggling.
+ * the same chrome affordance is how the two would drift apart. The setter is a
+ * plain toggle: every write to this storage comes from a user opening or closing
+ * a section, so the stored bit always means intent (#task:1901).
  */
 export function useSidebarSectionExpanded(
   persistId: string | undefined,
   defaultExpanded: boolean,
-): [boolean, (next?: boolean) => void] {
+): [boolean, () => void] {
   const [expanded, setExpanded] = useState(() =>
     persistId === undefined
       ? defaultExpanded
       : readExpanded(persistId, defaultExpanded),
   );
-  const toggle = useCallback(
-    (explicit?: boolean) => {
-      setExpanded(prev => {
-        const next = explicit ?? !prev;
-        if (next === prev) return prev; // no write, no re-render
-        if (persistId !== undefined) persistExpanded(persistId, next);
-        return next;
-      });
-    },
-    [persistId],
-  );
+  const toggle = useCallback(() => {
+    setExpanded(prev => {
+      const next = !prev;
+      if (persistId !== undefined) persistExpanded(persistId, next);
+      return next;
+    });
+  }, [persistId]);
   return [expanded, toggle];
 }
 

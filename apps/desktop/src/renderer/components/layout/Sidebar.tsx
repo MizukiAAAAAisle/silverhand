@@ -20,8 +20,12 @@ import {
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
+import { useIsStarredConversation } from '@/features/favorites/hooks';
 import { OUTER_GLYPH_INSET } from './sidebar-shared';
-import { partitionRailWorkspaces } from '@/lib/home-grouping';
+import {
+  partitionRailWorkspaces,
+  type SelectedConversation,
+} from '@/lib/home-grouping';
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
@@ -32,7 +36,8 @@ interface SidebarProps {
    *  to the User icon. #task:919 */
   agentsById?: ReadonlyMap<string, AgentDto>;
   /** The workspace the primary pane is in. Since #task:1889 it never highlights
-   *  anything — it only decides which parent expands on navigate. */
+   *  anything — with `selectedChannelId` and the star fact it decides which
+   *  collapsed container keeps the open row (see `branchHoldsSelectedRow`). */
   selectedWorkspaceId: string | null;
   /** The open conversation — the tree's ONE selection object: it FILLs its
    *  channel row (under its parent, or in STARRED when starred). */
@@ -117,6 +122,20 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     return out;
   }, [props.workspaces, props.agentsById]);
   const dmAgentAvatarUrls = useAgentAvatarObjectUrls(dmAvatarSources);
+
+  // The tree's selection, composed ONCE here, because the third field can only be
+  // answered above the sections: whether the open conversation has moved into
+  // STARRED (#task:1888) decides WHICH container renders its row, and therefore
+  // which collapsed container may keep it (`branchHoldsSelectedRow`). Reading it
+  // from the parent's own channel list would be circular — that list is the thing
+  // being decided about. A cache observer, not a second owner of the favorites
+  // freshness scope: `FavoritesGroup` below still owns it.
+  const selectedIsStarred = useIsStarredConversation(props.selectedChannelId);
+  const selected: SelectedConversation = {
+    channelId: props.selectedChannelId,
+    workspaceId: props.selectedWorkspaceId,
+    starred: selectedIsStarred,
+  };
 
   // Per-user rail ordering (#task:1146). The whole rail is ONE list; the drag
   // state machine (synchronous drop override, settle guard) lives in the shared
@@ -273,8 +292,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           label="WORKSPACES"
           kind="regular"
           workspaces={orderedRegular}
-          selectedWorkspaceId={props.selectedWorkspaceId}
-          selectedChannelId={props.selectedChannelId}
+          selected={selected}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
           headerAction={
@@ -309,8 +327,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           label="DM"
           kind="dm"
           workspaces={orderedDms}
-          selectedWorkspaceId={props.selectedWorkspaceId}
-          selectedChannelId={props.selectedChannelId}
+          selected={selected}
           onSelectChannel={props.onSelectChannel}
           onCreateChannel={props.onCreateChannel}
           emptyHint="Creating an agent opens a DM"
