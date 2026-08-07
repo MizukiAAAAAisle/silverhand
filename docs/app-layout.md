@@ -90,12 +90,15 @@ Activity 是 NavRail 顶层 section，与 `chat` 平级（不再是 chat sidebar
 
 ## 3. Sidebar（唯一 browse 列，NavRail 右侧）
 
-**一棵树，不是两栏**（#task:1889）：channel 是 workspace 的 children，同一列里展开。结构（自上而下）：工具行（`Search` / `Saved` / `Archived`）→ STARRED 组 → DM 组 → WORKSPACES 组（每个 workspace 行下挂它自己的 channels）。settings 入口在 NavRail 底部；members 是 NavRail top-level section，不在 Sidebar 内。
+**一棵树，不是两栏**（#task:1889）：channel 是 workspace 的 children，同一列里展开。结构（自上而下）：工具行（`Search` / `Saved` / `Archived`）→ STARRED 组 → WORKSPACES 组（每个 workspace 行下挂它自己的 channels）→ DM 组。settings 入口在 NavRail 底部；members 是 NavRail top-level section，不在 Sidebar 内。
 
 - **Sidebar 仅在 NavRail = `chat` 时显示**。NavRail = `members` / `computers` 时，本列被相应的 MembersPanel / ComputersPanel 替换（仍占同样宽度、同底色）。
 - **一个 splitter、一个 collapse pane。** 显隐与宽度都是全局 layout preference，不随 workspace 切换；titlebar 按钮和键盘 chord（`⌘\`）双向同步，隐藏时 splitter 也跟着卸载。宽度经 CSS var 引用，drag 改值不触发 transition；splitter 是窄可点击区，hover 变色，drag 期间整个文档加 col-resize + 禁选中。
-- **层级靠 chevron 沟表达，不靠缩进。** parent 与 child 的 identity glyph（workspace 图标 / DM 头像 / channel `#` / 工具行字形）**全部落在同一列**；parent 与 child 的唯一差别是 chevron 沟里有没有东西。
-- **workspace 头行 = 折叠开关**：不导航、不改高亮、不改 titlebar 上下文。折叠态逐 workspace 持久化。children 按展开态**懒取**——折叠的 workspace 零请求。
+- **只有一级缩进，且不留常驻 chevron 沟。** 全树两条 glyph 列，相距一个 16px 缩进步：**组列**（工具行 + 三个组头 STARRED / WORKSPACES / DM）与**内容列**（workspace / DM 头行、它们下面的 channel 行、STARRED 行）。树结构上有四层，但**逐层缩进不做**——这一列本来就窄，阶梯会把宽度花在留白上、读起来层级过多；channel 与它的 workspace 头行**同列**，位置由上方的头行与折叠态表达。
+- **icon↔chevron 原位替换只属于那三个组头。** 组头平时显示语义 icon，hover / keyboard focus 时原位换成折叠 chevron，因此折叠控件不额外占一列，顶部三项与组头同列。组头 hover **只做这一次图标替换**：不加背景、不加边框、不变字色。三个组头 icon 是同一族的等重描边字形——`Star` / `MessagesSquare`（DM，Slack 的双气泡）/ 常规字重的衬线 `W`；均不带 `data-workspace-icon`（那是 workspace 实例的主题化贴纸，组头不是实例）。
+- **三个组头右侧的 action（排序 / `+`）hover 才显示，范围是整组。** 常驻会让三份 chrome 与行争视线，而这是「安排一次」的控件；揭示范围取组头**或组内任一行**——排序菜单是读列表时才想起来的东西，不是读标题时。键盘那一半用 `:has(:focus-visible)`（不是 `focus-within`，Chromium mousedown 就上焦点），菜单开着时用 `:has([data-state=open])` 钉住。侧栏之外的 panel（Members / Computers）保留常驻 `+`。
+- **实例行的身份图标永不替换、也不铺 hover 底色。** workspace / DM 头行显示自己的头像 / workspace icon 并**保持不动**——身份不能在指针下被换掉；它是分组线不是房间，hover 只提字色，`.sidebar-row-border` 的状态涂装（forza6 下是柠檬底 + 投影）不参与，改用只保留描边宽度、不带状态的 `.sidebar-row-gutter`。填充留给唯一的选区：当前打开的 channel。
+- **workspace 头行 = 折叠开关**：不导航、不改高亮、不改 titlebar 上下文。折叠态逐 workspace 持久化。children 按展开态**懒挂载**——折叠的 workspace 不挂载它自己的 channels / unread / modes 查询。（这不等于「该 workspace 零请求」：STARRED 订阅**全部可见 workspace**的 scope，且其中的 regular channel 会拉取父 workspace 的 attention modes。）
 - **高亮只有一档，归会话**：FILL = 当前打开的那个 channel，侧栏选区状态就等于 `selectedChannelId`；**workspace / DM 头行永不高亮**。`/chat/w/:id`（无 channel）时侧栏零高亮，入口改由行内 `+ New channel` 承担。导航到某 channel 时**自动展开它的父**（reveal-on-navigate），但不与用户手动折叠当前 workspace 相争。
 - **折叠头徽章**：折叠时保留聚合未读徽章，展开后撤掉；mute 标记两态常驻。徽章不带点击跳转。
 - channel 列表只展示 top-level channel-like（`channel` / `dm_channel`），**不含 thread 节点**——thread 是父 channel 里的 message reply-cluster、不是导航树节点（§7）。同一 workspace 下是**单一平铺组**（viewer sort + 每父独立的手动拖拽序），不做 pin 分段、也不做 thread 缩进层级；归档 channel 不进树，归 §4.5 的全局 `Archived`。

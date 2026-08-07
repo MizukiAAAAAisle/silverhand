@@ -219,8 +219,14 @@ export interface ViewerSyncFrame {
  * - `viewer_workspaces_changed` event → always `['workspaces']`; for
  *   `role_changed` additionally the workspace's members query (governance
  *   `viewerRole` is sourced there, not from the list); for `added` additionally
- *   the attention badge roll-up (below).
+ *   the attention badge roll-up (below) and the favorites list.
  * - anything else → no invalidation.
+ *
+ * Why `added` reaches FAVORITES (#task:1889, @Cindy MUST FIX): a star is stored on
+ * the conversation and OUTLIVES the viewer's membership in its parent, exactly like
+ * the mute preference below. Re-joining a workspace therefore makes starred rows
+ * reachable again, and no `workspace_channels_changed` is emitted for it — without
+ * this the STARRED section stays short until a remount.
  *
  * Why `added` reaches the roll-up (#task:1870 / #task:1877, Cindy review): a
  * workspace the viewer just joined has no unread of their own, so the old reading
@@ -247,7 +253,7 @@ export function decideViewerSyncInvalidations(
     return [workspacesKey, membersKey(frame.payload.workspace_id)];
   }
   if (frame.payload.change === 'added') {
-    return [workspacesKey, attentionBadgesKey()];
+    return [workspacesKey, attentionBadgesKey(), favoritesKey];
   }
   return [workspacesKey];
 }
@@ -398,6 +404,14 @@ export function useRenameWorkspace() {
       // the rename system broadcast we just emitted), so refresh
       // channels for this workspace as well.
       qc.invalidateQueries({ queryKey: channelsKey(workspace.id) });
+      // STARRED snapshots the PARENT's title on every regular row
+      // (`FavoriteRowDto.parent_title`, #task:1888) and a rename emits no
+      // `workspace_channels_changed`, so nothing else re-reads it — without this
+      // the old name survives in STARRED until a remount (@Cindy, #task:1889).
+      // An agent-home parent is NOT covered here and must not be: its name is a
+      // carrier of agent identity and already converges through the
+      // identity-carrier registry.
+      qc.invalidateQueries({ queryKey: favoritesKey });
     },
   });
 }

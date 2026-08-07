@@ -34,6 +34,7 @@ import type {
 } from '@silverhand/shared';
 import { apiPaths } from '@silverhand/shared';
 import { api } from '@/lib/api';
+import type { FavoritesWatchScope } from '@/lib/home-grouping';
 import {
   isCurrentViewerScope,
   onWsFrame,
@@ -152,52 +153,85 @@ export function removeWorkspaceFromFavorites(
  * its membership now moves on facts the viewer scope never carries: leaving a
  * private channel, or archiving one, ends a star's reachability and must drop the
  * row — otherwise a dead STARRED row survives until remount. Those facts arrive as
- * `workspace_channels_changed` on the PARENT's workspace scope, so this hook
- * subscribes to the distinct parents of the rows it is currently showing (the same
- * shape as `useArchivedChannelsIndex`; no new backend event). A star ADDING a row
- * needs no arm here — the star mutations invalidate this key directly.
+ * `workspace_channels_changed` on the PARENT's workspace scope.
+ *
+ * The watched scope set is supplied by the CONSUMER (every workspace the viewer
+ * can currently see) and typed {@link FavoritesWatchScope}, whose only producer is
+ * `partitionRailWorkspaces().allVisibleIds` — so it can be neither derived from
+ * the rows this list is showing nor re-derived from a home projection without
+ * failing typecheck (@Cindy MUST FIX, #task:1889). A projection must not decide
+ * its own dependency set: the moment an authoritative
+ * refetch hid the LAST favorite under a parent, that parent left the derived set,
+ * and the later restore / re-join `workspace_channels_changed` had nobody left
+ * listening — the star never came back short of a remount. A star ADDING a row
+ * needs no arm here (the star mutations invalidate this key directly), and
+ * regaining a whole workspace arrives on the viewer scope
+ * (`decideViewerSyncInvalidations`, `features/workspaces/hooks`).
  */
-export function useFavorites() {
+export function useFavorites(watchWorkspaceIds: FavoritesWatchScope) {
   const qc = useQueryClient();
   const query = useQuery<ListFavoritesDto>({
     queryKey: favoritesKey,
     queryFn: ({ signal }) => api<ListFavoritesDto>(apiPaths.favorites, { signal }),
   });
 
-  // The parents currently represented in the list. Joined into a stable string so
-  // the effect re-subscribes only when the SET changes, not on every refetch.
-  const parentIds = Array.from(
-    new Set((query.data?.items ?? []).map(it => it.workspace_id)),
-  ).sort();
-  const parentKey = parentIds.join(',');
+  // Joined into a stable string so the effect re-subscribes only when the SET
+  // changes, not on every render of the caller's array literal.
+  const scopeKey = Array.from(new Set(watchWorkspaceIds)).sort().join(',');
 
   useEffect(() => {
-    const scopeIds = parentKey ? parentKey.split(',') : [];
+    const scopeIds = scopeKey ? scopeKey.split(',') : [];
     const subs = scopeIds.map(id => subscribeWsScope(`workspace:${id}`));
     const sub = subscribeViewerScope();
     const unsub = onWsFrame(frame => {
-      if (frame.type === 'snapshot_required') {
-        if (
-          isCurrentViewerScope(frame.scope)
-          || scopeIds.some(id => frame.scope === `workspace:${id}`)
-        ) {
-          void qc.invalidateQueries({ queryKey: favoritesKey });
-        }
-        return;
+      const viewerSnapshot =
+        frame.type === 'snapshot_required' && isCurrentViewerScope(frame.scope);
+      if (viewerSnapshot || decideFavoritesInvalidation(frame, scopeIds)) {
+        void qc.invalidateQueries({ queryKey: favoritesKey });
       }
-      if (frame.type !== 'event') return;
-      if (frame.kind !== 'workspace_channels_changed') return;
-      if (!scopeIds.some(id => frame.scope === `workspace:${id}`)) return;
-      void qc.invalidateQueries({ queryKey: favoritesKey });
     });
     return () => {
       for (const s of subs) s.unsubscribe();
       sub.unsubscribe();
       unsub();
     };
-  }, [qc, parentKey]);
+  }, [qc, scopeKey]);
 
   return query;
+}
+
+/** Minimal WS frame shape {@link decideFavoritesInvalidation} consumes, so the
+ *  decision can be exercised without React or a socket (mirrors
+ *  `ViewerSyncFrame` in `features/workspaces/hooks`). */
+export interface FavoritesSyncFrame {
+  type: string;
+  /** Optional so a raw `ServerFrame` (whose non-scoped variants carry none) can
+   *  be passed straight in — a frame with no scope matches no watched workspace. */
+  scope?: string;
+  kind?: string;
+}
+
+/**
+ * Pure decision: does this frame invalidate the favorites list, given the
+ * WATCHED workspace scopes? True for a replay gap or a channel-membership change
+ * on any watched parent. The viewer-scope half of the gate stays in the caller
+ * (`isCurrentViewerScope` reads live socket state), same split as
+ * `decideViewerSyncInvalidations`.
+ *
+ * `scopeIds` is every workspace the viewer can see — deliberately NOT the parents
+ * of the rows currently in the list. A parent with zero visible favorites is
+ * exactly the case that must stay armed: it is where a hidden star is waiting for
+ * its channel to be restored.
+ */
+export function decideFavoritesInvalidation(
+  frame: FavoritesSyncFrame,
+  scopeIds: readonly string[],
+): boolean {
+  const watched = scopeIds.some(id => frame.scope === `workspace:${id}`);
+  if (frame.type === 'snapshot_required') return watched;
+  if (frame.type !== 'event') return false;
+  if (frame.kind !== 'workspace_channels_changed') return false;
+  return watched;
 }
 
 /**

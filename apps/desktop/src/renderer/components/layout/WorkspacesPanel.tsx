@@ -1,7 +1,7 @@
 import { Fragment, useEffect, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { MessagesSquare, Plus } from 'lucide-react';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
   SortableGroup,
@@ -9,6 +9,7 @@ import {
   sortableItemStyle,
 } from '@/components/layout/list-drag-sort';
 import {
+  CHILD_GLYPH_INSET,
   SidebarSection,
   MutedMarker,
   UnreadBadge,
@@ -136,6 +137,26 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
   );
 }
 
+/** The GROUP header's semantic glyph — the thing shiki asked for on
+ *  STARRED / WORKSPACES / DM: identity at rest, chevron on hover. The three must
+ *  read as one family, so all three are stroke glyphs at the same optical
+ *  weight: `Star` / `MessagesSquare` (Slack's double-bubble for DMs) / a serif
+ *  `W` at NORMAL weight — the semibold `W` sat visibly heavier than two 2px
+ *  lucide strokes beside it (shiki, 2026-08-08).
+ *
+ *  Deliberately WITHOUT `data-workspace-icon`: that hook is the themed poster
+ *  badge for a workspace INSTANCE, and a muted section header is not one (see
+ *  app-layout.md §9 on not inventing a second primitive — this reuses the header
+ *  vocabulary rather than the row's). */
+function sectionGlyphFor(kind: WorkspaceUiKind): JSX.Element {
+  if (kind === 'dm') return <MessagesSquare className="size-3.5" />;
+  return (
+    <span className="inline-flex size-3.5 shrink-0 items-center justify-center font-serif text-[14px] leading-none">
+      W
+    </span>
+  );
+}
+
 function canStarWorkspace(workspace: WorkspaceItem, ctx: RailRowContext): boolean {
   // Both regular workspaces and DMs can be starred (#task:1209 / #task:1252 /
   // #task:1254). Since #task:1888 a CONTAINER star does not move the row: it pins
@@ -151,6 +172,7 @@ function canStarWorkspace(workspace: WorkspaceItem, ctx: RailRowContext): boolea
 
 export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   label,
+  kind,
   workspaces,
   selectedWorkspaceId,
   selectedChannelId,
@@ -179,6 +201,7 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
   return (
     <SidebarSection
       label={label}
+      icon={sectionGlyphFor(kind)}
       count={workspaces.length}
       onAdd={headerAction ? undefined : onAdd}
       action={headerAction}
@@ -266,9 +289,10 @@ function SortableWorkspaceItem({
  * The header is pure CHROME (#task:1889, shiki: 「workspace 应该永远不能高亮」) —
  * a collapse toggle and a right-click menu. It does NOT navigate, does NOT change
  * the titlebar context and NEVER highlights, so the tree has exactly one FILL and
- * it always belongs to the open conversation. Hierarchy is carried by the chevron
- * gutter, the lighter ink and the absence of the row vocabulary (no ink frame),
- * not by indenting the children — every glyph in the tree shares one column.
+ * it always belongs to the open conversation. Hierarchy is carried by one 16px
+ * indent step (children sit on the child glyph column), the lighter ink and the
+ * absence of the row vocabulary (no ink frame) — the header's own glyph slot is
+ * the collapse control's home on hover, so no column is spent on a chevron.
  *
  * Collapse state persists per workspace under the shared section vocabulary
  * (`silverhand:layout.sidebar-section.ws.<id>`), so the shape of the tree survives
@@ -350,23 +374,37 @@ function WorkspaceHeaderRow({
   const canStar = canStarWorkspace(workspace, ctx);
   const isStarred = isWorkspaceStarred(workspace);
   const unread = workspace.unread;
-  // Hover-revealed actions. `group-focus-within` keeps them reachable by keyboard,
-  // and `:has([data-state=open])` keeps them visible while one of their own menus
-  // is open — otherwise the trigger vanishes from under an open Radix popover the
-  // moment the pointer leaves the row.
+  // Hover-revealed actions. Keyboard reachability comes from `focus-visible` — on
+  // the control itself, or on a descendant for the wrappers whose focusable part is
+  // a menu trigger. NOT `group-focus-within`: Chromium focuses a <button> on
+  // mousedown, so clicking the workspace header (a collapse toggle) left the row's
+  // `+` and sort menu pinned visible until focus moved elsewhere — the row read as
+  // stuck in a selected state (shiki, #task:1889 review). `:focus-visible` is the
+  // keyboard-only half of that signal, which is the only half this affordance
+  // wanted. `:has([data-state=open])` keeps a trigger visible while its own menu is
+  // open — otherwise it vanishes from under an open Radix popover the moment the
+  // pointer leaves the row.
   const hoverOnly =
-    'opacity-0 transition-opacity group-hover/ws:opacity-100 group-focus-within/ws:opacity-100 [&:has([data-state=open])]:opacity-100';
+    'opacity-0 transition-opacity group-hover/ws:opacity-100 '
+    + 'focus-visible:opacity-100 [&:has(:focus-visible)]:opacity-100 '
+    + '[&:has([data-state=open])]:opacity-100';
 
   const row = (
     <div
       className={
-        // 28px chrome, NOT the 32px row vocabulary: no ink frame, muted ink, and a
-        // transparent border that exists only to keep this row's content box on the
-        // same x as a child row's (see GLYPH_COLUMN_INSET — margin + border + 4px
-        // padding, then the 12px chevron gutter and a 4px gap, lands every glyph at
-        // 28px from the sidebar edge).
-        'sidebar-row-border group/ws flex h-7 w-full items-stretch border border-transparent pl-1 pr-2 ' +
-        'text-text-muted hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary'
+        // 28px chrome, NOT the 32px row vocabulary. A workspace / DM header is a
+        // GROUPING line, and the tree already spends its fill on the thing that
+        // matters — the selected channel. So no ink frame and NO hover fill: the
+        // `sidebar-row-gutter` twin reserves the same stroke for column alignment
+        // but takes none of `.sidebar-row-border`'s state paint (in forza6 that
+        // hover is a lime fill + drop shadow, which made this line compete with a
+        // real selection). Hover lifts the ink and nothing else (shiki,
+        // 2026-08-08). The indent puts it on the CHILD column — one 16px step in
+        // from its group header, which is what shows it is a child of that group.
+        'sidebar-row-gutter group/ws flex h-7 w-full items-stretch pr-2 ' +
+        CHILD_GLYPH_INSET +
+        ' ' +
+        'text-text-muted hover:text-text-primary'
       }
     >
       <button
@@ -375,15 +413,16 @@ function WorkspaceHeaderRow({
         aria-expanded={expanded}
         className="flex min-w-0 flex-1 items-center text-left text-[12.5px] font-medium"
       >
-        <span className="flex w-3 shrink-0 items-center justify-center opacity-70">
-          {expanded ? (
-            <ChevronDown className="size-2.5" />
-          ) : (
-            <ChevronRight className="size-2.5" />
-          )}
+        {/* The workspace's own identity glyph, and it HOLDS STILL. The icon↔chevron
+            swap belongs to the three GROUP headers only (shiki, 2026-08-08): an
+            avatar / workspace icon is who this row IS, and swapping identity out
+            from under the pointer is a different thing from swapping a section's
+            decorative anchor. The row is still the collapse toggle — the expanded
+            state is read off the children, and the indent shows the depth. */}
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          {icon}
         </span>
-        <span className="ml-1 flex shrink-0 items-center">{icon}</span>
-        <span className="ml-1.5 min-w-0 truncate">{title}</span>
+        <span className="ml-2 min-w-0 truncate">{title}</span>
       </button>
       <span className="flex shrink-0 items-center gap-1 pl-1">
         {/* Mute is a two-state fact about the workspace itself, so it is present

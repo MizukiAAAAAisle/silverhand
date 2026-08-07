@@ -20,7 +20,7 @@ import {
   type WorkspaceSortConfig,
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
-import { GLYPH_COLUMN_INSET } from './sidebar-shared';
+import { SECTION_GLYPH_INSET } from './sidebar-shared';
 import { partitionRailWorkspaces, pinStarredFirst } from '@/lib/home-grouping';
 
 interface SidebarProps {
@@ -85,17 +85,27 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // validates against. Archived workspaces are dropped outright (#task:1889): the
   // top-level `Archived` entry is the one archive index. `props.workspaces` is the
   // RAW full visible set; these are the home projections (see lib/home-grouping).
-  const { dms: homeDms, regular: homeRegular } = useMemo(
-    () => partitionRailWorkspaces(props.workspaces),
-    [props.workspaces],
-  );
+  //
+  // `allVisibleIds` comes out of the SAME call, not a second derivation: it is
+  // STARRED's freshness scope (every workspace the viewer can see, archived
+  // included — a restore is exactly when a hidden star returns), and taking it from
+  // the projections would silently disarm the parents that show nothing. It is
+  // branded `FavoritesWatchScope` so that substitution does not typecheck — the
+  // shapes were identical before, so the wrong wiring compiled green.
+  const {
+    dms: homeDms,
+    regular: homeRegular,
+    allVisibleIds: watchWorkspaceIds,
+  } = useMemo(() => partitionRailWorkspaces(props.workspaces), [props.workspaces]);
 
   // Resolve DM-agent avatar object URLs ONCE for the whole rail, over the
   // STABLE union of every DM agent (across dm / regular / archived) from the RAW
   // workspace set. Resolving over the raw set (not the home projection) keeps the
-  // map identical across renders even though star/unstar now MOVES a DM between
-  // the home group and STARRED — so no avatar tears down + refetches (the flash
-  // shiki saw came from per-section resolution churning on star). #task:1146
+  // map identical across renders — so no avatar tears down + refetches (the flash
+  // shiki saw came from per-section resolution churning on star). Since #task:1888
+  // a container star only PINS the row inside its own group, but the raw set is
+  // still the right basis: it is the one input that never changes with ordering.
+  // #task:1146
   const dmAvatarSources = useMemo<AgentAvatarSource[]>(() => {
     const agentsById = props.agentsById;
     if (!agentsById) return [];
@@ -178,16 +188,17 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * fading a discrete committed state is the flicker (#task:1162). Keeps
           * all three sidebar row classes (rail / channel / tool) one row-language.
           *
-          * Their glyphs sit on the tree's ONE identity column
-          * (`GLYPH_COLUMN_INSET`, #task:1889) — a tool row has no chevron, so it
-          * pays the whole gutter as padding instead of drawing it. */}
+          * Their glyphs sit on the SECTION column (`SECTION_GLYPH_INSET`,
+          * #task:1889) — the same x as a workspace / DM header's icon, which is what
+          * lets the three of them line up with the tree instead of floating in
+          * their own gutter. */}
         <div className="mb-3 space-y-0.5">
           <button
             type="button"
             onClick={props.onSelectSearch}
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
-                GLYPH_COLUMN_INSET,
+                SECTION_GLYPH_INSET,
               props.searchActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -202,7 +213,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             onClick={props.onSelectSaved}
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
-                GLYPH_COLUMN_INSET,
+                SECTION_GLYPH_INSET,
               props.savedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -233,7 +244,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             onClick={props.onSelectArchived}
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
-                GLYPH_COLUMN_INSET,
+                SECTION_GLYPH_INSET,
               props.archivedActive
                 ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
                 : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
@@ -246,8 +257,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
 
         {/* STARRED = the global Favorites list (#task:1253/#task:1254), holding
           * CONVERSATIONS since #task:1888. Self-contained (owns its read-model,
-          * parent-avatar resolution, tier batches, unstar); renders nothing when
-          * empty. EXCLUSIVE — a starred conversation lives HERE only, removed from
+          * tier batches, unstar); renders nothing when empty. EXCLUSIVE — a starred conversation lives HERE only, removed from
           * its parent's channel list.
           *
           * Every rail section persists its collapse state across restarts
@@ -258,24 +268,13 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * which owns its whole section. */}
         <FavoritesGroup
           selectedChannelId={props.selectedChannelId}
+          watchWorkspaceIds={watchWorkspaceIds}
           onSelectConversation={props.onSelectConversation}
         />
-        <WorkspaceGroup
-          label="DM"
-          kind="dm"
-          workspaces={orderedDms}
-          selectedWorkspaceId={props.selectedWorkspaceId}
-          selectedChannelId={props.selectedChannelId}
-          onSelectChannel={props.onSelectChannel}
-          onCreateChannel={props.onCreateChannel}
-          onStarWorkspace={props.onStarWorkspace}
-          emptyHint="Creating an agent opens a DM"
-          agentsById={props.agentsById}
-          dmAgentAvatarUrls={dmAgentAvatarUrls}
-          headerAction={sortMenuFor('dm')}
-          sort={sortConfigFor('dm')}
-          persistId="dm"
-        />
+        {/* Order: STARRED → WORKSPACES → DM (shiki, 2026-08-08). WORKSPACES is the
+          * deep half of the tree — every row can expand into channels — so it takes
+          * the position right under STARRED, and DM (flat, one row per agent) sits
+          * at the bottom where its length doesn't push the workspaces off-screen. */}
         <WorkspaceGroup
           label="WORKSPACES"
           kind="regular"
@@ -312,6 +311,22 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           dmAgentAvatarUrls={dmAgentAvatarUrls}
           sort={sortConfigFor('regular')}
           persistId="workspaces"
+        />
+        <WorkspaceGroup
+          label="DM"
+          kind="dm"
+          workspaces={orderedDms}
+          selectedWorkspaceId={props.selectedWorkspaceId}
+          selectedChannelId={props.selectedChannelId}
+          onSelectChannel={props.onSelectChannel}
+          onCreateChannel={props.onCreateChannel}
+          onStarWorkspace={props.onStarWorkspace}
+          emptyHint="Creating an agent opens a DM"
+          agentsById={props.agentsById}
+          dmAgentAvatarUrls={dmAgentAvatarUrls}
+          headerAction={sortMenuFor('dm')}
+          sort={sortConfigFor('dm')}
+          persistId="dm"
         />
         {/* No bottom ARCHIVED group since #task:1889: the top-level `Archived`
           * entry above is the ONE archive index (#task:1890 gave it archived

@@ -103,22 +103,36 @@ export function useSidebarSectionExpanded(
 }
 
 /**
- * The single identity-glyph column of the merged sidebar (#task:1889). EVERY
- * glyph in the tree — workspace icon, DM avatar, channel `#`, tool-row glyph —
- * starts at the same x, and a child row is distinguished from its parent header
- * not by indentation but by whether the chevron gutter carries anything. So the
- * inset is a shared constant, not a per-row guess:
+ * The sidebar's TWO glyph columns (#task:1889, shiki's Slack reference).
  *
- *   6px section margin + 2px row border + 4px row padding
- *     + 12px chevron gutter + 4px gap  =  28px
+ *   section:  tool rows + the three group headers (STARRED / WORKSPACES / DM)
+ *   child:    everything under a group header — workspace / DM headers, the
+ *             channels beneath them, STARRED rows
  *
- * Only the last two terms are this class's job (`pl-5` = 20px): the margin is
- * the section's and the border width is a per-theme token
- * (`--sidebar-row-border-width`), so a hardcoded 28px total would be wrong in
- * any theme that changes it. Rows that own a chevron (workspace headers) pay the
- * 4px padding and draw the gutter themselves instead.
+ * One 16px step, and only one. The tree is four levels deep by structure, but
+ * indenting each level would spend the whole narrow column on whitespace and
+ * make the list read as a staircase (shiki: 「否则层级太多」, 2026-08-08). So a
+ * channel sits on the SAME column as its workspace header rather than one step
+ * further in — the workspace header above it, its own `#` sticker and the
+ * collapse state are what say where it lives; the indent is reserved for the one
+ * distinction that has to survive a glance: group header vs group content.
+ *
+ * The column is by DEPTH-CLASS, not entity kind: a STARRED conversation and a
+ * workspace header are both a group's direct child, so they share it even though
+ * one is a room and the other a container.
+ *
+ * There is no permanent chevron gutter: a collapsible GROUP HEADER's own glyph
+ * slot is where its chevron appears on hover, so the header keeps the tool rows'
+ * column instead of paying a column for a control that is only reachable while
+ * you point at it. Instance rows (a workspace, a DM) do NOT swap — their avatar /
+ * workspace icon is identity and must hold still (shiki, 2026-08-08).
+ *
+ * The section margin and the per-theme row border (`--sidebar-row-border-width`)
+ * are already in the box, so only the indent step is these classes' job — a
+ * hardcoded absolute x would be wrong in any theme that changes the border.
  */
-export const GLYPH_COLUMN_INSET = 'pl-5';
+export const SECTION_GLYPH_INSET = 'pl-1';
+export const CHILD_GLYPH_INSET = 'pl-5';
 
 interface SectionProps {
   label: string;
@@ -128,7 +142,12 @@ interface SectionProps {
    *  neutral; consumers pass plain lucide icons and themes decide
    *  whether to paint them further. Skip when the section's content
    *  already carries identity (channel `#` chips, computer Monitor
-   *  glyphs). */
+   *  glyphs).
+   *
+   *  On a COLLAPSIBLE section this slot doubles as the collapse control:
+   *  the icon swaps to a chevron on hover / keyboard focus and the header
+   *  moves onto the section glyph column (#task:1889). Pass a 14px glyph
+   *  so it centres in the 16px slot. */
   icon?: ReactNode;
   count?: number;
   onAdd?: () => void;
@@ -165,7 +184,10 @@ export function SidebarSection({
   const showBody = !collapsible || expanded;
 
   return (
-    <section className="px-1.5 pb-3">
+    // `group/sectionscope` spans the header AND the body: the right-side actions
+    // are revealed by pointing anywhere in the GROUP, not just at its header
+    // (shiki, 2026-08-08) — see `SidebarSectionHeader`.
+    <section className="group/sectionscope px-1.5 pb-3">
       <SidebarSectionHeader
         label={label}
         icon={icon}
@@ -209,15 +231,74 @@ export function SidebarSectionHeader({
   expanded = true,
   onToggle,
 }: SectionHeaderProps): JSX.Element {
-  const headerInner = (
+  // A COLLAPSIBLE section that carries an icon is a tree container row (shiki's
+  // Slack reference, #task:1889): its icon slot IS the collapse control's home —
+  // semantic glyph at rest, chevron while the pointer is on the header or the
+  // toggle has keyboard focus. So it sits on the section glyph column with the
+  // tool rows instead of paying a separate chevron gutter, which is what lets
+  // Search / Saved / Archived line up with STARRED / WORKSPACES / DM.
+  //
+  // `group-focus-visible`, not `group-focus`: Chromium focuses a <button> on
+  // mousedown, so plain focus would leave the chevron showing after a click.
+  const swapGlyph = collapsible && icon !== undefined;
+
+  // The right-side actions (sort menu, `+`) of a TREE GROUP are hover-revealed,
+  // not permanent (shiki, 2026-08-08): three sections' worth of always-on chrome
+  // competed with the rows for the eye, and these are arrange-once controls. The
+  // reveal scope is the WHOLE group — header or any child — because the sort menu
+  // is what you reach for while reading the list, not while reading the label; the
+  // `group/sectionscope` marker therefore lives on `SidebarSection`'s `<section>`,
+  // which is why this only applies to the tree groups (the panels that render a
+  // permanent `+` keep it).
+  //
+  // `[&:has(:focus-visible)]` and NOT `focus-within`: Chromium focuses a button on
+  // mousedown, so `focus-within` would pin the actions on after any click (the
+  // same trap as the chevron above). `[&:has([data-state=open])]` keeps them up
+  // while their own menu is open — by then the pointer has left the group.
+  const actionReveal = swapGlyph
+    ? 'flex items-center transition-opacity opacity-0 ' +
+      'group-hover/sectionscope:opacity-100 [&:has(:focus-visible)]:opacity-100 ' +
+      '[&:has([data-state=open])]:opacity-100'
+    : 'flex items-center';
+  const chevron = expanded ? (
+    <ChevronDown className="size-3.5" />
+  ) : (
+    <ChevronRight className="size-3.5" />
+  );
+
+  const headerInner = swapGlyph ? (
+    <span className="flex items-center gap-2">
+      <span className="relative flex size-4 shrink-0 items-center justify-center">
+        {/* The fading wrapper carries NO theme hook, and the hook carries no
+            opacity of its own. forza6 paints `[data-sidebar-section-icon]` with
+            `opacity: .7` at the same specificity as Tailwind's
+            `group-hover:opacity-0`, so with the hook ON the animated element the
+            theme won the cascade and the icon never left — the chevron faded in
+            ON TOP of it (shiki: forza6 下 hover 时两个图标重叠, 2026-08-08).
+            Splitting the two responsibilities makes the swap exclusive in every
+            theme by construction, not by winning a specificity race. */}
+        <span className="inline-flex items-center transition-opacity group-hover/section:opacity-0 group-focus-visible/sectiontoggle:opacity-0">
+          <span data-sidebar-section-icon className="inline-flex items-center">
+            {icon}
+          </span>
+        </span>
+        <span
+          aria-hidden
+          className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/section:opacity-100 group-focus-visible/sectiontoggle:opacity-100"
+        >
+          {chevron}
+        </span>
+      </span>
+      <span>
+        {label}
+        {typeof count === 'number' ? (
+          <span className="ml-1 text-text-muted/70">{count}</span>
+        ) : null}
+      </span>
+    </span>
+  ) : (
     <span className="flex items-center gap-1">
-      {collapsible ? (
-        expanded ? (
-          <ChevronDown className="size-3 text-text-muted" />
-        ) : (
-          <ChevronRight className="size-3 text-text-muted" />
-        )
-      ) : null}
+      {collapsible ? <span className="text-text-muted">{chevron}</span> : null}
       {icon ? (
         <span data-sidebar-section-icon className="inline-flex shrink-0 items-center text-text-muted">
           {icon}
@@ -233,12 +314,29 @@ export function SidebarSectionHeader({
   );
 
   return (
-    <header className="mb-1 flex items-stretch justify-between text-[12px] font-medium tracking-wider text-text-muted">
+    <header
+      className={
+        'mb-1 flex items-stretch justify-between text-[12px] font-medium tracking-wider text-text-muted ' +
+        (swapGlyph ? 'group/section' : '')
+      }
+    >
       {collapsible ? (
         <button
           type="button"
           onClick={onToggle}
-          className="flex flex-1 items-center px-2 h-6 text-left hover:text-text-secondary"
+          className={
+            'group/sectiontoggle flex flex-1 items-center h-6 text-left ' +
+            // A GROUP HEADER is a label, not a row. Its only hover feedback is the
+            // icon → chevron swap above — no background, no border, no ink change
+            // (shiki, 2026-08-08). Hence `sidebar-row-gutter`, which reserves the
+            // row stroke for column alignment but carries none of the row state
+            // paint (`.sidebar-row-border:hover` is a lime fill in forza6). The
+            // plain chevron-only header (Members / Computers / Settings) is not a
+            // tree node and keeps its own padding + hover ink.
+            (swapGlyph
+              ? 'sidebar-row-gutter ' + SECTION_GLYPH_INSET
+              : 'px-2 hover:text-text-secondary')
+          }
           aria-expanded={expanded}
         >
           {headerInner}
@@ -247,11 +345,13 @@ export function SidebarSectionHeader({
         <span className="flex flex-1 items-center px-2 h-6">{headerInner}</span>
       )}
       {action ? (
-        action
+        <span className={actionReveal}>{action}</span>
       ) : onAdd ? (
-        <Button variant="ghost" size="icon" onClick={onAdd} aria-label={`add ${label}`}>
-          <Plus className="size-3.5" />
-        </Button>
+        <span className={actionReveal}>
+          <Button variant="ghost" size="icon" onClick={onAdd} aria-label={`add ${label}`}>
+            <Plus className="size-3.5" />
+          </Button>
+        </span>
       ) : null}
     </header>
   );

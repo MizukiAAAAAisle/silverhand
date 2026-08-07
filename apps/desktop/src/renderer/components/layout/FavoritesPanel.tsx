@@ -1,27 +1,21 @@
 import { useMemo } from 'react';
-import { Bell, Copy, Star, User } from 'lucide-react';
+import { Bell, Copy, Star } from 'lucide-react';
 import type {
   ChannelAttentionMode,
   ChannelAttentionModeRowDto,
   FavoriteRowDto,
 } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { WorkspaceIcon } from '@/components/WorkspaceIcon';
-import { AgentAvatar } from '@/components/AgentAvatar';
 import { ChannelIcon } from '@/components/ChannelIcon';
-import { AVATAR_PX } from '@/components/avatar-scale';
 import {
   AppContextMenu,
   AppContextMenuItem,
   AppContextMenuSeparator,
   AppContextMenuSub,
 } from '@/components/menus/AppContextMenu';
-import {
-  useAgentAvatarObjectUrls,
-  type AgentAvatarSource,
-} from '@/features/agents/avatar-hooks';
 import { useFavorites, useUnstarFavorite } from '@/features/favorites/hooks';
 import { useAttentionModesAcrossWorkspaces } from '@/features/attention/hooks';
+import type { FavoritesWatchScope } from '@/lib/home-grouping';
 import { useSetSortMode } from '@/features/workspaces/hooks';
 import { channelRowBadge } from '@/lib/attention-mode';
 import { conversationSelectionTier, railRowTierClass } from '@/lib/rail-selection';
@@ -35,6 +29,7 @@ import {
   useListDragSort,
 } from '@/components/layout/list-drag-sort';
 import {
+  CHILD_GLYPH_INSET,
   SidebarSection,
   UnreadBadge,
   copyConversationName,
@@ -66,13 +61,15 @@ const FAVORITES_GROUP = 'favorites';
  * drift source. STARRED owns PRESENCE + ORDER only, never BEHAVIOR: open, selection,
  * badge and attention all delegate to the same authorities the parent's row uses.
  *
- * ROW (matches mockups/sidebar-merge-single-column.html): the identity column shows
- * the PARENT's glyph, not the channel's — the list is global, so two workspaces can
- * each have a `#general` and without a source cue the rows are indistinguishable. The
- * `#` is demoted to a subordinate prefix on the name (`ChannelIcon variant="utility"`:
- * the parent glyph is this row's identity anchor, so the `#` must not also wear a
- * theme's sticker chrome and inflate beside it). Every parent glyph is server-resolved
- * (`parent_icon_url` / `parent_runtime`) — the renderer joins nothing.
+ * ROW: byte-identical to the row this conversation has under its own workspace —
+ * the channel's `#` sticker, then the title. It had led with the PARENT's glyph, on
+ * the theory that a global list needs a source cue to tell two `#general`s apart;
+ * that theory was wrong in practice, because `WorkspaceIcon`'s regular branch is a
+ * literal `W`, so every regular parent rendered the SAME badge and disambiguated
+ * nothing while taking the loudest element in the section (shiki: 「starred 的 icon
+ * 不对」, 2026-08-08). Source now reaches the user through the row's `title`. The
+ * DTO still carries `parent_icon_url` / `parent_runtime`; restoring a source cue is
+ * rendering them again beside the `#`, quietly (no poster hook).
  *
  * BADGE (#task:1875 contract, @Cindy MUST FIX on #task:1889): the row must NOT paint
  * `FavoriteRowDto.unread_count` directly — that number is POSITIONAL only. It goes
@@ -89,35 +86,29 @@ const FAVORITES_GROUP = 'favorites';
  * is INDEPENDENT of the parent's list: reordering favorites never touches a
  * conversation's rank there.
  *
- * Self-contained: it owns its data (`useFavorites`), its parent-avatar resolution, its
- * tier batches, its sort wiring and its unstar mutation, so the parent only passes the
- * current selection + the navigation handler. Renders nothing when empty.
+ * Self-contained: it owns its data (`useFavorites`), its tier batches, its sort
+ * wiring and its unstar mutation, so the parent only passes the current selection +
+ * the navigation handler. Renders nothing when empty.
  */
 export function FavoritesGroup(props: {
   /** The open conversation — the ONLY thing that highlights a STARRED row. */
   selectedChannelId: string | null;
+  /** Every workspace the viewer can currently see. This list's freshness
+   *  subscription is scoped to them (see `useFavorites`) — the set must come from
+   *  OUTSIDE the projection, because a parent with no visible favorite is exactly
+   *  the one holding a hidden star waiting to be restored. `FavoritesWatchScope`
+   *  is what enforces that: its only producer is
+   *  `partitionRailWorkspaces().allVisibleIds`, so a projection-derived
+   *  `string[]` cannot be passed here. */
+  watchWorkspaceIds: FavoritesWatchScope;
   /** Navigate to a starred conversation inside its parent workspace. */
   onSelectConversation: (workspaceId: string, conversationId: string) => void;
 }): JSX.Element | null {
-  const { data } = useFavorites();
+  const { data } = useFavorites(props.watchWorkspaceIds);
   const items = useMemo(() => data?.items ?? [], [data]);
   const viewerSort = data?.viewer_sort;
   const unstar = useUnstarFavorite();
   const setSortMode = useSetSortMode();
-
-  // Parent-agent avatars, resolved once for the whole section over the stable set of
-  // rows whose parent is an agent home with an avatar. Keyed by `entity_id` (the row
-  // id). The server gives a relative `?v=`-busted URL; the Electron renderer can't
-  // use it directly in <img>, so it must go through the avatar object-url proxy —
-  // same as Activity's preview_sender (avoids the blank/broken-img trap).
-  const parentAvatarSources = useMemo<AgentAvatarSource[]>(
-    () =>
-      items
-        .filter(i => i.parent_icon_url)
-        .map(i => ({ id: i.entity_id, avatar_url: i.parent_icon_url })),
-    [items],
-  );
-  const parentAvatarUrls = useAgentAvatarObjectUrls(parentAvatarSources);
 
   // Tier authority for the rows that HAVE a tier. Only `kind === 'channel'` parents
   // are fanned out: the modes population joins `conversation_users` AND
@@ -155,6 +146,7 @@ export function FavoritesGroup(props: {
   return (
     <SidebarSection
       label="STARRED"
+      icon={<Star className="size-3.5" />}
       count={items.length}
       collapsible
       defaultExpanded
@@ -175,7 +167,6 @@ export function FavoritesGroup(props: {
             key={item.favorite_key}
             item={item}
             selectedChannelId={props.selectedChannelId}
-            parentAvatarUrl={parentAvatarUrls.get(item.entity_id) ?? null}
             attention={byChannel.get(item.entity_id)}
             workspaceMuted={mutedByWorkspace.get(item.workspace_id)}
             onSelectConversation={props.onSelectConversation}
@@ -190,7 +181,6 @@ export function FavoritesGroup(props: {
 interface FavoriteRowProps {
   item: FavoriteRowDto;
   selectedChannelId: string | null;
-  parentAvatarUrl: string | null;
   /** This conversation's tier row from its parent's batch. Absent ≡ no tier of its
    *  own (a `dm_channel`, a browse-only public channel, or the batch hasn't landed) —
    *  never defaulted here. */
@@ -226,7 +216,6 @@ function SortableFavoriteRow(props: FavoriteRowProps): JSX.Element {
 function FavoriteRow({
   item,
   selectedChannelId,
-  parentAvatarUrl,
   attention,
   workspaceMuted,
   onSelectConversation,
@@ -256,10 +245,15 @@ function FavoriteRow({
   // still stands out against it.
   const isSilenced = effectiveMode === 'mute';
 
-  // Notifications is a member-scoped write on regular channels only (the backend 404s
-  // a dm_channel). Every STARRED row is a conversation the viewer can reach, and a
-  // favorite is only projected for a member or a public channel.
-  const showAttentionMenu = item.kind === 'channel';
+  // Notifications is a member-scoped write on regular channels only (the backend
+  // 404s a dm_channel). Membership is read off the SAME authority the badge uses:
+  // the modes batch joins `conversation_users`, so a row with no tier is a row the
+  // viewer is not a member of — a browse-only PUBLIC channel can be starred without
+  // joining, and offering it the menu would hand the user a guaranteed 404
+  // (@Cindy MUST FIX, #task:1889; the parent list's `ChannelRow` gates on `isMember`
+  // for the same reason). While the batch is loading or failed the entry is simply
+  // absent rather than optimistically offered.
+  const showAttentionMenu = item.kind === 'channel' && attention !== undefined;
 
   // No `transition-colors`: selection is a discrete committed state — fading it is
   // the leaving-row "flicker" (#task:1162). One tier vocabulary shared with every
@@ -269,7 +263,16 @@ function FavoriteRow({
   const row = (
     <div
       data-row-selected={isPrimary || undefined}
-      className={'sidebar-row-border flex h-8 w-full items-stretch border px-2 ' + rowBg}
+      className={
+        // A STARRED row is a CHILD row: its leading glyph sits on the same column as
+        // a channel `#` under an expanded workspace, one indent step right of the
+        // container rows. It had been on `px-2` — 12px left of every other row in
+        // the tree, which is what made the section read as a separate list.
+        'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
+        CHILD_GLYPH_INSET +
+        ' ' +
+        rowBg
+      }
     >
       <button
         type="button"
@@ -277,14 +280,8 @@ function FavoriteRow({
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px]"
         title={`${item.title} — ${item.parent_title}`}
       >
-        {/* Fixed 16px leading column for the PARENT's glyph, so the heterogeneous
-            sources (workspace poster badge / agent avatar) align down the list. */}
-        <span className="flex size-4 shrink-0 items-center justify-center text-text-muted">
-          <FavoriteParentIcon item={item} parentAvatarUrl={parentAvatarUrl} />
-        </span>
         <ChannelIcon
-          variant="utility"
-          density="sm"
+          variant="sticker"
           className={isSilenced && !isPrimary ? 'text-text-muted/60' : 'text-text-muted'}
         />
         <span
@@ -332,32 +329,4 @@ function FavoriteRow({
       </AppContextMenuItem>
     </AppContextMenu>
   );
-}
-
-/** The row's identity anchor: its PARENT. `parent_icon_url` is non-null only for an
- *  agent home with an avatar, `parent_runtime` only for an agent home — so the three
- *  branches are the contract, not a guess (shared `api/favorites.ts`). Regular
- *  workspaces carry no icon storage, hence the canonical themed poster badge. */
-function FavoriteParentIcon({
-  item,
-  parentAvatarUrl,
-}: {
-  item: FavoriteRowDto;
-  parentAvatarUrl: string | null;
-}): JSX.Element {
-  if (item.parent_runtime) {
-    return (
-      <AgentAvatar
-        runtime={item.parent_runtime}
-        size={AVATAR_PX.xs}
-        avatarObjectUrl={parentAvatarUrl}
-      />
-    );
-  }
-  if (item.kind === 'dm_channel') {
-    // A DM parent with no resolved runtime — neutral glyph rather than a guessed
-    // runtime.
-    return <User className="size-4 shrink-0" />;
-  }
-  return <WorkspaceIcon kind="regular" dmAgentId={null} />;
 }

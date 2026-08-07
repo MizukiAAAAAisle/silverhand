@@ -632,18 +632,24 @@
   padding: 1px;
 }
 
-/* Dense NAVIGATION lists (channel sidebar + agent-activity roster) drop the
+/* Dense NAVIGATION lists (the browse tree + agent-activity roster) drop the
    sticker AT REST — repeated down a long list the yellow fill reads heavy and
    borrows Tasks' fluorescent yellow as mere row decoration, spending the tasks
    hue budget. Resting = quiet ink glyph (mirrors warm/slack, which strengthen
    the `#` by COLOUR alone); the sticker is EARNED by the selected row (below).
    Scoped to these two containers only — every other surface keeps the pop.
-   `[data-row-selected] [data-channel-icon]` already only ever matched these two
-   (Favorites/Workspaces rows carry `data-workspace-icon`, not channel-icon), so
-   the container scope just extends that to the resting state. (shiki #task:1441)
+   (shiki #task:1441)
+
+   The container hook is `[data-sidebar='workspaces']` — the ONE browse column
+   since #task:1889 folded the channel column into it. It was `'channels'` (the
+   retired `ChannelsSidebar`'s aside), which after the merge matched nothing, so
+   every channel row fell through to the loud default and the sidebar read as
+   "all rows selected" (shiki, #task:1889 review). STARRED rows are unaffected
+   either way: their `#` is a `ChannelIcon variant="utility"` and carries no
+   `data-channel-icon` hook at all.
    The chat-header `#` (`[data-conversation-hash-icon]`) is a SEPARATE hook and
    stays a hero sticker — the single-instance surface where loudness belongs. */
-[data-theme='forza6'] [data-sidebar='channels'] [data-channel-icon],
+[data-theme='forza6'] [data-sidebar='workspaces'] [data-channel-icon],
 [data-theme='forza6'] [data-agent-activity] [data-channel-icon] {
   background-color: transparent;
   border-color: transparent;
@@ -658,7 +664,7 @@
    second shadow on the icon just re-stacks weight and reads heavy (shiki
    #task:1441). The fill + 1.5px ink frame alone distinguish it from the resting
    quiet glyph. */
-[data-theme='forza6'] [data-sidebar='channels'] [data-row-selected] [data-channel-icon],
+[data-theme='forza6'] [data-sidebar='workspaces'] [data-row-selected] [data-channel-icon],
 [data-theme='forza6'] [data-agent-activity] [data-row-selected] [data-channel-icon] {
   background-color: var(--forza6-yellow);
   color: var(--forza6-ink);

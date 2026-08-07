@@ -23,7 +23,11 @@ import {
   type ChannelListItem,
   type ViewerSyncFrame,
 } from './hooks';
-import { favoritesKey, removeWorkspaceFromFavorites } from '../favorites/hooks';
+import {
+  decideFavoritesInvalidation,
+  favoritesKey,
+  removeWorkspaceFromFavorites,
+} from '../favorites/hooks';
 import { activityKey, removeWorkspaceFromActivity } from '../attention/hooks';
 import {
   messageUnreadByConversationKey,
@@ -327,12 +331,15 @@ describe('decideViewerSyncInvalidations', () => {
     ).toEqual([['workspaces']]);
   });
 
-  it('also invalidates the attention roll-up on add (re-join restores a mute)', () => {
+  it('also invalidates the attention roll-up and STARRED on add (re-join restores a mute and a star)', () => {
     // #task:1870 — the badge NUMBER of a just-joined workspace is necessarily 0,
     // which is why this used to be list-only. But the roll-up also carries
     // `muted_workspace_ids`, and a mute preference outlives a membership removal
     // so a re-join brings the id back with every number still 0. Without this the
     // rail's muted marker stays missing until an unrelated attention event lands.
+    // #task:1889 — a STAR outlives the membership the same way, and a re-join emits
+    // no `workspace_channels_changed`, so the favorites list is the third
+    // projection of this one fact (workspace remove → re-add).
     expect(
       decideViewerSyncInvalidations(
         frame({
@@ -340,7 +347,7 @@ describe('decideViewerSyncInvalidations', () => {
           payload: { change: 'added', workspace_id: 'w-1' },
         }),
       ),
-    ).toEqual([['workspaces'], ['attention', 'badges']]);
+    ).toEqual([['workspaces'], ['attention', 'badges'], favoritesKey]);
   });
 
   it('invalidates only the workspace list on remove — the purge is the removal contract\'s', () => {
@@ -550,6 +557,58 @@ describe('removeWorkspaceFromFavorites (#task:1404, conversation rows since #tas
     qc.setQueryData<ListFavoritesDto>(favoritesKey, loaded);
     removeWorkspaceFromFavorites(qc, 'w-1');
     expect(qc.getQueryData(favoritesKey)).toBe(loaded);
+  });
+});
+
+describe('decideFavoritesInvalidation (#task:1889)', () => {
+  // The scope set is what this pins. STARRED used to derive its watched
+  // workspaces from the parents of the rows it was currently showing, so hiding
+  // the LAST favorite under a parent (archive the channel, leave a private one)
+  // silently disarmed that parent — and the restore event that should bring the
+  // star back had nobody listening. The set now comes from the consumer: every
+  // workspace the viewer can see, rows or not.
+  const chFrame = (scope: string) => ({
+    type: 'event',
+    scope,
+    kind: 'workspace_channels_changed',
+  });
+
+  it('invalidates for a watched workspace that currently shows NO favorite (channel hide → restore)', () => {
+    // `w-2` holds a star whose channel is archived, so the list shows nothing
+    // under it. The restore arrives here; with a result-derived scope set this
+    // frame was dropped and the star never came back short of a remount.
+    expect(decideFavoritesInvalidation(chFrame('workspace:w-2'), ['w-1', 'w-2'])).toBe(
+      true,
+    );
+    expect(decideFavoritesInvalidation(chFrame('workspace:w-2'), [])).toBe(false);
+  });
+
+  it('ignores an unwatched workspace, other event kinds, and other frame types', () => {
+    expect(decideFavoritesInvalidation(chFrame('workspace:w-9'), ['w-1'])).toBe(false);
+    expect(
+      decideFavoritesInvalidation(
+        { type: 'event', scope: 'workspace:w-1', kind: 'message_created' },
+        ['w-1'],
+      ),
+    ).toBe(false);
+    expect(
+      decideFavoritesInvalidation({ type: 'ack', scope: 'workspace:w-1' }, ['w-1']),
+    ).toBe(false);
+  });
+
+  it('treats a replay gap on a watched workspace as an invalidation', () => {
+    expect(
+      decideFavoritesInvalidation(
+        { type: 'snapshot_required', scope: 'workspace:w-1' },
+        ['w-1'],
+      ),
+    ).toBe(true);
+    // The viewer-scope half of the gate stays in the hook (`isCurrentViewerScope`).
+    expect(
+      decideFavoritesInvalidation({ type: 'snapshot_required', scope: 'viewer:u-1' }, [
+        'w-1',
+      ]),
+    ).toBe(false);
   });
 });
 

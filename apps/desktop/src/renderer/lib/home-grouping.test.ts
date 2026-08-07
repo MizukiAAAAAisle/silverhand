@@ -53,6 +53,32 @@ describe('partitionRailWorkspaces (#task:1888 — kind split only, star no longe
     expect(regular.map(w => w.id)).toEqual(['r1']);
     expect(dms).toEqual([]);
   });
+
+  // The scope set for STARRED's freshness subscription (#task:1889). The bug this
+  // pins is a WIRING bug, not a decision bug: `useFavorites` used to derive its
+  // watched workspaces from the favorites rows it was currently showing, so a
+  // parent whose last favorite got hidden dropped out of the set and the restore
+  // event had nobody listening. Returning the scope from THIS call — the one place
+  // that sees the raw input — is what makes "derived from the projection" not
+  // expressible; these cells pin that it is strictly WIDER than the home groups.
+  it('returns every raw workspace as the watch scope, including ones the tree drops', () => {
+    const { dms, regular, allVisibleIds } = partitionRailWorkspaces([
+      ws('r1'),
+      ws('a1', { archived: true }),
+      ws('d1', { kind: 'dm' }),
+    ]);
+    // `a1` is archived: not in the tree, still watched — a restore is exactly the
+    // event that brings its hidden star back.
+    expect(allVisibleIds).toEqual(['r1', 'a1', 'd1']);
+    expect([...regular, ...dms].map(w => w.id)).not.toContain('a1');
+  });
+
+  it('watches a workspace that contributes NO row at all (zero favorites, zero children)', () => {
+    // An empty workspace holds no favorite, so a result-derived scope set excluded
+    // it. It must still be watched: that is where a star waits to be restored.
+    const { allVisibleIds } = partitionRailWorkspaces([ws('empty')]);
+    expect(allVisibleIds).toEqual(['empty']);
+  });
 });
 
 describe('pinStarredFirst (#task:1888 rail pin — ordering, never membership)', () => {

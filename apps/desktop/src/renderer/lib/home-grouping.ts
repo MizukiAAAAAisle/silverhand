@@ -34,10 +34,34 @@ export function isStarredAt(starredAt: number | null | undefined): boolean {
 }
 
 interface RailWorkspaceItem {
+  id: string;
   kind: 'regular' | 'dm';
   archived?: boolean;
   starred_at?: number | null;
 }
+
+declare const FAVORITES_WATCH_SCOPE: unique symbol;
+
+/**
+ * The STARRED freshness scope, as a NOMINAL type (#task:1889, @Cindy MUST FIX).
+ *
+ * `FavoritesGroup.watchWorkspaceIds` takes this and nothing else, and the ONLY
+ * value of it is `partitionRailWorkspaces().allVisibleIds`. That is the fence:
+ * re-deriving the scope from a projection — `homeDms.concat(homeRegular).map(w =>
+ * w.id)`, or the favorites rows' own `workspace_id`s — produces a plain
+ * `string[]` and fails typecheck at the call site. The earlier claim that this
+ * was already unrepresentable was wrong: the shape was structurally identical, so
+ * the wrong wiring compiled and every test stayed green (@Cindy proved it by
+ * doing exactly that substitution). A brand is what actually makes the two
+ * distinguishable.
+ *
+ * Why the scope must be the raw set: it has to stay armed for a workspace with
+ * NOTHING visible in the tree — that is precisely where a hidden star waits, and
+ * where a restore arrives. Any projection has already dropped those rows.
+ */
+export type FavoritesWatchScope = readonly string[] & {
+  readonly [FAVORITES_WATCH_SCOPE]: true;
+};
 
 /**
  * Partition the rail's workspaces into the home hard groups by KIND. Archived rows
@@ -48,18 +72,31 @@ interface RailWorkspaceItem {
  * at render, so unlike the channel projection this returns the full non-archived
  * set. The input order is preserved within each group, so an upstream sort still
  * holds.
+ *
+ * `allVisibleIds` is the RAW input's id set — every workspace the viewer can see,
+ * archived INCLUDED, and deliberately NOT `dms ∪ regular`. It is the scope set for
+ * viewer-local projections that must stay armed for a workspace holding nothing
+ * visible (STARRED's `useFavorites`, #task:1889): a parent with zero visible rows
+ * is exactly the one whose hidden star is waiting to be restored, and an archived
+ * parent is exactly where a restore arrives. It is returned from HERE, beside the
+ * projections, and typed `FavoritesWatchScope` (above) so a projection-derived
+ * substitute cannot reach the consumer.
  */
 export function partitionRailWorkspaces<T extends RailWorkspaceItem>(
   items: readonly T[],
-): { dms: T[]; regular: T[] } {
+): { dms: T[]; regular: T[]; allVisibleIds: FavoritesWatchScope } {
   const dms: T[] = [];
   const regular: T[] = [];
+  const allVisibleIds: string[] = [];
   for (const w of items) {
+    allVisibleIds.push(w.id);
     if (w.archived) continue;
     if (w.kind === 'dm') dms.push(w);
     else regular.push(w);
   }
-  return { dms, regular };
+  // The one place the brand is minted — it asserts provenance (raw input set),
+  // which no runtime check can express.
+  return { dms, regular, allVisibleIds: allVisibleIds as unknown as FavoritesWatchScope };
 }
 
 interface StarrableItem {

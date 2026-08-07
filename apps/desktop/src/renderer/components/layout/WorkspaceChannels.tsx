@@ -3,15 +3,20 @@
 // column) became: the row vocabulary, the badge path and the drag group are
 // ported unchanged — only the mounting story is new.
 //
-// LAZY BY MOUNT (the spec's "折叠的 workspace 零请求"). Every per-workspace read
-// this subtree needs lives INSIDE it, so a collapsed workspace renders nothing
-// and therefore fetches nothing; expanding mounts the component and the three
-// queries fire together. That is also what gives an expanded workspace its
-// realtime liveness: `useChannelsForWorkspace` is the sole owner of the
-// `workspace:<id>` subscription, so a workspace is live exactly while it is
-// visible. The sort menu is a sibling in the header and is likewise rendered
-// only while expanded — mounting it collapsed would re-introduce the request
-// (it reads the same `channelsKey` cache).
+// LAZY BY MOUNT. Every per-workspace read THIS SUBTREE needs lives inside it, so a
+// collapsed workspace renders nothing and this subtree fetches nothing; expanding
+// mounts the component and its three queries fire together. The sort menu is a
+// sibling in the header and is likewise rendered only while expanded — mounting it
+// collapsed would re-introduce the request (it reads the same `channelsKey` cache).
+//
+// SCOPED CLAIM, on purpose (@Cindy, #task:1889): this is "the subtree mounts no
+// queries of its own", NOT "a collapsed workspace is request-free" and NOT
+// "`useChannelsForWorkspace` owns the `workspace:<id>` subscription". Two surfaces
+// outside this file reach a collapsed workspace: STARRED subscribes to EVERY
+// visible workspace scope (`useFavorites` — it must stay armed where nothing is
+// showing), and a starred regular channel makes STARRED fetch its parent's
+// attention modes. So expanding is what stops THIS subtree's fetches, and realtime
+// liveness for a workspace's channel list is what tracks visibility here.
 //
 // WHY THE MUTATIONS ARE HERE TOO: `useStarChannel(workspaceId)` /
 // `useArchiveChannel(workspaceId)` are per-workspace (they reconcile that
@@ -35,7 +40,7 @@ import {
 } from '@/components/menus/AppContextMenu';
 import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
 import {
-  GLYPH_COLUMN_INSET,
+  CHILD_GLYPH_INSET,
   UnreadBadge,
   copyConversationName,
 } from '@/components/layout/sidebar-shared';
@@ -93,7 +98,8 @@ interface ChannelNode {
  * unmounts with the expanded state: it reads the SAME `channelsKey` cache as the
  * children below (`useChannelSortState` is a `select` over
  * `useChannelsForWorkspace`'s query), so mounting it on a COLLAPSED workspace
- * would fetch that workspace's channels and break "collapsed → zero requests".
+ * would fetch that workspace's channels — the one fetch the lazy mount exists to
+ * avoid (see the file header for what "lazy" does and does not claim).
  */
 export function ChannelSortMenu({
   workspaceId,
@@ -208,7 +214,7 @@ export function WorkspaceChannels({
           onClick={() => onCreateChannel(workspaceId)}
           className={
             'flex h-7 w-full items-center gap-1.5 text-left text-[12px] text-text-muted hover:text-text-primary ' +
-            GLYPH_COLUMN_INSET
+            CHILD_GLYPH_INSET
           }
         >
           <Plus className="size-3.5 shrink-0" />
@@ -387,11 +393,14 @@ function ChannelRow({
     <div
       data-row-selected={selected || undefined}
       className={
-        // `pl-5` is the shared glyph column (#task:1889): this row's `#` lands on
-        // exactly the same x as a workspace icon, a STARRED row's parent glyph and
-        // a tool row's glyph. Depth is read off the chevron gutter, not indentation.
+        // The CHILD glyph column (#task:1889): this row's `#` sits one indent
+        // step in from the group header — the SAME column as its own workspace
+        // header, not a second step further. A per-level staircase was tried and
+        // rejected: in a column this narrow it spends the width on whitespace and
+        // reads as too many levels (shiki, 2026-08-08). What locates this row is
+        // the header above it plus the collapse state, not its x.
         'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
-        GLYPH_COLUMN_INSET +
+        CHILD_GLYPH_INSET +
         ' ' +
         // No `transition-colors`: selected/hover switch instantly (#task:1162).
         // Selected is a discrete, already-committed state — fading it over 150ms
