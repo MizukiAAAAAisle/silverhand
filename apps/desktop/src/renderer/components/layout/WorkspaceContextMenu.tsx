@@ -10,13 +10,10 @@ import { WorkspaceMuteMenuItem } from './ChannelAttentionSurfaces';
  * order, and the "no capability ⇒ no menu at all" rule — is the part that must
  * not fork; callers supply only the resolved capabilities/handlers.
  *
- * NO STAR (shiki, 2026-08-08). A container star could only ever pin the row to
- * the top of its own group, which is a second ordering authority on a list that
- * already has manual drag — and the pin was applied after the sort, so a drag
- * that put an unstarred row above a starred one silently snapped back. It also
- * made one glyph mean two things: on a conversation Star MOVES the row into the
- * global STARRED list, on a container it only re-sorted. Containers are ordered
- * by drag alone; STARRED holds conversations only.
+ * NO STAR (shiki, 2026-08-08): containers have no star, so this menu has no such
+ * item to gate. Star belongs to conversations and means exactly one thing —
+ * MOVE the row into the global STARRED list. Container order is `f(mode, rank)`.
+ * Why the container reading was retired: docs/app-layout.md §4.5 (#task:1900).
  */
 export function WorkspaceContextMenu({
   trigger,

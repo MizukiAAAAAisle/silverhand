@@ -7,12 +7,10 @@
  * STARRED list (`FavoritesPanel`). Exclusive — the row renders THERE only, never in
  * both places. See `excludeStarredChannels`.
  *
- * Containers (workspace / DM) have NO star (shiki, 2026-08-08). They used to take
- * the same word for an in-group pin, which made one glyph mean two things depending
- * on the row you right-clicked, and put a second ordering authority on a list that
- * already has manual drag: the pin was applied after the sort hook, so dropping an
- * unstarred container above a starred one visibly settled back below it. Container
- * order is `f(mode, rank)` and nothing else.
+ * Containers (workspace / DM) have NO star (shiki, 2026-08-08): their order is
+ * `f(mode, rank)` and nothing else, so no projection here ever reads a container's
+ * `starred_at`. Why the container reading was retired: docs/app-layout.md §4.5
+ * (#task:1900).
  *
  * SINGLE SOURCE, NO DRIFT: every projection reads each item's `starred_at`, which
  * the composition root (App.tsx) joins onto every item from the SAME

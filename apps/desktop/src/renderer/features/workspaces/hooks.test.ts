@@ -191,23 +191,25 @@ describe('Favorites sort cache wiring (#task:1254)', () => {
   });
 
   it('applyOrderToViewerSort writes dense 0..n ranks and flips the list-wide scope to manual', () => {
+    // Favorites keys are `<channel|dm_channel>:<conversation_id>` only — a container
+    // can never appear here (#task:1888 / #task:1900).
     const next = applyOrderToViewerSort(
       vs(
         [
           { entity_id: 'channel:c1', rank: null, last_accessed_at: 5, starred_at: 1 },
-          { entity_id: 'workspace:w1', rank: null, last_accessed_at: 9, starred_at: 2 },
+          { entity_id: 'dm_channel:c2', rank: null, last_accessed_at: 9, starred_at: 2 },
         ],
         { '': 'recent' },
       ),
       undefined, // list-wide scope (favorites has no per-group axis)
-      ['workspace:w1', 'channel:c1'],
+      ['dm_channel:c2', 'channel:c1'],
     );
     expect(next.modes['']).toBe('manual');
     const byId = new Map(next.entries.map(e => [e.entity_id, e]));
-    expect(byId.get('workspace:w1')?.rank).toBe(0);
+    expect(byId.get('dm_channel:c2')?.rank).toBe(0);
     expect(byId.get('channel:c1')?.rank).toBe(1);
     // non-rank fields ride through untouched.
-    expect(byId.get('workspace:w1')?.last_accessed_at).toBe(9);
+    expect(byId.get('dm_channel:c2')?.last_accessed_at).toBe(9);
   });
 
   it('a favorites cache write lands on favoritesKey and never touches workspaces/channels caches', () => {
