@@ -114,7 +114,7 @@ describe('PUT /api/sort/mode', () => {
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const res = await http(t).put('/api/sort/mode', {
       list_key: `channels:${wsId}`,
-      group: 'starred',
+      group: 'channels',
       mode: 'manual',
     });
     expect(res.status).toBe(400);
@@ -196,7 +196,7 @@ describe('PUT /api/sort/order', () => {
     const c1 = await makeChannel(t, wsId, 'one', agentId);
     const c2 = await makeChannel(t, wsId, 'two', agentId);
 
-    // All channels are unpinned; reorder them as [c2, c1].
+    // The conversation list is a SINGLE hard group (`channels`); reorder as [c2, c1].
     const listKey = `channels:${wsId}`;
     const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
     const allIds = chList.channels.map((c: any) => c.id);
@@ -206,7 +206,7 @@ describe('PUT /api/sort/order', () => {
     const ordered = [c2, c1, ...allIds.filter((id: string) => id !== c1 && id !== c2)];
     const res = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: ordered,
     });
     expect(res.status).toBe(200);
@@ -216,7 +216,7 @@ describe('PUT /api/sort/order', () => {
     expect(rankOf(c1)).toBe(1);
   });
 
-  it('a starred channel moves to the sidebar `starred` section and reorders there; `unstarred` reorder excludes it (#task:1252 local channel star)', async () => {
+  it('a starred channel LEAVES its workspace list for the global STARRED list — excluded from the `channels` reorder (#task:1888 exclusive)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
@@ -226,34 +226,34 @@ describe('PUT /api/sort/order', () => {
 
     const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
     const allIds: string[] = chList.channels.map((c: any) => c.id);
-    // A channel star is LOCAL: it MOVES c1 into the sidebar's top `starred`
-    // section (c1 stays a live sidebar member — unlike a workspace/DM, which
-    // leaves the rail entirely for the global STARRED list).
+    // A conversation star is EXCLUSIVE: c1 MOVES to the global Favorites list and
+    // is reordered there, so it is no longer a member of this workspace's group.
+    // The list endpoint still returns it (the renderer derives the exclusion from
+    // `starred_at`), and it stays a valid star/touch target.
     expect((await http(t).post(`/api/channels/${c1}/star`, undefined)).status).toBe(200);
     expect(allIds).toContain(c1);
 
-    // `starred` reorder = EXACTLY the starred members (c1 alone) → accepted.
-    const starredOk = await http(t).put('/api/sort/order', {
+    // `starred` is not a legal conversation-list group any more → rejected.
+    const starredGroup = await http(t).put('/api/sort/order', {
       list_key: listKey,
       group: 'starred',
       ordered_ids: [c1],
     });
-    expect(starredOk.status).toBe(200);
+    expect(starredGroup.status).toBe(400);
 
-    // `unstarred` reorder = the NON-starred members only → accepted.
-    const unstarredIds = allIds.filter(id => id !== c1);
-    const unstarredOk = await http(t).put('/api/sort/order', {
+    // `channels` reorder = the NON-starred members only → accepted.
+    const remaining = allIds.filter(id => id !== c1);
+    const ok = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
-      ordered_ids: unstarredIds,
+      group: 'channels',
+      ordered_ids: remaining,
     });
-    expect(unstarredOk.status).toBe(200);
+    expect(ok.status).toBe(200);
 
-    // Including the starred c1 in the `unstarred` reorder is rejected — it lives
-    // in the `starred` section now, not `unstarred`.
+    // Including the starred c1 is rejected — it lives in the global list now.
     const withC1 = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: allIds,
     });
     expect(withC1.status).toBe(400);
@@ -265,7 +265,7 @@ describe('PUT /api/sort/order', () => {
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const res = await http(t).put('/api/sort/order', {
       list_key: `channels:${wsId}`,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: ['ghost'],
     });
     expect(res.status).toBe(400);
@@ -279,13 +279,13 @@ describe('PUT /api/sort/order', () => {
     await makeChannel(t, wsId, 'two', agentId);
     const listKey = `channels:${wsId}`;
 
-    // 3 live unpinned channels (onboarding + two). Establish a full order.
+    // 3 live channels (onboarding + two). Establish a full order.
     const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
     const allIds: string[] = chList.channels.map((c: any) => c.id);
     expect(allIds.length).toBe(3);
     const full = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: allIds,
     });
     expect(full.status).toBe(200);
@@ -294,7 +294,7 @@ describe('PUT /api/sort/order', () => {
     // Send only two of the three → 400 (partial / would collide), ranks unchanged.
     const partial = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: allIds.slice(0, 2),
     });
     expect(partial.status).toBe(400);
@@ -314,7 +314,7 @@ describe('PUT /api/sort/order', () => {
     const c1 = await makeChannel(t, wsId, 'one', agentId);
     const res = await http(t).put('/api/sort/order', {
       list_key: `channels:${wsId}`,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: [c1, c1],
     });
     expect(res.status).toBe(400);
@@ -324,11 +324,11 @@ describe('PUT /api/sort/order', () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     await makeWorkspace(t, 'eng', agentId);
-    // 'unstarred' is a channel-sidebar group, not a workspace-rail group
-    // (the rail uses pinned / dm / regular).
+    // 'channels' is a conversation-list group, not a workspace-rail group
+    // (the rail partitions by kind: dm / regular).
     const res = await http(t).put('/api/sort/order', {
       list_key: 'workspaces',
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: [],
     });
     expect(res.status).toBe(400);
@@ -350,7 +350,7 @@ describe('PUT /api/sort/order', () => {
     const allIds: string[] = chList.channels.map((c: any) => c.id);
     const res = await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: [...allIds].reverse(),
     });
     expect(res.status).toBe(200);
@@ -429,7 +429,7 @@ describe('PUT /api/sort/order', () => {
     // The full visible set — including the unjoined public channel — is a legal reorder.
     const ok = await asTeammate.put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: [pubUnjoined, pubJoined],
     });
     expect(ok.status).toBe(200);
@@ -437,7 +437,7 @@ describe('PUT /api/sort/order', () => {
     // Submitting the unjoined PRIVATE id (not in the viewer's visible set) is rejected.
     const rejected = await asTeammate.put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
+      group: 'channels',
       ordered_ids: [pubUnjoined, pubJoined, privUnjoined],
     });
     expect(rejected.status).toBe(400);
@@ -484,14 +484,14 @@ describe('viewer_sort does not leak non-live entities', () => {
   });
 });
 
-describe('star/unstar rank handling — home rank preserved (exclusive move), starred excluded from home reorder', () => {
+describe('star/unstar rank handling — home rank preserved everywhere (#task:1888)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('CLEARS a channel rank on star/unstar (cross-group move → enters the new section unranked) — #task:1252 local channel star', async () => {
+  it('PRESERVES a channel home rank across star/unstar (star is a move OUT; the home rank is an orphan that restores)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
@@ -500,11 +500,11 @@ describe('star/unstar rank handling — home rank preserved (exclusive move), st
     const listKey = `channels:${wsId}`;
 
     const chList = (await (await http(t).get(`/api/workspaces/${wsId}/channels`)).json()) as any;
-    const allUnstarred = chList.channels.map((c: any) => c.id);
+    const allIds = chList.channels.map((c: any) => c.id);
     await http(t).put('/api/sort/order', {
       list_key: listKey,
-      group: 'unstarred',
-      ordered_ids: [c1, c2, ...allUnstarred.filter((id: string) => id !== c1 && id !== c2)],
+      group: 'channels',
+      ordered_ids: [c1, c2, ...allIds.filter((id: string) => id !== c1 && id !== c2)],
     });
 
     const db = t.ctx.db;
@@ -515,24 +515,21 @@ describe('star/unstar rank handling — home rank preserved (exclusive move), st
         )
         .get(listKey, id);
 
-    expect(rowOf(c1)?.rank).toBe(0); // c1 manually placed at top of `unstarred`
+    expect(rowOf(c1)?.rank).toBe(0); // c1 manually placed at the top of `channels`
 
-    // Star MOVES c1 across the hard-group boundary into `starred`. A single rank
-    // is only meaningful within one group, so it is CLEARED — c1 enters the
-    // starred section unranked (tail), not carrying its stale unstarred rank 0.
+    // Star MOVES c1 out of this list into the global Favorites list. No list
+    // hard-partitions by star any more, so the home rank is not a cross-group
+    // move: it survives as an orphan and c1 lands back at slot 0 on unstar.
     expect((await http(t).post(`/api/channels/${c1}/star`, undefined)).status).toBe(200);
-    expect(rowOf(c1)?.rank ?? null).toBeNull(); // cleared on the cross-group move
+    expect(rowOf(c1)?.rank).toBe(0);
     expect(rowOf(c1)?.starred_at).not.toBeNull();
 
-    // Unstar moves it back to `unstarred` — again cross-group, so rank stays
-    // cleared (it re-enters unranked, NOT at the old rank-0 slot). One rank can't
-    // hold both group positions; per-group rank would be a future enhancement.
     expect((await http(t).del(`/api/channels/${c1}/star`)).status).toBe(200);
-    expect(rowOf(c1)?.rank ?? null).toBeNull();
+    expect(rowOf(c1)?.rank).toBe(0); // restored to its arranged home slot
     expect(rowOf(c1)?.starred_at ?? null).toBeNull();
   });
 
-  it('a starred workspace is EXCLUDED from its home kind-group reorder (moved to global STARRED, #task:1252 exclusive)', async () => {
+  it('a starred workspace STAYS a reorderable member of its rail kind group (star only PINS it, #task:1888)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const regularWs = await makeWorkspace(t, 'eng', agentId);
@@ -545,7 +542,8 @@ describe('star/unstar rank handling — home rank preserved (exclusive move), st
     );
     expect(dmWs).toBeTruthy();
 
-    // Star one regular ws + the DM — both MOVE to the global STARRED list.
+    // Star one regular ws + the DM. Neither leaves the rail: a container's star
+    // pins it at the top of its own kind group, it never enters global Favorites.
     expect((await http(t).post(`/api/workspaces/${dmWs.id}/star`, undefined)).status).toBe(200);
     expect((await http(t).post(`/api/workspaces/${regularWs}/star`, undefined)).status).toBe(200);
 
@@ -557,8 +555,7 @@ describe('star/unstar rank handling — home rank preserved (exclusive move), st
     });
     expect(starredReorder.status).toBe(400);
 
-    // The starred entity is still returned in the rail payload (so the renderer
-    // can hide it via its `starred_at`)…
+    // The starred workspace is still a live rail row carrying its `starred_at`…
     const list = (await (await http(t).get('/api/workspaces')).json()) as any;
     const regularIds = list.workspaces
       .filter((w: any) => w.workspace_kind === 'regular' && w.archived_at == null)
@@ -568,24 +565,34 @@ describe('star/unstar rank handling — home rank preserved (exclusive move), st
       list.viewer_sort.entries.find((e: any) => e.entity_id === regularWs)?.starred_at,
     ).not.toBeNull();
 
-    // …but a home-group reorder whose ordered_ids INCLUDE the starred entity is
-    // rejected — it is no longer a home-group member.
+    // …and the WHOLE kind group — starred member included — is the legal reorder
+    // set: the star is an in-group pin, not a move to another list.
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'workspaces',
         group: 'regular',
         ordered_ids: regularIds, // contains the starred regularWs
       })).status,
-    ).toBe(400);
+    ).toBe(200);
 
-    // The correct reorder — only the unstarred member(s) — succeeds.
+    // Omitting the starred member is now the PARTIAL submission → rejected.
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'workspaces',
         group: 'regular',
         ordered_ids: regularIds.filter((id: string) => id !== regularWs),
       })).status,
-    ).toBe(200);
+    ).toBe(400);
+  });
+
+  it('a starred workspace creates NO global-Favorites row (containers are outside that context)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    expect((await http(t).post(`/api/workspaces/${wsId}/star`, undefined)).status).toBe(200);
+
+    const favs = (await (await http(t).get('/api/favorites')).json()) as any;
+    expect(favs.items).toEqual([]);
   });
 
   it('starring/unstarring a workspace PRESERVES its manual rail rank (#task:1252)', async () => {

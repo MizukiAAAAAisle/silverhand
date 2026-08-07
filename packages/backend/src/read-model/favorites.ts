@@ -1,53 +1,71 @@
-// Read-model for the global Favorites list (#task:1252, docs/list-sort-v1.md).
-// Favorites is a read-side projection over the `sort` bounded context. Its
-// MEMBERSHIP owns NO storage: every row is projected from the single
-// `user_sort_entry.starred_at` fact. Its ORDERING does live in sort state
-// (`list_key='favorites'` — see the ORDERING note below). Dependency direction is
-// one-way: routes → read-model. Nothing here writes.
+// Read-model for the global Favorites list (#task:1252, re-scoped to
+// conversations by #task:1888; docs/list-sort-v1.md). Favorites is a read-side
+// projection over the `sort` bounded context. Its MEMBERSHIP owns NO storage:
+// every row is projected from the single `user_sort_entry.starred_at` fact. Its
+// ORDERING does live in sort state (`list_key='favorites'` — see the ORDERING
+// note below). Dependency direction is one-way: routes → read-model. Nothing
+// here writes.
 //
-// SCOPE: the global Favorites/STARRED list holds WORKSPACE and DM rows only — it
-// projects the viewer's stars from the workspace rail (`list_key='workspaces'`:
-// regular workspaces → kind 'workspace', agent_home DMs → kind 'dm'). A CHANNEL
-// is NOT a global-Favorites member: a channel star is LOCAL to its own channel
-// sidebar (it forms that sidebar's top `starred` section — see routes/sort.ts
-// `channels:*`), never hoisted into this flat global list. Channels are simply
-// outside this bounded context.
+// SCOPE: the global Favorites/STARRED list holds CONVERSATION rows only — it
+// projects the viewer's stars from the per-workspace conversation lists
+// (`list_key='channels:<ws_id>'`), i.e. `kind='channel'` and `kind='dm_channel'`
+// (the latter covers an agent home's DM stream, its Onboarding thread and its
+// Mentions inbox — "Mentions" is a dm_channel, not a kind of its own). A
+// WORKSPACE / DM container is NOT a global-Favorites member: starring one PINS it
+// at the top of its own rail kind group (an ordering marker read off the rail's
+// own `viewer_sort.starred_at`), never hoisted into this flat global list.
+// Containers are simply outside this bounded context.
 //
 // ORDERING (#task:1252 C) is the one thing Favorites stores for itself: a
 // first-class viewer-scoped sort state under `list_key='favorites'` — a flat,
 // single-group, list-wide [recent|manual] toggle + manual drag, reusing the
-// `sort` context. It does NOT reuse the rail's old `workspaces`/`starred` scope.
-// This read-model SYNTHESIZES the `viewer_sort` the renderer composes from:
-//   - keyed by `<kind>:<entity_id>` favorite keys (a bare id could not
-//     distinguish a DM from a same-id regular workspace);
+// `sort` context. This read-model SYNTHESIZES the `viewer_sort` the renderer
+// composes from:
+//   - keyed by `<kind>:<entity_id>` favorite keys;
 //   - each entry carries rank (from the `favorites` list_key) + last_accessed_at
-//     (from the entity's HOME list — recent = recently-OPENED, never "recently
-//     starred") + starred_at (home — a membership/display mirror, NOT a sort key;
-//     recent's tiebreak is the row's created_at → favorite_key).
+//     (from the conversation's HOME list — recent = recently-OPENED, never
+//     "recently starred"; opening a conversation already stamps that list) +
+//     starred_at (home — a membership/display mirror, NOT a sort key; recent's
+//     tiebreak is the row's created_at → favorite_key).
 // The backend does NOT pre-sort `items`; the renderer composes order from
 // `viewer_sort` with the shared list-sort helper, exactly like the rail / sidebar.
 //
 // MEMBERSHIP CONTRACT (enforced below; stated in prose so it is not hidden in
-// SQL). A starred workspace/DM appears IFF the viewer can still access it AND it
-// is not archived — exactly the set the per-entity star endpoints accept, so
-// Favorites membership ≡ the viewer's star-toggleable workspace/DM set (one
-// source of truth):
-//   - workspace/dm (list_key='workspaces', entity = a workspace):
-//       viewer ∈ workspace_users(ws)  AND  ws.archived_at IS NULL.
-//       `workspace_kind='regular'` → kind 'workspace'; `'agent_home'` → kind
-//       'dm' (a DM is an agent's own home workspace; identity from owner_agent_id).
+// SQL). A starred conversation appears IFF the viewer can still reach it AND
+// neither it nor its workspace is archived — the reachability arms are the SAME
+// ones the channel star endpoint accepts, so Favorites membership is the viewer's
+// star-toggleable conversation set INTERSECTED with "not archived" (the star
+// endpoint itself does not look at the parent's archive state). Archive is a
+// display hide, never an unstar:
+//   - the star row lives in the conversation's OWN home list
+//     (`list_key = 'channels:' || c.workspace_id`) with `starred_at IS NOT NULL`;
+//   - viewer ∈ workspace_users(parent)  AND  parent.archived_at IS NULL;
+//   - conversation.archived_at IS NULL;
+//   - viewer ∈ conversation_users(conv)  OR  (kind='channel' AND public) — the
+//     UNION of the two arms the star endpoint's own set is built from:
+//     `listActiveChannelsForViewer` (joined ∪ browseable public) for a regular
+//     workspace and the strictly membership-filtered DM query for an agent home.
+//     The public arm is kind-qualified so the DM side cannot be widened by a
+//     stray `visibility` value — the equality holds structurally, without leaning
+//     on the dm_channel visibility CHECK.
 // An inaccessible / archived favorite is HIDDEN, not deleted: its
 // `user_sort_entry.starred_at` row (and any `favorites` ordering row) persists,
-// so the favorite reappears with its arranged position if the entity is restored
-// / re-shared. This mirrors orphan-hide elsewhere. A deliberate UNSTAR is the
+// so the favorite reappears with its arranged position if it is restored /
+// re-shared. This mirrors orphan-hide elsewhere. A deliberate UNSTAR is the
 // opposite of an archive-hide: it actively DELETES the `favorites` ordering row
 // (`SortRepo.clearFavoriteRank`), so a re-star re-enters fresh — there is no
-// stale favorites rank to revive (the entity's HOME rank, by contrast, is
+// stale favorites rank to revive (the conversation's HOME rank, by contrast, is
 // preserved and restored on unstar; see SortRepo).
+//
+// Pre-#1888 `favorites` ordering rows are keyed `workspace:<ws>` / `dm:<ws>`.
+// Those keys can no longer be projected by any member, so they are unreachable
+// orphans — deliberately NOT migrated or deleted (nothing reads them, and the
+// list's whole population changed, so an old arrangement of containers has no
+// meaning to preserve).
 //
 // Favorites is human viewer-scoped — the only principal kind that stars — so the
 // visibility predicate is the canViewWorkspace USER branch (workspace_users
-// membership), expressed as SQL joins.
+// membership) plus the conversation-level reachability above, expressed as SQL.
 import type { BackendContext } from '../context.js';
 import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import {
@@ -63,14 +81,17 @@ export interface ListFavoritesParams {
   viewerUserId: string;
 }
 
-/** A starred workspace-rail entry resolved against `workspaces` (+ the bound
- *  agent for DMs). entity_id is the workspace id. */
-interface WorkspaceFavoriteRow {
+/** A starred conversation resolved against `conversations` + its parent
+ *  workspace (+ the bound agent when the parent is an agent home).
+ *  entity_id is the conversation id. */
+interface ConversationFavoriteRow {
   entity_id: string;
   starred_at: number;
   last_accessed_at: number | null;
   created_at: number;
-  workspace_kind: 'regular' | 'agent_home';
+  kind: 'channel' | 'dm_channel';
+  title: string;
+  workspace_id: string;
   workspace_name: string;
   owner_agent_id: string | null;
   agent_display_name: string | null;
@@ -88,9 +109,10 @@ export function favoriteKey(kind: FavoriteRowDto['kind'], entityId: string): str
 
 /**
  * Project the viewer's flat Favorites list plus its ordering state. Pure read.
- * `items` carry display identity + the favorite_key/created_at the renderer
- * needs; `viewer_sort` (list_key='favorites') carries the per-favorite_key sort
- * triple the renderer composes order from. The backend does not pre-sort.
+ * `items` carry display identity (own + PARENT) + the favorite_key/created_at the
+ * renderer needs; `viewer_sort` (list_key='favorites') carries the
+ * per-favorite_key sort triple the renderer composes order from. The backend does
+ * not pre-sort.
  */
 export function listFavorites(
   ctx: BackendContext,
@@ -98,18 +120,23 @@ export function listFavorites(
 ): ListFavoritesDto {
   const { viewerUserId } = params;
 
-  // ── workspace + dm favorites (list_key='workspaces') ──────────────────────
-  // Visibility = workspace_users membership; archived workspaces are excluded.
-  // `last_accessed_at` is the HOME-list recent-opened stamp — recent mode reads
-  // it so "recent" means recently-OPENED (from anywhere), not recently-starred.
-  const workspaceRows = ctx.db
-    .prepare<{ viewer: string }, WorkspaceFavoriteRow>(
+  // ── conversation favorites (list_key='channels:<ws_id>') ──────────────────
+  // The star row is keyed to the conversation's OWN home list, so the list_key
+  // is derived from the joined row rather than passed in — a star recorded under
+  // any other list cannot leak in. Visibility = workspace membership + the
+  // conversation-level reachability from the header; archived conversations and
+  // archived workspaces are excluded. `last_accessed_at` is the HOME-list
+  // recent-opened stamp, so "recent" means recently-OPENED (from anywhere).
+  const conversationRows = ctx.db
+    .prepare<{ viewer: string }, ConversationFavoriteRow>(
       `SELECT
          use.entity_id        AS entity_id,
          use.starred_at       AS starred_at,
          use.last_accessed_at AS last_accessed_at,
-         w.created_at         AS created_at,
-         w.workspace_kind     AS workspace_kind,
+         c.created_at         AS created_at,
+         c.kind               AS kind,
+         c.title              AS title,
+         c.workspace_id       AS workspace_id,
          w.name               AS workspace_name,
          w.owner_agent_id     AS owner_agent_id,
          a.display_name       AS agent_display_name,
@@ -118,14 +145,24 @@ export function listFavorites(
          a.avatar_storage_key AS agent_avatar_key,
          a.updated_at         AS agent_updated_at
        FROM user_sort_entry use
-       JOIN workspaces w ON w.id = use.entity_id
+       JOIN conversations c ON c.id = use.entity_id
+       JOIN workspaces w ON w.id = c.workspace_id
        JOIN workspace_users wu
          ON wu.workspace_id = w.id AND wu.user_id = @viewer
        LEFT JOIN agents a ON a.id = w.owner_agent_id
        WHERE use.user_id = @viewer
-         AND use.list_key = 'workspaces'
+         AND use.list_key = 'channels:' || c.workspace_id
          AND use.starred_at IS NOT NULL
-         AND w.archived_at IS NULL`,
+         AND c.kind IN ('channel', 'dm_channel')
+         AND c.archived_at IS NULL
+         AND w.archived_at IS NULL
+         AND (
+           EXISTS (
+             SELECT 1 FROM conversation_users cu
+              WHERE cu.conversation_id = c.id AND cu.user_id = @viewer
+           )
+           OR (c.kind = 'channel' AND c.visibility = 'public')
+         )`,
     )
     .all({ viewer: viewerUserId });
 
@@ -154,15 +191,14 @@ export function listFavorites(
   const items: FavoriteRowDto[] = [];
   const entries: ViewerSortEntryDto[] = [];
 
-  // Unread badge (#task:1254). A starred workspace/DM has MOVED out of its home
-  // rail group, so its unread signal lives ONLY here — the badge MUST be
-  // populated or a starred workspace/DM loses the unread visibility its rail row
-  // used to carry. Source is the CANONICAL unread repo (same `ROLLUP_UNREAD`
-  // predicate the rail badge uses), so the STARRED badge equals what the rail row
-  // would show — single source, no drift: workspace/dm row → the per-workspace
-  // rollup (`unreadCountsByWorkspace`), exactly the rail workspace badge.
+  // Unread badge (#task:1254, re-sourced by #task:1875 / #task:1888). A starred
+  // conversation has MOVED out of its parent's children, and that parent may be
+  // collapsed and fetching nothing, so the row must carry its own unread or the
+  // signal is simply lost. Source is the CANONICAL unread repo (the same
+  // `ROLLUP_UNREAD` predicate an in-tree conversation row uses), so the STARRED
+  // badge equals what the in-tree row would show — single source, no drift.
   const reads = new ConversationReadRepo(ctx.db);
-  const unreadByWorkspace = reads.unreadCountsByWorkspace(viewerUserId);
+  const unreadByConversation = reads.unreadCountsByConversation(viewerUserId);
   // NO tiered badge aggregation here (#task:1875). The tiered badge lives on
   // `GET /api/attention/badges` alone — that is the face `attention_badge_updated`
   // keeps fresh, and this read model is not one of its subscribers. Adding a
@@ -182,39 +218,42 @@ export function listFavorites(
     });
   };
 
-  for (const r of workspaceRows) {
-    const isDm = r.workspace_kind === 'agent_home';
-    const kind = isDm ? 'dm' : 'workspace';
-    const key = favoriteKey(kind, r.entity_id);
-    // DM identity comes from the bound agent; a regular workspace uses its name
-    // and has no icon storage (icon_url stays null → renderer monogram/W glyph).
-    const avatarUrl =
-      isDm && r.owner_agent_id && r.agent_avatar_key
+  for (const r of conversationRows) {
+    const key = favoriteKey(r.kind, r.entity_id);
+    // PARENT identity. An agent-home parent is identified by its bound agent
+    // (avatar + runtime + display name); a regular workspace has no icon storage
+    // (parent_icon_url stays null → renderer monogram) and no runtime. The glyph
+    // recipe is chosen from these fields, never inferred from `kind`.
+    const parentAvatarUrl =
+      r.owner_agent_id && r.agent_avatar_key
         ? `${apiPaths.agentAvatar(r.owner_agent_id)}?v=${r.agent_updated_at ?? 0}`
         : null;
+    const parentTitle = r.owner_agent_id
+      ? r.agent_display_name?.trim()
+        ? r.agent_display_name
+        : r.agent_name ?? r.workspace_name
+      : r.workspace_name;
     items.push({
-      kind,
+      kind: r.kind,
       favorite_key: key,
       entity_id: r.entity_id,
-      workspace_id: r.entity_id,
-      title: isDm
-        ? r.agent_display_name?.trim()
-          ? r.agent_display_name
-          : r.agent_name ?? r.workspace_name
-        : r.workspace_name,
-      icon_url: avatarUrl,
-      runtime: isDm ? r.agent_runtime : null,
+      workspace_id: r.workspace_id,
+      title: r.title,
+      parent_title: parentTitle,
+      parent_icon_url: parentAvatarUrl,
+      parent_runtime: r.owner_agent_id ? r.agent_runtime : null,
       starred_at: r.starred_at,
       created_at: r.created_at,
-      unread_count: unreadByWorkspace[r.entity_id] ?? 0,
+      unread_count: unreadByConversation[r.entity_id] ?? 0,
     });
     pushEntry(key, r.starred_at, r.last_accessed_at);
   }
 
-  // Stable default array order (most-recently-starred first, entity_id tiebreak)
-  // so an unsorted client / a test reading items raw sees a deterministic order.
-  // The authoritative display order is composed by the renderer from viewer_sort
-  // (recent → last_accessed_at / manual → rank); this is only the fallback.
+  // Stable default array order (most-recently-starred first, favorite_key
+  // tiebreak) so an unsorted client / a test reading items raw sees a
+  // deterministic order. The authoritative display order is composed by the
+  // renderer from viewer_sort (recent → last_accessed_at / manual → rank); this
+  // is only the fallback.
   items.sort(
     (a, b) =>
       b.starred_at - a.starred_at ||
@@ -227,4 +266,3 @@ export function listFavorites(
 
   return { items, viewer_sort: { list_key: 'favorites', modes, entries } };
 }
-

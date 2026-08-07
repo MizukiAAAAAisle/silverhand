@@ -141,16 +141,14 @@ export class SortRepo {
   /**
    * Toggle THIS viewer's personal ⭐ star on an entity (#task:1209), scoped to
    * the acting viewer (never global — the old pin cleared all viewers' ranks).
-   * Recent-opened (last_accessed_at) is always preserved. `rank` is left as-is
-   * here — the CALLER decides whether to preserve or clear it, because the right
-   * policy depends on what star does to THIS list (see routes/sort.ts):
-   *   - the rail (workspace/DM): star is a MOVE OUT to the global Favorites list,
-   *     so home rank is a harmless orphan that RESTORES on unstar → preserved.
-   *   - the channel sidebar: star is a CROSS-GROUP move within one list
-   *     (`unstarred ↔ starred`), so a single rank can't stay meaningful across
-   *     the boundary → the caller clears it (`clearRank`), entity enters the new
-   *     group unranked.
-   * The Favorites placement is the converse of the rail's home rank — see
+   * Recent-opened (last_accessed_at) and `rank` are always preserved: since
+   * #task:1888 no list hard-partitions by star, so a star never moves an entity
+   * across groups WITHIN a list and its home rank stays meaningful.
+   *   - a conversation list: star is a MOVE OUT to the global Favorites list, so
+   *     the home rank is a harmless orphan that RESTORES on unstar.
+   *   - the rail (workspace/DM): star only PINS the entity inside its own kind
+   *     group, so it keeps its place in that group's manual order.
+   * The Favorites placement is the converse of the home rank — see
    * `clearFavoriteRank` (unstar is a voluntary favorites-removal → discarded).
    */
   setStarred(
@@ -181,23 +179,6 @@ export class SortRepo {
         )
         .run(viewerUserId, listKey, entityId);
     }
-  }
-
-  /**
-   * Clear THIS viewer's manual `rank` for one entity in a list (set rank NULL on
-   * an existing row; no-op if absent). Used when star/unstar moves an entity
-   * ACROSS a list's hard groups (the channel sidebar's `starred ↔ unstarred`): a
-   * single rank is only meaningful within one group, so the entity enters the new
-   * group unranked (null-rank tail) rather than carrying a stale cross-group
-   * position that would collide/pollute the destination group's manual order.
-   */
-  clearRank(viewerUserId: string, listKey: string, entityId: string): void {
-    this.db
-      .prepare<[string, string, string]>(
-        `UPDATE user_sort_entry SET rank = NULL
-         WHERE user_id = ? AND list_key = ? AND entity_id = ?`,
-      )
-      .run(viewerUserId, listKey, entityId);
   }
 
   /**

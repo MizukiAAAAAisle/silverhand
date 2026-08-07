@@ -26,10 +26,11 @@ export interface SortRouteDeps {
  * Per-user (viewer-scoped) list sort mutations (#task:1147). The backend
  * persists preferences only; the renderer composes the final order. Group
  * membership for a reorder is validated against LIVE kind/star state — the
- * backend rejects cross-group / unknown ids rather than guessing. A starred
- * workspace/DM has moved to the global Favorites list and is not reorderable in
- * its home group (#task:1252); a starred CHANNEL stays in its own sidebar's
- * `starred` section and IS reorderable there (channel star is local, #task:1252).
+ * backend rejects cross-group / unknown ids rather than guessing. Star is
+ * EXCLUSIVE for exactly one list kind (#task:1888): a starred CONVERSATION has
+ * moved to the global Favorites list and is not reorderable in its own
+ * workspace's list; a starred workspace/DM merely PINS inside its rail kind group
+ * and stays reorderable there.
  *
  * Read state is carried inline on the list responses (see workspaces route),
  * so there is no GET here.
@@ -40,19 +41,18 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
 
   /** The legal hard groups for a list kind.
    *  - workspace rail: partitions by KIND only (`dm` / `regular`). Star is NOT a
-   *    rail group — a starred workspace/DM MOVES to the global Favorites/STARRED
-   *    list (#task:1252, docs/list-sort-v1.md).
-   *  - channel sidebar: two hard groups `starred | unstarred`. A channel star is
-   *    LOCAL — it pins the channel to the top `starred` section of its OWN sidebar;
-   *    a starred channel never leaves its workspace for the global STARRED list
-   *    (global Favorites is workspace/DM only). Both sections share one list-wide
-   *    mode (see modeScopeOf); rank is only ever compared within a section.
+   *    rail group — a starred workspace/DM stays in its kind group, pinned to the
+   *    top by the renderer (#task:1888, docs/list-sort-v1.md).
+   *  - conversation list: a SINGLE group (`channels`). Star is not a group here
+   *    either — a starred conversation MOVES to the global Favorites/STARRED list
+   *    (#task:1888) and is excluded from this group's reorder. One list-wide mode
+   *    (see modeScopeOf).
    *  - global Favorites: a single FLAT group (`favorites`) — sortable, not
    *    sub-partitioned. */
   function legalGroups(listKey: string): SortGroup[] {
     if (listKey === 'workspaces') return ['dm', 'regular'];
     if (listKey === 'favorites') return ['favorites'];
-    return ['starred', 'unstarred'];
+    return ['channels'];
   }
 
   /**
@@ -92,11 +92,12 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
    * `groups` is the FULL visible set (so the `viewer_sort` it backs carries every
    * entity's `starred_at`). The `starred` set is the reorder-EXCLUSION subset —
    * entities that live in a DIFFERENT list and so are not reorderable here:
-   *   - workspaces: a starred workspace/DM has MOVED to the global STARRED list
-   *     (#task:1252 exclusive), so it is excluded from its kind group's reorder
-   *     (but stays a valid star/touch target and keeps `starred_at` on the wire).
-   *   - channels: a channel star is LOCAL (it forms the sidebar's own `starred`
-   *     section, not a move elsewhere), so nothing is excluded — the set is EMPTY.
+   *   - workspaces: NOTHING is excluded — a starred workspace/DM stays in its kind
+   *     group (star pins it there, #task:1888), so the set is EMPTY.
+   *   - channels: a starred CONVERSATION has MOVED to the global STARRED list
+   *     (#task:1888 exclusive) and is reordered there, so it is excluded from this
+   *     workspace's single group (but stays a valid star/touch target and keeps
+   *     `starred_at` on the wire).
    * Returns not-found / forbidden for the caller to render. Archived entities are
    * excluded (not in the sorting scope).
    */
@@ -109,14 +110,10 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     const principal = getUserPrincipal(c);
     const groups = new Map<string, SortGroup>();
     if (listKey === 'workspaces') {
-      // Workspace rail partitions by KIND (`dm` / `regular`). `groups` is the
-      // full visible set (incl starred) so viewer_sort still exposes every
-      // `starred_at`; `starred` is returned so reorder excludes them — a starred
-      // workspace/DM has MOVED to the global STARRED list and is not reorderable
-      // in its kind group (#task:1252 exclusive).
-      const starred = new Set(
-        sort.listStarredEntityIds(principal.userId, 'workspaces'),
-      );
+      // Workspace rail partitions by KIND (`dm` / `regular`). Star is neither a
+      // group nor an exclusion here (#task:1888): a starred workspace/DM stays a
+      // live, reorderable member of its kind group and is merely pinned to the
+      // top of it by the renderer, so the exclusion set is EMPTY.
       for (const ws of workspaces.list()) {
         if (ws.archived_at != null) continue;
         if (!canViewWorkspace(ctx, principal, ws.id)) continue;
@@ -126,7 +123,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
           groups.set(ws.id, 'regular');
         }
       }
-      return { ok: true, groups, starred };
+      return { ok: true, groups, starred: new Set() };
     }
     if (listKey === 'favorites') {
       // The global Favorites list — a single flat group keyed by favorite_key
@@ -141,15 +138,12 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       }
       return { ok: true, groups, starred: new Set() };
     }
-    // 'channels:<ws_id>' — the channel sidebar has TWO hard groups
-    // `starred | unstarred`. A channel star is LOCAL: it pins the channel to the
-    // top `starred` section of THIS sidebar (channels never enter the global
-    // STARRED list — that is workspace/DM only, #task:1252). The partition is
-    // this viewer's own star set (per-VIEWER #task:1209), never a shared field.
-    // Unlike the workspaces branch, NOTHING is excluded from reorder: a starred
-    // channel stays a live, reorderable member of its `starred` section, so the
-    // exclusion set returned below is EMPTY (reorder is validated by group
-    // membership alone — a starred id must be reordered within `starred`).
+    // 'channels:<ws_id>' — one workspace's conversation list, a SINGLE hard group
+    // (`channels`). Star is EXCLUSIVE here (#task:1888): a starred conversation
+    // has MOVED to the global STARRED list and is reordered there, so it is
+    // returned in the exclusion set below. `groups` is still the FULL visible set
+    // (incl. starred) so the `viewer_sort` it backs exposes every `starred_at`
+    // and a starred conversation stays a valid star/touch target.
     const channelStarred = new Set(
       sort.listStarredEntityIds(principal.userId, listKey),
     );
@@ -168,27 +162,28 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
         ? conversations.listActiveChannelsForViewer(workspace.id, principal.userId)
         : conversations.listActiveDmChannelsForViewer(workspace.id, principal.userId);
     for (const ch of channels) {
-      groups.set(ch.id, channelStarred.has(ch.id) ? 'starred' : 'unstarred');
+      groups.set(ch.id, 'channels');
     }
-    return { ok: true, groups, starred: new Set() };
+    // Only the starred ids that are actually live members of THIS list — a stale
+    // star row for a gone/archived conversation must not enter the exclusion set.
+    return {
+      ok: true,
+      groups,
+      starred: new Set([...channelStarred].filter(id => groups.has(id))),
+    };
   }
 
   /** The kind-qualified global-Favorites key for a HOME (list_key, entity_id) —
    *  the `entity_id` under `user_sort_entry.list_key='favorites'`. Mirrors the
-   *  favorites read-model's kind resolution: a workspace is `dm` when it is an
-   *  agent_home, else `workspace`. Returns null for a list_key with no global
-   *  Favorites projection (channels — their star is local to their sidebar). */
+   *  favorites read-model's key: the CONVERSATION's own kind (#task:1888).
+   *  Returns null for a list_key with no global Favorites projection (the
+   *  workspace rail — a container's star pins it inside its own kind group and
+   *  never creates a favorites row). */
   function favoriteKeyForHome(listKey: string, entityId: string): string | null {
-    if (listKey === 'workspaces') {
-      const ws = workspaces.get(entityId);
-      if (!ws) return null;
-      return favoriteKey(ws.workspace_kind === 'agent_home' ? 'dm' : 'workspace', entityId);
-    }
-    // A channel is never a global-Favorites member (global STARRED is workspace/DM
-    // only, #task:1252) — its star is local to its own sidebar's `starred`
-    // section. So a channel unstar has NO `favorites` list_key rank orphan to
-    // clear; return null (the star only toggles the channel's home starred_at).
-    return null;
+    if (!listKey.startsWith('channels:')) return null;
+    const channel = conversations.getChannelLike(entityId);
+    if (!channel) return null;
+    return favoriteKey(channel.kind, entityId);
   }
 
   app.put(apiPaths.sortMode, async c => {
@@ -254,10 +249,11 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     }
     // Reject unknown / cross-group ids — don't guess. Every id must be a live,
     // viewer-visible entity of this list that currently sits in `group` AND is
-    // not in the reorder-exclusion set. For workspaces that set holds the starred
-    // workspace/DM (moved to global STARRED, reordered there — #task:1252); for
-    // channels it is empty (a starred channel reorders within its own `starred`
-    // section), so a channel is validated by group membership alone.
+    // not in the reorder-exclusion set. For a conversation list that set holds the
+    // starred conversations (moved to global STARRED, reordered there —
+    // #task:1888); for the rail it is empty (a starred workspace/DM stays a
+    // reorderable member of its kind group), so the rail is validated by group
+    // membership alone.
     for (const id of orderedIds) {
       if (resolved.groups.get(id) !== group || resolved.starred.has(id)) {
         return c.json(
@@ -270,8 +266,9 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
     // members of `group` (any order, no missing / extra / duplicate). A partial
     // submission (stale client or race) would leave other members' ranks stale
     // and collide within the group, so it's rejected — the client refetches.
-    // Exclusion-set entities (workspaces: the moved-out starred workspace/DM) are
-    // not members of any home group here; for channels the set is empty.
+    // Exclusion-set entities (a conversation list: the moved-out starred
+    // conversations) are not members of any home group here; for the rail the set
+    // is empty.
     const liveGroupIds = [...resolved.groups.entries()]
       .filter(([id, g]) => g === group && !resolved.starred.has(id))
       .map(([id]) => id);
@@ -361,21 +358,14 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'not found' }, 404);
     }
     sort.setStarred(principal.userId, listKey, entityId, starred);
-    // Per-list rank policy on a star toggle:
-    if (legalGroups(listKey).includes('starred')) {
-      // This list HARD-PARTITIONS by star (the channel sidebar: `starred |
-      // unstarred`). Star/unstar moves the entity ACROSS those groups within the
-      // one list, and a single `rank` is only meaningful within one group — so
-      // clear it: the entity enters the new group unranked (tail), then the
-      // viewer can re-drag within that group. (Keeping it would carry a stale
-      // cross-group position that collides/pollutes the destination group.)
-      sort.clearRank(principal.userId, listKey, entityId);
-    } else if (!starred) {
-      // A list where star MOVES the entity OUT entirely (the rail → global
-      // Favorites). Home rank is kept as an orphan that restores on return, so
-      // nothing to clear here; but unstar is a VOLUNTARY removal from Favorites,
-      // so drop its favorites manual-rank orphan — a later re-star re-enters
-      // fresh, never jumping to a stale favorites slot. See clearFavoriteRank.
+    // Rank policy on a star toggle. No list hard-partitions by star any more
+    // (#task:1888), so a star never moves an entity ACROSS groups within one list
+    // and the home rank is always kept: on the rail the entity does not move at
+    // all, and a conversation's home rank survives as an orphan that restores when
+    // it comes back. What an UNSTAR must drop is the FAVORITES rank — unstar is a
+    // voluntary removal from that list, so a later re-star re-enters fresh instead
+    // of jumping to a stale favorites slot. See clearFavoriteRank.
+    if (!starred) {
       const favKey = favoriteKeyForHome(listKey, entityId);
       if (favKey) sort.clearFavoriteRank(principal.userId, favKey);
     }

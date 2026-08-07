@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import { encodeUserPrincipalHeader, X_SILVERHAND_PRINCIPAL_HEADER } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
-// Favorites read-model (#task:1252): the viewer's flat global STARRED list,
-// a read projection of `user_sort_entry.starred_at` for the WORKSPACE/DM rail
-// (`list_key='workspaces'`). A channel star is local to its own channel sidebar
-// and is NOT a global favorite. See packages/backend/src/read-model/favorites.ts.
+// Favorites read-model (#task:1252, re-scoped by #task:1888): the viewer's flat
+// global STARRED list, a read projection of `user_sort_entry.starred_at` for the
+// per-workspace CONVERSATION lists (`list_key='channels:<ws_id>'`). A workspace /
+// DM container star is NOT a global favorite — it only pins the container inside
+// its own rail kind group. See packages/backend/src/read-model/favorites.ts.
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const r = await http(t).post('/api/agents', { name, runtime: 'claude' });
@@ -68,142 +70,177 @@ describe('GET /api/favorites', () => {
     t = null;
   });
 
-  it('projects a starred workspace with server-resolved identity; a channel is NOT a global favorite', async () => {
+  it('projects a starred channel with server-resolved PARENT identity; a workspace star is NOT a global favorite', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const chId = await makeChannel(t, wsId, 'general', agentId);
 
-    expect((await http(t).post(`/api/workspaces/${wsId}/star`)).status).toBe(200);
     expect((await http(t).post(`/api/channels/${chId}/star`)).status).toBe(200);
+    expect((await http(t).post(`/api/workspaces/${wsId}/star`)).status).toBe(200);
 
     const items = await favorites(t);
-    const ws = items.find(i => i.entity_id === wsId);
+    const ch = items.find(i => i.entity_id === chId);
 
-    expect(ws).toMatchObject({
-      kind: 'workspace',
-      entity_id: wsId,
+    expect(ch).toMatchObject({
+      kind: 'channel',
+      favorite_key: `channel:${chId}`,
+      entity_id: chId,
+      // The PARENT workspace — no longer the entity itself (#task:1888).
       workspace_id: wsId,
-      title: 'eng',
-      icon_url: null,
-      runtime: null,
+      title: 'general',
+      // Parent identity is server-resolved so the renderer joins nothing: a
+      // regular workspace has no icon storage and no runtime → monogram recipe.
+      parent_title: 'eng',
+      parent_icon_url: null,
+      parent_runtime: null,
       // No non-system messages yet → caught-up rollup is 0 (not null).
       unread_count: 0,
     });
-    expect(typeof ws.starred_at).toBe('number');
+    expect(typeof ch.starred_at).toBe('number');
 
-    // #task:1252: the global STARRED list holds workspace/DM only — a channel
-    // star is LOCAL to its own channel sidebar (its top `starred` section), never
-    // a global favorite. The channel star row still exists in user_sort_entry
-    // (it drives the local sidebar partition), it is just not projected here.
-    expect(items.find(i => i.entity_id === chId)).toBeUndefined();
-    const chStar = t.ctx.db
+    // #task:1888: the global STARRED list holds CONVERSATIONS only. A container
+    // star merely PINS the workspace inside its own rail kind group, so it is not
+    // projected here — while its star row still exists in user_sort_entry.
+    expect(items.find(i => i.entity_id === wsId)).toBeUndefined();
+    const wsStar = t.ctx.db
       .prepare(
-        `SELECT COUNT(*) AS n FROM user_sort_entry WHERE user_id = 'local' AND list_key = ? AND entity_id = ? AND starred_at IS NOT NULL`,
+        `SELECT COUNT(*) AS n FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ? AND starred_at IS NOT NULL`,
       )
-      .get(`channels:${wsId}`, chId) as any;
-    expect(chStar.n).toBe(1);
+      .get(wsId) as any;
+    expect(wsStar.n).toBe(1);
   });
 
   it('orders rows by starred_at DESC (most-recently-starred first)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    const { wsId: dmWsId } = dmOf(t, agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
-    await http(t).post(`/api/workspaces/${dmWsId}/star`);
+    const c1 = await makeChannel(t, wsId, 'one', agentId);
+    const c2 = await makeChannel(t, wsId, 'two', agentId);
+    await http(t).post(`/api/channels/${c1}/star`);
+    await http(t).post(`/api/channels/${c2}/star`);
 
-    // workspace starred earlier, DM later (both live in list_key='workspaces').
-    setStarredAt(t, 'workspaces', wsId, 1000);
-    setStarredAt(t, 'workspaces', dmWsId, 2000);
+    // c1 starred earlier, c2 later (both in the home list channels:<ws_id>).
+    setStarredAt(t, `channels:${wsId}`, c1, 1000);
+    setStarredAt(t, `channels:${wsId}`, c2, 2000);
 
     const items = await favorites(t);
-    expect(items.map(i => i.entity_id)).toEqual([dmWsId, wsId]);
+    expect(items.map(i => i.entity_id)).toEqual([c2, c1]);
   });
 
-  it('projects a starred DM (agent_home) as kind="dm" resolved from the bound agent', async () => {
+  it('projects a starred dm_channel with the bound agent as PARENT (kind="dm_channel")', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'rover');
-    const { wsId: dmWsId } = dmOf(t, agentId);
+    const { wsId: dmWsId, dmChannelId } = dmOf(t, agentId);
 
-    expect((await http(t).post(`/api/workspaces/${dmWsId}/star`)).status).toBe(200);
+    expect((await http(t).post(`/api/channels/${dmChannelId}/star`)).status).toBe(200);
 
     const items = await favorites(t);
-    const dm = items.find(i => i.entity_id === dmWsId);
+    const dm = items.find(i => i.entity_id === dmChannelId);
     expect(dm).toMatchObject({
-      kind: 'dm',
-      entity_id: dmWsId,
+      kind: 'dm_channel',
+      favorite_key: `dm_channel:${dmChannelId}`,
+      entity_id: dmChannelId,
       workspace_id: dmWsId,
-      title: 'rover', // agent name (no display_name set)
-      icon_url: null, // no avatar set
-      runtime: 'claude',
+      // Agent-home parent → identity comes from the bound agent.
+      parent_title: 'rover', // agent name (no display_name set)
+      parent_icon_url: null, // no avatar set
+      parent_runtime: 'claude',
     });
+    expect(typeof dm.title).toBe('string');
   });
 
-  it('builds icon_url for a DM agent that has an avatar', async () => {
+  it('builds parent_icon_url from the agent-home parent avatar', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'rover');
-    const { wsId: dmWsId } = dmOf(t, agentId);
-    await http(t).post(`/api/workspaces/${dmWsId}/star`);
+    const { dmChannelId } = dmOf(t, agentId);
+    expect((await http(t).post(`/api/channels/${dmChannelId}/star`)).status).toBe(200);
 
     // Give the agent an avatar (both columns set per the CHECK constraint).
     t.ctx.db
       .prepare(`UPDATE agents SET avatar_storage_key = 'k', avatar_content_type = 'image/png', updated_at = 4242 WHERE id = ?`)
       .run(agentId);
 
-    const dm = (await favorites(t)).find(i => i.entity_id === dmWsId);
-    expect(dm.icon_url).toBe(`/api/agents/${agentId}/avatar?v=4242`);
+    const dm = (await favorites(t)).find(i => i.entity_id === dmChannelId);
+    expect(dm.parent_icon_url).toBe(`/api/agents/${agentId}/avatar?v=4242`);
   });
 
-  it('hides archived workspace and archived channel favorites (storage row preserved)', async () => {
-    t = buildTestApp();
+  // Membership ≡ the star endpoint's own live set: a browseable PUBLIC channel the
+  // viewer has not joined is star-able, so it must also be projectable. Reducing
+  // the predicate to a `conversation_users` join would silently drop it.
+  it('projects a starred unjoined PUBLIC channel; an unjoined private one is not even star-able', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    const chId = await makeChannel(t, wsId, 'general', agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
-    await http(t).post(`/api/channels/${chId}/star`);
+    // teammate: workspace member, but NOT a member of the channels below.
+    t.ctx.db
+      .prepare(
+        `INSERT OR IGNORE INTO workspace_users (workspace_id, user_id, joined_at, role)
+         VALUES (?, ?, ?, 'member')`,
+      )
+      .run(wsId, 'teammate', Date.now());
+    const asTeammate = http(t, {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    });
+    const mkChannel = async (title: string, visibility?: 'public') => {
+      const r = await http(t!).post(`/api/workspaces/${wsId}/channels`, {
+        title,
+        member_agent_ids: [],
+        ...(visibility ? { visibility } : {}),
+      });
+      return ((await r.json()) as any).channel.id as string;
+    };
+    const pubUnjoined = await mkChannel('pub-unjoined', 'public');
+    const privUnjoined = await mkChannel('priv-unjoined');
 
-    // Archive both (directly — the star row stays in user_sort_entry).
-    t.ctx.db.prepare(`UPDATE conversations SET archived_at = 1 WHERE id = ?`).run(chId);
-    t.ctx.db.prepare(`UPDATE workspaces SET archived_at = 1 WHERE id = ?`).run(wsId);
+    expect((await asTeammate.post(`/api/channels/${pubUnjoined}/star`)).status).toBe(200);
+    // Not in teammate's visible set → not a star target at all.
+    expect((await asTeammate.post(`/api/channels/${privUnjoined}/star`)).status).toBe(404);
+
+    const r = await asTeammate.get('/api/favorites');
+    expect(r.status).toBe(200);
+    const items = ((await r.json()) as any).items as any[];
+    expect(items.map(i => i.entity_id)).toEqual([pubUnjoined]);
+    expect(items[0]).toMatchObject({ kind: 'channel', workspace_id: wsId, parent_title: 'eng' });
+  });
+
+  it('hides an archived channel and a channel under an archived workspace (storage row preserved)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsA = await makeWorkspace(t, 'eng', agentId);
+    const wsB = await makeWorkspace(t, 'ops', agentId);
+    const chA = await makeChannel(t, wsA, 'general', agentId);
+    const chB = await makeChannel(t, wsB, 'general', agentId);
+    await http(t).post(`/api/channels/${chA}/star`);
+    await http(t).post(`/api/channels/${chB}/star`);
+
+    // Archive the conversation on one side and the PARENT workspace on the other
+    // (directly — the star rows stay in user_sort_entry).
+    t.ctx.db.prepare(`UPDATE conversations SET archived_at = 1 WHERE id = ?`).run(chA);
+    t.ctx.db.prepare(`UPDATE workspaces SET archived_at = 1 WHERE id = ?`).run(wsB);
 
     expect(await favorites(t)).toEqual([]);
-    // The underlying star rows persist (favorite reappears on restore).
+    // Both star rows persist (each favorite reappears on restore).
     const rows = t.ctx.db
       .prepare(`SELECT COUNT(*) AS n FROM user_sort_entry WHERE user_id = 'local' AND starred_at IS NOT NULL`)
       .get() as any;
     expect(rows.n).toBe(2);
   });
 
-  it('hides a dm_channel star (#task:1252 v1 narrowing) — DM surfaces only as kind="dm"', async () => {
-    t = buildTestApp();
-    const agentId = await makeAgent(t, 'rover');
-    const { wsId: dmWsId, dmChannelId } = dmOf(t, agentId);
-
-    // Directly write a star on the DM *conversation* (channels:<agent_home>).
-    t.ctx.db
-      .prepare(
-        `INSERT INTO user_sort_entry (user_id, list_key, entity_id, rank, last_accessed_at, starred_at)
-         VALUES ('local', ?, ?, NULL, NULL, 5000)`,
-      )
-      .run(`channels:${dmWsId}`, dmChannelId);
-
-    // Not projected as a channel row (or any row).
-    const items = await favorites(t);
-    expect(items.find(i => i.entity_id === dmChannelId)).toBeUndefined();
-  });
-
-  it('hides favorites the viewer can no longer access (membership dropped)', async () => {
+  it('hides favorites the viewer can no longer access (channel or workspace membership dropped)', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
-    const wsId = await makeWorkspace(t, 'eng', agentId);
-    const chId = await makeChannel(t, wsId, 'general', agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
-    await http(t).post(`/api/channels/${chId}/star`);
+    const wsA = await makeWorkspace(t, 'eng', agentId);
+    const wsB = await makeWorkspace(t, 'ops', agentId);
+    const chA = await makeChannel(t, wsA, 'general', agentId);
+    const chB = await makeChannel(t, wsB, 'general', agentId);
+    await http(t).post(`/api/channels/${chA}/star`);
+    await http(t).post(`/api/channels/${chB}/star`);
 
-    // Drop the viewer's workspace + conversation membership.
-    t.ctx.db.prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`).run(chId);
-    t.ctx.db.prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = 'local'`).run(wsId);
+    // chA: left the (private) channel — no conversation membership, no public arm.
+    t.ctx.db.prepare(`DELETE FROM conversation_users WHERE conversation_id = ? AND user_id = 'local'`).run(chA);
+    // chB: removed from the parent workspace entirely.
+    t.ctx.db.prepare(`DELETE FROM workspace_users WHERE workspace_id = ? AND user_id = 'local'`).run(wsB);
 
     expect(await favorites(t)).toEqual([]);
   });
@@ -214,21 +251,22 @@ describe('GET /api/favorites', () => {
     expect(await favorites(t)).toEqual([]);
   });
 
-  it('populates unread_count from the canonical rollup (#task:1254)', async () => {
-    // The STARRED workspace/DM badge is filled server-side from the SAME
-    // ROLLUP_UNREAD predicate the rail badge uses (per-workspace rollup), so
-    // STARRED ≡ home, no drift. (A channel is not a global favorite, so only the
-    // workspace/dm rollup is asserted here; the channel still contributes to its
-    // parent workspace's rollup.)
+  it('populates unread_count per CONVERSATION from the canonical rollup (#task:1254)', async () => {
+    // The STARRED badge is filled server-side from the SAME ROLLUP_UNREAD
+    // predicate the in-tree channel row uses, keyed by CONVERSATION — so a
+    // sibling channel's unread never inflates this row (which a per-workspace
+    // rollup would).
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
     const chId = await makeChannel(t, wsId, 'general', agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
+    const sibling = await makeChannel(t, wsId, 'random', agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
+    await http(t).post(`/api/channels/${sibling}/star`);
 
-    // Two unread agent mainline messages in the channel. The viewer 'local' has
-    // no conversation_reads cursor → any seq > 0 counts. A system message and
-    // the viewer's OWN message do NOT (ROLLUP_UNREAD excludes both).
+    // Two unread agent mainline messages in `chId`. The viewer 'local' has no
+    // conversation_reads cursor → any seq > 0 counts. A system message and the
+    // viewer's OWN message do NOT (ROLLUP_UNREAD excludes both).
     const db = t.ctx.db;
     const insertMsg = (
       id: string,
@@ -258,12 +296,9 @@ describe('GET /api/favorites', () => {
     insertMsg('m4', chId, 'user', 103); // viewer's own → excluded
 
     const items = await favorites(t);
-    const ws = items.find(i => i.entity_id === wsId);
-    // Workspace row = the per-workspace rollup (sums its conversations = the
-    // channel's 2), exactly what the rail workspace badge would show.
-    expect(ws.unread_count).toBe(2);
-    // Channel itself is not a global favorite.
-    expect(items.find(i => i.entity_id === chId)).toBeUndefined();
+    expect(items.find(i => i.entity_id === chId).unread_count).toBe(2);
+    // The sibling favorite stays caught up — per-conversation, not per-workspace.
+    expect(items.find(i => i.entity_id === sibling).unread_count).toBe(0);
   });
 });
 
@@ -300,35 +335,36 @@ describe('Favorites ordering (list_key=favorites)', () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    const { wsId: dmWsId } = dmOf(t, agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
-    await http(t).post(`/api/workspaces/${dmWsId}/star`);
-    setStarredAt(t, 'workspaces', wsId, 1000);
-    setStarredAt(t, 'workspaces', dmWsId, 2000);
-    setHomeAccessed(t, 'workspaces', wsId, 7000);
-    setHomeAccessed(t, 'workspaces', dmWsId, 8000);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    const { wsId: dmWsId, dmChannelId } = dmOf(t, agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
+    await http(t).post(`/api/channels/${dmChannelId}/star`);
+    setStarredAt(t, `channels:${wsId}`, chId, 1000);
+    setStarredAt(t, `channels:${dmWsId}`, dmChannelId, 2000);
+    setHomeAccessed(t, `channels:${wsId}`, chId, 7000);
+    setHomeAccessed(t, `channels:${dmWsId}`, dmChannelId, 8000);
 
     const { items, viewer_sort } = await favoritesFull(t);
     expect(viewer_sort.list_key).toBe('favorites');
 
     // Rows carry the favorite_key (kind-qualified) + created_at.
-    const wsRow = items.find(i => i.entity_id === wsId);
-    const dmRow = items.find(i => i.entity_id === dmWsId);
-    expect(wsRow.favorite_key).toBe(`workspace:${wsId}`);
-    expect(dmRow.favorite_key).toBe(`dm:${dmWsId}`);
-    expect(typeof wsRow.created_at).toBe('number');
+    const chRow = items.find(i => i.entity_id === chId);
+    const dmRow = items.find(i => i.entity_id === dmChannelId);
+    expect(chRow.favorite_key).toBe(`channel:${chId}`);
+    expect(dmRow.favorite_key).toBe(`dm_channel:${dmChannelId}`);
+    expect(typeof chRow.created_at).toBe('number');
 
     // Entries are keyed by favorite_key and carry rank + HOME last_accessed_at +
     // starred_at — never the favorites row's own (null) last_accessed.
     const byKey = Object.fromEntries(
       viewer_sort.entries.map((e: any) => [e.entity_id, e]),
     );
-    expect(byKey[`workspace:${wsId}`]).toMatchObject({
+    expect(byKey[`channel:${chId}`]).toMatchObject({
       rank: null,
       last_accessed_at: 7000,
       starred_at: 1000,
     });
-    expect(byKey[`dm:${dmWsId}`]).toMatchObject({
+    expect(byKey[`dm_channel:${dmChannelId}`]).toMatchObject({
       rank: null,
       last_accessed_at: 8000,
       starred_at: 2000,
@@ -339,16 +375,17 @@ describe('Favorites ordering (list_key=favorites)', () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    const { wsId: dmWsId } = dmOf(t, agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
-    await http(t).post(`/api/workspaces/${dmWsId}/star`);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    const { dmChannelId } = dmOf(t, agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
+    await http(t).post(`/api/channels/${dmChannelId}/star`);
 
-    const wsKey = `workspace:${wsId}`;
-    const dmKey = `dm:${dmWsId}`;
+    const chKey = `channel:${chId}`;
+    const dmKey = `dm_channel:${dmChannelId}`;
     const r = await http(t).put('/api/sort/order', {
       list_key: 'favorites',
       group: 'favorites',
-      ordered_ids: [dmKey, wsKey],
+      ordered_ids: [dmKey, chKey],
     });
     expect(r.status).toBe(200);
     const vs = ((await r.json()) as any).viewer_sort;
@@ -356,80 +393,83 @@ describe('Favorites ordering (list_key=favorites)', () => {
     expect(vs.modes['']).toBe('manual'); // order ⟹ manual on the list-wide scope
     const byKey = Object.fromEntries(vs.entries.map((e: any) => [e.entity_id, e]));
     expect(byKey[dmKey].rank).toBe(0);
-    expect(byKey[wsKey].rank).toBe(1);
+    expect(byKey[chKey].rank).toBe(1);
   });
 
   it('rejects a reorder id that is not a kind-qualified favorite_key', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
 
-    // Bare entity_id (not `workspace:<id>`) is not a member of the favorites group.
+    // Bare entity_id (not `channel:<id>`) is not a member of the favorites group.
     const r = await http(t).put('/api/sort/order', {
       list_key: 'favorites',
       group: 'favorites',
-      ordered_ids: [wsId],
+      ordered_ids: [chId],
     });
     expect(r.status).toBe(400);
   });
 
-  it('favorites reorder does NOT disturb the home-list (workspaces rail) ranks', async () => {
+  it('favorites reorder does NOT disturb the home-list (conversation list) ranks', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    const { wsId: dmWsId } = dmOf(t, agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
-    await http(t).post(`/api/workspaces/${dmWsId}/star`);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    const { dmChannelId } = dmOf(t, agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
+    await http(t).post(`/api/channels/${dmChannelId}/star`);
 
-    // Give the workspace a manual rail rank in its HOME list.
+    // Give the channel a manual rank in its HOME conversation list.
     t.ctx.db
       .prepare(
-        `UPDATE user_sort_entry SET rank = 5 WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+        `UPDATE user_sort_entry SET rank = 5 WHERE user_id = 'local' AND list_key = ? AND entity_id = ?`,
       )
-      .run(wsId);
+      .run(`channels:${wsId}`, chId);
 
     // Reorder the FAVORITES list.
     const r = await http(t).put('/api/sort/order', {
       list_key: 'favorites',
       group: 'favorites',
-      ordered_ids: [`dm:${dmWsId}`, `workspace:${wsId}`],
+      ordered_ids: [`dm_channel:${dmChannelId}`, `channel:${chId}`],
     });
     expect(r.status).toBe(200);
 
-    // The home rail rank is untouched — favorites ordering is its own axis.
+    // The home rank is untouched — favorites ordering is its own axis.
     const homeRank = t.ctx.db
-      .prepare<[string], { rank: number | null }>(
-        `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+      .prepare<[string, string], { rank: number | null }>(
+        `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = ? AND entity_id = ?`,
       )
-      .get(wsId);
+      .get(`channels:${wsId}`, chId);
     expect(homeRank?.rank).toBe(5);
   });
 
-  it('unstar DROPS the favorite_key rank orphan (re-star re-enters fresh; HOME rank kept) — #task:1252 exclusive', async () => {
+  it('unstar DROPS the favorite_key rank orphan (re-star re-enters fresh; HOME rank kept) — #task:1888 exclusive', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    const { wsId: dmWsId } = dmOf(t, agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
-    await http(t).post(`/api/workspaces/${dmWsId}/star`);
-    const wsKey = `workspace:${wsId}`;
-    const dmKey = `dm:${dmWsId}`;
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    const { dmChannelId } = dmOf(t, agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
+    await http(t).post(`/api/channels/${dmChannelId}/star`);
+    const chKey = `channel:${chId}`;
+    const dmKey = `dm_channel:${dmChannelId}`;
 
     // Manually arrange favorites → both get a rank under list_key='favorites'.
     expect(
       (await http(t).put('/api/sort/order', {
         list_key: 'favorites',
         group: 'favorites',
-        ordered_ids: [dmKey, wsKey],
+        ordered_ids: [dmKey, chKey],
       })).status,
     ).toBe(200);
-    // Give the workspace a HOME rail rank too, to prove it is NOT touched.
+    // Give the channel a HOME rank too, to prove it is NOT touched.
     t.ctx.db
       .prepare(
-        `UPDATE user_sort_entry SET rank = 9 WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+        `UPDATE user_sort_entry SET rank = 9 WHERE user_id = 'local' AND list_key = ? AND entity_id = ?`,
       )
-      .run(wsId);
+      .run(`channels:${wsId}`, chId);
 
     const db = t.ctx.db;
     const favRank = (key: string) =>
@@ -438,31 +478,32 @@ describe('Favorites ordering (list_key=favorites)', () => {
           `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'favorites' AND entity_id = ?`,
         )
         .get(key);
-    expect(favRank(wsKey)?.rank).toBe(1);
+    expect(favRank(chKey)?.rank).toBe(1);
     expect(favRank(dmKey)?.rank).toBe(0);
 
-    // Unstar the workspace → its FAVORITES rank orphan is deleted (voluntary
-    // removal), but the DM's favorites rank and the ws's HOME rank survive.
-    expect((await http(t).del(`/api/workspaces/${wsId}/star`)).status).toBe(200);
-    expect(favRank(wsKey)).toBeUndefined();
+    // Unstar the channel → its FAVORITES rank orphan is deleted (voluntary
+    // removal), but the DM's favorites rank and the channel's HOME rank survive.
+    expect((await http(t).del(`/api/channels/${chId}/star`)).status).toBe(200);
+    expect(favRank(chKey)).toBeUndefined();
     expect(favRank(dmKey)?.rank).toBe(0);
     const homeRank = t.ctx.db
-      .prepare<[string], { rank: number | null }>(
-        `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = 'workspaces' AND entity_id = ?`,
+      .prepare<[string, string], { rank: number | null }>(
+        `SELECT rank FROM user_sort_entry WHERE user_id = 'local' AND list_key = ? AND entity_id = ?`,
       )
-      .get(wsId);
+      .get(`channels:${wsId}`, chId);
     expect(homeRank?.rank).toBe(9);
 
     // Re-star → re-enters FRESH (no rank), never jumping to the old slot 1.
-    expect((await http(t).post(`/api/workspaces/${wsId}/star`)).status).toBe(200);
-    expect(favRank(wsKey)?.rank ?? null).toBeNull();
+    expect((await http(t).post(`/api/channels/${chId}/star`)).status).toBe(200);
+    expect(favRank(chKey)?.rank ?? null).toBeNull();
   });
 
   it('mode toggle on favorites is persisted list-wide (scope "")', async () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
 
     const r = await http(t).put('/api/sort/mode', {
       list_key: 'favorites',
@@ -484,11 +525,12 @@ describe('Favorites ordering (list_key=favorites)', () => {
     t = buildTestApp();
     const agentId = await makeAgent(t, 'alice');
     const wsId = await makeWorkspace(t, 'eng', agentId);
-    await http(t).post(`/api/workspaces/${wsId}/star`);
+    const chId = await makeChannel(t, wsId, 'general', agentId);
+    await http(t).post(`/api/channels/${chId}/star`);
 
     const r = await http(t).post('/api/sort/touch', {
       list_key: 'favorites',
-      entity_id: `workspace:${wsId}`,
+      entity_id: `channel:${chId}`,
     });
     expect(r.status).toBe(400);
     // No dead last_accessed_at row written under list_key='favorites' — recent
@@ -501,4 +543,3 @@ describe('Favorites ordering (list_key=favorites)', () => {
     expect(row.n).toBe(0);
   });
 });
-

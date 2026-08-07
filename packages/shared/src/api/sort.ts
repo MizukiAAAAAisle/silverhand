@@ -17,14 +17,16 @@ export type SortMode = z.infer<typeof SortModeSchema>;
 
 /**
  * Hard-group descriptor for a manual reorder. Groups are partitioned LIVE at
- * sort time, never stored on the entity. Star semantics differ by list:
- *   workspace rail : 'dm' | 'regular' — by KIND only. Star is EXCLUSIVE here
- *     (#task:1252): a starred workspace/DM MOVES to the global Favorites/STARRED
- *     list and is removed from the rail, so star is NOT a rail hard group.
- *   channel sidebar: 'starred' | 'unstarred'. A channel star is LOCAL — it pins
- *     the channel to the top `starred` section of its own sidebar (channels never
- *     enter the global Favorites list). Both sections share one list-wide mode;
- *     rank is only compared within a section.
+ * sort time, never stored on the entity. Exactly ONE list has EXCLUSIVE star
+ * (#task:1888): the CONVERSATION list. Star never creates a hard group anywhere.
+ *   workspace rail : 'dm' | 'regular' — by KIND only. A starred workspace/DM
+ *     STAYS in its kind group (star is a PIN there — the renderer orders starred
+ *     first within the group), so it remains a live, reorderable member.
+ *   channel sidebar: 'channels' — a single group holding the workspace's
+ *     conversations. A starred conversation has MOVED to the global
+ *     Favorites/STARRED list and is reordered there, so it is excluded from this
+ *     group's reorder (it stays a valid star/touch target and keeps `starred_at`
+ *     on the wire). One list-wide mode.
  *   favorites list : 'favorites' — a single FLAT group (#task:1252 C). The global
  *     Favorites list is sortable on its own axis (recent/manual + drag) but is not
  *     sub-partitioned: every member sits in the one `favorites` group.
@@ -32,10 +34,9 @@ export type SortMode = z.infer<typeof SortModeSchema>;
  * (`starred_at`), never as a shared aggregate field.
  */
 export const SortGroupSchema = z.enum([
-  'starred', // channel sidebar's top section (#task:1252) — local channel star
   'dm',
   'regular',
-  'unstarred',
+  'channels', // one workspace's conversations (#task:1888) — star moved them out
   'favorites',
 ]);
 export type SortGroup = z.infer<typeof SortGroupSchema>;
@@ -43,12 +44,14 @@ export type SortGroup = z.infer<typeof SortGroupSchema>;
 /**
  * `list_key` namespaces a list:
  *   'workspaces'        — the workspace rail (one per viewer)
- *   'channels:<ws_id>'  — one workspace's channel sidebar
+ *   'channels:<ws_id>'  — one workspace's conversation list
  *   'favorites'         — the global Favorites list's ordering state (#task:1252 C):
  *                         rank + the list-wide mode only, keyed by `<kind>:<entity_id>`
  *                         favorite keys. Membership stays single-source in each
  *                         entity's HOME list (`starred_at`); `favorites` never
  *                         stores what is starred, only how the list is arranged.
+ *                         Since #task:1888 its members are CONVERSATIONS, so the
+ *                         home list of every favorite is a `channels:<ws_id>` one.
  */
 export const SortListKeySchema = z
   .string()
@@ -62,16 +65,17 @@ export const SortListKeySchema = z
 
 /** Per-entity viewer state. rank/last_accessed_at/starred_at are null until set.
  *  `starred_at` is the personal ⭐ favorite (#task:1209): non-null = starred. Its
- *  effect on the home list depends on the list (#task:1252): on the workspace
- *  rail it is the home-EXCLUSION signal — a starred workspace/DM has MOVED to the
- *  global Favorites list, so the rail hides it by reading this off its OWN inline
- *  `viewer_sort`; on the channel sidebar it is the SECTION-PARTITION signal — a
- *  starred channel stays in the sidebar but moves to its top `starred` section.
- *  Either way it is a PRESENCE marker (+ timestamp for the favorites projection /
- *  debug), NOT a sort key — within-group order is governed solely by that group's
- *  mode (recent → last_accessed_at / manual → rank). It REPLACES the former
- *  shared `pinned_at` aggregate field — star is per-viewer view state, so it lives
- *  here in the sort entry, never on the entity DTO. */
+ *  effect on the home list depends on the list (#task:1888): on a `channels:*`
+ *  list it is the home-EXCLUSION signal — a starred CONVERSATION has MOVED to the
+ *  global Favorites list, so its parent hides it by reading this off its OWN
+ *  inline `viewer_sort` (never by joining `GET /api/favorites`); on the workspace
+ *  rail it is a PIN signal — a starred workspace/DM stays in its kind group and is
+ *  merely ordered first there. Either way it is a PRESENCE marker (+ timestamp for
+ *  the favorites projection / debug), NOT a within-group sort key — within-group
+ *  order is governed by that group's mode (recent → last_accessed_at / manual →
+ *  rank). It REPLACES the former shared `pinned_at` aggregate field — star is
+ *  per-viewer view state, so it lives here in the sort entry, never on the entity
+ *  DTO. */
 export const ViewerSortEntryDtoSchema = z.object({
   entity_id: z.string(),
   rank: z.number().nullable(),
@@ -88,8 +92,7 @@ export type ViewerSortEntryDto = z.infer<typeof ViewerSortEntryDtoSchema>;
  * `modes` is the per-SCOPE mode map (#task:1146). A scope is one independently
  * toggleable [recent|manual] axis within the list:
  *   - workspace rail : scope = the hard group ('dm' | 'regular') — each rail
- *     section has its own mode (star is exclusive — starred items move to the
- *     global Favorites list, so star is not a rail group).
+ *     section has its own mode (star is a pin inside those groups, not a group).
  *   - channel sidebar: scope = '' (the sentinel "list-wide" scope) — one mode
  *     for the whole list, exactly as before.
  * Sparse: an absent scope means the default, 'recent'. Read with the renderer

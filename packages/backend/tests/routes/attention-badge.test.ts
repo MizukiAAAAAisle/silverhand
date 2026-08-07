@@ -491,10 +491,11 @@ describe('tiered attention badge (#task:1870 B)', () => {
     await sendAsAgent(t, channelId, aliceId, 'plain one');
     await sendAsAgent(t, channelId, aliceId, 'plain two');
     await sendAsAgent(t, channelId, aliceId, `hey @${VIEWER_HANDLE}`);
-    expect((await http(t).post(`/api/workspaces/${workspaceId}/star`)).status).toBe(200);
+    // Favorites holds CONVERSATIONS (#task:1888) — star the channel itself.
+    expect((await http(t).post(`/api/channels/${channelId}/star`)).status).toBe(200);
 
     const items = (await (await http(t).get('/api/favorites')).json()) as any;
-    const row = items.items.find((i: any) => i.entity_id === workspaceId);
+    const row = items.items.find((i: any) => i.entity_id === channelId);
     // The tiered number is served by the badge face alone; favorites is not a
     // subscriber of `attention_badge_updated`, so a copy here would be a second
     // carrier nothing refreshes.

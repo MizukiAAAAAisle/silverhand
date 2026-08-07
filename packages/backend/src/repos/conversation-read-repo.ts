@@ -330,6 +330,36 @@ export class ConversationReadRepo {
     };
   }
 
+  /** Per-conversation unread across ALL of the viewer's conversations
+   *  (#task:1888) — the all-workspace twin of
+   *  {@link unreadCountsByConversationForWorkspace}, for read faces that are
+   *  themselves global. The global Favorites/STARRED list is one: its rows are
+   *  conversations from any workspace, including workspaces the client is not
+   *  currently fetching anything else for (a collapsed sidebar parent), so a
+   *  per-workspace scan would mean one request per parent that happens to own a
+   *  starred row. Same `ROLLUP_UNREAD` predicate and same per-row body as the
+   *  scoped form, so a STARRED row's badge is provably the number its in-tree row
+   *  would show. Counts only, no pointers: the pointer map is a jump-target
+   *  concern of the per-workspace face, and nothing global needs it. */
+  unreadCountsByConversation(viewerUserId: string): Record<string, number> {
+    const rows = prepareObserved<{ viewer: string }, { conversation_id: string; c: number }>(
+        this.db,
+        'reads.unread_counts_by_conversation',
+        `SELECT c.id AS conversation_id, COUNT(m.id) AS c
+           FROM conversations c
+           JOIN conversation_users cu
+             ON cu.conversation_id = c.id AND cu.user_id = @viewer
+           JOIN messages m
+             ON m.conversation_id = c.id AND ${ROLLUP_UNREAD}
+          GROUP BY c.id`,
+      )
+      .all({ viewer: viewerUserId });
+
+    const byConversation: Record<string, number> = {};
+    for (const row of rows) byConversation[row.conversation_id] = row.c;
+    return byConversation;
+  }
+
   /** Channel-level unread = §3.5 roll-up: mainline unread + Σ(followed-thread
    *  unread). Non-followed threads' unread is deliberately excluded (de-noising)
    *  — it surfaces only as a weak dot in the Threads list, never in this count. */
