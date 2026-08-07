@@ -128,6 +128,15 @@ pnpm perf:client profile \
   --yes
 ```
 
+For source-level CPU attribution, add `--cpu-profile --unminified`. The harness
+writes one `.cpuprofile`-compatible JSON file per phase. This remains a
+production renderer without HMR, but disabling minification and sampling the
+stack changes absolute timing; use it to rank functions/components, not as a
+latency baseline. Add `--js-coverage` for V8 precise coverage with exact
+per-function call counts; pair it with `--unminified` for component-level
+attribution. Reports using `--retained-heap`, `--cpu-profile`, `--js-coverage`,
+or `--unminified` are marked `baseline_eligible: false`.
+
 ## Metrics and reading order
 
 Each phase records:

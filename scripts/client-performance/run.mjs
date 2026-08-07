@@ -62,6 +62,9 @@ async function printTargets(options) {
 
 async function runAttached(options) {
   const mode = requiredMode(options);
+  if (options.unminified === true) {
+    fail('--unminified is only available for an owned release-profile build');
+  }
   if (mode === 'release-profile' || mode === 'release') {
     console.warn(
       'Attached mode cannot prove which SILVERHAND_DIR the target owns; fixture seeding is disabled. ' +
@@ -115,6 +118,9 @@ async function runOwnedProfile(options) {
   if (mode === 'dev') {
     fail('`profile` owns an isolated production process; use `run --mode dev` for HMR diagnosis');
   }
+  if (options.unminified === true && mode !== 'release-profile') {
+    fail('--unminified is only available for release-profile');
+  }
   const scale = fixtureScale(options.scale);
   const profileDir = await prepareProfileDir(required(options, 'profile-dir'), scale);
   const port = parsePort(options.port ?? '9233');
@@ -126,7 +132,13 @@ async function runOwnedProfile(options) {
     await prepareHostBundle();
     await prepareElectronBinding();
   }
-  const child = launchProfileProcess({ mode, profileDir, port, executable: options.executable });
+  const child = launchProfileProcess({
+    mode,
+    profileDir,
+    port,
+    executable: options.executable,
+    unminified: options.unminified === true,
+  });
   const shutdown = () => {
     if (!child.killed) child.kill('SIGTERM');
   };
@@ -211,7 +223,10 @@ async function runScenario(context) {
   await client.send('Runtime.enable');
   await client.send('Performance.enable');
   const retainedHeap = options['retained-heap'] === true;
+  const cpuProfileEnabled = options['cpu-profile'] === true;
+  const jsCoverageEnabled = options['js-coverage'] === true;
   if (retainedHeap) await client.send('HeapProfiler.enable');
+  if (cpuProfileEnabled || jsCoverageEnabled) await client.send('Profiler.enable');
   await evaluate(client, installProbeSource());
   const browser = await client.send('Browser.getVersion');
   const renderer = await evaluate(client, rendererMetadataSource());
@@ -236,14 +251,51 @@ async function runScenario(context) {
       const prepared = interpolateAction(phase.action, fixture);
       if (retainedHeap) await client.send('HeapProfiler.collectGarbage');
       const heapBeforeBytes = await readHeapUsage(client);
-      const raw = await evaluate(
-        client,
-        phaseSource(phase.id, prepared, phase.settle_ms, phase.observe_ms),
-      );
+      if (cpuProfileEnabled) await client.send('Profiler.start');
+      if (jsCoverageEnabled) {
+        await client.send('Profiler.startPreciseCoverage', {
+          callCount: true,
+          detailed: true,
+          allowTriggeredUpdates: false,
+        });
+      }
+      let raw;
+      let cpuProfile = null;
+      let jsCoverage = null;
+      try {
+        raw = await evaluate(
+          client,
+          phaseSource(phase.id, prepared, phase.settle_ms, phase.observe_ms),
+        );
+      } finally {
+        if (jsCoverageEnabled) {
+          const coverage = await client.send('Profiler.takePreciseCoverage');
+          jsCoverage = coverage.result;
+          await client.send('Profiler.stopPreciseCoverage');
+        }
+        if (cpuProfileEnabled) {
+          const stopped = await client.send('Profiler.stop');
+          cpuProfile = stopped.profile;
+        }
+      }
       if (retainedHeap) await client.send('HeapProfiler.collectGarbage');
       const heapAfterBytes = await readHeapUsage(client);
       const summary = summarizePhase({ ...raw, heapBeforeBytes, heapAfterBytes });
       phases.push({ id: phase.id, label: phase.label, action: prepared, metrics: summary });
+      if (cpuProfile) {
+        await writeFile(
+          join(outputDir, `cpu-profile-${phase.id}.cpuprofile`),
+          `${JSON.stringify(cpuProfile)}\n`,
+          'utf8',
+        );
+      }
+      if (jsCoverage) {
+        await writeFile(
+          join(outputDir, `js-coverage-${phase.id}.json`),
+          `${JSON.stringify(jsCoverage)}\n`,
+          'utf8',
+        );
+      }
       console.log(formatPhaseSummary(summary));
     }
   } finally {
@@ -256,8 +308,19 @@ async function runScenario(context) {
     schema_version: REPORT_SCHEMA_VERSION,
     created_at: new Date().toISOString(),
     mode,
-    baseline_eligible: mode !== 'dev' && context.profileDir !== undefined,
+    baseline_eligible:
+      mode !== 'dev' &&
+      context.profileDir !== undefined &&
+      !retainedHeap &&
+      !cpuProfileEnabled &&
+      !jsCoverageEnabled &&
+      options.unminified !== true,
     heap_measurement: retainedHeap ? 'post_gc' : 'ambient',
+    instrumentation: {
+      cpu_profile: cpuProfileEnabled,
+      js_coverage: jsCoverageEnabled,
+      unminified_build: options.unminified === true,
+    },
     scenario: { id: scenario.id, title: scenario.title, source: context.scenarioPath },
     fixture: Object.keys(fixture).length === 0 ? null : fixture,
     profile_dir: context.profileDir ?? null,
@@ -281,7 +344,7 @@ async function runScenario(context) {
   if (traceEnabled) console.log(`Trace:  ${join(outputDir, 'trace.json')}`);
 }
 
-function launchProfileProcess({ mode, profileDir, port, executable }) {
+function launchProfileProcess({ mode, profileDir, port, executable, unminified }) {
   const env = {
     ...process.env,
     SILVERHAND_DIR: profileDir,
@@ -290,6 +353,7 @@ function launchProfileProcess({ mode, profileDir, port, executable }) {
   // Electron's own CLI uses this variable internally, but inheriting it into
   // the profiled app makes the Electron binary behave like plain Node.
   delete env.ELECTRON_RUN_AS_NODE;
+  if (unminified) env.SILVERHAND_MINIFY = 'false';
   let program;
   let childArgs;
   if (mode === 'release-profile') {
@@ -856,7 +920,9 @@ function parseArgs(values) {
       result[name.slice(3)] = false;
       continue;
     }
-    if (['yes', 'trace', 'retained-heap'].includes(name)) {
+    if (
+      ['yes', 'trace', 'retained-heap', 'cpu-profile', 'js-coverage', 'unminified'].includes(name)
+    ) {
       result[name] = true;
       continue;
     }
@@ -902,6 +968,9 @@ Flags:
   --output DIR      Report directory (default /tmp/silverhand-client-performance/...).
   --yes             Run phases without the readiness prompt.
   --retained-heap   Force V8 GC outside each measured phase before heap samples.
+  --cpu-profile     Save one V8 CPU profile per measured phase.
+  --js-coverage     Save exact JavaScript function call counts per measured phase.
+  --unminified      Build the owned release-profile without minification.
   --no-trace        Skip the Chrome trace stream.
 `);
 }
