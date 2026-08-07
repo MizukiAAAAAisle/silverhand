@@ -200,13 +200,21 @@ export class SortRepo {
   }
 
   /**
-   * The entity ids THIS viewer has starred in a list (#task:1209). How the caller
-   * USES this set depends on the list kind (route decides):
-   *   - workspace rail: the home EXCLUSION set — a starred workspace/DM has moved
-   *     to the global Favorites/STARRED list, so the rail hides it and reorder
-   *     validation rejects it as a home-group member.
-   *   - channel sidebar: the PARTITION set — a starred channel stays in the sidebar
-   *     but sits in its top `starred` hard group (`starred | unstarred`).
+   * The entity ids THIS viewer has starred in a list (#task:1209). Since
+   * #task:1888 exactly ONE list kind asks for this set, and it asks for the home
+   * EXCLUSION set:
+   *   - conversation list (`channels:<ws_id>`): a starred conversation has MOVED
+   *     to the global Favorites/STARRED list, so it is reordered there and this
+   *     list's reorder validation rejects it as a `channels` member. (The route
+   *     intersects with the list's live membership first, so a stale star row for
+   *     a gone/archived conversation never enters the exclusion set.)
+   *   - workspace rail (`workspaces`): does NOT call this. A starred
+   *     workspace/DM stays a live, reorderable member of its KIND group
+   *     (`dm` / `regular`) and is merely pinned to the top of it, so the rail's
+   *     exclusion set is empty by construction.
+   *   - `favorites`: does NOT call this either — that list IS the starred set.
+   * No list PARTITIONS by star any more: the old `starred | unstarred` hard
+   * groups are gone (see docs/list-sort-v1.md, #task:1888 revision).
    * (The renderer reads the same `starred_at` straight off the inline `viewer_sort`
    * entries — same fact, so display and validation cannot drift.)
    */
