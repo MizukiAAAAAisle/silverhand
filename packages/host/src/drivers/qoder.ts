@@ -12,15 +12,21 @@ import {
 import { versionAtLeast } from './version-gate.js';
 
 /**
- * First `qodercli` release whose stdin `user` frame honours
- * `priority:"next"` — a non-destructive mid-turn steer that the runtime
- * drains at the next tool boundary of the SAME turn, and echoes through
- * `command_lifecycle` frames keyed by our payload uuid. Verified
- * empirically on 1.1.17 (#task:1907); shiki set 1.1.17 as the floor.
+ * Verified enable floor for `qodercli`'s `priority:"next"` steer — NOT a
+ * claim about the first release that shipped it.
  *
- * Below this floor `priority` is unknown to the CLI, so we neither send
- * the field nor claim the steer profile: those builds only accept input
- * between turns (`next-turn-batch`).
+ * What is actually proven: on 1.1.17, `priority:"next"` is a
+ * non-destructive mid-turn steer that the runtime drains at the next tool
+ * boundary of the SAME turn, and echoes through `command_lifecycle` frames
+ * keyed by our payload uuid (#task:1907). Separately, 1.0.48 accepts the
+ * field but its headless handler never forwards/honours it (#task:1556) —
+ * that is the ONE build with negative evidence. Everything strictly between
+ * those two, and every unparseable version, is simply untested; shiki chose
+ * 1.1.17 as the conservative floor.
+ *
+ * So below the floor we treat the capability as UNPROVEN and fail closed:
+ * neither the field nor the steer profile. If a lower release is ever
+ * measured to honour it, the floor may drop — with that evidence attached.
  */
 const STEER_MIN_VERSION = '1.1.17';
 
@@ -113,13 +119,15 @@ function queueStatusEvent(line: string): ParsedEvent | null {
  * kickoff + boundary-gated release — with **no supervisor-level runtime
  * branch**, and reuses the shared `stream-json` parser.
  *
- * Release profile is the one capability that moved with the CLI version
- * (#task:1909): `>= 1.1.17` honours `priority:"next"` and echoes
- * `command_lifecycle`, so those builds get Claude's
- * `tool-boundary-steer`; older builds stay on `next-turn-batch`. The
- * version comes from the detection the spawn path already performs and
- * is bound once per process generation via `bindRuntimeVersion` — the
- * driver never probes and never re-resolves.
+ * Release profile is the one capability that varies with the CLI version
+ * (#task:1909): at/above the verified enable floor `1.1.17`,
+ * `priority:"next"` is honoured and `command_lifecycle` comes back, so
+ * those builds get Claude's `tool-boundary-steer`; anything below the
+ * floor — or unparseable — is treated as unproven and stays on
+ * `next-turn-batch` (see {@link STEER_MIN_VERSION} for what is actually
+ * measured vs merely untested). The version comes from the detection the
+ * spawn path already performs and is bound once per process generation via
+ * `bindRuntimeVersion` — the driver never probes and never re-resolves.
  *
  * Deliberate divergences from the Claude driver:
  *  - No `--verbose` / `--allow-dangerously-skip-permissions`: Qoder's
@@ -216,9 +224,11 @@ export class QoderDriver implements Driver {
     opts?: { payloadUuid?: string },
   ): string {
     if (!this.steerCapable) {
-      // Pre-1.1.17: `priority` is not in the CLI's frame schema and the
-      // runtime emits no per-payload `command_lifecycle`, so stamping
-      // either field would be noise at best. Keep the frame minimal.
+      // Below the enable floor the capability is unproven (1.0.48 accepts
+      // `priority` but its headless handler never honours it, #task:1556;
+      // the rest is untested), and no per-payload `command_lifecycle` is
+      // known to come back. Stamping either field would be noise at best
+      // and a false capability claim at worst. Keep the frame minimal.
       return encodeStreamJsonUserMessage(content, cliSessionId);
     }
     // 1.1.17+: state the tool-boundary-steer intent explicitly, and carry

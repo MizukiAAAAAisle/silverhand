@@ -150,12 +150,17 @@ describe('QoderDriver.encode', () => {
 // ===========================================================================
 // CONTRACT (Do Not Weaken) — version-gated release profile, #task:1909
 //
-// WHY THIS EXISTS: `priority:"next"` (non-destructive mid-turn steer) only
-// exists in qodercli >= 1.1.17; shiki set that floor. Below it, the field is
-// not in the CLI's frame schema and no `command_lifecycle` echo comes back,
-// so claiming `tool-boundary-steer` would make the daemon release input the
-// runtime cannot admit mid-turn — silently losing the admission proof that
-// the freshness CAS depends on.
+// WHY THIS EXISTS: `priority:"next"` (non-destructive mid-turn steer) is
+// VERIFIED on qodercli 1.1.17 (#task:1907), and shiki chose that version as
+// the conservative enable floor — it is NOT known to be the first release
+// that shipped the feature. The one build with negative evidence is 1.0.48
+// (#task:1556): it accepts the field, but its headless handler never
+// forwards/honours it, and no `command_lifecycle` echo comes back. Anything
+// between the two is untested, hence unproven. Claiming
+// `tool-boundary-steer` on an unproven build would make the daemon release
+// input the runtime cannot admit mid-turn — silently losing the admission
+// proof that the freshness CAS depends on. So the gate's job is to admit
+// only what is at/above the floor.
 //
 // INVARIANTS:
 //  1. The gate FAILS CLOSED for every input that is not provably >= the

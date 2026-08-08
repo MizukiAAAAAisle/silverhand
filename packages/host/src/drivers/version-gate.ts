@@ -20,6 +20,18 @@
  * No dependency is added for this; if real pre-release ordering ever
  * becomes load-bearing, that is the moment to reach for a comparator
  * library, not before.
+ *
+ * Where the real boundary is (so nobody hardens the wrong function):
+ * `probeVersion` extracts with `/\d+\.\d+(?:\.\d+)?/`, which has no
+ * suffix group. A pre-release marker is therefore destroyed BEFORE it
+ * reaches this comparator — `1.1.17-beta.2` arrives as `1.1.17`, so the
+ * suffix rule above is unreachable from the spawn path and no strictness
+ * here can recover the distinction. By the same token, that unanchored
+ * regex will lift a dotted number out of arbitrary text (usage output
+ * included), and this gate cannot tell that apart from a real version.
+ * Both properties belong to `probeVersion` and are shared by every
+ * consumer of `RuntimeInfo.version`; changing them is a separate,
+ * cross-runtime decision, not a local fix in a driver's capability gate.
  */
 
 /** Parsed numeric prefix, or null when the string has none. */

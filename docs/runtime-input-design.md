@@ -134,7 +134,7 @@ daemon 本地:  queued ──边界到达──▶ (claim) ──write──▶ 
 | `native-steer` | 新输入由 runtime 协议并入当前 turn | Codex（原生 turn/steer，立即交付） | **generation-boundary echo（countgame round-2 定版）**：`turn/steer`/`turn/start` 的 JSON-RPC 响应只是 transport ack（只承诺"并入 active turn"，不承诺在途/已排队生成会重新条件化——实测 ACK 落后已生成 send 300–600ms 仍放行了旧稿），**不产生任何证据事件**；payload uuid 经原生 `clientUserMessageId` 字段（0.144.4 schema 确认）随 steer 下发，codex 在 drain pending_input 入模型 history、构造下一次 sampling request 之前以 `item/started {type:'userMessage', clientId}` 回显——该回显才是 lifecycle/推进证据。echo 丢失时退化为 pendingAdmission 在 turn 边界结算（fail-closed） | 已定版 |
 | `tool-boundary-steer` | 新输入在当前 turn 的下一个 tool boundary 并入 | Claude（B' 实测：默认即 steer、`priority` 无行为差异；**产品决定仍显式发送 `priority:"next"`**——声明意图并防未来默认行为变化，未文档化字段的维护成本随版本实测跟进；首帧带 priority 已探证正常；无 tool turn 自然退化为独立下一 turn）；**Qoder `>= 1.1.17`**（#task:1907 实测：`priority:"next"` 在同一 turn 的 tool boundary 非破坏性 drain，`now` 才是破坏性中断、`later` 不 mid-turn drain；并回显以 payload uuid 关联的 `command_lifecycle queued/started/completed`） | write=released；`started(uuid)` 到达即按 payload 覆盖晋升 observed | **已启用**（B'，证据 notes/claude-ab-results）；`!compacting` 为迁移期保守 hold（未覆盖场景），非实证 guard，禁止重新共享化 |
 | `prompt-boundary` | 协议显式暴露"可开启下一 prompt"的边界 | OpenCode（ACP `session/prompt` 生命周期） | **整批边界（构造性，#task:1565 定版，opencode 1.18.1 实测）**：client 侧单 in-flight prompt 是**正确性不变量**——实测 runtime 会静默排队第二条 prompt，且把两个 RPC 响应都攥到整段排队运行结束才一起返回（usage 合并），排队状态下"prompt 响应"不再是逐 turn 边界。mid-prompt 投递一律 defer 进 daemon 队列，prompt 响应（parsed `turn_end`）重开边界后合成一条 `session/prompt` 写入，写入即边界 admission（同 qoder 档构造性证据）。`session/cancel` 实测以 `stopReason:'cancelled'` 正常结算响应、会话可继续（无 wedge）。post-init 边界关闭走 defer 不 refuse——refuse 只留给 pre-init（`ready_for_drain` 每 run 一次，post-init refuse 会饿死行） | 已定版 |
-| `next-turn-batch` | 无 steer、无 prompt admission 协议：等 turn 结束，积压合成一个 payload 作下一 turn 输入 | Qoder `< 1.1.17`、以及版本未知/不可解析（`priority:"next"` 在这些版本实测无效——headless handler 不读该字段，#task:1556；也无 `command_lifecycle` 回显，勿走 Claude 路径） | **构造性**（§3.4：write reservation + parsed `turn_end`） | FIFO 逐 turn 消费已由二进制 + 双黑盒实验证实（#task:1556） |
+| `next-turn-batch` | 无 steer、无 prompt admission 协议：等 turn 结束，积压合成一个 payload 作下一 turn 输入 | Qoder `< 1.1.17`（**启用阈值以下 = 能力未证实**，非"已证实不支持"：唯一有 negative 实测的是 1.0.48 —— 它的 frame schema **接受** `priority`，但 headless handler 不转发/不兑现、也无 `command_lifecycle` 回显，#task:1556；1.0.48 与 1.1.17 之间未实测，按 fail-closed 归本档）、以及版本未知/不可解析 | **构造性**（§3.4：write reservation + parsed `turn_end`） | FIFO 逐 turn 消费已由二进制 + 双黑盒实验证实（#task:1556） |
 | `one-shot` | 不支持 live input | Cursor | 不适用 | 不在此模型内 |
 
 **ACP v2 前瞻约束（#task:1591，2026-07-22）**：v2 Draft 将
@@ -158,14 +158,17 @@ Codex 的 `turn/steer` 都在 tool/turn 进行中写入，实验已证）。它�
 runtime 只记录 released/admitted-at-driver-boundary，不虚构"模型已看到"。**
 
 **Profile 可以随 CLI 版本变化（#task:1909，2026-08-08）**：同一 runtime 的不同
-CLI 版本可能是不同 profile（Qoder 的 `priority` 支持就是从 1.1.17 起有的）。此时
+CLI 版本可能是不同 profile（Qoder 的 `priority` 已在 1.1.17 实测可用，1.1.17 是
+**选定的启用阈值**，不是已定位的首个支持版本）。此时
 profile 仍由 driver 声明，只是**由已探测的版本解析一次**：版本来自 spawn 路径
 本来就 await 的 runtime detection（`RuntimeInfo.version`，此前被丢弃），driver 不
 自行探测、不新增子进程、不解析 CLI 输出。解析结果**钉在 driver 实例上 = 钉在进程
 代际上**（driver 每次 spawn 新建），因此会话中途升级 CLI 不会改变已在跑的子进程
 如何被驱动；任何边界判定都不得重新读取实时 detection。方向仍是 fail-closed：版本
-缺失 / 不可解析 / 低于实测下限，一律退回该 runtime 最老受支持版本的 profile，并且
+缺失 / 不可解析 / 低于启用阈值，一律退回该 runtime 最保守的 profile，并且
 **不发送新版本才有的 wire 字段**（profile 与线上帧必须同源，不能一个升档一个不升）。
+阈值的证据纪律：**阈值上要有 positive 实测**才能启用；阈值以下只需"未证实"即可
+fail-closed，不必逐版本证伪。阈值下调必须附新的 positive 实测。
 
 **Action-snapshot 不变量（countgame round-2 定版，2026-07-21）**：
 `observedSeqByStream` 不是"runtime 已接收输入的最新水位"，而是**当前模型生成
@@ -249,10 +252,11 @@ flush，#1556 核实）。
 
 ### 3.4 Qoder `< 1.1.17`：write reservation + parsed `turn_end`（构造性 admission 定版）
 
-**适用范围（#task:1909）**：本节是 Qoder 无 `priority` 支持时的档位。
+**适用范围（#task:1909）**：本节是 Qoder 在 `priority` 能力**未证实**时的档位
+（不等于"已证实不支持"，见 §3.2 表格对 1.0.48 negative 证据的界定）。
 `qodercli >= 1.1.17` 走 `tool-boundary-steer`（§3.2 表格 + `priority:"next"` +
 `command_lifecycle` uuid 回显），不再用本节的 reservation 构造；两档由 spawn 时
-探测到的版本选择，低版本与版本未知仍落在这里。
+探测到的版本选择，低于阈值与版本未知仍落在这里。
 
 实证基础（#task:1556，二进制控制流 + 两次独立黑盒实验，详见 Cindy 的
 `notes/qoder-stdin-admission.md` 与 `qoder-stdin-probe.mjs`）：Qoder 后台 reader
@@ -320,9 +324,9 @@ Claude 保持 tool-boundary 写入（steer 有真实收益，不降级为 turn-b
 > response-loss 恢复臂全部否决）。根因判断：双曝光/大窗口是"消息等 boundary
 > 才能进模型"的放大症状；机制应收敛到单一正文释放面，而不是给慢通道建第二
 > 条精确补看通路。Qoder 的实时性等上游 steer 支持（#task:1568 已证实 headless
-> 无非破坏介入点）。**该括注已被 #task:1907/#task:1909 取代**：qodercli 1.1.17
-> 起 `priority:"next"` 就是那个非破坏介入点，Qoder `>= 1.1.17` 已升到
-> `tool-boundary-steer`。v8 的单一正文释放面合同本身不变。
+> 无非破坏介入点）。**该括注已被 #task:1907/#task:1909 取代**：`priority:"next"`
+> 就是那个非破坏介入点（已在 qodercli 1.1.17 实测），Qoder 在启用阈值
+> `>= 1.1.17` 上已升到 `tool-boundary-steer`。v8 的单一正文释放面合同本身不变。
 
 ### 5.1 核心合同：单一正文释放面
 
