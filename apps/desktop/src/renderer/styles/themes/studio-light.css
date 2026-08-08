@@ -414,14 +414,43 @@
    `--bg-row-selected` 已经是纯白（比侧栏亮一档），这里补两件事：一条 Studio Blue
    左条（committed 的记号）+ 一层极薄阴影（"浮起"）。四边描边转透明 ——
    1px 宽度只作水槽，选中时内容不位移。
-   两个选择器覆盖两种行来源：aside 里的行（PINNED / DM / workspaces）要压过
+   左条画在 `::before` 而不是 `border-left`（#task:1904）：行有 6px 圆角，
+   `border-left` 会被两端的圆角带弯成月牙；伪元素是独立的矩形，怎么圆角都不弯。
+   连带修掉一处位移 —— 旧写法把 1px 水槽换成 3px 边，选中时内容右移 2px，
+   与上面 `--sidebar-row-border-width` 那条"三态都不位移"的约定冲突。
+   条的高度由**上下等距内缩**得到（`top`/`bottom` 各留 `--row-bar-inset`），不写
+   死高度、也不用百分比：这一族的行高不齐（32px 的 channel 行、两行 `stacked` 的
+   computer / DM 行更高），定高会让同一个记号在高行里读得太短（shiki 2026-08-08:
+   "Computer item 高一点，这点竖条就有点小了"）；百分比则相反 —— 内缩量随行高
+   放大，高行的条会显得离两端太远。等距内缩让"条到行边的留白"成为跨行不变量，
+   条本身随行长。内缩量取 7px 是为了让 32px 的 channel 行仍得到 ≈16px 的条
+   （绝对定位的包含块是 padding box，1px 透明边各吃一侧：32 − 2×0.91 − 2×7 ≈ 16），
+   矮行的观感与上一版一致；两行的 computer / DM 行（≈52px）由此得到 ≈36px。
+   `min-height` 只是兜底：万一有行矮到 16px 以下，条不会被压成一个点。
+   两个选择器覆盖两种行来源：aside 里的行（DM / workspaces / 分枝）要压过
    global.css 的 `aside[data-sidebar] …`(0,3,1) → (0,4,1)；WorkspaceChannels
    的 channel 行用 Tailwind `border-accent`(0,1,0) 并带 `data-row-selected`。 */
 [data-theme='studio-light'] aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
 [data-theme='studio-light'] [data-row-selected].sidebar-row-border.text-text-on-selected {
+  position: relative;
   border-color: transparent;
-  border-left: 3px solid var(--brand-bar);
   box-shadow: 0 1px 2px rgba(var(--shadow-base), 0.10);
+}
+[data-theme='studio-light']
+  aside[data-sidebar]
+  .sidebar-row-border.text-text-on-selected::before,
+[data-theme='studio-light']
+  [data-row-selected].sidebar-row-border.text-text-on-selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: var(--row-bar-inset, 7px);
+  bottom: var(--row-bar-inset, 7px);
+  width: 3px;
+  min-height: 10px;
+  border-radius: 999px;
+  background-color: var(--brand-bar);
+  pointer-events: none;
 }
 
 /* hover 只提半档冷灰，不画框：hover 与 selected 必须是同一个连续量

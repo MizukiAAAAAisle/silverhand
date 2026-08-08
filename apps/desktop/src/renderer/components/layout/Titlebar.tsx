@@ -1,7 +1,7 @@
 import {
   CheckSquare,
-  PanelLeft,
-  PanelLeftDashed,
+  PanelLeftClose,
+  PanelLeftOpen,
   Settings,
   Users,
 } from 'lucide-react';
@@ -115,9 +115,11 @@ export function Titlebar({
             *
             * ONE toggle since #task:1889 merged the two browse columns into a
             * single tree. State is communicated by *icon shape*, not background
-            * colour: solid panel = visible; dashed panel = hidden. The retired
-            * channel toggle's Columns/Square family went with its column — a
-            * second shape family for one pane would read as a missing control. */}
+            * colour: the chevron points at what the click will do — close the
+            * panel while it is visible, open it while it is hidden (#task:1904).
+            * The retired channel toggle's Columns/Square family went with its
+            * column — a second shape family for one pane would read as a
+            * missing control. */}
           {showSidebarToggle ? (
             <button
               type="button"
@@ -130,9 +132,9 @@ export function Titlebar({
               className={toggleButton}
             >
               {workspaceSidebarVisible ? (
-                <PanelLeft className="size-3.5" />
+                <PanelLeftClose className="size-3.5" />
               ) : (
-                <PanelLeftDashed className="size-3.5" />
+                <PanelLeftOpen className="size-3.5" />
               )}
             </button>
           ) : null}
