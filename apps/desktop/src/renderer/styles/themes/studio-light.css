@@ -382,7 +382,6 @@
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --duration: 200ms;
 
   /* ── Compat: tokens introduced by forza6 (design-new-theme §3 关键 3 —
      every theme MUST define these explicitly so a forza6 → studio-light

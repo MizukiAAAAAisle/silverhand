@@ -181,77 +181,52 @@ describe('theme markdown token cascade contract', () => {
 
   // The ONE cascade-safety token test: every promoted token MUST be declared
   // explicitly in every theme, so a switch away from the default can't leak its
-  // festival-only value via the :root fallback. This is the contract that
-  // catches the real recurring bug (a new theme forgets a token). We assert the
-  // token is DECLARED per theme — never its value (14px / a hue / a radius),
-  // which is a visual concern verified by dogfood.
+  // festival-only value via the :root fallback. This catches the real recurring
+  // bug (a new theme forgets a token). We assert the token is DECLARED per theme
+  // — never its value (14px / a hue / a radius), a visual concern for dogfood.
+  //
+  // The required set is DERIVED from the default theme, not hand-listed. forza6
+  // owns `:root`, so every token it declares there becomes the global default;
+  // any token another theme omits resolves back to forza6's festival value — the
+  // exact leak. So the contract is simply "whatever forza6 declares, every other
+  // theme must declare too." Adding a token to forza6 auto-extends the contract;
+  // deleting a dead one auto-retracts it — the fence maintains itself, no manual
+  // token list to drift out of sync.
   it('every theme explicitly declares the full promoted-token set (no :root leak)', () => {
-    const REQUIRED_TOKENS = [
-      // markdown + chrome sizes (declaration only — the px value is visual)
-      '--md-prose-size',
-      '--md-code-size',
-      '--system-message-size',
-      // forza6-introduced identity tokens
-      '--font-display',
-      '--accent-2',
-      '--text-on-accent-2',
-      '--bg-structure-dark',
-      '--text-on-structure',
-      '--text-on-dark-pop',
-      // radius family
-      '--profile-section-radius',
-      '--row-radius',
-      '--tab-segment-radius',
-      '--control-radius',
-      '--chip-radius',
-      '--select-content-radius',
-      '--select-item-radius',
-      // border / hover state
-      '--border-control-hover',
-      '--border-row-hover',
-      '--border-row-selected',
-      // inline-code chip
-      '--bg-inline-code',
-      '--border-inline-code',
-      '--radius-inline-code',
-      // chrome-label utility
-      '--font-chrome-label',
-      '--chrome-label-tracking',
-      '--chrome-label-transform',
-      // primary control surface (CTA)
-      '--bg-control-primary',
-      '--bg-control-primary-hover',
-      '--text-on-control-primary',
-      // floating frame
-      '--floating-border',
-      '--floating-radius',
-      '--floating-item-radius',
-      // task-status badge family (5 statuses × {bg, text, border, solid})
-      '--task-status-todo-bg',
-      '--task-status-todo-text',
-      '--task-status-todo-border',
-      '--task-status-todo-solid',
-      '--task-status-in-progress-bg',
-      '--task-status-in-progress-text',
-      '--task-status-in-progress-border',
-      '--task-status-in-progress-solid',
-      '--task-status-in-review-bg',
-      '--task-status-in-review-text',
-      '--task-status-in-review-border',
-      '--task-status-in-review-solid',
-      '--task-status-done-bg',
-      '--task-status-done-text',
-      '--task-status-done-border',
-      '--task-status-done-solid',
-      '--task-status-closed-bg',
-      '--task-status-closed-text',
-      '--task-status-closed-border',
-      '--task-status-closed-solid',
-    ];
-    for (const css of [studioLightCss, forza6Css, slackDarkCss]) {
-      for (const token of REQUIRED_TOKENS) {
-        expect(css).toContain(`${token}:`);
-      }
+    const stripComments = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, '');
+    // A declaration is `--name:`; `var(--name)` usages end in `)`, not `:`, so
+    // this matches definitions only.
+    const declaredTokens = (css: string) =>
+      new Set(
+        [...stripComments(css).matchAll(/(--[a-z0-9-]+)\s*:/g)].map(
+          m => m[1]!,
+        ),
+      );
+
+    // Excluded from the per-theme contract:
+    //  --forza6-*  private palette (namespaced; each theme owns its own palette)
+    //  --color-*   Tailwind bridge (lives in global.css @theme inline, not here)
+    //  --app-corner-radius  intentionally forza6-only. NavRail reads it as
+    //              `var(--app-corner-radius, var(--card-radius, 0))`, so other
+    //              themes resolve to their own card radius by design — not a leak.
+    const FORZA6_ONLY = new Set(['--app-corner-radius']);
+    const isPromoted = (t: string) =>
+      !t.startsWith('--forza6-') &&
+      !t.startsWith('--color-') &&
+      !FORZA6_ONLY.has(t);
+
+    const required = [...declaredTokens(forza6Css)].filter(isPromoted);
+    // Sanity: if the regex ever breaks, the set collapses and the test would
+    // pass vacuously. The real set is ~130 tokens.
+    expect(required.length).toBeGreaterThan(100);
+
+    for (const [name, css] of [
+      ['studio-light', studioLightCss],
+      ['slack-dark', slackDarkCss],
+    ] as const) {
+      const declared = declaredTokens(css);
+      const missing = required.filter(t => !declared.has(t));
+      expect(missing, `${name} is missing promoted token(s)`).toEqual([]);
     }
   });
 });

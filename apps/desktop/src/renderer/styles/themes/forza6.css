@@ -490,7 +490,6 @@
   --forza6-syntax-string: #FFD7E5;
   --forza6-syntax-number: var(--forza6-cyan);
   --forza6-syntax-comment: rgba(255, 255, 255, 0.45);
-  --forza6-syntax-meta: rgba(255, 255, 255, 0.55);
   --forza6-syntax-addition: var(--forza6-lime);
   --forza6-syntax-deletion: #FF6F8C;
 
@@ -701,7 +700,6 @@
 
   /* ── Motion ── */
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --duration: 200ms;
 
   /* ============================================================
      NEW TOKENS introduced by forza6 (extending design-new-theme §3).
