@@ -79,7 +79,7 @@
   /* message-row 的 framed（hover / saved / replying / 搜索命中）洗色。白是
      明度阶梯的顶端，所以这一档只能**往下**走；取值卡在白与 inline-code
      `#ECF1F7` 之间，三层等距。见文件末尾 `[data-message-row].border-accent`。 */
-  --bg-message-framed: #F5F8FC;
+  --studio-light-bg-message-framed: #F5F8FC;
 
   /* ── Card-style frame ──
      每个 panel 圆角 + 一层极薄阴影浮在冷灰 frame 上；splitter 落在 gap
@@ -100,10 +100,10 @@
   /* ── Brand identity ──
      这个主题的品牌色就是 accent 本体（Studio Blue）：一个 hue 同时当品牌与操作，
      不像 warm 那样"品牌黄 + 工作金"分两支 —— 因为 Studio Blue 本来就够文字对比度，
-     不需要一个"可读版"的替身。`--brand-bar` 保留成独立 token 只为让"小面积
+     不需要一个"可读版"的替身。`--studio-light-brand-bar` 保留成独立 token 只为让"小面积
      图形"（rail active tile、选中行左条）有一个可以单独挪的旋钮。 */
   --brand-primary: #2F5AD0;
-  --brand-bar: #2F5AD0;
+  --studio-light-brand-bar: #2F5AD0;
   --text-on-brand: #FFFFFF;
   /* NavRail 是深板岩 chrome：静息字色是冷灰降一档，hover 提到近白。 */
   --text-nav-rail: #98A1B5;
@@ -467,7 +467,7 @@
   width: 3px;
   min-height: 10px;
   border-radius: 999px;
-  background-color: var(--brand-bar);
+  background-color: var(--studio-light-brand-bar);
   pointer-events: none;
 }
 
@@ -484,7 +484,7 @@
    accent 出场的地方。hover 只是近白薄洗。两态都不画描边 —— 填充/薄洗已经
    说完了状态。 */
 [data-theme='studio-light'] nav[aria-label='App sections'] button[aria-current='page'] {
-  background-color: var(--brand-bar);
+  background-color: var(--studio-light-brand-bar);
   color: var(--text-on-brand);
   border-color: transparent;
 }
@@ -542,7 +542,7 @@
 }
 [data-theme='studio-light'] [data-message-row].border-accent {
   border-color: rgba(var(--shadow-base), 0.16);
-  background-color: var(--bg-message-framed);
+  background-color: var(--studio-light-bg-message-framed);
 }
 
 /* composer focus：主舞台输入框的 focus 是这个主题唯一保留 accent 的 focus

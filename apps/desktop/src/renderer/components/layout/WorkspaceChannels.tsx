@@ -54,6 +54,7 @@ import {
   NESTED_GLYPH_INSET,
   UnreadBadge,
   copyConversationName,
+  sidebarRowStateClass,
 } from '@/components/layout/sidebar-shared';
 import { SortModeMenu } from '@/components/layout/SortModeMenu';
 import {
@@ -432,9 +433,7 @@ function ChannelRow({
   // an icon, and a directed badge still stands out against it.
   const isSilenced = effectiveMode === 'mute';
 
-  const rowBg = selected
-    ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
+  const rowBg = sidebarRowStateClass(selected);
 
   const row = (
     <div

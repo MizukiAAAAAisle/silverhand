@@ -137,6 +137,22 @@ export function useSidebarSectionExpanded(
 export const OUTER_GLYPH_INSET = 'pl-1';
 export const NESTED_GLYPH_INSET = 'pl-5';
 
+/**
+ * The shared selected/hover recipe for a sidebar row — channel/workspace/DM
+ * rows, favorites, and the Search/Saved/Archived rail all share it, so it lives
+ * in one place instead of drifting across five copies. Identity only: it paints
+ * border + fill + text state; the consumer still owns layout (row border, sizing,
+ * glyph inset). Selected = accent frame over the selected fill; unselected =
+ * neutral, gaining an accent frame + row-hover ink on hover. The `--bg-row-hover`
+ * fallback is `transparent` — every theme sets the token, so a theme that ever
+ * forgot it would degrade to no hover fill, never a loud literal colour.
+ */
+export function sidebarRowStateClass(selected: boolean | undefined): string {
+  return selected
+    ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
+    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,transparent)] hover:text-text-primary';
+}
+
 interface SectionProps {
   label: string;
   /** Optional leading icon (lucide or any ReactNode). Renders before the
@@ -555,9 +571,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           // padding than the compact single-line default.
           'sidebar-row-border flex w-full items-center gap-2 border px-2 text-left text-sm leading-[16px] transition-colors ' +
           (stacked ? 'py-2 ' : 'py-1.5 ') +
-          (selected
-            ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-            : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary') +
+          sidebarRowStateClass(selected) +
           (className ? ` ${className}` : '')
         }
       >

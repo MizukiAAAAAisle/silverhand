@@ -44,7 +44,7 @@ export function reactionChipClass(
   return (
     'flex h-[18px] items-center gap-1 rounded-[var(--chip-radius)] px-2 text-xs tabular-nums text-text-primary transition-colors ' +
     (agg.viewer_reacted
-      ? 'bg-[var(--accent-soft)]'
+      ? 'bg-accent-soft'
       : interactive
         ? 'bg-[var(--chip-bg)] hover:bg-[var(--chip-bg-hover)]'
         : 'bg-[var(--chip-bg)]')

@@ -21,7 +21,7 @@ import {
 } from './WorkspacesPanel';
 import { FavoritesGroup } from './FavoritesPanel';
 import { useStarMembership } from '@/features/favorites/hooks';
-import { OUTER_GLYPH_INSET } from './sidebar-shared';
+import { OUTER_GLYPH_INSET, sidebarRowStateClass } from './sidebar-shared';
 import {
   partitionRailWorkspaces,
   type SelectedConversation,
@@ -214,9 +214,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
                 OUTER_GLYPH_INSET,
-              props.searchActive
-                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-                : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
+              sidebarRowStateClass(props.searchActive),
             )}
           >
             <Search className="size-4" />
@@ -229,9 +227,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
                 OUTER_GLYPH_INSET,
-              props.savedActive
-                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-                : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
+              sidebarRowStateClass(props.savedActive),
             )}
           >
             <Bookmark
@@ -260,9 +256,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             className={cn(
               'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
                 OUTER_GLYPH_INSET,
-              props.archivedActive
-                ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-                : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary',
+              sidebarRowStateClass(props.archivedActive),
             )}
           >
             <Archive className="size-4" />

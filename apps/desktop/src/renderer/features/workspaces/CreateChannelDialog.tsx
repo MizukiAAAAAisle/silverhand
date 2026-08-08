@@ -325,7 +325,7 @@ function VisibilitySelect({
                   // selectable-option fill (`--bg-option-hover` — forza6 pale
                   // lime, warm/slack neutral). NOT `--bg-row-hover`, which is a
                   // magenta brand tint in forza6.
-                  : 'border-border-subtle bg-[var(--bg-base)] text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
+                  : 'border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
               )}
             >
               <Icon className="size-3.5" />

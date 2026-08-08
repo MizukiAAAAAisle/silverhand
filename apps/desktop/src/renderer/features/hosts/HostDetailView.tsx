@@ -854,7 +854,7 @@ function CascadeImpact({
 }): JSX.Element {
   return (
     <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--warning)]">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-warning">
         {computerCopy.deleteCascadeImpactTitle}
       </p>
       <ul className="mt-2 flex flex-col gap-1.5" aria-label="Agents to be removed">
@@ -1435,7 +1435,7 @@ function AdmissionFailureNotice({
       className="mt-5 flex items-start gap-2.5 rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5"
     >
       <AlertTriangle
-        className="mt-0.5 size-4 shrink-0 text-[var(--warning)]"
+        className="mt-0.5 size-4 shrink-0 text-warning"
         aria-hidden
       />
       <p className="min-w-0 flex-1 text-sm text-text-primary">
