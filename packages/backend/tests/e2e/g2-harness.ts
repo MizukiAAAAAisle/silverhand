@@ -411,11 +411,12 @@ export interface DaemonWithSupervisorOptions {
    *  a fixture script and whose `parseLine` interprets a sentinel
    *  stdout line as the parsed event the test wants to fan out. */
   driverFor: (kind: RuntimeKind) => Driver;
-  /** Pin the resolved binary path. Defaults to returning the
-   *  driver's declared `.binary` verbatim — i.e. tests that point
-   *  the driver at an absolute fixture path get that path used
-   *  unchanged. */
-  resolveBinary?: SupervisorOptions['resolveBinary'];
+  /** Pin the resolved binary path (and the version the daemon would
+   *  have probed). Defaults to returning the driver's declared
+   *  `.binary` verbatim with no version — i.e. tests that point the
+   *  driver at an absolute fixture path get that path used unchanged,
+   *  and version-gated driver capabilities fail closed. */
+  resolveRuntime?: SupervisorOptions['resolveRuntime'];
   /** Override `child_process.spawn`. Defaults to invoking the
    *  resolved binary via the same node interpreter (`execPath`) so
    *  `.cjs` fixtures don't need `chmod +x`. */
@@ -513,8 +514,9 @@ export async function bootDaemonWithSupervisor(
         emit,
         logger,
         driverFor: opts.driverFor,
-        resolveBinary:
-          opts.resolveBinary ?? (async (_kind, fallback) => fallback),
+        resolveRuntime:
+          opts.resolveRuntime ??
+          (async (_kind, fallback) => ({ binary: fallback, version: null })),
         spawnFn: opts.spawnFn ?? defaultSpawnFn,
         daemonInstanceId,
         runtimePidRootDir: pidRoot,

@@ -147,6 +147,85 @@ describe('QoderDriver.encode', () => {
   });
 });
 
+// ===========================================================================
+// CONTRACT (Do Not Weaken) — version-gated release profile, #task:1909
+//
+// WHY THIS EXISTS: `priority:"next"` (non-destructive mid-turn steer) only
+// exists in qodercli >= 1.1.17; shiki set that floor. Below it, the field is
+// not in the CLI's frame schema and no `command_lifecycle` echo comes back,
+// so claiming `tool-boundary-steer` would make the daemon release input the
+// runtime cannot admit mid-turn — silently losing the admission proof that
+// the freshness CAS depends on.
+//
+// INVARIANTS:
+//  1. The gate FAILS CLOSED for every input that is not provably >= the
+//     floor: null (probe failed), unparseable text, and short forms like
+//     `1.1` where a naive string/float compare would say "newer".
+//  2. The two decisions move TOGETHER — release profile and wire frame come
+//     from one resolved capability. A version that yields
+//     `tool-boundary-steer` must also stamp `priority` + the payload uuid,
+//     and one that yields `next-turn-batch` must stamp neither.
+//  3. An unbound instance behaves like an old CLI. Anything reading
+//     `releaseProfile` off a driver nobody bound must get the conservative
+//     answer, never a steer claim.
+//
+// REVIEW GATE for changes here: is the floor still the version whose
+// `priority` support was empirically verified? Does every non-provable
+// version still fail closed? Do profile and frame still agree? If you raise
+// the floor, raise it with evidence, not with a guess.
+// ===========================================================================
+describe('QoderDriver version-gated release profile (#task:1909)', () => {
+  it('defaults to next-turn-batch before any version is bound', () => {
+    expect(new QoderDriver().releaseProfile).toBe('next-turn-batch');
+  });
+
+  it('claims tool-boundary-steer at and above the verified floor', () => {
+    for (const version of ['1.1.17', '1.1.18', '1.2.0', '2.0.0', 'v1.1.17']) {
+      const driver = new QoderDriver();
+      driver.bindRuntimeVersion(version);
+      expect(driver.releaseProfile, version).toBe('tool-boundary-steer');
+    }
+  });
+
+  it('fails closed below the floor and on anything unprovable', () => {
+    // `1.1` and `1.1.9` are the cases a string / float compare gets wrong:
+    // missing components count as 0, and components compare numerically.
+    for (const version of [
+      '1.1.16',
+      '1.1.9',
+      '1.1',
+      '1',
+      '0.9.99',
+      null,
+      '',
+      'qodercli (build 9.9.9)',
+      'unknown',
+    ]) {
+      const driver = new QoderDriver();
+      driver.bindRuntimeVersion(version);
+      expect(driver.releaseProfile, String(version)).toBe('next-turn-batch');
+    }
+  });
+
+  it('stamps priority + payload uuid only on the steer-capable frame', () => {
+    const steer = new QoderDriver();
+    steer.bindRuntimeVersion('1.1.17');
+    const steerFrame = JSON.parse(
+      steer.encodeStdinMessage('hello', 'sess-1', { payloadUuid: 'uuid-1' }),
+    );
+    expect(steerFrame.priority).toBe('next');
+    expect(steerFrame.uuid).toBe('uuid-1');
+
+    const legacy = new QoderDriver();
+    legacy.bindRuntimeVersion('1.1.16');
+    const legacyFrame = JSON.parse(
+      legacy.encodeStdinMessage('hello', 'sess-1', { payloadUuid: 'uuid-1' }),
+    );
+    expect(legacyFrame.priority).toBeUndefined();
+    expect(legacyFrame.uuid).toBeUndefined();
+  });
+});
+
 describe('QoderDriver.classifyInitProgress', () => {
   it('treats any complete stream-json frame as protocol-ready', () => {
     expect(

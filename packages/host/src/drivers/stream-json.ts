@@ -27,7 +27,8 @@ export type StreamJsonErrorClassifier = (
  *  message). Identical across Claude-shaped runtimes. `payloadUuid`
  *  (Claude, #task:1557) stamps the frame's `uuid` so the runtime's
  *  `command_lifecycle` frames can be correlated back to the payload;
- *  runtimes that don't echo it (qoder, #task:1556) simply omit it. */
+ *  callers omit it for a runtime (or a CLI version) that doesn't echo
+ *  those frames — qoder does only from 1.1.17 on (#task:1909). */
 export function encodeStreamJsonUserMessage(
   content: string,
   cliSessionId: string | null,

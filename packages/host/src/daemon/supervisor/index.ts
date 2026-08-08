@@ -184,6 +184,23 @@ interface InitRetryState {
   cooldownUntil: number;
 }
 
+/**
+ * What the spawn path needs from runtime detection: the binary to exec
+ * plus the version detection already probed for it (#task:1909).
+ *
+ * The version rides along because detection probes it anyway — spawn
+ * already awaits `detectRuntimes()` to find the binary, and the probe
+ * result was previously discarded. Drivers whose protocol capability
+ * depends on the CLI release (qoder steer) resolve it from this value
+ * via `bindRuntimeVersion`, so no spawn-time parsing and no extra
+ * subprocess is introduced. `null` = detection could not read a
+ * version; every consumer must fail closed.
+ */
+export interface ResolvedRuntime {
+  binary: string;
+  version: string | null;
+}
+
 export interface SupervisorOptions {
   /** Sink for outgoing events; wired by `runDaemon` to the per-socket
    *  broadcaster (with output backpressure applied per §2.2.2). */
@@ -216,15 +233,18 @@ export interface SupervisorOptions {
   /** Optional injection for tests:
    *   - `driverFor` lets tests substitute a fake `Driver` so they can
    *     drive `Supervisor` against a controlled binary;
-   *   - `resolveBinary` lets tests pin the binary path without
-   *     touching PATH;
+   *   - `resolveRuntime` lets tests pin the binary path (and the probed
+   *     version) without touching PATH;
    *   - `spawnFn` lets tests fully stub `child_process.spawn`.
    *
    *  Production wiring leaves them undefined → default
    *  `getDriver(kind)` + `detectRuntimes` + node's spawn.
    */
   driverFor?: (kind: RuntimeKind) => Driver;
-  resolveBinary?: (kind: RuntimeKind, fallback: string) => Promise<string | null>;
+  resolveRuntime?: (
+    kind: RuntimeKind,
+    fallback: string,
+  ) => Promise<ResolvedRuntime | null>;
   spawnFn?: (
     binary: string,
     args: ReadonlyArray<string>,
@@ -683,10 +703,10 @@ export class Supervisor implements SupervisorContract {
   private readonly logger: DaemonLogger;
   private readonly runtimeStartResolveDeps: RuntimeStartResolveDeps;
   private readonly driverFor: (kind: RuntimeKind) => Driver;
-  private readonly resolveBinary: (
+  private readonly resolveRuntime: (
     kind: RuntimeKind,
     fallback: string,
-  ) => Promise<string | null>;
+  ) => Promise<ResolvedRuntime | null>;
   private readonly spawnFn: NonNullable<SupervisorOptions['spawnFn']>;
   private readonly now: () => number;
   private readonly sigtermToSigkillMs: number;
@@ -746,7 +766,7 @@ export class Supervisor implements SupervisorContract {
     this.logger = opts.logger;
     this.runtimeStartResolveDeps = opts.runtimeStartResolveDeps;
     this.driverFor = opts.driverFor ?? getDefaultDriver;
-    this.resolveBinary = opts.resolveBinary ?? defaultResolveBinary;
+    this.resolveRuntime = opts.resolveRuntime ?? defaultResolveRuntime;
     this.spawnFn = opts.spawnFn ?? nodeSpawn;
     this.now = opts.now ?? Date.now;
     this.sigtermToSigkillMs =
@@ -2064,12 +2084,19 @@ export class Supervisor implements SupervisorContract {
     await ensureRuntimeStartWorkspaceCwd(resolvedOptions.workspace, this.logger);
 
     const driver = this.driverFor(runtimeKind);
-    const binary = await this.resolveBinary(runtimeKind, driver.binary);
-    if (!binary) {
+    const resolved = await this.resolveRuntime(runtimeKind, driver.binary);
+    if (!resolved) {
       throw new Error(
         `runtime_start: binary "${driver.binary}" for runtime "${runtimeKind}" not found on PATH`,
       );
     }
+    const binary = resolved.binary;
+    // #task:1909 — pin version-derived driver capabilities (qoder's
+    // release profile) to THIS process generation, before anything reads
+    // `driver.releaseProfile` or encodes a stdin frame. Driver instances
+    // are per-spawn, so a CLI upgrade mid-session can never change how the
+    // child started here is driven.
+    driver.bindRuntimeVersion?.(resolved.version);
 
     const promptCtx =
       await buildPromptContextFromRuntimeStartOptions(resolvedOptions);
@@ -2346,6 +2373,11 @@ export class Supervisor implements SupervisorContract {
         conversationId: handle.conversationId,
         agent_id: handle.agentId,
         runtime: runtimeKind,
+        // #task:1909 — the release profile can be version-derived, so the
+        // spawn record is the only place the pair is observable. Backend's
+        // static driver view logs the class default and may differ.
+        runtime_version: resolved.version,
+        release_profile: driver.releaseProfile,
         startup_delivery: startupBatch ? startupBatch.deliveryIds : null,
       },
       'spawned agent runtime',
@@ -5221,28 +5253,37 @@ function trimActivitySnippet(text: string): string | undefined {
 }
 
 /**
- * Default binary resolver — wraps `detectRuntimes()` from
+ * Default runtime resolver — wraps `detectRuntimes()` from
  * `packages/host/src/runtimes.ts`. The detector has a short cache, but a
  * miss is force-refreshed so installing a runtime after daemon boot does not
  * require a daemon restart before spawn can find it.
+ *
+ * Returns the probed `version` alongside the binary (#task:1909). It costs
+ * nothing extra: `detectRuntime` already runs `<bin> --version` to decide
+ * `present` vs `present_unverified`, and this resolver already awaited that
+ * catalog — it simply used to drop the version on the floor.
  */
-async function detectedBinaries(force = false): Promise<Map<RuntimeKind, string>> {
+async function detectedRuntimes(
+  force = false,
+): Promise<Map<RuntimeKind, ResolvedRuntime>> {
   const infos = await detectRuntimes({ force });
-  const m = new Map<RuntimeKind, string>();
+  const m = new Map<RuntimeKind, ResolvedRuntime>();
   for (const info of infos) {
-    if (info.installed && info.binary) m.set(info.kind, info.binary);
+    if (info.installed && info.binary) {
+      m.set(info.kind, { binary: info.binary, version: info.version });
+    }
   }
   return m;
 }
 
-async function defaultResolveBinary(
+async function defaultResolveRuntime(
   kind: RuntimeKind,
   _fallback: string,
-): Promise<string | null> {
-  const cached = await detectedBinaries(false);
+): Promise<ResolvedRuntime | null> {
+  const cached = await detectedRuntimes(false);
   const found = cached.get(kind);
   if (found) return found;
-  const fresh = await detectedBinaries(true);
+  const fresh = await detectedRuntimes(true);
   return fresh.get(kind) ?? null;
 }
 

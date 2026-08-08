@@ -36,6 +36,7 @@ import { Supervisor } from '../src/daemon/supervisor/index.js';
 import type { DeliveryOwnerContext } from '../src/daemon/supervisor-contract.js';
 import { CodexDriver } from '../src/drivers/codex.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
+import { QoderDriver } from '../src/drivers/qoder.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
 import { runtimePidFilePath } from '../src/daemon/runtime-pidfiles.js';
@@ -158,7 +159,7 @@ function encodeStreamJsonUser(text: string): string {
 function makeFakeDriver(extraArgs: string[] = []): Driver {
   return {
     kind: 'claude',
-    binary: FIXTURE, // resolveBinary stub returns this verbatim
+    binary: FIXTURE, // resolveRuntime stub returns this verbatim
     kickoffMode: 'self_inits',
     releaseProfile: 'native-steer',
     oneShot: false,
@@ -219,7 +220,7 @@ function makeSupervisor(opts: {
     emit: spy.emit,
     logger: opts.logger ?? silentLogger(),
     driverFor: () => driver,
-    resolveBinary: async (_kind, fallback) => fallback,
+    resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
     spawnFn,
     daemonInstanceId: opts.daemonInstanceId,
     runtimePidRootDir: opts.runtimePidRootDir,
@@ -517,7 +518,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn: (bin, args, options) =>
         spawn(execPath, [bin, ...args.slice(1)], options),
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({
@@ -638,7 +639,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => makeFakeDriver(),
-      resolveBinary: async () => null,
+      resolveRuntime: async () => null,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     });
@@ -1045,7 +1046,7 @@ describe('Supervisor 3a — hard stop / exit', () => {
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -1260,7 +1261,7 @@ function makeSupervisorWithDriver(driver: Driver, opts: {
     emit: spy.emit,
     logger: opts.logger ?? silentLogger(),
     driverFor: () => driver,
-    resolveBinary: async (_kind, fallback) => fallback,
+    resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
     spawnFn,
     runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
     controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -1810,7 +1811,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -2161,7 +2162,7 @@ function make3cSupervisor(
     emit: spy.emit,
     logger: silentLogger(),
     driverFor: () => driver,
-    resolveBinary: async (_kind, fallback) => fallback,
+    resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
     spawnFn,
     runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
     controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -4200,7 +4201,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -4396,7 +4397,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -4660,7 +4661,7 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -6493,7 +6494,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       emit: spy.emit,
       logger: logger ?? silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn: () => {
         if (!firstSpawn) stub = new DriveStub();
         firstSpawn = false;
@@ -7034,7 +7035,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_k, fb) => fb,
+      resolveRuntime: async (_k, fb) => ({ binary: fb, version: null }),
       spawnFn: () => stub as unknown as ChildProcess,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
@@ -7466,7 +7467,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       emit: spy.emit,
       logger: silentLogger(),
       driverFor: () => driver,
-      resolveBinary: async (_kind, fallback) => fallback,
+      resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn: () => {
         if (!firstSpawn) stub = new PullDriveStub();
         firstSpawn = false;
@@ -8159,6 +8160,201 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
+    }
+  });
+});
+
+// ===========================================================================
+// CONTRACT (Do Not Weaken) — the spawn path is the ONLY version source,
+// #task:1909
+//
+// WHY THIS EXISTS: shiki's constraint is explicit — no spawn-time capability
+// parsing and no added startup latency. The version therefore has to come
+// from the runtime detection the spawn path ALREADY awaits to find the
+// binary (`resolveRuntime`, formerly `resolveBinary`, which used to throw the
+// probed version away). If a future change re-introduces a per-spawn probe,
+// these tests are what makes that visible.
+//
+// INVARIANTS:
+//  1. Exactly ONE runtime resolution per spawn, and no extra child process is
+//     launched to ask for a version (`--version` never appears in a spawn).
+//  2. The probed version reaches the driver via `bindRuntimeVersion` BEFORE
+//     anything reads the driver's capabilities — `buildArgs` is the first
+//     driver call the supervisor makes after resolution, so it is the
+//     observation point.
+//  3. The binding is per-spawn (driver instances are per-spawn), i.e. the
+//     capability is pinned to the process generation. Never re-read live
+//     detection at a later boundary decision.
+// ===========================================================================
+describe('Supervisor — runtime version binding on the spawn path (#task:1909)', () => {
+  it('resolves the runtime once and binds the probed version before buildArgs', async () => {
+    let resolveCalls = 0;
+    const boundVersions: Array<string | null> = [];
+    const versionAtBuildArgs: Array<string | null | undefined> = [];
+    const spawnedArgs: string[][] = [];
+    let seen: string | null | undefined;
+
+    const base = makeFakeDriver(['--echo-stdin']);
+    const driver: Driver = {
+      ...base,
+      bindRuntimeVersion: version => {
+        boundVersions.push(version);
+        seen = version;
+      },
+      buildArgs: ctx => {
+        versionAtBuildArgs.push(seen);
+        return base.buildArgs(ctx);
+      },
+    };
+
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveRuntime: async (_kind, fallback) => {
+        resolveCalls += 1;
+        return { binary: fallback, version: '1.1.17' };
+      },
+      spawnFn: (bin, args, options) => {
+        spawnedArgs.push([...args]);
+        return spawn(execPath, [bin, ...args.slice(1)], options);
+      },
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+
+    try {
+      const res = await supervisor.start(baseStartParams);
+      expect(res.started).toBe(true);
+
+      // One resolution, one binding — and the version was already bound by
+      // the time the supervisor asked the driver for spawn args.
+      expect(resolveCalls).toBe(1);
+      expect(boundVersions).toEqual(['1.1.17']);
+      expect(versionAtBuildArgs).toEqual(['1.1.17']);
+      // No side probe: nothing on the spawn path shells out for a version.
+      expect(spawnedArgs.flat()).not.toContain('--version');
+    } finally {
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      });
+    }
+  });
+
+  it('binds null when detection could not read a version (drivers fail closed)', async () => {
+    const boundVersions: Array<string | null> = [];
+    const base = makeFakeDriver();
+    const driver: Driver = {
+      ...base,
+      bindRuntimeVersion: version => boundVersions.push(version),
+    };
+
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => driver,
+      resolveRuntime: async (_kind, fallback) => ({
+        binary: fallback,
+        version: null,
+      }),
+      spawnFn: (bin, args, options) =>
+        spawn(execPath, [bin, ...args.slice(1)], options),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+
+    try {
+      expect((await supervisor.start(baseStartParams)).started).toBe(true);
+      expect(boundVersions).toEqual([null]);
+    } finally {
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      });
+    }
+  });
+
+  it('pins the resolved profile per spawn: a qoder respawn re-resolves from its own version', async () => {
+    // Real QoderDriver, one instance per spawn exactly like production
+    // `getDriver`. The version changes between generations, so this is the
+    // mid-session CLI upgrade: the already-resolved generation must keep its
+    // profile, and only the NEW child may steer.
+    const versions = ['1.1.16', '1.1.17'];
+    const instances: QoderDriver[] = [];
+    let generation = 0;
+
+    const spy = makeEmitSpy();
+    const supervisor = new Supervisor({
+      emit: spy.emit,
+      logger: silentLogger(),
+      driverFor: () => {
+        const qoder = new QoderDriver();
+        instances.push(qoder);
+        return qoder;
+      },
+      // Point at the echo fixture instead of `qodercli`; the driver's own
+      // args are real (buildArgs reads the materialized prompt) but the
+      // fixture ignores them.
+      resolveRuntime: async () => ({
+        binary: FIXTURE,
+        version: versions[generation] ?? null,
+      }),
+      spawnFn: (bin, _args, options) => spawn(execPath, [bin], options),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
+      controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      sigtermToSigkillMs: 50,
+      sigkillTimeoutMs: 200,
+    });
+
+    const qoderStartParams = {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      options: testStartOptions({
+        conversationId: 'c1',
+        agentId: 'a1',
+        agentName: 'tester',
+        runtime: 'qoder',
+      }),
+    };
+
+    try {
+      expect((await supervisor.start(qoderStartParams)).started).toBe(true);
+      expect(instances).toHaveLength(1);
+      expect(instances[0]!.releaseProfile).toBe('next-turn-batch');
+
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      });
+      generation = 1;
+      expect((await supervisor.start(qoderStartParams)).started).toBe(true);
+      expect(instances).toHaveLength(2);
+      expect(instances[1]!.releaseProfile).toBe('tool-boundary-steer');
+      // The retired generation is untouched — capability is pinned to the
+      // process it was resolved for, never re-read.
+      expect(instances[0]!.releaseProfile).toBe('next-turn-batch');
+    } finally {
+      await supervisor.stop({
+        conversation_id: 'c1',
+        agent_id: 'a1',
+        mode: 'hard',
+      });
     }
   });
 });

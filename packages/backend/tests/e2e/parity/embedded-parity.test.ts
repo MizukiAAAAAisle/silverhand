@@ -229,7 +229,10 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
         emit,
         logger,
         driverFor: (_kind: RuntimeKind) => makeParitySessionInitDriver(expectedSessionId),
-        resolveBinary: async (_kind, fallback) => fallback,
+        resolveRuntime: async (_kind, fallback) => ({
+          binary: fallback,
+          version: null,
+        }),
         spawnFn,
         daemonInstanceId,
         runtimePidRootDir: pidRoot,

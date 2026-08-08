@@ -81,7 +81,14 @@ export interface Driver {
   /** Release profile (docs/runtime-input-design.md §3.2, #task:1558):
    *  how the daemon releases live input to this runtime and what counts
    *  as admission. The legacy three-value `busyDeliveryMode` was removed
-   *  in Commit C — release scheduling dispatches on this profile only. */
+   *  in Commit C — release scheduling dispatches on this profile only.
+   *
+   *  Read this from the LIVE per-spawn driver instance. A driver whose
+   *  protocol capability depends on the installed CLI version resolves
+   *  the value in `bindRuntimeVersion` (qoder, #task:1909), so it is
+   *  constant per process generation but not constant per driver class.
+   *  Backend holds a static instance for cosmetic/diagnostic use only
+   *  (`DriverDeliveryView`); release scheduling is daemon-owned. */
   readonly releaseProfile:
     | 'native-steer'
     | 'tool-boundary-steer'
@@ -130,6 +137,27 @@ export interface Driver {
    *  drainInbox. Lets stateful drivers (codex) start their JSON-RPC
    *  handshake. No-op for stateless drivers. */
   bindIO?(io: DriverIO): void;
+
+  /**
+   * Optional: hand the driver the version of the binary this spawn
+   * resolved (#task:1909), so a driver whose protocol capabilities
+   * differ across CLI releases can pick its behaviour once.
+   *
+   * Contract:
+   *  - Called exactly once per spawn, immediately after the binary is
+   *    resolved and BEFORE anything reads `releaseProfile` or encodes a
+   *    stdin frame. The value is whatever runtime detection already
+   *    probed (`RuntimeInfo.version`) — implementations must NOT run
+   *    their own probe.
+   *  - `null` means detection could not read a version. Implementations
+   *    MUST fail closed (keep the capability the oldest supported CLI
+   *    has), and must also fail closed when never called at all.
+   *  - The resolved capability is pinned to this driver instance, i.e.
+   *    to the process generation: driver instances are per-spawn
+   *    (`getDriver`), so upgrading the CLI mid-session cannot change how
+   *    the already-running child is driven. Never re-resolve per turn.
+   */
+  bindRuntimeVersion?(version: string | null): void;
 
   /**
    * Whether the driver can produce a non-null `encodeStdinMessage`

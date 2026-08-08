@@ -132,9 +132,9 @@ daemon 本地:  queued ──边界到达──▶ (claim) ──write──▶ 
 | Profile | 语义 | Runtime | admission 证据（observed 推进） | 状态 |
 |---|---|---|---|---|
 | `native-steer` | 新输入由 runtime 协议并入当前 turn | Codex（原生 turn/steer，立即交付） | **generation-boundary echo（countgame round-2 定版）**：`turn/steer`/`turn/start` 的 JSON-RPC 响应只是 transport ack（只承诺"并入 active turn"，不承诺在途/已排队生成会重新条件化——实测 ACK 落后已生成 send 300–600ms 仍放行了旧稿），**不产生任何证据事件**；payload uuid 经原生 `clientUserMessageId` 字段（0.144.4 schema 确认）随 steer 下发，codex 在 drain pending_input 入模型 history、构造下一次 sampling request 之前以 `item/started {type:'userMessage', clientId}` 回显——该回显才是 lifecycle/推进证据。echo 丢失时退化为 pendingAdmission 在 turn 边界结算（fail-closed） | 已定版 |
-| `tool-boundary-steer` | 新输入在当前 turn 的下一个 tool boundary 并入 | Claude（B' 实测：默认即 steer、`priority` 无行为差异；**产品决定仍显式发送 `priority:"next"`**——声明意图并防未来默认行为变化，未文档化字段的维护成本随版本实测跟进；首帧带 priority 已探证正常；无 tool turn 自然退化为独立下一 turn） | write=released；`started(uuid)` 到达即按 payload 覆盖晋升 observed | **已启用**（B'，证据 notes/claude-ab-results）；`!compacting` 为迁移期保守 hold（未覆盖场景），非实证 guard，禁止重新共享化 |
+| `tool-boundary-steer` | 新输入在当前 turn 的下一个 tool boundary 并入 | Claude（B' 实测：默认即 steer、`priority` 无行为差异；**产品决定仍显式发送 `priority:"next"`**——声明意图并防未来默认行为变化，未文档化字段的维护成本随版本实测跟进；首帧带 priority 已探证正常；无 tool turn 自然退化为独立下一 turn）；**Qoder `>= 1.1.17`**（#task:1907 实测：`priority:"next"` 在同一 turn 的 tool boundary 非破坏性 drain，`now` 才是破坏性中断、`later` 不 mid-turn drain；并回显以 payload uuid 关联的 `command_lifecycle queued/started/completed`） | write=released；`started(uuid)` 到达即按 payload 覆盖晋升 observed | **已启用**（B'，证据 notes/claude-ab-results）；`!compacting` 为迁移期保守 hold（未覆盖场景），非实证 guard，禁止重新共享化 |
 | `prompt-boundary` | 协议显式暴露"可开启下一 prompt"的边界 | OpenCode（ACP `session/prompt` 生命周期） | **整批边界（构造性，#task:1565 定版，opencode 1.18.1 实测）**：client 侧单 in-flight prompt 是**正确性不变量**——实测 runtime 会静默排队第二条 prompt，且把两个 RPC 响应都攥到整段排队运行结束才一起返回（usage 合并），排队状态下"prompt 响应"不再是逐 turn 边界。mid-prompt 投递一律 defer 进 daemon 队列，prompt 响应（parsed `turn_end`）重开边界后合成一条 `session/prompt` 写入，写入即边界 admission（同 qoder 档构造性证据）。`session/cancel` 实测以 `stopReason:'cancelled'` 正常结算响应、会话可继续（无 wedge）。post-init 边界关闭走 defer 不 refuse——refuse 只留给 pre-init（`ready_for_drain` 每 run 一次，post-init refuse 会饿死行） | 已定版 |
-| `next-turn-batch` | 无 steer、无 prompt admission 协议：等 turn 结束，积压合成一个 payload 作下一 turn 输入 | Qoder（`priority:"next"` 实测无效——headless handler 不读该字段，#task:1556，勿走 Claude 路径） | **构造性**（§3.4：write reservation + parsed `turn_end`） | FIFO 逐 turn 消费已由二进制 + 双黑盒实验证实（#task:1556） |
+| `next-turn-batch` | 无 steer、无 prompt admission 协议：等 turn 结束，积压合成一个 payload 作下一 turn 输入 | Qoder `< 1.1.17`、以及版本未知/不可解析（`priority:"next"` 在这些版本实测无效——headless handler 不读该字段，#task:1556；也无 `command_lifecycle` 回显，勿走 Claude 路径） | **构造性**（§3.4：write reservation + parsed `turn_end`） | FIFO 逐 turn 消费已由二进制 + 双黑盒实验证实（#task:1556） |
 | `one-shot` | 不支持 live input | Cursor | 不适用 | 不在此模型内 |
 
 **ACP v2 前瞻约束（#task:1591，2026-07-22）**：v2 Draft 将
@@ -156,6 +156,16 @@ Codex 的 `turn/steer` 都在 tool/turn 进行中写入，实验已证）。它�
 规则：profile 由 driver 声明并附 falsifier 测试；不允许从 wire shape 相同推断语义
 相同（Claude/Qoder 同为 stream-json，语义完全不同——已实证）。**没有可关联证据的
 runtime 只记录 released/admitted-at-driver-boundary，不虚构"模型已看到"。**
+
+**Profile 可以随 CLI 版本变化（#task:1909，2026-08-08）**：同一 runtime 的不同
+CLI 版本可能是不同 profile（Qoder 的 `priority` 支持就是从 1.1.17 起有的）。此时
+profile 仍由 driver 声明，只是**由已探测的版本解析一次**：版本来自 spawn 路径
+本来就 await 的 runtime detection（`RuntimeInfo.version`，此前被丢弃），driver 不
+自行探测、不新增子进程、不解析 CLI 输出。解析结果**钉在 driver 实例上 = 钉在进程
+代际上**（driver 每次 spawn 新建），因此会话中途升级 CLI 不会改变已在跑的子进程
+如何被驱动；任何边界判定都不得重新读取实时 detection。方向仍是 fail-closed：版本
+缺失 / 不可解析 / 低于实测下限，一律退回该 runtime 最老受支持版本的 profile，并且
+**不发送新版本才有的 wire 字段**（profile 与线上帧必须同源，不能一个升档一个不升）。
 
 **Action-snapshot 不变量（countgame round-2 定版，2026-07-21）**：
 `observedSeqByStream` 不是"runtime 已接收输入的最新水位"，而是**当前模型生成
@@ -189,14 +199,15 @@ profile 不是更细的枚举，而是 driver 声明的**接口实例**。接口
 tool boundary 才写，反而错过该边界再慢一拍）：
 
 1. **scheduler release/write policy（何时写）**：Codex/Claude **立即写**；
-   Qoder 等 parsed `turn_end`；ACP 等 ready-prompt；one-shot 等 next-spawn。
+   Qoder `< 1.1.17` 等 parsed `turn_end`（`>= 1.1.17` 归入立即写）；ACP 等
+   ready-prompt；one-shot 等 next-spawn。
 2. **runtime admission semantics（runtime 何时接纳）**：Codex 原生 steer 并入
-   当前 turn；Claude 在当前 turn 的下一个 tool boundary 并入；Qoder 下一 turn
-   整批；ACP 下一 prompt。
+   当前 turn；Claude / Qoder `>= 1.1.17` 在当前 turn 的下一个 tool boundary
+   并入；Qoder `< 1.1.17` 下一 turn 整批；ACP 下一 prompt。
 3. **normalized evidence（何以为证）**：`userMessage clientId` 回显（Codex，
    generation-boundary echo；RPC 回执只是 release ack）/ `started(uuid)`
-   （Claude）/ 构造性 write-at-boundary（Qoder，凭 #1556 证实的 FIFO 语义）/
-   prompt 生命周期（ACP）。
+   （Claude、Qoder `>= 1.1.17`）/ 构造性 write-at-boundary（Qoder
+   `< 1.1.17`，凭 #1556 证实的 FIFO 语义）/ prompt 生命周期（ACP）。
 
 **payload composition 的 owner 拆分**：strategy 只声明 **batch selection /
 cardinality**（能否合批、一批几条）与 **runtime wire encoder**（`turn/steer`
@@ -213,7 +224,8 @@ admission 分离。
 **是否需要额外 write guard 也是 strategy 的一部分，没有全局地位**：Codex 在
 active turn 中直接 `turn/steer`、Claude 实验就是在 tool 运行中写入
 `priority:"next"`——对它们保留 `outstandingToolUses === 0` 会把已验证的 steer
-能力重新阉割。Qoder 由 `turn_end` release 构造自然满足；ACP 由 prompt readiness
+能力重新阉割（Qoder `>= 1.1.17` 现在同属这一类）。Qoder `< 1.1.17` 由 `turn_end`
+release 构造自然满足；ACP 由 prompt readiness
 保证。旧谓词 `outstandingToolUses === 0 && !compacting` 只能以**显式的
 `legacy-safe-boundary` 迁移策略**存在：已知 runtime 必须显式声明 strategy（当前
 五个均可分类，无缺口）；未声明/未知 driver **fail closed**（不接受 live input，
@@ -235,7 +247,12 @@ flush，#1556 核实）。
 - 边界到达时对 pending queue 做**有界 snapshot**；snapshot 后到达的消息进下一批。
 - 合成保留每条消息完整 meta header、附件快照、linked_task；不改写正文。
 
-### 3.4 Qoder：write reservation + parsed `turn_end`（构造性 admission 定版）
+### 3.4 Qoder `< 1.1.17`：write reservation + parsed `turn_end`（构造性 admission 定版）
+
+**适用范围（#task:1909）**：本节是 Qoder 无 `priority` 支持时的档位。
+`qodercli >= 1.1.17` 走 `tool-boundary-steer`（§3.2 表格 + `priority:"next"` +
+`command_lifecycle` uuid 回显），不再用本节的 reservation 构造；两档由 spawn 时
+探测到的版本选择，低版本与版本未知仍落在这里。
 
 实证基础（#task:1556，二进制控制流 + 两次独立黑盒实验，详见 Cindy 的
 `notes/qoder-stdin-admission.md` 与 `qoder-stdin-probe.mjs`）：Qoder 后台 reader
@@ -303,7 +320,9 @@ Claude 保持 tool-boundary 写入（steer 有真实收益，不降级为 turn-b
 > response-loss 恢复臂全部否决）。根因判断：双曝光/大窗口是"消息等 boundary
 > 才能进模型"的放大症状；机制应收敛到单一正文释放面，而不是给慢通道建第二
 > 条精确补看通路。Qoder 的实时性等上游 steer 支持（#task:1568 已证实 headless
-> 无非破坏介入点）。
+> 无非破坏介入点）。**该括注已被 #task:1907/#task:1909 取代**：qodercli 1.1.17
+> 起 `priority:"next"` 就是那个非破坏介入点，Qoder `>= 1.1.17` 已升到
+> `tool-boundary-steer`。v8 的单一正文释放面合同本身不变。
 
 ### 5.1 核心合同：单一正文释放面
 
@@ -324,8 +343,9 @@ Claude 保持 tool-boundary 写入（steer 有真实收益，不降级为 turn-b
 
 - **daemon 收到 409 不推进 observed**（什么都没展示）。unseen 内容经正常投递
   到达、按该 runtime 的 admission 证据推进 observed 后，retry 才能过 CAS。
-  steer runtime（codex/claude）当前 turn 内到达；boundary runtime（qoder）
-  turn_end 后一个合批到达。uninformed retry 按设计再次 409。
+  steer runtime（codex/claude、Qoder `>= 1.1.17`）当前 turn 内到达；boundary
+  runtime（Qoder `< 1.1.17`）turn_end 后一个合批到达。uninformed retry 按设计
+  再次 409。
 - `--anyway`（force_send）仍是显式逃生口；`stale-resolve --resolution obsolete`
   处理"读后不必再发"。
 
@@ -415,7 +435,8 @@ capability daemon 活跃、或设定最低 daemon 版本门槛后才删除——
 
 | 合同/不变量 | Falsifier 测试 |
 |---|---|
-| I1 | Qoder：batch 只在确认边界写入，写入前 send 的 seen 不含 batch seq、写入后按 covered_seq_by_stream 逐 stream 推进；单 stream 同时至多一个 batch 在途。Claude：Step 2 后 `started(uuid)` 推进对应 payload。 |
+| I1 | Qoder `< 1.1.17`：batch 只在确认边界写入，写入前 send 的 seen 不含 batch seq、写入后按 covered_seq_by_stream 逐 stream 推进；单 stream 同时至多一个 batch 在途。Claude / Qoder `>= 1.1.17`：Step 2 后 `started(uuid)` 推进对应 payload。 |
+| §3.2 版本档位 | 三档版本（低于下限 / 等于下限 / 版本未知）解析出的 profile 与线上帧同源：升档才发 `priority` + payload uuid，不升档一个都不发；spawn 路径只解析一次 runtime、不额外起子进程问版本；capability 钉在进程代际（旧代不因升级改档）。 |
 | I2 | daemon 持有 pending 时 send → 本地 `pending_input`，backend 零请求。 |
 | I3 | 每 delivery 恰好一个 release winner（inbox lease 唯一权威）；409 不构成第二释放面（零正文）。 |
 | I4 | 超界 batch 分批排出的完整性（拼接无缺失/重复）。 |

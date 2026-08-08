@@ -9,6 +9,20 @@ import {
   encodeStreamJsonUserMessage,
   parseStreamJsonLine,
 } from './stream-json.js';
+import { versionAtLeast } from './version-gate.js';
+
+/**
+ * First `qodercli` release whose stdin `user` frame honours
+ * `priority:"next"` — a non-destructive mid-turn steer that the runtime
+ * drains at the next tool boundary of the SAME turn, and echoes through
+ * `command_lifecycle` frames keyed by our payload uuid. Verified
+ * empirically on 1.1.17 (#task:1907); shiki set 1.1.17 as the floor.
+ *
+ * Below this floor `priority` is unknown to the CLI, so we neither send
+ * the field nor claim the steer profile: those builds only accept input
+ * between turns (`next-turn-batch`).
+ */
+const STEER_MIN_VERSION = '1.1.17';
 
 /**
  * Qoder tools that clash with Silverhand's own contracts and must be
@@ -96,8 +110,16 @@ function queueStatusEvent(line: string): ParsedEvent | null {
  * (not one-shot), queues follow-up turns, and resumes context across
  * processes via `--resume <session_id>`. So it slots into the exact
  * same host-supervision boundary as Claude — `requires_first_message`
- * kickoff + `gated` busy-delivery — with **no supervisor-level runtime
+ * kickoff + boundary-gated release — with **no supervisor-level runtime
  * branch**, and reuses the shared `stream-json` parser.
+ *
+ * Release profile is the one capability that moved with the CLI version
+ * (#task:1909): `>= 1.1.17` honours `priority:"next"` and echoes
+ * `command_lifecycle`, so those builds get Claude's
+ * `tool-boundary-steer`; older builds stay on `next-turn-batch`. The
+ * version comes from the detection the spawn path already performs and
+ * is bound once per process generation via `bindRuntimeVersion` — the
+ * driver never probes and never re-resolves.
  *
  * Deliberate divergences from the Claude driver:
  *  - No `--verbose` / `--allow-dangerously-skip-permissions`: Qoder's
@@ -132,12 +154,30 @@ export class QoderDriver implements Driver {
   readonly kind = 'qoder' as const;
   readonly binary = 'qodercli';
   readonly kickoffMode = 'requires_first_message' as const;
-  readonly releaseProfile = 'next-turn-batch' as const;
   readonly oneShot = false;
   readonly supportsNativeStandingPrompt = true;
   readonly initLivenessSilenceMs = 30 * 1000;
   readonly initPreProtocolCapMs = 5 * 60 * 1000;
   readonly initPostProtocolMs = 60 * 1000;
+
+  /** Resolved once by `bindRuntimeVersion`; false until then so a driver
+   *  instance nobody bound behaves like an old CLI (fail closed). */
+  private steerCapable = false;
+
+  /**
+   * Version-derived, pinned to this instance = to the child process
+   * generation (`getDriver` mints one driver per spawn). Reading it is
+   * safe at any boundary decision; re-resolving per turn would let a
+   * mid-session CLI upgrade change how an already-running child is
+   * driven, which is exactly the bug the pin prevents.
+   */
+  get releaseProfile(): 'tool-boundary-steer' | 'next-turn-batch' {
+    return this.steerCapable ? 'tool-boundary-steer' : 'next-turn-batch';
+  }
+
+  bindRuntimeVersion(version: string | null): void {
+    this.steerCapable = versionAtLeast(version, STEER_MIN_VERSION);
+  }
 
   buildArgs(ctx: DriverSpawnContext): string[] {
     const standingPrompt = readFileSync(ctx.systemPromptPath, 'utf-8');
@@ -170,8 +210,24 @@ export class QoderDriver implements Driver {
     return { ...baseEnv };
   }
 
-  encodeStdinMessage(content: string, cliSessionId: string | null): string {
-    return encodeStreamJsonUserMessage(content, cliSessionId);
+  encodeStdinMessage(
+    content: string,
+    cliSessionId: string | null,
+    opts?: { payloadUuid?: string },
+  ): string {
+    if (!this.steerCapable) {
+      // Pre-1.1.17: `priority` is not in the CLI's frame schema and the
+      // runtime emits no per-payload `command_lifecycle`, so stamping
+      // either field would be noise at best. Keep the frame minimal.
+      return encodeStreamJsonUserMessage(content, cliSessionId);
+    }
+    // 1.1.17+: state the tool-boundary-steer intent explicitly, and carry
+    // the supervisor's payload uuid so the runtime's `command_lifecycle`
+    // frames correlate back to this batch — `started` is what promotes the
+    // batch from pending-admission to model-seen (`input_lifecycle`).
+    return encodeStreamJsonUserMessage(content, cliSessionId, opts?.payloadUuid, {
+      priority: 'next',
+    });
   }
 
   encodeInterruptControl(): string | null {
