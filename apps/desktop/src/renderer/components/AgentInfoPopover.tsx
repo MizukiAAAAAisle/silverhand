@@ -161,7 +161,7 @@ export function AgentInfoPopover({
           onPointerEnter={scheduleOpen}
           onPointerLeave={scheduleClose}
           data-popover-frame="info"
-          className="z-50 w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          className="z-[var(--z-dialog)] w-[260px] max-w-[calc(100vw-32px)] bg-bg-floating p-3 shadow-popover outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           {/* v3 layout (#task:912 review round 7 → round 9 final):
                 avatar | name + ● presence    [↻ ⏻ ⌫]   ← actions top-right
@@ -270,7 +270,7 @@ function PresenceInline({
   // dot + "Not here" rather than collapse silently.
   if (!row) {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-text-muted">
+      <span className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted">
         <span data-status-pip className="size-1.5 rounded-full bg-text-muted/40" />
         Not here
       </span>
@@ -278,7 +278,7 @@ function PresenceInline({
   }
   return (
     <span
-      className="inline-flex shrink-0 items-center gap-1 text-[10px] text-text-muted"
+      className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
       title={PRESENCE_LABEL[row.status]}
     >
       <span data-status-pip className={'size-1.5 rounded-full ' + PRESENCE_DOT[row.status]} />

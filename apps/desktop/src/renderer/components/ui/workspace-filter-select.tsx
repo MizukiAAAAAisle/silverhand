@@ -100,7 +100,7 @@ export function WorkspaceFilterSelect({
                 workspace-filter dropdown reads the same. */}
             {dms.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   DMs
                 </Select.Label>
                 {dms.map(workspace => (
@@ -128,7 +128,7 @@ export function WorkspaceFilterSelect({
             ) : null}
             {regular.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
                 {regular.map(workspace => (

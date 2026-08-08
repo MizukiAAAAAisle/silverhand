@@ -212,7 +212,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectSearch}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[length:var(--text-strong)] ' +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.searchActive),
             )}
@@ -225,7 +225,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectSaved}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[length:var(--text-strong)] ' +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.savedActive),
             )}
@@ -254,7 +254,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectArchived}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[13px] ' +
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[length:var(--text-strong)] ' +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.archivedActive),
             )}
@@ -308,7 +308,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           emptyHint={
             <>
               No workspaces yet. Use{' '}
-              <kbd className="inline-flex size-4 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated align-text-bottom text-[11px] leading-none">
+              <kbd className="inline-flex size-4 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated align-text-bottom text-[length:var(--text-meta)] leading-none">
                 +
               </kbd>{' '}
               to create one.

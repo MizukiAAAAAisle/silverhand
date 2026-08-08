@@ -108,7 +108,7 @@ function ServerStatusPill({
       role="status"
       aria-label={`Desktop to server: ${STATUS_LABEL[status]}`}
       className={cn(
-        'inline-flex shrink-0 items-center gap-1 rounded-[var(--control-radius)] border bg-bg-floating px-2 py-0.5 text-[10px] font-medium',
+        'inline-flex shrink-0 items-center gap-1 rounded-[var(--control-radius)] border bg-bg-floating px-2 py-0.5 text-[length:var(--text-badge)] font-medium',
         STATUS_TONE_CLASS[status],
       )}
     >
@@ -446,7 +446,7 @@ export function ConnectionPane(): JSX.Element {
             </Button>
           </div>
           {classification.kind === 'reject' && (
-            <p className="text-[11px] text-error">{classification.message}</p>
+            <p className="text-[length:var(--text-meta)] text-error">{classification.message}</p>
           )}
         </form>
       </div>

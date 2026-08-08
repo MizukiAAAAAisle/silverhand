@@ -197,7 +197,7 @@ export function AgentActivityTimeline({
                 type="button"
                 onClick={() => void onLoadEarlier()}
                 disabled={isLoadingMore}
-                className="mx-auto mb-1 flex items-center gap-1 px-2 py-1.5 text-[11px] text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
+                className="mx-auto mb-1 flex items-center gap-1 px-2 py-1.5 text-[length:var(--text-meta)] text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
               >
                 <ChevronUp className="size-3" />
                 {isLoadingMore ? 'Loading…' : 'Load earlier'}
@@ -300,10 +300,10 @@ function RowShell({
           className={cn('mt-0.5 size-3.5 shrink-0', TONE_TEXT[tone])}
           strokeWidth={2}
         />
-        <div className="min-w-0 flex-1 break-words text-[12.5px] leading-snug">
+        <div className="min-w-0 flex-1 break-words text-xs leading-snug">
           {title}
         </div>
-        <span className="mt-0.5 shrink-0 font-mono text-[10.5px] tabular-nums text-text-muted">
+        <span className="mt-0.5 shrink-0 font-mono text-[length:var(--text-badge)] tabular-nums text-text-muted">
           {time}
         </span>
       </div>
@@ -341,7 +341,7 @@ function GroupRow({
       title={<span className="text-text-secondary">Thinking</span>}
       preview={
         text.trim().length > 0 ? (
-          <span className="block whitespace-pre-wrap break-words text-[12.5px] italic leading-snug text-text-secondary">
+          <span className="block whitespace-pre-wrap break-words text-xs italic leading-snug text-text-secondary">
             {text}
           </span>
         ) : null
@@ -484,7 +484,7 @@ function ToolDetailView({ detail }: { detail: ToolDetail }): JSX.Element {
     return <DiffView removed={detail.removed} added={detail.added} />;
   }
   return (
-    <pre className="whitespace-pre-wrap break-all border border-border-subtle bg-bg-base px-2 py-1 font-mono text-[11px] leading-relaxed text-text-secondary">
+    <pre className="whitespace-pre-wrap break-all border border-border-subtle bg-bg-base px-2 py-1 font-mono text-[length:var(--text-meta)] leading-relaxed text-text-secondary">
       {detail.text}
     </pre>
   );
@@ -501,7 +501,7 @@ function DiffView({
   added: string;
 }): JSX.Element {
   return (
-    <div className="flex flex-col gap-px border border-border-subtle font-mono text-[11px] leading-relaxed">
+    <div className="flex flex-col gap-px border border-border-subtle font-mono text-[length:var(--text-meta)] leading-relaxed">
       <DiffSide
         text={removed}
         sign="-"

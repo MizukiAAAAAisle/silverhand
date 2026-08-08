@@ -117,7 +117,7 @@
      而非 forza6 的实色海报贴纸。 */
   --bg-inline-code: rgba(232, 145, 45, 0.12);
   --border-inline-code: 1px solid rgba(232, 145, 45, 0.28);
-  --radius-inline-code: var(--radius-sm);
+  --inline-code-radius: var(--radius-sm);
 
   /* ── Task status badge (5 × 3 = 15 tokens) ──
      dark 主题统一走 "soft fill + 同色描边 + chip 内字色 ≥ AA" 的公式，

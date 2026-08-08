@@ -364,12 +364,12 @@ export function ComposerActivityHeader({
             {subjectName}
           </button>
           {badge ? (
-            <span className="shrink-0 rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[10px] leading-4 text-text-muted">
+            <span className="shrink-0 rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[length:var(--text-badge)] leading-4 text-text-muted">
               {badge}
             </span>
           ) : null}
           {snippetKindLabel ? (
-            <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-[10px] leading-4 text-text-muted">
+            <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-[length:var(--text-badge)] leading-4 text-text-muted">
               {SnippetKindIcon ? <SnippetKindIcon className="size-3" /> : null}
               <span>{snippetKindLabel}</span>
             </span>
@@ -378,7 +378,7 @@ export function ComposerActivityHeader({
             {snippet}
           </span>
           {extra > 0 ? (
-            <span className="shrink-0 rounded-full bg-bg-hover px-1.5 text-[10px] leading-4 text-text-muted">
+            <span className="shrink-0 rounded-full bg-bg-hover px-1.5 text-[length:var(--text-badge)] leading-4 text-text-muted">
               +{extra}
             </span>
           ) : null}
@@ -454,7 +454,7 @@ function ActivityDetailRow({
           </button>
           <Loader2 className="size-3 shrink-0 animate-spin text-text-muted" />
           {snippetKindLabel ? (
-            <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-[10px] leading-4 text-text-muted">
+            <span className="flex shrink-0 items-center gap-1 rounded border border-border-subtle/70 px-1.5 py-px text-[length:var(--text-badge)] leading-4 text-text-muted">
               {SnippetKindIcon ? <SnippetKindIcon className="size-3" /> : null}
               <span>{snippetKindLabel}</span>
             </span>
@@ -480,7 +480,7 @@ function ActivityDetailRow({
             {toolEntries.map(([toolName, count]) => (
               <span
                 key={`${toolName}:${count}`}
-                className="rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[10px] leading-4 text-text-muted"
+                className="rounded border border-border-subtle/70 px-1.5 py-px font-mono text-[length:var(--text-badge)] leading-4 text-text-muted"
               >
                 <span className="mr-1 text-text-muted/70">{count}</span>
                 {toolName}

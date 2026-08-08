@@ -28,7 +28,7 @@ export function SettingsHeading({
     <div className="flex items-center gap-3">
       <span
         data-settings-icon-chip
-        className="flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary"
+        className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated text-text-secondary"
       >
         {icon}
       </span>

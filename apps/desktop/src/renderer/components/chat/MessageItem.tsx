@@ -566,7 +566,7 @@ function ActorMessageItem({
     <time
       dateTime={new Date(message.created_at).toISOString()}
       title={timeTooltip}
-      className="text-[11px] text-text-muted"
+      className="text-[length:var(--text-meta)] text-text-muted"
     >
       {timeLabel}
     </time>
@@ -845,7 +845,7 @@ function ActorMessageItem({
           dateTime={new Date(message.created_at).toISOString()}
           title={timeTooltip}
           className={
-            'w-8 shrink-0 select-none text-[10px] text-text-muted transition-opacity ' +
+            'w-8 shrink-0 select-none text-[length:var(--text-badge)] text-text-muted transition-opacity ' +
             (alignRight ? 'text-left ' : 'text-right ') +
             (hover ? 'opacity-100' : 'opacity-0')
           }
@@ -918,7 +918,7 @@ function ActorMessageItem({
         onFocus={() => setFocusWithin(true)}
         onBlur={handleActionsBlur}
         className={
-          'absolute top-1 z-10 flex items-center gap-3 text-xs transition-opacity ' +
+          'absolute top-1 z-[var(--z-raised)] flex items-center gap-3 text-xs transition-opacity ' +
           (alignRight ? 'left-2' : 'right-2') +
           ' ' +
           (hover || focusWithin || reactionPickerOpen
@@ -1078,7 +1078,7 @@ function MessageTaskTag({
         // fill / border / radius stay in lockstep with the board chips.
         data-task-status={status}
         title={title}
-        className="inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none"
+        className="inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none"
       >
         {/* The status glyph is aria-hidden and the fill colour is visual-only,
             and a generic span's aria-label is not reliably exposed — so carry
@@ -1109,7 +1109,7 @@ function MessageTaskTag({
         aria-label={`Task #${linkedTask.task_number} (${label}) — click to change status`}
         // Stop the click from reaching the row's selection/jump capture.
         onClick={e => e.stopPropagation()}
-        className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[11px] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
       >
         {body}
       </button>
@@ -1563,7 +1563,7 @@ function AttachmentTile({
         >
           <FileText className="size-4 shrink-0 text-text-muted" />
           <span className="min-w-0 truncate">{attachment.filename}</span>
-          <span className="shrink-0 text-[10px] text-text-muted">
+          <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">
             {formatBytes(attachment.size)}
           </span>
         </div>
@@ -1583,7 +1583,7 @@ function AttachmentTile({
         >
           <FileText className="size-4 shrink-0 text-text-muted group-hover:text-text-primary" />
           <span className="min-w-0 truncate">{attachment.filename}</span>
-          <span className="shrink-0 text-[10px] text-text-muted group-hover:text-text-primary">
+          <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted group-hover:text-text-primary">
             {formatBytes(attachment.size)}
           </span>
         </button>
@@ -1610,7 +1610,7 @@ function AttachmentTile({
  *  button): on a sent message the label is already fixed. */
 function AttachmentLabelBadge({ label }: { label: string }): JSX.Element {
   return (
-    <span className="block w-full text-center font-mono text-[10px] text-text-muted">
+    <span className="block w-full text-center font-mono text-[length:var(--text-badge)] text-text-muted">
       {label}
     </span>
   );

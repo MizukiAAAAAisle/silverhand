@@ -505,7 +505,7 @@ function MessageAlignmentControl(): JSX.Element {
   return (
     <div
       data-settings-card
-      className="grid gap-2 rounded-[8px] border border-border-subtle bg-bg-floating p-3"
+      className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
@@ -626,7 +626,7 @@ function AccountPane(): JSX.Element {
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="text-xs font-medium text-text-secondary">Log out</p>
-              <p className="text-[11px] text-text-muted">
+              <p className="text-[length:var(--text-meta)] text-text-muted">
                 Ends the current sign-in on this computer.
               </p>
             </div>
@@ -686,7 +686,7 @@ function SharedFontSizeControl({
   return (
     <div
       data-settings-card
-      className="grid gap-2 rounded-[8px] border border-border-subtle bg-bg-floating p-3"
+      className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3"
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
@@ -720,7 +720,7 @@ function SharedFontSizeControl({
             // Hover border = `--border-control-hover` (ink in every theme),
             // not `accent` — see the font-preset pill below for why the
             // saturated hue can't be spent on a utility state.
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
             <RotateCcw className="size-3.5" />
             Reset
@@ -729,7 +729,7 @@ function SharedFontSizeControl({
       </div>
 
       <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 pt-1">
-        <span className="font-mono text-[11px] text-text-muted">
+        <span className="font-mono text-[length:var(--text-meta)] text-text-muted">
           {FONT_SIZE_MIN}px
         </span>
         <input
@@ -786,7 +786,7 @@ function SharedFontSizeControl({
           }}
           className="settings-font-size-slider"
         />
-        <span className="font-mono text-[11px] text-text-muted">
+        <span className="font-mono text-[length:var(--text-meta)] text-text-muted">
           {FONT_SIZE_MAX}px
         </span>
       </div>
@@ -832,13 +832,13 @@ function MarkdownFontControl({
   return (
     <div
       data-settings-card
-      className="grid gap-3 rounded-[8px] border border-border-subtle bg-bg-floating p-3"
+      className="grid gap-3 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3"
     >
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
             data-settings-icon-chip
-            className="flex size-7 shrink-0 items-center justify-center rounded-[6px] bg-bg-elevated text-text-secondary"
+            className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] bg-bg-elevated text-text-secondary"
           >
             {icon}
           </span>
@@ -854,7 +854,7 @@ function MarkdownFontControl({
           data-settings-card
           onClick={onReset}
           disabled={!fontValue}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[6px] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
         >
           <RotateCcw className="size-3.5" />
           Reset
@@ -890,7 +890,7 @@ function MarkdownFontControl({
                 data-selected={isSelected || undefined}
                 onClick={() => onFontChange(preset.value)}
                 className={cn(
-                  'rounded-[999px] border px-2 py-1 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+                  'rounded-full border px-2 py-1 text-[length:var(--text-meta)] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
                   isSelected
                     ? 'border-accent bg-accent text-text-on-accent'
                     // Hover is a UTILITY state, so its border rides the
@@ -915,7 +915,7 @@ function MarkdownFontControl({
       <div
         data-settings-card
         className={cn(
-          'rounded-[6px] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary',
+          'rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary',
           code ? 'font-mono' : '',
         )}
         style={sampleStyle}

@@ -944,7 +944,7 @@ function AttachmentChip({
       )}
       <div className="flex min-w-0 flex-1 flex-col">
         <span className="truncate">{item.filename}</span>
-        <div className="flex items-center gap-1 text-[10px] text-text-muted">
+        <div className="flex items-center gap-1 text-[length:var(--text-badge)] text-text-muted">
           {item.label ? (
             onInsertLabel ? (
               <button
@@ -1339,7 +1339,7 @@ function PickerMenu({
       {hiddenCount > 0 ? (
         <div
           aria-hidden
-          className="border-t border-border-subtle px-3 py-1.5 text-[11px] text-text-muted"
+          className="border-t border-border-subtle px-3 py-1.5 text-[length:var(--text-meta)] text-text-muted"
         >
           +{hiddenCount} more
         </div>
@@ -1357,7 +1357,7 @@ function SectionHeader({ label }: { label: string }): JSX.Element {
   return (
     <div
       role="presentation"
-      className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wider text-text-muted"
+      className="px-2 pb-1 pt-1.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted"
     >
       {label}
     </div>
@@ -1430,7 +1430,7 @@ function Row({
             <span className="truncate text-sm font-medium text-text-primary">
               {item.agent.display_name?.trim() || item.agent.name}
             </span>
-            <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+            <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
               <span className="truncate font-mono">@{item.agent.name}</span>
               <span aria-hidden>·</span>
               {/* v6.9.7 #task:917 (shiki composer audit B): runtime
@@ -1439,7 +1439,7 @@ function Row({
                   agent-runtime visual identity stays uniform across
                   every place the app surfaces it (Members rows,
                   mention picker, future Hosts). Other themes inherit
-                  the wrapping parent's `text-[11px] text-text-muted`
+                  the wrapping parent's `text-[length:var(--text-meta)] text-text-muted`
                   unchanged. */}
               <span data-agent-runtime className="shrink-0">
                 {item.agent.runtime}
@@ -1458,7 +1458,7 @@ function Row({
             <span className="truncate text-sm font-medium text-text-primary">
               {item.human.display_name?.trim() || item.human.name}
             </span>
-            <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+            <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
               <span className="truncate font-mono">@{item.human.name}</span>
               <span aria-hidden>·</span>
               {/* Same HUD-tag treatment as the agent runtime above.

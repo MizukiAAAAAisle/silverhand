@@ -131,7 +131,7 @@ export function PresencePill({
     return (
       <span
         data-panel-pill="presence-offline"
-        className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+        className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted"
       >
         <span className="size-1.5 rounded-full bg-text-muted/60" />
         {label ?? 'Offline'}
@@ -141,7 +141,7 @@ export function PresencePill({
   return (
     <span
       data-panel-pill="presence"
-      className="inline-flex items-center gap-1.5 bg-success px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-on-success"
+      className="inline-flex items-center gap-1.5 bg-success px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-on-success"
     >
       <span className="size-1.5 rounded-full bg-text-on-success/90" />
       {label ?? 'Online'}

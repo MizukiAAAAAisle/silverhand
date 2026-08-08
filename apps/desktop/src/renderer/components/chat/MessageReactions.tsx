@@ -159,7 +159,7 @@ function ReactionChip({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          className="z-[80] max-w-[240px] rounded-[var(--floating-radius)] border border-border bg-bg-floating px-2.5 py-1.5 text-xs text-text-primary shadow-popover outline-none"
+          className="z-[var(--z-popover)] max-w-[240px] rounded-[var(--floating-radius)] border border-border bg-bg-floating px-2.5 py-1.5 text-xs text-text-primary shadow-popover outline-none"
         >
           <span className="mr-1">{agg.emoji}</span>
           {reactors.isLoading && names.length === 0 ? (

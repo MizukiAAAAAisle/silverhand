@@ -22,7 +22,7 @@ export const FILTER_SELECT_TRIGGER_CLASS =
   'flex h-8 w-full items-center justify-between gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating px-2.5 text-xs text-text-primary outline-none transition-colors hover:border-[color:var(--border-control-hover)] focus:border-border-focus data-[placeholder]:text-text-muted';
 
 export const FILTER_SELECT_CONTENT_CLASS =
-  'z-[60] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover';
+  'z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--select-content-radius)] border border-border bg-bg-floating shadow-popover';
 
 export const FILTER_SELECT_ITEM_CLASS =
   'relative flex cursor-default select-none items-center gap-2 rounded-[var(--select-item-radius)] px-2 py-1.5 pr-7 text-xs text-text-primary outline-none data-[highlighted]:bg-bg-hover data-[highlighted]:text-text-primary data-[disabled]:cursor-not-allowed data-[disabled]:text-text-muted data-[disabled]:opacity-60 data-[disabled]:data-[highlighted]:bg-transparent';
@@ -73,7 +73,7 @@ export function FilterSelectItem({
         <span className="truncate">{children}</span>
       </Select.ItemText>
       {suffix ? (
-        <span className="ml-auto text-[10px] text-text-muted">{suffix}</span>
+        <span className="ml-auto text-[length:var(--text-badge)] text-text-muted">{suffix}</span>
       ) : null}
       <Select.ItemIndicator className="absolute right-2 inline-flex items-center">
         <Check className="size-3.5 text-accent" />

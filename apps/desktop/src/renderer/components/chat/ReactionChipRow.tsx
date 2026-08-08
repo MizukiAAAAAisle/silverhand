@@ -59,7 +59,7 @@ export function ReactionChipBody({
 }): JSX.Element {
   return (
     <>
-      <span className="text-[13px] leading-none">{agg.emoji}</span>
+      <span className="text-[length:var(--text-strong)] leading-none">{agg.emoji}</span>
       <span
         className={
           'font-semibold ' +

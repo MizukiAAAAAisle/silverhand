@@ -131,7 +131,7 @@ export function Combobox({
           align="start"
           sideOffset={4}
           onOpenAutoFocus={e => e.preventDefault()}
-          className="z-[60] max-h-[42vh] min-w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-[var(--select-content-radius)] border border-border bg-bg-floating p-1 shadow-popover"
+          className="z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-[var(--select-content-radius)] border border-border bg-bg-floating p-1 shadow-popover"
         >
           {suggestions.map(s => (
             <button

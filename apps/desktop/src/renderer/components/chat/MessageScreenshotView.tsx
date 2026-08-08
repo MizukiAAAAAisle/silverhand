@@ -271,7 +271,7 @@ function ScreenshotRow({
         }
         timestamp={
           continuesPrevious ? null : (
-            <span className="text-[11px] text-text-muted">{time}</span>
+            <span className="text-[length:var(--text-meta)] text-text-muted">{time}</span>
           )
         }
         taskTag={null}
@@ -360,7 +360,7 @@ function ScreenshotAttachmentTile({
   const isImage = attachment.content_type.startsWith('image/');
   const filename = sanitizeScreenshotText(attachment.filename);
   const labelBadge = label ? (
-    <span className="block w-full text-center font-mono text-[10px] text-text-muted">
+    <span className="block w-full text-center font-mono text-[length:var(--text-badge)] text-text-muted">
       {label}
     </span>
   ) : null;
@@ -384,7 +384,7 @@ function ScreenshotAttachmentTile({
       <div className="flex max-w-[280px] items-center gap-2 rounded-md border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary">
         <FileText className="size-4 shrink-0 text-text-muted" />
         <span className="min-w-0 truncate">{filename}</span>
-        <span className="shrink-0 text-[10px] text-text-muted">
+        <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">
           {formatBytes(attachment.size)}
         </span>
       </div>

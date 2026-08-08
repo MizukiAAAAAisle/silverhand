@@ -55,8 +55,8 @@ export function ReactionPicker({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          // z-[85]: above the reactor hover-card (z-[80]), below modals.
-          className="z-[85] rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1.5 shadow-popover outline-none"
+          // z-[var(--z-popover-nested)]: above the reactor hover-card (z-[var(--z-popover)]), below modals.
+          className="z-[var(--z-popover-nested)] rounded-[var(--floating-radius)] border border-border bg-bg-floating p-1.5 shadow-popover outline-none"
         >
           <div className="grid grid-cols-8 gap-0.5">
             {QUICK_REACTIONS.map(emoji => (
@@ -68,7 +68,7 @@ export function ReactionPicker({
                   onPick(emoji);
                 }}
                 aria-label={`React ${emoji}`}
-                className="flex size-7 items-center justify-center rounded-[var(--floating-item-radius)] text-[17px] leading-none transition-colors hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="flex size-7 items-center justify-center rounded-[var(--floating-item-radius)] text-base leading-none transition-colors hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
               >
                 {emoji}
               </button>

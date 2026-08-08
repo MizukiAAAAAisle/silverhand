@@ -131,7 +131,7 @@ function EditInSettingsButton(): JSX.Element {
         persistSettingsSection('account');
         nav.toSettings();
       }}
-      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] px-1 py-0.5 text-[11px] text-text-muted transition-colors hover:text-text-primary"
+      className="inline-flex items-center gap-1 rounded-[var(--control-radius)] px-1 py-0.5 text-[length:var(--text-meta)] text-text-muted transition-colors hover:text-text-primary"
       title="Edit in Settings"
     >
       <Pencil className="size-3" />

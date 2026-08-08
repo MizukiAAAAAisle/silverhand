@@ -92,7 +92,7 @@ export function AuthorAvatarView({
 export function DeletedActorMarker(): JSX.Element {
   return (
     <span
-      className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-px text-[10px] font-medium uppercase tracking-wide text-text-muted"
+      className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-px text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted"
       title="This account was deleted"
     >
       deleted

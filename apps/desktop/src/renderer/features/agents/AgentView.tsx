@@ -463,19 +463,19 @@ function AgentSidePanel({
                 ellipsis-truncates on overflow (shiki). Two-line block height is
                 fixed regardless of description length. */}
             <div className="flex items-baseline gap-1.5">
-              <span className="shrink-0 text-[13px] font-semibold leading-tight text-text-primary">
+              <span className="shrink-0 text-[length:var(--text-strong)] font-semibold leading-tight text-text-primary">
                 {agent.display_name || agent.name}
               </span>
               {agent.description ? (
                 <span
-                  className="min-w-0 flex-1 truncate text-[12px] font-normal leading-tight text-text-muted"
+                  className="min-w-0 flex-1 truncate text-xs font-normal leading-tight text-text-muted"
                   title={agent.description}
                 >
                   {agent.description}
                 </span>
               ) : null}
             </div>
-            <p className="truncate text-[11px] capitalize leading-tight text-text-muted">
+            <p className="truncate text-[length:var(--text-meta)] capitalize leading-tight text-text-muted">
               {agent.runtime}
               {agent.model ? ` · ${agent.model}` : ''}
             </p>
@@ -505,7 +505,7 @@ function AgentSidePanel({
               aria-selected={selected}
               onClick={() => setSection(tab.id)}
               className={cn(
-                'flex items-center gap-1.5 border-b-2 px-2.5 py-2 text-[12px] -mb-px',
+                'flex items-center gap-1.5 border-b-2 px-2.5 py-2 text-xs -mb-px',
                 selected
                   ? 'border-text-primary font-medium text-text-primary'
                   : 'border-transparent text-text-muted hover:text-text-secondary',

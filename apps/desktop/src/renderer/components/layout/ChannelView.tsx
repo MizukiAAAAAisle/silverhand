@@ -671,12 +671,12 @@ function ActiveChannelView({
           </>
         )}
         {closed ? (
-          <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-[10px] uppercase tracking-wider text-text-muted">
+          <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
             closed
           </span>
         ) : null}
         {isArchived ? (
-          <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] uppercase tracking-wider text-accent">
+          <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-accent">
             archived
           </span>
         ) : null}
@@ -690,7 +690,7 @@ function ActiveChannelView({
               aria-pressed={find.open}
               title="Search this channel"
               className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
+                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
                 (find.open
                   ? 'bg-bg-hover text-text-primary'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
@@ -707,7 +707,7 @@ function ActiveChannelView({
               aria-pressed={threadsListActive}
               title="Threads"
               className={
-                'relative flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
+                'relative flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
                 (threadsListActive
                   ? 'bg-bg-hover text-text-primary'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
@@ -733,7 +733,7 @@ function ActiveChannelView({
               aria-pressed={filesListActive}
               title="Attachments"
               className={
-                'flex size-7 shrink-0 items-center justify-center rounded-[6px] ' +
+                'flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] ' +
                 (filesListActive
                   ? 'bg-bg-hover text-text-primary'
                   : 'text-text-muted hover:bg-bg-hover hover:text-text-primary')
@@ -759,7 +759,7 @@ function ActiveChannelView({
               onClick={() => setSettingsOpen(true)}
               aria-label="Channel settings"
               title="Channel settings"
-              className="flex size-7 shrink-0 items-center justify-center rounded-[6px] text-text-muted hover:bg-bg-hover hover:text-text-primary"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary"
             >
               <Settings className="size-3.5" />
             </button>
@@ -801,7 +801,7 @@ function ActiveChannelView({
           search controller + this overlay; the message window is untouched
           until the user navigates to a match (ensure-visible below). */}
       {findAvailable && find.open ? (
-        <div className="absolute inset-x-0 top-12 z-20">
+        <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
           <InlineFindBar
             controller={find}
             onOpenAdvanced={() =>

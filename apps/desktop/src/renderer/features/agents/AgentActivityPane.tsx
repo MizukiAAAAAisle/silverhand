@@ -110,7 +110,7 @@ export function AgentActivityPane({
       >
         <div className="flex-1 overflow-y-auto px-1.5 py-2">
           {groups.active.length === 0 && groups.recent.length === 0 ? (
-            <p className="px-2 py-6 text-center text-[11px] text-text-muted">
+            <p className="px-2 py-6 text-center text-[length:var(--text-meta)] text-text-muted">
               Not in any channel yet.
             </p>
           ) : (
@@ -166,7 +166,7 @@ function RosterGroup({
   if (rows.length === 0) return null;
   return (
     <div className="mb-0.5">
-      <p className="px-2 pb-0.5 pt-1 font-mono text-[9.5px] uppercase tracking-wider text-text-muted">
+      <p className="px-2 pb-0.5 pt-1 font-mono text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
         {label}
       </p>
       <ul className="flex flex-col">
@@ -234,7 +234,7 @@ function RosterItem({
           kind={isDm ? 'dm' : 'channel'}
           className={selected ? 'text-text-on-selected' : 'text-text-muted'}
         />
-        <span className="min-w-0 flex-1 truncate text-[12px]">
+        <span className="min-w-0 flex-1 truncate text-xs">
           {row.channel_title}
         </span>
         {live ? (

@@ -5,7 +5,7 @@ import { ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 const MENU_CONTENT_CLASS =
-  'z-[80] min-w-[180px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-popover outline-none';
+  'z-[var(--z-popover)] min-w-[180px] rounded-md border border-border bg-bg-floating p-1 text-xs text-text-primary shadow-popover outline-none';
 
 const MENU_ITEM_CLASS = cn(
   // `cursor-pointer` on hover so the menu reads as actionable; Radix's
@@ -34,7 +34,7 @@ function AppMenuItemContent({
       </span>
       <span className="min-w-0 flex-1 truncate">{children}</span>
       {trailing ? (
-        <span className="shrink-0 text-[10px] text-text-muted">{trailing}</span>
+        <span className="shrink-0 text-[length:var(--text-badge)] text-text-muted">{trailing}</span>
       ) : null}
     </>
   );

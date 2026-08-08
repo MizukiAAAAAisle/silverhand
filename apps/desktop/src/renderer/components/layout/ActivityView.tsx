@@ -417,7 +417,7 @@ function ActivitySection({
 }): JSX.Element {
   return (
     <section>
-      <div className="px-1 pb-1.5 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+      <div className="px-1 pb-1.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
         {label}
       </div>
       <ul className="space-y-2">
@@ -603,7 +603,7 @@ function ActivityRow({
 
         {/* Timestamp pairs with the where-line, so it stays TOP-right (the row is
             items-start). */}
-        <span className="shrink-0 text-[11px] text-text-muted">
+        <span className="shrink-0 text-[length:var(--text-meta)] text-text-muted">
           {relTime(item.timestamp)}
         </span>
         {clearSource ? (

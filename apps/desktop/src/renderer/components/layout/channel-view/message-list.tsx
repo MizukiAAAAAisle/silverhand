@@ -863,7 +863,7 @@ export function MessageList({
               setBottomAnchorVersion(v => v + 1);
             }
           }}
-          className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
+          className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
         >
           <ArrowDown className="size-4" />
         </button>

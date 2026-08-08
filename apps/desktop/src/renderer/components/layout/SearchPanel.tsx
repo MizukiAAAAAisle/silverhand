@@ -286,7 +286,7 @@ export function SearchPanel({
           <div className="space-y-5">
             {resultGroups.map(group => (
               <section key={group.key}>
-                <header className="mb-2 flex items-center gap-2 px-1 text-[11px] font-medium uppercase leading-none tracking-wider text-text-muted">
+                <header className="mb-2 flex items-center gap-2 px-1 text-[length:var(--text-meta)] font-medium uppercase leading-none tracking-wider text-text-muted">
                   {group.icon}
                   <span className="leading-none">{group.label}</span>
                   <span className="leading-none text-text-muted/70">
@@ -381,7 +381,7 @@ function WorkspaceFilterSelect({
             </SelectItem>
             {dms.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   DMs
                 </Select.Label>
                 {dms.map(workspace => (
@@ -404,7 +404,7 @@ function WorkspaceFilterSelect({
             ) : null}
             {regular.length > 0 ? (
               <Select.Group>
-                <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+                <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                   Workspaces
                 </Select.Label>
                 {regular.map(workspace => (
@@ -491,7 +491,7 @@ function SenderFilterSelect({
               All senders
             </SelectItem>
             <Select.Group>
-              <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                 Humans
               </Select.Label>
               {sortedUsers.length === 0 ? (
@@ -524,7 +524,7 @@ function SenderFilterSelect({
               )}
             </Select.Group>
             <Select.Group>
-              <Select.Label className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              <Select.Label className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted">
                 Agents
               </Select.Label>
               {agents.length === 0 ? (

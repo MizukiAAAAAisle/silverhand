@@ -63,7 +63,7 @@ export function ProfileSection({
         <div className="flex min-w-0 items-center gap-1.5">
           <h3
             className={cn(
-              'font-serif text-[13px] font-semibold uppercase tracking-wider',
+              'font-serif text-[length:var(--text-strong)] font-semibold uppercase tracking-wider',
               muted ? 'text-text-muted' : 'text-text-secondary',
             )}
           >
@@ -72,7 +72,7 @@ export function ProfileSection({
           {titleAdornment ?? null}
         </div>
         {headerSlot ? (
-          <div className="text-[11px] text-text-muted">{headerSlot}</div>
+          <div className="text-[length:var(--text-meta)] text-text-muted">{headerSlot}</div>
         ) : null}
       </header>
       <div
@@ -130,12 +130,12 @@ export function ProfileField({
 }: ProfileFieldProps): JSX.Element {
   return (
     <div className={cn('flex min-w-0 flex-col gap-1', full ? 'sm:col-span-2' : '')}>
-      <div className="text-[11px] font-medium uppercase tracking-wider text-text-muted">
+      <div className="text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted">
         {label}
       </div>
       <div className="min-w-0">{children}</div>
       {hint ? (
-        <div className="text-[11px] leading-snug text-text-muted">{hint}</div>
+        <div className="text-[length:var(--text-meta)] leading-snug text-text-muted">{hint}</div>
       ) : null}
     </div>
   );
@@ -176,7 +176,7 @@ export function MetadataList({
         >
           <dt
             data-metadata-label
-            className="text-[11px] uppercase tracking-wider text-text-muted"
+            className="text-[length:var(--text-meta)] uppercase tracking-wider text-text-muted"
           >
             {item.label}
           </dt>

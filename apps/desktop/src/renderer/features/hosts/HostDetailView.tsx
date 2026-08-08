@@ -854,7 +854,7 @@ function CascadeImpact({
 }): JSX.Element {
   return (
     <div className="rounded-[var(--control-radius)] bg-[var(--warning-surface)] px-3 py-2.5">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-warning">
+      <p className="text-[length:var(--text-meta)] font-semibold uppercase tracking-wider text-warning">
         {computerCopy.deleteCascadeImpactTitle}
       </p>
       <ul className="mt-2 flex flex-col gap-1.5" aria-label="Agents to be removed">
@@ -1093,7 +1093,7 @@ function ProxySection({
                       data-runtime-tile-check
                       data-checked={checked || undefined}
                       className={cn(
-                        'flex size-4 shrink-0 items-center justify-center rounded-[4px] border',
+                        'flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border',
                         checked
                           ? 'border-accent bg-accent text-text-on-accent'
                           : 'border-border-subtle bg-bg-floating text-transparent',
@@ -1106,7 +1106,7 @@ function ProxySection({
                     <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
                       {runtimeLabel(kind)}
                     </span>
-                    <span className="shrink-0 font-mono text-[11px] text-text-muted">
+                    <span className="shrink-0 font-mono text-[length:var(--text-meta)] text-text-muted">
                       {kind}
                     </span>
                   </label>
@@ -1197,7 +1197,7 @@ function HostHero({
         {/* shiki dogfood `hLEODapuI_dHuCPz` / `z5DyAzlG34Rto52-`:
             state row in the MIDDLE between title and meta.
             v6.9 (#task:917): chip refactored to PresencePill geometry
-            (border + py-0.5 + text-[10px], ≈20-21px tall), so Refresh
+            (border + py-0.5 + text-[length:var(--text-badge)], ≈20-21px tall), so Refresh
             and the Loading placeholder both drop from `h-7` (28px) to
             a matching structural construction (border + py-0.5 around
             a 15px glyph) — same vertical anatomy as the chip, no
@@ -1207,7 +1207,7 @@ function HostHero({
           {statusLabel && statusTone ? (
             <StatusChip label={statusLabel} tone={statusTone} />
           ) : statusLoading ? (
-            <span className="inline-flex items-center gap-1.5 border border-transparent px-1 py-0.5 text-[10px] text-text-muted">
+            <span className="inline-flex items-center gap-1.5 border border-transparent px-1 py-0.5 text-[length:var(--text-badge)] text-text-muted">
               <Loader2 className="size-[15px] animate-spin" aria-hidden />
               <span>Loading…</span>
             </span>
@@ -1302,7 +1302,7 @@ function StatusChip({
     <span
       role="status"
       data-panel-pill="host-status"
-      className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-secondary"
+      className="inline-flex items-center gap-1.5 border border-border-subtle bg-transparent px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-secondary"
     >
       <span
         data-status-pip
@@ -1325,7 +1325,7 @@ function ProvenanceChip(): JSX.Element {
   return (
     <span
       data-panel-pill="host-provenance"
-      className="inline-flex items-center border border-border-subtle bg-transparent px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted"
+      className="inline-flex items-center border border-border-subtle bg-transparent px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider text-text-muted"
     >
       {computerCopy.appManaged}
     </span>
@@ -1390,7 +1390,7 @@ function SystemField({
 }): JSX.Element {
   return (
     <div className="flex items-baseline gap-4">
-      <dt className="w-36 shrink-0 text-[11px] font-medium uppercase tracking-wider text-text-muted">
+      <dt className="w-36 shrink-0 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted">
         {label}
       </dt>
       <dd data-host-system-value className="min-w-0 flex-1 text-sm tabular-nums">
@@ -1569,7 +1569,7 @@ function HostSection({
   return (
     <section className="flex flex-col border-t border-border-subtle py-6 first:border-t-0">
       <header className="mb-3.5">
-        <h3 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-text-muted">
+        <h3 className="text-[length:var(--text-meta)] font-semibold uppercase tracking-[0.14em] text-text-muted">
           {title}
         </h3>
       </header>
@@ -1675,7 +1675,7 @@ function AgentStatusPip({
     <span
       role="status"
       aria-label={online === 'online' ? 'Online' : 'Offline'}
-      className="inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-text-muted"
+      className="inline-flex items-center gap-1.5 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-muted"
     >
       <span
         data-status-pip

@@ -10,7 +10,7 @@ import { AgentAvatar } from '@/components/AgentAvatar';
  *
  * - regular workspace → a serif `W` carrying the theme-neutral
  *   `data-workspace-icon` hook. Every theme paints it as a filled square poster
- *   badge (`text-[16px]` here is only the unthemed fallback — the themes
+ *   badge (`text-base` here is only the unthemed fallback — the themes
  *   override the glyph to 11px). Layout/size stays here; identity painting lives
  *   in the theme (#task:1160).
  * - DM workspace → the bound agent's avatar (DMs are 1:1 with an agent), so the
@@ -59,7 +59,7 @@ export function WorkspaceIcon({
     <span
       data-workspace-icon
       style={{ width: size, height: size }}
-      className="inline-flex shrink-0 items-center justify-center font-serif text-[16px] font-semibold leading-none"
+      className="inline-flex shrink-0 items-center justify-center font-serif text-base font-semibold leading-none"
     >
       W
     </span>

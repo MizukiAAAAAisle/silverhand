@@ -139,7 +139,7 @@ export function EditableAgentAvatar({
           type="button"
           onClick={() => void onRemove()}
           disabled={pending}
-          className="text-[11px] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
+          className="text-[length:var(--text-meta)] text-text-muted underline-offset-2 hover:underline disabled:opacity-50"
         >
           Remove
         </button>
@@ -147,7 +147,7 @@ export function EditableAgentAvatar({
       {error ? (
         <p
           role="alert"
-          className="text-[11px] leading-snug text-error"
+          className="text-[length:var(--text-meta)] leading-snug text-error"
           data-testid="agent-avatar-error"
         >
           {error}

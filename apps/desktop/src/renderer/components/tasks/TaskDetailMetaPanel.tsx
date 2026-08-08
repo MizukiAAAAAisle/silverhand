@@ -84,12 +84,12 @@ function MetaRow({
 }): JSX.Element {
   return (
     <div className="grid grid-cols-[68px_1fr] items-start gap-x-2">
-      <span className="chrome-label text-[10px] font-medium leading-4 text-text-muted">
+      <span className="chrome-label text-[length:var(--text-badge)] font-medium leading-4 text-text-muted">
         {label}
       </span>
       <div className="min-w-0 text-xs leading-4 text-text-primary">
         {children}
-        {error ? <p className="mt-0.5 text-[11px] text-error">{error}</p> : null}
+        {error ? <p className="mt-0.5 text-[length:var(--text-meta)] text-error">{error}</p> : null}
       </div>
     </div>
   );

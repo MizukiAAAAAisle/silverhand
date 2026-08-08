@@ -113,7 +113,7 @@ export function ConnectionCommandCard({
       >
         {/* Terminal title bar: label left, Reveal + Copy right. */}
         <div className="flex items-center justify-between gap-2 border-b border-[var(--border-terminal)] bg-[var(--bg-terminal-chrome)] px-3 py-1.5">
-          <span className="inline-flex items-center gap-1.5 font-mono text-[11px] uppercase tracking-wider text-[var(--text-terminal-chrome)]">
+          <span className="inline-flex items-center gap-1.5 font-mono text-[length:var(--text-meta)] uppercase tracking-wider text-[var(--text-terminal-chrome)]">
             <Terminal className="size-3.5" aria-hidden />
             {label}
           </span>
@@ -122,7 +122,7 @@ export function ConnectionCommandCard({
               type="button"
               onClick={() => setRevealed(v => !v)}
               disabled={!daemonCommand}
-              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[11px] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[length:var(--text-meta)] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={revealed ? computerCopy.hide : computerCopy.reveal}
             >
               {revealed ? (
@@ -136,7 +136,7 @@ export function ConnectionCommandCard({
               type="button"
               onClick={() => void handleCopy()}
               disabled={!daemonCommand}
-              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[11px] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
+              className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-[length:var(--text-meta)] text-[var(--text-terminal-chrome)] transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
               aria-label={computerCopy.copy}
             >
               {copied ? (

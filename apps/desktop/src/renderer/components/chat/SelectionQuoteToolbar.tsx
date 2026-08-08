@@ -214,7 +214,7 @@ export function SelectionQuoteToolbar({
       // hairline) so forza6 gets its 2px hard-ink poster frame + 0 radius
       // while warm/slack keep their softer 1px + 6px surface. Matches the
       // Lightbox / ImagePreviewModal / SelectionToolbar floating idiom.
-      className="z-[80] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
+      className="z-[var(--z-popover)] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
     >
       <SelectionQuoteButton
         icon={<TextQuote className="size-3.5" />}

@@ -261,7 +261,7 @@ export function WorkspaceChannels({
           type="button"
           onClick={() => onCreateChannel(workspaceId)}
           className={
-            'flex h-7 w-full items-center gap-1.5 text-left text-[12px] text-text-muted hover:text-text-primary ' +
+            'flex h-7 w-full items-center gap-1.5 text-left text-xs text-text-muted hover:text-text-primary ' +
             NESTED_GLYPH_INSET
           }
         >
@@ -466,7 +466,7 @@ function ChannelRow({
       <button
         type="button"
         onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px]"
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs"
       >
         <ChannelIcon
           variant="sticker"

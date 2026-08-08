@@ -118,7 +118,7 @@ const CHIP =
   // viewport + WorkspaceTasksDrawer at MIN_WIDTH share 5 columns). The
   // chip drops to its own line beneath `#nnn` instead of breaking
   // mid-word.
-  'rounded-[var(--chip-radius)] whitespace-nowrap px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide leading-none';
+  'rounded-[var(--chip-radius)] whitespace-nowrap px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide leading-none';
 
 export function TaskStatusBadge({
   status,
@@ -214,13 +214,13 @@ export function StatusPicker({
           // 点击 status 后卡片无法失焦消失).
           onCloseAutoFocus={e => e.preventDefault()}
           data-popover-frame="info"
-          // z-[85] clears the hover-card task popover (z-[80] in
+          // z-[var(--z-popover-nested)] clears the hover-card task popover (z-[var(--z-popover)] in
           // HoverPopover) so the picker isn't trapped behind its own
-          // host; stays under the modal layer (z-[90]+). Harmless in the
+          // host; stays under the modal layer (z-[var(--z-lightbox)]+). Harmless in the
           // task-card context where nothing floats this high. #task:923
-          className="z-[85] min-w-[136px] bg-bg-floating p-1 shadow-popover outline-none"
+          className="z-[var(--z-popover-nested)] min-w-[136px] bg-bg-floating p-1 shadow-popover outline-none"
         >
-          <div className="px-1.5 pb-1 pt-0.5 text-[9px] font-medium uppercase tracking-wider text-text-muted">
+          <div className="px-1.5 pb-1 pt-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
             Move to
           </div>
           {ALL_STATUSES.filter(s => s !== current).map(s => (

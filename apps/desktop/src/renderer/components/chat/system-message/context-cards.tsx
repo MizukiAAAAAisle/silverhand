@@ -130,7 +130,7 @@ function ContextCardShell({
       <div className="mb-1 flex items-center gap-1.5 text-xs text-text-muted">
         <span
           className={
-            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider ' +
+            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[length:var(--text-badge)] font-semibold uppercase tracking-wider ' +
             CONTEXT_KIND_TAG_BG[model.kind]
           }
         >
@@ -237,7 +237,7 @@ function ContextCardLegacyFallback({
       <div className="mb-1">
         <span
           className={
-            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider ' +
+            'inline-flex items-center gap-1 rounded-sm px-1.5 py-px text-[length:var(--text-badge)] font-semibold uppercase tracking-wider ' +
             CONTEXT_KIND_TAG_BG[kind]
           }
         >

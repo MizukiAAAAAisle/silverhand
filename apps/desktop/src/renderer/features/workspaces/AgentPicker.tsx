@@ -215,7 +215,7 @@ export function MemberPicker({
           <Select.Content
             position="popper"
             sideOffset={4}
-            className="z-[60] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover"
+            className="z-[var(--z-in-dialog)] max-h-[40vh] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-md border border-border bg-bg-floating shadow-popover"
           >
             <Select.Viewport className="p-1">
               {candidates.length === 0 ? (
@@ -256,7 +256,7 @@ export function MemberPicker({
                           <span className="truncate font-medium">
                             {displayName}
                           </span>
-                          <span className="truncate font-mono text-[11px] text-text-muted">
+                          <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
                             @{handle}
                           </span>
                         </span>
@@ -323,7 +323,7 @@ function SelectedTag({
       <span className="flex min-w-0 items-baseline gap-1">
         <span className="truncate font-medium">{displayName}</span>
         {handle ? (
-          <span className="truncate font-mono text-[11px] text-text-muted">
+          <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
             @{handle}
           </span>
         ) : null}

@@ -888,7 +888,7 @@ export function ThreadPanel({
           It drives only the search controller + overlay; the cluster window is
           untouched until the user navigates to a match (ensure-visible above). */}
       {findAvailable && find.open ? (
-        <div className="absolute inset-x-0 top-12 z-20">
+        <div className="absolute inset-x-0 top-12 z-[var(--z-sticky)]">
           <InlineFindBar
             controller={find}
             onOpenAdvanced={() => onOpenAdvancedSearch?.(find.query, workspaceId)}
@@ -1012,7 +1012,7 @@ export function ThreadPanel({
               aria-label={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
               title={shouldResetToLatest ? 'Jump to latest reply' : 'Scroll to bottom'}
               onClick={handleScrollBottomClick}
-              className="absolute bottom-4 left-1/2 z-20 flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
+              className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex size-9 -translate-x-1/2 items-center justify-center rounded-full bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
             >
               <ArrowDown className="size-4" />
             </button>

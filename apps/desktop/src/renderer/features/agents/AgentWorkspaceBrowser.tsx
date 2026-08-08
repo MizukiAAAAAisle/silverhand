@@ -175,7 +175,7 @@ function FullBrowser({
             across both panes. Header is outside the scroll box below so it
             stays put while the tree scrolls. */}
         <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
-          <span className="text-[11px] uppercase tracking-[0.08em] text-text-muted">
+          <span className="text-[length:var(--text-meta)] uppercase tracking-[0.08em] text-text-muted">
             Files
           </span>
           <RefreshButton
@@ -238,7 +238,7 @@ function CompactBrowser({
               <ChevronRight className="size-4 rotate-180" />
             </button>
             <span
-              className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-text-primary"
+              className="min-w-0 flex-1 truncate font-mono text-[length:var(--text-meta)] text-text-primary"
               title={selectedPath}
             >
               {leafName(selectedPath)}
@@ -377,7 +377,7 @@ function WorkspaceFileTree({
   };
 
   return (
-    <ul className="flex flex-col py-1 text-[12px]">
+    <ul className="flex flex-col py-1 text-xs">
       {tree.nodes.map(node => {
         if (isHidden(node.path)) return null;
         const depth = node.path.split('/').length - 1;
@@ -539,12 +539,12 @@ function WorkspaceFilePreview({
         <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle bg-bg-base px-4 py-2">
           <FileText className="size-3.5 shrink-0 text-text-muted" />
           <span
-            className="min-w-0 flex-1 truncate font-mono text-[12px] text-text-primary"
+            className="min-w-0 flex-1 truncate font-mono text-xs text-text-primary"
             title={path}
           >
             {path}
           </span>
-          <span className="shrink-0 text-[11px] text-text-muted">
+          <span className="shrink-0 text-[length:var(--text-meta)] text-text-muted">
             {formatBytes(file.size)} ·{' '}
             {dayjs(file.mtime).format('YYYY-MM-DD HH:mm')}
           </span>
@@ -563,7 +563,7 @@ function WorkspaceFilePreview({
       {file.truncated ? (
         <div
           data-panel-card="placeholder"
-          className="shrink-0 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[11px] text-text-on-warning"
+          className="shrink-0 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[length:var(--text-meta)] text-text-on-warning"
         >
           Preview truncated at 512 KB. The full file lives on the agent's host —
           not all of it is shown here.
@@ -576,7 +576,7 @@ function WorkspaceFilePreview({
           // daemon's read cap (the banner above says so when it bit).
           <Markdown content={file.content} renderBudget="unbounded" />
         ) : (
-          <pre className="whitespace-pre-wrap break-words font-mono text-[12px]">
+          <pre className="whitespace-pre-wrap break-words font-mono text-xs">
             {file.content}
           </pre>
         )}

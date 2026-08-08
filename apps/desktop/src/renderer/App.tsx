@@ -2500,7 +2500,7 @@ function RegisteredAppShell(): JSX.Element {
         * user sees activity instead of a frozen window. Rendered above
         * everything and not dismissible — the app is closing. */}
       {shutdownStep !== null ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-bg-base/30 backdrop-blur-[1px]">
+        <div className="fixed inset-0 z-[var(--z-toolbar)] flex items-center justify-center bg-bg-base/30 backdrop-blur-[1px]">
           <div className="w-[420px] max-w-[calc(100vw-48px)] rounded-md border border-border bg-bg-floating/95 px-5 py-4 shadow-modal">
             <div className="flex items-center gap-4">
               <div className="relative flex size-12 shrink-0 items-center justify-center rounded-full bg-accent-soft text-accent">

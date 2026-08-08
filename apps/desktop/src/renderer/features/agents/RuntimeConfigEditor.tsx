@@ -981,7 +981,7 @@ function triggerClass(): string {
 }
 
 function contentClass(): string {
-  return 'z-[60] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 shadow-popover';
+  return 'z-[var(--z-in-dialog)] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 shadow-popover';
 }
 
 function itemClass(): string {

@@ -364,7 +364,7 @@ export function SidebarSectionHeader({
   return (
     <header
       className={
-        'mb-1 flex items-stretch justify-between text-[12px] font-medium tracking-wider text-text-muted ' +
+        'mb-1 flex items-stretch justify-between text-xs font-medium tracking-wider text-text-muted ' +
         (swapGlyph ? 'group/section' : '')
       }
     >
@@ -426,8 +426,8 @@ export type UnreadBadgeTier = 'loud' | 'quiet';
  * The ONE unread count pill for every sidebar surface (home rail workspace rows,
  * STARRED rows, channel rows). Extracted in #task:1870: the recipe had been
  * hand-copied at four call sites and had already drifted — the channel row was
- * `text-[9px]/leading-[16px]` with no `aria-label` while the other three were
- * `text-[10px]/h-4` — so a second (quiet) tier would have been copied four times
+ * `text-[length:var(--text-badge)]/leading-[16px]` with no `aria-label` while the other three were
+ * `text-[length:var(--text-badge)]/h-4` — so a second (quiet) tier would have been copied four times
  * over a divergent base.
  *
  * `inverted` is the selected-row form: on a filled selection the accent pill
@@ -464,7 +464,7 @@ export function UnreadBadge({
       data-sidebar-unread
       data-unread-tier={tier}
       className={
-        'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[10px] tabular-nums ' +
+        'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[length:var(--text-badge)] tabular-nums ' +
         // Quiet drops the weight too: hairline + regular weight is one coherent
         // step down, not a ring bolted onto a loud pill.
         (tier === 'quiet' ? 'font-medium ' : 'font-semibold ') +

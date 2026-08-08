@@ -74,7 +74,7 @@ export function ManageMembersPopover({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          className="z-50 w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
+          className="z-[var(--z-dialog)] w-[280px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
         >
           <PopoverBody workspaceId={workspaceId} />
         </Popover.Content>
@@ -271,7 +271,7 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
                     <span className="truncate text-sm font-medium text-text-primary">
                       {displayName}
                     </span>
-                    <span className="truncate font-mono text-[11px] text-text-muted">
+                    <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
                       @{handle}
                     </span>
                   </span>
@@ -399,7 +399,7 @@ function Section({
 }): JSX.Element {
   return (
     <section className="flex flex-col gap-1.5">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+      <div className="text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
         {title}
       </div>
       {children}

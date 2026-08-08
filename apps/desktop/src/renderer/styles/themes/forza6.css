@@ -290,11 +290,11 @@
      the full-lime + ink-border poster to a faint neutral wash with no
      border, so inline code sits as calm emphasis in the message stream
      instead of shouting. Lime stays the identity of selection + fenced-code
-     keywords; it no longer rides inline code. `--radius-inline-code: 0`
+     keywords; it no longer rides inline code. `--inline-code-radius: 0`
      kept for the hard-cut poster vocabulary. */
   --bg-inline-code: oklab(0 0 0 / 0.05);
   --border-inline-code: none;
-  --radius-inline-code: 0;
+  --inline-code-radius: 0;
 
   /* Task status badge — 4 statuses × {bg, text, border} = 12 tokens.
      Promoted from forza6-components.css PR-2 v5.6. Saturated fills
@@ -375,7 +375,7 @@
      海报系把所有 control surface (input / textarea / button / select
      trigger / icon button) 和 inline reference / filter chip 全部归零，
      强化"hard-cut block"语汇 —— 跟已有的 `--floating-radius: 0` /
-     `--radius-inline-code: 0` 同一节拍。pill-radius 暂不入：TaskStatusPill
+     `--inline-code-radius: 0` 同一节拍。pill-radius 暂不入：TaskStatusPill
      当前在 forza6 里仍然走 `rounded-full` 胶囊（shiki 决定先保留胶囊感，
      饱和填色 + 软形是状态语义的一种表达），等开 pill-radius 那一波再统一。 */
   --control-radius: 0;

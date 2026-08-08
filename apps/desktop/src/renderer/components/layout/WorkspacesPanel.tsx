@@ -468,7 +468,7 @@ function WorkspaceHeaderRow({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="group/wstoggle flex min-w-0 flex-1 items-center text-left text-[12.5px] font-medium"
+        className="group/wstoggle flex min-w-0 flex-1 items-center text-left text-xs font-medium"
       >
         {/* Identity at rest, disclosure triangle on hover / keyboard focus — the
             SAME swap the three group headers use. The rule is drawn by CAPABILITY,

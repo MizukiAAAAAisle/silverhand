@@ -70,7 +70,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           onClick={() => query.refetch()}
           disabled={query.isFetching}
           data-panel-control="row-action"
-          className="inline-flex min-w-7 items-center justify-center px-1.5 text-[11px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
+          className="inline-flex min-w-7 items-center justify-center px-1.5 text-[length:var(--text-meta)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
           aria-label="Refresh schedules"
           title="Refresh"
         >
@@ -171,7 +171,7 @@ function ScheduleItem({
             {row.message}
           </div>
         ) : null}
-        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-muted">
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[length:var(--text-meta)] text-text-muted">
           <span
             className="font-medium text-text-secondary"
             title={hasFutureFire ? dayjs(row.next_fire_at).toISOString() : undefined}
@@ -343,7 +343,7 @@ function KindPill({
     <span
       data-panel-pill="kind"
       className={cn(
-        'inline-flex items-center px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+        'inline-flex items-center px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider',
         cls,
       )}
       aria-label={`${kind} schedule`}
@@ -372,7 +372,7 @@ function KindPill({
  *   - once     → null (the colored KindTile + KindPill already convey
  *                "once"; rendering a spec chip would just be noise.)
  *
- * Geometry mirrors StatusPill / KindPill (`px-2 py-0.5 text-[10px]`
+ * Geometry mirrors StatusPill / KindPill (`px-2 py-0.5 text-[length:var(--text-badge)]`
  * → 14px box) but uses mono font (cron expressions / 'every Ns' are
  * code-island content; sans + caps would mangle '0 10 * * 0'). The
  * forza6 generic pill rule's display-caps treatment is suppressed by
@@ -401,7 +401,7 @@ function SpecPill({ row }: { row: ScheduleDto }): JSX.Element | null {
       <span
         data-panel-pill="schedule-spec"
         className={cn(
-          'inline-flex items-center px-2 py-0.5 font-mono text-[10px]',
+          'inline-flex items-center px-2 py-0.5 font-mono text-[length:var(--text-badge)]',
           cls,
         )}
         title={`every ${spec.every_seconds} seconds`}
@@ -415,7 +415,7 @@ function SpecPill({ row }: { row: ScheduleDto }): JSX.Element | null {
       <span
         data-panel-pill="schedule-spec"
         className={cn(
-          'inline-flex items-center px-2 py-0.5 font-mono text-[10px]',
+          'inline-flex items-center px-2 py-0.5 font-mono text-[length:var(--text-badge)]',
           cls,
         )}
         title={`cron expression — ${spec.expression}`}
@@ -459,7 +459,7 @@ function TargetPill({
         data-panel-pill="schedule-target"
         // Height matches StatusPill — see SpecPill height-alignment
         // rationale. shiki `iGfKfOatgeYZWCgS` (#task:818).
-        className="inline-flex items-center border border-border-subtle bg-bg-surface px-2 py-px font-mono text-[10px] text-text-primary"
+        className="inline-flex items-center border border-border-subtle bg-bg-surface px-2 py-px font-mono text-[length:var(--text-badge)] text-text-primary"
         title={`Fires in conversation ${conversationId}`}
       >
         {label}
@@ -524,7 +524,7 @@ function FireCounter({ row }: { row: ScheduleDto }): JSX.Element {
       title={formatFiredCount(row)}
     >
       <Zap className="size-3 text-text-muted" aria-hidden="true" />
-      <span className="font-mono text-[11px]">
+      <span className="font-mono text-[length:var(--text-meta)]">
         {cap !== null ? `${row.fired_count}/${cap}` : row.fired_count}
       </span>
     </span>
@@ -550,7 +550,7 @@ function StatusPill({ status }: { status: ScheduleStatus }): JSX.Element {
     <span
       data-panel-pill="status"
       className={cn(
-        'inline-flex items-center px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider',
+        'inline-flex items-center px-2 py-0.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-wider',
         cls,
       )}
     >
@@ -577,7 +577,7 @@ function FilterTabs({
           type="button"
           onClick={() => onChange(opt.value)}
           className={cn(
-            'px-2 py-0.5 text-[11px] transition-colors',
+            'px-2 py-0.5 text-[length:var(--text-meta)] transition-colors',
             opt.value === value
               ? 'bg-accent-2 text-text-on-accent-2'
               : 'text-text-muted hover:text-text-primary',

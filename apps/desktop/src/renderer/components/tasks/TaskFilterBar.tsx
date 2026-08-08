@@ -295,7 +295,7 @@ const TRIGGER_GLYPH_PX = 14;
  * Box recipe for a control that must line up in height with the filter chips
  * (`FilterTrigger`) on a task toolbar row — the New task CTA that sits right
  * after the filters (shiki: 高度和前面 filter button 保持一致). Mirrors the
- * trigger's box EXACTLY — `px-2 py-1 text-[11px]` plus a border-box border of
+ * trigger's box EXACTLY — `px-2 py-1 text-[length:var(--text-meta)]` plus a border-box border of
  * `--control-border-width` — instead of a fixed height, because the filter's
  * own height is content-driven and grows with the per-theme border (1px default
  * / 2px forza6). Spread this over the CTA's own fill/identity: only the OUTER
@@ -308,7 +308,7 @@ const TRIGGER_GLYPH_PX = 14;
  * bordered filters beside it in any theme.
  */
 export const FILTER_ROW_TRIGGER_BOX =
-  'h-auto px-2 py-1 text-[11px] border-[length:var(--control-border-width)] border-transparent';
+  'h-auto px-2 py-1 text-[length:var(--text-meta)] border-[length:var(--control-border-width)] border-transparent';
 
 const FilterTrigger = forwardRef<
   HTMLButtonElement,
@@ -324,7 +324,7 @@ const FilterTrigger = forwardRef<
       data-active={active || undefined}
       className={cn(
         'flex max-w-[200px] items-center gap-1.5 rounded-[var(--control-radius)]',
-        'border-[length:var(--control-border-width)] px-2 py-1 text-[11px] transition-colors',
+        'border-[length:var(--control-border-width)] px-2 py-1 text-[length:var(--text-meta)] transition-colors',
         // Hover always paints the theme's control hover border
         // (`--border-control-hover`: forza6 near-black ink / warm
         // accent / slack-dark `--border` 10% white). Note this is a
@@ -387,7 +387,7 @@ function FilterPanel({
         onKeyDown={onKeyDown}
         data-task-filter-panel
         data-dropdown-frame
-        className="z-[70] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
+        className="z-[var(--z-toolbar)] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
       >
         {children}
       </Popover.Content>
@@ -561,7 +561,7 @@ function ChannelFilter({
           <span className="flex min-w-0 flex-col">
             <span className="truncate">{o.label}</span>
             {o.sublabel ? (
-              <span className="truncate text-[10px] text-text-muted">
+              <span className="truncate text-[length:var(--text-badge)] text-text-muted">
                 {o.sublabel}
               </span>
             ) : null}
@@ -609,7 +609,7 @@ function ChannelFilter({
           sideOffset={4}
           data-task-filter-panel
           data-dropdown-frame
-          className="z-[70] flex max-h-[50vh] w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
+          className="z-[var(--z-toolbar)] flex max-h-[50vh] w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
         >
           <div className="flex items-center gap-1.5 border-b border-border-subtle px-2 pb-1.5 pt-1">
             <Search className="size-3.5 shrink-0 text-text-muted" />
@@ -647,7 +647,7 @@ function ChannelFilter({
             </OptionRow>
             {flatOptions.map(renderOption)}
             {filtered.length === 0 ? (
-              <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
+              <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
                 No matches
               </p>
             ) : null}
@@ -773,7 +773,7 @@ function WorkspaceFilter({
         </OptionRow>
         {sections.map(section => (
           <div key={section.key}>
-            <div className="px-2 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+            <div className="px-2 pb-1 pt-2 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
               {section.label}
             </div>
             {section.items.map(o => {
@@ -943,7 +943,7 @@ function PersonFilterControl({
           );
         })}
         {state === 'ready' ? null : (
-          <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
+          <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
             {state === 'loading'
               ? 'Loading…'
               : state === 'failed'

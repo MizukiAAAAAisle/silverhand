@@ -340,7 +340,7 @@ export function ChannelMembersDialog({
             >
               {label}
             </span>
-            <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-text-muted">
+            <span className="max-w-[45%] shrink-0 truncate font-mono text-[length:var(--text-meta)] text-text-muted">
               @{member.name}
             </span>
             {isSelf ? (
@@ -348,7 +348,7 @@ export function ChannelMembersDialog({
               // 2026-07-28) — `--chip-radius` is 0 in forza6 (hard-cut poster
               // geometry) and 4px in the warm themes, the same token the row
               // above already consumes.
-              <span className="shrink-0 rounded-[var(--chip-radius)] border border-border-subtle px-1 text-[10px] text-text-muted">
+              <span className="shrink-0 rounded-[var(--chip-radius)] border border-border-subtle px-1 text-[length:var(--text-badge)] text-text-muted">
                 you
               </span>
             ) : null}
@@ -600,7 +600,7 @@ export function ChannelMembersDialog({
 
 function GroupLabel({ children }: { children: string }): JSX.Element {
   return (
-    <div className="px-1.5 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-text-muted">
+    <div className="px-1.5 pb-1 pt-2.5 text-[length:var(--text-badge)] font-semibold uppercase tracking-[0.1em] text-text-muted">
       {children}
     </div>
   );

@@ -169,7 +169,7 @@ function ConversationPopoverBody({
   return (
     <div className="space-y-2">
       <div className="flex items-baseline gap-2">
-        <span className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-text-muted">
+        <span className="rounded-[var(--chip-radius)] bg-bg-elevated px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
           {kindLabel(conversation.kind)}
         </span>
       </div>
@@ -177,7 +177,7 @@ function ConversationPopoverBody({
         {conversation.title}
       </p>
       <p
-        className="truncate font-mono text-[10px] text-text-muted"
+        className="truncate font-mono text-[length:var(--text-badge)] text-text-muted"
         aria-label={id}
       >
         {id}
@@ -217,7 +217,7 @@ function UnresolvedConversationPopoverBody({
     <div className="space-y-2">
       <p className="text-xs text-text-muted">{message}</p>
       <p
-        className="truncate font-mono text-[10px] text-text-muted"
+        className="truncate font-mono text-[length:var(--text-badge)] text-text-muted"
         aria-label={id}
       >
         {id}

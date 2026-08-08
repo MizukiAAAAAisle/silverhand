@@ -169,7 +169,7 @@ export function useTaskMetaRows({
       key: 'task',
       label: 'Task',
       value: (
-        <span className="font-mono text-[11px] text-text-secondary">
+        <span className="font-mono text-[length:var(--text-meta)] text-text-secondary">
           #{view.task_number}
         </span>
       ),
@@ -302,7 +302,7 @@ function Timestamp({ at, muted }: { at: number; muted?: boolean }): JSX.Element 
   return (
     <time
       dateTime={new Date(at).toISOString()}
-      className={cn('font-mono text-[11px]', muted && 'text-text-muted')}
+      className={cn('font-mono text-[length:var(--text-meta)]', muted && 'text-text-muted')}
     >
       {dayjs(at).format(TIMESTAMP_FORMAT)}
     </time>
@@ -384,10 +384,10 @@ function AssigneePicker({
           sideOffset={4}
           collisionPadding={8}
           data-popover-frame="info"
-          // Above the host dialog's layer (`z-50`) — a picker under its host is
+          // Above the host dialog's layer (`z-[var(--z-dialog)]`) — a picker under its host is
           // unclickable. The pane host has no such layer, so this is safe there
           // too.
-          className="z-[85] min-w-[180px] max-w-[240px] bg-bg-floating p-1 shadow-popover outline-none"
+          className="z-[var(--z-popover-nested)] min-w-[180px] max-w-[240px] bg-bg-floating p-1 shadow-popover outline-none"
           onCloseAutoFocus={(e) => e.preventDefault()}
         >
           <PickerBody
@@ -430,11 +430,11 @@ function PickerBody({
 
   return (
     <div className="flex flex-col gap-1">
-      <p className="chrome-label px-2 pt-1 text-[10px] font-medium text-text-muted">
+      <p className="chrome-label px-2 pt-1 text-[length:var(--text-badge)] font-medium text-text-muted">
         Assign to
       </p>
       {candidates.length === 0 ? (
-        <p className="px-2 py-1.5 text-[11px] italic text-text-muted">
+        <p className="px-2 py-1.5 text-[length:var(--text-meta)] italic text-text-muted">
           {roster.status === 'loading' ? 'Loading…' : 'No other agents here.'}
         </p>
       ) : (

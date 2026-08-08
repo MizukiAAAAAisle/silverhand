@@ -184,7 +184,7 @@ export function AddMemberCombobox({
         <div
           ref={listRef}
           role="listbox"
-          className="absolute left-0 right-0 top-[calc(100%+4px)] z-10 max-h-[220px] overflow-y-auto rounded-[var(--select-content-radius)] border border-border bg-bg-floating p-1 shadow-popover"
+          className="absolute left-0 right-0 top-[calc(100%+4px)] z-[var(--z-raised)] max-h-[220px] overflow-y-auto rounded-[var(--select-content-radius)] border border-border bg-bg-floating p-1 shadow-popover"
         >
           {flat.length === 0 ? (
             <div className="px-2 py-2 text-center text-xs italic text-text-muted">
@@ -193,7 +193,7 @@ export function AddMemberCombobox({
           ) : (
             matched.map(group => (
               <div key={group.label}>
-                <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+                <div className="px-2 py-1 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
                   {group.label}
                 </div>
                 {group.items.map(candidate => {
@@ -240,7 +240,7 @@ export function AddMemberCombobox({
                         <span className="truncate text-sm font-medium text-text-primary">
                           {displayName}
                         </span>
-                        <span className="truncate font-mono text-[11px] text-text-muted">
+                        <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
                           @{handle}
                         </span>
                       </span>

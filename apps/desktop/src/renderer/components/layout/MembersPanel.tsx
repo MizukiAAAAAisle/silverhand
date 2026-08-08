@@ -167,7 +167,7 @@ export function MembersPanel({
             <Fragment key={group.key}>
               <li
                 data-agent-group-header
-                className="flex items-center gap-1.5 px-2 pb-0.5 pt-2 text-[11px] font-medium text-text-muted"
+                className="flex items-center gap-1.5 px-2 pb-0.5 pt-2 text-[length:var(--text-meta)] font-medium text-text-muted"
               >
                 <Monitor className="size-3 shrink-0" />
                 <span className="truncate">{group.name}</span>

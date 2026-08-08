@@ -144,7 +144,7 @@
      不是硬贴纸。 */
   --bg-inline-code: #ECF1F7;
   --border-inline-code: none;
-  --radius-inline-code: var(--radius-sm);
+  --inline-code-radius: var(--radius-sm);
 
   /* Task status badge — 5 statuses × {bg, text, border}。
      语义（docs/tasks-design.md）：todo = neutral；in_progress = warning

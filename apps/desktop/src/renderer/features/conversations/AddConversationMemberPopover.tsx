@@ -126,7 +126,7 @@ export function AddConversationMemberPopover({
           // 360px — the members modal's width, and ONE width for both triggers:
           // the panel is the same list either way, so making it narrower from
           // the header `+` would be a difference with nothing behind it.
-          className="z-50 w-[360px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
+          className="z-[var(--z-dialog)] w-[360px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
         >
           <PopoverBody
             workspaceId={workspaceId}
@@ -264,7 +264,7 @@ function PopoverBody({
         ) : (
           groups.map(group => (
             <div key={group.label}>
-              <div className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+              <div className="px-2 pb-1 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
                 {group.label}
               </div>
               <ul className="flex flex-col gap-0.5">
@@ -306,7 +306,7 @@ function PopoverBody({
                           >
                             {displayName}
                           </span>
-                          <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-text-muted">
+                          <span className="max-w-[45%] shrink-0 truncate font-mono text-[length:var(--text-meta)] text-text-muted">
                             @{handle}
                           </span>
                         </span>

@@ -71,7 +71,7 @@ export function UpdateRequiredGate({
           <h1 className="text-base font-semibold leading-tight">{title}</h1>
         </header>
         <p className="mb-4 text-xs leading-relaxed text-text-muted">{description}</p>
-        <p className="mb-4 text-[11px] text-text-muted">
+        <p className="mb-4 text-[length:var(--text-meta)] text-text-muted">
           Server API generation: {serverApiEpoch}
         </p>
         <Button

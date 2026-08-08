@@ -187,7 +187,7 @@ function AgentSelect({
         <Select.Content
           position="popper"
           sideOffset={4}
-          className="z-50 min-w-[var(--radix-select-trigger-width)] rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 text-sm shadow-popover"
+          className="z-[var(--z-dialog)] min-w-[var(--radix-select-trigger-width)] rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 text-sm shadow-popover"
         >
           <Select.Viewport>
             {agents.map(agent => (
@@ -294,7 +294,7 @@ function AgentCapabilityEditor({
       <div className="columns-2 gap-x-6">
         {GROUPS.map(group => (
           <div key={group.id} className="mb-4 flex break-inside-avoid flex-col gap-1.5 last:mb-0">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">
+            <div className="text-[length:var(--text-meta)] font-semibold uppercase tracking-wide text-text-muted">
               {group.label}
             </div>
             {group.items.map(item => {
@@ -319,7 +319,7 @@ function AgentCapabilityEditor({
                     <span className="text-xs font-medium text-text-primary">
                       {item.label}
                     </span>
-                    <span className="text-[11px] leading-tight text-text-muted">
+                    <span className="text-[length:var(--text-meta)] leading-tight text-text-muted">
                       {item.hint}
                     </span>
                   </span>

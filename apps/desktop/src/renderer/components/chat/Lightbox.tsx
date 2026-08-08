@@ -323,7 +323,7 @@ export function Lightbox({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-[90] bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-[var(--z-lightbox)] bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
         <DialogPrimitive.Content
           ref={shellRef}
           data-modal-shell
@@ -336,7 +336,7 @@ export function Lightbox({
           // stays crisp, whereas a 50% translate on an odd size lands mid-pixel
           // and blurs it (shiki "有时候图片不清晰"). `fit-content` is what makes
           // that trick shrink-to-fit — plain `auto` would stretch to `inset: 0`.
-          className="fixed inset-0 z-[91] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating shadow-xl focus:outline-none"
+          className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating shadow-xl focus:outline-none"
           style={{
             width: frozenBox ? `${frozenBox.w}px` : 'fit-content',
             height: frozenBox ? `${frozenBox.h}px` : 'fit-content',

@@ -261,7 +261,7 @@ function ServerRow({
         )}
         <span className="truncate">{target}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-muted">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[length:var(--text-meta)] text-text-muted">
         <span title="Private, domain-scoped name handed to the runtime so profile and workspace layers never collide.">
           runtime: <code className="font-mono">{runtimeName}</code>
         </span>
@@ -298,7 +298,7 @@ function ProbeButton({
       type="button"
       variant="outline"
       size="sm"
-      className="h-6 gap-1.5 px-2 text-[11px]"
+      className="h-6 gap-1.5 px-2 text-[length:var(--text-meta)]"
       disabled={disabled}
       onClick={onClick}
     >
@@ -322,7 +322,7 @@ function ProbeResult({
 }): JSX.Element | null {
   if (probe.isPending) {
     return (
-      <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+      <div className="flex items-center gap-1.5 text-[length:var(--text-meta)] text-text-muted">
         <Loader2 className="size-3 shrink-0 animate-spin" />
         Probing…
       </div>
@@ -403,7 +403,7 @@ function ProbeTools({
             <li key={tool.name} className="flex flex-col py-0.5">
               <span className="font-mono text-xs text-text-primary">{tool.name}</span>
               {tool.description ? (
-                <span className="truncate text-[11px] text-text-muted" title={tool.description}>
+                <span className="truncate text-[length:var(--text-meta)] text-text-muted" title={tool.description}>
                   {tool.description}
                 </span>
               ) : null}
@@ -458,7 +458,7 @@ function probePhaseLabel(phase: McpProbePhase): string {
 
 function TypeBadge({ type }: { type: string }): JSX.Element {
   return (
-    <span className="shrink-0 border border-border-subtle px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-text-muted">
+    <span className="shrink-0 border border-border-subtle px-1.5 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide text-text-muted">
       {type}
     </span>
   );
@@ -683,7 +683,7 @@ function CopyButton({
       }}
       className={cn(
         'inline-flex items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle px-2 py-1 text-text-secondary transition-colors hover:border-border hover:text-text-primary',
-        mono ? 'font-mono text-xs' : 'text-[11px]',
+        mono ? 'font-mono text-xs' : 'text-[length:var(--text-meta)]',
       )}
       title="Copy to clipboard"
     >

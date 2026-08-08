@@ -45,7 +45,7 @@ function BannerShell({
     <div
       role="alert"
       aria-live="polite"
-      className="pointer-events-auto fixed left-1/2 top-3 z-[60] -translate-x-1/2 transform"
+      className="pointer-events-auto fixed left-1/2 top-3 z-[var(--z-in-dialog)] -translate-x-1/2 transform"
       // The titlebar's drag region sits right above this; the banner owns
       // its own click target so it never gets swallowed by window drag.
       style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -59,7 +59,7 @@ function BannerShell({
             {title}
           </p>
           {detail ? (
-            <p className="text-[11px] leading-snug text-text-muted">{detail}</p>
+            <p className="text-[length:var(--text-meta)] leading-snug text-text-muted">{detail}</p>
           ) : null}
         </div>
         {action ? (

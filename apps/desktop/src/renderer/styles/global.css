@@ -114,6 +114,45 @@
   --titlebar-controls-safe-width: 138px;
 }
 
+/* ── Z-index ladder ──
+   One ascending stack for the whole app, named by role so a new overlay
+   picks a tier instead of inventing a magic number. Non-themable: stacking
+   order is structural, not a palette choice. Consumed as z-[var(--z-*)].
+   raised(10) local lift · sticky(20) pinned headers · drawer(40) side
+   panels · dialog(50) the modal layer · in-dialog(60) menus/selects opened
+   inside a dialog · toolbar(70) floating action bars · popover(80)
+   hover-cards & pickers · popover-nested(85) a picker opened from a popover
+   · lightbox(90) full-screen media, +1 for its own chrome. */
+:root {
+  --z-raised: 10;
+  --z-sticky: 20;
+  --z-drawer: 40;
+  --z-dialog: 50;
+  --z-in-dialog: 60;
+  --z-toolbar: 70;
+  --z-popover: 80;
+  --z-popover-nested: 85;
+  --z-lightbox: 90;
+  --z-lightbox-chrome: 91;
+}
+
+/* ── Micro type-scale ──
+   The three sub-`text-xs` steps Tailwind has no name for. 12px+ stays on
+   the native scale (text-xs 12 / text-sm 14 / text-base 16 / text-lg 18);
+   these three fill the gap below it so a badge / meta line / dense label
+   stops reaching for a magic `text-[Npx]`. badge(10) micro caps & counts ·
+   meta(11) timestamps & secondary meta · strong(13) the emphatic step
+   between meta and text-sm. Non-themable; global type rhythm. Kept in a
+   plain `:root` (not `@theme`) and consumed as `text-[length:var(--text-*)]`
+   — same as the z-index ladder — so a live edit hot-reloads (an `@theme`
+   block change does NOT re-run Tailwind's theme in electron-vite dev, which
+   silently drops the utilities and every site falls back to inherited 16px). */
+:root {
+  --text-badge: 10px;
+  --text-meta: 11px;
+  --text-strong: 13px;
+}
+
 /* ── Terminal skin (shiki: connect command 要"黑底绿字，就像终端那样") ──
    Deliberately NOT part of the per-theme palette. The connection-command
    card is not app chrome quoting a command — it is a stand-in for the
@@ -846,7 +885,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
    inline margin, and breaks anywhere so a long path can't blow out
    the message bubble. Visual identity (background / border / radius)
    is fully theme-driven through `--bg-inline-code` /
-   `--border-inline-code` / `--radius-inline-code` / `--text-inline-code`
+   `--border-inline-code` / `--inline-code-radius` / `--text-inline-code`
    so studio-light can keep a soft borderless cool-wash chip while
    forza6 paints a hard lime poster sticker — all via tokens, no
    per-theme override of this rule needed.
@@ -873,7 +912,7 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
   color: var(--text-inline-code);
   background: var(--bg-inline-code);
   border: var(--border-inline-code);
-  border-radius: var(--radius-inline-code);
+  border-radius: var(--inline-code-radius);
   overflow-wrap: anywhere;
 }
 

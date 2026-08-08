@@ -86,7 +86,7 @@ export function Titlebar({
         : '0px';
   const chromeWidth = `calc(var(--nav-rail-width) + ${leftColumnWidth} + var(--frame-padding, 0px) * 3)`;
   const toggleButton =
-    'no-drag flex size-6 items-center justify-center rounded-[6px] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus';
+    'no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus';
 
   return (
     <header
@@ -156,7 +156,7 @@ export function Titlebar({
       ) : null}
 
       {isArchived ? (
-        <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-text-muted">
+        <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-[length:var(--text-badge)] uppercase tracking-wider text-text-muted">
           archived
         </span>
       ) : null}
@@ -171,7 +171,7 @@ export function Titlebar({
         >
           <CheckSquare className="size-3.5" />
           {taskCount && taskCount > 0 ? (
-            <span className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-accent px-1 text-[9px] font-medium leading-[14px] text-text-on-accent">
+            <span className="absolute -right-1 -top-1 min-w-[14px] rounded-full bg-accent px-1 text-[length:var(--text-badge)] font-medium leading-[14px] text-text-on-accent">
               {taskCount}
             </span>
           ) : null}

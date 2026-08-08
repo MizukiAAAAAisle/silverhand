@@ -213,7 +213,7 @@ export function BackendUnreachableGate({
               </Button>
             </div>
             {classification.kind === 'reject' && (
-              <p className="text-[11px] text-error">{classification.message}</p>
+              <p className="text-[length:var(--text-meta)] text-error">{classification.message}</p>
             )}
           </form>
         ) : (
@@ -264,7 +264,7 @@ export function BackendUnreachableGate({
           unreachable.
         </p>
         {message ? (
-          <pre className="mb-4 overflow-x-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-[11px] leading-snug text-text-muted">
+          <pre className="mb-4 overflow-x-auto rounded-[var(--control-radius)] border border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-[length:var(--text-meta)] leading-snug text-text-muted">
             {message}
           </pre>
         ) : null}

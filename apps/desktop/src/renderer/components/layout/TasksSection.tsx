@@ -225,7 +225,7 @@ export const TasksSection = memo(function TasksSection({
         <span className="text-xs text-text-muted">
           · {boardCountLabel(totalTaskCount(counts))}
         </span>
-        <span className="ml-auto text-[10px] text-text-muted">
+        <span className="ml-auto text-[length:var(--text-badge)] text-text-muted">
           {boardCountLabel(activeTaskCount(counts))} active
         </span>
       </header>
@@ -475,10 +475,10 @@ function KanbanColumn({
       >
         <Chevron className="size-3.5 shrink-0 text-text-muted" aria-hidden />
         <Icon data-tasks-column-icon className={cn('size-3.5 shrink-0', iconClass)} aria-hidden />
-        <span className="text-[11px] font-medium uppercase tracking-wider text-text-secondary">
+        <span className="text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-secondary">
           {title}
         </span>
-        <span className="text-[10px] tabular-nums text-text-muted">
+        <span className="text-[length:var(--text-badge)] tabular-nums text-text-muted">
           {boardCountLabel(total)}
         </span>
       </button>
@@ -489,15 +489,15 @@ function KanbanColumn({
           className="min-h-0 flex-auto overflow-y-auto p-2"
         >
           {isLoading ? (
-            <p className="px-2 py-3 text-center text-[11px] text-text-muted">
+            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] text-text-muted">
               Loading…
             </p>
           ) : isError ? (
-            <p className="px-2 py-3 text-center text-[11px] text-text-muted">
+            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] text-text-muted">
               Couldn’t load tasks
             </p>
           ) : items.length === 0 && !dragOver ? (
-            <p className="px-2 py-3 text-center text-[11px] italic text-text-muted">
+            <p className="px-2 py-3 text-center text-[length:var(--text-meta)] italic text-text-muted">
               No {title.toLowerCase()} tasks
             </p>
           ) : (
@@ -572,7 +572,7 @@ function TaskCard({
         aria-label="Open task detail"
         className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       />
-      <div className="pointer-events-none relative z-10 min-w-0 p-2">
+      <div className="pointer-events-none relative z-[var(--z-raised)] min-w-0 p-2">
         {/* Row 1: #number + interactive status badge (reads "Closed" for
             a closed task — no separate chip). v6.5m: 2-row layout
             restored after v6.5l single-row attempt compressed title
@@ -581,7 +581,7 @@ function TaskCard({
             ("in progress" / "in review") drops to its own line beneath
             `#nnn` instead of overflowing the card edge. */}
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pb-0.5 leading-none">
-          <span data-tasks-num className="shrink-0 font-mono text-[10px] text-text-muted">
+          <span data-tasks-num className="shrink-0 font-mono text-[length:var(--text-badge)] text-text-muted">
             #{task.task_number}
           </span>
           <TaskStatusBadge
@@ -606,7 +606,7 @@ function TaskCard({
             only shrink target (`min-w-0 truncate`), so a long channel title
             ellipsizes (full name on hover via `title`) while assignee + time
             stay pinned. 稳定 > 自适应. */}
-        <div className="mt-1 flex items-center gap-x-2 text-[10px] text-text-muted">
+        <div className="mt-1 flex items-center gap-x-2 text-[length:var(--text-badge)] text-text-muted">
           <span className="shrink-0 text-text-secondary">
             {task.assignee ? task.assignee.name : (
               <span className="italic">unassigned</span>

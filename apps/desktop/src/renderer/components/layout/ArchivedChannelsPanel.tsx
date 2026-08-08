@@ -221,7 +221,7 @@ export function ArchivedChannelsPanel({
 
 function SectionLabel({ text }: { text: string }): JSX.Element {
   return (
-    <h2 className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wider text-text-secondary">
+    <h2 className="px-1 pb-2 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-secondary">
       {text}
     </h2>
   );

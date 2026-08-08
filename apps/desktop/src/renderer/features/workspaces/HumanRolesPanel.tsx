@@ -142,7 +142,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
                 <span className="truncate text-sm font-medium text-text-primary">
                   {member.display_name || member.name}
                 </span>
-                <span className="truncate font-mono text-[11px] text-text-muted">
+                <span className="truncate font-mono text-[length:var(--text-meta)] text-text-muted">
                   @{member.name}
                 </span>
               </span>
@@ -169,7 +169,7 @@ function RoleBadge({ role }: { role: WorkspaceRole }): JSX.Element {
   return (
     <span
       className={cn(
-        'shrink-0 rounded-[var(--chip-radius)] border-[length:var(--control-border-width)] px-2 py-0.5 text-[11px] font-medium',
+        'shrink-0 rounded-[var(--chip-radius)] border-[length:var(--control-border-width)] px-2 py-0.5 text-[length:var(--text-meta)] font-medium',
         role === 'owner'
           ? 'border-border text-text-secondary'
           : 'border-border-subtle text-text-muted',
@@ -215,7 +215,7 @@ function RoleSelect({
           position="popper"
           align="end"
           sideOffset={4}
-          className="z-[60] min-w-[10rem] rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 text-sm shadow-popover"
+          className="z-[var(--z-in-dialog)] min-w-[10rem] rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating p-1 text-sm shadow-popover"
         >
           <Select.Viewport>
             {ASSIGNABLE_ROLES.map(role => (

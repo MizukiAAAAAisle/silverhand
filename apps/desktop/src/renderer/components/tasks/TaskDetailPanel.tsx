@@ -297,13 +297,13 @@ function PaneBody({
       <div className="task-pane-meta items-start">
         {rows.map((row) => (
           <Fragment key={row.key}>
-            <span className="chrome-label text-[10px] font-medium leading-4 text-text-muted">
+            <span className="chrome-label text-[length:var(--text-badge)] font-medium leading-4 text-text-muted">
               {row.label}
             </span>
             <div className="min-w-0 text-xs leading-4 text-text-primary">
               {row.value}
               {row.error ? (
-                <p className="mt-0.5 text-[11px] text-error">{row.error}</p>
+                <p className="mt-0.5 text-[length:var(--text-meta)] text-error">{row.error}</p>
               ) : null}
             </div>
           </Fragment>
@@ -312,7 +312,7 @@ function PaneBody({
 
       <section className="flex min-w-0 flex-col gap-2">
         <div className="flex items-center gap-2">
-          <h2 className="chrome-label text-[10px] font-medium text-text-muted">
+          <h2 className="chrome-label text-[length:var(--text-badge)] font-medium text-text-muted">
             Description
           </h2>
           {!busy && editingField !== 'content' ? (

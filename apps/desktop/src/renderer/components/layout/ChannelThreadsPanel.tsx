@@ -338,7 +338,7 @@ function ThreadRow({
                   </span>
                 ))}
                 {overflow > 0 ? (
-                  <span data-avatar-ground className="flex size-[18px] shrink-0 items-center justify-center rounded-none text-[9px] font-medium text-text-muted">
+                  <span data-avatar-ground className="flex size-[18px] shrink-0 items-center justify-center rounded-none text-[length:var(--text-badge)] font-medium text-text-muted">
                     +{overflow}
                   </span>
                 ) : null}
@@ -354,7 +354,7 @@ function ThreadRow({
               summary.viewer_following ? (
                 <span
                   data-thread-unread="sticker"
-                  className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[9px] font-semibold leading-[16px] text-text-on-accent"
+                  className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[length:var(--text-badge)] font-semibold leading-[16px] text-text-on-accent"
                   title={`${unreadCount} new`}
                   aria-label={`${unreadCount} new`}
                 >

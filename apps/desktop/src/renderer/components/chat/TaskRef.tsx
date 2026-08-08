@@ -329,7 +329,7 @@ function TaskPopoverBody({
       <div className="flex items-center justify-between gap-2">
         <span
           data-tasks-num
-          className="font-mono text-[10px] text-text-muted"
+          className="font-mono text-[length:var(--text-badge)] text-text-muted"
         >
           #{task.task_number}
         </span>
@@ -345,7 +345,7 @@ function TaskPopoverBody({
       <p className="break-words text-xs font-medium text-text-primary">
         {task.title}
       </p>
-      <p className="flex items-baseline gap-1.5 text-[11px] text-text-muted">
+      <p className="flex items-baseline gap-1.5 text-[length:var(--text-meta)] text-text-muted">
         <span className="shrink-0 text-text-secondary">
           {task.assignee ? task.assignee.name : <em>unassigned</em>}
         </span>

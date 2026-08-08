@@ -298,7 +298,7 @@ function FavoriteRow({
       <button
         type="button"
         onClick={() => onSelectConversation(item.workspace_id, item.entity_id)}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-[12px]"
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs"
         title={`${item.title} — ${item.parent_title}`}
       >
         <ChannelIcon

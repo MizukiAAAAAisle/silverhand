@@ -47,7 +47,7 @@ export function ScheduleFireBanner({
           {headerTitle}
         </span>
         {meta ? (
-          <span className="ml-auto font-mono text-[11px] font-normal text-text-muted">
+          <span className="ml-auto font-mono text-[length:var(--text-meta)] font-normal text-text-muted">
             {meta.spec_summary ?? meta.spec_kind}
           </span>
         ) : null}
@@ -88,7 +88,7 @@ function ScheduleFirePills({ meta }: { meta: ScheduleFireMetadata }): JSX.Elemen
 }
 
 const PILL_BASE =
-  'inline-flex items-center gap-1 rounded bg-bg-elevated px-1.5 py-0.5 text-[11px] tabular-nums text-text-secondary';
+  'inline-flex items-center gap-1 rounded bg-bg-elevated px-1.5 py-0.5 text-[length:var(--text-meta)] tabular-nums text-text-secondary';
 
 function ScheduleFireFiredPill({ firedAt }: { firedAt: number }): JSX.Element {
   const { relative, absolute } = useRelativeTime(firedAt);

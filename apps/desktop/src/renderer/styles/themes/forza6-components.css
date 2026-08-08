@@ -462,7 +462,7 @@
 /* ── Markdown inline code ─────────────────────────────────────────
    Promoted to the token contract in PR-3 (#task:344). The recipe lives
    entirely in forza6.css via `--bg-inline-code` / `--border-inline-code`
-   / `--radius-inline-code` / `--text-inline-code`, consumed by the single
+   / `--inline-code-radius` / `--text-inline-code`, consumed by the single
    `.markdown-body :not(pre) > code` rule in global.css. No forza6-
    scoped override here anymore. (#task:1725 quieted it from the old
    acid-lime poster sticker to a faint neutral wash + no border.) */
@@ -944,7 +944,7 @@
    forza6-only block:
      - Poster sticker geometry: 2px near-black outline + 0 radius — the
        same hard-cut poster vocabulary as inline-code
-       (`--radius-inline-code: 0`), floating frames (`--floating-radius:
+       (`--inline-code-radius: 0`), floating frames (`--floating-radius:
        0`) and controls (`--control-radius: 0`).
      - Header is a full-bleed cap, NOT a slab framed inside the outline.
        The indigo header carries a `-2px` top/left/right margin so it
@@ -1122,7 +1122,7 @@
        hardness, just per-icon instead of one wrapping cluster.
      - Square corners (`border-radius: 0`) — same hard-cut language as
        `--control-radius: 0` / `--floating-radius: 0` /
-       `--radius-inline-code: 0`. shiki `npbm1_xryIbWicIw` "forza6 主题
+       `--inline-code-radius: 0`. shiki `npbm1_xryIbWicIw` "forza6 主题
        去掉圆角，保持直角，这是海报的风格".
      - Hover: `translateY(-1px)` lift. transition kept short (150ms)
        so the icons feel snappy, not floaty. Icon colour shift
