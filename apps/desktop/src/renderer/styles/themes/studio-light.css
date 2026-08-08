@@ -1,7 +1,7 @@
 /* ================================================================
    Theme: Studio Light — Cool Neutral Chrome & Studio Blue Accent (#task:1656)
    性格：冷中性 chrome + **纯白工作面** + 一个 accent 管 action/state +
-   一个独立的绿只管 agent 身份。定位是"安静的亮色工作台"—— 长时间盯着
+   一个独立的绿只管正向终态与 liveness。定位是"安静的亮色工作台"—— 长时间盯着
    干活的那一档。
 
    为什么它替掉 warm-script（shiki 2026-07-27）：
@@ -23,9 +23,13 @@
       托盘里浮起来的一张白纸。分隔一律 1px hairline，无纹理、无衬线。
    2. **两个语义色各管一件事**：Studio Blue `#2F5AD0` = action/state（选中左条 /
       rail active / unread / mention / in-prose `#task` / in_review / focus /
-      主操作）；绿 `#0C7E60` = **agent 身份**（作者名、liveness）。agent 是
-      一等公民，身份色不能跟操作色共用 hue，否则「这是状态还是身份」永远读
-      不清。这条也是 `done` 不吃绿的原因（见 task-status 一节）。
+      主操作）；绿 `#0A7256` = **正向终态**（`done`）**与系统 liveness**
+      （connected / VERIFIED / 还活着）。绿绝不进 action/state，否则「这是要我
+      做点什么，还是已经好了」读不清。
+      **修订（shiki 2026-08-08 #task:1906）**：这条原先写的是"绿 = agent 身份
+      （作者名）"，并据此让 `done` 退成中性墨。作者名那半从来没有落地——没有
+      任何主题在 `data-author-kind` 上上色——而中性的 `done` 在包里"看着和
+      todo / closed 一样"。所以绿的语义收敛成上面那句，`done` 吃绿。
    3. **utility 不吃 accent**：hover / focus / 分隔线 / splitter 一律中性墨。
       唯一例外是 composer（brand-anchored 主舞台）的 focus 光。
 
@@ -34,7 +38,7 @@
      **1px 描边**（都 ≥4.5:1），否则"一个 token 服务整条 action/state"做不到，
      又会开始长 per-surface 补丁。
    - 第一轮蓝 `#3B6BF0` 被否：「太大众，太 saas 化」（shiki 2026-07-27 13:20）。
-   - 第二轮换紫罗兰 `#5B45D9`（色环空位法：绿 160° = agent 身份、琥珀 35° =
+   - 第二轮换紫罗兰 `#5B45D9`（色环空位法：绿 160° = done / liveness、琥珀 35° =
      in progress、红 5° = destructive，离三段都最远的是 260–270°）。落到包里
      被否：「紫色太晃眼睛了」（13:51）。
    - 现在这一支 `#2F5AD0`（≈225°，6.0:1）。**「晃眼睛」的根因不是 hue 而是
@@ -45,8 +49,9 @@
 
    代价（明写）：
    - **主操作 CTA 归 accent**，不再是三主题共享的牛油果绿 —— 绿在这个主题里
-     是 agent 身份，CTA 吃绿就是一个 hue 两个语义。hue 预算已经花完（accent /
-     绿 / 琥珀 / 红），不为 CTA 再开第五个饱和色。
+     说的是"已经好了"（done / liveness），CTA 吃绿就等于让"去做"和"做完了"
+     共用一个 hue。hue 预算已经花完（accent / 绿 / 琥珀 / 红），不为 CTA 再开
+     第五个饱和色。
    - 放弃纸质感 / 衬线这类记忆点：这一槽换的就是"安静"，记忆点由 rail 的深
      板岩 + Studio Blue 承担。
    ================================================================ */
@@ -145,10 +150,18 @@
      语义（docs/tasks-design.md）：todo = neutral；in_progress = warning
      (actively in motion)；in_review = accent（needs a human，最响）；
      done = 终态。
-     **done 在这里退成中性墨，不吃绿**：绿是 agent 身份（原则 2），一个 hue
-     两个语义必双输 —— 而且终态本来就不需要响度。响度曲线因此是
-     todo（透明 hairline）< done（薄墨底，settled）< in_progress（琥珀薄底）
-     < in_review（Studio Blue 实底，唯一"要人处理"的一档）。 */
+     **done 吃 success 绿**（shiki 2026-08-08 #task:1906:「视觉上不像一个 done
+     的效果，反而和 todo/closed 很像，给一个类似 success 的颜色，用颜色给用户
+     提示」）。原先这里是中性墨，理由写的是"绿归 agent 身份（原则 2）"——
+     那条理由**在这个主题里没有落地**：`--success` 现在只画系统 liveness /
+     connected / VERIFIED，agent 作者名没有任何主题在 `data-author-kind` 上上色。
+     所以真实代价不是"身份被偷"，而是绿同时说"系统还活着"与"这件事做完了"，
+     两者靠**形态**分开：liveness 是裸字/圆点，done 是 chip（薄底 + 边）。
+     没有为它开第五个饱和色 —— hue 预算的规矩没变。
+     响度曲线：todo（透明 hairline）< closed（透明 + 更淡的边）< done（绿薄底）
+     ≈ in_progress（琥珀薄底）< in_review（Studio Blue 实底，唯一"要人处理"的
+     一档）。done 与 in_progress 同响度、靠 hue 分，是刻意的：一个在动、一个
+     做完，都不需要压过 in_review。 */
   --task-status-todo-bg: transparent;
   --task-status-todo-text: var(--text-muted);
   --task-status-todo-border: 1px solid var(--border);
@@ -158,9 +171,12 @@
   --task-status-in-review-bg: var(--accent);
   --task-status-in-review-text: var(--text-on-accent);
   --task-status-in-review-border: none;
-  --task-status-done-bg: rgba(17, 23, 37, 0.05);
-  --task-status-done-text: var(--text-secondary);
-  --task-status-done-border: 1px solid var(--border);
+  /* 与 in_progress 同一个配方（`-soft` 底 + 饱和字 + 45% 边），只换 hue：两个
+     chip 的响度必须由同一套参数决定，否则"哪个更要紧"会被参数差异说错。
+     `--success` #0A7256 在白底 5.91:1、在这层 9% 绿薄底上 5.19:1（AA）。 */
+  --task-status-done-bg: var(--success-soft);
+  --task-status-done-text: var(--success);
+  --task-status-done-border: 1px solid color-mix(in oklab, var(--success) 45%, transparent);
 
   /* Solid status signal colour (#task:1018) — see forza6.css for the
      cross-theme rationale. 薄底 + 饱和字的 chip，色相身份在 `-text` 上，
@@ -169,7 +185,7 @@
   --task-status-todo-solid: var(--task-status-todo-text);
   --task-status-in-progress-solid: var(--task-status-in-progress-text);
   --task-status-in-review-solid: var(--accent);
-  --task-status-done-solid: var(--text-muted);
+  --task-status-done-solid: var(--task-status-done-text);
   --task-status-closed-solid: var(--task-status-closed-text);
 
   /* ── Floating frame (§3.x) ──
@@ -265,8 +281,8 @@
   /* ── Primary control surface (CTA) ──
      `Button` default variant 的 bg / text / hover —— 所有主操作（New Agent /
      New Workspace / New Computer 的确认键、各处 Save、Composer 的 Send）。
-     **这里吃 accent**，而不是另外三个主题共享的牛油果绿：绿在这个主题里是
-     agent 身份（原则 2）。主操作是 action 的原型，跟 accent 同源正好；in_review
+     **这里吃 accent**，而不是另外三个主题共享的牛油果绿：绿在这个主题里说的是
+     "已经好了"（原则 2）。主操作是 action 的原型，跟 accent 同源正好；in_review
      虽然也是 accent 实底，但它是内容流里的小 pill，跟 chrome 上的按钮不在同一
      视觉栈里争。白字 on #2F5AD0 = 6.0:1。 */
   --bg-control-primary: #2F5AD0;
@@ -293,12 +309,15 @@
   --search-hit-text: #111725;
 
   /* ── Semantic ──
-     `--success` 是深青绿 #0C7E60（"系统成功 / 还活着"），白底 5.0:1。warning
+     `--success` 是深青绿 #0A7256（"做完了 / 还活着"），白底 5.9:1。warning
      是琥珀 35°（in progress 的那一段），error 砖红 5°：三段都离 accent 的
      225° 有 65° 以上，饱和色各占一段色环（success 绿是深青绿、accent 是深蓝，
-     分得开）。 */
-  --success: #0C7E60;
-  --success-soft: rgba(12, 126, 96, 0.09);
+     分得开）。
+     2026-08-08 #task:1906 由 #0C7E60 压深一档（「绿色稍微深一些些」，hue 164°
+     不变）：done 吃绿之后这个绿开始承担 chip 正文，压深同时把它在自己 9% 薄底
+     上的对比度从 4.46:1 抬到 5.19:1。 */
+  --success: #0A7256;
+  --success-soft: rgba(10, 114, 86, 0.09);
   --warning: #B46500;
   --warning-soft: rgba(180, 101, 0, 0.10);
   /* #task:1380 — soft warning CALLOUT surface（delete-cascade impact block）。
