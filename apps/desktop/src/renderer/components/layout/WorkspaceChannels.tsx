@@ -52,6 +52,7 @@ import {
 import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
 import {
   NESTED_GLYPH_INSET,
+  MutedMarker,
   UnreadBadge,
   copyConversationName,
   sidebarRowStateClass,
@@ -428,9 +429,14 @@ function ChannelRow({
         directedUnread: attention?.directed_unread_count ?? 0,
       })
     : null;
-  // A silenced row says so without being right-clicked — the title drops to the
-  // muted ink. Subtractive on purpose: the row loses emphasis instead of gaining
-  // an icon, and a directed badge still stands out against it.
+  // A silenced row says so without being right-clicked: a MutedMarker rides beside
+  // the name, like the workspace row's (shiki 2026-08-09). Mute is the marker ALONE
+  // — the name keeps its full colour (shiki 2026-08-09: dimming the title read as
+  // the row being de-emphasised, not silenced). Same shared primitive as the
+  // workspace row, so a muted channel and a muted workspace read identically.
+  // `effectiveMode` is the ONE authority (workspace suppressor already folded in),
+  // so a workspace-muted run marks every row — no second mute test. A DM is always
+  // 'all', so it never marks.
   const isSilenced = effectiveMode === 'mute';
 
   const rowBg = sidebarRowStateClass(selected);
@@ -478,16 +484,19 @@ function ChannelRow({
         />
         <span
           className={
-            'min-w-0 truncate ' +
-            (isClosed
-              ? 'line-through text-text-muted'
-              : isSilenced && !selected
-                ? 'text-text-muted'
-                : '')
+            'min-w-0 truncate ' + (isClosed ? 'line-through text-text-muted' : '')
           }
         >
           {channel.title}
         </span>
+        {/* Mute rides WITH the name, matching the workspace row (shiki 2026-08-09):
+            the shared MutedMarker hugs the (truncating) title, off the trailing edge
+            where the badge lives. */}
+        {isSilenced ? (
+          <span className="flex shrink-0 items-center">
+            <MutedMarker />
+          </span>
+        ) : null}
         {badge ? (
           <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
         ) : null}

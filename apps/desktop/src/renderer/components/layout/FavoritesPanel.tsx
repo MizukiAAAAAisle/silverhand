@@ -30,6 +30,7 @@ import {
 } from '@/components/layout/list-drag-sort';
 import {
   OUTER_GLYPH_INSET,
+  MutedMarker,
   SidebarSection,
   UnreadBadge,
   copyConversationName,
@@ -260,9 +261,10 @@ function FavoriteRow({
     positionalUnread: item.unread_count ?? 0,
     directedUnread: attention?.directed_unread_count ?? 0,
   });
-  // A silenced row says so without being right-clicked — the title drops to the muted
-  // ink. Subtractive, same as the parent list: no marker icon, and a directed badge
-  // still stands out against it.
+  // A silenced row says so without being right-clicked: a MutedMarker rides beside
+  // the name (shiki 2026-08-09), matching the workspace row and the parent list's
+  // `ChannelRow`. Mute is the marker ALONE — the name keeps its full colour (shiki
+  // 2026-08-09). A directed badge still stands out at the trailing edge.
   const isSilenced = effectiveMode === 'mute';
 
   // Notifications is a member-scoped write on regular channels only (the backend
@@ -303,15 +305,17 @@ function FavoriteRow({
       >
         <ChannelIcon
           variant="sticker"
-          className={isSilenced && !isPrimary ? 'text-text-muted/60' : 'text-text-muted'}
+          className="text-text-muted"
         />
-        <span
-          className={
-            'min-w-0 truncate ' + (isSilenced && !isPrimary ? 'text-text-muted' : '')
-          }
-        >
-          {item.title}
-        </span>
+        <span className="min-w-0 truncate">{item.title}</span>
+        {/* Mute rides WITH the name (shiki 2026-08-09), matching the workspace row
+            and the parent list's `ChannelRow`: shared MutedMarker beside the title,
+            badge stays at the trailing edge. */}
+        {isSilenced ? (
+          <span className="flex shrink-0 items-center">
+            <MutedMarker />
+          </span>
+        ) : null}
         {badge ? (
           <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
         ) : null}

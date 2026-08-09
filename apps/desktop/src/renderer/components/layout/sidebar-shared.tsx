@@ -479,19 +479,19 @@ export function UnreadBadge({
 }
 
 /**
- * The rail's persistent "this workspace is muted" marker (shiki 2026-08-07,
- * #task:1870). Shared by the home rail row and its STARRED twin because STARRED
- * is a starred workspace's EXCLUSIVE home — a marker only the rail knew how to
- * draw would silently vanish the moment you starred a muted workspace.
+ * The persistent "this is muted" marker (shiki 2026-08-07, #task:1870). Shared by
+ * the home rail's workspace row, its STARRED twin, and — since shiki 2026-08-09 —
+ * the channel rows (`WorkspaceChannels` / `FavoritesPanel`), so a muted workspace
+ * and a muted channel read identically and no consumer redraws the glyph.
  *
- * ADDITIVE, not subtractive: a channel row expresses silence by dropping to the
- * muted ink, which works there because the neighbouring loud rows are the
- * comparison group. The rail has no such group — its rows are already quiet when
- * nothing is happening, so "dimmer" is isomorphic to "nothing new" and only an
- * existence marker can say "silenced" (dogfood: shiki could not tell which
- * workspace was muted). It sits BESIDE the count slot rather than replacing it:
- * a directed mention legitimately pierces mute, so muted-and-loud is a real
- * state, not a contradiction.
+ * The marker is the SOLE mute signal on every row: an existence marker, not a
+ * dimming. Dimming was tried on the channel rows and rejected — a muted row that
+ * drops to the muted ink reads as de-emphasised or "not shown", not silenced, and
+ * the rail never had a comparison group to make "dimmer" legible in the first
+ * place (dogfood: shiki could not tell which workspace was muted; then, on the
+ * channel rows, asked to keep the name at full colour). It sits BESIDE the count
+ * slot rather than replacing it: a directed mention legitimately pierces mute, so
+ * muted-and-loud is a real state, not a contradiction.
  *
  * Ink: no colour of its own — it inherits the row's `currentColor` and dims it.
  * That is what keeps it correct in all three themes AND on the selected row
@@ -502,7 +502,8 @@ export function UnreadBadge({
  * level with `--text-faint`, this renderer's third-tier text step.
  *
  * Identity only, per the shared-component rule: placement and spacing belong to
- * the consumer's status slot.
+ * the consumer's status slot. The rail places it beside the count; the channel
+ * rows place it beside the name (shiki 2026-08-09), like the workspace row.
  */
 export function MutedMarker(): JSX.Element {
   return (
