@@ -25,7 +25,7 @@ export function TaskDropPlaceholder(): JSX.Element {
       <div
         data-panel-card="placeholder"
         data-task-drop-placeholder
-        className="flex items-center justify-center gap-1.5 border border-dashed border-[color:var(--text-on-selected)] px-2 py-3 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-[color:var(--text-on-selected)]"
+        className="flex items-center justify-center gap-1.5 border border-dashed border-text-on-selected px-2 py-3 text-[length:var(--text-meta)] font-medium uppercase tracking-wider text-text-on-selected"
       >
         <ArrowDownToLine className="size-3.5" aria-hidden />
         Drop here

@@ -643,7 +643,7 @@ function AttachmentRow({
             if (isImage) void openImagePreview();
             else void openAttachmentExternally(attachment);
           }}
-          className="group flex min-w-0 flex-1 items-center gap-2.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="group flex min-w-0 flex-1 items-center gap-2.5 text-left focus-outline"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           <AttachmentThumb attachment={attachment} isImage={isImage} />
@@ -688,7 +688,7 @@ function AttachmentRow({
           type="button"
           data-attachment-row-action
           onClick={() => void saveAttachmentToDisk(attachment)}
-          className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus-outline"
           title={`Download ${attachment.filename}`}
           aria-label={`Download ${attachment.filename}`}
         >
@@ -699,7 +699,7 @@ function AttachmentRow({
           type="button"
           data-attachment-row-action
           onClick={onJump}
-          className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus-outline"
           title={`Show ${attachment.filename} in conversation`}
           aria-label={`Show ${attachment.filename} in conversation`}
         >

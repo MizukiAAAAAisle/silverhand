@@ -184,6 +184,20 @@
      other themes resolve those consumers back to `--card-radius`. */
   --app-corner-radius: 10px;
   --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
+  /* Poster hard-offset shadow — the forza6 "printed sticker" lift: solid ink
+     drop at 0 blur / 0 spread. One size scale (sm/base/lg/xl) so the sites that
+     hand-wrote `Npx Npx 0 var(--forza6-ink)` share a recipe; the sizes mirror
+     the `[data-sticker]` primitive's own sm/base/lg, and `xl` is the extra step
+     hover uses to read as raised. Private art — other themes never see it. */
+  --forza6-poster-shadow-sm: 1px 1px 0 var(--forza6-ink);
+  --forza6-poster-shadow: 1.5px 1.5px 0 var(--forza6-ink);
+  --forza6-poster-shadow-lg: 2px 2px 0 var(--forza6-ink);
+  --forza6-poster-shadow-xl: 2.5px 2.5px 0 var(--forza6-ink);
+  /* Destructive variant — same base→xl lift, but the drop is `--error` so the
+     danger sticker's frame + shadow stay one hue. Only base + xl exist (the
+     destructive sticker only lifts on hover); sm/lg have no consumer. */
+  --forza6-poster-shadow-error: 1.5px 1.5px 0 var(--error);
+  --forza6-poster-shadow-error-xl: 2.5px 2.5px 0 var(--error);
   --splitter-bg: transparent;
   --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
   /* v6.9.6 (#task:917, shiki "拖拽的 resize handler 颜色, 在 forza6
@@ -215,6 +229,13 @@
      `JzkPVNV3svN97WSR`. */
   --brand-primary: var(--forza6-pink);
   --text-on-brand: var(--forza6-ink);
+  /* Task-board `#nnn` anchor — its own semantic slot, split off brand
+     (#task:1914). Defaults to the brand hot magenta (zero visual change), but
+     naming it separately lets the task-number hue be re-mapped without
+     dragging the composer's brand fill/focus with it — one saturated hue per
+     product semantic. Consumed by `[data-tasks-num]` + the column-header
+     count in forza6-components.css. */
+  --task-num: var(--brand-primary);
   /* NavRail moves to poster paper white (P2 v6.4 #task:917). v6.1-
      v6.3 ran #23545E deep湖青 — "跟青色 chrome 搭配不好" + 整体偏
      暗. Paper white #FAFBF6 is the brightest possible NavRail,
@@ -375,11 +396,16 @@
      海报系把所有 control surface (input / textarea / button / select
      trigger / icon button) 和 inline reference / filter chip 全部归零，
      强化"hard-cut block"语汇 —— 跟已有的 `--floating-radius: 0` /
-     `--inline-code-radius: 0` 同一节拍。pill-radius 暂不入：TaskStatusPill
-     当前在 forza6 里仍然走 `rounded-full` 胶囊（shiki 决定先保留胶囊感，
-     饱和填色 + 软形是状态语义的一种表达），等开 pill-radius 那一波再统一。 */
+     `--inline-code-radius: 0` 同一节拍。pill-radius = 其它主题走满圆
+     `rounded-full` 的那类通用胶囊（scroll-bottom FAB / unread 徽章 /
+     thread dot / status pip / 字号预设 pill），forza6 归零成方、warm 走满圆。
+     task-status-radius = task-status 家族专用语义 token（事件 pill / 任务卡
+     badge / 消息 task tag,同一状态各处同形,shiki 2026-08-09):值同满圆族,
+     语义独立于通用 pill,便于日后单独调形。 */
   --control-radius: 0;
   --chip-radius: 0;
+  --pill-radius: 0;
+  --task-status-radius: 0;
   /* Bottom-row chip fill — shared by reaction chips and the thread-reply
      pill (poster ink, no brand pink). The viewer's own reaction uses
      `--accent-soft` (faint pink) for a stronger fill — identity state only,
@@ -552,6 +578,14 @@
   --accent-soft: rgba(179, 24, 106, 0.14);
   --accent-hover: #8E0F50;
   --accent-glow: rgba(179, 24, 106, 0.30);
+  /* Unread signal — its own semantic slot, split off the generic accent
+     (#task:1914). Defaults to `--accent` (zero visual change), but naming it
+     separately lets the unread hue be re-mapped without dragging every other
+     accent surface with it — one saturated hue per product semantic. A
+     first-class promoted token: every theme declares its own `--unread` (blue
+     themes just alias accent, no collision), so shared JSX reads a bare
+     `var(--unread)`. forza6 is where accent/unread actually collide. */
+  --unread: var(--accent);
   /* Search-hit goose-yellow (#task:1335) — a soft pale yellow, deliberately
      paler than the fluorescent `--forza6-yellow` (#FFEB00) claimed by Tasks so
      the transient find highlight reads as "found text", not a task chip. Ink
@@ -606,9 +640,10 @@
      2px ring; shiki review "半透墨水晕不好, 直接用 ink 即可" — the
      half-tone halo read as muddy next to the solid frame, the cleaner
      read is two layers of the same ink hard-stamped. v6.10.2 lands on
-     solid ink for both: border = `--forza6-ink`, ring inherits the
-     same via the `ring-border-focus` utility. No component-layer
-     `--tw-ring-color` override needed.
+     solid ink: border = `--forza6-ink`, and the keyboard focus outline
+     inherits the same via `--border-focus` (see #task:1920 — focus is
+     drawn with `outline`, not a ring, app-wide; forza6 poster shadows
+     ate the box-shadow ring, so outline is the only reliable mechanism).
 
      Focus is a utility signal (short-lived, non-semantic), so it walks
      the v6.9.6 splitter / row-hover / control-hover ink vocabulary;

@@ -2,6 +2,7 @@ import { useId, useRef, useState, type KeyboardEvent } from 'react';
 import * as Popover from '@radix-ui/react-popover';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { dropdownPanelProps } from './dropdownPanel';
 
 /**
  * Editable combobox — a free-text input paired with a suggestions dropdown.
@@ -69,6 +70,7 @@ export function Combobox({
     <Popover.Root open={open && hasSuggestions} onOpenChange={setOpen}>
       <Popover.Anchor asChild>
         <div
+          data-input=""
           className={cn(
             'flex items-center rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-floating transition-colors',
             'hover:border-[color:var(--border-control-hover)]',
@@ -131,7 +133,10 @@ export function Combobox({
           align="start"
           sideOffset={4}
           onOpenAutoFocus={e => e.preventDefault()}
-          className="z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-popover-trigger-width)] overflow-y-auto rounded-[var(--select-content-radius)] border border-border bg-bg-floating p-1 shadow-popover"
+          {...dropdownPanelProps(
+            'poster',
+            'z-[var(--z-in-dialog)] max-h-[42vh] min-w-[var(--radix-popover-trigger-width)] overflow-y-auto p-1',
+          )}
         >
           {suggestions.map(s => (
             <button

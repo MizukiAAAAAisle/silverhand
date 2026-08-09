@@ -90,7 +90,7 @@ export function ChannelRef({ name, channel, onOpen }: ChannelRefProps): JSX.Elem
       role="button"
       tabIndex={0}
       className={
-        'inline-flex cursor-pointer items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus' +
+        'inline-flex cursor-pointer items-baseline gap-0.5 rounded-[var(--chip-radius)] px-1 -mx-0.5 font-medium text-accent transition-colors hover:bg-accent-soft focus-outline' +
         (dim ? ' opacity-60' : '')
       }
       title={tooltip}

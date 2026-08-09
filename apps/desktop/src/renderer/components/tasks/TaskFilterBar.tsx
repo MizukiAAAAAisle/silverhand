@@ -340,7 +340,7 @@ const FilterTrigger = forwardRef<
             // (`--border-row-selected`, same near-black as hover) so the
             // chip reads as a framed poster sticker, not a borderless fill
             // (shiki #task:790).
-            'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+            'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected'
           : 'border-border-subtle bg-bg-primary text-text-secondary hover:text-text-primary',
         className,
       )}
@@ -349,7 +349,7 @@ const FilterTrigger = forwardRef<
       <span
         className={cn(
           'shrink-0',
-          active ? 'text-[color:var(--text-on-selected)]' : 'text-text-muted',
+          active ? 'text-text-on-selected' : 'text-text-muted',
         )}
       >
         {icon}
@@ -358,7 +358,7 @@ const FilterTrigger = forwardRef<
       <ChevronDown
         className={cn(
           'size-3 shrink-0',
-          active ? 'text-[color:var(--text-on-selected)]' : 'text-text-muted',
+          active ? 'text-text-on-selected' : 'text-text-muted',
         )}
       />
     </button>
@@ -387,7 +387,7 @@ function FilterPanel({
         onKeyDown={onKeyDown}
         data-task-filter-panel
         data-dropdown-frame
-        className="z-[var(--z-toolbar)] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
+        className="scrollbar-hide z-[var(--z-toolbar)] max-h-[50vh] min-w-[180px] overflow-y-auto rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
       >
         {children}
       </Popover.Content>
@@ -450,7 +450,7 @@ export function OptionRow({
         // Keyboard-highlighted (but not the current value) → neutral hover
         // fill, so mouse and keyboard share one visual language.
         activeSelected
-          ? 'bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+          ? 'bg-[var(--bg-row-selected)] text-text-on-selected'
           : active
             ? 'bg-[var(--bg-option-hover)] text-text-primary'
             : 'text-text-secondary',
@@ -464,7 +464,7 @@ export function OptionRow({
             // Real selection → on-selected ink on the lime fill; the
             // neutral default current row → a muted check (no pink, no
             // lime) so it reads as "current" without the active look.
-            activeSelected ? 'text-[color:var(--text-on-selected)]' : 'text-text-muted',
+            activeSelected ? 'text-text-on-selected' : 'text-text-muted',
           )}
         />
       ) : null}
@@ -611,7 +611,10 @@ function ChannelFilter({
           data-dropdown-frame
           className="z-[var(--z-toolbar)] flex max-h-[50vh] w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
         >
-          <div className="flex items-center gap-1.5 border-b border-border-subtle px-2 pb-1.5 pt-1">
+          <div
+            data-input=""
+            className="flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
+          >
             <Search className="size-3.5 shrink-0 text-text-muted" />
             <input
               autoFocus
@@ -629,7 +632,7 @@ function ChannelFilter({
           <div
             role="listbox"
             id={listId}
-            className="mt-1 min-h-0 flex-1 overflow-y-auto"
+            className="scrollbar-hide mt-1 min-h-0 flex-1 overflow-y-auto"
           >
             <OptionRow
               selected={value === null}

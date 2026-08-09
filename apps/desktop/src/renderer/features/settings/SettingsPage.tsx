@@ -377,7 +377,7 @@ function AppearancePane({
                     // the transition tuple it needs (a bare
                     // `transition-colors` would not animate transform).
                     className={cn(
-                      'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+                      'group relative flex min-h-[92px] flex-col items-start justify-between overflow-hidden rounded-[10px] border-2 p-3 text-left focus-outline',
                       CONTROL_HOVER_LIFT,
                       active ? 'border-accent' : 'border-border-subtle',
                     )}
@@ -503,10 +503,7 @@ const MESSAGE_LAYOUT_META: Record<
 function MessageAlignmentControl(): JSX.Element {
   const mode = useMessageLayoutMode();
   return (
-    <div
-      data-settings-card
-      className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3"
-    >
+    <div className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-text-primary">
@@ -533,9 +530,9 @@ function MessageAlignmentControl(): JSX.Element {
                 aria-checked={selected}
                 onClick={() => setMessageLayoutMode(id)}
                 className={cn(
-                  'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus',
+                  'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors focus-outline',
                   selected
-                    ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+                    ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected'
                     : 'border-border-subtle bg-bg-base text-text-secondary hover:border-[color:var(--border-control-hover)] hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
                 )}
               >
@@ -684,10 +681,7 @@ function SharedFontSizeControl({
   };
 
   return (
-    <div
-      data-settings-card
-      className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3"
-    >
+    <div className="grid gap-2 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-text-primary">Font size</h3>
@@ -714,13 +708,12 @@ function SharedFontSizeControl({
           </span>
           <button
             type="button"
-            data-settings-card
             onClick={onReset}
             disabled={!isOverride}
             // Hover border = `--border-control-hover` (ink in every theme),
             // not `accent` — see the font-preset pill below for why the
             // saturated hue can't be spent on a utility state.
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
             <RotateCcw className="size-3.5" />
             Reset
@@ -830,10 +823,7 @@ function MarkdownFontControl({
   };
 
   return (
-    <div
-      data-settings-card
-      className="grid gap-3 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3"
-    >
+    <div className="grid gap-3 rounded-[var(--card-radius)] border border-border-subtle bg-bg-floating p-3">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span
@@ -851,10 +841,9 @@ function MarkdownFontControl({
         </div>
         <button
           type="button"
-          data-settings-card
           onClick={onReset}
           disabled={!fontValue}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-[color:var(--border-control-hover)] hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
         >
           <RotateCcw className="size-3.5" />
           Reset
@@ -890,7 +879,7 @@ function MarkdownFontControl({
                 data-selected={isSelected || undefined}
                 onClick={() => onFontChange(preset.value)}
                 className={cn(
-                  'rounded-full border px-2 py-1 text-[length:var(--text-meta)] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+                  'rounded-[var(--pill-radius)] border px-2 py-1 text-[length:var(--text-meta)] font-medium transition-colors focus-outline',
                   isSelected
                     ? 'border-accent bg-accent text-text-on-accent'
                     // Hover is a UTILITY state, so its border rides the
@@ -913,7 +902,6 @@ function MarkdownFontControl({
       </div>
 
       <div
-        data-settings-card
         className={cn(
           'rounded-[var(--control-radius)] border border-border-subtle bg-bg-primary px-3 py-2 text-text-primary',
           code ? 'font-mono' : '',

@@ -170,7 +170,12 @@
   --task-status-in-progress-border: 1px solid color-mix(in oklab, var(--warning) 45%, transparent);
   --task-status-in-review-bg: var(--accent);
   --task-status-in-review-text: var(--text-on-accent);
-  --task-status-in-review-border: none;
+  /* 实底 accent 不需要可见边框，但 badge 是 auto 高：`none` 会让 in_review 比
+     有 1px 边的 todo/done/closed 矮 2px（同一卡片行按状态跳高，todo/done≈16px、
+     in_review≈14px）。补一条 transparent 1px 边补回盒高、不显线（实底透过来），
+     五个状态在 studio-light 齐平（与 slack-dark 一致；forza6 自成 0 边更紧一档）。
+     这一族的高度不变式 = 每个状态都带 1px 边（可见或透明）。 */
+  --task-status-in-review-border: 1px solid transparent;
   /* 与 in_progress 同一个配方（`-soft` 底 + 饱和字 + 45% 边），只换 hue：两个
      chip 的响度必须由同一套参数决定，否则"哪个更要紧"会被参数差异说错。
      `--success` #0A7256 在白底 5.91:1、在这层 9% 绿薄底上 5.19:1（AA）。 */
@@ -239,6 +244,12 @@
      是 Tailwind `rounded-md` 那一档，用 `--radius-sm` 会把语义弄反。 */
   --control-radius: 6px;
   --chip-radius: 4px;
+  /* Round-pill family (unread 徽章 / status pip / thread dot / scroll-bottom /
+     字号预设 pill）— studio 保持满圆胶囊。 */
+  --pill-radius: 9999px;
+  /* task-status 家族专用（事件 pill / 任务卡 badge / 消息 task tag）— 满圆,
+     语义独立于通用 pill。 */
+  --task-status-radius: 9999px;
   /* Bottom-row chip fill — shared by reaction chips and the thread-reply
      pill so the whole message footer reads as one family. Utility, not a
      brand moment：中性墨洗；自己的 reaction 用 `--accent-soft`（薄 Studio Blue）
@@ -301,6 +312,10 @@
   --accent-soft: rgba(47, 90, 208, 0.10);
   --accent-hover: #2549B4;
   --accent-glow: rgba(47, 90, 208, 0.28);
+  /* Unread signal — its own semantic slot (#task:1914). Blue here has no
+     accent/unread collision, so it aliases `--accent`; naming it keeps the
+     unread hue independently re-mappable per theme, same seam every theme owns. */
+  --unread: var(--accent);
   /* Search-hit highlighter (#task:1335) — 查找高亮是**临时工具地色**（大块
      铺在正文下面），不与 accent 的小面积记号在同一个视觉栈里共现，所以留在
      荧光笔黄这个通用记忆点上；深墨字，active match 压深底色（无描边）。 */

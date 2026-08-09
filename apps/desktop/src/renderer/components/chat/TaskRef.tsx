@@ -242,7 +242,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   // global.css — text-decoration targets the label span directly). A filled
   // block reads as a slab in running prose regardless of
   // hue; a link reads as what it is (#task:1725). Each theme just supplies its
-  // own `--accent`. focus-visible ring kept — the sole focus signal now that
+  // own `--accent`. focus-visible outline kept — the sole focus signal now that
   // the chip is borderless.
   //
   // No `px-1.5 -mx-0.5`: unlike the inert variants (which keep a
@@ -263,7 +263,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
     <span
       role="button"
       tabIndex={0}
-      className="inline-flex max-w-[220px] cursor-pointer items-center gap-1 rounded-[var(--chip-radius)] font-medium text-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex max-w-[220px] cursor-pointer items-center gap-1 rounded-[var(--chip-radius)] font-medium text-accent focus-outline"
       aria-label={tooltip}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"

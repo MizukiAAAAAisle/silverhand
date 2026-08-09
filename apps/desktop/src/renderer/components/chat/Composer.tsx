@@ -733,7 +733,7 @@ export function Composer({
       onDragLeave={onDragLeave}
       className={
         'shrink-0 border-t border-border-subtle bg-bg-primary px-3 py-3 ' +
-        (dragOver ? 'ring-2 ring-border-focus' : '')
+        (dragOver ? '[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]' : '')
       }
     >
       {pending.length > 0 ? (
@@ -780,15 +780,15 @@ export function Composer({
          *  `focus-within:` ring so the focused-textarea outline still
          *  encloses both rows.
          *
-         *  v6.9.7 #task:917 (shiki composer audit C): `rounded-md`
-         *  (6px) is the right default for studio-light / slack-dark
-         *  cards, but in forza6's 0-radius poster vocab the composer
-         *  read as "almost-square". `data-composer-shell` lets forza6
-         *  square it (same one-rule hook pattern as `data-settings-
-         *  card` etc.); other themes keep the polished 6px. */}
+         *  v6.9.7 #task:917 (shiki composer audit C): the shell's
+         *  radius is token-driven via `--control-radius` — forza6's 0
+         *  comes straight from the token (poster vocab), studio-light /
+         *  slack-dark get their 6px. #task:1916 dropped the earlier
+         *  `data-composer-shell` radius override; the hook now only
+         *  carries forza6's brand focus-within border. */}
         <div
           data-composer-shell
-          className="flex flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-floating focus-within:border-border-focus focus-within:ring-2 focus-within:ring-border-focus"
+          className="flex flex-col overflow-hidden rounded-[var(--control-radius)] border border-border-subtle bg-bg-floating focus-within:border-border-focus"
         >
           {/* Identity self-sourced (#task:1731): the header resolves agent
               name/avatar from the global directory internally — it must NOT
@@ -930,7 +930,7 @@ function AttachmentChip({
           type="button"
           onClick={onPreview}
           disabled={!onPreview}
-          className="block size-8 shrink-0 overflow-hidden rounded-sm border border-border-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="block size-8 shrink-0 overflow-hidden rounded-sm border border-border-subtle focus-outline"
           aria-label="Preview image"
         >
           <img
@@ -952,7 +952,7 @@ function AttachmentChip({
                 onClick={onInsertLabel}
                 title="Insert reference into message"
                 aria-label={`Insert ${item.label} into message`}
-                className="shrink-0 rounded-sm font-mono text-text-muted transition-colors hover:text-text-secondary hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="shrink-0 rounded-sm font-mono text-text-muted transition-colors hover:text-text-secondary hover:underline focus-outline"
               >
                 {item.label}
               </button>

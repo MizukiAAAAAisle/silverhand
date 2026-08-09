@@ -1,19 +1,18 @@
 import { useMemo, useState } from 'react';
 import * as Popover from '@radix-ui/react-popover';
-import { Plus, Search } from 'lucide-react';
+import { Plus } from 'lucide-react';
 import type { AgentDto, MemberDto, UserDto, WorkspaceRole } from '@silverhand/shared';
-import { AgentAvatar } from '@/components/AgentAvatar';
-import { UserAvatar } from '@/components/UserAvatar';
-import { AVATAR_PX } from '@/components/avatar-scale';
-import { SEARCH_FIELD_FRAME } from '@/features/common/ControlInkBorder';
-import { useAgents } from '@/features/agents/hooks';
-import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
-import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
-import { useUsers } from '@/features/users/hooks';
 import { ApiError } from '@/lib/api';
+import { MemberCandidatePicker } from '../workspaces/MemberCandidatePicker';
+import type {
+  MemberCandidate,
+  MemberCandidateGroup,
+} from '../workspaces/member-search';
 import { useWorkspaceMemberLists } from '../workspaces/hooks';
 import { useConversationMembers } from './useConversationMembers';
 import { useAddConversationMember } from './useAddConversationMember';
+import { useAgents } from '@/features/agents/hooks';
+import { useUsers } from '@/features/users/hooks';
 
 export interface AddConversationMemberPopoverProps {
   workspaceId: string;
@@ -48,6 +47,13 @@ interface AddConversationMemberPopoverOptions
    *  lock exists, so it stays non-modal to avoid locking page scroll for a
    *  low-key affordance. */
   modal?: boolean;
+  /** Panel width (a Tailwind width class). Defaults to the compact
+   *  `w-[260px]` that suits the header `+` chip (shiki #task:1923 — the
+   *  360px it used to share with the modal was too wide for a low-key
+   *  affordance). The members modal passes `w-[360px]` to stay flush with
+   *  its own `max-w-[360px]` — the same coupling `align="center"` relies on
+   *  (shiki 2026-08-09: the two header entries may differ in width). */
+  widthClass?: string;
 }
 
 /**
@@ -101,6 +107,7 @@ export function AddConversationMemberPopover({
   trigger,
   align = 'end',
   modal = false,
+  widthClass = 'w-[260px]',
 }: AddConversationMemberPopoverOptions): JSX.Element {
   return (
     <Popover.Root modal={modal}>
@@ -111,7 +118,7 @@ export function AddConversationMemberPopover({
             aria-label="Add member to this conversation"
             title="Add member"
             data-member-chip="add"
-            className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+            className="inline-flex size-6 shrink-0 items-center justify-center rounded-[var(--control-radius)] border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
           >
             <Plus className="size-3.5" />
           </button>
@@ -123,10 +130,11 @@ export function AddConversationMemberPopover({
           sideOffset={6}
           collisionPadding={8}
           data-popover-frame="info"
-          // 360px — the members modal's width, and ONE width for both triggers:
-          // the panel is the same list either way, so making it narrower from
-          // the header `+` would be a difference with nothing behind it.
-          className="z-[var(--z-dialog)] w-[360px] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none"
+          // Width is `widthClass` (default compact `w-[260px]`; the modal
+          // passes `w-[360px]` to stay flush with its own edges — see the prop
+          // doc). The two header entries are allowed to differ: the member-strip
+          // `+` is a low-key affordance, the modal's row aligns to the modal.
+          className={`${widthClass} z-[var(--z-dialog)] rounded-md border border-border bg-bg-floating p-3 shadow-popover outline-none`}
         >
           <PopoverBody
             workspaceId={workspaceId}
@@ -156,7 +164,6 @@ function PopoverBody({
   const conversationMembers = useConversationMembers(conversationId);
   const addMember = useAddConversationMember(conversationId, workspaceId);
 
-  const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const wsAgents: AgentDto[] = memberLists.data?.agents ?? [];
@@ -171,12 +178,9 @@ function PopoverBody({
     () => computePickableAgents(wsAgents, ownedAgents.data ?? [], viewerRole),
     [wsAgents, ownedAgents.data, viewerRole],
   );
-  const agentAvatars = useAgentAvatarObjectUrls(pickableAgents);
-  const humanAvatars = useUserAvatarObjectUrls(pickableHumans);
 
-  // Set of `agent:<id>` / `human:<id>` for current conversation
-  // members. Used to filter workspace members down to "not yet in
-  // conversation".
+  // Set of `agent:<id>` / `human:<id>` for current conversation members. Used
+  // to narrow the pools to "not yet in conversation".
   const inConversation = useMemo(() => {
     const set = new Set<string>();
     if (conversationMembers.status === 'resolved') {
@@ -185,37 +189,30 @@ function PopoverBody({
     return set;
   }, [conversationMembers]);
 
-  const candidates = useMemo<PickableMember[]>(() => {
-    const q = query.trim().toLowerCase();
-    const list: PickableMember[] = [];
-    for (const a of pickableAgents) {
-      if (inConversation.has(`agent:${a.id}`)) continue;
-      if (q && !matchesAgent(a, q)) continue;
-      list.push({ kind: 'agent', agent: a });
-    }
-    for (const u of pickableHumans) {
-      if (inConversation.has(`human:${u.id}`)) continue;
-      if (q && !matchesHuman(u, q)) continue;
-      list.push({ kind: 'human', user: u });
-    }
-    return list;
-  }, [pickableAgents, pickableHumans, inConversation, query]);
-
-  // Split the already-filtered candidates into their two kinds so each gets its
-  // own labelled section (shiki 2026-08-03). A kind with no candidates drops
-  // out entirely — a header never sits above an empty list — and `candidates`
-  // keeps agents ahead of humans, so the section order is stable. This mirrors
-  // the workspace member picker's AGENTS / HUMANS grouping (ManageMembersPopover).
-  const groups = useMemo(
+  // Candidate pool for the picker, grouped agents-then-humans and narrowed to
+  // who is NOT yet in this conversation. Query narrowing is the picker's job,
+  // not ours — a kind with no candidates drops out so its header never sits
+  // above an empty list. Mirrors the workspace picker's AGENTS / HUMANS groups.
+  const groups = useMemo<MemberCandidateGroup[]>(
     () =>
       [
-        { label: 'AGENTS', items: candidates.filter(c => c.kind === 'agent') },
-        { label: 'HUMANS', items: candidates.filter(c => c.kind === 'human') },
+        {
+          label: 'AGENTS',
+          items: pickableAgents
+            .filter(a => !inConversation.has(`agent:${a.id}`))
+            .map(a => ({ kind: 'agent' as const, agent: a })),
+        },
+        {
+          label: 'HUMANS',
+          items: pickableHumans
+            .filter(u => !inConversation.has(`human:${u.id}`))
+            .map(u => ({ kind: 'human' as const, user: u })),
+        },
       ].filter(g => g.items.length > 0),
-    [candidates],
+    [pickableAgents, pickableHumans, inConversation],
   );
 
-  const onPick = async (c: PickableMember): Promise<void> => {
+  const onPick = async (c: MemberCandidate): Promise<void> => {
     setError(null);
     try {
       if (c.kind === 'agent') {
@@ -237,123 +234,35 @@ function PopoverBody({
     || conversationMembers.status === 'loading';
 
   return (
-    <div className="flex flex-col gap-2">
-      <label className={SEARCH_FIELD_FRAME}>
-        <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden />
-        <input
-          type="text"
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder="Search by name or @handle"
-          autoFocus
-          className="w-full min-w-0 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
-        />
-      </label>
-
-      <div className="flex max-h-[40vh] flex-col gap-2 overflow-y-auto">
-        {candidates.length === 0 ? (
-          <p className="px-2 py-3 text-center text-xs italic text-text-muted">
-            {isLoading
-              ? 'Loading…'
-              : query
-                ? 'No matches'
-                : canAddOthers
-                  ? 'Everyone is already in this conversation'
-                  : 'You have no agents left to add'}
-          </p>
-        ) : (
-          groups.map(group => (
-            <div key={group.label}>
-              <div className="px-2 pb-1 text-[length:var(--text-badge)] font-medium uppercase tracking-wider text-text-muted">
-                {group.label}
-              </div>
-              <ul className="flex flex-col gap-0.5">
-                {group.items.map(c => {
-                  const displayName =
-                    c.kind === 'agent'
-                      ? c.agent.display_name || c.agent.name
-                      : c.user.display_name || c.user.name;
-                  const handle = c.kind === 'agent' ? c.agent.name : c.user.name;
-                  return (
-                    <li key={candidateKey(c)}>
-                      <button
-                        type="button"
-                        onClick={() => void onPick(c)}
-                        disabled={addMember.isPending}
-                        className="flex w-full items-center gap-2 rounded-[var(--chip-radius)] px-2 py-1.5 text-left transition-colors hover:bg-bg-hover disabled:opacity-60"
-                      >
-                        {c.kind === 'agent' ? (
-                          <AgentAvatar
-                            runtime={c.agent.runtime}
-                            size={AVATAR_PX.sm}
-                            avatarObjectUrl={agentAvatars.get(c.agent.id) ?? null}
-                            alt={displayName}
-                          />
-                        ) : (
-                          <UserAvatar
-                            size={AVATAR_PX.sm}
-                            avatarObjectUrl={humanAvatars.get(c.user.id) ?? null}
-                            alt={displayName}
-                          />
-                        )}
-                        {/* Same name budget as the members-modal row: the handle is
-                            capped and `shrink-0`, so an overlong display name
-                            truncates first instead of squeezing the handle away. */}
-                        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-                          <span
-                            className="truncate text-sm font-medium text-text-primary"
-                            title={displayName}
-                          >
-                            {displayName}
-                          </span>
-                          <span className="max-w-[45%] shrink-0 truncate font-mono text-[length:var(--text-meta)] text-text-muted">
-                            @{handle}
-                          </span>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          ))
-        )}
-      </div>
-
-
-      {error ? (
-        <div role="alert" className="text-xs text-error">
-          {error}
-        </div>
-      ) : null}
-    </div>
+    <MemberCandidatePicker
+      mode="inline"
+      groups={groups}
+      onPick={c => void onPick(c)}
+      rowsDisabled={addMember.isPending}
+      autoFocus
+      ariaLabel="Add member"
+      emptyHint={
+        isLoading
+          ? 'Loading…'
+          : canAddOthers
+            ? 'Everyone is already in this conversation'
+            : 'You have no agents left to add'
+      }
+      footer={
+        error ? (
+          <div role="alert" className="text-xs text-error">
+            {error}
+          </div>
+        ) : null
+      }
+    />
   );
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-type PickableMember =
-  | { kind: 'agent'; agent: AgentDto }
-  | { kind: 'human'; user: UserDto };
-
 function memberKey(m: MemberDto): string {
   return m.kind === 'agent' ? `agent:${m.agent_id}` : `human:${m.user_id}`;
-}
-
-function candidateKey(c: PickableMember): string {
-  return c.kind === 'agent' ? `agent:${c.agent.id}` : `human:${c.user.id}`;
-}
-
-function matchesAgent(a: AgentDto, q: string): boolean {
-  if (a.name.toLowerCase().includes(q)) return true;
-  if ((a.display_name ?? '').toLowerCase().includes(q)) return true;
-  return false;
-}
-
-function matchesHuman(u: UserDto, q: string): boolean {
-  if (u.name.toLowerCase().includes(q)) return true;
-  if ((u.display_name ?? '').toLowerCase().includes(q)) return true;
-  return false;
 }
 
 /**

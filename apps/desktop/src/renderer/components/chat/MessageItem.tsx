@@ -644,7 +644,7 @@ function ActorMessageItem({
   // jumps to first unread.
   const threadUnreadNode =
     threadUnreadCount > 0 ? (
-      <span className="shrink-0 whitespace-nowrap font-medium text-accent">
+      <span className="shrink-0 whitespace-nowrap font-medium text-[var(--unread)]">
         {threadUnreadCount > 99 ? '99+' : threadUnreadCount} new
       </span>
     ) : null;
@@ -692,7 +692,7 @@ function ActorMessageItem({
           // exactly the "height is 30" misalignment. A row that states one fact
           // must stay one line high; when it cannot fit, the time segment gives
           // way (see below) rather than the row growing.
-          'inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs leading-none text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+          'inline-flex min-w-0 max-w-full items-center gap-1.5 text-xs leading-none text-text-muted transition-colors hover:text-text-primary focus-outline ' +
           // Mirrored ONLY as the preview block's header, and only for an
           // own-message row (#task:1855). The badge's glyph is this block's
           // COLUMN MARKER — it is supposed to sit in the same column as the
@@ -949,7 +949,7 @@ function ActorMessageItem({
                 type="button"
                 title="React"
                 aria-label="React"
-                className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-outline"
               >
                 <SmilePlus className="size-3.5" />
               </button>
@@ -1078,7 +1078,7 @@ function MessageTaskTag({
         // fill / border / radius stay in lockstep with the board chips.
         data-task-status={status}
         title={title}
-        className="inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none"
+        className="inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1.5 whitespace-nowrap rounded-[var(--task-status-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none"
       >
         {/* The status glyph is aria-hidden and the fill colour is visual-only,
             and a generic span's aria-label is not reliably exposed — so carry
@@ -1109,7 +1109,7 @@ function MessageTaskTag({
         aria-label={`Task #${linkedTask.task_number} (${label}) — click to change status`}
         // Stop the click from reaching the row's selection/jump capture.
         onClick={e => e.stopPropagation()}
-        className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--chip-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="inline-flex h-[18px] max-w-[220px] cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[var(--task-status-radius)] px-2 text-[length:var(--text-meta)] font-medium leading-none transition-opacity hover:opacity-80 focus-outline"
       >
         {body}
       </button>
@@ -1166,7 +1166,7 @@ function Avatar({
   onNavigateHuman: (userId: string) => void;
 }): JSX.Element {
   // Make the avatar's outermost element (button when wrapped, span when not)
-  // carry the explicit size box so the focus ring stays square regardless of the
+  // carry the explicit size box so the focus outline stays square regardless of the
   // image's natural aspect ratio (@shiki `4TU4EBHr70R-YMgc`).
   const avatar = (
     <AuthorAvatarView
@@ -1192,7 +1192,7 @@ function Avatar({
             event.preventDefault();
             onNavigateAgent(liveAgent.id);
           }}
-          className="mt-0.5 rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="mt-0.5 rounded-none focus-outline"
         >
           {avatar}
         </button>
@@ -1214,7 +1214,7 @@ function Avatar({
             event.preventDefault();
             onNavigateHuman(liveHuman.id);
           }}
-          className="mt-0.5 rounded-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="mt-0.5 rounded-none focus-outline"
         >
           {avatar}
         </button>
@@ -1272,7 +1272,7 @@ function AuthorLabel({
            *  not repaint the author name by kind. */
           data-message-author
           data-author-kind="agent"
-          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="rounded font-bold text-text-primary focus-outline"
         >
           {label}
         </button>
@@ -1295,7 +1295,7 @@ function AuthorLabel({
           }}
           data-message-author
           data-author-kind="user"
-          className="rounded font-bold text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+          className="rounded font-bold text-text-primary focus-outline"
         >
           {label}
         </button>
@@ -1350,7 +1350,7 @@ function ActionButton({
       title={label}
       aria-label={label}
       className={
-        'flex items-center rounded-sm transition-colors transition-opacity focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+        'flex items-center rounded-sm transition-colors transition-opacity focus-outline ' +
         (visible ? 'opacity-100' : 'pointer-events-none opacity-0') +
         ' ' +
         (active
@@ -1516,7 +1516,7 @@ function AttachmentTile({
           type="button"
           onClick={() => imageUrl && setLightboxOpen(true)}
           disabled={!imageUrl}
-          className="block overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="block overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-outline"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           {imageUrl ? (
@@ -1574,7 +1574,7 @@ function AttachmentTile({
 
   return (
     <div className="flex flex-col items-start gap-1">
-      <div className="flex max-w-[320px] items-stretch overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-within:ring-2 focus-within:ring-border-focus">
+      <div className="flex max-w-[320px] items-stretch overflow-hidden rounded-[var(--chip-radius)] border border-border-subtle bg-bg-floating focus-outline-within">
         <button
           type="button"
           onClick={downloadAndOpen}
@@ -1590,7 +1590,7 @@ function AttachmentTile({
         <button
           type="button"
           onClick={() => void saveAttachmentToDisk(attachment)}
-          className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus-outline"
           title="Download"
           aria-label={`Download ${attachment.filename}`}
         >
@@ -1645,7 +1645,7 @@ function SelectionCheckbox({
       aria-label={checked ? 'Deselect message' : 'Select message'}
       onClick={onChange}
       className={
-        'mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus ' +
+        'mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-[var(--control-radius)] border transition-colors focus-outline ' +
         (checked
           ? 'border-accent bg-accent text-bg-floating'
           : 'border-border bg-bg-floating text-transparent hover:border-accent')

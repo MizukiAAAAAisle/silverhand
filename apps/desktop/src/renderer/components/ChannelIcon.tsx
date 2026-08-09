@@ -94,7 +94,15 @@ export function ChannelIcon({
   // keeps the sticker markup byte-identical to the pre-primitive call-sites.
   if (variant === 'sticker') {
     return (
-      <Glyph data-channel-icon size={px} className={cn('shrink-0', className)} />
+      <Glyph
+        data-channel-icon
+        data-sticker
+        data-sticker-tone="channel"
+        data-sticker-size="sm"
+        data-sticker-flat
+        size={px}
+        className={cn('shrink-0', className)}
+      />
     );
   }
   return <Glyph size={px} className={cn('shrink-0', className)} />;

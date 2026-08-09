@@ -11,7 +11,7 @@ import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
 import { useUserAvatarObjectUrls } from '@/features/users/avatar-hooks';
 import { useUsers } from '@/features/users/hooks';
-import { AddMemberCombobox } from './AddMemberCombobox';
+import { MemberCandidatePicker } from './MemberCandidatePicker';
 import type {
   MemberCandidate,
   MemberCandidateGroup,
@@ -221,7 +221,8 @@ function PopoverBody({ workspaceId }: { workspaceId: string }): JSX.Element {
         * A plain member can only add their own agents, so both the label and
         * the empty hint say agents rather than members. */}
       {canAddAny ? (
-        <AddMemberCombobox
+        <MemberCandidatePicker
+          mode="floating"
           groups={candidateGroups}
           onPick={c => void onPick(c)}
           disabled={addMember.isPending}

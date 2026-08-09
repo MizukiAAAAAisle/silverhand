@@ -28,7 +28,7 @@ export function MiniIconButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        'inline-flex size-[18px] shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:pointer-events-none disabled:opacity-40',
+        'inline-flex size-[18px] shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-40',
         className,
       )}
     >

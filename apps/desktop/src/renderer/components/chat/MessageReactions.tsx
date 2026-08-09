@@ -75,7 +75,7 @@ export function MessageReactions({
               data-reaction-add
               aria-label="Add reaction"
               title="Add reaction"
-              className="flex h-[18px] items-center rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 text-text-muted transition-colors hover:bg-[var(--chip-bg-hover)] hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              className="flex h-[18px] items-center rounded-[var(--chip-radius)] bg-[var(--chip-bg)] px-2 text-text-muted transition-colors hover:bg-[var(--chip-bg-hover)] hover:text-text-primary focus-outline"
             >
               <SmilePlus className="size-3.5" />
             </button>
@@ -108,7 +108,7 @@ function ReactionChip({
       ?.find(d => d.emoji === agg.emoji)
       ?.reactors.map(r => r.display_name) ?? [];
   // Shared visual (single-sourced in ReactionChipRow); only the interactive
-  // chip gets the hover-fill shift and the focus ring — a display-only chip in
+  // chip gets the hover-fill shift and the focus outline — a display-only chip in
   // a read-only channel must not look clickable.
   const chipClass = reactionChipClass(agg, interactive);
   const inner = <ReactionChipBody agg={agg} />;
@@ -134,7 +134,7 @@ function ReactionChip({
             onClick={onClick}
             className={
               chipClass +
-              ' focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus'
+              ' focus-outline'
             }
           >
             {inner}

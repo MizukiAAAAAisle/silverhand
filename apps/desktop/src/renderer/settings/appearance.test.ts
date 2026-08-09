@@ -209,7 +209,11 @@ describe('theme markdown token cascade contract', () => {
     //  --app-corner-radius  intentionally forza6-only. NavRail reads it as
     //              `var(--app-corner-radius, var(--card-radius, 0))`, so other
     //              themes resolve to their own card radius by design — not a leak.
-    const FORZA6_ONLY = new Set(['--app-corner-radius']);
+    //  --task-num  intentionally forza6-only (#task:1914). The `#nnn` number hue
+    //              (`[data-tasks-num]`) is painted ONLY in forza6-components.css
+    //              `[data-theme='forza6']` rules; other themes render the number
+    //              as `text-text-muted` and never read the token, so it can't leak.
+    const FORZA6_ONLY = new Set(['--app-corner-radius', '--task-num']);
     const isPromoted = (t: string) =>
       !t.startsWith('--forza6-') &&
       !t.startsWith('--color-') &&

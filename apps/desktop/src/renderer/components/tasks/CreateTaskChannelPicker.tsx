@@ -103,6 +103,12 @@ export function CreateTaskChannelPicker({
         <button
           type="button"
           aria-label="Channel"
+          // Bordered field surface, like the dialog's Title input: forza6 paints
+          // the poster ink frame + drop shadow off `[data-input]` (SSOT comment
+          // in forza6-components.css). NOT `role='combobox'` — the inner search
+          // input already carries that role, and a second combobox on the trigger
+          // would confuse AT. Other themes leave `[data-input]` flat.
+          data-input=""
           className={cn(FILTER_SELECT_TRIGGER_CLASS, 'h-9')}
         >
           <span className="flex min-w-0 items-center gap-1.5">
@@ -131,7 +137,10 @@ export function CreateTaskChannelPicker({
         // it can never submit the form.
         className="z-[var(--z-popover)] flex max-h-[42vh] w-[var(--radix-popover-trigger-width)] min-w-[240px] flex-col rounded-[var(--select-content-radius)] bg-bg-floating p-1 shadow-popover outline-none"
       >
-        <div className="flex items-center gap-1.5 border-b border-border-subtle px-2 pb-1.5 pt-1">
+        <div
+          data-input=""
+          className="flex items-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-base px-2 py-1.5 transition-colors focus-within:border-border-focus"
+        >
           <Search className="size-3.5 shrink-0 text-text-muted" />
           <input
             autoFocus

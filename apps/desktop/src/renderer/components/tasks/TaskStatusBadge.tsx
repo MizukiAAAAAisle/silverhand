@@ -19,10 +19,11 @@ import {
 /**
  * Small inline status chip for task cards (drawer + global section).
  *
- * Chip form (9px, `--chip-radius`) is deliberately distinct from the
- * larger `TaskStatusPill` capsule — forza6 keeps a pill/chip form
- * boundary (Cindy review `ME-fJNO4XJRLpSHz`), so this stays chip-shaped
- * even when interactive instead of swapping to the pill.
+ * Radius rides `--task-status-radius` — the whole task-status family (this
+ * badge, the message task tag, and `TaskStatusPill`) shares ONE capsule form
+ * so the same status reads identically wherever it appears (shiki 2026-08-09,
+ * overriding the earlier chip/pill split from Cindy review
+ * `ME-fJNO4XJRLpSHz`): warm themes give the capsule, forza6 hard-cuts to 0.
  *
  * Read-only by default. Pass `onChange` to make it click-to-open a tiny
  * popover that moves the task to any other status — the human-side
@@ -118,7 +119,7 @@ const CHIP =
   // viewport + WorkspaceTasksDrawer at MIN_WIDTH share 5 columns). The
   // chip drops to its own line beneath `#nnn` instead of breaking
   // mid-word.
-  'rounded-[var(--chip-radius)] whitespace-nowrap px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide leading-none';
+  'rounded-[var(--task-status-radius)] whitespace-nowrap px-1 py-0.5 text-[length:var(--text-badge)] font-medium uppercase tracking-wide leading-none';
 
 export function TaskStatusBadge({
   status,
@@ -154,7 +155,7 @@ export function TaskStatusBadge({
         onClick={e => e.stopPropagation()}
         className={cn(
           CHIP,
-          'cursor-pointer transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus',
+          'cursor-pointer transition-opacity hover:opacity-80 focus-outline',
           className,
         )}
       >

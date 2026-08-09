@@ -352,7 +352,7 @@ export function Lightbox({
             <DialogPrimitive.Close
               aria-label="Close"
               data-sticker-close
-              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+              className="flex size-7 shrink-0 items-center justify-center rounded-[var(--control-radius)] text-text-muted hover:bg-bg-hover hover:text-text-primary focus-outline"
             >
               <X className="size-4" />
             </DialogPrimitive.Close>
@@ -421,7 +421,7 @@ export function Lightbox({
                 aria-label="Zoom out"
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
-                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
               >
                 <ZoomOut className="size-4" />
               </button>
@@ -446,7 +446,7 @@ export function Lightbox({
                 aria-label="Zoom in"
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
-                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="flex size-7 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-40 focus-outline"
               >
                 <ZoomIn className="size-4" />
               </button>
@@ -456,7 +456,7 @@ export function Lightbox({
                 aria-label="Reset zoom to fit"
                 disabled={scale === MIN_SCALE}
                 onClick={() => setZoom(1)}
-                className="flex h-7 min-w-[3.25rem] items-center justify-center rounded-[var(--control-radius)] px-1.5 tabular-nums text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="flex h-7 min-w-[3.25rem] items-center justify-center rounded-[var(--control-radius)] px-1.5 tabular-nums text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-60 focus-outline"
               >
                 {Math.round(scale * 100)}%
               </button>

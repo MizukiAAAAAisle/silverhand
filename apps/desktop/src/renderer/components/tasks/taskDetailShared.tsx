@@ -373,7 +373,7 @@ function AssigneePicker({
           // Hover = a slight fade, the same affordance the status chip uses — no
           // ground, no border; two editable rows in one column answer "I'm
           // clickable" the same way.
-          className="flex min-w-0 items-center rounded-[var(--control-radius)] text-left transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus"
+          className="flex min-w-0 items-center rounded-[var(--control-radius)] text-left transition-opacity hover:opacity-80 focus-outline"
         >
           {children}
         </button>

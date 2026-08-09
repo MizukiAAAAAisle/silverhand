@@ -522,7 +522,7 @@ export function ChannelMembersDialog({
         </DialogHeader>
         <div className="flex flex-col gap-2">
           {members.length > MEMBERS_SEARCH_MIN ? (
-            <label className={SEARCH_FIELD_FRAME}>
+            <label data-input="" className={SEARCH_FIELD_FRAME}>
               <Search className="size-3.5 shrink-0 text-text-muted" aria-hidden />
               <input
                 type="text"
@@ -579,6 +579,10 @@ export function ChannelMembersDialog({
                 workspaceId={addMemberWorkspaceId}
                 conversationId={channelId}
                 align="center"
+                // 360px = the modal's own `max-w-[360px]`, so a centred panel
+                // sits flush with the modal edges (shiki #task:1923: the member-
+                // strip `+` may stay narrower; this modal row keeps the match).
+                widthClass="w-[360px]"
                 // Opened from inside this Dialog: the Dialog's scroll-lock would
                 // otherwise block wheel scroll on the portaled candidate list, so
                 // the picker opens modal to reclaim it (#task:1785).

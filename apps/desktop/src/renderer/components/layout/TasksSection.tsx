@@ -218,7 +218,13 @@ export const TasksSection = memo(function TasksSection({
         * 地方用不同的外层样式来控制"). The drawer header keeps the
         * standard `px-4` because its own `py-3` already balances. */}
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle pl-[6px] pr-4">
-        <CheckSquare data-tasks-hero className="size-4 text-text-muted" />
+        <CheckSquare
+          data-tasks-hero
+          data-sticker
+          data-sticker-tone="task"
+          data-sticker-size="sm"
+          className="size-4 text-text-muted"
+        />
         <span className="font-serif text-sm font-semibold text-text-primary">
           {selectedChannelName ? `Tasks in #${selectedChannelName}` : 'All Tasks'}
         </span>
@@ -454,7 +460,7 @@ function KanbanColumn({
         // fixed px width would also stop the jitter but force horizontal
         // scroll in the narrow drawer, where 5 columns can't fit at a usable
         // fixed width — so equal-flex is the surface-agnostic choice.)
-        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-primary transition-colors',
+        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle bg-bg-primary transition-colors',
         // Done + Closed are terminal — dim slightly so the live columns
         // read as the focus.
         (status === 'done' || status === 'closed') && 'opacity-80',
@@ -554,10 +560,10 @@ function TaskCard({
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          'group relative min-w-0 cursor-grab rounded-md border border-border-subtle bg-bg-base transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
-          // Brief ring pulse when this card is a reveal target — same recipe as
+          'group relative min-w-0 cursor-grab rounded-[var(--card-radius)] border border-border-subtle bg-bg-base transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
+          // Brief outline pulse when this card is a reveal target — same recipe as
           // the drawer's card so one reveal reads identically on both boards.
-          highlighted && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-base',
+          highlighted && '[outline:2px_solid_var(--accent)] [outline-offset:1px]',
           dragging && 'opacity-50',
         )}
       >
@@ -570,7 +576,7 @@ function TaskCard({
         draggable={false}
         onClick={onClick}
         aria-label="Open task detail"
-        className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="absolute inset-0 z-0 rounded-[var(--card-radius)] focus-outline-accent"
       />
       <div className="pointer-events-none relative z-[var(--z-raised)] min-w-0 p-2">
         {/* Row 1: #number + interactive status badge (reads "Closed" for

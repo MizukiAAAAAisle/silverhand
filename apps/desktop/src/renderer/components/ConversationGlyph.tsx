@@ -37,6 +37,13 @@ export function ConversationGlyph({
     return <ChannelIcon variant="sticker" className={className} />;
   }
   return (
-    <AtSign data-channel-icon className={cn('size-3.5 shrink-0', className)} />
+    <AtSign
+      data-channel-icon
+      data-sticker
+      data-sticker-tone="channel"
+      data-sticker-size="sm"
+      data-sticker-flat
+      className={cn('size-3.5 shrink-0', className)}
+    />
   );
 }

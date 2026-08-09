@@ -127,6 +127,7 @@ export function InlineTextarea({
       <div className="flex flex-col gap-1.5">
         <textarea
           ref={textareaRef}
+          data-input=""
           value={draft}
           disabled={pending}
           rows={rows}

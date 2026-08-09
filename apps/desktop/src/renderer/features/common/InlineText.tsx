@@ -153,6 +153,7 @@ export function InlineText({
         <input
           ref={inputRef}
           type="text"
+          data-input=""
           value={draft}
           disabled={pending}
           onChange={e => setDraft(e.target.value)}

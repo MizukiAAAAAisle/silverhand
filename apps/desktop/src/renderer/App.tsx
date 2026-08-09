@@ -1,5 +1,5 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { Power } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Power, XCircle } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { NavRail, deriveNavRailDots } from '@/components/layout/NavRail';
 import { ComputersPanel } from '@/components/layout/ComputersPanel';
@@ -159,7 +159,7 @@ import { pickWorkspaceToRestore } from '@/lib/workspace-restore';
 import { resolveRestoreNavigation } from '@/lib/restore-navigation';
 import { dmRecognitionName } from '@/lib/workspace-name';
 export function App(): JSX.Element {
-  useAppearance();
+  const { appearance } = useAppearance();
   // #task:1763 — subscribe to main's confirmed runtime epoch promotion so a
   // running session gates without waiting for restart/focus refetch.
   useRuntimeEpochPromotion();
@@ -216,7 +216,14 @@ export function App(): JSX.Element {
   if (isRegistrationRequired(viewer.data)) {
     return <RegistrationGate signupEnabled={viewer.data.signup_enabled} />;
   }
-  return <RegisteredAppShell />;
+  // slack-dark is our only dark theme; studio-light / forza6 are light. sonner
+  // then picks the matching default scale for the parts our token overrides in
+  // global.css don't cover (e.g. any action/close button greys).
+  return (
+    <RegisteredAppShell
+      toasterTheme={appearance.theme === 'slack-dark' ? 'dark' : 'light'}
+    />
+  );
 }
 
 /**
@@ -251,7 +258,11 @@ const TOAST_MOBILE_OFFSET = {
   left: '16px',
 } as const;
 
-function RegisteredAppShell(): JSX.Element {
+function RegisteredAppShell({
+  toasterTheme,
+}: {
+  toasterTheme: 'light' | 'dark';
+}): JSX.Element {
   const { layout, toggleWorkspaceSidebar } = useLayoutSettings();
 
   // Global mount-once realtime/visibility sync (5 app-scope WS consumers),
@@ -2479,9 +2490,22 @@ function RegisteredAppShell(): JSX.Element {
           nav.toTasks();
         }}
       />
+      {/* Toast surface follows the active theme: `theme` picks sonner's
+        * light/dark default scale, and global.css maps its fill / text /
+        * border / radius onto our tokens (forza6 gets the ink frame). No
+        * `richColors` — that paints the whole toast in sonner's own hue
+        * palette; instead the surface stays neutral and the type icon carries
+        * the semantic, matching AppStatusBanner. Type icons come from our
+        * lucide set (circle-wrapped success/error) tinted by our status
+        * tokens, so they read as one family with the rest of the app. */}
       <Toaster
         position="top-right"
-        richColors
+        theme={toasterTheme}
+        icons={{
+          success: <CheckCircle2 className="size-5 text-[var(--success)]" />,
+          error: <XCircle className="size-5 text-[var(--error)]" />,
+          warning: <AlertTriangle className="size-5 text-[var(--warning)]" />,
+        }}
         offset={TOAST_OFFSET}
         mobileOffset={TOAST_MOBILE_OFFSET}
       />

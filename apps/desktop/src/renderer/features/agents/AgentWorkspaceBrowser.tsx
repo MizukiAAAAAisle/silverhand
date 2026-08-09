@@ -275,7 +275,7 @@ function RefreshButton({
       onClick={onRefresh}
       disabled={isFetching}
       data-panel-control="row-action"
-      className="ml-auto inline-flex size-6 shrink-0 items-center justify-center text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:opacity-50"
+      className="ml-auto inline-flex size-6 shrink-0 items-center justify-center text-text-muted transition-colors hover:text-text-primary focus-outline disabled:opacity-50"
       aria-label="Refresh workspace files"
       title="Refresh"
     >

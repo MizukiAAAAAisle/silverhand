@@ -237,7 +237,7 @@ export function SearchPanel({
             disabled={!hasIntent}
             aria-label="Clear search"
             title="Clear search"
-            className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:pointer-events-none disabled:opacity-0"
+            className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-0"
           >
             <X className="size-4" />
           </button>

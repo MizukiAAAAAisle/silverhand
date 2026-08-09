@@ -511,7 +511,13 @@ export function WorkspaceTasksDrawer({
           {/* Header — title + count only; all narrowing lives in the
               filter bar below (no archived segment here). */}
           <div className="flex shrink-0 items-center gap-3 border-b border-border-subtle px-4 py-3">
-            <CheckSquare data-tasks-hero className="size-4 text-text-muted" />
+            <CheckSquare
+              data-tasks-hero
+              data-sticker
+              data-sticker-tone="task"
+              data-sticker-size="sm"
+              className="size-4 text-text-muted"
+            />
             <span className="font-serif text-base font-semibold text-text-primary">
               Tasks
               {workspaceName ? (
@@ -743,7 +749,7 @@ function KanbanColumn({
         // resizes a column, so the live columns don't jitter when Closed
         // folds/unfolds. Closed stays 1/5 width — shiki accepts that; the perf
         // win was never rendering its 1000+ cards, not reclaiming width.
-        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-md border border-border-subtle bg-bg-base transition-colors',
+        'flex min-h-0 max-h-full flex-1 flex-col overflow-hidden rounded-[var(--card-radius)] border border-border-subtle bg-bg-base transition-colors',
         (status === 'done' || status === 'closed') && 'opacity-80',
         // Drop affordance (`data-drop-target`) is painted in CSS, not here —
         // forza6's high-specificity `[data-tasks-column]` background/border
@@ -840,12 +846,12 @@ function TaskCard({
         }}
         onDragEnd={() => setDragging(false)}
         className={cn(
-          'group relative min-w-0 cursor-grab rounded-md border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
-          // Brief ring pulse when this card is the focused-task target.
+          'group relative min-w-0 cursor-grab rounded-[var(--card-radius)] border border-border-subtle bg-bg-primary transition-all hover:border-accent hover:bg-bg-hover active:cursor-grabbing',
+          // Brief outline pulse when this card is the focused-task target.
           // Cleared by the drawer's setTimeout (~1.4s) so the highlight
-          // doesn't linger on next open. `transition-all` lets the ring
+          // doesn't linger on next open. `transition-all` lets the outline
           // fade in/out smoothly without a custom keyframe.
-          highlighted && 'ring-2 ring-accent ring-offset-1 ring-offset-bg-base',
+          highlighted && '[outline:2px_solid_var(--accent)] [outline-offset:1px]',
           dragging && 'opacity-50',
         )}
       >
@@ -859,7 +865,7 @@ function TaskCard({
         draggable={false}
         onClick={onClick}
         aria-label="Open task detail"
-        className="absolute inset-0 z-0 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        className="absolute inset-0 z-0 rounded-[var(--card-radius)] focus-outline-accent"
       />
       {/* Content layer. `pointer-events-none` so text clicks fall
           through to the jump overlay; only the status badge re-enables

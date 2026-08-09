@@ -1268,6 +1268,10 @@ function HostBadge(): JSX.Element {
   return (
     <span
       data-host-hero
+      data-sticker
+      data-sticker-tone="host"
+      data-sticker-no-frame
+      data-sticker-size="lg"
       className="inline-flex size-20 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-secondary"
       aria-hidden
     >
@@ -1306,7 +1310,7 @@ function StatusChip({
     >
       <span
         data-status-pip
-        className={cn('size-1.5 rounded-full', TONE_DOT_CLASS[tone])}
+        className={cn('size-1.5 rounded-[var(--pill-radius)]', TONE_DOT_CLASS[tone])}
         aria-hidden
       />
       {label}
@@ -1680,7 +1684,7 @@ function AgentStatusPip({
       <span
         data-status-pip
         className={cn(
-          'size-1.5 rounded-full',
+          'size-1.5 rounded-[var(--pill-radius)]',
           online === 'online' ? 'bg-success' : 'bg-text-muted/40',
         )}
         aria-hidden

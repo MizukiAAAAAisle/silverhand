@@ -135,7 +135,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
               <span
                 data-nav-unread-dot
                 aria-hidden
-                className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-accent"
+                className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-[var(--unread)]"
               />
             )}
           </button>

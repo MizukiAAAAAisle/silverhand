@@ -241,7 +241,7 @@ function RosterItem({
           <span
             data-status-pip
             aria-label="active"
-            className="size-1.5 shrink-0 rounded-full bg-success"
+            className="size-1.5 shrink-0 rounded-[var(--pill-radius)] bg-success"
           />
         ) : null}
       </button>

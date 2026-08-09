@@ -83,9 +83,9 @@ export function AvatarPickerButton({
       htmlFor={inputId}
       className={cn(
         'group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none',
-        // Focus ring lives on the wrapper so keyboard users get a clear
+        // Focus outline lives on the wrapper so keyboard users get a clear
         // outline when the hidden input gains focus via Tab.
-        'focus-within:outline-none focus-within:ring-2 focus-within:ring-border-focus',
+        'focus-outline-within',
         disabled
           ? 'pointer-events-none opacity-50'
           : 'cursor-pointer',

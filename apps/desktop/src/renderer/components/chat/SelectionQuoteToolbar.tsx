@@ -254,7 +254,7 @@ function SelectionQuoteButton({
       // + `p-0.5` (2px), so: warm 10−1−2=7, slack 6−1−2=3, forza6 0−2−2→0.
       // Clamped at 0 so forza6's hard corners never go negative. Keep the `2px`
       // in sync with the container's `p-0.5` if that padding changes.
-      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))_-_var(--control-border-width)_-_2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))_-_var(--control-border-width)_-_2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-outline"
     >
       {icon}
       <span>{label}</span>

@@ -225,6 +225,12 @@
      dark 不走 forza6 的 hard-cut，保持 light 默认（与 studio-light 同值）。 */
   --control-radius: 6px;
   --chip-radius: 4px;
+  /* Round-pill family (unread 徽章 / status pip / thread dot / scroll-bottom /
+     字号预设 pill）— slack 保持满圆胶囊。 */
+  --pill-radius: 9999px;
+  /* task-status 家族专用（事件 pill / 任务卡 badge / 消息 task tag）— 满圆,
+     语义独立于通用 pill。 */
+  --task-status-radius: 9999px;
   /* Bottom-row chip fill — shared by reaction chips and the thread-reply
      pill (transparent-white on dark). The viewer's own reaction uses
      `--accent-soft` for a stronger fill. */
@@ -280,6 +286,10 @@
   --accent-soft: rgba(29, 155, 209, 0.14);
   --accent-hover: #4FB7DC;        /* hover 抬亮一档 */
   --accent-glow: rgba(29, 155, 209, 0.30);
+  /* Unread signal — its own semantic slot (#task:1914). Blue here has no
+     accent/unread collision, so it aliases `--accent`; naming it keeps the
+     unread hue independently re-mappable per theme, same seam every theme owns. */
+  --unread: var(--accent);
   /* Search-hit goose-yellow (#task:1335) — on the dark ground a bright goose
      with dark ink text pops like a browser find highlight. Active match
      brightens the ground (no border). */

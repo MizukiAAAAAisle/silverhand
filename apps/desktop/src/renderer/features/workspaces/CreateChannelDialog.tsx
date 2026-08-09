@@ -317,7 +317,7 @@ function VisibilitySelect({
               className={cn(
                 'flex items-center justify-center gap-1.5 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] px-3 py-1.5 text-xs font-medium transition-colors',
                 selected
-                  ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-[color:var(--text-on-selected)]'
+                  ? 'border-[color:var(--border-row-selected)] bg-[var(--bg-row-selected)] text-text-on-selected'
                   // Resting matches the member chips below (bg-base + subtle
                   // border). Hover is the canonical control-hover recipe: an
                   // ink border (`--border-control-hover` — dark ink in warm,
@@ -377,7 +377,7 @@ function RegularMemberPicker({
             type="button"
             onClick={() => onChange([])}
             aria-label="Clear selected members"
-            className="shrink-0 rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+            className="shrink-0 rounded-[var(--control-radius)] text-text-muted transition-colors hover:text-text-primary focus-outline"
           >
             <X className="size-3.5" aria-hidden />
           </button>

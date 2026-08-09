@@ -225,9 +225,8 @@ function ScheduleItem({
             // shell (= 28×28, same size as the Hero Refresh button) so
             // the click target doesn't shrink with the glyph. Drop
             // `px/py` — sizing comes from `h/w` only — and add the
-            // canonical `focus-visible:ring-2 focus-visible:ring-
-            // border-focus` so keyboard focus stays visible without a
-            // text label as fallback.
+            // canonical `focus-outline` so keyboard focus stays visible
+            // without a text label as fallback.
             //
             // shiki `tYICT4j_RcEqDmZV`: glyph swapped from `<X />` to
             // `<Ban />` — `X` reads as "close this view" (the universal
@@ -247,7 +246,7 @@ function ScheduleItem({
             // fixed; 10% on a 28×28 target is ~3px out per side, no
             // row reflow because the shell is `shrink-0` inside a
             // flex row with implicit overflow tolerance.
-            className="inline-flex h-7 w-7 items-center justify-center text-text-muted transition-all duration-150 hover:scale-110 hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus disabled:opacity-50 disabled:hover:scale-100"
+            className="inline-flex h-7 w-7 items-center justify-center text-text-muted transition-all duration-150 hover:scale-110 hover:text-text-primary focus-outline disabled:opacity-50 disabled:hover:scale-100"
             aria-label="Cancel schedule"
             title="Cancel"
           >

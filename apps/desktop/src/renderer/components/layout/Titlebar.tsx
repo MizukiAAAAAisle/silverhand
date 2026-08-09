@@ -86,7 +86,7 @@ export function Titlebar({
         : '0px';
   const chromeWidth = `calc(var(--nav-rail-width) + ${leftColumnWidth} + var(--frame-padding, 0px) * 3)`;
   const toggleButton =
-    'no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-focus';
+    'no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline';
 
   return (
     <header

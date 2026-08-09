@@ -301,7 +301,7 @@ function ThreadRow({
         as="button"
         type="button"
         onClick={onOpen}
-        className="flex w-full flex-col overflow-hidden text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="flex w-full flex-col overflow-hidden text-left focus-outline"
       >
         {/* Band 1 — root message: sender avatar + a natural "Name: content"
             flow. shiki wants the avatar kept; the standalone byline row read as
@@ -354,7 +354,7 @@ function ThreadRow({
               summary.viewer_following ? (
                 <span
                   data-thread-unread="sticker"
-                  className="shrink-0 min-w-[16px] rounded-full bg-accent px-1 text-center text-[length:var(--text-badge)] font-semibold leading-[16px] text-text-on-accent"
+                  className="shrink-0 min-w-[16px] rounded-[var(--pill-radius)] bg-[var(--unread)] px-1 text-center text-[length:var(--text-badge)] font-semibold leading-[16px] text-text-on-accent"
                   title={`${unreadCount} new`}
                   aria-label={`${unreadCount} new`}
                 >
@@ -363,7 +363,7 @@ function ThreadRow({
               ) : (
                 <span
                   data-thread-unread="dot"
-                  className="size-1.5 shrink-0 rounded-full bg-accent"
+                  className="size-1.5 shrink-0 rounded-[var(--pill-radius)] bg-[var(--unread)]"
                   title={`${unreadCount} unread`}
                   aria-label={`${unreadCount} unread`}
                 />

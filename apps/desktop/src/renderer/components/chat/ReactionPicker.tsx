@@ -68,7 +68,7 @@ export function ReactionPicker({
                   onPick(emoji);
                 }}
                 aria-label={`React ${emoji}`}
-                className="flex size-7 items-center justify-center rounded-[var(--floating-item-radius)] text-base leading-none transition-colors hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+                className="flex size-7 items-center justify-center rounded-[var(--floating-item-radius)] text-base leading-none transition-colors hover:bg-bg-hover focus-outline"
               >
                 {emoji}
               </button>

@@ -305,7 +305,7 @@ function AgentCapabilityEditor({
                   key={item.key}
                   className={cn(
                     'flex items-start gap-2 rounded-[var(--control-radius)] px-1.5 py-1',
-                    highlight ? 'ring-2 ring-border-focus' : null,
+                    highlight ? '[outline:2px_solid_var(--border-focus)] [outline-offset:-2px]' : null,
                   )}
                 >
                   <Checkbox

@@ -271,7 +271,7 @@ function PresenceInline({
   if (!row) {
     return (
       <span className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted">
-        <span data-status-pip className="size-1.5 rounded-full bg-text-muted/40" />
+        <span data-status-pip className="size-1.5 rounded-[var(--pill-radius)] bg-text-muted/40" />
         Not here
       </span>
     );
@@ -281,7 +281,7 @@ function PresenceInline({
       className="inline-flex shrink-0 items-center gap-1 text-[length:var(--text-badge)] text-text-muted"
       title={PRESENCE_LABEL[row.status]}
     >
-      <span data-status-pip className={'size-1.5 rounded-full ' + PRESENCE_DOT[row.status]} />
+      <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + PRESENCE_DOT[row.status]} />
       {PRESENCE_LABEL[row.status]}
     </span>
   );

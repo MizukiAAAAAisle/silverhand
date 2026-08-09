@@ -333,7 +333,7 @@ export function ComposerActivityHeader({
             }}
             title={`Open ${subjectName}'s activity`}
             aria-label={`Open ${subjectName}'s activity`}
-            className="shrink-0 cursor-pointer outline-none ring-[color:var(--border-control-hover)] focus-visible:ring-2"
+            className="shrink-0 cursor-pointer focus-outline"
           >
             <AgentAvatar
               runtime={subjectAgent?.runtime ?? 'claude'}
@@ -432,7 +432,7 @@ function ActivityDetailRow({
           onClick={() => onOpenActivity(state.agentId)}
           title={`Open ${name}'s activity`}
           aria-label={`Open ${name}'s activity`}
-          className="block shrink-0 cursor-pointer outline-none ring-[color:var(--border-control-hover)] focus-visible:ring-2"
+          className="block shrink-0 cursor-pointer focus-outline"
         >
           <AgentAvatar
             runtime={runtime}

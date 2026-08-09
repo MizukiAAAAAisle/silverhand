@@ -457,14 +457,14 @@ export function UnreadBadge({
     tier === 'quiet'
       ? 'border border-border text-text-secondary'
       : inverted
-        ? 'bg-bg-floating text-accent'
-        : 'bg-accent text-text-on-accent';
+        ? 'bg-bg-floating text-[var(--unread)]'
+        : 'bg-[var(--unread)] text-text-on-accent';
   return (
     <span
       data-sidebar-unread
       data-unread-tier={tier}
       className={
-        'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full px-1 text-[length:var(--text-badge)] tabular-nums ' +
+        'inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-[var(--pill-radius)] px-1 text-[length:var(--text-badge)] tabular-nums ' +
         // Quiet drops the weight too: hairline + regular weight is one coherent
         // step down, not a ring bolted onto a loud pill.
         (tier === 'quiet' ? 'font-medium ' : 'font-semibold ') +
@@ -608,7 +608,7 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
         {badge && badge > 0 ? (
           <UnreadBadge count={badge} tier={badgeTier} inverted={selected} />
         ) : status ? (
-          <span data-status-pip className={'size-1.5 rounded-full ' + STATUS_DOT[status]} />
+          <span data-status-pip className={'size-1.5 rounded-[var(--pill-radius)] ' + STATUS_DOT[status]} />
         ) : null}
       </button>
     </li>

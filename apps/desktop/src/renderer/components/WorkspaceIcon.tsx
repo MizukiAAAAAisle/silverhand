@@ -58,6 +58,10 @@ export function WorkspaceIcon({
   return (
     <span
       data-workspace-icon
+      data-sticker
+      data-sticker-tone="workspace"
+      data-sticker-no-frame
+      data-sticker-flat
       style={{ width: size, height: size }}
       className="inline-flex shrink-0 items-center justify-center font-serif text-base font-semibold leading-none"
     >

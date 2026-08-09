@@ -333,7 +333,7 @@ function SelectedTag({
         onClick={onRemove}
         aria-label={ariaRemoveLabel}
         title="Remove member"
-        className="flex size-4 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-muted transition-colors hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-focus"
+        className="flex size-4 shrink-0 items-center justify-center rounded-[var(--chip-radius)] text-text-muted transition-colors hover:text-text-primary focus-outline"
       >
         <X className="size-3" aria-hidden />
       </button>

@@ -125,6 +125,8 @@ export function MessageScreenshotView({
           >
             <Hash
               data-conversation-hash-icon
+              data-sticker
+              data-sticker-tone="channel"
               className="size-4 shrink-0 align-[-0.15em]"
             />
             {safeChannelTitle}

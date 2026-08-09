@@ -207,7 +207,7 @@ export function WorkspaceSettingsDialog({
                   className={cn(
                     'flex items-center gap-2 rounded-[var(--control-radius)] px-2.5 py-1.5 text-left text-sm transition-colors',
                     active
-                      ? 'bg-[var(--bg-row-selected)] font-medium text-[color:var(--text-on-selected)]'
+                      ? 'bg-[var(--bg-row-selected)] font-medium text-text-on-selected'
                       : 'text-text-secondary hover:bg-[var(--bg-option-hover)] hover:text-text-primary',
                   )}
                 >

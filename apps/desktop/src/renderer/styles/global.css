@@ -233,14 +233,14 @@ html, body, #root {
 
 /* Info-framed popovers & dialogs: the global thumb reads `--bg-hover`,
    which in forza6 is a lime tile colour and looked like a "green scrollbar"
-   inside these panels (shiki feedback, task-filter dropdowns then the members
-   modal's add-member picker #task:1785). A scrollbar is a utility surface, so
-   it takes the neutral `--border` ink here rather than a saturated tile hue.
-   `data-popover-frame="info"` is the shared info-frame skin worn by every
-   info popover and dialog (pickers, info cards, the members modal), so all of
-   them get the neutral thumb — not just the surface that surfaced the bug. */
-[data-task-filter-panel]::-webkit-scrollbar-thumb,
-[data-task-filter-panel] ::-webkit-scrollbar-thumb,
+   inside these panels (shiki feedback, the members modal's add-member picker
+   #task:1785). A scrollbar is a utility surface, so it takes the neutral
+   `--border` ink here rather than a saturated tile hue. `data-popover-frame="info"`
+   is the shared info-frame skin worn by every info popover and dialog (pickers,
+   info cards, the members modal), so all of them get the neutral thumb — not
+   just the surface that surfaced the bug. Task-filter dropdowns
+   (`[data-task-filter-panel]`) instead HIDE the scrollbar entirely via
+   `.scrollbar-hide` (#task:1927), so they're not listed here. */
 [data-popover-frame]::-webkit-scrollbar-thumb,
 [data-popover-frame] ::-webkit-scrollbar-thumb {
   background: var(--border);
@@ -588,6 +588,31 @@ button:disabled { cursor: not-allowed; }
    lives in one place per theme (forza6 → 2px black; studio-light → 1px subtle),
    the same border the full menus already use. */
 [data-dropdown-frame] {
+  border: var(--floating-border);
+}
+
+/* In-app notifications (sonner Toaster) mapped onto our theme tokens. sonner
+   styles each toast from a small CSS-var set scoped to its own light/dark
+   theme; we remap that set to our tokens so a notification wears the ACTIVE
+   theme's fill / text / border / radius instead of sonner's built-in palette.
+   The `html[data-theme]` prefix raises specificity above sonner's own
+   `[data-sonner-toaster][data-sonner-theme]` block — its <style> is injected
+   at runtime, after ours — so these win regardless of load order. `richColors`
+   is off (App.tsx): the surface stays neutral and the built-in type icon
+   carries the semantic, the same restraint as AppStatusBanner. */
+html[data-theme] [data-sonner-toaster] {
+  --normal-bg: var(--bg-floating);
+  --normal-text: var(--text-primary);
+  --normal-border: var(--border);
+  --border-radius: var(--floating-radius);
+}
+html[data-theme] [data-sonner-toast][data-styled='true'] {
+  box-shadow: var(--shadow-popover);
+}
+/* forza6 floating surfaces are a 2px ink frame (radius already 0 via
+   --floating-radius); sonner hardcodes a 1px border, so restate the ink
+   frame here to match every other forza6 floating panel. */
+html[data-theme='forza6'] [data-sonner-toast][data-styled='true'] {
   border: var(--floating-border);
 }
 
@@ -1375,8 +1400,53 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
      matching its hairline-rounded language. */
   border-radius: var(--tab-segment-radius);
 }
+/* Segment focus — keyboard focus on a tab wedge (auth gate's Sign up ⇄ Log in,
+   Activity / Schedule FilterTabs). These are bare `<button>`s outside the base
+   Button primitive, so they had no focus-visible at all. Outline (not ring):
+   forza6's hero track sets `box-shadow:none` on the wedge, which would eat a
+   Tailwind ring; outline is immune. `outline-offset:-2px` keeps the halo inside
+   the tight bracket instead of bleeding over it. Colour rides `--border-focus`
+   so each theme paints its own (forza6 ink / slack-dark blue / studio ink). */
+[data-panel-tabs] button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
+}
 [data-panel-control] {
   border-radius: var(--control-radius);
+}
+/* Channel/thread header action focus — the right-hand icon-button cluster
+   (Search / Threads / Attachments / Members / Settings / Fullscreen / Close).
+   Bare `<button>`s, no focus-visible of their own; same outline treatment as
+   the tab wedges above, and it joins forza6's existing sticker focus family
+   (`[data-*-action]:focus-visible`) for free. Outset offset so the halo rings
+   the sticker rather than sitting inside its ink frame. */
+[data-channel-actions] button:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* ── Unified keyboard-focus indicator (shiki 2026-08-09) ──────────────
+   Every theme shows focus as an `outline`, never a Tailwind `ring`: a ring
+   is a `box-shadow`, and forza6's poster sticker shadows (and its
+   `box-shadow:none` wedges) eat it. Outline is a separate property, immune,
+   and folds into forza6's existing sticker-focus language. Same recipe as the
+   font-size slider and the header-action / tab-wedge rules above.
+
+   Opt-in per control (`.focus-outline`) rather than a blanket `:focus-visible`
+   base rule — we don't want to outline every focusable node (menu items, links,
+   inputs). Text inputs deliberately keep their `--border-focus` border-colour
+   swap instead of an outline (no layout shift, lighter for a bordered field).
+   Colour rides `--border-focus` so each theme paints its own (forza6 ink /
+   slack-dark blue / studio ink); `.focus-outline-accent` keeps `--accent` for
+   the few emphasis-coloured focuses (task jump / drop targets). */
+.focus-outline:focus-visible,
+.focus-outline-within:focus-within {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.focus-outline-accent:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ── App frame corners (shiki 2026-08-07) ─────────────────────────────

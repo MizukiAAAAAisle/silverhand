@@ -651,6 +651,8 @@ function ActiveChannelView({
                   channel 都需要 # icon,逻辑上不需要分支", #task:1373). */}
               <Hash
                 data-conversation-hash-icon
+                data-sticker
+                data-sticker-tone="channel"
                 className="size-4 shrink-0 align-[-0.15em]"
               />
               {conversation.title}
@@ -720,7 +722,7 @@ function ActiveChannelView({
                 // aria-label — so pointer-events-none and aria-hidden.
                 <span
                   aria-hidden
-                  className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-accent"
+                  className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-[var(--unread)]"
                 />
               ) : null}
             </button>
