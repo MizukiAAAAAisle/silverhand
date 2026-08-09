@@ -500,16 +500,29 @@ function WorkspaceHeaderRow({
           </span>
         </span>
         <span className="ml-2 min-w-0 truncate">{title}</span>
+        {/* Mute rides WITH the name (shiki, 2026-08-09): it is a two-state fact
+            about the workspace identity, so it belongs on the identity line — and
+            OFF the trailing edge, where the always-present `+` used to push it
+            around. Inside the toggle it hugs the (truncating) title and never moves
+            with the hover actions. Wrapped in a span because `MutedMarker` takes no
+            props — the marker owns its own size/opacity; the wrapper owns spacing. */}
+        {workspace.muted ? (
+          <span className="ml-1 flex shrink-0 items-center">
+            <MutedMarker />
+          </span>
+        ) : null}
       </button>
+      {/* Trailing actions keep the right edge, unchanged by the mute marker moving
+          up to the name (shiki, 2026-08-09: 「add channel icon 不变」). The aggregate
+          unread badge shows only while collapsed — it answers "is it worth opening
+          this?", withdrawn once the children carrying the same information are on
+          screen (consumed exactly as the backend projects it: a channel moved into
+          STARRED is still counted here; don't re-derive to subtract). The sort menu
+          and `+` reveal on branch hover / keyboard focus via `hoverOnly` — same
+          `ghost` icon Button recipe (h-6 w-6), reveal on a WRAPPER so its
+          `transition-opacity` can't merge away the Button's own
+          `transition-colors`. */}
       <span className="flex shrink-0 items-center gap-1 pl-1">
-        {/* Mute is a two-state fact about the workspace itself, so it is present
-            collapsed AND expanded. The aggregate unread badge is not: it exists to
-            answer "is it worth opening this?", so it is withdrawn once the children
-            that carry the same information are on screen. It is consumed exactly as
-            the backend projects it — a channel that has moved into STARRED is still
-            counted here (shiki's ruling: don't re-derive the projection to subtract
-            it). */}
-        {workspace.muted ? <MutedMarker /> : null}
         {!expanded ? (
           unread && unread > 0 ? (
             <UnreadBadge count={unread} />
@@ -522,14 +535,6 @@ function WorkspaceHeaderRow({
             <ChannelSortMenu workspaceId={workspace.id} workspaceKind={workspace.kind} />
           </span>
         ) : null}
-        {/* Same recipe as the sort trigger beside it — one `ghost` icon Button at
-            h-6 w-6, so resting ink and hover fill come from one place (shiki,
-            2026-08-08: the `+` had no hover background and sat at a different
-            resting colour). Two sibling actions on one row differ by glyph and
-            command only. The reveal lives on a WRAPPER, as it does for the sort
-            menu: `hoverOnly` sets `transition-opacity`, which would otherwise
-            merge away the Button's own `transition-colors` and make the hover
-            fill snap while its neighbour's fades. */}
         <span className={hoverOnly}>
           <Button
             variant="ghost"
