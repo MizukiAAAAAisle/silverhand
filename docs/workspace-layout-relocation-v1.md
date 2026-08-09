@@ -90,21 +90,27 @@ shim:**
    spawning the supervised daemon. Desktop main only passes the existing
    computer binding and never moves bytes or writes the marker. Data-sized work
    therefore sits outside the supervised daemon's ready-handshake deadline.
-4. **A single completion marker gates startup admission.** The migration runs as
+4. **A single completion marker gates the hard L2 cut.** The migration runs as
    a daemon **startup preflight**, before any registry or data-plane surface
    exists (as the existing convergence pass already does, fail-closed). The
-   marker (§5) is written only after *both* the L2 relocation *and* the session
-   fan-out verify. Marker absent/corrupt → the preflight runs the migration;
-   if it cannot complete and verify, **the daemon aborts startup** — it never
-   comes up serving a half-migrated state or a legacy resolver. Marker present →
-   the data plane comes up and the deterministic resolver is authoritative.
+   marker (§5) is written only after the L2 relocation verifies. Marker
+   absent/corrupt → the preflight runs the migration; if the L2 cut cannot
+   complete and verify, **the daemon aborts startup** — it never comes up serving
+   a half-migrated L2 state or a legacy resolver. Claude/Qoder session continuity
+   is attempted independently per runtime before the marker but is best-effort:
+   a typed vendor-session failure is logged locally and does not block startup.
+   Marker present → the data plane comes up and the deterministic resolver is
+   authoritative.
 5. **Transpose, never curate; migrate opaquely — but only within the migration
    truth set.** The migration truth is exactly two things: each agent's own
    `.silverhand/agents/<agent_id>/` L2 subtree, and the Claude/Qoder cwd-scoped
-   session namespace. Within that set the move is verbatim and opaque — no
+   session namespace. Within that set each attempted copy is verbatim and opaque — no
    membership filter, no `MEMORY.md`/`notes` shape filter, no GC, and **no parsing
-   of any vendor-private session-store internals**; every byte *of those two
-   things* is preserved, and departed-member and dormant-agent L2 move too.
+   of any vendor-private session-store internals**. Every L2 byte is preserved,
+   and departed-member and dormant-agent L2 move too. Runtime-session history is
+   copied without interpretation when verifiable; if one runtime cannot be
+   migrated, that runtime may lose resume continuity and the user may reset its
+   session.
    Everything else that happens to sit under a *managed* shared cwd — a project
    checkout, `.git`, `node_modules`, sibling `.silverhand` content outside
    `agents/<agent_id>/` — is **not migration truth**: it is left in place,
@@ -113,10 +119,13 @@ shim:**
    real working location was never Silverhand's persistent truth (§3.1); it is
    carried by conversation and the agent's own resumed session, so a resumed agent
    knows where its repo is and `cd`s there when it needs it.
-6. **Fail closed, retry idempotently.** Any unverifiable or conflicting state
-   leaves the original bytes untouched, does not enter a partial new layout,
-   does not clear `cli_session_id`, does not write the marker, and re-runs
-   cleanly on the next startup.
+6. **Fail closed for L2; degrade per runtime for session history.** An
+   unverifiable or conflicting L2 state leaves the original bytes untouched,
+   does not enter a partial new layout, does not write the marker, and re-runs
+   cleanly on the next startup. A typed Claude/Qoder session migration failure
+   leaves its source bytes untouched, writes a local warning, and does not block
+   the other runtime or startup. Silverhand never clears `cli_session_id`
+   automatically; a user may reset the affected session explicitly.
 
 ---
 
@@ -376,16 +385,18 @@ concrete, computer-local marker:
   routes to its explicit upgrade arm (v1 is the first, so none exists below it
   yet — but the arm is named, not lumped into "unknown").
 - **Writer** — written by the shared daemon startup preflight **only**, **last**, after
-  both L2 relocation and session fan-out verify. Single writer; atomic
+  L2 relocation verifies and both runtime-session attempts have either completed
+  or emitted a local degraded warning. Single writer; atomic
   temp-file-plus-`rename` within the same directory (never a partial in-place
   write). No other process writes it; desktop main may pass a binding to its
   child but must not write this marker.
 - **Semantics** — marker present ⇒ deterministic resolver authoritative,
   registry never consulted at runtime; marker absent/corrupt ⇒ preflight
   (re-)runs and, if it cannot verify, startup aborts.
-- *Falsifier:* L2 already published but session fan-out fails → the marker is not
-  written, the daemon does NOT start on the new resolver, and a restart converges
-  from that exact physical state.
+- *Falsifier:* L2 publishes, Claude session fan-out fails, and Qoder succeeds →
+  the marker is written, daemon startup proceeds on the new resolver, Qoder
+  history is reachable, and Claude's source remains untouched with a warning
+  containing runtime, typed code, and local error detail.
 
 **Inventory — the registry, never DB membership.** The old daemon-local
 `workspace-registry.json` supplies the authoritative `workspace_id → old root`.
@@ -473,11 +484,11 @@ inventory already enumerates** under the registry workspace root:
   sessions carried along are inert). The slug transform is TOTAL over every path
   (the vendors fold every non-alphanumeric code unit and hash the over-long tail
   — #task:1816), so no cwd is ever "unverifiable"; only a non-absolute
-  config-dir override still fails closed, as the typed
-  `session_store_root_unverifiable` refusal raised once per runtime before any
-  coordinate is planned — the same code the convergence pass and the desktop
-  engine raise for the same condition, because the repair is the user's and does
-  not depend on which pass noticed (#task:1815).
+  config-dir override still makes that runtime unverifiable. Relocation catches
+  the typed `session_store_root_unverifiable` once per runtime, records the
+  operator detail locally, and continues; the same code remains fail-closed when
+  the earlier convergence pass needs the store root to settle the live layout
+  (#task:1815).
   Codex and the other non-cwd-scoped runtimes are explicit no-ops; a runtime whose
   old bucket is absent is the not-applicable classifier cell (no empty
   destination synthesized).
@@ -494,35 +505,39 @@ inventory already enumerates** under the registry workspace root:
   independently pick its own legal source version.
 - A session bucket that exists for the workspace's old cwd while the inventory has
   **zero** child agents (source present, but no destination at all) is an
-  unexpected state — a spawned agent always leaves an L2 child — → **fail closed,
-  never silently orphaned** (distinct from the source-absent not-applicable cell).
+  unexpected state — a spawned agent always leaves an L2 child. That runtime is
+  marked degraded and skipped; the source remains untouched (distinct from the
+  source-absent not-applicable cell).
 - *Falsifiers:* with no DB query, two child agents each receive the old-namespace
   copy at their own new cwd and each resumes its own session (via its persistent
   `cli_session_id`) when the backend later spawns it; a fan-out that publishes the
   first of N destinations then crashes re-runs to verify that one equivalent and
   complete the rest — coexistence is replay, not abort; a source rewritten between
-  destination 1's publish and destination 2's start makes the whole fan-out
-  withhold the marker, and a retry lands all N equal to one stable source; a
-  Claude-only workspace migrates with Qoder a no-op and no empty bucket created.
+  destination 1's publish and destination 2's start marks that runtime degraded
+  without publishing a torn destination; the source stays intact and startup
+  proceeds after the hard L2 cut. A Claude-only workspace migrates with Qoder a
+  no-op and no empty bucket created.
 
-**Single marker gates the whole preflight.** The marker is written only after
-every L2 destination *and* every session-bucket destination classify as published
-or settled. Any conflict, integrity/stable-snapshot mismatch, unverifiable path,
-lone-destination-without-source, `EXDEV` with no writable staging, special-file,
-or permission failure → do not write the marker, do not enter a partial layout, do
-not clear `cli_session_id`, preserve original bytes, and **abort daemon startup**;
-retry idempotently next startup. Dormant agents migrate in the same pass. No
-persistent per-item journal is introduced: retained source + deterministic
-filesystem inventory + manifest-equivalence classification already make the whole
-batch a safe idempotent replay.
+**Single marker gates the hard L2 cut, not session continuity.** The marker is
+written only after every L2 destination classifies as published or settled.
+Any L2 conflict, integrity/stable-snapshot mismatch, unverifiable path, `EXDEV`
+with no writable staging, special-file, or permission failure → do not write the
+marker, preserve original bytes, and **abort daemon startup**; retry idempotently
+next startup. The same typed failures inside Claude/Qoder fan-out are caught at
+the runtime boundary: retain source and any atomically published destinations,
+log `runtime_session_relocation_degraded` with runtime/code/detail, continue the
+other runtime, then write the marker. This deliberately gives up automatic retry
+for that runtime after the cut; the bounded loss is resume continuity, recoverable
+by an explicit session reset. No per-runtime journal or partial marker is added.
 
-**Acceptance proof (for the implementation task).** A Claude/Qoder agent with a
-live session resumes the *same* session at its new cwd and appends transcript;
-two agents in one workspace each resume their own session; Codex resumes by id; a
-crash mid-migration re-runs without losing bytes or switching sessions; source on
-an external drive migrates; a same-size-different-content corruption is refused;
-departed-member and dormant L2 arrive intact; no partial layout is ever
-observable; with the marker absent the daemon never starts on the new resolver.
+**Acceptance proof (for the implementation task).** A Claude/Qoder agent whose
+runtime migration succeeds resumes the *same* session at its new cwd and appends
+transcript; two agents in one workspace each resume their own session; Codex
+resumes by id; source on an external drive migrates; L2 corruption is refused;
+departed-member and dormant L2 arrive intact; with the marker absent the daemon
+never starts on the new resolver. Separately, a Claude failure leaves its source
+untouched, emits one actionable local warning, does not block Qoder, and still
+allows the verified L2 marker and daemon startup.
 
 ---
 
@@ -568,9 +583,10 @@ lockstep in task 3.
    the id-derived path as the sole runtime resolver; prompt L2 → `.`.
 2. **L2-relocation migration facet** — add the facet to the daemon convergence
    preflight: registry inventory, cross-fs opaque copy + manifest-hash integrity
-   + atomic publish, whole-namespace opaque session fan-out (1→N), the
-   computer-local completion marker, startup-abort on failure, all fail-closed
-   and idempotent (§5). Owns the falsifiers as tests.
+   + atomic publish, per-runtime best-effort opaque session fan-out (1→N), and
+   the computer-local completion marker. L2 failures abort startup; typed vendor
+   session failures warn and continue without a per-runtime journal (§5). Owns
+   the falsifiers as tests.
 3. **Retire `workspace_path` as a plan-A epoch release** — remove DTO fields,
    `/local-paths`, the append-only column drop, and the renderer surfaces per
    §3.5, with the atomic triple bump in the same commit (§6). Renderer side

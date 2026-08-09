@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -172,9 +173,9 @@ describe('direct daemon startup preflight (#task:1806)', () => {
     expect(second).toBe('already_current');
   });
 
-  it('fails closed on a relocation conflict, writes diagnostics, and never writes the marker', async () => {
+  it('fails closed on an L2 relocation conflict and keeps actionable detail local', async () => {
     const fx = setUpLegacyState();
-    write(join(fx.newSession, 'session.jsonl'), 'CONFLICTING\n');
+    write(join(fx.newL2, 'MEMORY.md'), 'CONFLICTING\n');
 
     await expect(
       runDirectStartupPreflight({
@@ -202,6 +203,19 @@ describe('direct daemon startup preflight (#task:1806)', () => {
         }),
       ],
     });
+    const logPath = join(
+      fx.logDir,
+      readdirSync(fx.logDir).find(name => name.startsWith('daemon-'))!,
+    );
+    const failure = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .find(line => line.action === 'layout_v2_migration_failed');
+    expect(failure).toMatchObject({
+      code: 'relocation_conflict',
+      detail: expect.stringContaining(fx.newL2),
+    });
   });
 
   it('preserves the launcher outcome for an unclaimed desktop with no binding', async () => {
@@ -219,7 +233,7 @@ describe('direct daemon startup preflight (#task:1806)', () => {
   });
 });
 
-describe('store-root refusal reaches the launcher (#task:1815)', () => {
+describe('store-root handling across hard convergence and best-effort relocation', () => {
   /** A namespaced (pre-flatten) root, so convergence's session rename pass runs
    * before relocation ever plans — the other side of the same condition. */
   function setUpNamespacedState() {
@@ -251,12 +265,10 @@ describe('store-root refusal reaches the launcher (#task:1815)', () => {
     };
   }
 
-  it('the one-shot command writes exactly one closed-set frame and refuses the launch', async () => {
+  it('a relocation-only runtime config failure warns locally and does not block launch', async () => {
     const fx = setUpLegacyState();
-    // The command resolves its own home and env, so the one condition drivable
-    // from outside is the store-root override — which is also the only failure
-    // in this facet the user can repair. It refuses while PLANNING, so nothing
-    // under the real session home is moved.
+    // This state is already flat, so the config error belongs only to optional
+    // runtime-session relocation. The hard L2 migration must still complete.
     const previous = process.env.CLAUDE_CONFIG_DIR;
     process.env.CLAUDE_CONFIG_DIR = 'not-absolute';
     const stdout: string[] = [];
@@ -292,27 +304,87 @@ describe('store-root refusal reaches the launcher (#task:1815)', () => {
       else process.env.CLAUDE_CONFIG_DIR = previous;
     }
 
-    expect(exitCode).toBe(1);
-    // Exactly one frame, and the success frame is NOT among the writes.
+    expect(exitCode).toBe(0);
     expect(stdout).toHaveLength(1);
-    expect(parseWorkspacePreflightFailureFrame(stdout[0]!)).toBe(
-      'session_store_root_unverifiable',
-    );
-    // Nothing user-identifying rode along: no env value, no absolute path.
+    expect(stdout[0]).toContain('"layout_migration_outcome":"migrated"');
+    expect(parseWorkspacePreflightFailureFrame(stdout[0]!)).toBeNull();
+    // The product frame remains free of local configuration and paths.
     expect(stdout[0]).not.toContain('not-absolute');
     expect(stdout[0]).not.toContain(scratch);
     expect(
       existsSync(join(fx.slot.workspaceData, 'relocation-v1.marker.json')),
-    ).toBe(false);
-    expect(readLayoutMigrationFailures({ appRoot: fx.stateRoot })).toEqual({
-      reports: [
-        expect.objectContaining({
-          component: 'daemon',
-          stage: 'workspace_layout_relocation',
-          code: 'session_store_root_unverifiable',
-          count: 1,
-        }),
-      ],
+    ).toBe(true);
+    const logPath = join(
+      fx.logDir,
+      readdirSync(fx.logDir).find(name => name.startsWith('daemon-'))!,
+    );
+    const warning = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .find(line => line.action === 'runtime_session_relocation_degraded');
+    expect(warning).toMatchObject({
+      runtime: 'claude',
+      code: 'session_store_root_unverifiable',
+      detail: expect.stringContaining('CLAUDE_CONFIG_DIR'),
+    });
+  });
+
+  it('a hard convergence failure still emits a code-only launcher frame', async () => {
+    const fx = setUpNamespacedState();
+    const previous = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = 'not-absolute';
+    const stdout: string[] = [];
+    const outSpy = vi
+      .spyOn(process.stdout, 'write')
+      .mockImplementation((chunk: unknown) => {
+        stdout.push(String(chunk));
+        return true;
+      });
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let exitCode: number;
+    try {
+      exitCode = await runDirectStartupPreflightCommand([
+        '--workspace-relocation-host-id',
+        BINDING.host_id,
+        '--workspace-relocation-server-origin',
+        BINDING.server_origin,
+        '--computers-root-dir',
+        fx.computersRootDir,
+        '--silverhand-state-root-dir',
+        fx.stateRoot,
+        '--log-dir',
+        fx.logDir,
+        '--layout-migration-outcome',
+        'already_current',
+      ]);
+    } finally {
+      outSpy.mockRestore();
+      errSpy.mockRestore();
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = previous;
+    }
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toHaveLength(1);
+    expect(parseWorkspacePreflightFailureFrame(stdout[0]!)).toBe(
+      'session_store_root_unverifiable',
+    );
+    expect(stdout[0]).not.toContain('not-absolute');
+    expect(stdout[0]).not.toContain(scratch);
+
+    const logPath = join(
+      fx.logDir,
+      readdirSync(fx.logDir).find(name => name.startsWith('daemon-'))!,
+    );
+    const failure = readFileSync(logPath, 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .find(line => line.action === 'layout_v2_migration_failed');
+    expect(failure).toMatchObject({
+      code: 'session_store_root_unverifiable',
+      detail: expect.stringContaining('CLAUDE_CONFIG_DIR'),
     });
   });
 

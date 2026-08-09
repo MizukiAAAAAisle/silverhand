@@ -247,6 +247,7 @@ export async function runDirectStartupPreflight(
           action: 'layout_v2_migration_failed',
           stage,
           code,
+          detail: err.message,
           layoutVersion: 2,
           daemonVersion: DAEMON_VERSION,
           hostId: opts.binding.host_id,

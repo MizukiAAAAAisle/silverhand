@@ -29,6 +29,7 @@ import {
   CWD_SCOPED_SESSION_RUNTIMES,
   sessionNamespaceFor,
   type MigrationLogger,
+  SessionStoreConfigError,
   type SessionStoreEnv,
 } from './session-migration.js';
 
@@ -38,7 +39,10 @@ import {
  * SAME computer, in place. It transposes each `(agent, workspace)` L2 subtree
  * out of the shared workspace cwd into the deterministic agent-home bundle, and
  * fans each workspace's shared Claude/Qoder session bucket out to every agent's
- * new distinct cwd — verbatim, opaquely, fail-closed, idempotently.
+ * new distinct cwd — verbatim and opaquely. L2 relocation is fail-closed;
+ * runtime session continuity is best-effort and isolated per runtime because a
+ * missing vendor history can be recovered by resetting that runtime session,
+ * while blocking the whole application cannot.
  *
  * This is a NEW facet composed from the shipped machinery per the reuse map
  * (§4): it runs inside the shared daemon startup preflight as
@@ -421,8 +425,8 @@ interface SessionFanOutStep {
 }
 
 /**
- * Plan every cwd-scoped runtime's session fan-out across the WHOLE inventory
- * BEFORE any publish (§5, Cindy 2026-08-04). The vendor cwd-slug is
+ * Plan one cwd-scoped runtime's session fan-out across the WHOLE inventory
+ * before publishing that runtime (§5, revised 2026-08-09). The vendor cwd-slug is
  * non-injective (EVERY non-alphanumeric code unit folds to `-`), so two
  * distinct new bundle cwds can resolve to the same physical session namespace.
  * This planner is the one place that reconciles the collapse:
@@ -433,50 +437,83 @@ interface SessionFanOutStep {
  *   (#task:1663) established;
  * - one destination claimed by TWO DIFFERENT source buckets is an ambiguous
  *   merge of distinct histories — a typed `relocation_conflict` raised HERE,
- *   before L2 or session has published anything, so a colliding inventory aborts
- *   the whole preflight with every destination still absent.
+ *   before this runtime publishes anything. The caller isolates that runtime,
+ *   records a local warning, and continues startup.
  *
  * A workspace with a live source bucket but zero census yields a `source → ∅`
  * step so the executor's `fanOutOneBucket` fails closed on the orphan rather
  * than silently dropping it.
  */
-function planSessionFanOut(
+function planSessionFanOutForRuntime(
+  kind: CwdScopedSessionRuntime,
   workspaces: readonly CensusedWorkspace[],
   deps: RelocationDeps,
 ): SessionFanOutStep[] {
   const steps: SessionFanOutStep[] = [];
-  for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
-    // A store root that cannot be located is a property of (runtime, env)
-    // alone — asserted ONCE per runtime, never per workspace (#task:1815).
-    assertSessionStoreRootVerifiable(kind, deps.env, 'relocation_plan');
-    const destOwner = new Map<string, string>(); // physical destination → owning source namespace
-    const bySource = new Map<string, Set<string>>(); // source namespace → deduped destinations
-    for (const { entry, census } of workspaces) {
-      const oldRoot = entry.path;
-      const source = sessionNamespaceFor(kind, oldRoot, deps.sessionStoreHome, deps.env)!;
-      if (!bySource.has(source)) bySource.set(source, new Set());
-      const bucket = bySource.get(source)!;
-      for (const agentId of census) {
-        const newCwd = resolveAgentWorkspaceBundleDir(agentId, entry.workspace_id, {
-          agentHomeRootDir: deps.agentHomeRootDir,
-        });
-        const dest = sessionNamespaceFor(kind, newCwd, deps.sessionStoreHome, deps.env)!;
-        const owner = destOwner.get(dest);
-        if (owner !== undefined && owner !== source) {
-          throw new RelocationError(
-            'relocation_conflict',
-            `session destination ${dest} is claimed by two distinct source buckets (${owner} and ${source}); refusing to merge distinct histories`,
-          );
-        }
-        destOwner.set(dest, source);
-        bucket.add(dest);
+  // A store root that cannot be located is a property of (runtime, env)
+  // alone — asserted ONCE per runtime, never per workspace (#task:1815).
+  assertSessionStoreRootVerifiable(kind, deps.env, 'relocation_plan');
+  const destOwner = new Map<string, string>(); // physical destination → owning source namespace
+  const bySource = new Map<string, Set<string>>(); // source namespace → deduped destinations
+  for (const { entry, census } of workspaces) {
+    const oldRoot = entry.path;
+    const source = sessionNamespaceFor(kind, oldRoot, deps.sessionStoreHome, deps.env)!;
+    if (!bySource.has(source)) bySource.set(source, new Set());
+    const bucket = bySource.get(source)!;
+    for (const agentId of census) {
+      const newCwd = resolveAgentWorkspaceBundleDir(agentId, entry.workspace_id, {
+        agentHomeRootDir: deps.agentHomeRootDir,
+      });
+      const dest = sessionNamespaceFor(kind, newCwd, deps.sessionStoreHome, deps.env)!;
+      const owner = destOwner.get(dest);
+      if (owner !== undefined && owner !== source) {
+        throw new RelocationError(
+          'relocation_conflict',
+          `session destination ${dest} is claimed by two distinct source buckets (${owner} and ${source}); refusing to merge distinct histories`,
+        );
       }
-    }
-    for (const [source, dests] of bySource) {
-      steps.push({ kind, source, dests: [...dests] });
+      destOwner.set(dest, source);
+      bucket.add(dest);
     }
   }
+  for (const [source, dests] of bySource) {
+    steps.push({ kind, source, dests: [...dests] });
+  }
   return steps;
+}
+
+function planSessionFanOut(
+  workspaces: readonly CensusedWorkspace[],
+  deps: RelocationDeps,
+): SessionFanOutStep[] {
+  return CWD_SCOPED_SESSION_RUNTIMES.flatMap(kind =>
+    planSessionFanOutForRuntime(kind, workspaces, deps),
+  );
+}
+
+function migrateRuntimeSessionsBestEffort(
+  kind: CwdScopedSessionRuntime,
+  workspaces: readonly CensusedWorkspace[],
+  deps: RelocationDeps,
+): void {
+  try {
+    for (const step of planSessionFanOutForRuntime(kind, workspaces, deps)) {
+      fanOutOneBucket(step.source, step.dests);
+    }
+  } catch (err) {
+    if (!(err instanceof RelocationError) && !(err instanceof SessionStoreConfigError)) {
+      throw err;
+    }
+    deps.logger.warn(
+      {
+        action: 'runtime_session_relocation_degraded',
+        runtime: kind,
+        code: err.code,
+        detail: err.message,
+      },
+      'runtime session relocation did not complete; startup will continue and the affected runtime may require a session reset',
+    );
+  }
 }
 
 /** Write the completion marker LAST, atomically (§5): temp-file + same-dir
@@ -516,12 +553,13 @@ function writeRelocationMarkerAtomic(
 }
 
 /**
- * Run the L2-relocation preflight facet (§5). Idempotent and fail-closed: on a
- * valid marker it skips; otherwise it relocates every agent's L2 subtree and
- * fans out every workspace's session bucket, then writes the marker LAST. Any
- * unverifiable/conflicting/torn state throws a typed {@link RelocationError}
- * and the marker is not written — the caller (connect preflight) aborts daemon
- * startup, leaving every source byte in place for the next startup to retry.
+ * Run the L2-relocation preflight facet (§5). Idempotent and fail-closed for L2:
+ * on a valid marker it skips; otherwise it relocates every agent's L2 subtree,
+ * attempts each runtime's session fan-out independently, then writes the marker
+ * LAST. Expected runtime-session migration failures are logged with local
+ * path/error detail and do not block startup; the affected runtime may lose
+ * resume continuity and can reset its session. Unknown programmer errors still
+ * escape.
  */
 export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationResult {
   const markerPath = join(deps.workspaceDataRootDir, MARKER_FILE_NAME);
@@ -543,11 +581,9 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
     census: enumerateAgentCensus(entry.path),
   }));
 
-  // Phase 2 — PLAN, no writes. The vendor cwd-slug is non-injective, so two
-  // distinct new bundle cwds can fold to one session namespace; that collision
-  // class is reconciled in `planSessionFanOut`, which raises a typed conflict
-  // before any publish so a poisoned inventory aborts the whole preflight with
-  // every destination still absent.
+  // Phase 2 — PLAN the hard L2 moves, no writes. Session plans are built later
+  // per runtime so one vendor's unprovable history cannot block L2 or the other
+  // vendor.
   //
   // Two adjacent collision classes are KNOWINGLY not gated here (@shiki
   // 2026-08-04, accepted low-probability residual risk; see task body): a
@@ -566,21 +602,21 @@ export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationRe
       });
     }
   }
-  const sessionSteps = planSessionFanOut(workspaces, deps);
-
-  // Phase 3 — EXECUTE the validated plan. L2 first, then the session fan-out.
+  // Phase 3 — EXECUTE the validated L2 plan. Session continuity is optional
+  // enrichment and is isolated per runtime below; it is not part of the
+  // marker's hard proof.
   for (const { source, dest } of l2Moves) {
     relocateSingleTree(source, dest);
   }
-  for (const step of sessionSteps) {
-    fanOutOneBucket(step.source, step.dests);
+  for (const kind of CWD_SCOPED_SESSION_RUNTIMES) {
+    migrateRuntimeSessionsBestEffort(kind, workspaces, deps);
   }
 
   const migrated = { workspaces: inventory.length, agents: l2Moves.length };
   writeRelocationMarkerAtomic(markerPath, migrated, deps.now ?? Date.now);
   deps.logger.info(
     { action: 'workspace_layout_relocation_completed', ...migrated },
-    'workspace-layout relocation completed; per-agent L2 bundles and session buckets published',
+    'workspace-layout relocation completed; per-agent L2 bundles published and runtime session relocation attempted',
   );
   return {
     status: 'migrated',

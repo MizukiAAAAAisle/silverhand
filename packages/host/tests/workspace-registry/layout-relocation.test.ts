@@ -31,7 +31,11 @@ import {
   __test_relocateSingleTree as relocateSingleTree,
 } from '../../src/daemon/workspace-registry/layout-relocation.js';
 import type { RegistryBinding } from '../../src/daemon/workspace-registry/registry.js';
-import { cwdSessionSlug, SessionStoreConfigError } from '../../src/daemon/workspace-registry/session-migration.js';
+import {
+  cwdSessionSlug,
+  type MigrationLogger,
+  SessionStoreConfigError,
+} from '../../src/daemon/workspace-registry/session-migration.js';
 
 /**
  * #task:1805 workspace-layout-relocation-v1 §5 falsifiers. Each block breaks a
@@ -242,9 +246,17 @@ describe('opaque-copy — stable-snapshot copy invariants (§5 step 1–4)', () 
       makeTree(src, { 'secret.txt': 'shh' });
       chmodSync(join(src, 'secret.txt'), 0o000);
       try {
-        expect(() => buildManifest(src)).toThrow(
+        let thrown: unknown;
+        try {
+          buildManifest(src);
+        } catch (err) {
+          thrown = err;
+        }
+        expect(thrown).toEqual(
           expect.objectContaining({ code: 'relocation_unreadable' }),
         );
+        expect((thrown as Error).message).toContain(join(src, 'secret.txt'));
+        expect((thrown as Error).message).toMatch(/\((?:EACCES|EPERM)\)/);
       } finally {
         try {
           chmodSync(join(src, 'secret.txt'), 0o644);
@@ -607,6 +619,8 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     l2Dest: string;
     claudeSource: string;
     claudeDest: string;
+    qoderSource: string;
+    qoderDest: string;
   }
 
   function setUp(oldRootName = 'checkout'): Fixture {
@@ -633,6 +647,8 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
 
     const l2Dest = resolveAgentWorkspaceBundleDir(agentId, workspaceId, { agentHomeRootDir });
     const claudeDest = join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', l2Dest));
+    const qoderSource = join(sessionHome, '.qoder', 'projects', cwdSessionSlug('qoder', oldRoot));
+    const qoderDest = join(sessionHome, '.qoder', 'projects', cwdSessionSlug('qoder', l2Dest));
 
     return {
       workspaceDataRootDir,
@@ -644,17 +660,19 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
       l2Dest,
       claudeSource,
       claudeDest,
+      qoderSource,
+      qoderDest,
     };
   }
 
-  function run(fx: Fixture) {
+  function run(fx: Fixture, logger: MigrationLogger = silentLogger) {
     return runWorkspaceLayoutRelocation({
       workspaceDataRootDir: fx.workspaceDataRootDir,
       agentHomeRootDir: fx.agentHomeRootDir,
       currentBinding: BINDING,
       sessionStoreHome: fx.sessionHome,
       env: {},
-      logger: silentLogger,
+      logger,
     });
   }
 
@@ -731,41 +749,60 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('file');
   });
 
-  it('such a cwd still fails CLOSED when its session destination conflicts', () => {
+  it('a session destination conflict does not block the hard L2 migration', () => {
     const fx = setUp('My Checkout (2025)/\u5de5\u4f5c\u533a');
     makeTree(fx.claudeDest, { 'sess.jsonl': 'CONFLICTING' });
+    const warnings: Array<Record<string, unknown>> = [];
 
-    expect(() => run(fx)).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
-    expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
+    expect(
+      run(fx, {
+        info: () => {},
+        warn: (fields: Record<string, unknown>) => {
+          warnings.push(fields);
+        },
+      }),
+    ).toMatchObject({ status: 'migrated', moved: true });
+    expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('file');
+    expect(readFileSync(join(fx.l2Dest, 'MEMORY.md'), 'utf-8')).toBe('agent memory');
     expect(readFileSync(join(fx.claudeSource, 'sess.jsonl'), 'utf-8')).toBe('{"turn":1}\n');
+    expect(readFileSync(join(fx.claudeDest, 'sess.jsonl'), 'utf-8')).toBe('CONFLICTING');
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        action: 'runtime_session_relocation_degraded',
+        runtime: 'claude',
+        code: 'relocation_conflict',
+        detail: expect.stringContaining(fx.claudeDest),
+      }),
+    );
   });
 
-  it('L2 publishes but session fan-out fails ⇒ NO marker; a restart converges from that state', () => {
+  it('one runtime failure does not block another runtime or startup', () => {
     const fx = setUp();
-    // Poison the session destination with conflicting content so the fan-out
-    // classifier fails closed AFTER the L2 subtree has already published.
+    makeTree(fx.qoderSource, { 'state.json': '{"turn":1}\n' });
     makeTree(fx.claudeDest, { 'sess.jsonl': 'CONFLICTING' });
+    const warnings: Array<Record<string, unknown>> = [];
 
-    expect(() => run(fx)).toThrow(
-      expect.objectContaining({ code: 'relocation_conflict' }),
-    );
+    expect(
+      run(fx, {
+        info: () => {},
+        warn: (fields: Record<string, unknown>) => {
+          warnings.push(fields);
+        },
+      }),
+    ).toMatchObject({ status: 'migrated', moved: true });
 
-    // L2 was published (the failure came later in the same pass)...
     expect(readFileSync(join(fx.l2Dest, 'MEMORY.md'), 'utf-8')).toBe('agent memory');
-    // ...but the marker was NOT written, so the daemon would not start on the
-    // new resolver.
     const markerPath = join(fx.workspaceDataRootDir, 'relocation-v1.marker.json');
-    expect(probe(markerPath)).toBe('absent');
-
-    // Resolve the conflict (the operator / next state) and restart: the L2
-    // classifier sees an equivalent published destination (settled no-op), the
-    // fan-out now has an absent destination to publish, and the marker is
-    // written — converging from the exact physical state the crash left.
-    rmSync(fx.claudeDest, { recursive: true, force: true });
-    const retry = run(fx);
-    expect(retry).toMatchObject({ status: 'migrated', moved: true });
-    expect(readFileSync(join(fx.claudeDest, 'sess.jsonl'), 'utf-8')).toBe('{"turn":1}\n');
     expect(probe(markerPath)).toBe('file');
+    expect(readFileSync(join(fx.qoderDest, 'state.json'), 'utf-8')).toBe('{"turn":1}\n');
+    expect(readFileSync(join(fx.claudeDest, 'sess.jsonl'), 'utf-8')).toBe('CONFLICTING');
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        action: 'runtime_session_relocation_degraded',
+        runtime: 'claude',
+        code: 'relocation_conflict',
+      }),
+    ]);
   });
 
   it('same-source aliasing agents collapse to ONE session publish; L2 stays per-agent (§5 B2 dedup)', () => {
@@ -807,7 +844,7 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     expect(readFileSync(join(destUnderscore, 'sess.jsonl'), 'utf-8')).toBe('{"t":1}\n');
   });
 
-  it('cross-source collision on one session destination fails closed BEFORE any publish (§5 B2 conflict)', () => {
+  it('cross-source session collision degrades that runtime without blocking L2', () => {
     const workspaceDataRootDir = join(scratch, 'wdr');
     const agentHomeRootDir = join(scratch, 'agents-home');
     const sessionHome = join(scratch, 'home');
@@ -826,25 +863,31 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
       'sess.jsonl': 'B\n',
     });
 
-    expect(() =>
+    const warnings: Array<Record<string, unknown>> = [];
+    expect(
       runWorkspaceLayoutRelocation({
         workspaceDataRootDir,
         agentHomeRootDir,
         currentBinding: BINDING,
         sessionStoreHome: sessionHome,
         env: {},
-        logger: silentLogger,
+        logger: { info: () => {}, warn: fields => warnings.push(fields) },
       }),
-    ).toThrow(expect.objectContaining({ code: 'relocation_conflict' }));
+    ).toMatchObject({ status: 'migrated', workspaces: 2, agents: 2 });
 
-    // Detected in the plan phase: NO marker, and EVERY destination still absent
-    // — both the shared session namespace AND both L2 bundles.
-    expect(probe(join(workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('absent');
+    expect(probe(join(workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('file');
     const cwdA = resolveAgentWorkspaceBundleDir('ax', 'w_1', { agentHomeRootDir });
     const cwdB = resolveAgentWorkspaceBundleDir('ax', 'w-1', { agentHomeRootDir });
     expect(cwdSessionSlug('claude', cwdA)).toBe(cwdSessionSlug('claude', cwdB)); // guard: they really collide
     expect(probe(join(sessionHome, '.claude', 'projects', cwdSessionSlug('claude', cwdA)))).toBe('absent');
-    expect(probe(cwdA)).toBe('absent');
-    expect(probe(cwdB)).toBe('absent');
+    expect(readFileSync(join(cwdA, 'MEMORY.md'), 'utf-8')).toBe('A');
+    expect(readFileSync(join(cwdB, 'MEMORY.md'), 'utf-8')).toBe('B');
+    expect(warnings).toContainEqual(
+      expect.objectContaining({
+        action: 'runtime_session_relocation_degraded',
+        runtime: 'claude',
+        code: 'relocation_conflict',
+      }),
+    );
   });
 });
