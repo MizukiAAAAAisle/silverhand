@@ -501,15 +501,13 @@ function migrateRuntimeSessionsBestEffort(
       fanOutOneBucket(step.source, step.dests);
     }
   } catch (err) {
-    if (!(err instanceof RelocationError) && !(err instanceof SessionStoreConfigError)) {
-      throw err;
-    }
+    const known = err instanceof RelocationError || err instanceof SessionStoreConfigError;
     deps.logger.warn(
       {
         action: 'runtime_session_relocation_degraded',
         runtime: kind,
-        code: err.code,
-        detail: err.message,
+        code: known ? err.code : 'unexpected',
+        detail: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
       },
       'runtime session relocation did not complete; startup will continue and the affected runtime may require a session reset',
     );
@@ -558,8 +556,9 @@ function writeRelocationMarkerAtomic(
  * attempts each runtime's session fan-out independently, then writes the marker
  * LAST. Expected runtime-session migration failures are logged with local
  * path/error detail and do not block startup; the affected runtime may lose
- * resume continuity and can reset its session. Unknown programmer errors still
- * escape.
+ * resume continuity and can reset its session. The catch boundary encloses only
+ * vendor-session migration, so even an unexpected implementation error here is
+ * degraded rather than promoted to an application startup failure.
  */
 export function runWorkspaceLayoutRelocation(deps: RelocationDeps): RelocationResult {
   const markerPath = join(deps.workspaceDataRootDir, MARKER_FILE_NAME);

@@ -35,6 +35,7 @@ import {
   cwdSessionSlug,
   type MigrationLogger,
   SessionStoreConfigError,
+  type SessionStoreEnv,
 } from '../../src/daemon/workspace-registry/session-migration.js';
 
 /**
@@ -665,13 +666,17 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
     };
   }
 
-  function run(fx: Fixture, logger: MigrationLogger = silentLogger) {
+  function run(
+    fx: Fixture,
+    logger: MigrationLogger = silentLogger,
+    env: SessionStoreEnv = {},
+  ) {
     return runWorkspaceLayoutRelocation({
       workspaceDataRootDir: fx.workspaceDataRootDir,
       agentHomeRootDir: fx.agentHomeRootDir,
       currentBinding: BINDING,
       sessionStoreHome: fx.sessionHome,
-      env: {},
+      env,
       logger,
     });
   }
@@ -803,6 +808,40 @@ describe('runWorkspaceLayoutRelocation — end-to-end convergence falsifier (§5
         code: 'relocation_conflict',
       }),
     ]);
+  });
+
+  it('an unexpected runtime-session implementation error is degraded, not promoted to startup failure', () => {
+    const fx = setUp();
+    const warnings: Array<Record<string, unknown>> = [];
+    const env = new Proxy<SessionStoreEnv>({}, {
+      get(target, property, receiver) {
+        if (property === 'CLAUDE_CONFIG_DIR') {
+          throw new TypeError('synthetic runtime planner failure');
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    expect(
+      run(
+        fx,
+        {
+          info: () => {},
+          warn: (fields: Record<string, unknown>) => {
+            warnings.push(fields);
+          },
+        },
+        env,
+      ),
+    ).toMatchObject({ status: 'migrated', moved: true });
+    expect(probe(join(fx.workspaceDataRootDir, 'relocation-v1.marker.json'))).toBe('file');
+    expect(readFileSync(join(fx.l2Dest, 'MEMORY.md'), 'utf-8')).toBe('agent memory');
+    expect(warnings).toContainEqual({
+      action: 'runtime_session_relocation_degraded',
+      runtime: 'claude',
+      code: 'unexpected',
+      detail: 'TypeError: synthetic runtime planner failure',
+    });
   });
 
   it('same-source aliasing agents collapse to ONE session publish; L2 stays per-agent (§5 B2 dedup)', () => {

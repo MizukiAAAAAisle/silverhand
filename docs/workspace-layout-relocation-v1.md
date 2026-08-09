@@ -98,7 +98,7 @@ shim:**
    complete and verify, **the daemon aborts startup** — it never comes up serving
    a half-migrated L2 state or a legacy resolver. Claude/Qoder session continuity
    is attempted independently per runtime before the marker but is best-effort:
-   a typed vendor-session failure is logged locally and does not block startup.
+   a vendor-session failure is logged locally and does not block startup.
    Marker present → the data plane comes up and the deterministic resolver is
    authoritative.
 5. **Transpose, never curate; migrate opaquely — but only within the migration
@@ -122,7 +122,7 @@ shim:**
 6. **Fail closed for L2; degrade per runtime for session history.** An
    unverifiable or conflicting L2 state leaves the original bytes untouched,
    does not enter a partial new layout, does not write the marker, and re-runs
-   cleanly on the next startup. A typed Claude/Qoder session migration failure
+   cleanly on the next startup. A Claude/Qoder session migration failure
    leaves its source bytes untouched, writes a local warning, and does not block
    the other runtime or startup. Silverhand never clears `cli_session_id`
    automatically; a user may reset the affected session explicitly.
@@ -523,7 +523,7 @@ written only after every L2 destination classifies as published or settled.
 Any L2 conflict, integrity/stable-snapshot mismatch, unverifiable path, `EXDEV`
 with no writable staging, special-file, or permission failure → do not write the
 marker, preserve original bytes, and **abort daemon startup**; retry idempotently
-next startup. The same typed failures inside Claude/Qoder fan-out are caught at
+next startup. Any failure inside Claude/Qoder fan-out is caught at
 the runtime boundary: retain source and any atomically published destinations,
 log `runtime_session_relocation_degraded` with runtime/code/detail, continue the
 other runtime, then write the marker. This deliberately gives up automatic retry
@@ -584,7 +584,7 @@ lockstep in task 3.
 2. **L2-relocation migration facet** — add the facet to the daemon convergence
    preflight: registry inventory, cross-fs opaque copy + manifest-hash integrity
    + atomic publish, per-runtime best-effort opaque session fan-out (1→N), and
-   the computer-local completion marker. L2 failures abort startup; typed vendor
+   the computer-local completion marker. L2 failures abort startup; vendor
    session failures warn and continue without a per-runtime journal (§5). Owns
    the falsifiers as tests.
 3. **Retire `workspace_path` as a plan-A epoch release** — remove DTO fields,
