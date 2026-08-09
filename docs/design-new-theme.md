@@ -69,6 +69,7 @@ apps/desktop/src/renderer/
 | `--bg-nav-rail-hover` | NavRail icon hover 底色 | 与 `--bg-nav-rail` 成对；深色 nav 用浅混色，浅色 nav 用深混色 |
 | `--bg-row-selected` | Workspace / Channel / Search / Saved row 选中底色 | 必须从 sidebar 底色中跳出 |
 | `--bg-row-hover` | 同一组 row 的 hover 底色 | selected 的弱一级，不应比 selected 更抢眼 |
+| `--bg-option-hover` | 可选项（下拉/列表 option）的 hover 预览底 | 与 row-hover 分开的 token，别默认复用 |
 
 **关键规则 1：`--bg-selected` ≠ `--bg-floating`**。两者是有意拆分的 token —— 若某主题下它们凑巧同值（例如某浅底主题都是纯白），可以，但不能默认复用；否则 `bg-elevated` 容器里的激活态会消失（参见 §4.3 配对表）。
 
@@ -84,6 +85,7 @@ apps/desktop/src/renderer/
 | `--card-radius` | NavRail / sidebar / chat panel 圆角 | 与 frame 节奏一致；直角主题也要显式写 0 值 |
 | `--card-shadow` | panel card 阴影 | 轻阴影即可，避免卡片变成浮层 |
 | `--splitter-bg` | resize splitter 的静态底色 | card frame 中通常 `transparent`，由 gap 表达分隔 |
+| `--splitter-hover-bg` | splitter hover/拖拽时的着色 | **MUST 显式定义** —— consumer 的 `var(--splitter-hover-bg, var(--accent))` fallback 会把饱和 accent 变成拖拽把手色；走中性墨 |
 | `--splitter-offset` | 抵消 splitter 作为 flex item 产生的额外列间距 | 让视觉 gap 仍等于 `--frame-padding` |
 | `--titlebar-border` | titlebar 下边线 | card frame 主题通常 `transparent`，避免 titlebar 和 body 断层 |
 
@@ -139,7 +141,7 @@ apps/desktop/src/renderer/
 |---|---|---|
 | `--bg-inline-code` | chip 背景 | 软底主题常用 `color-mix(text-primary X%, bg-base)`；海报系用饱和填充色 |
 | `--border-inline-code` | chip 边框 shorthand（含 width + style + color） | 软底主题给 `none`；海报系给可见 near-black 描边 |
-| `--radius-inline-code` | chip 圆角 | 软底主题给 `var(--radius-sm)`；海报系给 `0` 方角 |
+| `--inline-code-radius` | chip 圆角 | 软底主题给 `var(--radius-sm)`；海报系给 `0` 方角 |
 
 ### 3.2.2 Task status badge
 
@@ -154,6 +156,10 @@ apps/desktop/src/renderer/
 | `--task-status-in-review-bg` / `-text` / `-border` | "in review" — **awaiting human attention 语义**（配 accent/brand loud beacon）|
 | `--task-status-done-bg` / `-text` / `-border` | "done" 徽标 |
 | `--task-status-closed-bg` / `-text` / `-border` | "closed" 徽标（见下方 closed 说明）|
+
+**另有两组配套 token（同 MUST 每主题全定义）**：
+- `--task-status-<status>-solid`（5 个，#task:1018）：kanban 卡的**实心圆点信号色**，与上面 15 个 bg/text/border 分开取值（点要在浅底上够跳）。
+- `--task-status-radius`（2026-08-09）：task-status 家族 pill 的圆角，语义独立于 `--pill-radius`（软底给胶囊、海报系归 0）。
 
 **closed = 第五个终态 status**（不再是与 `task_status` 正交的 archived 可见性维度）。closed 卡片落在 kanban 第五列（Done 之后），status badge 直接显示 `closed`。其 3 个 token 与其它四个 status 同属一套 task-badge 词汇，每个主题 MUST 三个都显式定义。取值原则：软底主题给 `transparent` / `var(--text-muted)` / hairline 边；海报系给饱和填充 + 高对比字 + 同色实心块边。
 
@@ -198,6 +204,7 @@ neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、
 | `--text-on-accent` | 配 `--accent` 背景的字色 |
 | `--text-on-success` / `--text-on-warning` / `--text-on-error` | 配语义背景的字色 |
 | `--text-on-selected` | 配 `--bg-selected` 的字色 —— 必须与 selected 成对出现 |
+| `--unread` | 未读信号色（badge / 未读点）—— #task:1914 从 `--accent` 拆出；每个主题都 alias（多数指回 accent，但独立槽让主题各自选）|
 
 ### 3.4 语义色
 
@@ -205,7 +212,9 @@ neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、
 |---|---|
 | `--success` / `--success-soft` | 成功 |
 | `--warning` / `--warning-soft` | 警告 |
+| `--warning-surface` | 干净的浅底 callout 面（#task:1380，区别于半透明的 `--warning-soft`）|
 | `--error` / `--error-soft` | 错误 |
+| `--search-hit-bg` / `--search-hit-bg-active` / `--search-hit-text` | 搜索命中高亮（#task:1335），active 是当前跳转到的那条 |
 
 `*-soft` 是低透明度的版本，用于状态卡的休眠底色（具体透明度主题自行取值）。**饱和度上限**与覆盖范围见 §4，主题切换不放宽这两个上限。
 
@@ -216,7 +225,8 @@ neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、
 | `--border` | 通用实线描边（留白派几乎不用，描边派是定义性特征） |
 | `--border-subtle` | 极淡分隔 |
 | `--border-island` | 岛屿描边 |
-| `--border-focus` | focus ring |
+| `--border-avatar` / `--border-avatar-width` | chat 头像的描边色 + 宽度 |
+| `--border-focus` | focus outline / border-color 交换的颜色（见 §12.7(4)）|
 
 ### 3.5.1 Row-state border color
 
@@ -232,6 +242,8 @@ neutral 按密度分级，不一刀切：输入框旁的图标按钮（Browse、
 **为什么把 hook 限定在 `aside[data-sidebar]` 作用域**：同一个 `.sidebar-row-border` 类也被主内容区的归档列表复用（那里 hover 走另一套词汇），选择器带这个祖先才不会把主内容区的行错拉进导航契约。未来第三个 row 表面想接同契约，给它显式 hook 并补到这一节。
 
 **为什么两个 token 而非 shorthand**：hover 和 selected 经常同色但背景不同，分开 token 让"色一致而背景递进"的语义显式 —— 边框承担 geometry，背景承担 emphasis 梯度。
+
+**相关但不同：`--border-control-hover`**（#task:912）是 **control 表面**（input / button / select）hover 时的边框色，与 row hover 解耦 —— 不并进这套 row 契约，但每主题同样 MUST 定义。它与 focus 的 `--border-focus` 同族（同一控件 hover→focus 不跨色族，见 §12.7(4)）。
 
 ### 3.6 阴影 + 浮层 base
 
@@ -292,6 +304,7 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 | Token | 含义 |
 |---|---|
 | `--radius-sm` / `--radius-md` / `--radius-lg` / `--radius-xl` | 圆角等级 |
+| `--control-border-width` | control 表面（input/button/select/贴纸框）描边宽度 —— forza6 = 2px 海报硬框，软底 = 1px hairline |
 | `--font-sans` | UI chrome 字体栈 |
 | `--font-serif` | 正文/prose 字体栈（极简主题可让 serif = sans） |
 | `--font-mono` | 等宽字体栈 |
@@ -325,7 +338,7 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 - SelectContent / popover / dialog / menu 等浮层表面 → 走 `--floating-radius`
 - card 表面（result card、DialogContent 主框）→ 走 `--card-radius`
 - chip → 走 `--chip-radius`（§3.7.3）
-- pill 胶囊（TaskStatusPill）→ 保留胶囊，pill-radius 不入
+- pill 胶囊（TaskStatusPill）→ 走 `--pill-radius`（§3.7.3），不进 `--control-radius`
 - 一般 empty-state / notification banner / 非表单 callout → 暂留调用点字面圆角
 
 ### 3.7.3 Chip radius
@@ -343,7 +356,20 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 - control = 有清晰交互手感的表面（input / button / select），形状是矩形按钮 / 输入框
 - 两个 token 分开的核心是它们在软底主题里圆角值不同（chip 比 control 略小）
 
-**没引入 `--pill-radius`**：TaskStatusPill 是当前唯一胶囊消费者，先保留胶囊（海报系用饱和填色表达状态语义，不靠形状）。出现第二个 pill 消费者再单独开。
+**`--pill-radius`**：TaskStatusPill（当前唯一胶囊消费者）的形状出口。软底主题给 `9999px` 保留胶囊；海报系给 `0` 方角，靠饱和填色而非形状表达状态语义。每个主题 MUST 显式定义。出现第二个 pill 消费者直接复用。
+
+### 3.7.4 Surface-specific radius / fill
+
+以下都是既有消费点的 per-theme 契约 token（同 §3.1 关键规则 3：一旦被 `var()` 消费即 MUST 每主题全定义，否则从 `:root` 默认主题漏过来）。海报系一律归 0 / 硬底，软底走各自命名 radius / 软填充。
+
+| Token | 含义 |
+|---|---|
+| `--row-radius` | 5 类 row-style 表面的统一圆角出口 |
+| `--profile-section-radius` | `[data-panel-card='profile-section']` 卡角（典型 fallback-leak 案例，CSS 注释点名）|
+| `--message-bubble-radius` | 自己消息气泡圆角（#task:1838）|
+| `--tab-segment-radius` | `[data-panel-tabs] button` 当前段圆角（#task:1198 / 912）|
+| `--chip-bg` / `--chip-bg-hover` | 底排 reaction / thread-reply chip 填充 |
+| `--thread-preview-bg` / `-bg-hover` / `-text` | thread 预览行三件套（#task:1745，另一处显式 fallback-leak 案例）|
 
 ---
 
@@ -398,7 +424,7 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 - [ ] **附件 / 文件面板 tab 栏**：active tab、非 active tab、tab close 按钮（X 在 active tab 上要可见）
 - [ ] **Markdown 编辑器**：Preview / Edit segment control、toolbar 按钮 active 态
 - [ ] **设置弹窗 / popover / context menu**：底色（应是 `bg-floating`）、item hover（应走 accent）、阴影边界
-- [ ] **Toast**：success / warning / error 三色左侧状态条
+- [ ] **Toast / AppStatusBanner**：中性浮层表面（`--bg-floating` + `--floating-border/-radius` + 阴影），语义靠**类型图标**（success 带 circle 的 check / error circle-x / warning 三角、无底色），非整块染色（#task:1918）；slack-dark 走 sonner dark 档
 - [ ] **Resize handle**：hover 时变 accent
 - [ ] **Modal**：底色 + 遮罩对比度
 
@@ -522,7 +548,7 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 
 ### 12.4 不特化的（设计边界，避免噪声过载）
 
-- 滚动条
+- 滚动条（**基础**不特化；例外：浮层 `[data-popover-frame]` 的 thumb 走 `--border`、task-filter 下拉用 `.scrollbar-hide` 隐藏但仍可滚，#task:1927 —— 都是中性/全局处理，不是海报皮肤）
 - Tooltip 内容（小浮层）
 - HoverCard 部分用例（仅 HoverPopover wrapper 走海报硬框）
 - Select listbox（仅继承 lime hover，不加硬框）
@@ -552,7 +578,11 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 
 从 forza6 特化中沉淀的五个跨主题可复用配方（当作设计规则用，具体 CSS 值以主题 CSS 为准）。
 
-**(1) Pane hero sticker 配方**。把"高识别度小标"提炼成一个换 hue 即跨语义复用的配方，挂在结构 hook 上：填充走语义色、glyph 走对比 ink、硬边 + 直角 + 无模糊的硬冲压投影，构成海报"贴纸"质感。尺寸/间距由 consumer 外层控制，hook 只画 identity（fill/border/glyph/shadow）—— 见 §12.3 的 theme-neutral 约定。这是 hook 禁区的范式：hook 只 painting identity，layout 推给消费者。
+**(1) Sticker primitive（`[data-sticker]`，#task:1913）**。曾经每个 call site 手抄的"高识别度小标"配方已抽成一个参数化 primitive：consumer 挂 `data-sticker`（+ 可选 `data-sticker-tone`），forza6 在 `[data-theme='forza6'] [data-sticker]` 里统一画 **shape + colour** 两件曾被手抄的事，别的主题整体忽略这个 hook、保留自己的 JSX base class。
+- **shape 轴**：`data-sticker-size`（sm=1px 边/1px 影、默认 1.5px、lg=`--control-border-width`/2px）；`data-sticker-flat`（去 rest 阴影，抬起留给 hero/peel）；`data-sticker-no-frame`（去边框）。
+- **tone map**：`data-sticker-tone` = `channel`（黄/ink）· `task`（gold/ink）· `host`（deep-teal/paper）· `workspace`（ink/paper），一次改 hue 即跨语义复用。
+- **fill 与 frame 分两个槽**是关键：`--sticker-frame` 默认 ink，是旧规则唯一被 fill 污染的槽 —— 拆开后 fill 本身就是 ink（workspace）或对 ink 对比不足（host）的贴纸能靠 `data-sticker-no-frame` 去边而不丢 fill。
+- **per-instance layout 不进 primitive**：content-box 撑尺寸、padding、glyph `stroke-width` 留在各元素自己的规则；primitive 只拥有共享的 colour + shape。这是 hook 禁区的范式（§12.3）：hook 只 painting identity，layout 推给消费者。
 
 **(2) Modal poster chrome**。对话框类表面走 ink 硬框 + 硬投影 + 归零 radius 的海报形态。**opt-in 而非 `[role='dialog']` 全选**：Lightbox 也是 Radix Dialog 但不该吃海报框，所以用显式 hook 让它按需退出。
 
@@ -561,7 +591,7 @@ forza6 是首个走"token + component skin"两层的主题，不只是换色。�
 **(4) 焦点契约（硬规则）**：
 - **utility 状态绝不用饱和 hue**。focus / hover / splitter / row-hover / control-hover / 焦点框都是 utility → 走中性 ink 词汇（`--border-focus`）。`--border-focus` **钉死在 token 层，不准在 component 层重定义**（appearance test 锁）。
 - **例外：brand-anchored 主舞台**。composer 这种用户核心 anchor 的 focus 是 brand identity 高光，保留品牌色 —— 用 element-scoped `:focus-within` 覆盖，不动全局 token。判断标准：是不是"主舞台"？是→brand focus；否（一般 input/select/button）→ink focus。
-- **focus 变厚 = ring 不是 border**。要"focus 只换色不变粗"就删 ring 只换 border-color —— 前提是控件本就有可见 resting border。无 border 的控件（fill button / icon / chip）ring 是它们唯一 focus a11y 信号，**不能删**。
+- **focus 用 `outline` 不用 ring（#task:1920，app-wide）**。Tailwind ring 是 `box-shadow`，会被 forza6 海报贴纸的硬投影（及 `box-shadow:none` 楔子）吃掉；`outline` 是独立属性、免疫，且天然融进 forza6 的贴纸-focus 语言。机制：per-control opt-in 的 `.focus-outline` / `.focus-outline-within` 工具类 → `outline: 2px solid var(--border-focus)` + `outline-offset: 2px`（不是全局 `:focus-visible`，否则 menu item / link / input 全被描框）。emphasis 色 focus（task jump / drop target）走 `.focus-outline-accent`（吃 `--accent`）。**文本输入框刻意例外**：仍走 `--border-focus` 的 border-color 交换（无 layout shift、对已有边框的控件更轻）。颜色一律骑 `--border-focus`（forza6 ink / slack-dark 蓝 / studio ink）。
 - **hover→focus 不能跨色族**。同一控件 hover 一色 + focus 另一色族 = click 瞬间色彩跳跃。复合 hover-border token 让 hover/focus 跨主题各自同族。
 
 **(5) 在线状态点（presence dot）**：复用 app 既有 active 点色 `--success`（与 WORKSPACES 活跃点同款）。presence/online=绿是 app 既定约定，新做 presence 指示直接复用，**不算违反"饱和 hue 独占语义"**。批量数据用 `useAgentsPresence`（`useQueries` 拉 N 个 `/runtime-state`，共享 `useAgentRuntimeState` 的 query key + 节奏）。
