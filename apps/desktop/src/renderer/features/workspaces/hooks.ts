@@ -387,6 +387,32 @@ export function useDeleteWorkspace() {
   });
 }
 
+/**
+ * Self-LEAVE a workspace (member | admin — the owner's exit is Delete). The
+ * shape mirrors `useDeleteWorkspace`: fire the mutation, invalidate the
+ * workspaces list, and let convergence do the rest. The backend
+ * (`POST /leave`) removes the caller's workspace membership AND every channel
+ * membership they hold there in one transaction, then publishes
+ * `viewer_workspaces_changed {change:'removed'}` to the viewer scope — the
+ * existing `useViewerWorkspacesSync` → `handleViewerWorkspaceRemoved` already
+ * purges every viewer-local cache (favorites, unread, Activity), so no bespoke
+ * cleanup lives here. Navigation away is REACTIVE: the invalidated
+ * `['workspaces']` list drops the row and the selection effect bounces off it,
+ * exactly as Delete does. Empty body — the caller is always the removed human,
+ * so there is no target on the wire.
+ */
+export function useLeaveWorkspace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api(apiPaths.workspaceLeave(id), { method: 'POST' });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: workspacesKey });
+    },
+  });
+}
+
 export function useRenameWorkspace() {
   const qc = useQueryClient();
   return useMutation({

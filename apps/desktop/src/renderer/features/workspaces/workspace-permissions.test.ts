@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceRole } from '@silverhand/shared';
 import {
+  canLeaveWorkspace,
   canManageWorkspaceLifecycle,
   canRenameWorkspace,
 } from './workspace-permissions';
@@ -50,5 +51,27 @@ describe('workspace-permissions — renderer gate mirrors the backend governance
     }
     expect(canManageWorkspaceLifecycle('admin')).toBe(false);
     expect(canRenameWorkspace('admin')).toBe(true);
+  });
+
+  describe('canLeaveWorkspace — self-leave (member | admin, owner rejected)', () => {
+    it('allows member and admin', () => {
+      expect(canLeaveWorkspace('member')).toBe(true);
+      expect(canLeaveWorkspace('admin')).toBe(true);
+    });
+    it('denies owner — the owner exit is Delete, not Leave (no ownership transfer)', () => {
+      expect(canLeaveWorkspace('owner')).toBe(false);
+    });
+    it('denies a null role (non-member / still loading) — fail-closed', () => {
+      expect(canLeaveWorkspace(null)).toBe(false);
+    });
+  });
+
+  it('leave and lifecycle-manage never overlap — owner deletes, everyone else leaves', () => {
+    // Exactly one workspace exit per non-null role: owner → Delete,
+    // member/admin → Leave. Pins the danger zone from ever showing both.
+    for (const role of ALL_ROLES) {
+      if (role === null) continue;
+      expect(canLeaveWorkspace(role)).toBe(!canManageWorkspaceLifecycle(role));
+    }
   });
 });

@@ -154,6 +154,16 @@ export const apiPaths = {
     `/api/workspaces/${id}/members/users/${userId}`,
   workspaceHumanMemberRole: (id: string, userId: string) =>
     `/api/workspaces/${id}/members/users/${userId}/role`,
+  /** Self-LEAVE a workspace (#task:1930). POST, empty body — the caller is
+   *  ALWAYS the removed human, so there is no target on the wire to forge. This
+   *  is the member/admin counterpart of `workspace` DELETE (owner-only): it ends
+   *  the caller's own workspace membership and, in the same transaction, EVERY
+   *  channel membership they hold in that workspace. The owner is refused
+   *  (`owner_removal_unsupported`) — a workspace always has an owner and
+   *  ownership transfer is unsupported, so the owner's only exit is Delete.
+   *  Agents the caller enrolled here are NOT touched (shiki 2026-08-09).
+   *  Regular workspace only (agent-home / DM containers 404). */
+  workspaceLeave: (id: string) => `/api/workspaces/${id}/leave`,
   /** Agent capability set within a workspace (graded-permissions cut 2).
    *  GET reads the effective set (any workspace viewer); PUT replaces it
    *  (workspace admin, or a member who created the target agent — #task:1777). */

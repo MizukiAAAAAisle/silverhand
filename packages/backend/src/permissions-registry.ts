@@ -220,6 +220,11 @@ export const NON_GOVERNANCE_MUTATING_ROUTES: readonly NonGovernanceRouteDecl[] =
     reason: 'self-leave a channel — member-only self-service (removes only the caller), eligibility guarded by evaluateChannelMemberExitEligibility (the same predicate third-party removal uses for its target), not workspace governance',
   },
   {
+    method: 'POST',
+    path: '/api/workspaces/:id/leave',
+    reason: 'self-leave a workspace (#task:1930) — member-only self-service (removes only the caller: their workspace_users row plus every conversation_users row of that workspace, one transaction; enrolled agents untouched), so no role over others is required; the owner is refused (owner_removal_unsupported) because a workspace always has an owner and transfer is unsupported, and being existential it deliberately does NOT consult the per-channel exit guard',
+  },
+  {
     method: 'PUT',
     path: '/api/conversations/:id/attention-preference',
     reason: 'per-viewer ambient attention preference (#task:1227) — personal view state, conversation membership gate (canViewConversation), not governance',

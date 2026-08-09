@@ -49,6 +49,7 @@ specific conversation.
 | Edit **capabilities** of **someone else's** agent in this workspace (§2) | ✓ | ✓ | ✗ |
 | Add **human** member | ✓ | ✓ | ✗ |
 | Remove **human** member / change human role | ✓ | ✗ | ✗ |
+| Leave the **workspace** yourself (#task:1930) | ✗ | ✓ | ✓ |
 | Grant / revoke `admin` | ✓ | ✗ | ✗ |
 | **Archive / delete** workspace | ✓ | ✗ | ✗ |
 
@@ -105,6 +106,29 @@ unreachable through third-party removal today (the caller would have to be the o
 themselves, or a non-member of a private channel). They stay in the shared predicate because they are
 the SAME rule self-leave enforces, and each becomes reachable the moment its invariant changes
 (co-owners; admins gaining non-member visibility).
+
+**Leaving the WORKSPACE yourself** is `POST /api/workspaces/:id/leave` (#task:1930, shiki 2026-08-09) —
+the same self-service logic one level up, so it needs no role either, only an existing membership. It
+writes the caller's `workspace_users` row and EVERY `conversation_users` row they hold in that
+workspace, in one transaction (the owner-driven human-removal cascade, reused). Three properties follow
+from it being EXISTENTIAL rather than day-to-day:
+
+- The **owner is refused** (`owner_removal_unsupported`) — exactly one owner per workspace and no
+  ownership transfer, so the owner's exit is Delete. Letting an owner leave requires modelling transfer
+  first; it is not a gate to relax.
+- The per-channel exit guards **do not apply**. A private channel where the leaver is the last human
+  must not veto leaving the workspace. The cost is real and accepted: that channel is then stranded —
+  no human, admins included, can see or re-join a private channel — because exit freedom outranks the
+  recoverability of a sub-resource. This is the second documented
+  exception to `evaluateChannelMemberExitEligibility` ("every path" there means every path that ends a
+  channel edge as its own unit of work), alongside owner-driven human removal.
+- The leaver's **agents stay enrolled**. A human leaving takes no agent with them; those agents remain
+  governable by `admin` (the member∧creator arm no longer holds for the departed creator). Accepted
+  residual, not an oversight.
+
+A **non-member** is refused (`not_member`, 403) rather than answered idempotently: unlike a
+third-party removal, where an absent target row means the caller's goal is already true, here the
+caller is asserting a membership they do not have — idempotency must not outrank the permission model.
 
 
 ### 1.2 Storage

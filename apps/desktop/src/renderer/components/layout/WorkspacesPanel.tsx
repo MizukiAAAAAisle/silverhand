@@ -559,6 +559,11 @@ function WorkspaceHeaderRow({
       <WorkspaceContextMenu
         trigger={row}
         muteWorkspaceId={canMuteWorkspace(workspace) ? workspace.id : null}
+        leaveWorkspace={
+          canLeaveWorkspaceRow(workspace)
+            ? { id: workspace.id, name: workspace.name }
+            : null
+        }
       />
     </div>
   );
@@ -569,5 +574,15 @@ function WorkspaceHeaderRow({
  *  traffic has no ambient floor to silence, and the DB trigger forbids the row —
  *  and an archived workspace isn't being listened to at all. */
 function canMuteWorkspace(workspace: WorkspaceItem): boolean {
+  return workspace.kind === 'regular' && !workspace.archived;
+}
+
+/** Self-leave is offered in the row menu on the SAME structural footing as mute
+ *  — an active regular workspace — so the menu always keeps the always-present
+ *  Mute item and never renders empty (the owner-rejection role gate is resolved
+ *  downstream, inside the menu). A DM has no membership to leave, and an archived
+ *  workspace (which since #task:1889 isn't in this tree anyway) leaves through
+ *  Settings. */
+function canLeaveWorkspaceRow(workspace: WorkspaceItem): boolean {
   return workspace.kind === 'regular' && !workspace.archived;
 }

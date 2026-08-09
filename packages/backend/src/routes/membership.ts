@@ -6,6 +6,7 @@
 //   - DELETE /api/workspaces/:id/members/:agentId     (createWorkspaceMembershipApp)
 //   - DELETE /api/workspaces/:id/members/users/:userId
 //                                                     (createWorkspaceMembershipApp)
+//   - POST   /api/workspaces/:id/leave                (createWorkspaceMembershipApp)
 //   - GET    /api/conversations/:id/members           (createConversationMembershipApp)
 //   - POST   /api/conversations/:id/members           (createConversationMembershipApp)
 //   - DELETE /api/conversations/:id/members/agents/:agentId
@@ -347,7 +348,8 @@ async function removeWorkspaceHumanMember(
 
 /**
  * Workspace membership surface (api router): GET list + POST add + two DELETEs
- * (agent-remove and human-remove), as a mountable sub-app. GET is viewer-gated
+ * (agent-remove and human-remove) + POST self-leave, as a mountable sub-app.
+ * GET is viewer-gated
  * (`canViewWorkspace`); POST is admin-gated for both human and agent adds
  * (agent branch delegates to the AddWorkspaceAgentMember use case).
  *
@@ -362,6 +364,11 @@ async function removeWorkspaceHumanMember(
  * per-conversation removed messages + `workspace_users` in one transaction,
  * then publishes conversation/member-list updates plus `removed` to the viewer
  * scope post-commit. 204.
+ *
+ * POST `…/leave` (#task:1930) is the SAME cascade for the CALLER — self-service,
+ * so it needs no governance role at all, only an existing membership; the owner
+ * is refused with the same code. See the route comment for why it bypasses the
+ * per-channel exit guard and why the leaver's agents stay enrolled.
  *
  * Not to be confused with the same-suffix CONVERSATION route
  * (`/api/conversations/:id/members/users/:userId`, #task:1688): that one is
@@ -617,6 +624,71 @@ export function createWorkspaceMembershipApp(
       workspaceId: workspace.id,
       user,
       actor,
+    });
+    return c.body(null, 204);
+  });
+
+  // Self-LEAVE a workspace (#task:1930) — the member/admin counterpart of the
+  // owner-only workspace DELETE, and the workspace-level sibling of
+  // `channelLeave`. Empty body: the caller is ALWAYS the removed human
+  // (`getUserPrincipal`), so there is no target on the wire to forge and no
+  // governance role to check — you never need permission over OTHERS to end your
+  // OWN membership. Reuses `removeWorkspaceHumanMember` verbatim, so the cascade
+  // (every `conversation_users` row of this workspace + one per-conversation
+  // system message + the `workspace_users` row, ONE transaction, publishes
+  // post-commit) cannot drift from the owner-driven path. Three deliberate
+  // properties, all shiki 2026-08-09:
+  //
+  //   - AGENTS ARE UNTOUCHED. The leaver's enrolled agents keep their workspace
+  //     rows and their channel memberships; only the human leaves. Their
+  //     placement stays governable by `admin` (the non-admin arm of
+  //     enroll/remove is `member(workspace) ∧ creator(agent)`, which the leaver
+  //     no longer satisfies) — accepted, not overlooked.
+  //   - The OWNER is refused (`owner_removal_unsupported`, same code + invariant
+  //     as the owner-driven route): a workspace always has an owner and
+  //     ownership transfer is unsupported, so the owner's exit is Delete. The
+  //     client derives the affordance from the role, so this answers a race.
+  //   - Existential exit: NOT bound by `evaluateChannelMemberExitEligibility`
+  //     (see its docblock). A private channel where the leaver is the last human
+  //     must not veto leaving the workspace. The price is paid, not avoided:
+  //     that channel is then stranded (no human, admins included, can see or
+  //     re-join a private channel) — exit freedom over the recoverability of a
+  //     sub-resource.
+  app.post(apiPaths.workspaceLeave(':id'), async c => {
+    const id = c.req.param('id');
+    if (!id) return c.json({ error: 'workspace id required' }, 400);
+    const workspace = workspaces.get(id);
+    if (!workspace || workspace.workspace_kind !== 'regular') {
+      return c.json({ error: 'workspace not found' }, 404);
+    }
+    const principal = getUserPrincipal(c);
+    const currentRole = workspaces.getUserRole(workspace.id, principal.userId);
+    if (!currentRole) {
+      // Member-only, like channel leave: idempotency must not outrank the
+      // permission model, so a non-member is refused rather than answered 204.
+      return c.json(
+        { error: 'not a member of this workspace', code: 'not_member' },
+        403,
+      );
+    }
+    if (currentRole === 'owner') return ownerRemovalUnsupported(c);
+    const user = ctx.userService.getDto(principal.userId);
+    if (!user) {
+      // `workspace_users.user_id REFERENCES users(id) ON DELETE CASCADE`, so a
+      // membership row without its user row cannot exist. An impossible state to
+      // report, not a branch to map to HTTP (same treatment as
+      // `removeConversationHumanMember`) — a 404 here would deny the membership
+      // we just read.
+      throw new Error(
+        `workspace ${workspace.id} has a member row for missing user ${principal.userId}`,
+      );
+    }
+    await removeWorkspaceHumanMember(ctx, workspaces, conversations, messages, {
+      workspaceId: workspace.id,
+      user,
+      // Actor === member: the removed-message content renders this as
+      // "@you left this conversation." (see conversationMemberRemovedContent).
+      actor: conversationMemberAddedActorSnapshot({ agents, users }, principal),
     });
     return c.body(null, 204);
   });

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Archive, ArchiveRestore, Settings2, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, LogOut, Settings2, ShieldCheck } from 'lucide-react';
 import type { AgentCapability } from '@silverhand/shared';
 import {
   Dialog,
@@ -22,10 +22,12 @@ import { HumanRolesPanel } from './HumanRolesPanel';
 import {
   useArchiveWorkspace,
   useDeleteWorkspace,
+  useLeaveWorkspace,
   useRenameWorkspace,
   useWorkspaceMemberLists,
 } from './hooks';
 import {
+  canLeaveWorkspace,
   canManageWorkspaceLifecycle,
   canRenameWorkspace,
 } from './workspace-permissions';
@@ -81,8 +83,10 @@ export function WorkspaceSettingsDialog({
   const [name, setName] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
   const renameWorkspace = useRenameWorkspace();
   const deleteWorkspace = useDeleteWorkspace();
+  const leaveWorkspace = useLeaveWorkspace();
   const archiveWorkspace = useArchiveWorkspace();
 
   // Governance affordances are driven by the server-authoritative viewer_role
@@ -95,6 +99,7 @@ export function WorkspaceSettingsDialog({
   const viewerRole = membersQuery.data?.viewerRole ?? null;
   const canRename = canRenameWorkspace(viewerRole);
   const canManageLifecycle = canManageWorkspaceLifecycle(viewerRole);
+  const canLeave = canLeaveWorkspace(viewerRole);
 
   const isDm = workspaceKind === 'dm';
   const isArchived = archivedAt !== null;
@@ -112,6 +117,7 @@ export function WorkspaceSettingsDialog({
       setName(workspaceName ?? '');
       setRenameError(null);
       setConfirmingDelete(false);
+      setConfirmingLeave(false);
     }
   }, [open, workspaceName, initialSection, isDm]);
 
@@ -148,6 +154,18 @@ export function WorkspaceSettingsDialog({
       onSuccess: () => {
         onOpenChange(false);
         onDeleted?.();
+      },
+    });
+  };
+
+  const handleLeave = () => {
+    if (!workspaceId || leaveWorkspace.isPending) return;
+    leaveWorkspace.mutate(workspaceId, {
+      onSuccess: () => {
+        // Same reactive bounce as Delete: the invalidated workspaces list drops
+        // this row and the selection effect navigates away. The dialog only
+        // needs to close.
+        onOpenChange(false);
       },
     });
   };
@@ -225,6 +243,7 @@ export function WorkspaceSettingsDialog({
                 isArchived={isArchived}
                 canRename={canRename}
                 canManageLifecycle={canManageLifecycle}
+                canLeave={canLeave}
                 name={name}
                 onNameChange={setName}
                 onRename={handleRename}
@@ -238,6 +257,10 @@ export function WorkspaceSettingsDialog({
                 setConfirmingDelete={setConfirmingDelete}
                 onDelete={handleDelete}
                 deletePending={deleteWorkspace.isPending}
+                confirmingLeave={confirmingLeave}
+                setConfirmingLeave={setConfirmingLeave}
+                onLeave={handleLeave}
+                leavePending={leaveWorkspace.isPending}
               />
             ) : (
               <div className="flex flex-col gap-4">
@@ -309,6 +332,11 @@ interface GeneralSectionProps {
   setConfirmingDelete: (v: boolean) => void;
   onDelete: () => void;
   deletePending: boolean;
+  canLeave: boolean;
+  confirmingLeave: boolean;
+  setConfirmingLeave: (v: boolean) => void;
+  onLeave: () => void;
+  leavePending: boolean;
 }
 
 function GeneralSection({
@@ -329,6 +357,11 @@ function GeneralSection({
   setConfirmingDelete,
   onDelete,
   deletePending,
+  canLeave,
+  confirmingLeave,
+  setConfirmingLeave,
+  onLeave,
+  leavePending,
 }: GeneralSectionProps): JSX.Element {
   // A DM name is immutable (auto-generated); a regular workspace is editable
   // only for owner|admin. Everyone else sees the name read-only — the value is
@@ -472,6 +505,64 @@ function GeneralSection({
             )}
           </div>
         </>
+      ) : null}
+
+      {/* Leave is the member/admin counterpart of the owner's Delete — the two
+          are complementary over any role, so exactly one shows. Unlike Delete it
+          is NOT styled danger (no red border/tint): it ends only the viewer's own
+          membership and destroys no content, so a neutral panel — the same frame
+          as Archive — reads it correctly. Access is not freely restored (rejoining
+          re-seeds no channel membership), but the caption stays terse per shiki;
+          do NOT reintroduce a "re-invite restores access" line — it is false for
+          channels. The inline confirm mirrors Delete's two-button swap for
+          consistency within the section. Owner never reaches here (canLeave is
+          false for owner). */}
+      {!isDm && canLeave ? (
+        <div className="flex flex-col gap-2 rounded-[var(--control-radius)] border-[length:var(--control-border-width)] border-border bg-bg-elevated/40 p-3">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-sm font-medium text-text-primary">
+              Leave workspace
+            </span>
+            <span className="text-xs text-text-muted">
+              You leave this workspace and all its channels.
+            </span>
+          </div>
+          {confirmingLeave ? (
+            <div className="flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setConfirmingLeave(false)}
+                disabled={leavePending}
+                {...neutralAction()}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onLeave}
+                disabled={leavePending}
+                {...neutralAction()}
+              >
+                {leavePending ? 'Leaving…' : 'Leave'}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setConfirmingLeave(true)}
+                disabled={!workspaceId}
+                {...neutralAction()}
+              >
+                <LogOut className="mr-1.5 size-3.5" />
+                Leave workspace
+              </Button>
+            </div>
+          )}
+        </div>
       ) : null}
     </div>
   );

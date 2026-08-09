@@ -583,6 +583,19 @@ export type LeaveChannelResult =
  *     channel). `conversation_users` IS the human-membership table, so its row
  *     count is the human count. Active PUBLIC channels are exempt (0 humans
  *     stays discoverable + joinable).
+ *
+ * "Every path" above means every path that ends a CHANNEL edge as its own unit
+ * of work. Two WORKSPACE-level exits deliberately do NOT consult this rule and
+ * are not violations of it: owner-driven human removal
+ * (`DELETE …/members/users/:userId`) and self-leave
+ * (`POST /api/workspaces/:id/leave`, #task:1930). Both are existential — the
+ * human stops being a member of the workspace, so no channel of it can keep an
+ * edge; deferring to a per-channel guard would let one private channel veto the
+ * exit and lock a person into a workspace they left. That has a real price,
+ * accepted deliberately (shiki 2026-08-09): a private channel whose last human
+ * was the leaver is left stranded — exactly the outcome `last_human_member`
+ * exists to prevent — because exit freedom outranks the recoverability of a
+ * sub-resource. Add a new consulting path here, not a third exception.
  */
 export function evaluateChannelMemberExitEligibility(
   deps: { ctx: BackendContext; conversations: ConversationRepo },
@@ -1419,10 +1432,27 @@ export function conversationMemberAddedMetadata(input: {
   };
 }
 
+/**
+ * Sentence for a `conversation_member_removed` system message. `content` is the
+ * ONLY rendered carrier (the metadata below has no production reader), so the
+ * self-departure case needs its own wording rather than the third-party one:
+ * a workspace self-leave (`POST /api/workspaces/:id/leave`, #task:1930) cascades
+ * through every channel of the workspace with actor === member, and "@x removed
+ * @x from this conversation." would read as somebody else's moderation. Same
+ * subtype either way — `actor_id === member_id` is what structurally marks the
+ * self case, so a later first-class `left` event can derive history mechanically.
+ */
 export function conversationMemberRemovedContent(input: {
   actor: ConversationMemberAddedActorSnapshot;
   member: ConversationMemberAddedMemberSnapshot;
 }): string {
+  if (
+    input.actor.kind === 'user'
+    && input.member.kind === 'human'
+    && input.actor.id === input.member.id
+  ) {
+    return `${conversationMemberAddedLabel(input.member)} left this conversation.`;
+  }
   return `${conversationMemberAddedLabel(input.actor)} removed ${conversationMemberAddedLabel(input.member)} from this conversation.`;
 }
 

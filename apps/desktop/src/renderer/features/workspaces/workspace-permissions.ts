@@ -18,6 +18,7 @@ import type { WorkspaceRole } from '@silverhand/shared';
  *   - rename  (PATCH  /api/workspaces/:id)          → `canGovernWorkspace(…, 'admin')` → owner | admin
  *   - archive (PATCH  /api/workspaces/:id/archive)  → `canGovernWorkspace(…, 'owner')` → owner
  *   - delete  (DELETE /api/workspaces/:id)          → `canGovernWorkspace(…, 'owner')` → owner
+ *   - leave   (POST   /api/workspaces/:id/leave)    → member-floor, owner rejected → member | admin
  */
 
 /** Rename is admin-or-owner (the `'admin'` threshold — owner outranks admin). */
@@ -29,4 +30,15 @@ export function canRenameWorkspace(role: WorkspaceRole | null): boolean {
  *  backend gate, so they share one predicate here. */
 export function canManageWorkspaceLifecycle(role: WorkspaceRole | null): boolean {
   return role === 'owner';
+}
+
+/** Leave is SELF-removal: any non-owner member removes themselves (member ∨
+ *  admin). The owner is never a candidate — there must always be an owner and
+ *  ownership transfer is unsupported, so the owner's exit is Delete, not Leave.
+ *  Mirrors the backend self-leave gate (member floor, owner rejected). Null —
+ *  non-member or still-loading — is fail-closed, same as the others. Leave and
+ *  lifecycle-manage are complementary over any non-null role: owner deletes,
+ *  everyone else leaves. */
+export function canLeaveWorkspace(role: WorkspaceRole | null): boolean {
+  return role === 'member' || role === 'admin';
 }
