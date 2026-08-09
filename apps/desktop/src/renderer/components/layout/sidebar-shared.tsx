@@ -182,15 +182,19 @@ interface SectionProps {
    *  is the storage identity of this section, so renaming it resets every
    *  user's choice. Omit for session-only collapse. */
   persistId?: string;
-  /** What a COLLAPSED section renders in place of its body: the row for the
-   *  currently open conversation, when it lives in this section (`null`
-   *  otherwise). Collapsing must never leave the sidebar with no selection while
-   *  the main pane is showing that conversation, so every container keeps exactly
-   *  the selected leaf and drops everything else (shiki, 2026-08-08 —
-   *  `app-layout.md` §3). The leaf ALONE, not the chain down to it: an
-   *  intermediate row here would be a header whose only action is a collapse that
-   *  can no longer do anything, and which workspace it is is on the titlebar. */
-  selectionPath?: ReactNode;
+  /** What a COLLAPSED section renders in place of its body. At minimum the row for
+   *  the currently open conversation, when it lives in this section (`null`
+   *  otherwise): collapsing must never leave the sidebar with no selection while the
+   *  main pane is showing that conversation (shiki, 2026-08-08 — `app-layout.md` §3).
+   *  A collapsed section ALSO pokes out its awake branches' `loud` unread rows
+   *  (#task:1939), for the same reason the collapsed branch does — the header paints no
+   *  unread number, so the reveal is the only signal and it must survive one level up.
+   *  The caller (`WorkspaceGroup`) decides the exact set and attribution; this slot
+   *  just hosts it in the same `<ul>` as the body, so those rows sit where they always
+   *  sat. What it never keeps is an intermediate header whose only action is a collapse
+   *  that can no longer do anything. (Named for what it hosts — not just the selection —
+   *  since a collapsed group now reveals several awake branches, not one row.) */
+  collapsedContent?: ReactNode;
   children: ReactNode;
 }
 
@@ -203,7 +207,7 @@ export function SidebarSection({
   collapsible = false,
   defaultExpanded = true,
   persistId,
-  selectionPath,
+  collapsedContent,
   children,
 }: SectionProps): JSX.Element {
   const [expanded, toggleExpanded] = useSidebarSectionExpanded(
@@ -212,9 +216,9 @@ export function SidebarSection({
   );
   const showBody = !collapsible || expanded;
   // Collapsed, but the open conversation lives in here: keep that one row (see
-  // `selectionPath`). Same `<ul>` as the body, so the surviving row sits where it
+  // `collapsedContent`). Same `<ul>` as the body, so the surviving row sits where it
   // always sat instead of being re-homed into a second kind of list.
-  const body = showBody ? children : selectionPath;
+  const body = showBody ? children : collapsedContent;
 
   return (
     // `group/sectionscope` spans the header AND the body: the right-side actions

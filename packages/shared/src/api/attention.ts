@@ -131,7 +131,9 @@ export const AttentionBadgeRollupDtoSchema = z.object({
    *  A SIBLING of `by_workspace`, not a field inside it: that map is keyed by
    *  "has a non-zero badge", and a muted workspace is usually at 0 and therefore
    *  ABSENT — there would be no entry to hang the flag on, and forcing zeros in
-   *  would destroy the "keys ≡ which workspaces are lit" reading.
+   *  would destroy the "keys ≡ which workspaces have something waiting" reading
+   *  (which since #task:1939 is read by the sidebar's wake gate, not painted on
+   *  the workspace row).
    *
    *  Not a second authority either: the suppressor row remains the only place
    *  mute is decided (`PUT /api/workspaces/:id/attention-preference`); this is
@@ -149,9 +151,13 @@ export type AttentionBadgeRollupDto = z.infer<
  *  workspace" without re-deriving the rule, and so flipping the workspace mute
  *  off restores a visible per-channel choice.
  *
- *  `directed_unread_count` is what makes a quiet/silent row EXPLAINABLE when the
- *  workspace badge is lit: without it a `mute` channel contributing directed
- *  residue to the workspace number has no visible cause. */
+ *  `directed_unread_count` is what makes a quiet/silent row EXPLAINABLE: a
+ *  `mute` channel's directed residue is exactly what makes THAT ROW loud
+ *  (`channelRowBadge`) and, since #task:1939, what surfaces it out of a collapsed
+ *  workspace — without it a muted channel contributing directed residue to the
+ *  workspace aggregate would have no visible cause. The aggregate itself is no
+ *  longer displayed on the workspace row (docs/activity-lifecycle-v1.md §8
+ *  「呈现」); the row is where the explanation lands. */
 export const ChannelAttentionModeRowDtoSchema = z.object({
   conversation_id: z.string(),
   mode: z.enum(CHANNEL_ATTENTION_MODES),

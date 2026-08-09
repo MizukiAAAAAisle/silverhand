@@ -289,8 +289,9 @@ export const apiPaths = {
    *  `?workspace_id=…` is REQUIRED — one batch instead of N per-channel GETs for
    *  the sidebar. Carries each channel's own `mode`, the workspace-suppressed
    *  `effective_mode`, and its directed unread count (what makes a quiet/silent
-   *  row explainable when the workspace badge is lit). Read-only, human
-   *  viewer-scoped. */
+   *  row explainable, and since #task:1939 what surfaces it out of a collapsed
+   *  workspace — the workspace aggregate is no longer displayed). Read-only,
+   *  human viewer-scoped. */
   attentionModes: '/api/attention/modes',
   conversationLogDebug: (id: string) => `/api/conversations/${id}/log-debug`,
   conversationAgentActivity: (id: string, agentId: string) =>

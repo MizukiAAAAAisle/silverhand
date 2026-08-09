@@ -8,17 +8,30 @@
 // mounts the component and its three queries fire together. The sort menu is a
 // sibling in the header and is likewise rendered only while expanded — mounting it
 // collapsed would re-introduce the request (it reads the same `channelsKey` cache),
-// and in `selectedOnly` (below) a single row has no order to choose.
+// and the collapsed render (below) shows a partial set with no order to choose.
 //
 // ONE EXCEPTION, bounded to the workspace you are currently in: collapsing the
-// branch that holds the open channel keeps that ONE row on screen
-// (`selectedOnly`), so this subtree stays mounted there and its three queries stay
+// branch that holds the open channel keeps that ONE row on screen (`collapsed`
+// render, `pokeUnread` off), so this subtree stays mounted there and its three
+// queries stay
 // armed while collapsed. That is the price of the invariant "the selected row is
 // always visible in the sidebar" (shiki, 2026-08-08) — the sidebar otherwise shows
 // no selection at all while the main pane shows that channel. It is bounded: at
 // most one branch in the whole tree can hold the selection, it is the workspace
 // the user is looking at (its caches are warm), and every OTHER collapsed
 // workspace stays fully lazy.
+//
+// SECOND EXCEPTION, the collapsed poke-out (#task:1939): a collapsed branch whose
+// workspace attention badge is lit (`workspace.unread > 0`) also mounts, and renders
+// the rows that lit it — the `loud` unread ones — beside the kept selection. The
+// badge is the WAKE GATE: it is already loaded on the rail, so the decision to mount
+// costs no fetch, and the reveal set reuses `channelRowBadge`'s `loud` verdict, so it
+// is the same fact the workspace badge sums (Σ loud rows = badge_count). Bounded like
+// the first exception: only branches that actually have loud unread mount, and a
+// workspace whose ONLY loud row is starred mounts, finds nothing to show (STARRED
+// already moved that row out) and renders empty — a wasted query, never a visible
+// signal. That empty case is the precondition for the badge staying an INVISIBLE wake
+// gate (see WorkspacesPanel's header, which paints no number/dot).
 //
 // SCOPED CLAIM, on purpose (@Cindy, #task:1889): this is "the subtree mounts no
 // queries of its own", NOT "a collapsed workspace is request-free" and NOT
@@ -73,9 +86,9 @@ import {
 } from '@/features/workspaces/hooks';
 import { useMessageUnreadCounts } from '@/features/channels/message-unread';
 import { useWorkspaceAttentionModes } from '@/features/attention/hooks';
-import { channelRowBadge } from '@/lib/attention-mode';
+import { channelRowBadge, type RowBadge } from '@/lib/attention-mode';
 import { sortModeOf } from '@/lib/viewer-sort';
-import { excludeStarredChannels } from '@/lib/home-grouping';
+import { collapsedRevealRows, excludeStarredChannels } from '@/lib/home-grouping';
 
 export type WorkspaceUiKind = 'regular' | 'dm';
 
@@ -143,11 +156,30 @@ interface WorkspaceChannelsProps {
   /** Create a channel in THIS workspace — the empty-state action, and the
    *  compensation for `/chat/w/:id` having no highlight of its own. */
   onCreateChannel: (workspaceId: string) => void;
-  /** Collapsed branch that holds the open channel: render THAT row and nothing
-   *  else — no drag, no sort, no empty-state action (see the file header). A
-   *  starred selection is already excluded from this list and shows in STARRED,
-   *  so it correctly renders nothing here. */
-  selectedOnly?: boolean;
+  /** COLLAPSED partial render: show only a subset — no drag, no sort, no empty-state
+   *  action (see the file header). Always keeps the open channel's row; a starred
+   *  selection is excluded and shows in STARRED, so it may render nothing. Both a
+   *  collapsed SECTION and a collapsed BRANCH pass this. */
+  collapsed?: boolean;
+  /** Poke this branch's `loud` unread rows out on top of the kept selection
+   *  (#task:1939). Read ONLY while `collapsed`. MUST be the branch's WAKE GATE (the
+   *  lit workspace badge), never `!expanded`: a branch collapses-and-mounts to keep
+   *  the selection with a DARK badge, and gating the poke on "collapsed" would reveal
+   *  a stale `loud` sibling with no wake signal (`collapsedRevealRows` docblock). */
+  pokeUnread?: boolean;
+  /** A leading node (a workspace caption) shown ABOVE the revealed rows in the
+   *  collapsed render — but ONLY when the reveal set is non-empty (#task:1939, @Cindy
+   *  MUST FIX). It is co-fated with the rows on purpose: the collapsed GROUP mounts a
+   *  branch on its WAKE GATE (`workspace.unread > 0`, an aggregate), which can be lit
+   *  while this branch's row-level reveal is empty — its only loud row is STARRED
+   *  (moved out), or the row queries are loading / failed. Rendering the caption
+   *  beside the branch (before this component) would then leave a lone title with no
+   *  channels under it — a visible signal with nothing to point at, breaking
+   *  "starred-only only spins, shows no signal" and "loading/failure fabricates
+   *  nothing". Passing it HERE binds it to the same `revealed.length > 0` gate the
+   *  rows use, so no-rows ⟹ no-caption by construction. Only the collapsed GROUP
+   *  passes it (to attribute a non-current branch's rows); the branch level does not. */
+  revealCaption?: ReactNode;
 }
 
 /**
@@ -167,7 +199,9 @@ export function WorkspaceChannels({
   selectedChannelId,
   onSelectChannel,
   onCreateChannel,
-  selectedOnly = false,
+  collapsed = false,
+  pokeUnread = false,
+  revealCaption,
 }: WorkspaceChannelsProps): JSX.Element {
   const { data: items = [] } = useChannelsForWorkspace(workspaceId, workspaceKind);
   const { data: viewerSort } = useChannelSortState(workspaceId, workspaceKind);
@@ -223,33 +257,57 @@ export function WorkspaceChannels({
   });
   const ordered = orderedGroups.channels;
 
-  // The collapsed branch that holds the open channel keeps exactly that row (see
-  // the file header). Placed BEFORE the empty-state arm on purpose: a collapsed
-  // branch must not offer "New channel" — the one thing it is still allowed to
-  // say is where you are. No sortable wrapper either: a single row has nothing to
-  // reorder, and the grab cursor would promise an ordering this branch is not
-  // showing. The right-click menu comes along unchanged, because the row is the
-  // same row — this state hides siblings, it does not downgrade the survivor.
-  if (selectedOnly) {
-    const pinned = ordered.find(c => c.id === selectedChannelId);
-    if (!pinned) return <></>;
+  // Collapsed render (see the file header's two exceptions). `collapsed` shows a
+  // partial set: the open channel's row, plus — only when `pokeUnread` is on — this
+  // branch's `loud` unread rows. Both drop drag / sort / empty-state on purpose: a
+  // partial set has no order to reorder, and a collapsed branch must not offer "New
+  // channel" — the one thing it may still say is where you are and what is shouting.
+  // The reveal filter reuses `channelNodeBadge` (the exact predicate the row paints),
+  // so the poked-out set is the same `loud` fact the workspace wake badge sums.
+  // `ordered` is already starred-excluded (`excludeStarredChannels`), so a starred
+  // selection or a starred loud row never surfaces here — the accepted empty-reveal
+  // case. `pokeUnread` is the WAKE GATE, never `!expanded` (see its prop docblock).
+  if (collapsed) {
+    const revealed = collapsedRevealRows(ordered, {
+      pokeUnread,
+      isSelected: c => c.id === selectedChannelId,
+      // Same-source with the row paint: a row pokes out iff the badge it would
+      // show is `loud` (`channelNodeBadge`), which is exactly what it contributes
+      // to the workspace wake badge. With `pokeUnread` off (a collapsed section, or
+      // a branch kept only for its selection) only the selected row survives.
+      isLoud: c =>
+        channelNodeBadge(
+          c,
+          attentionByChannel.get(c.id),
+          unreadByChannel[c.id] ?? 0,
+        )?.tier === 'loud',
+    });
+    if (revealed.length === 0) return <></>;
     return (
-      <li>
-        <ChannelRow
-          channel={pinned}
-          selected
-          onClick={() => onSelectChannel(pinned.id, workspaceId)}
-          onStar={(channelId, starred) => starChannel.mutate({ channelId, starred })}
-          onArchive={(channelId, archived) =>
-            archiveChannel.mutate({ channelId, archived, workspaceId })
-          }
-          archivePending={archiveChannel.isPending}
-          workspaceKind={workspaceKind}
-          unreadCount={unreadByChannel[pinned.id] ?? 0}
-          attention={attentionByChannel.get(pinned.id)}
-          workspaceMuted={workspaceMuted}
-        />
-      </li>
+      <>
+        {/* Co-fated with the rows: only reached because `revealed` is non-empty, so a
+            wake-gate-lit-but-empty branch (starred-only loud, or loading/failure)
+            renders NEITHER caption nor rows — no orphan title (see `revealCaption`). */}
+        {revealCaption}
+        {revealed.map(c => (
+          <li key={c.id}>
+            <ChannelRow
+              channel={c}
+              selected={c.id === selectedChannelId}
+              onClick={() => onSelectChannel(c.id, workspaceId)}
+              onStar={(channelId, starred) => starChannel.mutate({ channelId, starred })}
+              onArchive={(channelId, archived) =>
+                archiveChannel.mutate({ channelId, archived, workspaceId })
+              }
+              archivePending={archiveChannel.isPending}
+              workspaceKind={workspaceKind}
+              unreadCount={unreadByChannel[c.id] ?? 0}
+              attention={attentionByChannel.get(c.id)}
+              workspaceMuted={workspaceMuted}
+            />
+          </li>
+        ))}
+      </>
     );
   }
 
@@ -362,6 +420,30 @@ function SortableChannelItem({
   );
 }
 
+/** The unread badge a channel row shows, or `null`. Extracted so the collapsed
+ *  poke-out reveal filter (`WorkspaceChannels`) paints from the EXACT same predicate
+ *  the row does: a row is revealed while collapsed iff the badge it would show is
+ *  `loud`, and `loud` is precisely what a row contributes to its workspace's wake
+ *  badge (`channelRowBadge`'s Σ invariant). Folds in the member gate — a browse-only
+ *  public row (non-member, or an unknown row on a stale payload) has no unread of its
+ *  own — and the `dm_channel`'s unconditional `'all'` tier. Missing/unresolved
+ *  attention leaves `effective_mode` undefined, which `channelRowBadge` renders as
+ *  nothing: a loading batch reveals no rows rather than fabricating unread. */
+function channelNodeBadge(
+  channel: ChannelNode,
+  attention: ChannelAttentionModeRowDto | undefined,
+  unreadCount: number,
+): RowBadge | null {
+  if (channel.is_member !== true) return null;
+  const effectiveMode: ChannelAttentionMode | undefined =
+    channel.kind === 'channel' ? attention?.effective_mode : 'all';
+  return channelRowBadge({
+    effectiveMode,
+    positionalUnread: unreadCount,
+    directedUnread: attention?.directed_unread_count ?? 0,
+  });
+}
+
 function ChannelRow({
   channel,
   selected,
@@ -421,14 +503,11 @@ function ChannelRow({
   // propagates to the badge, which renders nothing for it.
   const effectiveMode: ChannelAttentionMode | undefined =
     channel.kind === 'channel' ? attention?.effective_mode : 'all';
-  // One number per row, and its volume. Non-members have no unread of their own.
-  const badge = isMember
-    ? channelRowBadge({
-        effectiveMode,
-        positionalUnread: unreadCount,
-        directedUnread: attention?.directed_unread_count ?? 0,
-      })
-    : null;
+  // One number per row, and its volume — via the shared `channelNodeBadge` so the
+  // collapsed poke-out reveal filter paints from the EXACT same predicate (a row is
+  // revealed iff the badge it would show is `loud`). The member gate and the
+  // non-member's absent unread are folded in there.
+  const badge = channelNodeBadge(channel, attention, unreadCount);
   // A silenced row says so without being right-clicked: a MutedMarker rides beside
   // the name, like the workspace row's (shiki 2026-08-09). Mute is the marker ALONE
   // — the name keeps its full colour (shiki 2026-08-09: dimming the title read as

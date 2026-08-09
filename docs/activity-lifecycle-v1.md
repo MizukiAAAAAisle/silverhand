@@ -53,7 +53,7 @@ Owner: 脊柱(数据模型/生命周期/领域分层)=Alice · UI 表面节=Norm
 | channel 自己存的档 | **stored (mode)** | 内部 | `getStoredMode` / `storedChannelModeExpr`;per-channel 控件的读面 |
 | 折叠 workspace 抑制器之后的档 | **effective (mode)** | 内部 | `effective_mode` / `effectiveChannelModeExpr` / `resolveEffectiveAttentionMode`;**`effective` 在本 context 只有这一个意思**(#task:1870) |
 | workspace 级抑制器 | **suppressor** | 内部 | per-(viewer, workspace) boolean,压过该 workspace 全部 stored 档,不改写它们 |
-| workspace 上那个数字 | **badge** | 内部 | 分档加权计数(§8),与 sidebar 的 raw positional 未读是两个口径 |
+| workspace 的分档加权计数 | **badge** | 内部 | 分档加权计数(§8),与 sidebar 的 raw positional 未读是两个口径。**#task:1939 起它不再显示在 workspace 行上**,只作折叠态(枝 / 整组)的唤醒门(§8 末「呈现」) |
 
 **硬规:`Attention` / `eligibility` / `claim` / `salience` / `source_ref` 是内部语言,绝不上界面。** 用户只见 **Activity**(列表)+ channel 控件 `所有消息 / 仅提及 / 静音` + workspace `静音` + thread `Follow / Unfollow`。(Slack 是命名参考,**非规范源**。)
 
@@ -200,7 +200,7 @@ enter(item, me) = directed(item, me)  OR  ( ambient(item) AND subscribed(item, m
 
 **worked edge(两不变量同时成立):** 某 thread 唯一未读 = 一条 @我@10 → sidebar badge = **1**(确实有一条没读)、Activity = **1 条 directed 行 + ambient 行不存在**(`positional\directed = 0`,无双重计数)。那条事在 Activity 里只出现一次、同时 channel 仍被 badge 标记。两头都对。
 
-**第三个面:workspace badge(#task:1870)。** channel 三档上线后,workspace 那颗数字答的是第三个问题 ——「这个 workspace 里有多少件**按我设的响度**该吵我的事?」:
+**第三个面:workspace badge(#task:1870)。** channel 三档上线后,这个计数答的是第三个问题 ——「这个 workspace 里有多少件**按我设的响度**该吵我的事?」(**#task:1939 起它不再显示给眼睛、只答给唤醒门**,见本节末「呈现」):
 
 ```
 badge(workspace, viewer) = Σ_{effective==所有消息} raw positional unread
@@ -215,6 +215,17 @@ badge(workspace, viewer) = Σ_{effective==所有消息} raw positional unread
 - **fail-closed 靠共享片段继承**:两项都套 `ROLLUP_UNREAD` / `liveConversationPredicate`,不各自重述 liveness,所以归档、退群不可能从任一项漏出去。
 - **两项都以 membership 为定义域**(都 `JOIN conversation_users`):故 badge 有**两类**自变量 —— 响度(档位)与**成员边**。后者是第四类变更源,见 §10。
 - **原始 positional 口径一个字不改**(sidebar badge、`unread_updated.workspace_unread_count`、`FavoriteRowDto.unread_count`):badge 是**同一 membership 的第二张脸**,不是替换。这也是为什么它走**自己的** `attention_badge_updated` 事件而不去重定义 `unread_updated`(§10)。
+
+**呈现:容器不显示这个数字(#task:1939,shiki 2026-08-09 裁定;组级 2026-08-10 同裁)。** 上面那条算术不变,变的是它出不出现在 workspace 行上。
+
+- **为什么**:badge 的定义域是 viewer 在该 workspace 的**全部成员 channel**,而 conversation star 是**独占显示**(`docs/list-sort-v1.md`)—— 被 star 的 channel 从 workspace 枝里移出、只在全局 STARRED 渲染。于是容器上的数字可以**指不到自己的 children**:折叠显示 `3`,展开却在这一枝里找不到那 `3`。这是**指向**错,不是精度错 ⇒ 降成一颗 dot 只是把错误指向的分辨率降低,所以**数字和 dot 都不显示**。
+- **改成什么**:workspace 行不承载任何 unread 信号;这个计数**降级为不可见的唤醒门** —— **除保留当前选中行那条既有挂载门外**(#task:1889:持有打开 channel 的枝始终挂着、始终留那一行,与 unread 无关),**unread 的露出仅由 badge 非 0 唤醒**:门开时该折叠枝挂 channels / unread / modes 查询,并**临时露出**枝内 loud 的 channel 行,清零后自动收回。所以折叠枝的露出集 = {选中行} ∪ {loud 行},两条门各自独立。**不写 `expanded`**:#task:1901 的判据是那一位只能表达「你要它开着」,而这里的触发器是**别人的活动**,更没有资格写它。
+- **两级折叠共用这一条门(2026-08-10 扩到组级)**:一级组头(WORKSPACES / DM)折叠时同样不许藏住 loud unread,判定**仍是同一个 badge 非 0**、不是第二套。组折叠时的挂载集 = {持有选中行的枝} ∪ {门开的枝},**正是组展开时本来就挂着的那一集**(展开态的挂载条件已含这两项)⇒ 扩到组级**不提高挂载量级**,也**不许因为组折叠去挂全组查询**。每枝内部走的仍是上一条那条路径(exclusive-home 排除 STARRED → 同一个 `channelRowBadge` 判 `loud` → 选中行与 loud 行去重),故两级只有**入口**不同,判定与露出集同源。
+- **组头同样不显示任何 unread 数字 / dot**,理由与 workspace 行一字不差:容器层级越高,定义域越大,「指不到自己 children」的可能只增不减。**由此,露出本身也不得给容器新增任何可见信号** —— 某枝的门开而露出集为空时(下面「已知空转」那条),它在组折叠态必须**完全无形**;归属类附加行(同名 channel 的可辨识性)只能与该枝**真实露出的行同生灭**,否则「浪费一次查询」立刻退化成「显示有事却点不进去」,也就把那条空转成立的前提破掉。
+- **门与叶子必须同源**:露出集 = 枝内 `channelRowBadge` 判为 `loud` 的行 —— 它正是本节算术的行级形态(`Σ(loud row badge) = badge_count`,by construction)。**不得引第二套 unread 判定**,否则同一个断裂被复制到下一层:门说「有事」而露出集按另一个口径算出空。
+- **已知空转 + 它的前提**:starred 行**计入** badge 却**不在该枝渲染** ⇒ 某 workspace 唯一的 loud 来源正好是 starred 时,门会触发而露出集为空。因为容器此时**什么都不显示**,这只是一次浪费的查询、**不是谎报**;那条 loud 行仍在 STARRED 里、走**同一个** `channelRowBadge`(`FavoritesPanel`),所以「点亮它的行始终存在」仍然成立,只是**不再保证它在该 workspace 枝下**。**这个空转的无害性完全依赖「容器不显示任何信号」**—— 谁以后给 workspace 行**或组头**加回数字 / dot / 归属标签 / 任何可见 unread 信号,断裂立刻回来。
+- **`muted_workspace_ids` 不受影响**:workspace 静音仍在该行显示 marker(§10 那枚淡 icon)。它答的是「我把这里调静了」,不是「这里有多少事」—— 移除的是数字,不是这个状态。
+- **新鲜度**:门的新鲜度就是 badge 的新鲜度(§10:客户端不随时间、不随 window focus 重取,**漏一帧会一直错到 remount / 重连 / 另一个失效触发器**)。表现从「数字错」变成「折叠态(枝或整组)该露的行没露」,暴露面同级(旧行为里那个数字也是容器唯一的信号)⇒ §10 那四类变更源**一个都不能少**这条约束仍然全额承重。
 
 ---
 

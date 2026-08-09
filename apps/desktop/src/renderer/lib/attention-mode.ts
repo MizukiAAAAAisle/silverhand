@@ -73,8 +73,16 @@ export interface RowBadge {
  *
  * The load-bearing invariant: **a `loud` row badge is exactly what that row
  * contributes to its workspace's badge**, so Σ(loud row badges) = the rail's
- * `badge_count` by construction. That is what makes a lit workspace badge
- * ANSWERABLE — the user can always find the row that lit it. A quiet badge
+ * `badge_count` by construction. Since #task:1939 the container does not paint
+ * that number at all — the badge is an INVISIBLE WAKE GATE, and a collapsed
+ * branch pokes out its `loud` rows instead; when the whole WORKSPACES / DM
+ * section is collapsed, the same gate reveals each awake branch's `loud` rows
+ * one level up (`WorkspaceChannels`, docs/activity-lifecycle-v1.md §8「呈现」).
+ * So the equality no longer explains a number the user can see; it is what
+ * keeps the gate and the revealed set ONE
+ * fact, which is why this must stay the only unread verdict either of them reads:
+ * a gate that fires on one predicate and reveals by another moves the old
+ * unanswerable state down a layer instead of removing it. A quiet badge
  * contributes nothing; it is the residue the viewer asked to keep quiet.
  *
  * Per tier:
@@ -85,8 +93,9 @@ export interface RowBadge {
  *                  the badge, so row and badge agree. With no directed claim the
  *                  ambient residue shows QUIET — the in-place hint.
  *   - `mute`     → a directed claim is STILL loud. Mute silences the ambient
- *                  channel, never the person addressing you; a silent row beside
- *                  a lit workspace badge is precisely the unexplainable state.
+ *                  channel, never the person addressing you; the badge counts
+ *                  that claim, so a silent row here would be a gate that fires
+ *                  and reveals nothing — the unexplainable state exactly.
  *                  Ambient residue is suppressed entirely (silent = no badge).
  *
  * A `mentions` row with a directed claim deliberately DROPS its ambient residue

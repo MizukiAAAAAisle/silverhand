@@ -606,9 +606,11 @@ function RegisteredAppShell({
 
   // ── Attention badges (#task:1870) ──────────────────────────────────────
   // The viewer's per-workspace badge roll-up: raw unread for `all` channels plus
-  // the directed residue of quiet/muted ones. It is what the rail rows, the
-  // nav-rail chat dot and the dock badge all show — a muted workspace must not
-  // nag on any of them, and folding the tiers in three places would drift.
+  // the directed residue of quiet/muted ones. The nav-rail chat dot and the dock
+  // badge SHOW it; since #task:1939 the rail rows only READ it (the collapsed-state
+  // wake gate — branch or whole section — and the presence dot's suppressor) instead of
+  // painting a number — a muted workspace must not nag on any of them, and folding
+  // the tiers in three places would drift.
   // `useAttentionRealtime` is the ONE attention subscription; it lives here so
   // rows can read the roll-up without each installing a listener.
   useAttentionRealtime();

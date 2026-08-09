@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import type { ChannelAttentionMode } from '@silverhand/shared';
+import { channelRowBadge } from './attention-mode';
 import {
   branchHoldsSelectedRow,
+  collapsedGroupRevealBranches,
+  collapsedRevealRows,
   excludeStarredChannels,
   isStarredAt,
+  isWorkspaceAwake,
   partitionRailWorkspaces,
 } from './home-grouping';
 
@@ -138,5 +143,191 @@ describe('branchHoldsSelectedRow (#task:1901 — which collapsed container keeps
         starred: 'unstarred',
       }),
     ).toBe(false);
+  });
+});
+
+describe('isWorkspaceAwake (#task:1939 — the single wake-gate predicate)', () => {
+  it('is awake only for a positive badge; a missing badge is NOT awake', () => {
+    // The `?? 0` is the point: loading (undefined) and an explicit null must read as
+    // asleep, not throw or coerce to awake. A bare `unread > 0` would break here.
+    expect(isWorkspaceAwake({ unread: 2 })).toBe(true);
+    expect(isWorkspaceAwake({ unread: 0 })).toBe(false);
+    expect(isWorkspaceAwake({ unread: null })).toBe(false);
+    expect(isWorkspaceAwake({ unread: undefined })).toBe(false);
+    expect(isWorkspaceAwake({})).toBe(false);
+  });
+});
+
+describe('collapsedRevealRows (#task:1939 — collapsed branch poke-out)', () => {
+  // A fixture with just enough to drive the two seams: `excludeStarredChannels`
+  // reads `starred_at`, and the real `channelRowBadge` reads the tier inputs — so
+  // "loud" here is the SAME verdict the row paints, not a test-local flag.
+  interface Fx {
+    id: string;
+    starred_at: number | null;
+    mode: ChannelAttentionMode | undefined;
+    unread: number;
+    directed: number;
+  }
+  const fx = (id: string, over: Partial<Fx> = {}): Fx => ({
+    id,
+    starred_at: null,
+    mode: 'all',
+    unread: 0,
+    directed: 0,
+    ...over,
+  });
+  const isLoud = (c: Fx) =>
+    channelRowBadge({
+      effectiveMode: c.mode,
+      positionalUnread: c.unread,
+      directedUnread: c.directed,
+    })?.tier === 'loud';
+  // The exact production wiring: exclude starred FIRST, then union {selected} ∪
+  // {loud}, with `loud` decided by the real badge predicate. `pokeUnread` is the
+  // branch's WAKE GATE — a SEPARATE input from "the branch is collapsed".
+  const revealed = (
+    items: Fx[],
+    opts: { selectedId: string | null; pokeUnread: boolean },
+  ) =>
+    collapsedRevealRows(excludeStarredChannels(items), {
+      pokeUnread: opts.pokeUnread,
+      isSelected: c => c.id === opts.selectedId,
+      isLoud,
+    }).map(c => c.id);
+
+  it('wake gate on reveals {selected} ∪ {loud}; a quiet row stays hidden', () => {
+    const items = [
+      fx('sel', { mode: 'all', unread: 0 }), // selected, no unread → kept anyway
+      fx('loud', { mode: 'all', unread: 3 }), // positional loud → poked out
+      fx('quiet', { mode: 'mentions', unread: 2 }), // ambient residue → quiet, hidden
+    ];
+    expect(revealed(items, { selectedId: 'sel', pokeUnread: true })).toEqual([
+      'sel',
+      'loud',
+    ]);
+  });
+
+  it('a directed claim under mute is loud and pokes out (tracks the real verdict, not just positional)', () => {
+    const items = [fx('mention', { mode: 'mute', unread: 0, directed: 1 })];
+    expect(revealed(items, { selectedId: null, pokeUnread: true })).toEqual([
+      'mention',
+    ]);
+  });
+
+  it('a starred loud row is excluded BEFORE reveal — it lives in STARRED (#task:1888)', () => {
+    const items = [
+      fx('sel', { unread: 0 }),
+      fx('star', { starred_at: 10, mode: 'all', unread: 5 }), // loud but starred
+    ];
+    // The accepted empty-reveal case: `star` counts toward the wake badge yet
+    // never surfaces here, so a workspace whose only loud row is starred pokes
+    // out nothing. An EMPTY reveal is the contract the collapsed-group caption keys
+    // off (#task:1939): the branch mounts on its lit wake gate, but with no revealed
+    // row `WorkspaceChannels` renders nothing — so no orphan workspace caption.
+    expect(revealed(items, { selectedId: 'sel', pokeUnread: true })).toEqual([
+      'sel',
+    ]);
+    expect(
+      revealed([fx('star', { starred_at: 10, mode: 'all', unread: 5 })], {
+        selectedId: null,
+        pokeUnread: true,
+      }),
+    ).toEqual([]);
+  });
+
+  it('a lit wake gate with only loading/failed rows reveals nothing (no orphan caption, #task:1939)', () => {
+    // Loading / failure: attention has not resolved, so `effectiveMode` is undefined
+    // and `channelRowBadge` returns null — the row is not `loud`. The workspace wake
+    // badge (an aggregate on a different cache) can still be lit, mounting this branch
+    // in the collapsed group; the reveal set must be empty regardless, so a caption
+    // co-fated with it never appears with no channels under it (fabricates nothing).
+    const items = [fx('pending', { mode: undefined, unread: 3 })];
+    expect(revealed(items, { selectedId: null, pokeUnread: true })).toEqual([]);
+  });
+
+  it('section collapse (wake gate off) does NOT poke — only the selected row survives', () => {
+    const items = [
+      fx('sel', { unread: 0 }),
+      fx('loud', { mode: 'all', unread: 4 }),
+    ];
+    expect(revealed(items, { selectedId: 'sel', pokeUnread: false })).toEqual([
+      'sel',
+    ]);
+  });
+
+  it('section collapse with nothing selected reveals an empty set', () => {
+    const items = [fx('loud', { mode: 'all', unread: 4 })];
+    expect(revealed(items, { selectedId: null, pokeUnread: false })).toEqual([]);
+  });
+
+  it('a branch mounted to keep the selection while the wake gate is DARK does not poke a stale loud sibling (#task:1939, @Cindy MUST FIX)', () => {
+    // The regression this pins: a branch can mount collapsed purely because it
+    // holds the open row (`branchHoldsSelectedRow`), with the workspace badge
+    // UNLIT. Wiring the poke to `!expanded` instead of the wake gate would then
+    // reveal a `loud` sibling left in the row-level cache — a different cache from
+    // the badge, so the two can disagree for a frame. The ONLY difference between
+    // reveal and no-reveal here is `pokeUnread`, so it must be the wake gate.
+    const items = [
+      fx('sel', { unread: 0 }),
+      fx('sibling', { mode: 'all', unread: 2 }), // loud in cache, but badge dark
+    ];
+    expect(revealed(items, { selectedId: 'sel', pokeUnread: false })).toEqual([
+      'sel',
+    ]);
+    // Same rows, gate lit → the sibling pokes out. Nothing but the gate changed.
+    expect(revealed(items, { selectedId: 'sel', pokeUnread: true })).toEqual([
+      'sel',
+      'sibling',
+    ]);
+  });
+});
+
+describe('collapsedGroupRevealBranches (#task:1939 — which branches a collapsed GROUP reveals)', () => {
+  interface W {
+    id: string;
+    holds: boolean;
+    unread: number;
+  }
+  const branches = (items: W[]) =>
+    collapsedGroupRevealBranches(items, {
+      holdsSelection: w => w.holds,
+      isAwake: w => w.unread > 0,
+    }).map(w => w.id);
+
+  it('reveals awake branches and the selected branch, excluding quiet unselected ones', () => {
+    const items = [
+      { id: 'quiet', holds: false, unread: 0 }, // neither → NOT mounted (constraint ②)
+      { id: 'sel', holds: true, unread: 0 }, // selected, even with a dark badge
+      { id: 'awake', holds: false, unread: 2 }, // lit wake gate → revealed
+    ];
+    expect(branches(items)).toEqual(['sel', 'awake']);
+  });
+
+  it('puts the selected branch FIRST, keeping the rest in input (sort) order', () => {
+    const items = [
+      { id: 'a', holds: false, unread: 1 },
+      { id: 'b', holds: false, unread: 3 },
+      { id: 'sel', holds: true, unread: 0 },
+    ];
+    expect(branches(items)).toEqual(['sel', 'a', 'b']);
+  });
+
+  it('with no selection here (e.g. a starred selection), reveals only the awake branches', () => {
+    // A starred selection makes `holdsSelection` false everywhere — its row is
+    // STARRED's — so nothing is force-mounted; only genuinely awake branches show.
+    const items = [
+      { id: 'quiet', holds: false, unread: 0 },
+      { id: 'awake', holds: false, unread: 5 },
+    ];
+    expect(branches(items)).toEqual(['awake']);
+  });
+
+  it('reveals nothing when the group is fully quiet and holds no selection', () => {
+    const items = [
+      { id: 'a', holds: false, unread: 0 },
+      { id: 'b', holds: false, unread: 0 },
+    ];
+    expect(branches(items)).toEqual([]);
   });
 });

@@ -14,7 +14,6 @@ import {
   OUTER_GLYPH_INSET,
   SidebarSection,
   MutedMarker,
-  UnreadBadge,
   useSidebarSectionExpanded,
 } from './sidebar-shared';
 import { ChannelSortMenu, WorkspaceChannels } from './WorkspaceChannels';
@@ -22,6 +21,8 @@ import { WorkspaceContextMenu } from './WorkspaceContextMenu';
 import { dmRecognitionName } from '@/lib/workspace-name';
 import {
   branchHoldsSelectedRow,
+  collapsedGroupRevealBranches,
+  isWorkspaceAwake,
   type SelectedConversation,
 } from '@/lib/home-grouping';
 
@@ -140,6 +141,64 @@ function rowIconFor(workspace: WorkspaceItem, ctx: RailRowContext): JSX.Element 
   );
 }
 
+/** The recognition name a workspace row shows: a DM reads as the bound agent
+ *  (no `@`, no `· DM` suffix — shiki, #task:1768), a regular workspace as its own
+ *  name. Shared by the interactive header and the collapsed-group caption so the two
+ *  can never drift. */
+function workspaceRowTitle(
+  workspace: WorkspaceItem,
+  ctx: RailRowContext,
+): string {
+  const dmAgent =
+    workspace.kind === 'dm' && workspace.dm_agent_id
+      ? ctx.agentsById?.get(workspace.dm_agent_id)
+      : undefined;
+  return workspace.kind === 'dm'
+    ? dmRecognitionName(workspace.name, dmAgent)
+    : workspace.name;
+}
+
+/**
+ * A NON-interactive workspace label, shown above a non-current awake branch's poked
+ * rows while the whole group is collapsed (#task:1939). When a collapsed group reveals
+ * loud channels from more than one workspace, those rows would otherwise float with no
+ * owner — two workspaces' `general` become indistinguishable. The branch you are IN
+ * needs none of this (the titlebar names it), so only the OTHER branches are captioned.
+ *
+ * Deliberately NOT `WorkspaceHeaderRow`: it carries no disclosure triangle, drag,
+ * sort menu or `+`. A collapse toggle here would be the fake control shiki removed
+ * from the collapsed branch (its only action can no longer change anything), and
+ * writing `expanded` from it would break the "reveal is DERIVED" invariant. It wears
+ * the muted grouping weight (a caption), not the header's `text-text-secondary`
+ * (a control), so it reads as a label for the rows beneath it.
+ */
+function WorkspaceCaption({
+  workspace,
+  ctx,
+}: {
+  workspace: WorkspaceItem;
+  ctx: RailRowContext;
+}): JSX.Element {
+  return (
+    <li>
+      <div
+        className={
+          'sidebar-row-gutter flex h-7 w-full items-center pr-2 ' +
+          OUTER_GLYPH_INSET +
+          ' text-text-muted'
+        }
+      >
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          {rowIconFor(workspace, ctx)}
+        </span>
+        <span className="ml-2 min-w-0 truncate text-xs font-medium">
+          {workspaceRowTitle(workspace, ctx)}
+        </span>
+      </div>
+    </li>
+  );
+}
+
 /** The GROUP header's semantic glyph — the thing shiki asked for on
  *  STARRED / WORKSPACES / DM: identity at rest, chevron on hover. The three must
  *  read as one family, so all three are stroke glyphs at the same optical
@@ -194,15 +253,34 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
     dmAgentAvatarUrls,
   };
 
-  // Collapsed group, open conversation inside it: keep that ONE channel row and
-  // nothing else (`app-layout.md` §3). The branch's own header row is NOT kept —
-  // its only action is a collapse that would no longer change anything, and which
-  // workspace you are in is on the titlebar. Reuses the branch's own
-  // `selectedOnly` render, so the surviving row is the same row with the same
-  // indent, fill and menu. Same `branchHoldsSelectedRow` the branch itself uses, so
-  // a starred selection resolves to nothing here — its row lives in STARRED, and
-  // this group must not mount a branch that has no row to show (#task:1901).
-  const selectedBranch = workspaces.find(w => branchHoldsSelectedRow(w.id, selected));
+  // Collapsed group: reveal the same rows an EXPANDED group would keep visible while
+  // its branches are collapsed — the open conversation's row, PLUS every awake
+  // branch's `loud` unread rows (#task:1939). A collapsed GROUP must not hide a new
+  // message any more than a collapsed BRANCH does: the section header paints no unread
+  // number, so this reveal is the only signal and it has to survive one level up.
+  // `collapsedGroupRevealBranches` mounts exactly `holdsSelection || wakeGate` — the
+  // set an expanded group already mounts — and NOTHING else (@Cindy MUST FIX ②: a
+  // quiet, unselected branch stays unmounted; the group never mounts its whole
+  // membership just because it closed). Each branch reuses its own `collapsed` +
+  // `pokeUnread` render, so STARRED exclusion, the `channelNodeBadge` `loud` verdict
+  // and selected∪loud dedup are the SAME as the branch level, and no `expanded` is
+  // ever written (@Cindy MUST FIX ①) — the reveal is derived and retracts when the
+  // unread clears.
+  //
+  // The current branch is FIRST and headerless (the titlebar names the workspace you
+  // are in — shiki, 2026-08-08). Any OTHER awake branch gets a NON-interactive
+  // `WorkspaceCaption`: its loud channels would otherwise float context-free, and two
+  // workspaces' same-named channels become indistinguishable. The caption is a label,
+  // not the branch header — no disclosure, drag, sort or `+` — so it is not the fake
+  // control shiki removed from the collapsed branch. It is passed THROUGH
+  // `WorkspaceChannels` (`revealCaption`), not rendered beside it, so it appears ONLY
+  // when that branch's reveal is non-empty: a branch whose wake gate is lit but whose
+  // only loud row is STARRED — or whose row queries are loading/failed — shows nothing,
+  // never an orphan title (@Cindy MUST FIX).
+  const revealBranches = collapsedGroupRevealBranches(workspaces, {
+    holdsSelection: w => branchHoldsSelectedRow(w.id, selected),
+    isAwake: w => isWorkspaceAwake(w),
+  });
 
   return (
     <SidebarSection
@@ -214,16 +292,34 @@ export function WorkspaceGroup<GroupKey extends SortGroup = SortGroup>({
       collapsible
       defaultExpanded={defaultExpanded ?? true}
       persistId={persistId}
-      selectionPath={
-        selectedBranch ? (
-          <WorkspaceChannels
-            workspaceId={selectedBranch.id}
-            workspaceKind={selectedBranch.kind}
-            selectedChannelId={selected.channelId}
-            onSelectChannel={onSelectChannel}
-            onCreateChannel={onCreateChannel}
-            selectedOnly
-          />
+      collapsedContent={
+        revealBranches.length > 0 ? (
+          <>
+            {revealBranches.map(w => (
+              <WorkspaceChannels
+                key={w.id}
+                workspaceId={w.id}
+                workspaceKind={w.kind}
+                selectedChannelId={selected.channelId}
+                onSelectChannel={onSelectChannel}
+                onCreateChannel={onCreateChannel}
+                collapsed
+                pokeUnread={isWorkspaceAwake(w)}
+                // The current branch is headerless (titlebar names it); any OTHER
+                // branch gets a caption — but passed THROUGH `WorkspaceChannels` so it
+                // renders only when that branch's reveal is non-empty. A wake-gate-lit
+                // branch whose only loud row is STARRED (or whose row queries are
+                // loading/failed) then shows nothing at all, never an orphan title
+                // (@Cindy MUST FIX — same "signal with no row" failure as the branch
+                // level).
+                revealCaption={
+                  branchHoldsSelectedRow(w.id, selected) ? undefined : (
+                    <WorkspaceCaption workspace={w} ctx={ctx} />
+                  )
+                }
+              />
+            ))}
+          </>
         ) : null
       }
     >
@@ -324,9 +420,10 @@ function SortableWorkspaceItem({
  * a restart. It starts COLLAPSED and only an explicit click changes it — the stored
  * bit means "I want this open", never "I have been here" (see `holdsSelection`
  * below). Opening a channel in a collapsed branch does not expand it; the branch
- * keeps that one row on screen by itself (`selectedOnly`), which is how the FILL
- * stays reachable without pinning the branch open or handing the header a stand-in
- * marker.
+ * keeps that one row on screen by itself, and a collapsed branch with `loud` unread
+ * also pokes those rows out (`collapsed` render + `pokeUnread`, #task:1939) — both DERIVED, so the
+ * FILL and the unread stay reachable without pinning the branch open, writing
+ * `expanded`, or handing the header a stand-in marker.
  */
 function WorkspaceBranch({
   workspace,
@@ -350,7 +447,7 @@ function WorkspaceBranch({
   // been here" rather than "you want this open", and a default of collapsed decayed
   // back to fully expanded over a few days of use. Nothing is lost by dropping it,
   // because a collapsed branch holding the open channel already shows that one row
-  // (`selectedOnly`) — the same reveal, without the siblings and without the write.
+  // (`collapsed` render) — the same reveal, without the siblings and without the write.
   //
   // "Holding" is membership AFTER exclusive-home, not parent-id equality: a starred
   // conversation's row is STARRED's, so this branch keeps nothing and stays
@@ -358,6 +455,16 @@ function WorkspaceBranch({
   // the only authority, and guessing while it loads spends exactly the requests
   // this gate exists to save (`branchHoldsSelectedRow`, #task:1901 @Cindy MUST FIX).
   const holdsSelection = branchHoldsSelectedRow(workspace.id, ctx.selected);
+  // The collapsed poke-out wake gate (#task:1939): a lit workspace attention badge
+  // (`workspace.unread` = `attentionBadges.by_workspace`, the Σ of its rows' `loud`
+  // badges) means a `loud` unread row exists somewhere in this branch, so mount it
+  // even while collapsed to poke that row out. The badge is already on the rail, so
+  // this costs no fetch to DECIDE; mounting is the same bounded cost as
+  // `holdsSelection`. It paints no number here (the header dropped its badge) — it is
+  // purely the invisible signal that there is something to reveal. When the only loud
+  // contributor is a starred row (still counted in the badge, but moved to STARRED),
+  // the branch mounts and reveals nothing — a wasted query, never a visible signal.
+  const wakeGate = isWorkspaceAwake(workspace);
 
   return (
     <>
@@ -368,7 +475,7 @@ function WorkspaceBranch({
         onToggle={() => setExpanded()}
         dragHandleProps={dragHandleProps}
       />
-      {expanded || holdsSelection ? (
+      {expanded || holdsSelection || wakeGate ? (
         <ul className="space-y-0.5">
           <WorkspaceChannels
             workspaceId={workspace.id}
@@ -376,14 +483,21 @@ function WorkspaceBranch({
             selectedChannelId={ctx.selected.channelId}
             onSelectChannel={ctx.onSelectChannel}
             onCreateChannel={ctx.onCreateChannel}
-            // Collapsed, but this is the branch you are IN: keep the open
-            // channel's row and drop the rest (shiki, 2026-08-08). Collapse
-            // stays a working control — the rejected alternative was pinning the
-            // branch open, which turns a header row whose ONLY action is collapse
-            // into a focusable, pressable no-op. What it costs is this branch's
-            // three queries staying armed while collapsed; bounded to one branch,
-            // and to the workspace whose caches are already warm.
-            selectedOnly={!expanded}
+            // Collapsed, but this branch is awake — the one you are IN
+            // (`holdsSelection`) and/or one with a `loud` unread row (`wakeGate`).
+            // TWO ORTHOGONAL inputs (#task:1939, @Cindy MUST FIX): `collapsed` only
+            // means "render the partial set" (the kept selection); `pokeUnread` is the
+            // SEPARATE gate that ALSO reveals the loud rows, and it is the WAKE GATE
+            // itself — never `!expanded`. Were it `!expanded`, a branch mounted only
+            // to keep the selection (`holdsSelection`, dark badge) would poke a stale
+            // `loud` sibling with no wake signal — the badge and the row-level verdict
+            // live in different caches, neither refetched over time (activity-lifecycle
+            // §10). The reveal stays DERIVED — no `expanded` write (#task:1901: that
+            // bit means "I want this open", never "something happened here") — so it
+            // retracts the instant unread clears. Cost: this branch's three queries
+            // stay armed while it has unread; bounded to branches that actually do.
+            collapsed={!expanded}
+            pokeUnread={wakeGate}
           />
         </ul>
       ) : null}
@@ -407,15 +521,9 @@ function WorkspaceHeaderRow({
   // DM rows show the bound agent's RAW display name — no `@`, no `· DM` suffix
   // (shiki 2026-08-01, #task:1768). This is a recognition surface (who you're
   // talking to), so it reads like a person, not a handle. Shares
-  // `dmRecognitionName` with the titlebar so the two can't drift.
-  const dmAgent =
-    workspace.kind === 'dm' && workspace.dm_agent_id
-      ? ctx.agentsById?.get(workspace.dm_agent_id)
-      : undefined;
-  const title =
-    workspace.kind === 'dm'
-      ? dmRecognitionName(workspace.name, dmAgent)
-      : workspace.name;
+  // `workspaceRowTitle` / `dmRecognitionName` with the caption and titlebar so the
+  // three can't drift.
+  const title = workspaceRowTitle(workspace, ctx);
   const icon = rowIconFor(workspace, ctx);
   const unread = workspace.unread;
   // Hover-revealed actions, scoped to the whole BRANCH (`group/wsbranch` on the
@@ -512,23 +620,20 @@ function WorkspaceHeaderRow({
           </span>
         ) : null}
       </button>
-      {/* Trailing actions keep the right edge, unchanged by the mute marker moving
-          up to the name (shiki, 2026-08-09: 「add channel icon 不变」). The aggregate
-          unread badge shows only while collapsed — it answers "is it worth opening
-          this?", withdrawn once the children carrying the same information are on
-          screen (consumed exactly as the backend projects it: a channel moved into
-          STARRED is still counted here; don't re-derive to subtract). The sort menu
-          and `+` reveal on branch hover / keyboard focus via `hoverOnly` — same
-          `ghost` icon Button recipe (h-6 w-6), reveal on a WRAPPER so its
-          `transition-opacity` can't merge away the Button's own
-          `transition-colors`. */}
+      {/* No unread badge here (#task:1939): the workspace row shows NO unread number
+          or dot. The old aggregate badge was UNANSWERABLE — a channel moved into
+          STARRED still counts in it, so a collapsed workspace could show a number
+          with no row to point at on expand (shiki). The count still lives on the rail
+          as `workspace.unread` (`attentionBadges.by_workspace`), now only as the
+          INVISIBLE wake gate that pokes the loud rows out below (see
+          `WorkspaceBranch`). The presence dot is a separate liveness hint — kept, and
+          still shown only when there is no unread. The sort menu and `+` reveal on
+          branch hover / keyboard focus via `hoverOnly` — same `ghost` icon Button
+          recipe (h-6 w-6), reveal on a WRAPPER so its `transition-opacity` can't merge
+          away the Button's own `transition-colors`. */}
       <span className="flex shrink-0 items-center gap-1 pl-1">
-        {!expanded ? (
-          unread && unread > 0 ? (
-            <UnreadBadge count={unread} />
-          ) : workspace.active ? (
-            <span className="size-1.5 rounded-full bg-success" />
-          ) : null
+        {!expanded && !(unread && unread > 0) && workspace.active ? (
+          <span className="size-1.5 rounded-full bg-success" />
         ) : null}
         {expanded ? (
           <span className={hoverOnly}>

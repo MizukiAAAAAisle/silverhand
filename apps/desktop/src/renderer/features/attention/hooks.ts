@@ -335,6 +335,12 @@ export function useAttentionModesAcrossWorkspaces(
  * already exists to avoid. A row's own `unread_count` is a DIFFERENT question
  * ("how many are unread", raw positional) and stays where it is.
  *
+ * Since #task:1939 the workspace row PAINTS none of this: it reads its entry as an
+ * invisible wake gate (poke that branch's `loud` rows out of whatever is collapsed
+ * around them — the branch itself or the whole section) and as the presence dot's
+ * suppressor. Still one carrier — one fewer face
+ * (docs/activity-lifecycle-v1.md §8「呈现」).
+ *
  * `by_workspace` omits zeros (absent ≡ 0) and `total` is their sum — the
  * app-level badge (macOS dock included: a muted workspace that still bumped the
  * dock would defeat muting).
@@ -499,8 +505,8 @@ export function useAttentionRealtime(): void {
  * `total` is RECOMPUTED from the map rather than adjusted, so `total = Σ
  * by_workspace` holds by construction instead of by two matching arithmetic
  * paths. A zero deletes its entry, keeping the server's "absent ≡ 0" shape (a
- * stored `0` would make `Object.keys` a wrong answer to "which workspaces are
- * lit").
+ * stored `0` would make `Object.keys` a wrong answer to "which workspaces have
+ * something waiting").
  *
  * Roll-up not loaded → no-op: the GET is the authority, and inventing a
  * one-entry map would claim every OTHER workspace is at zero.

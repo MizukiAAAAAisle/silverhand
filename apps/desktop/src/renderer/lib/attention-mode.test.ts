@@ -7,8 +7,9 @@ import {
 
 // These are BEHAVIOR decisions (which volume, which number, or nothing), not
 // paint — the badge's own visuals stay untested per the UI rule. The pinned
-// property is the answerability invariant: Σ(loud row badges) = the workspace
-// `badge_count`, which is what lets a user find the row that lit the rail.
+// property is Σ(loud row badges) = the workspace `badge_count`: since #task:1939
+// the container paints no number, and that equality is what keeps the collapsed
+// branch's wake gate and the rows it pokes out the same fact.
 
 describe('resolveEffectiveAttentionMode', () => {
   it('lets the channel tier stand when the workspace is not muted', () => {
