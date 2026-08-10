@@ -475,13 +475,20 @@
   border-color: transparent;
 }
 
-/* ── channel `#` icon — slack colour accent (no chip) ────────────────
-   Colour-only strengthening (no fill/chip — matches warm's approach, avoids
-   the borrowed-from-forza6 look): a flat, slightly bolder bright-blue accent
-   glyph, readable on the dark ground. */
+/* ── channel `#` / Lock icon — quiet neutral ink (#task:1955) ─────────
+   Was `--accent` at `stroke-width: 2.5`. The accent is ALSO the selected row's
+   full brand fill, so one saturated hue was carrying two things at once:
+   "this is a channel" (identity — every row has it, ~20 at a time) and "you
+   are here" (state — exactly one). The 20 win by sheer count, so the state got
+   diluted, and a workspace branch of private channels read as a solid blue
+   column of Locks louder than the names beside it. Neutral ink puts the glyph
+   one notch under the row name (same weight as the Search / Saved / Archived
+   utility glyphs it shares the column with) and leaves blue to mean state only.
+   Default lucide stroke for the same reason — 2.5 was extra weight spent on
+   identity. Density-graded, NOT global: the chat-header `#` below is a single
+   hero instance and keeps the loud accent recipe. */
 [data-theme='slack-dark'] [data-channel-icon] {
-  color: var(--accent);
-  stroke-width: 2.5;
+  color: var(--text-muted);
 }
 /* selected sidebar row is brand-blue with white text — the `#` follows, going
    white so it reads on the blue and matches the row's channel name. */
@@ -489,13 +496,16 @@
   color: var(--text-on-selected);
 }
 
-/* ── chat-header `#` icon — same colour identity as the sidebar `#` ────
+/* ── chat-header `#` icon — the ONE loud channel `#` (hero) ────────────
    Every channel `#` (sidebar `[data-channel-icon]` + chat-header
    `[data-conversation-hash-icon]`, ChannelView + screenshot export) is the
-   same lucide Hash SVG. slack strengthens by COLOUR alone (no fill/chip):
-   a bright-blue accent glyph, bolder stroke, a hair of right margin
-   mirroring the sidebar's flex `gap-2`. The header is never on a
-   selected/brand ground, so no `data-row-selected` variant. */
+   same lucide Hash SVG, but the colour is density-graded, not uniform
+   (#task:1955): the sidebar's ~20 glyphs went quiet neutral, and the accent
+   stayed HERE, where there is exactly one of them and it names the room you
+   are in. slack strengthens by COLOUR alone (no fill/chip): a bright-blue
+   accent glyph, bolder stroke, a hair of right margin mirroring the sidebar's
+   flex `gap-2`. The header is never on a selected/brand ground, so no
+   `data-row-selected` variant. */
 [data-theme='slack-dark'] [data-conversation-hash-icon] {
   /* Tailwind preflight sets `svg { display: block }`, which would drop the
      icon onto its own line beside the title — force it back inline. */
