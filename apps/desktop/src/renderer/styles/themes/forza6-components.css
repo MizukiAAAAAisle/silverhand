@@ -173,12 +173,53 @@
    tokens. `--text-on-selected` likewise comes from root (var(--forza6-ink)).
    The carriers went from pale lime to hueless paper in #task:1867 (rationale
    at their declaration in forza6.css); this scope is unchanged by that — it
-   only re-points the bg token at whatever the carrier is. */
+   only re-points the bg token at whatever the carrier is.
+
+   ── Ink ladder, re-cut #task:1947 (shiki: 「重新设计 sidebar 中的颜色」) ──
+   TWO rungs, and the whole design is how far apart they are: every ROW title is
+   `--text-secondary` (= ink), every LABEL and count is `--text-muted`. Measured
+   on the `#F6F7F1` carrier:
+     ink    #0A0A0A  18.38:1  — every row title, hover, selected descendants
+     muted  #586865   5.44:1  — section label, counts (step from a row 3.38:1)
+   Both clear AA at their sizes (muted also carries the 10px counts).
+   The row rung landed here in three moves, each one shiki reading the screen:
+   · #1A1F1E (pre-task) — 1.19:1 against ink, i.e. the same black, so the
+     #task:1946 label/row hierarchy collapsed onto font-weight alone.
+   · #3B4A47 (first cut) — bought a hover ink lift by lightening the resting row,
+     i.e. charged the element the user reads all day for a transition seen for a
+     moment. 「仍然偏灰,导致跟背景色有点相似」 (`aIHjTB_w7_xNrcPH`): sampled off his
+     screenshot it rendered #3C4B48, while the reference shot he compared it
+     against ran #020202 on a ground only 1.03× lighter.
+   · #26332F (second cut) — 12.21:1, near-ink, and it kept 1.51:1 in hand for the
+     hover lift. That left the label only 2.24:1 away from a row, and 2.24:1 does
+     not READ as a step here: shiki 2026-08-10「肉眼上这个 group 颜色还是和下面的
+     叶子太接近了」. The reason is that the label spends contrast in the opposite
+     direction at the same time — it is `font-bold` 700 caps against a row's
+     `font-medium` 500 (his call, `Y0pj72Zayj6xS-Wp`), and bold caps lay down
+     more ink per glyph, so perceived darkness ≈ colour × stroke mass and the two
+     axes cancel. Weight is fixed by him, so the colour has to buy the whole
+     distance: the row goes to ink and the step becomes 3.38:1 (+51%).
+   The label rung does NOT move to help, in either direction: it is already at
+   5.44:1 with the AA floor at 4.5:1 for the 10px counts that share it, and
+   `[data-sidebar-section-icon]` composites it at `opacity: .7` to 2.95:1 —
+   already at the 3:1 non-text floor, so lightening the label costs legibility to
+   buy ~18% of step, a bad trade next to the 51% the row rung gives for free.
+   What going to ink COSTS is the resting→hover ink lift, which is now equal on
+   both sides everywhere in the sidebar. Priced, not overlooked: the leaf rows
+   (channel / STARRED / Search-Saved-Archived) hover with a lime ground + ink
+   border + poster shadow, so ink was never their signal; the workspace / DM rows
+   carry `sidebar-row-gutter` and take no hover fill by design, but since
+   #task:1948 they reveal a trailing disclosure caret on hover — that reveal, not
+   the ink, is what says "this line collapses". If the caret ever stops being
+   enough, the fix is a hover ground scoped to those rows (NOT to the gutter
+   class, which the section header shares and which shiki ruled must stay unpainted).
+   `MutedMarker` gets better, not worse: `opacity-60` off the row's own ink now
+   composites to ~4.2:1 (was 3.71:1 at #26332F) over the 3:1 non-text floor. */
 [data-theme='forza6'] aside[data-sidebar] {
   --bg-channels-sidebar: var(--forza6-carrier-channels);
   --text-primary: var(--forza6-ink);
-  --text-secondary: #1A1F1E;
-  --text-muted: #4F5F5C;
+  --text-secondary: var(--forza6-ink);
+  --text-muted: #586865;
   --bg-hover: rgba(0, 0, 0, 0.06);
   --bg-elevated: rgba(0, 0, 0, 0.10);
 }
@@ -212,18 +253,30 @@
    shiki v5.4 `HmSkM-LYURE6O9zp` "缺少黑边". Same fix as NavRail:
    border switches from `var(--forza6-lime)` lime to `var(--forza6-ink)` near-black so
    the hover sticker shares the selected sticker's structural
-   border, making hover a true preview. Ground stays `var(--forza6-lime-pale)`.
+   border, making hover a true preview. Ground was `var(--forza6-lime-pale)`
+   until #task:1947 (see below).
    `border-color` now comes from `--border-row-hover` (PR-5 token,
-   global.css); only the pale-lime ground stays forza6-specific.
+   global.css); only the lime ground stays forza6-specific.
 
    v6.4 update (shiki #task:917): poster sticker drop shadow on
    hover too, mirroring selected row. Same 1.5px ink shadow recipe
    so hover is a true preview of selected — both the lime fill and
-   the drop shadow show up together. */
+   the drop shadow show up together.
+
+   #task:1947 — the ground is now a lime WASH (lime mixed into the poster
+   paper) instead of `--forza6-lime-pale`. Hover keeps the hue, so it is still
+   the preview of a lime selection; what it gives up is intensity. At pale-lime
+   the two states were separated by one small step of lime saturation while
+   sharing the ink border AND the poster shadow, so a hovered row read as loud
+   as the committed one and the selection stopped winning its own list. Derived
+   from `--forza6-lime` rather than hand-picked, so re-tuning the lime moves
+   hover and selected together; `--forza6-lime-pale` itself is NOT touched
+   because it is the app-wide `--bg-option-hover` (proxy cards, task-filter
+   rows), which is a different question from this list's row hover. */
 [data-theme='forza6']
   aside[data-sidebar]
   .sidebar-row-border:not(.text-text-on-selected):hover {
-  background-color: var(--forza6-lime-pale);
+  background-color: color-mix(in srgb, var(--forza6-lime) 28%, var(--forza6-paper));
   box-shadow: var(--forza6-poster-shadow);
 }
 
@@ -249,8 +302,10 @@
    (the brand body face) end-to-end, not Rajdhani — so the section
    header inherits `--font-sans` from the cascade. Uppercase + 0.16em
    tracking still differentiates the header from row text without
-   switching faces. Color cascades from the redefined `--text-muted:
-   #4F5F5C` (≥5.9:1 AA on both paper carriers). */
+   switching faces. Colour cascades from the redefined `--text-muted`
+   (#586865, 5.44:1 on the paper carrier — the quiet rung of the #task:1947 ink
+   ladder, 3.38:1 away from a row title, which is what separates a label from a
+   row now that both are bold-vs-medium rather than 12px-vs-14px). */
 [data-theme='forza6']
   aside[data-sidebar] section > header {
   letter-spacing: 0.16em;
@@ -278,7 +333,14 @@
    default body weight. The poster vocabulary stays exclusive to
    the unread badge (`[data-sidebar-unread]`) and the `#` channel
    sticker, so loud-where-it-matters / quiet-elsewhere is the
-   sidebar's single visual hierarchy. */
+   sidebar's single visual hierarchy.
+
+   #task:1947: the extra `opacity: 0.85` on top of muted ink is gone. It was
+   diluting an already-lightest-rung colour to 4.41:1 at 10px — under AA, the
+   same failure mode this rule was written to escape (the original `/70` alpha
+   diluted to ~2.87:1). "Subdued" is already carried by muted ink + 10px + mono
+   + weight; a second dilution only bought illegibility. Now the count sits AT
+   the muted rung: 5.44:1. */
 [data-theme='forza6']
   aside[data-sidebar] .text-text-muted\/70 {
   color: var(--text-muted);
@@ -291,7 +353,7 @@
   font-size: 10px;
   letter-spacing: 0;
   padding: 0;
-  opacity: 0.85;
+  opacity: 1;
 }
 
 /* ── #4 Inline task-ref chip — reference, not announcement ─────────
@@ -815,7 +877,11 @@
    rule above (shiki "干扰严重"). Saved-row counts and section-group
    counts share one quiet metadata vocabulary; the loud poster
    sticker is reserved for `[data-sidebar-unread]` and the `#`
-   channel chip. */
+   channel chip.
+
+   #task:1947 dropped the `opacity: 0.85` here for the same reason as the
+   group-count rule above: two dilutions of the lightest ink rung at 10px put it
+   under AA. It stays quiet on muted ink alone. */
 [data-theme='forza6']
   aside[data-sidebar] [data-sidebar-count] {
   color: var(--text-muted);
@@ -828,7 +894,7 @@
   font-size: 10px;
   letter-spacing: 0;
   padding: 0;
-  opacity: 0.85;
+  opacity: 1;
 }
 
 /* ── Sidebar unread badge — square poster sticker (v6.5c, #task:917) ──
@@ -1679,8 +1745,11 @@
    `data-[highlighted]:bg-bg-hover` and `hover:bg-bg-hover` Tailwind
    utilities (used by AppContextMenu's MENU_ITEM_CLASS, Select.Item,
    AgentInfoPopover buttons, etc.) resolve to forza6's lime preview
-   `var(--forza6-lime-pale)` — the same hover language as NavRail / sidebar /
-   inline-code stickers.
+   `var(--forza6-lime-pale)` — the same hover language as NavRail /
+   inline-code stickers. The sidebar TREE forked off it in #task:1947 (a lighter
+   lime wash, so a hovered row stops matching the committed selection in a list
+   that repeats hundreds of rows); these sparse, transient surfaces keep the
+   full pale lime.
 
    Lazy-substitution architecture identical to the sidebar pattern
    from PR-2 R2: a single scoped redefinition flows down through
