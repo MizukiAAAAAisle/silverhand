@@ -136,9 +136,12 @@ export function useSidebarSectionExpanded(
  * The section margin and the per-theme row border (`--sidebar-row-border-width`)
  * are already in the box, so only the indent step is these classes' job — a
  * hardcoded absolute x would be wrong in any theme that changes the border.
+ *
+ * The outer column is 8px (shiki 2026-08-10, up from 4px) — the two values move
+ * TOGETHER, because the 16px step above is the invariant, not either absolute x.
  */
-export const OUTER_GLYPH_INSET = 'pl-1';
-export const NESTED_GLYPH_INSET = 'pl-5';
+export const OUTER_GLYPH_INSET = 'pl-2';
+export const NESTED_GLYPH_INSET = 'pl-6';
 
 /**
  * The shared selected/hover recipe for a sidebar row — channel/workspace/DM
