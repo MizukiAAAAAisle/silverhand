@@ -154,6 +154,39 @@ describe('GET /api/favorites', () => {
     expect(typeof dm.title).toBe('string');
   });
 
+  // The STARRED row draws the channel's glyph (hash vs Lock) from this field, so the
+  // projection must carry the conversation's STORED visibility rather than leave the
+  // renderer to join the parent's channel list — that list no longer holds the row
+  // (#task:1888 moves it) and the parent may be collapsed and fetching nothing.
+  // Per-kind massaging stays OUT of the wire: dm_channel ships its raw stored value
+  // and the renderer gates the Lock on `kind === 'channel'` (#task:1954).
+  it('projects each row visibility: stored value verbatim, both kinds (#task:1954)', async () => {
+    t = buildTestApp();
+    const agentId = await makeAgent(t, 'alice');
+    const wsId = await makeWorkspace(t, 'eng', agentId);
+    const privId = await makeChannel(t, wsId, 'secret', agentId);
+    const pubR = await http(t).post(`/api/workspaces/${wsId}/channels`, {
+      title: 'open',
+      member_agent_ids: [],
+      visibility: 'public',
+    });
+    const pubId = ((await pubR.json()) as any).channel.id as string;
+    const { dmChannelId } = dmOf(t, agentId);
+    for (const id of [privId, pubId, dmChannelId]) {
+      expect((await http(t).post(`/api/channels/${id}/star`)).status).toBe(200);
+    }
+
+    const items = await favorites(t);
+    const byId = new Map(items.map(i => [i.entity_id, i]));
+    expect(byId.get(privId)?.visibility).toBe('private');
+    expect(byId.get(pubId)?.visibility).toBe('public');
+    // dm_channel: verbatim, whatever the conversation row stores.
+    const stored = t.ctx.db
+      .prepare(`SELECT visibility FROM conversations WHERE id = ?`)
+      .get(dmChannelId) as { visibility: string };
+    expect(byId.get(dmChannelId)?.visibility).toBe(stored.visibility);
+  });
+
   // Membership ≡ the star endpoint's own live set: a browseable PUBLIC channel the
   // viewer has not joined is star-able, so it must also be projectable. Reducing
   // the predicate to a `conversation_users` join would silently drop it.

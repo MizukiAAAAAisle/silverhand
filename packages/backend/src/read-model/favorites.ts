@@ -87,6 +87,7 @@ interface ConversationFavoriteRow {
   created_at: number;
   kind: 'channel' | 'dm_channel';
   title: string;
+  visibility: 'private' | 'public';
   workspace_id: string;
   workspace_name: string;
   owner_agent_id: string | null;
@@ -129,6 +130,10 @@ export function listFavorites(
          c.created_at         AS created_at,
          c.kind               AS kind,
          c.title              AS title,
+         -- Stored visibility: the STARRED row draws the same hash / Lock glyph its
+         -- in-tree row does (#task:1954). Already read in the WHERE below for the
+         -- public-arm reachability test; selected here as the row's own fact.
+         c.visibility         AS visibility,
          c.workspace_id       AS workspace_id,
          w.name               AS workspace_name,
          w.owner_agent_id     AS owner_agent_id,
@@ -228,6 +233,7 @@ export function listFavorites(
       entity_id: r.entity_id,
       workspace_id: r.workspace_id,
       title: r.title,
+      visibility: r.visibility,
       parent_title: parentTitle,
       starred_at: r.starred_at,
       created_at: r.created_at,

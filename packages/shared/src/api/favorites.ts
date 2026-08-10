@@ -33,7 +33,7 @@
 // endpoints; those still return the FULL visible set (other consumers need it),
 // and the sidebar derives the parent-side exclusion.
 import { z } from 'zod';
-import { ConversationKindSchema } from '../db/schema.js';
+import { ConversationKindSchema, ConversationVisibilitySchema } from '../db/schema.js';
 import { ViewerSortStateDtoSchema } from './sort.js';
 
 /**
@@ -120,6 +120,22 @@ export const FavoriteRowDtoSchema = z.object({
   // row would be a second carrier of the same number on a read face that does
   // not subscribe to that frame. `unread_count` above answers a DIFFERENT
   // question ("how many messages are unread") and stays.
+  /** The conversation's STORED visibility (`conversations.visibility`) — the same
+   *  identity-level fact `ConversationDto` carries, populated for BOTH kinds
+   *  because it is the row's own stored value, not a favorites-specific
+   *  derivation. It exists so a STARRED row can draw the channel's glyph from the
+   *  same axis its in-tree row does: a private channel wears a `Lock`, a public
+   *  one the canonical `#` (#task:1954 — STARRED drew a constant `#` because this
+   *  projection had no visibility to hand `ChannelIcon`). The "which kinds get a
+   *  Lock" rule is NOT encoded here: exactly as in `WorkspaceChannels`, the
+   *  renderer passes this to `ChannelIcon` only for `kind === 'channel'`, so a
+   *  `dm_channel` (stored `private` by its CHECK) keeps the `#`. One rule, one
+   *  place — this field stays the raw stored fact.
+   *  Deliberately NOT joined client-side off the parent's channel list: a starred
+   *  conversation is MOVED out of that list and its parent may be collapsed and
+   *  fetching nothing, so a client join would make the glyph depend on whether an
+   *  unrelated query happened to be warm. */
+  visibility: ConversationVisibilitySchema,
 });
 export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
 

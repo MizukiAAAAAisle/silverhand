@@ -89,6 +89,7 @@ function favRow(
     starred_at: 0,
     created_at: 0,
     unread_count: unread,
+    visibility: 'public',
   };
 }
 

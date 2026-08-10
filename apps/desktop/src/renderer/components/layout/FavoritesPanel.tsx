@@ -313,6 +313,13 @@ function FavoriteRow({
       >
         <ChannelIcon
           variant="sticker"
+          // Same glyph axis as the in-tree `ChannelRow` (#task:1954, shiki
+          // 「starred group 中的 icon 是恒定的」): a private channel wears the
+          // Lock here too — STARRED owns PRESENCE + ORDER, never a different
+          // identity. Kind-gated exactly as the parent list does it: a
+          // `dm_channel` is stored `private` but is not a private channel, so it
+          // keeps the canonical `#`.
+          visibility={item.kind === 'channel' ? item.visibility : undefined}
           className="text-text-muted"
         />
         <span className="min-w-0 truncate">{item.title}</span>

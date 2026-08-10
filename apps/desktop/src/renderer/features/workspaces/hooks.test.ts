@@ -490,6 +490,7 @@ describe('removeWorkspaceFromFavorites (#task:1404, conversation rows since #tas
     starred_at: 1,
     created_at: 1,
     unread_count: 3,
+    visibility: 'public',
   });
 
   it('drops every row under the removed parent, plus their orphan sort entries', () => {
