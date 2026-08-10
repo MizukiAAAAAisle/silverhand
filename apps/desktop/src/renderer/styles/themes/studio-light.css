@@ -404,22 +404,34 @@
   --font-display: var(--font-sans);
   --accent-2: var(--accent);
   --text-on-accent-2: var(--text-on-accent);
-  /* 深板岩结构色 = NavRail 的那一块（整个主题只有一种"深"），workspace 方块
-     徽标和它同源。`--text-on-dark-pop` 是 accent 在深底上的可读版（原色在
-     #1B2030 上只有 ~2.7:1）。 */
+  /* 深板岩结构色 = NavRail 的那一块（整个主题只有一种"深"）。#task:1956 起
+     workspace 方块徽标不再同源（见下方那条规则），本主题里这个 token 因此
+     没有消费者了 —— 但它是跨主题契约 token（global.css `@theme inline` 里
+     映射、forza6 侧有消费者），每个主题都必须定义，不是死 token，别删。
+     `--text-on-dark-pop` 是 accent 在深底上的可读版（原色在 #1B2030 上只有
+     ~2.7:1）。 */
   --bg-structure-dark: #1B2030;
   --text-on-structure: #F2F5F9;
   --text-on-dark-pop: #9DB6F7;
 }
 
 /* Workspace `W` identity badge — filled square (#task:1160)：给 workspace
-   glyph 一个 avatar 重量的实心方块，别读作 DM 头像旁边的普通灰字。用
-   `--bg-structure-dark` / `--text-on-structure`（NavRail 同源的深板岩）在冷灰
-   侧栏上自成对比 —— 无描边无阴影（这里的头像也都没有）。glyph 缩一档，坐在
-   填充里而不是撑满；圆角跟 chip 同族（这个主题的语言是软圆角，不是 warm 的
-   pixel-zero 方块）。 */
+   glyph 一个 avatar 重量的实心方块，别读作 DM 头像旁边的普通灰字。无描边无
+   阴影（这里的头像也都没有）；glyph 缩一档，坐在填充里而不是撑满；圆角跟 chip
+   同族（这个主题的语言是软圆角，不是 warm 的 pixel-zero 方块）。
+   底色降一档到 `--text-secondary`(#task:1956)：原先用 NavRail 同源的
+   `--bg-structure-dark` (#1B2030)，那是整条浅色侧栏最重的一块墨 ⇒ 眼睛第一落点
+   是「silverhand」这个**容器标题**，比真正的选中行（白卡 + 3px 蓝条）还响，响度
+   倒置。`--text-secondary` 仍是与下面 DM 组 agent 头像同族的实心方块（这一点比
+   「更轻」更重要，所以没走淡 tint 底那版），只是墨轻一级。glyph 仍用
+   `--text-on-structure`：它是浅字，在 #495064 上 ~7.4:1。
+   **代价**：`--bg-nav-rail` 也是 #1B2030，所以徽章原先与 NavRail 那条深板岩同色
+   （「整个主题只有一种深」）；降档后不再同色。这个呼应是 studio-light 独有的 ——
+   slack-dark 是浅方块 vs 近黑 NavRail、forza6 是墨方块 vs 纸白 NavRail，两边都
+   是反极。所以降档顺带把本主题拉回跨主题的同一形状：徽章取侧栏底色的反极，而
+   不是与另一块 chrome 表面同色。 */
 [data-theme='studio-light'] [data-workspace-icon] {
-  background-color: var(--bg-structure-dark);
+  background-color: var(--text-secondary);
   color: var(--text-on-structure);
   border-radius: var(--chip-radius);
   font-size: 11px;
