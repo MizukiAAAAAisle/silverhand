@@ -64,11 +64,11 @@ import {
 } from '@/components/menus/AppContextMenu';
 import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
 import {
+  ConversationRowLayout,
   NESTED_GLYPH_INSET,
   MutedMarker,
   UnreadBadge,
   copyConversationName,
-  sidebarRowStateClass,
 } from '@/components/layout/sidebar-shared';
 import { SortModeMenu } from '@/components/layout/SortModeMenu';
 import {
@@ -471,8 +471,8 @@ function ChannelRow({
   attention?: ChannelAttentionModeRowDto;
   /** The workspace suppressor, `undefined` until the tier batch resolves. */
   workspaceMuted: boolean | undefined;
-  /** Manual mode: show the grab cursor so the row reads as draggable. The
-   *  drag listeners live on the parent `<li>`, not here. */
+  /** Grab cursor — set by `SortableChannelItem` alone; the collapsed-reveal row
+   *  has nothing to reorder. Drag listeners live on the parent `<li>`. */
   draggable?: boolean;
 }): JSX.Element {
   const isClosed = channel.closed_at !== null;
@@ -522,73 +522,43 @@ function ChannelRow({
   // no default is resolved for it.
   const isSilenced = attention?.mode === 'mute';
 
-  const rowBg = sidebarRowStateClass(selected);
-
   const row = (
-    <div
-      data-row-selected={selected || undefined}
-      className={
-        // The NESTED glyph column (#task:1889): a channel under a workspace is
-        // the ONLY row in the tree that indents. The tree has exactly one step to
-        // spend and it is spent here, because this is the only boundary position
-        // alone can carry — a workspace row and a channel row are the same size,
-        // weight, colour and height, so on one column a workspace and its nine
-        // channels read as one flat run. Indented, each workspace's children are
-        // a block whose edges are the boundary (shiki, 2026-08-08). A per-level
-        // staircase stays rejected: in a column this narrow it spends the width
-        // on whitespace and reads as too many levels.
-        'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
-        NESTED_GLYPH_INSET +
-        ' ' +
-        // No `transition-colors`: selected/hover switch instantly (#task:1162).
-        // Selected is a discrete, already-committed state — fading it over 150ms
-        // is what read as the leaving-row "flicker" (and the entering row "slow
-        // to light up"). A discrete state must commit instantly; only hover (a
-        // pointer-driven continuous affordance) ever earned the fade, and the
-        // cost of keeping it (the whole drag-time color-freeze apparatus) wasn't
-        // worth it. Hover now switches instantly too.
-        rowBg +
-        (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
-      }
+    <ConversationRowLayout
+      selected={selected}
+      // A channel under a workspace is the ONLY row in the tree that indents:
+      // the tree's single step is spent on this boundary (#task:1889, rationale
+      // at NESTED_GLYPH_INSET).
+      column="nested"
+      draggable={draggable}
+      onSelect={onClick}
     >
-      {/* Channel select button — grows to fill the row. `font-medium` is the ROW
-          rung of the sidebar's type ladder (`font-bold` belongs to the section
-          LABEL, not to any row — shiki 2026-08-10); the matching ink,
-          `text-text-secondary`, arrives on the container from
-          `sidebarRowStateClass`. */}
-      <button
-        type="button"
-        onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium leading-4"
+      <ChannelIcon
+        variant="sticker"
+        // Lock is opt-in for a private *regular* channel only. A `dm_channel`
+        // is not a private channel, so it keeps the canonical `#` — pass the
+        // visibility only when the row is a real channel.
+        visibility={channel.kind === 'channel' ? channel.visibility : undefined}
+        className={isClosed ? 'text-text-muted/50' : 'text-text-muted'}
+      />
+      <span
+        className={
+          'min-w-0 truncate ' + (isClosed ? 'line-through text-text-muted' : '')
+        }
       >
-        <ChannelIcon
-          variant="sticker"
-          // Lock is opt-in for a private *regular* channel only. A `dm_channel`
-          // is not a private channel, so it keeps the canonical `#` — pass the
-          // visibility only when the row is a real channel.
-          visibility={channel.kind === 'channel' ? channel.visibility : undefined}
-          className={isClosed ? 'text-text-muted/50' : 'text-text-muted'}
-        />
-        <span
-          className={
-            'min-w-0 truncate ' + (isClosed ? 'line-through text-text-muted' : '')
-          }
-        >
-          {channel.title}
+        {channel.title}
+      </span>
+      {/* Mute rides WITH the name, matching the workspace row (shiki 2026-08-09):
+          the shared MutedMarker hugs the (truncating) title, off the trailing edge
+          where the badge lives. */}
+      {isSilenced ? (
+        <span className="flex shrink-0 items-center">
+          <MutedMarker />
         </span>
-        {/* Mute rides WITH the name, matching the workspace row (shiki 2026-08-09):
-            the shared MutedMarker hugs the (truncating) title, off the trailing edge
-            where the badge lives. */}
-        {isSilenced ? (
-          <span className="flex shrink-0 items-center">
-            <MutedMarker />
-          </span>
-        ) : null}
-        {badge ? (
-          <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
-        ) : null}
-      </button>
-    </div>
+      ) : null}
+      {badge ? (
+        <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
+      ) : null}
+    </ConversationRowLayout>
   );
 
   return (

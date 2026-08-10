@@ -3,6 +3,7 @@ import {
   useCallback,
   useState,
   type ButtonHTMLAttributes,
+  type HTMLAttributes,
   type ReactNode,
 } from 'react';
 import { BellOff, ChevronDown, ChevronRight, Plus } from 'lucide-react';
@@ -148,6 +149,18 @@ export const NESTED_GLYPH_INSET = 'pl-5';
  * neutral, gaining an accent frame + row-hover ink on hover. The `--bg-row-hover`
  * fallback is `transparent` — every theme sets the token, so a theme that ever
  * forgot it would degrade to no hover fill, never a loud literal colour.
+ *
+ * Binary on purpose: exactly one strong highlight in the sidebar, no faint /
+ * ambient second tier (#task:1254). `text-text-on-selected` is also the hook the
+ * per-theme border contract keys on
+ * (`aside[data-sidebar] .sidebar-row-border.text-text-on-selected` →
+ * `--border-row-selected`), so it must stay on the selected row ALONE.
+ *
+ * STARRED used to paint from its own copy of this (`railRowTierClass`, #task:1957
+ * folded it in): same two class strings, but its hover fallback was a literal
+ * `rgba(255,255,255,0.7)` — the loud degradation this docblock argues against.
+ * A conversation must look identical inside and outside STARRED, so there is one
+ * function.
  */
 export function sidebarRowStateClass(selected: boolean | undefined): string {
   return selected
@@ -662,3 +675,104 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
     </li>
   );
 });
+
+interface ConversationRowLayoutProps
+  extends Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children' | 'className'> {
+  /** `true` iff this row is the open conversation — the ONE selection object in
+   *  the tree (`conversationSelectionTier`). Paints the row AND sets the
+   *  `data-row-selected` theme hook. */
+  selected: boolean;
+  /** Which glyph column the row sits on — see {@link OUTER_GLYPH_INSET}. A
+   *  conversation nested under its workspace takes `nested`; the same
+   *  conversation in STARRED takes `outer`, because there the group is its
+   *  parent. It is a prop precisely because one row species appears on both. */
+  column: 'nested' | 'outer';
+  /** Paint the grab cursor so the row reads as draggable. Set by a sortable
+   *  wrapper only — drag is always available (a drop is what flips the list to
+   *  manual), but a row rendered outside the sortable group (STARRED's
+   *  collapsed reveal) has nothing to reorder. The drag listeners live on the
+   *  parent `<li>`, never here. */
+  draggable?: boolean;
+  /** Native tooltip on the name button — for a row whose visible title is not the
+   *  whole story (STARRED shows `title — parent`). */
+  title?: string;
+  onSelect: () => void;
+  /** What rides ON the row, inside the name button: identity glyph, title,
+   *  markers, trailing badge. */
+  children: ReactNode;
+}
+
+/**
+ * One conversation row's layout — the skeleton behind the in-tree `ChannelRow`
+ * and the STARRED `FavoriteRow`. It owns the row box (height, the per-theme
+ * border, the glyph column, the selection/hover paint) and the full-width name
+ * button; the consumer owns the content and its own wrappers (context menu,
+ * sortable `<li>`).
+ *
+ * Scope is the CONVERSATION rung, which is why it is named for the entity and not
+ * for the tree: both consumers render `kind ∈ {channel, dm_channel}` and nothing
+ * else. **The workspace / DM container row deliberately stays out** — it is a
+ * different rung (`h-7`, `sidebar-row-gutter` instead of the state-painted
+ * `sidebar-row-border`, its own ink) and it needs siblings BESIDE the name button
+ * (caret, hover actions). Stretching this layout over it would turn it into a
+ * switch on entity kind, which is how a shared primitive starts hurting whoever
+ * adopts it next; the row it would save is one `<div>`.
+ *
+ * `SidebarRow` is the OTHER row family and stays separate: a flat list's row is a
+ * single `<button>` with auto height, so it has no container to place siblings in
+ * and no glyph column to choose.
+ *
+ * MUST stay a `forwardRef` that spreads the rest of its props onto the row `<div>`:
+ * both consumers hand this element to `AppContextMenu`, i.e. to a Radix
+ * `Trigger asChild`, which opens the menu by cloning the element with its own
+ * `ref` + `onContextMenu`/pointer handlers. A plain function component drops both
+ * SILENTLY — right-click just stops working, with nothing failing at the type level
+ * (#task:1957 regression, shiki 2026-08-10: 「抽离了 ConversationRow 之后 context
+ * menu 丢了」). `title` / `children` / `className` are excluded from the spread
+ * because this layout owns them.
+ */
+export const ConversationRowLayout = forwardRef<HTMLDivElement, ConversationRowLayoutProps>(
+  function ConversationRowLayout(
+    { selected, column, draggable, title, onSelect, children, ...rest },
+    ref,
+  ): JSX.Element {
+    return (
+      <div
+        ref={ref}
+        // Injected trigger props go on FIRST so the row's own identity
+        // (`data-row-selected`, `className`) can never be clobbered by a wrapper.
+        {...rest}
+        data-row-selected={selected || undefined}
+        className={
+          'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
+          (column === 'nested' ? NESTED_GLYPH_INSET : OUTER_GLYPH_INSET) +
+          ' ' +
+          // No `transition-colors`: selected/hover switch instantly (#task:1162).
+          // Selected is a discrete, already-committed state — fading it over 150ms
+          // is what read as the leaving-row "flicker" (and the entering row "slow to
+          // light up"). A discrete state must commit instantly; only hover (a
+          // pointer-driven continuous affordance) ever earned the fade, and the cost
+          // of keeping it (the whole drag-time colour-freeze apparatus) wasn't worth
+          // it. Hover now switches instantly too.
+          sidebarRowStateClass(selected) +
+          (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
+        }
+      >
+        {/* The name button grows to fill the row, so the whole width is clickable.
+            `font-medium` is the ROW rung of the sidebar's type ladder (`font-bold`
+            belongs to the section LABEL, never to a row — shiki 2026-08-10); the
+            matching ink, `text-text-secondary`, arrives on the container from
+            `sidebarRowStateClass`. `leading-4` pins the 16px line box so the 16px
+            identity glyph and the title share one vertical centre (#task:1946). */}
+        <button
+          type="button"
+          onClick={onSelect}
+          title={title}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium leading-4"
+        >
+          {children}
+        </button>
+      </div>
+    );
+  },
+);

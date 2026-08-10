@@ -18,6 +18,12 @@
  * sections painting "is this the open one?" with their own expressions is exactly the
  * drift this module was created to end — and the acceptance contract is that a
  * channel looks identical before and after the move.
+ *
+ * This module decides the tier ONLY; the paint lives in `sidebarRowStateClass`
+ * (`components/layout/sidebar-shared.tsx`). It used to own a second copy of that
+ * paint (`railRowTierClass`, for STARRED) until #task:1957 put both rows on the
+ * shared `ConversationRowLayout` — the same split-authority the tier itself exists
+ * to prevent.
  */
 export type RowSelectionTier = 'primary' | 'none';
 
@@ -34,20 +40,4 @@ export function conversationSelectionTier(
   return selectedConversationId !== null && conversationId === selectedConversationId
     ? 'primary'
     : 'none';
-}
-
-/**
- * The row's visual treatment for a selection tier — the single class vocabulary
- * every sidebar row shares (#task:1254). Binary: exactly one strong highlight, no
- * faint/ambient tier.
- *   - `primary` → solid selected fill + accent border + on-selected text. The
- *     `.text-text-on-selected` class is the hook the per-theme border contract
- *     keys on (`aside[data-sidebar] .sidebar-row-border.text-text-on-selected`
- *     → `--border-row-selected`), so it MUST stay on the primary row only.
- *   - `none` → resting + hover only.
- */
-export function railRowTierClass(tier: RowSelectionTier): string {
-  return tier === 'primary'
-    ? 'border-accent bg-[var(--bg-row-selected,var(--bg-selected))] text-text-on-selected'
-    : 'border-transparent text-text-secondary hover:border-accent hover:bg-[var(--bg-row-hover,rgba(255,255,255,0.7))] hover:text-text-primary';
 }

@@ -18,7 +18,7 @@ import { useAttentionModesAcrossWorkspaces } from '@/features/attention/hooks';
 import type { FavoritesWatchScope } from '@/lib/home-grouping';
 import { useSetSortMode } from '@/features/workspaces/hooks';
 import { channelRowBadge } from '@/lib/attention-mode';
-import { conversationSelectionTier, railRowTierClass } from '@/lib/rail-selection';
+import { conversationSelectionTier } from '@/lib/rail-selection';
 import { sortModeOf } from '@/lib/viewer-sort';
 import { ChannelAttentionMenuItems } from '@/components/layout/ChannelAttentionSurfaces';
 import { SortModeMenu } from '@/components/layout/SortModeMenu';
@@ -29,7 +29,7 @@ import {
   useListDragSort,
 } from '@/components/layout/list-drag-sort';
 import {
-  OUTER_GLYPH_INSET,
+  ConversationRowLayout,
   MutedMarker,
   SidebarSection,
   UnreadBadge,
@@ -211,6 +211,10 @@ interface FavoriteRowProps {
   workspaceMuted: boolean | undefined;
   onSelectConversation: (workspaceId: string, conversationId: string) => void;
   onUnstar: () => void;
+  /** Paint the grab cursor so the row reads as draggable (shiki 2026-08-10 — the
+   *  in-tree `ChannelRow` already does). Set by the sortable wrapper ALONE: the
+   *  collapsed-reveal row has nothing to reorder. */
+  draggable?: boolean;
 }
 
 /** The drag wrapper: an `<li>` bound to dnd-kit by `favorite_key` (the same id in
@@ -218,7 +222,7 @@ interface FavoriteRowProps {
  *  `SortableChannelItem`. Drag listeners sit on the `<li>`; the row's own click
  *  (navigate) and context menu (unstar) still fire — dnd-kit's activation constraint
  *  separates a drag from a click. */
-function SortableFavoriteRow(props: FavoriteRowProps): JSX.Element {
+function SortableFavoriteRow(props: Omit<FavoriteRowProps, 'draggable'>): JSX.Element {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } =
     useSortable({ id: props.item.favorite_key, animateLayoutChanges });
   return (
@@ -229,7 +233,7 @@ function SortableFavoriteRow(props: FavoriteRowProps): JSX.Element {
       {...attributes}
       {...listeners}
     >
-      <FavoriteRow {...props} />
+      <FavoriteRow {...props} draggable />
     </li>
   );
 }
@@ -241,9 +245,9 @@ function FavoriteRow({
   workspaceMuted,
   onSelectConversation,
   onUnstar,
+  draggable,
 }: FavoriteRowProps): JSX.Element {
-  const tier = conversationSelectionTier(item.entity_id, selectedChannelId);
-  const isPrimary = tier === 'primary';
+  const isPrimary = conversationSelectionTier(item.entity_id, selectedChannelId) === 'primary';
 
   // Byte-identical to the parent list's `ChannelRow`, which is the acceptance
   // contract for the move. A `dm_channel` carries no tier row (the backend's
@@ -285,57 +289,43 @@ function FavoriteRow({
   // absent rather than optimistically offered.
   const showAttentionMenu = item.kind === 'channel' && attention !== undefined;
 
-  // No `transition-colors`: selection is a discrete committed state — fading it is
-  // the leaving-row "flicker" (#task:1162). One tier vocabulary shared with every
-  // other sidebar row.
-  const rowBg = railRowTierClass(tier);
-
   const row = (
-    <div
-      data-row-selected={isPrimary || undefined}
-      className={
-        // A STARRED row sits on the OUTER column: its parent IS the group, so it is
-        // flush with the STARRED header and with the workspace / DM rows below —
-        // the single indent step is spent on channels nested under a workspace.
-        // Not `px-2`, which was 12px left of every other row in the tree and made
-        // the section read as a separate list.
-        'sidebar-row-border flex h-8 w-full items-stretch border pr-2 ' +
-        OUTER_GLYPH_INSET +
-        ' ' +
-        rowBg
-      }
+    <ConversationRowLayout
+      selected={isPrimary}
+      // A STARRED row sits on the OUTER column: its parent IS the group, so it is
+      // flush with the STARRED header and with the workspace / DM rows below —
+      // the single indent step is spent on channels nested under a workspace.
+      column="outer"
+      draggable={draggable}
+      // The visible title is the child's alone, so the tooltip carries where it
+      // came from — STARRED lifts a row out of its parent's list.
+      title={`${item.title} — ${item.parent_title}`}
+      onSelect={() => onSelectConversation(item.workspace_id, item.entity_id)}
     >
-      <button
-        type="button"
-        onClick={() => onSelectConversation(item.workspace_id, item.entity_id)}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium leading-4"
-        title={`${item.title} — ${item.parent_title}`}
-      >
-        <ChannelIcon
-          variant="sticker"
-          // Same glyph axis as the in-tree `ChannelRow` (#task:1954, shiki
-          // 「starred group 中的 icon 是恒定的」): a private channel wears the
-          // Lock here too — STARRED owns PRESENCE + ORDER, never a different
-          // identity. Kind-gated exactly as the parent list does it: a
-          // `dm_channel` is stored `private` but is not a private channel, so it
-          // keeps the canonical `#`.
-          visibility={item.kind === 'channel' ? item.visibility : undefined}
-          className="text-text-muted"
-        />
-        <span className="min-w-0 truncate">{item.title}</span>
-        {/* Mute rides WITH the name (shiki 2026-08-09), matching the workspace row
-            and the parent list's `ChannelRow`: shared MutedMarker beside the title,
-            badge stays at the trailing edge. */}
-        {isSilenced ? (
-          <span className="flex shrink-0 items-center">
-            <MutedMarker />
-          </span>
-        ) : null}
-        {badge ? (
-          <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
-        ) : null}
-      </button>
-    </div>
+      <ChannelIcon
+        variant="sticker"
+        // Same glyph axis as the in-tree `ChannelRow` (#task:1954, shiki
+        // 「starred group 中的 icon 是恒定的」): a private channel wears the
+        // Lock here too — STARRED owns PRESENCE + ORDER, never a different
+        // identity. Kind-gated exactly as the parent list does it: a
+        // `dm_channel` is stored `private` but is not a private channel, so it
+        // keeps the canonical `#`.
+        visibility={item.kind === 'channel' ? item.visibility : undefined}
+        className="text-text-muted"
+      />
+      <span className="min-w-0 truncate">{item.title}</span>
+      {/* Mute rides WITH the name (shiki 2026-08-09), matching the workspace row
+          and the parent list's `ChannelRow`: shared MutedMarker beside the title,
+          badge stays at the trailing edge. */}
+      {isSilenced ? (
+        <span className="flex shrink-0 items-center">
+          <MutedMarker />
+        </span>
+      ) : null}
+      {badge ? (
+        <UnreadBadge count={badge.count} tier={badge.tier} className="ml-auto" />
+      ) : null}
+    </ConversationRowLayout>
   );
 
   return (
