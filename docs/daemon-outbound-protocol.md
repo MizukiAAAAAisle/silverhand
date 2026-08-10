@@ -18,8 +18,9 @@ intent and events across that boundary.
   `provisioning_source = 'user_invite'`, and a non-null `user_id`. Any other
   host (e.g. a remote host that is not user-managed) is rejected `403`. Sandbox
   hosts are not a distinct `HostKind` and are not accepted as one.
-- On accepted upgrade, the server touches `hosts.last_seen_at` and updates it
-  from the heartbeat/pong cadence.
+- On an accepted upgrade the server holds a transport slot only; it touches
+  `hosts.last_seen_at` (with `activated_at`) when that daemon's `ready` is
+  admitted, and refreshes it on each subsequent attachment.
 
 User session cookies are not accepted on this endpoint. `host_token` remains
 daemon-only and must not be exposed to renderer or agent process credentials.
@@ -84,7 +85,9 @@ upgrade as a private **transport slot** and creates the business attachment
 passes the protocol-version gate. A refused generation therefore publishes
 nothing and can receive no runtime command; it is refused with close code `1002`
 and reason `update_required`. The lifecycle stamp (`activated_at` /
-`last_seen_at`) stays on the upgrade: it records the credential, not the session.
+`last_seen_at`) is part of that same admitted edge, not of the upgrade: the
+`status` derived from `activated_at` is what the Add-computer flow reads as
+"connected", so an unadmitted generation must not move it.
 
 Reconnect uses jittered exponential backoff capped at 60 seconds. The budget is
 reset by the daemon's own **pong**, not by the socket opening: a raw `open`

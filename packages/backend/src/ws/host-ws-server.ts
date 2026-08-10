@@ -105,7 +105,34 @@ export interface HostWsAdmissionFailure {
   observedAt: number;
 }
 
+/**
+ * Do two refusal records describe the SAME unresolved fact? The identity of a
+ * refusal is its reason plus the two versions that disagree — a retry of the
+ * identical incompatibility is not news, an incompatibility that CHANGED is
+ * (#task:1966). `connectionId` and `observedAt` are per-attempt bookkeeping and
+ * are excluded on purpose: including them would make the fresh-forever status
+ * read fire an event per reconnect, which is the storm this task removes.
+ */
+function describesSameRefusal(
+  a: HostWsAdmissionFailure,
+  b: HostWsAdmissionFailure,
+): boolean {
+  return (
+    a.kind === b.kind &&
+    a.offeredProtocolVersion === b.offeredProtocolVersion &&
+    a.expectedProtocolVersion === b.expectedProtocolVersion
+  );
+}
+
 export interface HostWsServerController {
+  /** Number of hosts with a live ATTACHMENT — the same population as
+   *  `connectedHostIds().length`, which is what makes it a comparable
+   *  readiness number across the WS and embedded-Unix adapters. It deliberately
+   *  does NOT count authenticated-but-unadmitted transport slots (#task:1966,
+   *  @Cindy MUST FIX 2): a reader named for connectedness must not be the one
+   *  hole through which a refused generation still reads as connected. Raw
+   *  socket volume stays a metric (`host_ws_connections`), not a public
+   *  accessor. */
   activeConnectionCount(): number;
   /** Hosts with a live ATTACHMENT — i.e. a connection that passed the
    *  compatibility gate by sending a valid `ready` (#task:1966). A daemon whose
@@ -367,6 +394,23 @@ export function installHostWebSocketServer(
             hostname,
             capabilities,
           });
+          // The lifecycle stamp belongs to THIS edge, not to the upgrade
+          // (#task:1966, @Cindy MUST FIX 1 + @Norman's renderer trace). It is not
+          // a private credential note: `getHostLifecycleStatus` derives
+          // `status: 'attached'` from `activated_at !== null`, the Add-computer
+          // dialog's phase gate advances to naming on that status, and
+          // `PATCH /api/hosts/:id` finalizes to `active` after checking only
+          // `activated_at`. Stamped at the upgrade, an incompatible daemon that
+          // can never attach would walk the user through naming and finalizing a
+          // computer that never once formed an attachment — onboarding lying
+          // about success, with no way for the user to recover — while rewriting
+          // two columns per reconnect at the mismatch loop's rate. Migration
+          // `hosts.activated_at`'s own comment already reads it as proof of
+          // daemon attachment, so this is the column's original meaning restored.
+          // A daemon that cannot speak our protocol correctly reads as "not
+          // connected yet": the waiting phase it stays in shows the install /
+          // connect command, which is the actual repair path.
+          new HostRepo(ctx.db).markActivated(auth.host.hostId);
           publishHostConnectionChanged(ctx, auth.host.userId, {
             host_id: auth.host.hostId,
           });
@@ -380,16 +424,28 @@ export function installHostWebSocketServer(
           // for the next unrelated invalidation, and #task:1631's precise "update
           // Silverhand on this computer" copy would sit behind a generic Offline.
           //
-          // Deduped on `previous`, not on a timer: the record is cleared only by
-          // a valid `ready`, so a reconnect loop finds it already set and stays
-          // silent — one event per unresolved episode per host, whatever the
-          // daemon does. No attachment check is needed: the 409 slot conflict
-          // admits one socket per host at a time and the `close` listener drops
-          // the slot and the attachment in the same tick, so a host cannot hold a
-          // live attachment while a refusal is being recorded.
+          // Deduped on the refusal's STABLE SEMANTICS — `(kind, offered,
+          // expected)` — not on "was anything recorded before" (#task:1966,
+          // @Cindy finding 3). The record is cleared only by a valid `ready`, so
+          // one daemon's reconnect loop re-records the identical fact and stays
+          // silent: one event per unresolved episode per host. But when the
+          // refusal fact itself changes — the user upgrades that computer to a
+          // still-incompatible build, or a different machine dials in with the
+          // same credential — the client must be told, because
+          // `GET /api/hosts/:id/status` is fresh-forever and would otherwise keep
+          // showing the FIRST offered version's copy forever. `connectionId` and
+          // `observedAt` move on every attempt and are deliberately not part of
+          // the comparison; they would make every retry an event again.
+          //
+          // No attachment check is needed: the 409 slot conflict admits one
+          // socket per host at a time and the `close` listener drops the slot and
+          // the attachment in the same tick, so a host cannot hold a live
+          // attachment while a refusal is being recorded. A refusal that arrives
+          // while a DIFFERENT dialer holds the slot is withheld on the read side
+          // by `getAdmissionFailure`, which is the load-bearing guard.
           const previous = admissionFailuresByHost.get(auth.host.hostId);
           admissionFailuresByHost.set(auth.host.hostId, failure);
-          if (previous) return;
+          if (previous && describesSameRefusal(previous, failure)) return;
           publishHostConnectionChanged(ctx, auth.host.userId, {
             host_id: auth.host.hostId,
           });
@@ -400,20 +456,15 @@ export function installHostWebSocketServer(
       });
       connections.set(ws, connection);
       connectionsByHost.set(auth.host.hostId, connection);
-      // `markActivated` stays HERE, on the authenticated upgrade (#task:1966
-      // deliberately did NOT move it). It stamps the LIFECYCLE axis — "a machine
-      // holding this credential reached us", which is what flips a draft
-      // `pending → attached` and what `last_seen_at` means — and
-      // `docs/user-managed-computer-v1.md` already forbids reading it as
-      // readiness (the live gate is the attachment). Gating it on `ready` would
-      // strand the Add-computer dialog on "waiting for connection" for exactly
-      // the incompatible daemon whose terminal reason we want the user to read.
-      new HostRepo(ctx.db).markActivated(auth.host.hostId);
-      // No attachment and no `host_connection_changed` here: the upgrade proves
-      // the CREDENTIAL, not that this daemon speaks our protocol. Everything on
-      // the SESSION axis waits for the compatibility gate in
+      // Nothing is written or announced here: the upgrade proves the CREDENTIAL,
+      // not that this daemon speaks our protocol. The whole lifecycle edge
+      // (`activated_at` / `last_seen_at`, the attachment, and
+      // `host_connection_changed`) waits for the compatibility gate in
       // `updateAttachmentReady`, which is also why the announcement can no longer
-      // race ahead of `capabilities`.
+      // race ahead of `capabilities`. If a "this credential was used at least
+      // once" fact is ever needed (today its only consumer would be the
+      // diagnostics payload), it must be its own named column — `activated_at`
+      // cannot carry it, because `status` speaks for that column.
       ws.on('close', (code, reason) => {
         ctx.metrics?.changeHostWsConnections('websocket_open', -1);
         ctx.metrics?.observeHostWsClose(
@@ -445,7 +496,7 @@ export function installHostWebSocketServer(
   server.on('upgrade', onUpgrade);
 
   return {
-    activeConnectionCount: () => connections.size,
+    activeConnectionCount: () => attachmentsByHost.size,
     connectedHostIds: () => [...attachmentsByHost.keys()],
     // Every business reader below resolves through the ATTACHMENT registry, so a
     // socket that is authenticated but has not passed the compatibility gate is

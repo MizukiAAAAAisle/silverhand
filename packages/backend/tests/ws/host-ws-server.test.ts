@@ -60,7 +60,7 @@ describe('host outbound WebSocket server', () => {
     });
   });
 
-  it('accepts a valid long-lived local host token on upgrade', async () => {
+  it('accepts a valid long-lived local host token on upgrade, and stamps the lifecycle only once the ready lands', async () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local');
@@ -73,6 +73,14 @@ describe('host outbound WebSocket server', () => {
     const ws = await connectHost(server.url, issued.hostToken);
     sockets.push(ws);
 
+    // The upgrade is ACCEPTED (no close) but it is only a transport slot: it is
+    // not counted as a connection and it writes nothing (#task:1966).
+    expect(server.controller.activeConnectionCount()).toBe(0);
+    expect(new HostRepo(t.ctx.db).get(host!.id)!.last_seen_at).toBe(before);
+
+    // The admitted `ready` is the edge that counts and stamps.
+    ws.send(JSON.stringify(readyFrame({ hostName: 'Test Mac' })));
+    await waitFor(() => server!.controller.getAttachment(host!.id) !== null);
     expect(server.controller.activeConnectionCount()).toBe(1);
     const after = new HostRepo(t.ctx.db).get(host!.id)!.last_seen_at;
     expect(after).not.toBeNull();
@@ -227,7 +235,9 @@ describe('host outbound WebSocket server', () => {
     });
     const ws = await connectHost(server.url, issued.hostToken);
     sockets.push(ws);
-    expect(server.controller.activeConnectionCount()).toBe(1);
+    // Not counted either (@Cindy MUST FIX 2): a reader named for connectedness
+    // must report the attachment population, not the raw slot population.
+    expect(server.controller.activeConnectionCount()).toBe(0);
 
     // @Cindy MUST FIX falsifier: the generation token, the readiness snapshot and
     // the command path must agree. A non-null `connectionIdForHost` here would
@@ -249,6 +259,7 @@ describe('host outbound WebSocket server', () => {
       expect.any(String),
     );
     expect(server.controller.connectedHostIds()).toEqual([host.id]);
+    expect(server.controller.activeConnectionCount()).toBe(1);
     const pending = server.controller.sendCommand(
       host.id,
       'runtime_status',
@@ -317,7 +328,7 @@ describe('host outbound WebSocket server', () => {
       // the refetch storm this task exists to kill — so it is deduped on the
       // record, which only a valid `ready` clears.
       for (const attempt of [1, 2, 3]) {
-        const ws = await connectHost(server.url, issued.hostToken);
+        const ws = await connectHostEventually(server.url, issued.hostToken);
         sockets.push(ws);
         ws.send(
           JSON.stringify({
@@ -329,7 +340,6 @@ describe('host outbound WebSocket server', () => {
           }),
         );
         await waitForClose(ws);
-        await waitFor(() => server!.controller.activeConnectionCount() === 0);
       }
 
       expect(ownerEvents).toEqual([
@@ -339,6 +349,72 @@ describe('host outbound WebSocket server', () => {
         },
       ]);
       expect(server.controller.getAdmissionFailure(remote.id)).not.toBeNull();
+    } finally {
+      unsubOwner();
+    }
+  });
+
+  // #task:1966 fixup (@Cindy review point 3) — the dedupe must key on the
+  // REFUSAL's stable semantics, not on "something was recorded before".
+  // `GET /api/hosts/:id/status` is fresh-forever, so if a still-incompatible
+  // daemon starts offering a different version, a `previous !== null` guard
+  // would keep serving the first version's copy until a valid `ready` cleared
+  // the record — which by definition never comes for that daemon.
+  it('re-announces a refusal whose offered version changed, and only that', async () => {
+    t = buildTestApp();
+    server = await openServer(t);
+    const hosts = new HostRepo(t.ctx.db);
+    const remote = hosts.createUserInvite({ userId: t.viewerUserId });
+    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+      hostId: remote.id,
+    });
+    const ownerEvents: Array<{ kind: string; payload: unknown }> = [];
+    const unsubOwner = t.ctx.events.subscribeScope(
+      `viewer:${t.viewerUserId}`,
+      event => ownerEvents.push({ kind: event.kind, payload: event.payload }),
+    );
+
+    const refuse = async (offered: number): Promise<void> => {
+      const ws = await connectHostEventually(server!.url, issued.hostToken);
+      sockets.push(ws);
+      ws.send(
+        JSON.stringify({
+          ...(readyFrame({ hostName: 'Old Mac' }) as Record<string, unknown>),
+          protocol_version: offered,
+        }),
+      );
+      await waitForClose(ws);
+    };
+
+    try {
+      await refuse(OUTBOUND_PROTOCOL_VERSION - 2);
+      await waitFor(() => ownerEvents.length === 1);
+      expect(server.controller.getAdmissionFailure(remote.id)).toMatchObject({
+        offeredProtocolVersion: OUTBOUND_PROTOCOL_VERSION - 2,
+      });
+
+      // Same episode, same offered version: nothing new to tell.
+      await refuse(OUTBOUND_PROTOCOL_VERSION - 2);
+      await refuse(OUTBOUND_PROTOCOL_VERSION - 2);
+      expect(ownerEvents).toHaveLength(1);
+
+      // The daemon updated but is still too old — the copy the user reads
+      // changes, so this one must reach them.
+      await refuse(OUTBOUND_PROTOCOL_VERSION - 1);
+      await waitFor(() => ownerEvents.length === 2);
+      expect(ownerEvents.map(e => e.kind)).toEqual([
+        HOST_CONNECTION_CHANGED_EVENT,
+        HOST_CONNECTION_CHANGED_EVENT,
+      ]);
+      expect(server.controller.getAdmissionFailure(remote.id)).toMatchObject({
+        kind: 'protocol_mismatch',
+        offeredProtocolVersion: OUTBOUND_PROTOCOL_VERSION - 1,
+        expectedProtocolVersion: OUTBOUND_PROTOCOL_VERSION,
+      });
+
+      // And it settles again on the new pair.
+      await refuse(OUTBOUND_PROTOCOL_VERSION - 1);
+      expect(ownerEvents).toHaveLength(2);
     } finally {
       unsubOwner();
     }
@@ -362,16 +438,20 @@ describe('host outbound WebSocket server', () => {
     );
     await waitForClose(stale);
     await waitFor(() => server!.controller.getAdmissionFailure(host.id) !== null);
-    await waitFor(() => server!.controller.activeConnectionCount() === 0);
+    expect(server.controller.activeConnectionCount()).toBe(0);
 
     // A replacement dialer is mid-handshake: not an attachment yet, but the old
     // refusal no longer describes this host's state, so it must not be reported.
     // Under the gate this window is real (it lasts until `ready` lands), which is
     // why the generation compare reads the private transport slot rather than the
-    // public readiness snapshot.
-    const replacement = await connectHost(server.url, issued.hostToken);
+    // public readiness snapshot. The successful upgrade is the proof that this
+    // dialer holds the slot — the attachment population stays 0 throughout.
+    const replacement = await connectHostEventually(
+      server.url,
+      issued.hostToken,
+    );
     sockets.push(replacement);
-    await waitFor(() => server!.controller.activeConnectionCount() === 1);
+    expect(server.controller.activeConnectionCount()).toBe(0);
     expect(server.controller.getAttachment(host.id)).toBeNull();
     expect(server.controller.getAdmissionFailure(host.id)).toBeNull();
   });
@@ -488,13 +568,15 @@ describe('host outbound WebSocket server', () => {
     );
   });
 
-  // #task:1966 — `activated_at` is the CREDENTIAL axis ("a machine holding this
-  // token reached us"), so it is stamped on the authenticated upgrade, BEFORE the
-  // compatibility gate. Deliberately not moved behind `ready`: the Add-computer
-  // dialog advances on `status === 'attached'`, so gating it would strand that
-  // dialog on "waiting for connection" for exactly the incompatible daemon whose
-  // terminal reason the user needs to read.
-  it('accepts a user-managed remote host token and activates on upgrade, before attachment', async () => {
+  // #task:1966 — `activated_at` belongs to the ADMITTED edge, not to the raw
+  // upgrade: `getHostLifecycleStatus` derives `status: 'attached'` from it, the
+  // Add-computer dialog advances out of "waiting" on that status, and `PATCH
+  // /api/hosts/:id` finalizes to `active` checking only that column. So stamping
+  // it for a daemon that can never attach would walk onboarding to the naming
+  // step and hand the user an `active` computer that never formed an attachment.
+  // The falsifier is therefore written against the projection the dialog reads
+  // (`toDto(...).status`), not against a spy on `markActivated`.
+  it('activates a user-managed remote host on its first admitted ready, not on the upgrade', async () => {
     t = buildTestApp();
     server = await openServer(t);
     const hosts = new HostRepo(t.ctx.db);
@@ -510,12 +592,48 @@ describe('host outbound WebSocket server', () => {
     });
 
     const before = Date.now();
-    const ws = await connectHost(server.url, issued.hostToken);
-    sockets.push(ws);
-    await waitFor(() => hosts.get(remote.id)?.activated_at !== null);
+    const stale = await connectHost(server.url, issued.hostToken);
+    sockets.push(stale);
 
-    // The SESSION axis has not opened: no `ready` frame has landed yet.
+    // Authenticated, holding the transport slot, announcing nothing. The first
+    // assertion is the projection the Add-computer dialog actually gates on.
+    await expect(noMessageWithin(stale, 25)).resolves.toBeUndefined();
     expect(server.controller.getAttachment(remote.id)).toBeNull();
+    expect(hosts.toDto(hosts.get(remote.id)!)).toMatchObject({
+      status: 'pending',
+    });
+    expect(hosts.get(remote.id)).toMatchObject({
+      activated_at: null,
+      last_seen_at: remote.last_seen_at,
+    });
+
+    // A refused generation must not move that projection either — this is the
+    // case that would otherwise lie to the Add-computer flow.
+    stale.send(
+      JSON.stringify({
+        ...(readyFrame({ hostName: 'Studio Mac' }) as Record<string, unknown>),
+        protocol_version: OUTBOUND_PROTOCOL_VERSION - 1,
+      }),
+    );
+    await waitForClose(stale);
+    await waitFor(() => server!.controller.getAdmissionFailure(remote.id) !== null);
+    const refused = hosts.get(remote.id)!;
+    expect(hosts.toDto(refused)).toMatchObject({
+      status: 'pending',
+      placeable: false,
+    });
+    expect(refused).toMatchObject({
+      activated_at: null,
+      last_seen_at: remote.last_seen_at,
+      finalized_at: null,
+    });
+
+    // The first compatible `ready` is the admitted edge: it opens the session
+    // and stamps the lifecycle in the same step.
+    const upgraded = await connectHostEventually(server.url, issued.hostToken);
+    sockets.push(upgraded);
+    upgraded.send(JSON.stringify(readyFrame({ hostName: 'Studio Mac' })));
+    await waitFor(() => server!.controller.getAttachment(remote.id) !== null);
 
     const activated = hosts.get(remote.id);
     expect(activated?.activated_at).toEqual(expect.any(Number));
@@ -1052,12 +1170,10 @@ describe('host outbound WebSocket server', () => {
     // race ahead of the listener; the previous synchronous
     // `expect(activeConnectionCount === 0)` was the source of a
     // pre-existing flake on this test (Cindy `Acsun_kzRmpNmXZo`).
-    // Wait on ALL three observable state fields simultaneously —
-    // `activeConnectionCount` reads `connections.size`,
-    // `getAttachment` reads `attachmentsByHost`, and
-    // `connectionIdForHost` reads `connectionsByHost`; the three
-    // maps are populated/cleared independently, so all three must
-    // flip before the assertion holds. Bounded wait, no sleep.
+    // Bounded wait, no sleep. Since #task:1966 all three of these read the
+    // ATTACHMENT (count = `attachmentsByHost.size`), so they prove the session
+    // is gone but say nothing about the private transport slot — which is why
+    // the idempotency assertion below has to retry rather than fire once.
     await waitFor(
       () =>
         server!.controller.activeConnectionCount() === 0 &&
@@ -1065,8 +1181,9 @@ describe('host outbound WebSocket server', () => {
         server!.controller.connectionIdForHost(host.id) === null,
     );
 
-    // Idempotent on already-disconnected hosts.
-    expect(server.controller.disconnectHost(host.id)).toBe(false);
+    // Idempotent on already-disconnected hosts: `disconnectHost` is the only
+    // reader of the raw slot, so retrying it is also how we wait for its release.
+    await waitFor(() => server!.controller.disconnectHost(host.id) === false);
     // And on hosts that never attached at all.
     expect(server.controller.disconnectHost('phantom-host')).toBe(false);
   });
@@ -1121,8 +1238,12 @@ describe('host outbound WebSocket server', () => {
       code: 1008,
       reason: HOST_WS_CLOSE_REASON_REVOKED,
     });
-    await waitFor(() => server!.controller.activeConnectionCount() === 0);
-    expect(server.controller.disconnectHost(host.id)).toBe(false);
+    // The raw slot is private by design (#task:1966), and `activeConnectionCount`
+    // now counts attachments — which is 0 for this host from the start, so it is
+    // no proxy for "the slot was released". `disconnectHost` is the only reader
+    // there is, and it is a no-op on an empty slot: retrying it IS the wait, and
+    // the `false` it settles on is the assertion.
+    await waitFor(() => server!.controller.disconnectHost(host.id) === false);
   });
 
   it('responds to app-level daemon heartbeat pings', async () => {
@@ -1452,6 +1573,26 @@ async function attachHost(
   ws.send(JSON.stringify(readyFrame({ hostName })));
   await waitFor(() => server.controller.getAttachment(hostId) !== null);
   return ws;
+}
+
+// #task:1966 — dialing right after the previous socket closed can still race the
+// server's `close` handler releasing the transport slot (409). The slot is
+// private by design, so there is no public predicate to wait on; retrying the
+// dial IS the wait, and a successful upgrade proves the replacement now holds it.
+async function connectHostEventually(
+  url: string,
+  token: string,
+  timeoutMs = 1_000,
+): Promise<WebSocket> {
+  const start = Date.now();
+  for (;;) {
+    try {
+      return await connectHost(url, token);
+    } catch (err) {
+      if (Date.now() - start >= timeoutMs) throw err;
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  }
 }
 
 async function connectHostRejected(

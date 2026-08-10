@@ -112,13 +112,16 @@ activated_at != NULL AND finalized_at == NULL       → attached  (daemon connec
 otherwise (activated_at == NULL)                    → pending   (created, never connected)
 ```
 
-- `activated_at` = the **technical-connection** fact: first successful
-  authenticated daemon attach (`GET /api/hosts/connect` with the connect-token).
-  **Not** set at token-issuance time. Deliberately the CREDENTIAL axis, not the
-  session axis: it is stamped on the authenticated upgrade even if the server then
-  refuses that daemon's wire protocol (#task:1966), because "a machine holding
-  this token reached us" is exactly what the draft flow needs to know. Liveness
-  is the live attachment, never this column (see below).
+- `activated_at` = the **technical-connection** fact: first successful daemon
+  **attachment** over `GET /api/hosts/connect` — the authenticated upgrade plus a
+  `ready` frame this server accepts (#task:1966). **Not** set at token-issuance
+  time, and **not** set by an upgrade whose wire protocol is then refused: the
+  derived `status` above is what the Add-computer flow reads to leave "waiting
+  for connection", so stamping an unadmitted daemon would walk the user through
+  naming and finalizing a computer that never once attached. A daemon too old to
+  speak the protocol stays `pending`, which is the truthful reading and shows the
+  install/connect command that repairs it. Liveness is still the live attachment,
+  never this column (see below): activated-but-currently-disconnected is normal.
 - `finalized_at` = the **user-commitment** fact: the user confirmed the Add
   computer flow (named it). These are two genuinely distinct facts (technical
   connect ⊥ user commitment) at different times; separating them lets an
