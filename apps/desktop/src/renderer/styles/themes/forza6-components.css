@@ -235,16 +235,24 @@
    v6.4 update (shiki #task:917): poster sticker drop shadow ON
    selected sidebar rows, mirroring the `[data-conversation-hash-icon]`
    chat-header chip recipe. Box-shadow doesn't take layout space so
-   adding it on selected doesn't shift surrounding rows. 1.5px ink
-   offset matches the chat header `#` hero投影 size. Since 2026-08-08
+   adding it on selected doesn't shift surrounding rows. Since 2026-08-08
    the ROW is the only sticker in these lists — the `#` inside it stays
-   a quiet ink glyph (see the `[data-channel-icon]` block below). */
+   a quiet ink glyph (see the `[data-channel-icon]` block below).
+
+   #task:1950 — selected is now the `-xl` rung (2.5px) while hover keeps base
+   (1.5px), shiki `bQZYzkqIoLOZ90_U`. Both states used to share the 1.5px
+   offset, so the entire hover→selected distance was carried by lime intensity
+   alone; after #task:1947 damped the hover ground that was the second time the
+   two states differed by less than a whole step. Lift is the right dimension to
+   spend here: the committed row is the one that should read as physically ON TOP
+   of the list, and the ladder already exists (`sm` 1px / base 1.5 / `lg` 2 /
+   `xl` 2.5) so this is a rung change, not a new recipe. */
 [data-theme='forza6']
   aside[data-sidebar] .sidebar-row-border.text-text-on-selected {
   --text-primary: var(--forza6-ink);
   --text-secondary: var(--forza6-ink);
   --text-muted: rgba(0, 0, 0, 0.62);
-  box-shadow: var(--forza6-poster-shadow);
+  box-shadow: var(--forza6-poster-shadow-xl);
 }
 
 /* ── Sidebar row unselected hover — black-bordered "preview of selected" ──
@@ -259,9 +267,11 @@
    global.css); only the lime ground stays forza6-specific.
 
    v6.4 update (shiki #task:917): poster sticker drop shadow on
-   hover too, mirroring selected row. Same 1.5px ink shadow recipe
-   so hover is a true preview of selected — both the lime fill and
-   the drop shadow show up together.
+   hover too, mirroring selected row — hover is a true preview of selected, so
+   the lime fill and the drop shadow show up together. Hover STAYS on the base
+   1.5px rung (shiki `bQZYzkqIoLOZ90_U`「hover 保持 base」); selected moved up to
+   `-xl` in #task:1950, so the preview is now one rung below the commitment
+   instead of tying with it.
 
    #task:1947 — the ground is now a lime WASH (lime mixed into the poster
    paper) instead of `--forza6-lime-pale`. Hover keeps the hue, so it is still
