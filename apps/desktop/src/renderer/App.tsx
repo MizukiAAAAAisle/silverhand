@@ -279,10 +279,22 @@ function RegisteredAppShell({
   // <aside>) re-flow without prop-drilling. ONE column since #task:1889 — the
   // merged tree took over the retired `--channels-sidebar-width`'s range (up to
   // 400) because it now carries channels too; its own width memory is gone.
+  //
+  // `min` is 230, not 200, since the collapse caret landed (#task:1949, shiki
+  // `Q_M0W5o2VTuTU9QP`). Nothing in a row can actually compress — icon, mute
+  // marker, caret and the hover action cluster are all `shrink-0` — so the whole
+  // squeeze lands on the ONE flexible child, the name. A workspace row spends
+  // ~56px on chrome before the name (2px gutter border ×2 + pl-1 + 16px icon +
+  // ml-2 + caret's ml-1 + 12px + pr-2) and another 28–56px on the sort / `+`
+  // cluster the moment you point at the branch — which is exactly when you are
+  // reading the name. At 200 that left the name ~88px (~11 chars at 14px); at 230
+  // it gets ~118px. A width persisted inside the old 200–229 band no longer
+  // validates on load and falls back to `defaultWidth` (240) — a one-time
+  // widening, not a clamp, and the only reachable consequence of moving the floor.
   const sidebar = useResizableWidth({
     storageKey: 'silverhand.layout.sidebar-width',
     defaultWidth: 240,
-    min: 200,
+    min: 230,
     max: 400,
     cssVar: '--sidebar-width',
   });
