@@ -235,15 +235,19 @@ The connect-token is the whole auth story for user-managed computers.
   token must never land in logs, system messages, conversation history, or renderer
   query cache — it flows only mint → command card (masked) → user → target machine.
 - **Concurrency: reject the later connect, never silent-replace.** If a second
-  daemon presents the token while one is already attached, the **later attach is
+  daemon presents the token while one is already connected, the **later attach is
   rejected** (`computer_already_connected`); the incumbent is left untouched. The
-  gate is **live attachment**, not the DB `activated_at` flag, so an
-  activated-but-currently-disconnected computer accepts a fresh connect; a stale
-  attachment is released after the heartbeat/pong timeout. The rejection names the
-  machine currently holding the connection (attach-reported hostname — diagnostic
-  only, never identity/dedupe). Migration is always one explicit action away:
-  disconnect the incumbent, or rotate (old daemon drops, new machine connects with
-  the new command).
+  gate is the **server-private authenticated transport slot** — one live socket per
+  host — not the admitted attachment and not the DB `activated_at` flag. Deliberately
+  the slot: it also refuses a second dialer while the incumbent's `ready` handshake
+  is still unresolved, so two pre-ready dialers can never race for the same computer.
+  An activated-but-currently-disconnected computer accepts a fresh connect; a stale
+  socket is released after the heartbeat/pong timeout. The rejection names the machine
+  currently holding the connection when it can (attach-reported hostname — diagnostic
+  only, never identity/dedupe); an incumbent that has not sent `ready` yet has no
+  reported hostname, so `connected_host_name` is `null` and the copy must degrade to
+  the unnamed case. Migration is always one explicit action away: disconnect the
+  incumbent, or rotate (old daemon drops, new machine connects with the new command).
 - **Instance-scoped data root.** Each daemon uses its own data root under
   `~/.silverhand/computers/` keyed by host id (`{run,logs,agents}`), resolved
   daemon-side (host-local path authority). It holds **only** agent runtime working

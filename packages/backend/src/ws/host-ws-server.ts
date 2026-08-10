@@ -136,8 +136,9 @@ export interface HostWsServerController {
   activeConnectionCount(): number;
   /** Hosts with a live ATTACHMENT — i.e. a connection that passed the
    *  compatibility gate by sending a valid `ready` (#task:1966). A daemon whose
-   *  handshake is being refused holds a transport slot (`connectionIdForHost`)
-   *  but is deliberately absent here: broadcasting to it is undeliverable work,
+   *  handshake is being refused holds only the module-private transport slot —
+   *  no public accessor names it, `connectionIdForHost` included — and is
+   *  deliberately absent here: broadcasting to it is undeliverable work,
    *  and counting it as connected is what turned a refusal loop into fleet-wide
    *  business traffic. */
   connectedHostIds(): string[];

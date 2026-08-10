@@ -32,7 +32,7 @@ import {
  * dispatch must not.
  *
  * The contract is intentionally the transport-neutral subset of
- * {@link HostWsServerController}: connection liveness plus command send.
+ * {@link HostWsServerController}: attachment liveness plus command send.
  * WS-only concerns — credential-revoke kick (`disconnectHost`) — stay on
  * the controller and are not part of the formal server↔daemon surface.
  *
@@ -42,22 +42,33 @@ import {
  * must pass the same harness.
  */
 export interface OutboundFrameAdapter {
-  /** Number of live outbound connections (0 or 1 in embedded). */
+  /**
+   * Number of hosts with a live ATTACHMENT (0 or 1 in embedded) — never a raw
+   * socket count. Since #task:1966 an authenticated-but-unadmitted dialer is
+   * transport-internal on every implementation: standalone counts attachments
+   * created by a compatible `ready`, and embedded has no separately-versioned
+   * dialer to admit (the co-located daemon ships in the same binary), so its
+   * socket IS the admitted edge.
+   */
   activeConnectionCount(): number;
-  /** Host ids with a live outbound connection right now. */
+  /** Host ids with a live ATTACHMENT right now — same population as
+   *  `activeConnectionCount()`, and the only meaning of "connected" this port
+   *  exposes. */
   connectedHostIds(): string[];
   /**
-   * Per-connection id for `hostId`'s current live connection, or `null`
-   * when none. A replacement connection mints a new id, so callers can
-   * compare ids across snapshots to detect a reattach (the same
+   * Per-attachment id for `hostId`'s current USABLE generation, or `null` when
+   * the host has no attachment (an authenticated dialer awaiting or failing
+   * admission reads as `null`). A replacement attachment mints a new id, so
+   * callers can compare ids across snapshots to detect a reattach (the same
    * reattach-race guard D4.d's `agent_materialize` dispatch relies on).
    */
   connectionIdForHost(hostId: string): string | null;
   /**
-   * Snapshot of the current live attachment for `hostId`, or `null` when
-   * no connection exists. Independent of any event-sink wiring; tracks the
-   * underlying transport lifecycle so it is a valid readiness signal in
-   * both modes.
+   * Snapshot of the current live ATTACHMENT for `hostId`, or `null` when the
+   * host has none. Independent of any event-sink wiring. It tracks the
+   * attachment lifecycle — NOT the underlying transport's: a socket that is
+   * merely authenticated has no snapshot here, which is what makes a non-null
+   * value a valid readiness signal in both modes.
    */
   getAttachment(hostId: string): HostWsAttachment | null;
   /**
@@ -67,7 +78,7 @@ export interface OutboundFrameAdapter {
    * (the `transport_*` family). Daemon-returned command errors reject
    * with the per-command wire error, preserving its code (e.g. the D4.d
    * `agent_materialize` typed codes). `expectedConnectionId`, when given,
-   * fails fast before dispatch if the live connection has been replaced.
+   * fails fast before dispatch if the live attachment has been replaced.
    */
   sendCommand<K extends OutboundServerCommandKind>(
     hostId: string,

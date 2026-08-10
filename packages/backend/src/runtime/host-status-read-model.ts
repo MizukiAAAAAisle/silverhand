@@ -14,9 +14,10 @@
  *
  * The three facts the route needs decompose by source:
  *
- *   1. **availability** — whether a live connection exists is a
- *      backend-local transport fact (`connectionIdForHost`), never an
- *      RPC.
+ *   1. **availability** — whether the host has a live ATTACHMENT (a daemon
+ *      admitted by a compatible `ready`, #task:1966) is a backend-local
+ *      fact (`connectionIdForHost`), never an RPC. A socket that is merely
+ *      authenticated is not availability.
  *   2. **static snapshot** (os / arch / daemon pid / version /
  *      started_at) — immutable for the lifetime of one daemon process,
  *      hence of one connection generation. Seeded by ONE `host_status`
