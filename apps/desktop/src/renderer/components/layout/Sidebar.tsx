@@ -208,8 +208,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * header row, which is what lets the three of them line up with the tree
           * instead of floating in their own gutter. They share that column but NOT
           * the group's weight: `font-bold` belongs to the section LABEL, and every
-          * ROW — these three included — takes `font-medium` (shiki, 2026-08-10). */}
-        <div className="mb-3 space-y-0.5">
+          * ROW — these three included — takes `font-medium` (shiki, 2026-08-10).
+          * The 4px row gap is shared with the tree for the same reason
+          * (#task:1951). */}
+        <div className="mb-3 space-y-1">
           <button
             type="button"
             onClick={props.onSelectSearch}

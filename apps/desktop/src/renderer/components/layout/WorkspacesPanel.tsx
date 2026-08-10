@@ -475,7 +475,8 @@ function WorkspaceBranch({
         dragHandleProps={dragHandleProps}
       />
       {expanded || holdsSelection || wakeGate ? (
-        <ul className="space-y-0.5">
+        // 4px, the one sidebar row gap (#task:1951) — see `SidebarSection`.
+        <ul className="space-y-1">
           <WorkspaceChannels
             workspaceId={workspace.id}
             workspaceKind={workspace.kind}

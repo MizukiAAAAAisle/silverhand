@@ -237,7 +237,13 @@ export function SidebarSection({
         expanded={expanded}
         onToggle={() => toggleExpanded()}
       />
-      {body ? <ul className="space-y-0.5">{body}</ul> : null}
+      {/* 4px row gap (#task:1951, shiki 「叶子的 space-y-0.5 也抬到 1」). Every row
+          stack in the sidebar — this body, a workspace's channel branch, and the
+          tool rows above the sections — carries the SAME gap, so the tree's
+          hierarchy keeps being told by indentation and the caret, never by
+          uneven breathing room. Raising one of the three alone would make a
+          leaf's neighbour distance depend on which island it lives in. */}
+      {body ? <ul className="space-y-1">{body}</ul> : null}
     </section>
   );
 }
