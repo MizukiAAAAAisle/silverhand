@@ -62,8 +62,9 @@
   --splitter-bg: transparent;
   --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
   /* splitter 是 utility（拖拽把手），走中性墨。缺这一行会 fallback 到
-     `--accent`（饱和蓝）。暗底用浅墨：0.24 在 selected-border(0.20) 与
-     强边(0.26) 之间，hover 时读作"亮一档的规线"。 */
+     `--accent`（饱和蓝）。暗底用浅墨：0.24 落在常规边（`--border` 10%）
+     与 message-row framed hairline(26%) 之间，hover 时读作"亮一档的
+     规线"。 */
   --splitter-hover-bg: rgba(255, 255, 255, 0.24);
   --titlebar-border: transparent;
 
@@ -159,14 +160,18 @@
   --floating-item-radius: var(--radius-sm);
 
   /* ── Row-state border color ──
-     selected 用 low-α 白 hairline（不复用 brand-primary fill 色，否则
-     1px 边在 brand fill 上变隐形 = 跟 fill 同色；同时这个 token 还被
-     SelectionToolbar 借用做"主区按钮 hairline"，复用 brand-primary 会让
-     dark bg-floating 上出现刺眼的亮蓝边，shiki review）。
+     selected = **无边**（`transparent`）：填充已经是品牌蓝实心 + 白字，
+     那才是 "你在这" 的信号；一道低透白 hairline 叠在 #1164A3 上会合出
+     一圈更浅的蓝，读作发光的奶白圈（shiki #task:1960）。sidebar 行与
+     NavRail 当前页本来就各带一条覆写把它压成 transparent —— 现在真正
+     还在吃这个 token 的四处（Settings segment / 可见性卡 / TaskFilterBar
+     激活 chip / Activity 选中行）与它们同一条路，那两条覆写随之删掉。
+     响度不倒挂：满色填充稳稳压过 control hover 的 10% 白 hairline。
+     ⇒ 想给选中态加回可见边框之前，先问它凭什么比填充更该承担这件事。
      hover 用 transparent — 让 bg veil 单独表达 hover，避免行扫读时
      border 闪烁。 */
   --border-row-hover: transparent;
-  --border-row-selected: rgba(255, 255, 255, 0.20);
+  --border-row-selected: transparent;
 
   /* ── Control hover border (#task:912 review round 3) ──
      `--border-control-hover` 是 control surface (TaskFilterBar 的 chip
@@ -457,21 +462,12 @@
     color-mix(in oklab, color-mix(in oklab, var(--accent) 60%, var(--brand-primary)) 45%, transparent);
 }
 
-/* NavRail selected / hover: the brand-blue tile fill (and the hover veil)
-   carry the state — drop the border. Scoped to the NavRail so shared
-   sidebar-row tokens are untouched. */
-[data-theme='slack-dark'] nav[aria-label='App sections'] button[aria-current='page'],
+/* NavRail hover: the veil carries it — drop the `border-accent` ring the
+   shared TSX recipe applies, so a hovered tile never out-shouts the
+   brand-blue current tile. The current tile needs no rule of its own:
+   `--border-row-selected` is `transparent` theme-wide. Scoped to the
+   NavRail so shared sidebar-row tokens are untouched. */
 [data-theme='slack-dark'] nav[aria-label='App sections'] button:not([aria-current='page']):hover {
-  border-color: transparent;
-}
-
-/* sidebar selected row: the brand-blue fill + white text already carry
-   "selected" — drop the white border so slack matches warm's borderless
-   selected (warm uses a veil + left-bar; slack uses the full brand fill).
-   Two selectors mirror the aside-hosted rows and the channel-row
-   `data-row-selected` variant. */
-[data-theme='slack-dark'] aside[data-sidebar] .sidebar-row-border.text-text-on-selected,
-[data-theme='slack-dark'] [data-row-selected].sidebar-row-border.text-text-on-selected {
   border-color: transparent;
 }
 
