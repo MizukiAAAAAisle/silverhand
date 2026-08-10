@@ -551,11 +551,15 @@ function ChannelRow({
         (draggable ? ' cursor-grab select-none active:cursor-grabbing' : '')
       }
     >
-      {/* Channel select button — grows to fill the row */}
+      {/* Channel select button — grows to fill the row. `font-medium` is the ROW
+          rung of the sidebar's type ladder (`font-bold` belongs to the section
+          LABEL, not to any row — shiki 2026-08-10); the matching ink,
+          `text-text-secondary`, arrives on the container from
+          `sidebarRowStateClass`. */}
       <button
         type="button"
         onClick={onClick}
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs"
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sm font-medium leading-4"
       >
         <ChannelIcon
           variant="sticker"

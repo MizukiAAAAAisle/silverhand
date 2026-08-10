@@ -561,10 +561,17 @@ function WorkspaceHeaderRow({
         // needs position to be readable as a block (shiki, 2026-08-08).
         //
         // Resting ink is `text-text-secondary`, NOT muted: muted is the group
-        // LABEL's weight, and wearing it made the parent row read as a caption —
+        // LABEL's ink, and wearing it made the parent row read as a caption —
         // lighter than its own channel children, so the line that is actually a
         // control looked like the one thing on screen you cannot press (shiki:
         // 「可点击提示不强」, 2026-08-08).
+        //
+        // This row is a ROW, not the group: the weight ladder is section LABEL
+        // `font-bold` vs every row `font-medium`, and a workspace row takes the row
+        // rung even though it parents the channels below it (shiki 2026-08-10:
+        // 「workspace 叶子需要 medium，而不是 bold」). It briefly wore `font-bold` — the
+        // wrong reading of "group" — which put the loudest weight in the tree on
+        // the line that is only a container.
         'sidebar-row-gutter group/ws flex h-7 w-full items-stretch pr-2 ' +
         OUTER_GLYPH_INSET +
         ' ' +
@@ -575,7 +582,7 @@ function WorkspaceHeaderRow({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="group/wstoggle flex min-w-0 flex-1 items-center text-left text-xs font-medium"
+        className="group/wstoggle flex min-w-0 flex-1 items-center text-left text-sm font-medium leading-4"
       >
         {/* Identity glyph, permanently (#task:1948). It used to cross-fade into a
             disclosure triangle on hover — the SAME swap the three group headers

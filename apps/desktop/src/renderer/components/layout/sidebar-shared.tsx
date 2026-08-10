@@ -394,7 +394,16 @@ export function SidebarSectionHeader({
   return (
     <header
       className={
-        'mb-1 flex items-stretch justify-between text-xs font-medium tracking-wider text-text-muted ' +
+        // The GROUP rung of the sidebar's two-rung type ladder: `font-bold` here
+        // against `font-medium` on every ROW (workspace / channel / STARRED / the
+        // Search-Saved-Archived entries), and `text-text-muted` against a row's
+        // `text-text-secondary` — weight AND ink both separate the two levels
+        // (shiki, 2026-08-10). Ink deliberately goes DOWN as weight goes up: muted
+        // is chrome ink, and it is the pair that stays visibly apart in all four
+        // themes, whereas primary-vs-secondary collapses inside forza6's sidebar
+        // (both are pinned to near-black there). Size stays 12px — a label is not
+        // content (shiki: 「分组标题…保持 12」).
+        'mb-1 flex items-stretch justify-between text-xs font-bold tracking-wider text-text-muted ' +
         (swapGlyph ? 'group/section' : '')
       }
     >
@@ -598,6 +607,8 @@ export const SidebarRow = forwardRef<HTMLButtonElement, RowProps>(function Sideb
           // the title text on subtly different vertical centers
           // (#task:912 review round 5: shiki measured icon-wrapper 16×20
           // vs avatar 16×16, name height 17.5 → ~2px misalignment).
+          // The rest of the nav tree pins the SAME 16px as `leading-4`
+          // (#task:1946, shiki `2uEqqwZpm372oo-D`) — grep both forms.
           // `stacked` rows are two lines, so they need more vertical
           // padding than the compact single-line default.
           'sidebar-row-border flex w-full items-center gap-2 border px-2 text-left text-sm leading-[16px] transition-colors ' +

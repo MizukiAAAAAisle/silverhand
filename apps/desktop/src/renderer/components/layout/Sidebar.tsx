@@ -206,13 +206,15 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           * Their glyphs sit on the OUTER column (`OUTER_GLYPH_INSET`,
           * #task:1889) — the same x as a group header and as a workspace / DM
           * header row, which is what lets the three of them line up with the tree
-          * instead of floating in their own gutter. */}
+          * instead of floating in their own gutter. They share that column but NOT
+          * the group's weight: `font-bold` belongs to the section LABEL, and every
+          * ROW — these three included — takes `font-medium` (shiki, 2026-08-10). */}
         <div className="mb-3 space-y-0.5">
           <button
             type="button"
             onClick={props.onSelectSearch}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[length:var(--text-strong)] ' +
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 ' +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.searchActive),
             )}
@@ -225,7 +227,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectSaved}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[length:var(--text-strong)] ' +
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 ' +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.savedActive),
             )}
@@ -254,7 +256,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             type="button"
             onClick={props.onSelectArchived}
             className={cn(
-              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-[length:var(--text-strong)] ' +
+              'sidebar-row-border mx-1.5 flex w-[calc(100%-0.75rem)] items-center gap-2 border pr-2 h-8 text-left text-sm font-medium leading-4 ' +
                 OUTER_GLYPH_INSET,
               sidebarRowStateClass(props.archivedActive),
             )}
