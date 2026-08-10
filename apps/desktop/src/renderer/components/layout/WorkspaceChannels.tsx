@@ -465,8 +465,9 @@ function ChannelRow({
   archivePending: boolean;
   workspaceKind: WorkspaceUiKind;
   unreadCount: number;
-  /** This row's tier from the workspace batch, or `undefined` when it has none —
-   *  see `effectiveMode` below. */
+  /** This row's tier from the workspace batch, or `undefined` when it has none.
+   *  Carries BOTH the stored `mode` (what the marker paints) and the folded
+   *  `effective_mode` (what the badge weighs) — see `isSilenced` below. */
   attention?: ChannelAttentionModeRowDto;
   /** The workspace suppressor, `undefined` until the tier batch resolves. */
   workspaceMuted: boolean | undefined;
@@ -495,28 +496,31 @@ function ChannelRow({
   // fences them off from "Copy name" whenever any member action is present.
   const hasManagementMenu = showArchiveMenu || showAttentionMenu;
 
-  // A `dm_channel` carries no tier (the backend 404s it and the batch omits it):
-  // a DM is directed-grade throughout, so it always reads at full volume. For a
-  // real channel the batch row is the ONLY authority — no default is resolved
-  // here, not even once the suppressor is known, because a missing row does not
-  // mean "no stored choice" (the batch COALESCEs that server-side). `undefined`
-  // propagates to the badge, which renders nothing for it.
-  const effectiveMode: ChannelAttentionMode | undefined =
-    channel.kind === 'channel' ? attention?.effective_mode : 'all';
   // One number per row, and its volume — via the shared `channelNodeBadge` so the
   // collapsed poke-out reveal filter paints from the EXACT same predicate (a row is
-  // revealed iff the badge it would show is `loud`). The member gate and the
-  // non-member's absent unread are folded in there.
+  // revealed iff the badge it would show is `loud`). The member gate, the
+  // non-member's absent unread and the EFFECTIVE tier (suppressor folded in) all
+  // live in there: loudness is a function of the effective tier, always.
   const badge = channelNodeBadge(channel, attention, unreadCount);
   // A silenced row says so without being right-clicked: a MutedMarker rides beside
   // the name, like the workspace row's (shiki 2026-08-09). Mute is the marker ALONE
   // — the name keeps its full colour (shiki 2026-08-09: dimming the title read as
-  // the row being de-emphasised, not silenced). Same shared primitive as the
-  // workspace row, so a muted channel and a muted workspace read identically.
-  // `effectiveMode` is the ONE authority (workspace suppressor already folded in),
-  // so a workspace-muted run marks every row — no second mute test. A DM is always
-  // 'all', so it never marks.
-  const isSilenced = effectiveMode === 'mute';
+  // the row being de-emphasised, not silenced).
+  //
+  // The marker reads the channel's OWN stored tier, NOT `effective_mode`
+  // (#task:1952, shiki 2026-08-10): a workspace suppressor is ONE fact, so it is
+  // drawn ONCE on the workspace row. Folding it in here repainted it on every
+  // child, which reads as N facts and is pure noise on a workspace with many
+  // channels. So the marker keeps its actionable meaning — "this channel is
+  // silenced on its own" — and survives a workspace unmute unchanged, exactly
+  // like the stored value it now paints.
+  //
+  // Loudness is NOT affected: `badge` above and the reveal filter still fold in
+  // the suppressor, so a muted workspace stays quiet. A `dm_channel` carries no
+  // tier at all (the backend 404s it; a DB trigger forbids an agent_home
+  // suppressor), so `mode` is forever `undefined` there and a DM never marks —
+  // no default is resolved for it.
+  const isSilenced = attention?.mode === 'mute';
 
   const rowBg = sidebarRowStateClass(selected);
 
