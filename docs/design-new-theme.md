@@ -81,12 +81,13 @@ apps/desktop/src/renderer/
 
 | Token | 含义 | 选值原则 |
 |---|---|---|
-| `--frame-padding` | App frame 左右/底部 padding，也是 panel 之间的视觉 gap | 一档统一的窗口内缩；titlebar 下方 top padding 在组件层固定为 0 |
+| `--frame-padding` | App frame 左右/底部 padding，以及 NavRail 与 section sheet 之间的**外**水槽 | 一档统一的窗口内缩；titlebar 下方 top padding 在组件层固定为 0 |
+| `--pane-gap` | section sheet **内部** pane 之间的 gap（sidebar\|main）。可选：不写就回落到 `--frame-padding` | 每个 pane 各自成卡的主题不用写；只有"多个 pane 收进一张纸"的主题（iris）取 `0px` —— 必须带单位，`0` 会让 splitter 的 `calc()` 失效 |
 | `--card-radius` | NavRail / sidebar / chat panel 圆角 | 与 frame 节奏一致；直角主题也要显式写 0 值 |
 | `--card-shadow` | panel card 阴影 | 轻阴影即可，避免卡片变成浮层 |
+| `--pane-radius` / `--pane-shadow` | 只作用于 **pane 级** chrome 的窄化 token（消费点 `var(--pane-radius, var(--card-radius, 0))`）| 可选：只有"一张纸"主题声明它们（iris 取 `0` / `none`），让纸内部的 pane 变平；纸**内**小卡仍走 `--card-radius` |
 | `--splitter-bg` | resize splitter 的静态底色 | card frame 中通常 `transparent`，由 gap 表达分隔 |
 | `--splitter-hover-bg` | splitter hover/拖拽时的着色 | **MUST 显式定义** —— consumer 的 `var(--splitter-hover-bg, var(--accent))` fallback 会把饱和 accent 变成拖拽把手色；走中性墨 |
-| `--splitter-offset` | 抵消 splitter 作为 flex item 产生的额外列间距 | 让视觉 gap 仍等于 `--frame-padding` |
 | `--titlebar-border` | titlebar 下边线 | card frame 主题通常 `transparent`，避免 titlebar 和 body 断层 |
 
 ### 3.1.2 Brand / NavRail / row state

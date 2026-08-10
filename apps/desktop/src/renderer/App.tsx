@@ -2014,10 +2014,20 @@ function RegisteredAppShell({
         {/* Section sheet — the layer every section view lives in, one
           * step inside the frame (#task:1965). It exists so a theme can
           * decide whether the panes are separate cards floating in the
-          * gutter or ONE surface: it carries the same `--frame-padding`
-          * gap the frame used to apply directly, so themes that keep the
-          * card language are pixel-identical (a transparent pass-through).
-          * iris collapses the gap to 0 and paints this node as the single
+          * gutter or ONE surface.
+          *
+          * The gap is its own token: `--pane-gap` is the gap BETWEEN PANES,
+          * `--frame-padding` stays the OUTER gutter (window edge + around
+          * the rail). Unset → falls back to `--frame-padding`, so the three
+          * card themes are pixel-identical without declaring anything. It
+          * has to be a token rather than a theme-file override because this
+          * declaration is inline: a `[data-theme=x] [data-section-sheet]
+          * { gap: 0 }` rule loses to it on specificity, silently leaving
+          * the panes 8px apart (#task:1965 review round 1 — that stray gap
+          * is what stopped the chat header's border-bottom from closing
+          * against the sidebar divider).
+          *
+          * iris sets `--pane-gap: 0px` and paints this node as the single
           * white sheet holding sidebar + main, which is why the rail stays
           * OUTSIDE it — the rail is the one pane left standing on the
           * gradient paper.
@@ -2030,7 +2040,7 @@ function RegisteredAppShell({
         <div
           data-section-sheet=""
           className="flex min-w-0 flex-1"
-          style={{ gap: 'var(--frame-padding, 0)' }}
+          style={{ gap: 'var(--pane-gap, var(--frame-padding, 0px))' }}
         >
           {/* ===== Top-level section views (#task:1168 + #task:1170) =====
             *
@@ -2278,13 +2288,13 @@ function RegisteredAppShell({
                   flexBasis: workspaceSidebarVisible
                     ? 'var(--sidebar-width)'
                     : '0px',
-                  // When hidden, eat the right-side flex gap so the parent's
-                  // `gap: var(--frame-padding)` doesn't render twice (once on
+                  // When hidden, eat the right-side flex gap so the sheet's
+                  // `gap: var(--pane-gap)` doesn't render twice (once on
                   // each side of the 0-width slot). Animates alongside
                   // flex-basis so the collapse stays smooth end-to-end.
                   marginRight: workspaceSidebarVisible
                     ? '0px'
-                    : 'calc(-1 * var(--frame-padding, 0px))',
+                    : 'calc(-1 * var(--pane-gap, var(--frame-padding, 0px)))',
                 }}
                 // hidden subtree must not steal focus or grab pointer events
                 // mid-slide; `inert` removes it from the a11y tree too.

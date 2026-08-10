@@ -89,7 +89,6 @@
   --card-radius: 8px;
   --card-shadow: 0 1px 3px rgba(var(--shadow-base), 0.08);
   --splitter-bg: transparent;
-  --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
   /* Drag handle hover / active tint. **必须显式给**：VerticalSplitter /
      SplitPane 的 fallback 是 `var(--accent)`（那是给"accent 本来就是墨"的
      主题留的），Studio Blue 落在 4px 宽的分栏条上就是一道蓝，读作"看这个分隔线！"

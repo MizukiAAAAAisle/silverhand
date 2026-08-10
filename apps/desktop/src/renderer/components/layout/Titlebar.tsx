@@ -84,7 +84,14 @@ export function Titlebar({
       : workspaceSidebarVisible
         ? 'var(--sidebar-width)'
         : '0px';
-  const chromeWidth = `calc(var(--nav-rail-width) + ${leftColumnWidth} + var(--frame-padding, 0px) * 3)`;
+  // Three gutters sit left of the next column: the frame's own left padding,
+  // the frame gap between rail and section sheet (both `--frame-padding`), and
+  // the sheet's INNER gap between left column and main — that third one is
+  // `--pane-gap`, which iris takes to 0 (#task:1965). Unset in the card themes
+  // ⇒ falls back to `--frame-padding` and the sum is unchanged there.
+  const chromeWidth =
+    `calc(var(--nav-rail-width) + ${leftColumnWidth} + var(--frame-padding, 0px) * 2` +
+    ` + var(--pane-gap, var(--frame-padding, 0px)))`;
   const toggleButton =
     'no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline';
 

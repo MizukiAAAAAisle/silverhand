@@ -177,7 +177,9 @@ export function SettingsPage(): JSX.Element {
   /* Two islands, exactly the Computers / Members shape (shiki 2026-08-06
      「采用 computer rail 那种两栏 island 布局方式」): the section list is its
      own card at `--sidebar-width`, the panes are the content card, and the
-     section sheet's own `gap: var(--frame-padding)` separates them. Rendered
+     section sheet's own `gap: var(--pane-gap, var(--frame-padding))` separates
+     them (0 in iris, where the sheet IS one sheet — hence this pane's
+     `border-right` in `themes/iris.css`). Rendered
      as a fragment because `SectionLayer` is `display: contents` — the two
      cards are siblings in the sheet's flex row, like
      `aside[data-sidebar="computers"]` and `HostDetailView`.

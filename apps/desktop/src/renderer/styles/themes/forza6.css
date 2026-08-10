@@ -199,7 +199,6 @@
   --forza6-poster-shadow-error: 1.5px 1.5px 0 var(--error);
   --forza6-poster-shadow-error-xl: 2.5px 2.5px 0 var(--error);
   --splitter-bg: transparent;
-  --splitter-offset: calc((var(--frame-padding) + 4px) / -2);
   /* v6.9.6 (#task:917, shiki "拖拽的 resize handler 颜色, 在 forza6
      下现在是节日粉"): the splitter's hover/active fill defaults to
      `--accent`, which in forza6 = `--forza6-pink-deep #B3186A` (hot
