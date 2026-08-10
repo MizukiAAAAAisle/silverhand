@@ -77,16 +77,44 @@ and opens one WebSocket to `/api/hosts/connect` when the file contains a valid
 host token. Missing or invalid config closes the outbound connection
 without affecting the local Unix socket.
 
-Reconnect uses jittered exponential backoff capped at 60 seconds. Close-code
-handling is explicit:
+A raw socket open is not an attachment. The server treats an authenticated
+upgrade as a private **transport slot** and creates the business attachment
+— `host_connection_changed`, `connectedHostIds`, `connectionIdForHost`,
+`getAttachment`, and command reachability — only when the daemon's `ready` frame
+passes the protocol-version gate. A refused generation therefore publishes
+nothing and can receive no runtime command; it is refused with close code `1002`
+and reason `update_required`. The lifecycle stamp (`activated_at` /
+`last_seen_at`) stays on the upgrade: it records the credential, not the session.
+
+Reconnect uses jittered exponential backoff capped at 60 seconds. The budget is
+reset by the daemon's own **pong**, not by the socket opening: a raw `open`
+happens before the server has read `ready`, so resetting there let a refused
+handshake retry forever at the ~1s floor. A pong proves the server accepted this
+generation, because the daemon sends `ready` before its first `ping` and one
+socket's frames are processed in order.
+
+Close-code handling is explicit:
 
 - `1000` (`normal`) from daemon shutdown does not reconnect; `1000` from the
   server while the daemon is still running reconnects after backoff.
 - `1001` (`going_away`, including `server_shutdown`) reconnects after backoff,
   never as a tight loop.
+- `1002` with reason `update_required` is **terminal for the current host
+  config**: the daemon's wire protocol is not the one this server speaks, so no
+  retry can succeed until the binary changes. Suppression is keyed on the config
+  fingerprint and lifts when the config changes, exactly like
+  `host_revoked` / `host_disconnected`. A `1002` for any other reason (a frame
+  this server could not even read as `ready`) stays retryable — that is a corrupt
+  dialer, not a version verdict.
 - `1006` (`abnormal`) reconnects after backoff.
 - Other close codes are logged as `other` and also reconnect after backoff
   while the daemon still has valid host config.
+
+Version skew is a semantic break, not a range: the server accepts exactly
+`OUTBOUND_PROTOCOL_VERSION` and does not dual-accept. The terminal close only
+stops the *new* daemon's retry loop; already-deployed older daemons keep dialing
+until upgraded, which is harmless to the server because a refused generation is
+invisible to every business reader.
 
 Reconnect starts a fresh WebSocket. It does not replay any frame that was in
 the prior socket's process-local write buffer.

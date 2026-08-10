@@ -21,10 +21,13 @@
  *
  *   I3 perimeter under live multiplex (fresh fixture)
  *       Daemon X emits a frame referencing host Y's agent + conv. C5
- *       perimeter must drop + warn, with NO state slot lazy-created
- *       in the fanout's `states` Map. Cindy tightening (1): use a
- *       fresh fixture (zero state baseline) so attach ≠ state slot
- *       and the post-mismatch `states.size === 0` is unambiguous.
+ *       perimeter must drop + warn, leaving zero residue: no state
+ *       slot added to the fanout's `states` Map and no publish on
+ *       either conv. Cindy tightening (1) asked for a fresh fixture so
+ *       the residue is unambiguous; post-#task:1966 the baseline is no
+ *       longer zero (attaching means declaring, and that `ready` is an
+ *       admitted event that owns its slot), so the residue is asserted
+ *       as a delta against the post-attach baseline.
  *
  *   I4 outbound command routing
  *       Backend dispatches `runtime_status` to host Y. Daemon Y's
@@ -285,6 +288,33 @@ async function connectAndRecord(
   return { ws, frames };
 }
 
+/**
+ * #task:1966 — an authenticated socket is only a transport slot. The
+ * daemon becomes an ATTACHMENT (visible to the controller's business
+ * readers and admitted by the fanout's staleness gate) once a
+ * COMPATIBLE `ready` lands. Every invariant below wants an admitted
+ * daemon, so connect + declare + wait for the attachment is one step.
+ * `daemonPid` is per-host so the two daemon instance keys differ.
+ */
+async function attachAndRecord(
+  fix: TwoDaemonFixture,
+  host: HostInfo,
+  daemonPid: number,
+): Promise<RecordedSocket> {
+  const rec = await connectAndRecord(fixtureUrl(fix), host.hostToken);
+  rec.ws.send(encodeOutboundFrame(readyEvent(daemonPid)));
+  await waitFor(() => fix.controller.connectionIdForHost(host.id) !== null);
+  return rec;
+}
+
+function isRuntimeStatusCommand(frame: Record<string, unknown>): boolean {
+  return (
+    frame.direction === 'server_to_daemon' &&
+    frame.type === 'command' &&
+    frame.kind === 'runtime_status'
+  );
+}
+
 async function untilFrame(
   rec: RecordedSocket,
   predicate: (frame: Record<string, unknown>) => boolean,
@@ -356,11 +386,10 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
 
   it('I1 — both daemons attach simultaneously with distinct connection ids', async () => {
     fix = await makeTwoDaemonFixture();
-    const url = fixtureUrl(fix);
 
-    const recX = await connectAndRecord(url, fix.hostX.hostToken);
+    const recX = await attachAndRecord(fix, fix.hostX, 101);
     sockets.push(recX.ws);
-    const recY = await connectAndRecord(url, fix.hostY.hostToken);
+    const recY = await attachAndRecord(fix, fix.hostY, 102);
     sockets.push(recY.ws);
 
     expect(fix.controller.activeConnectionCount()).toBe(2);
@@ -375,11 +404,10 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
 
   it('I2 — daemon X event publishes to conv X only; daemon Y event publishes to conv Y only (bidirectional)', async () => {
     fix = await makeTwoDaemonFixture();
-    const url = fixtureUrl(fix);
 
-    const recX = await connectAndRecord(url, fix.hostX.hostToken);
+    const recX = await attachAndRecord(fix, fix.hostX, 101);
     sockets.push(recX.ws);
-    const recY = await connectAndRecord(url, fix.hostY.hostToken);
+    const recY = await attachAndRecord(fix, fix.hostY, 102);
     sockets.push(recY.ws);
 
     // Daemon X emits its own legitimate frame.
@@ -422,23 +450,26 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
 
   // ── I3 perimeter under live multiplex (fresh fixture) ───────
 
-  it('I3 — cross-host event from daemon X targeting host Y agent/conv is dropped; states.size stays 0 (fresh fixture, attach != state slot)', async () => {
-    // Cindy `vz7fAB040wHP0XfD` tightening (1): fresh fixture so
-    // there is zero baseline state slot. Attach itself does NOT
-    // create a state slot — that only happens on
-    // `stateForHost(hostId)` inside an admitted event. With no
-    // legitimate event sent first, post-mismatch `states.size`
-    // must be exactly 0.
+  it('I3 — cross-host event from daemon X targeting host Y agent/conv is dropped; the rejected frame leaves zero residue (no new state slot, no publish)', async () => {
+    // Cindy `vz7fAB040wHP0XfD` tightening (1) originally read the
+    // residue as `states.size === 0`, on the premise "attach != state
+    // slot". Post-#task:1966 attaching IS declaring: the compatible
+    // `ready` that makes the daemon reachable is itself an admitted
+    // event, so each attached host legitimately owns a slot before the
+    // mismatch frame is sent — and without an attachment the frame
+    // would never reach the perimeter at all (the staleness gate drops
+    // it first, proving nothing about C5). The residue claim is
+    // therefore pinned as a DELTA against the post-attach baseline: the
+    // rejected frame must add no slot and publish nothing.
     fix = await makeTwoDaemonFixture();
-    const url = fixtureUrl(fix);
 
-    const recX = await connectAndRecord(url, fix.hostX.hostToken);
+    const recX = await attachAndRecord(fix, fix.hostX, 101);
     sockets.push(recX.ws);
-    const recY = await connectAndRecord(url, fix.hostY.hostToken);
+    const recY = await attachAndRecord(fix, fix.hostY, 102);
     sockets.push(recY.ws);
 
-    // Sanity: attach alone hasn't built a fanout state slot.
-    expect(fanoutStatesSize(fix.fanout)).toBe(0);
+    const slotsBefore = fanoutStatesSize(fix.fanout);
+    const eventsBefore = fix.events.length;
 
     // Daemon X sends a frame referencing host Y's agent + conv.
     // C5 step (2) `agent.host_id !== hostId` rejects.
@@ -462,10 +493,10 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
       ),
     );
 
-    // Drop confirmed: zero SSE on either conv, zero state slot,
+    // Drop confirmed: no publish on either conv, no new state slot,
     // warn carries the C5 reason taxonomy.
-    expect(fix.events).toEqual([]);
-    expect(fanoutStatesSize(fix.fanout)).toBe(0);
+    expect(fix.events.slice(eventsBefore)).toEqual([]);
+    expect(fanoutStatesSize(fix.fanout)).toBe(slotsBefore);
     const warns = perimeterWarns(fix.warns);
     expect(warns.length).toBe(1);
     expect(warns[0]!.obj).toMatchObject({
@@ -481,12 +512,20 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
 
   it('I4 — controller.sendCommand(hostY, ...) routes ONLY to daemon Y; daemon X recorder never sees the same command id (Cindy tightening: id-scoped, not "received nothing")', async () => {
     fix = await makeTwoDaemonFixture();
-    const url = fixtureUrl(fix);
 
-    const recX = await connectAndRecord(url, fix.hostX.hostToken);
+    const recX = await attachAndRecord(fix, fix.hostX, 101);
     sockets.push(recX.ws);
-    const recY = await connectAndRecord(url, fix.hostY.hostToken);
+    const recY = await attachAndRecord(fix, fix.hostY, 102);
     sockets.push(recY.ws);
+
+    // #task:1966 — attaching now means declaring, and each admitted
+    // `ready` triggers the fanout's OWN hydrate `runtime_status` on that
+    // host. Drain both hydrate commands and reset the recorders so the
+    // id/kind-scoped assertions below see only the dispatched command.
+    await untilFrame(recX, isRuntimeStatusCommand);
+    await untilFrame(recY, isRuntimeStatusCommand);
+    recX.frames.length = 0;
+    recY.frames.length = 0;
 
     // Dispatch runtime_status to host Y. The controller writes the
     // command frame to host Y's WS — daemon Y receives + responds.
@@ -498,13 +537,7 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
     );
 
     // Wait until daemon Y observes the runtime_status command.
-    const cmdFrame = await untilFrame(
-      recY,
-      f =>
-        f.direction === 'server_to_daemon' &&
-        f.type === 'command' &&
-        f.kind === 'runtime_status',
-    );
+    const cmdFrame = await untilFrame(recY, isRuntimeStatusCommand);
     const cmdId = cmdFrame.id as string;
 
     // Reply on daemon Y's socket so the controller promise resolves.
@@ -537,15 +570,6 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
 
   it('I5 — daemon X disconnect clears host X runtime cache / live state; daemon Y connection + cache + publishes unchanged', async () => {
     fix = await makeTwoDaemonFixture();
-    const url = fixtureUrl(fix);
-
-    const recX = await connectAndRecord(url, fix.hostX.hostToken);
-    sockets.push(recX.ws);
-    const recY = await connectAndRecord(url, fix.hostY.hostToken);
-    sockets.push(recY.ws);
-
-    const connY = fix.controller.connectionIdForHost(fix.hostY.id);
-    expect(connY).not.toBeNull();
 
     // Cindy `mZoTQikfvPoJ2C45` P1: I5 must actually pin fanout
     // cache cleanup, not just controller map removal. Drive the
@@ -553,10 +577,10 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
     // RunStateCache observably has content (not just an empty
     // state slot from a parsed_event-only path):
     //
-    //   1. Daemon X sends `ready` → fanout's onDaemonReady triggers
-    //      an async hydrate via `bridge.runtimeStatus()` →
-    //      controller dispatches `runtime_status` command frame to
-    //      daemon X over the WS.
+    //   1. Daemon X's attach `ready` (#task:1966 — the attachment IS
+    //      the declaration) triggers the fanout's onDaemonReady, which
+    //      hydrates via `bridge.runtimeStatus()` → the controller
+    //      dispatches a `runtime_status` command frame to daemon X.
     //   2. Daemon X's recorder catches the command, replies with a
     //      snapshot containing a runtime + populated run_state.
     //   3. Backend's RuntimeEventHandler applies the snapshot via
@@ -571,14 +595,15 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
     // / coordinator refs (it preserves the `states` Map slot itself
     // by current production semantics; we don't require slot
     // deletion).
-    recX.ws.send(encodeOutboundFrame(readyEvent(123)));
-    const statusCmd = await untilFrame(
-      recX,
-      f =>
-        f.direction === 'server_to_daemon' &&
-        f.type === 'command' &&
-        f.kind === 'runtime_status',
-    );
+    const recX = await attachAndRecord(fix, fix.hostX, 123);
+    sockets.push(recX.ws);
+    const recY = await attachAndRecord(fix, fix.hostY, 124);
+    sockets.push(recY.ws);
+
+    const connY = fix.controller.connectionIdForHost(fix.hostY.id);
+    expect(connY).not.toBeNull();
+
+    const statusCmd = await untilFrame(recX, isRuntimeStatusCommand);
     recX.ws.send(
       encodeOutboundFrame({
         direction: 'daemon_to_server',

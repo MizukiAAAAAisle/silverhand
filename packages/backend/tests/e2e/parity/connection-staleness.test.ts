@@ -260,6 +260,25 @@ describe('D5.a-4 — standalone connection staleness (real WS replacement)', () 
       label: 'daemon #1 connectionId',
     });
 
+    // #task:1966 — the attachment only exists once `ready` is admitted, and
+    // that same `ready` makes the fanout hydrate: it dispatches its OWN
+    // `runtime_status` on this connection. Answer it and reset the recorder so
+    // the in-flight command captured below is unambiguously the test's.
+    const hydrate = await waitFor(
+      () => d1.frames.find(f => f.type === 'command' && f.kind === 'runtime_status') ?? null,
+      { label: 'fanout hydrate runtime_status on #1' },
+    );
+    d1.ws.send(
+      JSON.stringify({
+        direction: 'daemon_to_server',
+        type: 'command_response',
+        id: String(hydrate.id),
+        kind: 'runtime_status',
+        result: { runtimes: [] },
+      }),
+    );
+    d1.frames.length = 0;
+
     // Dispatch a command on #1 and DON'T answer it yet.
     const pending = fix.controller.sendCommand(
       fix.hostId,

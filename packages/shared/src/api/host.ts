@@ -170,6 +170,14 @@ export const HOST_CONNECTION_CHANGED_EVENT = 'host_connection_changed';
 
 export const HOST_WS_CLOSE_REASON_REVOKED = 'host_revoked';
 export const HOST_WS_CLOSE_REASON_DISCONNECTED = 'host_disconnected';
+/** #task:1966 — the daemon's wire protocol is not the one this server speaks, so
+ *  no retry against this server can ever succeed. Sent as the close reason for a
+ *  well-formed `ready` on a wrong `protocol_version`, and TERMINAL on the daemon
+ *  side: it suppresses reconnect for the current connection config instead of
+ *  burning the ~1s reconnect floor forever. A malformed `ready` is NOT this — it
+ *  is a corrupt dialer, which keeps the generic protocol-error close and stays
+ *  retryable. */
+export const HOST_WS_CLOSE_REASON_UPDATE_REQUIRED = 'update_required';
 
 export const HostConnectionChangedEventSchema = z
   .object({

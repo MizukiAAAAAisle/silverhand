@@ -23,6 +23,7 @@ import {
   HOST_CONNECTION_CHANGED_EVENT,
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
+  HOST_WS_CLOSE_REASON_UPDATE_REQUIRED,
   apiPaths,
   type HostConnectionChangedEvent,
 } from '@silverhand/shared';
@@ -49,8 +50,9 @@ export interface HostWsAttachment {
    *  life of one websocket; a replacement connection mints a new one.
    *  Use to distinguish stale vs fresh attachments. */
   connectionId: string;
-  /** Epoch ms when the upgrade completed and the host was registered.
-   *  This is "post-auth, post-registration" so callers can rely on the
+  /** Epoch ms when the daemon's COMPATIBLE `ready` frame landed and the host
+   *  was registered (#task:1966 — not the raw upgrade). This is "post-auth,
+   *  post-compatibility, post-registration" so callers can rely on the
    *  attachment being usable (sendCommand will find the connection)
    *  the moment they observe a non-null snapshot. */
   attachedAt: number;
@@ -61,10 +63,11 @@ export interface HostWsAttachment {
    * Feature capabilities the daemon advertised in its `ready`/hello frame
    * (#task:1486). Belongs to THIS live connection generation only — a
    * replacement connection re-reports its own, and disconnect drops the whole
-   * record, so a stale binary's capabilities can never be reused. Empty until
-   * the `ready` frame lands (before-ready = unsupported). Consumers treat an
-   * unknown token as absent; `runtime.codex.reasoning.v1` here is what lets the
-   * backend send a non-baseline reasoning token to this daemon.
+   * record, so a stale binary's capabilities can never be reused. Populated in
+   * the same tick the attachment is created, because the attachment IS the
+   * `ready` frame's effect (#task:1966). Consumers treat an unknown token as
+   * absent; `runtime.codex.reasoning.v1` here is what lets the backend send a
+   * non-baseline reasoning token to this daemon.
    */
   capabilities: readonly string[];
 }
@@ -85,11 +88,13 @@ export interface HostWsAttachment {
 export interface HostWsAdmissionFailure {
   kind: 'protocol_mismatch';
   /**
-   * The connection generation that was refused. Consumers compare it with
-   * `connectionIdForHost(hostId)` to tell "the refused connection is still
-   * being torn down" (same id — the refusal explains this host's state)
-   * from "a NEW connection has since attached and has not reported yet"
-   * (different id — say nothing terminal about it yet).
+   * The connection generation that was refused. Compared INSIDE the controller
+   * against the private transport slot (#task:1966): while the refused socket
+   * still holds the slot the refusal explains this host's state, and once a
+   * different dialer has taken it the record is withheld because that daemon may
+   * be a fixed one that has simply not handshaken yet. Consumers therefore never
+   * compare generations themselves — `getAdmissionFailure` already returns
+   * `null` in the second case.
    */
   connectionId: string;
   /** Wire protocol version the daemon offered in its `ready` frame. */
@@ -102,25 +107,44 @@ export interface HostWsAdmissionFailure {
 
 export interface HostWsServerController {
   activeConnectionCount(): number;
+  /** Hosts with a live ATTACHMENT — i.e. a connection that passed the
+   *  compatibility gate by sending a valid `ready` (#task:1966). A daemon whose
+   *  handshake is being refused holds a transport slot (`connectionIdForHost`)
+   *  but is deliberately absent here: broadcasting to it is undeliverable work,
+   *  and counting it as connected is what turned a refusal loop into fleet-wide
+   *  business traffic. */
   connectedHostIds(): string[];
+  /**
+   * The live ATTACHMENT generation for `hostId`, or `null` when this host has no
+   * attachment (#task:1966). Consumers — `OutboundFrameAdapter`,
+   * `CompositeOutboundFrameAdapter.findLiveAdapter`, the host-status read model,
+   * `create-agent`, the workspace data plane — all read a non-null value as "a
+   * usable generation", so it must never name a socket that is merely
+   * authenticated: the raw transport slot is private to this module.
+   */
   connectionIdForHost(hostId: string): string | null;
   /**
-   * The most recent unrecovered admission failure for `hostId`, or `null`
-   * when the last authenticated attempt was not refused for a known terminal
-   * reason (the ordinary-offline case). Memory-only and process-local, like
-   * `getAttachment` — a server restart forgets it and the next connection
-   * attempt re-establishes the fact.
+   * The most recent UNRESOLVED admission failure for `hostId`, or `null` when
+   * the last authenticated attempt was not refused for a known terminal reason
+   * (the ordinary-offline case). Already discriminated against the refused
+   * generation: a record whose socket has since been replaced by a different
+   * dialer reads as `null`, so callers never have to time the read or compare
+   * generations themselves. Memory-only and process-local, like `getAttachment`
+   * — a server restart forgets it and the next connection attempt
+   * re-establishes the fact.
    */
   getAdmissionFailure(hostId: string): HostWsAdmissionFailure | null;
   /**
    * Returns a snapshot of the currently-active outbound websocket
    * attachment for `hostId`, or `null` when no live connection exists.
    *
-   * **Independent of `eventSink`**: this registry tracks the underlying
-   * websocket lifecycle. It updates on authenticated upgrade and on
-   * connection close, regardless of whether an `eventSink` is wired —
-   * which makes it the correct readiness signal when event projection is
-   * intentionally ignored for the co-located embedded local host.
+   * **Independent of `eventSink`**: this registry tracks the websocket's
+   * ATTACHMENT lifecycle — created when the daemon's compatible `ready` frame
+   * lands, cleared on connection close — regardless of whether an `eventSink` is
+   * wired. That is what makes it the correct readiness signal when event
+   * projection is intentionally ignored for the co-located embedded local host:
+   * the `ready` FRAME still arrives on the host-ws for that host, only its
+   * business events are ignored.
    *
    * **Replacement-safe**: when a new connection replaces an existing
    * one for the same host, the previous connection's `close` cleanup
@@ -137,9 +161,16 @@ export interface HostWsServerController {
     opts?: { timeoutMs?: number; expectedConnectionId?: string },
   ): Promise<OutboundServerCommandResult<K>>;
   /**
-   * Close the live outbound websocket for `hostId`. Returns `true` when an
-   * attached connection existed and was kicked, `false` when no live connection
-   * was registered (idempotent).
+   * Close the live outbound websocket for `hostId`. Returns `true` when a live
+   * transport connection existed and was kicked, `false` when none was
+   * registered (idempotent).
+   *
+   * Deliberately the one PUBLIC method that reads the raw transport slot rather
+   * than the attachment (#task:1966): a revoke or an availability kick must also
+   * be able to close a socket whose handshake is still unresolved — that socket
+   * holds the host's slot and, left alone, would keep dialing on a credential the
+   * user just withdrew. It grants no data-plane reachability, so it cannot
+   * reintroduce the pre-`ready` "online" window the other readers close.
    *
    * `HOST_WS_CLOSE_REASON_REVOKED` is used after credentials are revoked.
    * `HOST_WS_CLOSE_REASON_DISCONNECTED` is an availability-axis kick that
@@ -225,15 +256,26 @@ export function installHostWebSocketServer(
     maxPayload: opts.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
   });
   const connections = new Map<WebSocket, HostWsConnection>();
+  // TRANSPORT slot map: one raw authenticated socket per host, taken at upgrade.
+  // PRIVATE to this module — its only readers are the 409 slot conflict, the
+  // revoke / disconnect kick, the admission-failure generation compare, and
+  // `sendCommand`'s liveness check against the attachment. It is never exposed as
+  // a business generation: "authenticated" is not "admitted" (#task:1966).
   const connectionsByHost = new Map<string, HostWsConnection>();
-  // Lifecycle registry, intentionally independent of `opts.eventSink`.
-  // The co-located embedded local host projects runtime events over the
-  // Unix-socket transport, so callers cannot rely on a host-ws
-  // `ready` event to know that attachment is live. `attachmentsByHost`
-  // is updated in the upgrade handler the same tick as
-  // `connectionsByHost`, and cleared in the `close` listener only when
-  // the captured `connectionId` is still the registered one
-  // (replacement-safe).
+  // ATTACHMENT registry — the business fact "this host is connected", and the one
+  // state every public reader resolves through. Intentionally independent of
+  // `opts.eventSink`: the co-located embedded local host projects runtime EVENTS
+  // over the Unix-socket transport, so attachment must not be a function of the
+  // `eventSink` pipeline — but the `ready` FRAME itself does arrive on this
+  // websocket for that host too, which is why gating on it is safe there.
+  //
+  // #task:1966 — an entry is created when the daemon's COMPATIBLE `ready` frame
+  // lands, not on upgrade, and cleared in the `close` listener only when the
+  // captured `connectionId` is still the registered one (replacement-safe). Raw
+  // socket open/close is transport-internal: a daemon whose handshake is refused
+  // never becomes an attachment, so it never moves `markActivated`, never
+  // publishes `host_connection_changed`, and never appears in
+  // `connectedHostIds()`.
   const attachmentsByHost = new Map<string, HostWsAttachment>();
   // #task:1631 — outlives the connection it describes on purpose: the whole
   // point is to explain an offline host, which by definition has no live
@@ -270,13 +312,19 @@ export function installHostWebSocketServer(
       rejectUpgrade(socket, auth.statusCode, auth.reason);
       return;
     }
-    const existing = attachmentsByHost.get(auth.host.hostId);
-    if (existing) {
+    // One transport slot per host. The slot — not the attachment — is the
+    // conflict authority (#task:1966): a second dialer must be refused while the
+    // first socket is still alive, including while its handshake is still
+    // unresolved. This is byte-for-byte the state the pre-#1966 check read, since
+    // back then the attachment was created in this very handler.
+    const existingConnection = connectionsByHost.get(auth.host.hostId);
+    if (existingConnection) {
       ctx.metrics?.observeHostWsConnection('upgrade', 'already_connected');
       rejectUpgrade(socket, 409, 'Conflict', {
         error: 'computer already connected',
         error_code: 'computer_already_connected',
-        connected_host_name: existing.hostname,
+        connected_host_name:
+          attachmentsByHost.get(auth.host.hostId)?.hostname ?? null,
       });
       return;
     }
@@ -294,16 +342,57 @@ export function installHostWebSocketServer(
         eventSink: opts.eventSink,
         deploymentMode: ctx.deploymentMode,
         updateAttachmentReady: (hostname, capabilities) => {
+          // #task:1966 — the compatibility gate's one write. A valid `ready` is
+          // what CREATES the attachment (and only then announces the change); a
+          // repeat `ready` on the same connection just refreshes the reported
+          // facts, so the viewer event does not fire twice for one generation.
           const current = attachmentsByHost.get(auth.host.hostId);
-          if (!current || current.connectionId !== connectionId) return;
+          if (current) {
+            if (current.connectionId !== connectionId) return;
+            attachmentsByHost.set(auth.host.hostId, {
+              ...current,
+              hostname,
+              capabilities,
+            });
+            return;
+          }
+          // `attachedAt` is captured here (not from any DB column) so phase-2
+          // boot watchdogs can use it as the `expectAttachSince` lower bound
+          // without coordinating with `hosts.last_seen_at` clock drift.
+          const attachedAt = Date.now();
           attachmentsByHost.set(auth.host.hostId, {
-            ...current,
+            hostId: auth.host.hostId,
+            connectionId,
+            attachedAt,
             hostname,
             capabilities,
           });
+          publishHostConnectionChanged(ctx, auth.host.userId, {
+            host_id: auth.host.hostId,
+          });
         },
         recordAdmissionFailure: failure => {
+          // #task:1966 — the refusal no longer rides on an attachment edge (a
+          // never-attached connection has none), so the ONE state transition
+          // "this host's offline state just became non-self-healing" is announced
+          // here, once. Announcing it is what keeps `/api/hosts/:id/status`'s
+          // terminal `admission_failure` a PUSH: without it the human would wait
+          // for the next unrelated invalidation, and #task:1631's precise "update
+          // Silverhand on this computer" copy would sit behind a generic Offline.
+          //
+          // Deduped on `previous`, not on a timer: the record is cleared only by
+          // a valid `ready`, so a reconnect loop finds it already set and stays
+          // silent — one event per unresolved episode per host, whatever the
+          // daemon does. No attachment check is needed: the 409 slot conflict
+          // admits one socket per host at a time and the `close` listener drops
+          // the slot and the attachment in the same tick, so a host cannot hold a
+          // live attachment while a refusal is being recorded.
+          const previous = admissionFailuresByHost.get(auth.host.hostId);
           admissionFailuresByHost.set(auth.host.hostId, failure);
+          if (previous) return;
+          publishHostConnectionChanged(ctx, auth.host.userId, {
+            host_id: auth.host.hostId,
+          });
         },
         clearAdmissionFailure: () => {
           admissionFailuresByHost.delete(auth.host.hostId);
@@ -311,22 +400,20 @@ export function installHostWebSocketServer(
       });
       connections.set(ws, connection);
       connectionsByHost.set(auth.host.hostId, connection);
-      // Same tick as connection registration: `attachedAt` is captured
-      // here (not from any DB column) so phase-2 boot watchdogs can use
-      // it as the `expectAttachSince` lower bound without coordinating
-      // with `hosts.last_seen_at` clock drift.
-      const attachedAt = Date.now();
-      attachmentsByHost.set(auth.host.hostId, {
-        hostId: auth.host.hostId,
-        connectionId,
-        attachedAt,
-        hostname: null,
-        capabilities: [],
-      });
-      new HostRepo(ctx.db).markActivated(auth.host.hostId, attachedAt);
-      publishHostConnectionChanged(ctx, auth.host.userId, {
-        host_id: auth.host.hostId,
-      });
+      // `markActivated` stays HERE, on the authenticated upgrade (#task:1966
+      // deliberately did NOT move it). It stamps the LIFECYCLE axis — "a machine
+      // holding this credential reached us", which is what flips a draft
+      // `pending → attached` and what `last_seen_at` means — and
+      // `docs/user-managed-computer-v1.md` already forbids reading it as
+      // readiness (the live gate is the attachment). Gating it on `ready` would
+      // strand the Add-computer dialog on "waiting for connection" for exactly
+      // the incompatible daemon whose terminal reason we want the user to read.
+      new HostRepo(ctx.db).markActivated(auth.host.hostId);
+      // No attachment and no `host_connection_changed` here: the upgrade proves
+      // the CREDENTIAL, not that this daemon speaks our protocol. Everything on
+      // the SESSION axis waits for the compatibility gate in
+      // `updateAttachmentReady`, which is also why the announcement can no longer
+      // race ahead of `capabilities`.
       ws.on('close', (code, reason) => {
         ctx.metrics?.changeHostWsConnections('websocket_open', -1);
         ctx.metrics?.observeHostWsClose(
@@ -340,6 +427,8 @@ export function installHostWebSocketServer(
         // Replacement-safe: only clear if the registered attachment is
         // the one this `close` belongs to. When a new connection has
         // already overwritten the slot, the stale `close` is a no-op.
+        // A refused handshake never created one, so a mismatch loop publishes
+        // nothing on either edge (#task:1966).
         const current = attachmentsByHost.get(auth.host.hostId);
         if (current && current.connectionId === connectionId) {
           attachmentsByHost.delete(auth.host.hostId);
@@ -357,14 +446,42 @@ export function installHostWebSocketServer(
 
   return {
     activeConnectionCount: () => connections.size,
-    connectedHostIds: () => [...connectionsByHost.keys()],
+    connectedHostIds: () => [...attachmentsByHost.keys()],
+    // Every business reader below resolves through the ATTACHMENT registry, so a
+    // socket that is authenticated but has not passed the compatibility gate is
+    // invisible to the runtime data plane (#task:1966, @Cindy MUST FIX): the
+    // generation token, the readiness snapshot and the command path must agree,
+    // otherwise `connectionIdForHost != null` would license `agent_materialize`
+    // and runtime commands into a socket the server is about to refuse.
     connectionIdForHost: hostId =>
-      connectionsByHost.get(hostId)?.connectionId ?? null,
+      attachmentsByHost.get(hostId)?.connectionId ?? null,
     getAttachment: hostId => attachmentsByHost.get(hostId) ?? null,
-    getAdmissionFailure: hostId => admissionFailuresByHost.get(hostId) ?? null,
+    getAdmissionFailure: hostId => {
+      const failure = admissionFailuresByHost.get(hostId);
+      if (!failure) return null;
+      // The refused-generation discrimination (#task:1631) lives HERE, on the
+      // private transport slot, because it is a question about admission and not
+      // about readiness: "has a DIFFERENT socket since taken the slot?" A public
+      // readiness accessor cannot answer it — under the compatibility gate a
+      // mid-handshake replacement is deliberately not an attachment yet, so
+      // asking `connectionIdForHost` would report the stale refusal as this
+      // host's state for the whole handshake window.
+      const slot = connectionsByHost.get(hostId);
+      if (slot && slot.connectionId !== failure.connectionId) return null;
+      return failure;
+    },
     sendCommand: (hostId, kind, params, commandOpts) => {
       const startedAt = performance.now();
-      const connection = connectionsByHost.get(hostId);
+      const attachment = attachmentsByHost.get(hostId);
+      const slot = attachment ? connectionsByHost.get(hostId) : undefined;
+      // Not "is there a socket" but "is there a socket this server has agreed to
+      // speak to". A pre-`ready` or refused generation is reported as
+      // `transport_no_connection` — the same fail-fast the callers already
+      // handle — rather than being written to and silently dropped on close.
+      const connection =
+        attachment && slot && slot.connectionId === attachment.connectionId
+          ? slot
+          : undefined;
       if (!connection) {
         return observeDaemonCommand(
           ctx,
@@ -414,8 +531,8 @@ export function installHostWebSocketServer(
       } else {
         connection.closeForRevoke();
       }
-      // The `close` listener registered in the upgrade handler
-      // (line ~209) will clean `connectionsByHost` and
+      // The `close` listener registered in the upgrade
+      // handler will clean `connectionsByHost` and
       // `attachmentsByHost` on the same tick the underlying
       // socket fires its close event. We do NOT pre-clean here
       // because that would race with the per-connection
@@ -753,10 +870,15 @@ class HostWsConnection {
       // per-host so the offline Computer can say WHY it will stay offline.
       // Only a well-formed-but-wrong version qualifies: `'invalid'` means the
       // frame wasn't a readable `ready` at all, which is a corrupt-dialer
-      // signal, not an actionable "upgrade your daemon" fact. Recorded BEFORE
-      // the fall-through close so the close handler's
-      // `publishHostConnectionChanged` already sees it and the refetch it
-      // triggers carries the reason.
+      // signal, not an actionable "upgrade your daemon" fact.
+      //
+      // #task:1966 changed how the human learns it, not whether: the refusal has
+      // no attachment edge to announce, so the FIRST record for a host publishes
+      // `host_connection_changed` on its own (see `recordAdmissionFailure` in the
+      // registry) and the reconnect loop behind it publishes nothing. Recorded
+      // BEFORE the close on purpose — it is the only data source for the terminal
+      // "update Silverhand on this computer" copy, and it outlives the connection
+      // so the read does not have to be timed.
       const offered = Number(offeredProtocolVersion);
       if (Number.isSafeInteger(offered)) {
         this.recordAdmissionFailure({
@@ -775,6 +897,14 @@ class HostWsConnection {
           },
           'host-ws: refused daemon on incompatible wire protocol',
         );
+        // #task:1966 — close with the DIAGNOSABLE reason instead of falling
+        // through to the generic frame error. A version we can read but do not
+        // speak is not a transient failure: no retry against this server can
+        // succeed until the daemon binary changes, so the reason has to carry
+        // that so the daemon can stop retrying. A version we cannot even read
+        // keeps the generic path below (corrupt dialer, still retryable).
+        this.closeWithProtocolError(HOST_WS_CLOSE_REASON_UPDATE_REQUIRED);
+        return;
       }
     }
 
@@ -1105,6 +1235,11 @@ function classifyHostWsCloseReason(code: number, rawReason: Buffer): string {
   if (reason === HOST_WS_CLOSE_REASON_DISCONNECTED) return 'host_disconnected';
   if (reason === 'host_connection_replaced') return 'host_connection_replaced';
   if (reason === 'heartbeat_timeout') return 'heartbeat_timeout';
+  // Split out of the generic `protocol_error` bucket (#task:1966): this one is
+  // the fleet's "daemon needs upgrading" signal, and it is the only protocol
+  // close the daemon treats as terminal — collapsing it into `protocol_error`
+  // would hide exactly the population the suppression is meant to shrink.
+  if (reason === HOST_WS_CLOSE_REASON_UPDATE_REQUIRED) return 'update_required';
   if (code === 1002) return 'protocol_error';
   if (code === 1000) return 'normal';
   if (reason === '') return 'no_reason';

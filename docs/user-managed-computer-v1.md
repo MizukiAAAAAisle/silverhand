@@ -114,7 +114,11 @@ otherwise (activated_at == NULL)                    → pending   (created, neve
 
 - `activated_at` = the **technical-connection** fact: first successful
   authenticated daemon attach (`GET /api/hosts/connect` with the connect-token).
-  **Not** set at token-issuance time.
+  **Not** set at token-issuance time. Deliberately the CREDENTIAL axis, not the
+  session axis: it is stamped on the authenticated upgrade even if the server then
+  refuses that daemon's wire protocol (#task:1966), because "a machine holding
+  this token reached us" is exactly what the draft flow needs to know. Liveness
+  is the live attachment, never this column (see below).
 - `finalized_at` = the **user-commitment** fact: the user confirmed the Add
   computer flow (named it). These are two genuinely distinct facts (technical
   connect ⊥ user commitment) at different times; separating them lets an

@@ -10,6 +10,7 @@ import {
   DAEMON_HOST_CONFIG_FILENAME,
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
+  HOST_WS_CLOSE_REASON_UPDATE_REQUIRED,
 } from '@silverhand/shared';
 import {
   KNOWN_CAPABILITIES_V1,
@@ -218,6 +219,124 @@ describe('outbound daemon websocket client', () => {
         reason: HOST_WS_CLOSE_REASON_REVOKED,
       }),
     );
+  });
+
+  // #task:1966 — a version the server can read but does not speak is not a
+  // transient failure: no retry against this server can succeed until this daemon
+  // binary changes. Treating it as retryable is what produced 293,881 refused
+  // handshakes in 24h from three stale daemons. Suppression is scoped to the
+  // current connection config, so a re-point (or the daemon restart that an
+  // upgrade entails) re-arms it.
+  it('suppresses reconnect after an update_required terminal close until config changes', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    const { client, logger, dir } = startClient(server.url, {
+      configPollMs: 10,
+      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    setTimeout(
+      () => first.ws.close(1002, HOST_WS_CLOSE_REASON_UPDATE_REQUIRED),
+      5,
+    );
+
+    await server.waitForCloseCount(1);
+    await delay(50);
+    expect(server.connections).toHaveLength(1);
+    expect(logger.entries).toContainEqual(
+      expect.objectContaining({
+        level: 'info',
+        action: 'reconnect_suppressed',
+        reason: HOST_WS_CLOSE_REASON_UPDATE_REQUIRED,
+      }),
+    );
+
+    writeFileSync(
+      join(dir, DAEMON_HOST_CONFIG_FILENAME),
+      JSON.stringify({
+        server_url: server.url,
+        host_id: 'host-1',
+        host_token: 'new-host-token',
+      }),
+    );
+
+    const second = await server.waitForConnectionCount(2);
+    expect(second.request.headers.authorization).toBe('Bearer new-host-token');
+  });
+
+  // #task:1966 — the reset used to live in the `open` handler, which made the
+  // recovery budget meaningless for a daemon the server refuses: every attempt
+  // opened a socket, reset to attempt 0, and re-dialed at the floor delay forever.
+  it('does not reset the reconnect budget on a raw socket open', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    // No pings: the pong is the ONLY thing that may clear the budget, so with
+    // heartbeats off the attempt counter must monotonically escalate.
+    const { client, logger } = startClient(server.url, {
+      heartbeat: { pingIntervalMs: 0, pongTimeoutMs: 50 },
+      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    expect(client.state().reconnectAttempt).toBe(0);
+    first.ws.close(1001, 'server_shutdown');
+    await server.waitForCloseCount(1);
+
+    const second = await server.waitForConnectionCount(2);
+    await waitFor(() => client.state().connected);
+    // The socket is OPEN and the budget is NOT back to zero.
+    expect(client.state().reconnectAttempt).toBe(1);
+
+    second.ws.close(1001, 'server_shutdown');
+    await server.waitForCloseCount(2);
+    await server.waitForConnectionCount(3);
+    expect(client.state().reconnectAttempt).toBe(2);
+    expect(
+      logger.entries
+        .filter(entry => entry.action === 'reconnect_scheduled')
+        .map(entry => entry.attempt),
+    ).toEqual([1, 2]);
+  });
+
+  it('clears the reconnect budget on the server pong, one round-trip after connecting', async () => {
+    const server = await FakeOutboundServer.start();
+    cleanup.push(() => server.close());
+    // A ping interval far longer than this test: the ping we observe can only be
+    // the IMMEDIATE one `startHeartbeat` sends, which is what keeps a healthy
+    // reconnect's budget reset as prompt as the old reset-on-`open` was.
+    const { client } = startClient(server.url, {
+      heartbeat: { pingIntervalMs: 10_000, pongTimeoutMs: 5_000 },
+      backoff: { minDelayMs: 10, maxDelayMs: 10, factor: 2, jitterRatio: 0 },
+    });
+    cleanup.push(() => client.stop('test_done'));
+
+    const first = await server.waitForConnectionCount(1);
+    await waitFor(() => pingsFor(server, first.ws).length === 1);
+    first.ws.close(1001, 'server_shutdown');
+    await server.waitForCloseCount(1);
+
+    const second = await server.waitForConnectionCount(2);
+    const ping = await waitForPing(server, second.ws);
+    // Ordering is the proof: `ready` was written before this ping on the same
+    // socket, and a socket's frames are handled in order — so a pong answering it
+    // rules out "the server is about to refuse this handshake", which is exactly
+    // what `open` could not rule out. Until it arrives the budget stands.
+    expect(client.state().reconnectAttempt).toBe(1);
+
+    second.ws.send(
+      encodeOutboundFrame({
+        direction: 'server_to_daemon',
+        type: 'heartbeat',
+        kind: 'pong',
+        ts: 1700000000001,
+        echo_ts: Number(ping.ts),
+      }),
+    );
+
+    await waitFor(() => client.state().reconnectAttempt === 0);
   });
 
   it('closes and reconnects after daemon heartbeat timeout', async () => {
@@ -764,6 +883,28 @@ class FakeOutboundServer {
     await waitFor(() => this.frames.some(({ frame }) => match(frame)));
     return this.frames.find(({ frame }) => match(frame))!.frame;
   }
+}
+
+function pingsFor(
+  server: FakeOutboundServer,
+  ws: WebSocket,
+): Array<Record<string, unknown>> {
+  return server.frames
+    .filter(
+      entry =>
+        entry.ws === ws &&
+        entry.frame.type === 'heartbeat' &&
+        entry.frame.kind === 'ping',
+    )
+    .map(entry => entry.frame);
+}
+
+async function waitForPing(
+  server: FakeOutboundServer,
+  ws: WebSocket,
+): Promise<Record<string, unknown>> {
+  await waitFor(() => pingsFor(server, ws).length >= 1);
+  return pingsFor(server, ws)[0]!;
 }
 
 function parseFrame(data: RawData): Record<string, unknown> | null {

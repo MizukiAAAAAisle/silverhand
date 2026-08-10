@@ -2738,24 +2738,24 @@ describe('host routes', () => {
       expect(HostStatusResponseSchema.safeParse(body).success).toBe(true);
     });
 
-    it('does NOT project a refusal that belongs to an older connection generation (#task:1631)', async () => {
+    it('does NOT project a refusal the controller withheld as stale (#task:1631, #task:1966)', async () => {
       // The other side of the same race: the user upgraded the daemon and it
-      // reconnected, so a NEW socket is attached and has not sent `ready`
-      // yet (the record clears on that `ready`). The stale refusal describes a
-      // socket that is already gone — claiming "upgrade this machine" here
-      // would be a false terminal verdict on a host that is coming back. Fall
-      // through to the transient `unreachable` arm instead.
+      // reconnected, so a NEW socket holds this host's transport slot. The stale
+      // refusal describes a socket that is already gone — claiming "upgrade this
+      // machine" here would be a false terminal verdict on a host that is coming
+      // back.
+      //
+      // #task:1966 moved that generation compare INTO the controller (pinned in
+      // tests/ws/host-ws-server.test.ts): a pre-`ready` socket is deliberately
+      // invisible to every readiness accessor, so this route can no longer make the
+      // comparison itself. What the route still owes is that it has no OTHER way to
+      // resurrect a refusal — with the controller withholding it, the answer must
+      // fall through to the transient arm.
       let controller: FakeHostWsController | null = null;
       t = buildTestApp({ hostWsController: () => controller });
       const fake = new FakeHostWsController(async () => ({}));
       fake.connectionId = 'conn-2'; // the upgraded daemon's socket
-      fake.admissionFailure = {
-        kind: 'protocol_mismatch',
-        connectionId: 'conn-1', // the refused, long-dead one
-        offeredProtocolVersion: 7,
-        expectedProtocolVersion: 8,
-        observedAt: 1_700_000_000_000,
-      };
+      fake.admissionFailure = null; // withheld: the record names conn-1
       controller = fake;
       const userToken = t.ctx.authSessions.issueSession({
         userId: t.viewerUserId,
@@ -3006,7 +3006,10 @@ class FakeHostWsController implements HostWsServerController {
   }
 
   /** #task:1631 — set by a test to model a host whose last authenticated
-   *  connection attempt was refused for an unrecoverable reason. */
+   *  connection attempt was refused for an unrecoverable reason. The real
+   *  controller answers this only when the record still describes the current
+   *  transport slot (#task:1966), so a test that wants the withheld case sets
+   *  this to null rather than expecting the route to compare generations. */
   admissionFailure: HostWsAdmissionFailure | null = null;
 
   getAdmissionFailure(): HostWsAdmissionFailure | null {

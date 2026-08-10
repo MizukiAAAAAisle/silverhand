@@ -15,6 +15,7 @@ import {
   DaemonHostConfigSchema,
   HOST_WS_CLOSE_REASON_DISCONNECTED,
   HOST_WS_CLOSE_REASON_REVOKED,
+  HOST_WS_CLOSE_REASON_UPDATE_REQUIRED,
   apiPaths,
   classifyServerUrl,
   type DaemonHostConfig,
@@ -345,7 +346,15 @@ export class OutboundDaemonClient {
     );
 
     ws.on('open', () => {
-      this.reconnectAttempt = 0;
+      // NO backoff reset here (#task:1966). A raw socket open proves only that
+      // the TCP/WS handshake succeeded — the server has not yet seen our `ready`,
+      // so an incompatible daemon would reset its recovery budget on every
+      // attempt and hammer the floor delay forever. The budget is cleared by the
+      // server's pong instead (see `handleHeartbeat`): `ready` is written first
+      // and one socket's frames are processed in order, so a pong proves the
+      // server did not refuse the handshake. `startHeartbeat` sends the first ping
+      // immediately, so a healthy connection still clears its budget in one
+      // round-trip rather than at the heartbeat interval.
       this.currentOwner = owner;
       this.writeBuffer.reset();
       this.opts.logger.info(
@@ -661,40 +670,56 @@ export class OutboundDaemonClient {
       });
       return;
     }
+    // The server's pong answering OUR ping: the one existing signal that this
+    // connection is both COMPATIBLE and usable (#task:1966). The ping went out
+    // behind `ready` on the same socket and a socket's frames are handled in
+    // order, so a pong rules out the "server is about to refuse this handshake"
+    // state that `open` cannot. Note the asymmetry — a server→daemon PING proves
+    // nothing, because the server starts pinging at upgrade, before it has read
+    // `ready`. This is where the reconnect budget is cleared.
+    this.reconnectAttempt = 0;
     this.clearPongTimer();
   }
 
   private startHeartbeat(): void {
     this.clearHeartbeatTimers();
     if (this.heartbeat.pingIntervalMs <= 0) return;
-    this.pingTimer = setInterval(() => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      const ts = this.now();
-      if (
-        !this.sendControlFrame({
-          direction: 'daemon_to_server',
-          type: 'heartbeat',
-          kind: 'ping',
-          ts,
-        })
-      ) {
-        return;
-      }
-      this.clearPongTimer();
-      this.pongTimer = setTimeout(() => {
-        this.opts.logger.warn(
-          {
-            kind: 'outbound_ws',
-            action: 'heartbeat_timeout',
-            timeout_ms: this.heartbeat.pongTimeoutMs,
-          },
-          'daemon outbound heartbeat timeout; closing connection',
-        );
-        this.ws?.close(1008, 'heartbeat_timeout');
-      }, this.heartbeat.pongTimeoutMs);
-      this.pongTimer.unref?.();
-    }, this.heartbeat.pingIntervalMs);
+    // One ping IMMEDIATELY, then on the interval (#task:1966). The immediate one
+    // exists so the admission signal is not paid for at the interval's price: it
+    // is written right behind `ready` on the same socket, so the server answers
+    // (or has already closed us) within a round-trip, and a healthy reconnect
+    // clears its backoff budget as promptly as the old reset-on-`open` did.
+    this.sendPing();
+    this.pingTimer = setInterval(() => this.sendPing(), this.heartbeat.pingIntervalMs);
     this.pingTimer.unref?.();
+  }
+
+  private sendPing(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const ts = this.now();
+    if (
+      !this.sendControlFrame({
+        direction: 'daemon_to_server',
+        type: 'heartbeat',
+        kind: 'ping',
+        ts,
+      })
+    ) {
+      return;
+    }
+    this.clearPongTimer();
+    this.pongTimer = setTimeout(() => {
+      this.opts.logger.warn(
+        {
+          kind: 'outbound_ws',
+          action: 'heartbeat_timeout',
+          timeout_ms: this.heartbeat.pongTimeoutMs,
+        },
+        'daemon outbound heartbeat timeout; closing connection',
+      );
+      this.ws?.close(1008, 'heartbeat_timeout');
+    }, this.heartbeat.pongTimeoutMs);
+    this.pongTimer.unref?.();
   }
 
   private sendControlFrame(frame: OutboundFrame): boolean {
@@ -1048,7 +1073,13 @@ function closeClass(code: number): 'normal' | 'going_away' | 'abnormal' | 'other
 function isTerminalServerCloseReason(reason: string): boolean {
   return (
     reason === HOST_WS_CLOSE_REASON_REVOKED ||
-    reason === HOST_WS_CLOSE_REASON_DISCONNECTED
+    reason === HOST_WS_CLOSE_REASON_DISCONNECTED ||
+    // #task:1966 — the server can read our `ready` but does not speak our wire
+    // version. Retrying the same binary against the same server is guaranteed to
+    // fail, so this joins the reasons that stop the loop until the connection
+    // config actually changes. A generic protocol error stays retryable: it can
+    // come from one corrupt frame rather than from the binary being too old.
+    reason === HOST_WS_CLOSE_REASON_UPDATE_REQUIRED
   );
 }
 

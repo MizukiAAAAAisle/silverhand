@@ -60,6 +60,11 @@ runOutboundFrameAdapterContract('standalone (outbound WSS)', async () => {
     connectDaemon: async (): Promise<FakeDaemonConnection> => {
       const ws = await connectHost(wsUrl, issued.hostToken);
       sockets.push(ws);
+      // #task:1966 — a bare authenticated socket is a transport slot, not an
+      // attachment: the adapter only sees a live generation once a COMPATIBLE
+      // `ready` has landed. The contract harness needs a reachable daemon, so
+      // this helper hands it a fully admitted one.
+      ws.send(readyFrame('daemon-host', []));
       await waitFor(() => controller.connectionIdForHost(host.id) !== null);
       const connectionId = controller.connectionIdForHost(host.id)!;
       return new StandaloneFakeDaemon(ws, connectionId);
@@ -161,6 +166,22 @@ class StandaloneFakeDaemon implements FakeDaemonConnection {
   }
 }
 
+function readyFrame(hostname: string, capabilities: string[]): string | Buffer {
+  return encodeOutboundFrame({
+    direction: 'daemon_to_server',
+    type: 'event',
+    kind: 'ready',
+    protocol_version: OUTBOUND_PROTOCOL_VERSION,
+    daemon_version: 'test',
+    daemon_id: 'local',
+    instance_id: 'inst-1',
+    host_descriptor: { name: hostname, kind: 'local' },
+    capabilities,
+    daemon_pid: 4242,
+    started_at: 1_717_000_000,
+  } as never) as string | Buffer;
+}
+
 async function connectHost(
   url: string,
   token: string,
@@ -217,22 +238,6 @@ async function waitFor(
 // never inherit a prior generation's advertised `runtime.codex.reasoning.v1`,
 // so a stale binary can never authorize an Ultra send it no longer supports.
 describe('StandaloneOutboundFrameAdapter capability recording (#task:1486 P2-2)', () => {
-  function readyFrame(hostname: string, capabilities: string[]): string | Buffer {
-    return encodeOutboundFrame({
-      direction: 'daemon_to_server',
-      type: 'event',
-      kind: 'ready',
-      protocol_version: OUTBOUND_PROTOCOL_VERSION,
-      daemon_version: 'test',
-      daemon_id: 'local',
-      instance_id: 'inst-1',
-      host_descriptor: { name: hostname, kind: 'local' },
-      capabilities,
-      daemon_pid: 4242,
-      started_at: 1_717_000_000,
-    } as never) as string | Buffer;
-  }
-
   it('records ready capabilities and a reconnected daemon starts without the stale grant', async () => {
     const t = buildTestApp();
     const httpServer = createServer((_req, res) => {
@@ -262,11 +267,10 @@ describe('StandaloneOutboundFrameAdapter capability recording (#task:1486 P2-2)'
       // First generation attaches and advertises the reasoning capability.
       const ws1 = await connectHost(wsUrl, issued.hostToken);
       sockets.push(ws1);
-      await waitFor(() => controller.connectionIdForHost(host.id) !== null);
-      const gen1 = controller.connectionIdForHost(host.id);
 
-      // Before `ready`: attached, but no capabilities advertised yet.
-      expect(adapter.getAttachment(host.id)?.capabilities).toEqual([]);
+      // Before `ready`: an authenticated transport slot, but no attachment at all
+      // (#task:1966) — so there is no capability set for the adapter to read.
+      expect(adapter.getAttachment(host.id)).toBeNull();
 
       ws1.send(readyFrame('daemon-host-1', ['runtime.codex.reasoning.v1']));
       await waitFor(
@@ -275,6 +279,8 @@ describe('StandaloneOutboundFrameAdapter capability recording (#task:1486 P2-2)'
             .getAttachment(host.id)
             ?.capabilities.includes('runtime.codex.reasoning.v1') ?? false,
       );
+      const gen1 = controller.connectionIdForHost(host.id);
+      expect(gen1).not.toBeNull();
 
       // Drop the connection: standalone deletes the attachment for THIS
       // generation, so nothing survives to be inherited.
@@ -283,20 +289,12 @@ describe('StandaloneOutboundFrameAdapter capability recording (#task:1486 P2-2)'
       await closed;
       await waitFor(() => controller.connectionIdForHost(host.id) !== gen1);
 
-      // Reconnect as a NEW generation. It MUST start with an empty capability
-      // set — the gen1 grant is gone until the new daemon re-declares.
+      // Reconnect as a NEW generation. Post-#task:1966 the stale grant cannot be
+      // inherited for a stronger reason than before: until the new daemon
+      // re-declares, there is no attachment to inherit it INTO.
       const ws2 = await connectHost(wsUrl, issued.hostToken);
       sockets.push(ws2);
-      await waitFor(() => {
-        const id = controller.connectionIdForHost(host.id);
-        return id !== null && id !== gen1;
-      });
-      expect(adapter.getAttachment(host.id)?.capabilities).toEqual([]);
-      expect(
-        adapter
-          .getAttachment(host.id)
-          ?.capabilities.includes('runtime.codex.reasoning.v1'),
-      ).toBe(false);
+      expect(adapter.getAttachment(host.id)).toBeNull();
 
       // The new generation re-declares its OWN, narrower set — still no Ultra.
       ws2.send(readyFrame('daemon-host-2', ['runtime.claude']));
@@ -305,6 +303,9 @@ describe('StandaloneOutboundFrameAdapter capability recording (#task:1486 P2-2)'
           adapter.getAttachment(host.id)?.capabilities.includes('runtime.claude') ??
           false,
       );
+      const gen2 = controller.connectionIdForHost(host.id);
+      expect(gen2).not.toBeNull();
+      expect(gen2).not.toBe(gen1);
       expect(
         adapter
           .getAttachment(host.id)
