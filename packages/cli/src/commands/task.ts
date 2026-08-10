@@ -13,6 +13,7 @@ import {
   type ParsedArgs,
 } from '../parse.js';
 import { decodeStdinUtf8, readAllStdin } from '../stdin.js';
+import type { RemovedFlagSpec } from '../strict-flags.js';
 import type { Command } from './index.js';
 
 /**
@@ -70,7 +71,7 @@ async function resolveBodySwitch(
       subkind: 'body_requires_stdin',
       message:
         '--body no longer takes an inline value; it reads the Markdown body from stdin. ' +
-        "Pipe it with a heredoc — e.g. `silverhand task edit --task-number N --body <<'SILVERHAND_EOF'\n" +
+        "Pipe it with a heredoc — e.g. `silverhand task edit 42 --body <<'SILVERHAND_EOF'\n" +
         '...\nSILVERHAND_EOF`. Omit --body to leave the body unchanged; ' +
         'use `task edit --clear-body` to clear it.',
       retriable: false,
@@ -83,7 +84,7 @@ async function resolveBodySwitch(
       subkind: 'stdin_is_tty',
       message:
         '--body reads the body from stdin, but stdin is a TTY. ' +
-        "Pipe it — e.g. `silverhand task edit --task-number N --body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`, " +
+        "Pipe it — e.g. `silverhand task edit 42 --body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`, " +
         'or use `task edit --clear-body` to clear the body.',
       retriable: false,
     });
@@ -103,7 +104,7 @@ async function resolveBodySwitch(
         verb === 'edit'
           ? '--body read an empty stdin and will NOT clear the body (a forgotten ' +
             'heredoc must never silently wipe a task description). To clear it, use ' +
-            '`silverhand task edit --task-number N --clear-body`; to leave it ' +
+            '`silverhand task edit 42 --clear-body`; to leave it ' +
             'unchanged, omit --body; otherwise pipe non-empty Markdown.'
           : '--body read an empty stdin. Omit --body to create the task with an empty ' +
             'description, or pipe non-empty Markdown. (An empty pipe is refused so a ' +
@@ -210,6 +211,101 @@ function expandFilterStatuses(raw: readonly string[]): TaskStatus[] | null {
     }
   }
   return [...out];
+}
+
+/**
+ * Migration hint shared by every by-number verb that used to take
+ * `--task-number`. The operand is now positional, so the flag is a
+ * `removedFlags` entry rather than an accepted alias: keeping both would
+ * leave two spellings of the same required argument, which is exactly the
+ * redundancy this cut removes. `task list` keeps `--task-number` because
+ * there it is an OPTIONAL, repeatable FILTER — a different role.
+ */
+const TASK_NUMBER_FLAG_REMOVED: RemovedFlagSpec = {
+  replacement: 'positional <task_number>',
+  hint:
+    'the task number is now a positional operand — e.g. ' +
+    '`silverhand task detail 42`, `silverhand task claim 42 43`. ' +
+    '`--task-number` survives only on `silverhand task list`, where it is ' +
+    'an optional repeatable filter.',
+};
+
+/**
+ * Parse the positional `<task_number>` operand(s) for the by-number verbs.
+ *
+ * Every check here is client-side and runs BEFORE any network call, so a
+ * missing / mistyped / over-supplied operand costs no round trip and can
+ * never be half-applied. Two arities:
+ *
+ *   'exactly-one'  detail | edit | status | unclaim — a point operation
+ *   'one-or-more'  claim — batch by construction (the backend's claim op
+ *                  takes a list and reports per-task success/failure)
+ *
+ * A task number is a positive integer: it is a per-workspace counter, so
+ * `0`, `-3`, `4.5`, and `4abc` are all impossible values rather than
+ * merely unlucky ones. Rejecting them here keeps the failure legible
+ * (`invalid_task_number` naming the offending token) instead of arriving
+ * as a 404 for a number that could not exist.
+ */
+function parseTaskNumberOperands(
+  args: ParsedArgs,
+  verb: string,
+  arity: 'exactly-one' | 'one-or-more',
+): number[] {
+  const tokens = args.positional;
+  const usage =
+    arity === 'one-or-more'
+      ? `silverhand task ${verb} <task_number> [<task_number> ...]`
+      : `silverhand task ${verb} <task_number>`;
+  if (tokens.length === 0) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'missing_task_number',
+      message:
+        `silverhand task ${verb} requires the task number as a positional ` +
+        `operand: \`${usage}\`. Task numbers come from \`task list\` rows ` +
+        '(the `task_number` field, i.e. what `#task:N` refers to).',
+      retriable: false,
+      details: { command: `task ${verb}`, operand: 'task_number' },
+    });
+  }
+  if (arity === 'exactly-one' && tokens.length > 1) {
+    throw new CliError({
+      code: 'validation_error',
+      subkind: 'unexpected_arguments',
+      message:
+        `silverhand task ${verb} operates on ONE task: \`${usage}\`. ` +
+        `Got ${tokens.length} positional tokens ` +
+        `(${tokens.map(t => JSON.stringify(t)).join(', ')}). ` +
+        'Call it once per task.',
+      retriable: false,
+      details: { command: `task ${verb}`, positional: tokens.slice() },
+    });
+  }
+  return tokens.map(token => {
+    // Number() would accept '', ' 12 ', '0x2a', '1e3' — none of which an
+    // agent can have read off a task row. Match the digits exactly, then
+    // require the parse to survive as an exact integer: a 20-digit string
+    // is all digits but rounds (or reaches Infinity) on the way to JSON,
+    // so it would leave here as a DIFFERENT number than the caller typed.
+    const value = /^\d+$/.test(token) ? Number(token) : Number.NaN;
+    if (!Number.isSafeInteger(value) || value < 1) {
+      throw new CliError({
+        code: 'validation_error',
+        subkind: 'invalid_task_number',
+        message:
+          `task number must be a positive integer; got ${JSON.stringify(token)}. ` +
+          `Usage: \`${usage}\`.`,
+        retriable: false,
+        details: {
+          command: `task ${verb}`,
+          operand: 'task_number',
+          value: token,
+        },
+      });
+    }
+    return value;
+  });
 }
 
 const listCommand: Command = {
@@ -596,7 +692,7 @@ function resolveWorkspaceSelector(
 const claimCommand: Command = {
   verb: 'claim',
   summary: 'Claim existing tasks by task number.',
-  help: `silverhand task claim --task-number N [--task-number N ...]
+  help: `silverhand task claim <task_number> [<task_number> ...]
                          [--workspace-id <id> | --workspace <name>]
 
 Atomic claim of tasks that ALREADY exist. If a task is already claimed by
@@ -604,6 +700,9 @@ someone else, the result entry has success=false with a reason. Always
 move on when a claim fails — do not retry.
 
 Claiming a "todo" task auto-advances it to "in_progress".
+
+  silverhand task claim 42          # one task
+  silverhand task claim 42 43 44    # batch; per-task success in the result
 
 To create a task from a message and start it in one call, use
 \`silverhand task create --title "..." --source-message-id <id> --claim\`.
@@ -619,16 +718,11 @@ You must be a member of the resolved workspace; otherwise the claim
 fails with \`workspace_membership_required\`.
 
 stdout: ClaimTasksResult JSON.`,
-  flags: ['task-number', 'workspace-id', 'workspace'] as const,
+  flags: ['workspace-id', 'workspace'] as const,
+  removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
+  allowPositional: true,
   async run({ client, args }) {
-    const taskNumbers = flagNumberArray(args, 'task-number');
-    if (!taskNumbers) {
-      throw new CliError({
-        code: 'validation_error',
-        message: 'task claim requires --task-number',
-        retriable: false,
-      });
-    }
+    const taskNumbers = parseTaskNumberOperands(args, 'claim', 'one-or-more');
     const selector = resolveWorkspaceSelector(args);
     return client.claimTasks({
       task_numbers: taskNumbers,
@@ -640,36 +734,31 @@ stdout: ClaimTasksResult JSON.`,
 const unclaimCommand: Command = {
   verb: 'unclaim',
   summary: 'Release your claim on a task.',
-  help: `silverhand task unclaim --task-number N
+  help: `silverhand task unclaim <task_number>
                            [--workspace-id <id> | --workspace <name>]
 
 Use only when you can no longer work on the task. To signal completion,
-use \`silverhand task status --task-number N --status in_review\` (or
+use \`silverhand task status <task_number> --status in_review\` (or
 done if explicitly approved) instead.
 
 Workspace selector — see \`silverhand task claim --help\`. You must be
 the task's assignee.
 
 stdout: TaskMutationResult JSON.`,
-  flags: ['task-number', 'workspace-id', 'workspace'] as const,
+  flags: ['workspace-id', 'workspace'] as const,
+  removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
+  allowPositional: true,
   async run({ client, args }) {
-    const n = flagNumber(args, 'task-number');
-    if (n === undefined) {
-      throw new CliError({
-        code: 'validation_error',
-        message: '--task-number is required',
-        retriable: false,
-      });
-    }
+    const [n] = parseTaskNumberOperands(args, 'unclaim', 'exactly-one');
     const selector = resolveWorkspaceSelector(args);
-    return client.unclaimTask({ task_number: n, ...selector });
+    return client.unclaimTask({ task_number: n!, ...selector });
   },
 };
 
 const statusCommand: Command = {
   verb: 'status',
   summary: 'Move a task through its status workflow.',
-  help: `silverhand task status --task-number N --status todo|in_progress|in_review|done|closed
+  help: `silverhand task status <task_number> --status todo|in_progress|in_review|done|closed
                           [--workspace-id <id> | --workspace <name>]
 
 Allowed transitions (you must be the assignee, or the creator of an
@@ -693,15 +782,22 @@ Workspace selector — see \`silverhand task claim --help\`. Cross-workspace
 status updates require you to be a member of the resolved workspace.
 
 stdout: TaskMutationResult JSON.`,
-  flags: ['task-number', 'status', 'workspace-id', 'workspace'] as const,
+  flags: ['status', 'workspace-id', 'workspace'] as const,
+  removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
+  allowPositional: true,
   async run({ client, args }) {
-    const n = flagNumber(args, 'task-number');
+    const [n] = parseTaskNumberOperands(args, 'status', 'exactly-one');
     const status = flagString(args, 'status') as TaskStatus | undefined;
-    if (n === undefined || !status) {
+    if (!status) {
       throw new CliError({
         code: 'validation_error',
-        message: 'task status requires --task-number and --status',
+        subkind: 'missing_required_flag',
+        message:
+          'silverhand task status requires --status: ' +
+          '`silverhand task status <task_number> --status ' +
+          `${VALID_UPDATE_STATUSES.join('|')}\`.`,
         retriable: false,
+        details: { command: 'task status', flag: 'status' },
       });
     }
     if (LIST_ONLY_STATUS_MACROS.has(status)) {
@@ -736,14 +832,14 @@ stdout: TaskMutationResult JSON.`,
       });
     }
     const selector = resolveWorkspaceSelector(args);
-    return client.updateTaskStatus({ task_number: n, status, ...selector });
+    return client.updateTaskStatus({ task_number: n!, status, ...selector });
   },
 };
 
 const editCommand: Command = {
   verb: 'edit',
   summary: "Edit a task's title and/or content (last-write-wins).",
-  help: `silverhand task edit --task-number N
+  help: `silverhand task edit <task_number>
                         [--title <title>] [--body | --clear-body]
                         [--workspace-id <id> | --workspace <name>]
 
@@ -755,12 +851,12 @@ than silently clearing the body (a forgotten heredoc must never wipe a
 description). To clear the content, pass --clear-body (mutually exclusive with
 --body). Omit all of them to leave a field unchanged.
 
-  silverhand task edit --task-number 42 --body <<'SILVERHAND_EOF'
+  silverhand task edit 42 --body <<'SILVERHAND_EOF'
   ## Acceptance
   Multi-line Markdown with $vars and \`backticks\` is safe under a heredoc.
   SILVERHAND_EOF
 
-  silverhand task edit --task-number 42 --clear-body   # clears the body
+  silverhand task edit 42 --clear-body   # clears the body
 
 Last-write-wins: the edit is applied directly and the most recent
 successful write wins — there is no concurrency check. It never changes
@@ -770,24 +866,16 @@ Workspace selector — see \`silverhand task claim --help\`.
 
 stdout: TaskEditResult JSON.`,
   flags: [
-    'task-number',
     'title',
     'body',
     'workspace-id',
     'workspace',
   ] as const,
   booleanFlags: ['clear-body'] as const,
+  removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
+  allowPositional: true,
   async run({ client, args }) {
-    const taskNumber = flagNumber(args, 'task-number');
-    if (taskNumber === undefined) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'missing_required_flag',
-        message: 'task edit requires --task-number',
-        retriable: false,
-        details: { command: 'task edit', flag: 'task-number' },
-      });
-    }
+    const [taskNumber] = parseTaskNumberOperands(args, 'edit', 'exactly-one');
     const title = flagString(args, 'title');
     const clearBody = flagBool(args, 'clear-body') === true;
     const hasBodyFlag = args.flags['body'] !== undefined;
@@ -821,7 +909,7 @@ stdout: TaskEditResult JSON.`,
     const body = clearBody ? '' : await resolveBodySwitch(args, 'edit');
     const selector = resolveWorkspaceSelector(args);
     return client.editTask({
-      task_number: taskNumber,
+      task_number: taskNumber!,
       ...(title !== undefined ? { title } : {}),
       ...(body !== undefined ? { body } : {}),
       ...selector,
@@ -832,34 +920,27 @@ stdout: TaskEditResult JSON.`,
 const detailCommand: Command = {
   verb: 'detail',
   summary: "Read one task's full detail (content + provenance).",
-  help: `silverhand task detail --task-number N
+  help: `silverhand task detail <task_number>
                          [--workspace-id <id> | --workspace <name>]
 
 Read a single task's full definition: title, complete content,
 last-editor attribution, the provenance \`source_message_id\`,
 and a viewer-resolved \`nav\` target for "view in conversation".
 
---task-number is the task's per-workspace number (the \`task_number\` field
+<task_number> is the task's per-workspace number (the \`task_number\` field
 on each row from \`task list\`, and what \`#task:N\` refers to).
 
 Workspace selector — see \`silverhand task claim --help\`. Defaults to the
 actor's current workspace.
 
 stdout: { "task": TaskDetailDto }`,
-  flags: ['task-number', 'workspace-id', 'workspace'] as const,
+  flags: ['workspace-id', 'workspace'] as const,
+  removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
+  allowPositional: true,
   async run({ client, args }) {
-    const taskNumber = flagNumber(args, 'task-number');
-    if (taskNumber === undefined) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'missing_required_flag',
-        message: 'task detail requires --task-number (from `task list` rows)',
-        retriable: false,
-        details: { command: 'task detail', flag: 'task-number' },
-      });
-    }
+    const [taskNumber] = parseTaskNumberOperands(args, 'detail', 'exactly-one');
     const selector = resolveWorkspaceSelector(args);
-    return client.getTaskDetail({ task_number: taskNumber, ...selector });
+    return client.getTaskDetail({ task_number: taskNumber!, ...selector });
   },
 };
 

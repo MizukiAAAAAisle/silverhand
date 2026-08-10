@@ -70,6 +70,15 @@ function parsedFlags(flags: Record<string, string | string[]>): ParsedArgs {
   return { flags, positional: [], rest: [] } as ParsedArgs;
 }
 
+/** `task status` takes the task number as a positional operand; only
+ *  `--status` remains a flag. */
+function parsedStatusArgs(
+  taskNumber: string,
+  flags: Record<string, string | string[]>,
+): ParsedArgs {
+  return { flags, positional: [taskNumber], rest: [] } as ParsedArgs;
+}
+
 describe('task list --status filter macros', () => {
   const list = findCommand('task', 'list');
   if (!list) throw new Error('task list command missing');
@@ -216,7 +225,7 @@ describe('task status --status mutation guards', () => {
       env,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client: client as any,
-      args: parsedFlags({ 'task-number': '7', status: 'in_review' }),
+      args: parsedStatusArgs('7', { status: 'in_review' }),
     });
     expect(capture()).toEqual({ task_number: 7, status: 'in_review' });
   });
@@ -227,7 +236,7 @@ describe('task status --status mutation guards', () => {
       env,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client: client as any,
-      args: parsedFlags({ 'task-number': '7', status: 'closed' }),
+      args: parsedStatusArgs('7', { status: 'closed' }),
     });
     expect(capture()).toEqual({ task_number: 7, status: 'closed' });
   });
@@ -238,7 +247,7 @@ describe('task status --status mutation guards', () => {
       env,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       client: client as any,
-      args: parsedFlags({ 'task-number': '7', status: 'todo' }),
+      args: parsedStatusArgs('7', { status: 'todo' }),
     });
     expect(capture()).toEqual({ task_number: 7, status: 'todo' });
   });
@@ -254,7 +263,7 @@ describe('task status --status mutation guards', () => {
             updateTaskStatus: async () => ({ ok: true } as const),
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any,
-          args: parsedFlags({ 'task-number': '7', status: macro }),
+          args: parsedStatusArgs('7', { status: macro }),
         });
       } catch (e) {
         caught = e;

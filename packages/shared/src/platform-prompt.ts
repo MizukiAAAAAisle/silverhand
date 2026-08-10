@@ -697,7 +697,7 @@ examples, outputs, and recovery guidance.
   \`task edit --clear-body\`:
 
   \`\`\`bash
-  silverhand task edit --task-number 42 --body <<'SILVERHAND_EOF'
+  silverhand task edit 42 --body <<'SILVERHAND_EOF'
   ## Acceptance
   Multi-line Markdown is safe here.
   SILVERHAND_EOF

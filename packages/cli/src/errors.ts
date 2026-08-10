@@ -77,6 +77,27 @@ export type ErrorSubkind =
   | 'unknown_flag'
   | 'enum_invalid'
   | 'mutually_exclusive'
+  /** A by-number `task` verb (`detail`/`edit`/`status`/`unclaim`/`claim`) was
+   *  called without its positional `<task_number>` operand. Distinct from
+   *  `missing_required_flag`: the task number is no longer a flag, so an
+   *  agent still reaching for `--task-number` gets `flag_removed` instead —
+   *  the two subkinds separate "wrong shape" from "nothing supplied". */
+  | 'missing_task_number'
+  /** The positional `<task_number>` operand was not a positive integer.
+   *  Task numbers are a per-workspace counter, so `0` / `-3` / `4.5` /
+   *  `4abc` name nothing that can exist and are refused before the
+   *  request rather than returning a 404 for an impossible number. An
+   *  all-digit string too large to survive as an exact integer (past
+   *  `Number.MAX_SAFE_INTEGER`) is refused for the same reason: it would
+   *  otherwise be sent as a rounded, different number. */
+  | 'invalid_task_number'
+  /** A `message search` range selector was spelled but names no range:
+   *  `--no-current-workspace` (presence IS the signal, so negating it says
+   *  nothing) or an id selector whose value arrived empty (typically an
+   *  unset shell variable). Dropping either would silently narrow the search
+   *  to the calling conversation and return a plausible, wrong answer, so
+   *  the call is refused before the request. */
+  | 'empty_selector'
   /** `task create --source-message-id` hit the permanent 1:1 provenance lock:
    *  another task already owns that source. Carries `details.existing_task` so
    *  the agent can hand off to the winner instead of retrying. */

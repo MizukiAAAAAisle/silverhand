@@ -302,7 +302,7 @@ checked on.
 | `agentReadHistory` | `canViewConversation` | `read_messages` | **target** conversation's workspace (route resolves a cross-conversation `target`) |
 | `agentListWorkspaces` | `canViewConversation` | — (`none-justified`: agent-self workspace index — lists the agent's own memberships, no per-workspace action; see §3.3) | — |
 | `agentListChannels` | `canViewConversation` | `read_messages` | **target** `workspace_id` arg (default principal's) |
-| `agentSearchMessages` | `canViewConversation` (+ `canAgentAccessWorkspace` cross-ws) | `read_messages` | **resolved target**: `scope='channel'` → `channel.workspace_id` (global id, may differ); else `workspace_id` arg; else principal's |
+| `agentSearchMessages` | `canViewConversation` (+ `canAgentAccessWorkspace` cross-ws) | `read_messages` | **resolved target**: `conversation_id` selector → that conversation's workspace (global id, may differ); else `workspace_id` arg (or `current_workspace: true` → principal's); else principal's |
 | `agentSendConversationMessage` | `canPostToConversation` | `send_messages` | principal conversation's workspace |
 | `agentCreateChannel` | `canPostToConversation` | `create_channels` | principal conversation's workspace |
 | `agentListConversationTasks` | `canViewConversation` | `read_tasks` | **effective** workspace (route supports `workspace_id` arg → other member workspace) |

@@ -9,7 +9,7 @@
  *     attachment is present,
  *   - bytes piped on stdin reach the backend byte-equal — no UTF-8
  *     normalization, no BOM strip, no CRLF→LF, no trim,
- *   - `--target` and repeated `--attachment` still flow through.
+ *   - `--target` and repeated `--attachment-id` still flow through.
  *
  * Why a real subprocess: the failure modes here are quintessentially
  * cross-process (TTY detection, raw byte passthrough through a
@@ -266,7 +266,7 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
   it('allows empty stdin when at least one attachment is present', async () => {
     captured.length = 0;
     const r = await runSend({
-      argv: ['--attachment', 'att-1'],
+      argv: ['--attachment-id', 'att-1'],
       stdin: '',
     });
     expect(r.code, r.stderr).toBe(0);
@@ -401,15 +401,15 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     }, 30_000);
   });
 
-  it('forwards --target and repeated --attachment in the request body', async () => {
+  it('forwards --target and repeated --attachment-id in the request body', async () => {
     captured.length = 0;
     const r = await runSend({
       argv: [
         '--target',
         'thread:m-1',
-        '--attachment',
+        '--attachment-id',
         'att-1',
-        '--attachment',
+        '--attachment-id',
         'att-2',
       ],
       stdin: 'hi',
@@ -575,24 +575,38 @@ describe('silverhand message send (stdin-only, real subprocess)', { timeout: 30_
     }
   });
 
-  it('reports obsolete stale resolution with an explicit event id in direct fallback', async () => {
+  it('reports no_pending_stale_event in the direct (no-daemon) fallback', async () => {
+    // The pending stale event is daemon-held state and there is at most one
+    // per agent, so `stale-resolve` carries no id. Without a daemon there is
+    // nothing to resolve: the CLI degrades honestly instead of POSTing a
+    // resolution for an event it cannot name.
     captured.length = 0;
     nextSendResponse = { status: 200, body: { ok: true } };
     const resolved = await runMessage({
       noun: 'message',
       verb: 'stale-resolve',
-      argv: ['--resolution', 'obsolete', '--event-id', 'evt-obsolete'],
+      argv: ['--resolution', 'obsolete'],
     });
     expect(resolved.code, resolved.stderr).toBe(0);
-    const output = JSON.parse(resolved.stdout) as { resolved: boolean };
-    expect(output).toEqual({ resolved: true });
-    const reqBody = JSON.parse(captured.at(-1)!.bodyBytes.toString('utf8')) as {
-      stale_event_id?: string;
-      resolution_reason?: string;
-    };
-    expect(captured.at(-1)!.path).toContain('/stale-message-resolution');
-    expect(reqBody.stale_event_id).toBe('evt-obsolete');
-    expect(reqBody.resolution_reason).toBe('obsolete');
+    expect(JSON.parse(resolved.stdout)).toEqual({
+      resolved: false,
+      reason: 'no_pending_stale_event',
+    });
+    expect(
+      captured.some(r => r.path.includes('/stale-message-resolution')),
+      'no-daemon stale-resolve still posted a resolution',
+    ).toBe(false);
+  });
+
+  it('rejects the removed --event-id with flag_removed', async () => {
+    const r = await runMessage({
+      noun: 'message',
+      verb: 'stale-resolve',
+      argv: ['--resolution', 'obsolete', '--event-id', 'evt-obsolete'],
+    });
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('flag_removed');
   });
 
   // Flag validation must precede the blocking stdin read. A bad

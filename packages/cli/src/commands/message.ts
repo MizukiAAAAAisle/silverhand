@@ -37,14 +37,14 @@ const sendCommand: Command = {
   verb: 'send',
   summary: 'Send a message to the current channel/thread.',
   help: `silverhand message send [--target channel|thread:<message_id>]
-                          [--attachment <id> ...]
+                          [--attachment-id <id> ...]
                           [--stale-resolution unaffected|revised]
                           [--anyway]
 
 Reads the message body from STDIN and sends it to the current
 conversation (channel or thread). A message must include text or at
 least one attachment. Pipe text via stdin; attachment-only sends may
-omit stdin and pass \`--attachment <id>\`.
+omit stdin and pass \`--attachment-id <id>\`.
 
 The old \`--content <text>\` flag was removed because shell quoting
 of a value containing \`"\`, backticks, or \`$\` silently truncated
@@ -61,7 +61,7 @@ Two recommended call shapes:
   SILVERHAND_EOF
 
   # attachment-only
-  silverhand message send --attachment att_123
+  silverhand message send --attachment-id att_123
 
   # explicitly send to a thread (reply cluster) under message m_123
   printf "%s" "in-thread answer" | silverhand message send --target thread:m_123
@@ -83,7 +83,7 @@ Flags:
                         the reply cluster containing that message; a main-line
                         message id opens/targets its thread, and a reply id
                         joins the same thread (no nesting).
-  --attachment <id>     Optional, repeatable. Attachment ids returned by
+  --attachment-id <id>  Optional, repeatable. Attachment ids returned by
                         \`silverhand file upload\`. All ids must belong
                         to the current channel.
   --stale-resolution    Optional. After a message_stale conflict, explain
@@ -106,9 +106,15 @@ Pre-flight failures (exit 1):
   stdin is not UTF-8             → invalid_utf8 (re-encode upstream)
 
 stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null> }`,
-  flags: ['target', 'reply-to', 'attachment', 'stale-resolution'] as const,
+  flags: ['target', 'reply-to', 'attachment-id', 'stale-resolution'] as const,
   booleanFlags: ['anyway'],
   removedFlags: {
+    attachment: {
+      replacement: '--attachment-id',
+      hint:
+        'use --attachment-id <id> (repeatable) — the value is an attachment ' +
+        'id, and the -id spelling is its canonical name here',
+    },
     content: {
       replacement: 'stdin',
       hint:
@@ -140,7 +146,7 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
     },
   },
   async run({ env, client, args }) {
-    let attachmentIds = flagStringArray(args, 'attachment');
+    let attachmentIds = flagStringArray(args, 'attachment-id');
     const hasAttachments = (attachmentIds?.length ?? 0) > 0;
     let content = '';
 
@@ -252,20 +258,30 @@ stdout: { "message_id": "<id>", "message_seq": <seq>, "thread_root_id": <id|null
 const staleResolveCommand: Command = {
   verb: 'stale-resolve',
   summary: 'Report that a stale draft no longer needs to be sent.',
-  help: `silverhand message stale-resolve --resolution obsolete [--event-id <id>]
+  help: `silverhand message stale-resolve --resolution obsolete
 
 Reports an observability-only resolution for the most recent message_stale
 conflict without sending a message. This is for the "no need to send anymore"
 case after reading the newer messages from the conflict response.
 
+There is exactly one unresolved stale event per agent at a time, so this
+command always targets that one — nothing identifies it on the command line.
+
 Flags:
   --resolution obsolete  Required. Records that the stale draft is obsolete.
-  --event-id <id>        Optional. Defaults to the pending stale event recorded
-                         from the latest message_stale response.
 
 stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale_event" }`,
-  flags: ['resolution', 'event-id'] as const,
-  async run({ env, client, args }) {
+  flags: ['resolution'] as const,
+  removedFlags: {
+    'event-id': {
+      replacement: 'none',
+      hint:
+        'a stale event is no longer addressable: an agent has at most one ' +
+        'unresolved message_stale at a time, and this command resolves it — ' +
+        'pass only --resolution obsolete',
+    },
+  },
+  async run({ env, args }) {
     const resolution = flagString(args, 'resolution');
     if (resolution !== 'obsolete') {
       throw new CliError({
@@ -274,24 +290,18 @@ stdout: { "resolved": true } or { "resolved": false, "reason": "no_pending_stale
         retriable: false,
       });
     }
-    const explicitEventId = flagString(args, 'event-id');
     if (env.daemonSocketPath) {
       return await resolveStaleViaDaemon(env.daemonSocketPath, {
         conversation_id: env.conversationId,
         agent_id: env.agentId,
-        ...(explicitEventId ? { stale_event_id: explicitEventId } : {}),
         resolution_reason: 'obsolete',
       });
     }
-    const staleEventId = explicitEventId;
-    if (!staleEventId) {
-      return { resolved: false, reason: 'no_pending_stale_event' };
-    }
-    await client.resolveStaleMessage({
-      stale_event_id: staleEventId,
-      resolution_reason: 'obsolete',
-    });
-    return { resolved: true };
+    // Direct (no-daemon) fallback: the pending stale event is daemon-held
+    // state, so without a daemon there is nothing to resolve. Reporting
+    // that is honest — the alternative would be asking the agent to carry
+    // an id it has no reliable way to know.
+    return { resolved: false, reason: 'no_pending_stale_event' };
   },
 };
 
@@ -518,11 +528,16 @@ const searchCommand: Command = {
   summary: 'Search visible message text.',
   help: `silverhand message search <query>
 silverhand message search (--q <text> | --query <text>)
-                            [--scope current|workspace|channel]
-                            [--workspace-id <id>] [--channel-id <id>]
+                            [--current-workspace | --workspace-id <id>
+                             | --conversation-id <id>]
                             [--no-include-system] [--limit N]
 
 Full-text search over messages this agent can see.
+
+The range is whichever selector you pass — there is no separate mode
+flag, and at most one selector may appear. Presence is the signal, so a
+selector with no range (\`--no-current-workspace\`, or an id flag whose
+value came out empty) is refused rather than quietly ignored.
 
 Flags:
   <query>              Positional query, equivalent to --q. Quote
@@ -532,20 +547,32 @@ Flags:
   --query <text>       Alias for --q. Same length limit. Passing more than
                        one query form fails with mutually_exclusive — pick
                        one form per call.
-  --scope              Default "current". One of:
-                         current   — only the current channel/thread
-                         workspace — every conv in this workspace (or one
-                                     given via --workspace-id) where you
-                                     are a current member
-                         channel   — a specific channel; requires --channel-id
-  --workspace-id <id>  Only valid with --scope workspace.
-  --channel-id <id>    Required with --scope channel; from "channel list".
+  (no selector)        Only the current channel/thread. This is the default.
+  --current-workspace  Every conv in THIS workspace where you are a current
+                       member — no need to look up the workspace id first.
+  --workspace-id <id>  Same, for another workspace you can access.
+  --conversation-id <id>  One specific conversation; from "channel list".
   --no-include-system  Skip system messages.
   --limit N            Max hits. Default 50, max 100.
 
-stdout: AgentSearchMessagesDto JSON.`,
-  flags: ['q', 'query', 'scope', 'workspace-id', 'channel-id', 'limit'] as const,
-  booleanFlags: ['include-system'],
+stdout: AgentSearchMessagesDto JSON. Its \`scope\` field echoes where the
+search landed (current|workspace|conversation) — output only; you never
+pass it in.`,
+  flags: ['q', 'query', 'workspace-id', 'conversation-id', 'limit'] as const,
+  booleanFlags: ['include-system', 'current-workspace'],
+  removedFlags: {
+    scope: {
+      replacement: 'selector flags',
+      hint:
+        'the range is now the selector itself: omit everything for the ' +
+        'current conversation, or pass one of --current-workspace, ' +
+        '--workspace-id <id>, --conversation-id <id>',
+    },
+    'channel-id': {
+      replacement: '--conversation-id',
+      hint: 'use --conversation-id <id> (same value domain, one name)',
+    },
+  },
   allowPositional: true,
   async run({ client, args }) {
     const qShort = flagString(args, 'q');
@@ -575,51 +602,82 @@ stdout: AgentSearchMessagesDto JSON.`,
         retriable: false,
       });
     }
-    const scope = (flagString(args, 'scope') ?? 'current') as
-      | 'current'
-      | 'workspace'
-      | 'channel';
-    if (!['current', 'workspace', 'channel'].includes(scope)) {
-      throw new CliError({
-        code: 'validation_error',
-        subkind: 'enum_invalid',
-        message: `--scope must be current|workspace|channel; got "${scope}"`,
-        retriable: false,
-        details: {
-          flag: 'scope',
-          value: scope,
-          allowed: ['current', 'workspace', 'channel'],
-        },
-      });
+    // Selector-only: PRESENCE picks the range, and no selector at all means
+    // the calling conversation. A selector that was named but carries no
+    // range is refused, never dropped: `--no-current-workspace` and
+    // `--conversation-id "$CID"` with an unset CID would otherwise answer a
+    // deliberately wider question with the calling conversation — exactly the
+    // silent narrowing this shape exists to remove. The wire agrees
+    // (`current_workspace: false` and a blank id are both 400 there).
+    const currentWorkspaceFlag = flagBool(args, 'current-workspace');
+    if (currentWorkspaceFlag === false) {
+      throw emptySelectorError(
+        '--no-current-workspace',
+        'negating it names no range. Omit every selector to search the ' +
+          'current conversation, or pass one selector.',
+      );
     }
+    const currentWorkspace = currentWorkspaceFlag === true;
     const workspaceId = flagString(args, 'workspace-id');
-    const channelId = flagString(args, 'channel-id');
-    if ((scope === 'channel') !== !!channelId) {
-      throw new CliError({
-        code: 'validation_error',
-        message: '--channel-id is required only when --scope is channel',
-        retriable: false,
-      });
+    const conversationId = flagString(args, 'conversation-id');
+    for (const [flag, value] of [
+      ['--workspace-id', workspaceId],
+      ['--conversation-id', conversationId],
+    ] as const) {
+      if (value !== undefined && value.trim() === '') {
+        throw emptySelectorError(
+          flag,
+          'it was passed with an empty value — usually an unset shell ' +
+            'variable. Supply the id, or omit the flag to search the ' +
+            'current conversation.',
+        );
+      }
     }
-    if (workspaceId && scope !== 'workspace') {
+    const selectors = [
+      currentWorkspace ? '--current-workspace' : null,
+      workspaceId !== undefined ? '--workspace-id' : null,
+      conversationId !== undefined ? '--conversation-id' : null,
+    ].filter((v): v is string => v !== null);
+    if (selectors.length > 1) {
       throw new CliError({
         code: 'validation_error',
-        message: '--workspace-id is only valid with --scope workspace',
+        subkind: 'mutually_exclusive',
+        message:
+          '--current-workspace, --workspace-id, and --conversation-id are ' +
+          'mutually exclusive: each one names the whole search range. Pass ' +
+          'one, or none to search the current conversation.',
         retriable: false,
+        details: { selectors },
       });
     }
     const includeSystem = flagBool(args, 'include-system') ?? true;
     const limit = flagNumber(args, 'limit') ?? 50;
     return client.searchMessages({
       q,
-      scope,
       include_system: includeSystem,
       limit,
-      ...(workspaceId ? { workspace_id: workspaceId } : {}),
-      ...(channelId ? { channel_id: channelId } : {}),
+      ...(currentWorkspace ? { current_workspace: true as const } : {}),
+      ...(workspaceId !== undefined ? { workspace_id: workspaceId } : {}),
+      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
     });
   },
 };
+
+/** A search selector was spelled but names no range (`--no-current-workspace`,
+ *  or an id flag whose value came out empty). Refusing beats dropping it: the
+ *  fallback range would be NARROWER than the caller asked for, and a narrower
+ *  answer looks like a real answer. */
+function emptySelectorError(flag: string, why: string): CliError {
+  return new CliError({
+    code: 'validation_error',
+    subkind: 'empty_selector',
+    message:
+      `${flag} does not select a search range: ${why} ` +
+      'Selectors: --current-workspace | --workspace-id <id> | --conversation-id <id>.',
+    retriable: false,
+    details: { selector: flag },
+  });
+}
 
 function parseSearchPositionalQuery(positional: readonly string[]): string | undefined {
   if (positional.length === 0) return undefined;
@@ -844,7 +902,7 @@ async function staleReceiveViaDaemon(
 /** Spool an oversized stdin body to a temp file and upload it as a
  *  `text/plain` attachment. The temp file is best-effort removed; the
  *  attachment itself survives a later failed send and can be reused by
- *  passing its id to `--attachment` on the retry. */
+ *  passing its id to `--attachment-id` on the retry. */
 async function uploadBodyAsAttachment(
   client: BackendClient,
   body: Buffer,

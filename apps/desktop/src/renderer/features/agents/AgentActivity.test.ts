@@ -7,7 +7,7 @@ import type {
 } from '@silverhand/shared';
 import { partitionRoster } from './AgentActivityPane';
 import { mergeActivityById } from './AgentActivityTimeline';
-import { coalesceActivity, presentToolCall } from './activityPresentation';
+import { coalesceActivity, presentToolCall, taskNumberFromCommand } from './activityPresentation';
 
 function conv(
   overrides: Partial<AgentRuntimeConversation> = {},
@@ -160,6 +160,12 @@ describe('presentToolCall', () => {
     });
     expect(staleSend.verb).not.toBe('Bash');
     expect(staleSend.verb).not.toBe(wrapped.verb);
+    // but a `--anyway` in a compound SUFFIX is not this send's flag → not stale
+    // (args stop at the separator; #task:1945, Cindy).
+    const suffixSend = presentToolCall('Bash', {
+      command: 'silverhand message send && echo --anyway',
+    });
+    expect(suffixSend.verb).toBe(wrapped.verb);
   });
 
   it('task actions surface task id + status change; never fabricate an id', () => {
@@ -177,6 +183,32 @@ describe('presentToolCall', () => {
     const byMessage = presentToolCall('Bash', { command: 'silverhand task claim --message-id abc123' });
     expect(byMessage.verb).not.toBe('Bash');
     expect(byMessage.arg).toBeNull();
+    // #task:1945 CLI migration: point verbs take the number POSITIONALLY. The
+    // reader recognises the new form identically to the retired flag, since
+    // activity rows are immutable historical command text (both forms coexist).
+    expect(presentToolCall('Bash', { command: 'silverhand task claim 9' }).arg).toBe('#9');
+    expect(
+      presentToolCall('Bash', { command: 'silverhand task status 42 --status done' }).arg,
+    ).toBe('#42 → done');
+    // create takes a source-message, never a task-number operand → no `#…`
+    const create = presentToolCall('Bash', {
+      command: 'silverhand task create --source-message-id abc --claim',
+    });
+    expect(create.verb).not.toBe('Bash');
+    expect(create.arg).toBeNull();
+    // MUST NOT leak a number from a compound prefix — only the identified
+    // `silverhand task …` command's own args are read, not the wider shell
+    // text (#task:1945, Cindy: `sleep 5 && …` must show #9, never #5).
+    expect(
+      presentToolCall('Bash', { command: 'sleep 5 && silverhand task claim 9' }).arg,
+    ).toBe('#9');
+    // …nor from a compound SUFFIX: args stop at the next unquoted separator, so
+    // a trailing `&& echo --task-number 5` can't fake `#5` on a create.
+    const createSuffix = presentToolCall('Bash', {
+      command: 'silverhand task create && echo --task-number 5',
+    });
+    expect(createSuffix.verb).not.toBe('Bash');
+    expect(createSuffix.arg).toBeNull();
   });
 
   it('does NOT mislabel a quoted "silverhand …" argument as a real action', () => {
@@ -204,6 +236,39 @@ describe('presentToolCall', () => {
     const fb = presentToolCall('MysteryTool', { foo: 'bar' });
     expect(fb.verb).toBe('MysteryTool');
     expect(fb.detail?.kind).toBe('json');
+  });
+});
+
+describe('taskNumberFromCommand', () => {
+  // Behaviour-determining branches (flag ∪ canonical positional, verb
+  // whitelist, first of a batch) live in a pure exported fn so a later
+  // "simplify back to one regex" can't silently drop the positional form. The
+  // arg is the command's `args` slice (after `task <verb>`), never the wider
+  // shell text — compound-prefix leakage is covered end-to-end via presentToolCall.
+  it('reads the retired --task-number flag for any verb (history compat)', () => {
+    expect(taskNumberFromCommand('claim', '--task-number 9')).toBe('9');
+    expect(taskNumberFromCommand('status', '--task-number=42 --status done')).toBe('42');
+    // list keeps --task-number as a filter → still surfaced via the flag form.
+    expect(taskNumberFromCommand('list', '--task-number 5')).toBe('5');
+  });
+
+  it('reads the new positional operand only for by-number verbs', () => {
+    expect(taskNumberFromCommand('claim', '9')).toBe('9');
+    expect(taskNumberFromCommand('detail', '1187')).toBe('1187');
+    expect(taskNumberFromCommand('status', '42 --status done')).toBe('42');
+    // non-by-number verbs never take a positional operand.
+    expect(taskNumberFromCommand('list', '5')).toBeNull();
+    expect(taskNumberFromCommand('create', '--source-message-id abc --claim')).toBeNull();
+    expect(taskNumberFromCommand(undefined, '5')).toBeNull();
+  });
+
+  it('shows the first of a batch; relies on canonical operand-first shape', () => {
+    expect(taskNumberFromCommand('claim', '42 43')).toBe('42');
+    // no operand at all (message-id claim) → null, never fabricated.
+    expect(taskNumberFromCommand('claim', '--message-id abc123')).toBeNull();
+    // NON-canonical flags-before-operand yields null rather than a wrong guess:
+    // we don't rebuild CLI flag parsing (`--clear-body`/`--json` are booleans).
+    expect(taskNumberFromCommand('edit', '--clear-body 42')).toBeNull();
   });
 });
 

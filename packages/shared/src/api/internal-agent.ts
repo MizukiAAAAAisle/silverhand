@@ -9,7 +9,6 @@ import {
 } from '../db/schema.js';
 import {
   MessageAttachmentIdsInputSchema,
-  SearchOptionalStringSchema,
   hasMessagePayload,
 } from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
@@ -415,10 +414,13 @@ export const AgentListChannelsDtoSchema = z.object({
 });
 export type AgentListChannelsDto = z.infer<typeof AgentListChannelsDtoSchema>;
 
+/** Where a search actually landed. OUTPUT ONLY — an input never carries
+ *  it. The caller passes at most one selector and the scope is derived
+ *  from that, so there is no mode+selector pair that can disagree. */
 export const AgentSearchMessagesScopeSchema = z.enum([
   'current',
   'workspace',
-  'channel',
+  'conversation',
 ]);
 export type AgentSearchMessagesScope = z.infer<
   typeof AgentSearchMessagesScopeSchema
@@ -432,25 +434,41 @@ const AgentSearchMessagesLimitSchema = z.preprocess(
 export const AgentSearchMessagesInputSchema = z
   .object({
     q: z.string().trim().min(1).max(200),
-    scope: AgentSearchMessagesScopeSchema.optional().default('current'),
+    /** Selector-only: the search range is whichever selector is present,
+     *  and no selector means the calling conversation. `current_workspace`
+     *  is `true`-or-absent on purpose — its presence IS the signal, so an
+     *  explicit `false` would be a second spelling of the default. */
+    current_workspace: z.literal(true).optional(),
+    /** Both id selectors are `.min(1)`: a present-but-empty selector is
+     *  refused, not coerced to absent. Blank-as-absent is right for the
+     *  human search FILTERS (`MessageSearchInput`, where an untouched form
+     *  field means "no filter"), but here the key IS the range — treating
+     *  `''` as absent would answer a caller who named a conversation with
+     *  the calling conversation instead. */
     workspace_id: z.string().min(1).optional(),
-    channel_id: SearchOptionalStringSchema,
+    conversation_id: z.string().min(1).optional(),
     include_system: z.boolean().optional().default(true),
     limit: AgentSearchMessagesLimitSchema,
   })
+  // Strict on purpose: the retired `scope` / `channel_id` keys must fail
+  // loudly. Stripping them would silently narrow a caller's intended
+  // workspace/channel search down to the calling conversation — the same
+  // silent last-wins the selector-only model exists to remove.
+  .strict()
   .superRefine((v, ctx) => {
-    if ((v.scope === 'channel') !== !!v.channel_id) {
+    const selectors = [
+      v.current_workspace ? 'current_workspace' : null,
+      v.workspace_id ? 'workspace_id' : null,
+      v.conversation_id ? 'conversation_id' : null,
+    ].filter((name): name is string => name !== null);
+    if (selectors.length > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'channel_id is required only when scope is channel',
-        path: ['channel_id'],
-      });
-    }
-    if (v.workspace_id && v.scope !== 'workspace') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'workspace_id is only valid with scope=workspace',
-        path: ['workspace_id'],
+        message:
+          `pass at most one of current_workspace, workspace_id, ` +
+          `conversation_id (got ${selectors.join(', ')}); omit all to ` +
+          `search the calling conversation`,
+        path: [selectors[1]!],
       });
     }
   });
@@ -470,7 +488,7 @@ export const AgentSearchMessagesDtoSchema = z.object({
   query: z.string(),
   scope: AgentSearchMessagesScopeSchema,
   workspace_id: z.string().nullable(),
-  channel_id: z.string().nullable(),
+  conversation_id: z.string().nullable(),
   include_system: z.boolean(),
   limit: z.number(),
   hits: z.array(AgentSearchMessageHitSchema),

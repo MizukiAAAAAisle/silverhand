@@ -110,7 +110,7 @@ export const AttachmentSnapshotSchema = z.object({
    *  `Image #N` / `File #N`). Stable per attachment instance from paste through
    *  send, so a body reference the user typed never renumbers on the receiver.
    *  Carried verbatim; the backend echoes it, never recomputes. Absent for
-   *  bare-id callers (agent CLI `--attachment <id>`, daemon relay) that have no
+   *  bare-id callers (agent CLI `--attachment-id <id>`, daemon relay) that have no
    *  compose-time labelling — those fall back to a positional label derived by
    *  `resolveAttachmentLabels`. */
   label: AttachmentLabelSchema.optional(),

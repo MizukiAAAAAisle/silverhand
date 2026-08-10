@@ -16,7 +16,8 @@ null\` means the workspace is unavailable on this computer (its local
 root is not provisioned here yet) — do not guess a path for it.
 
 Use the returned ids with --workspace-id on \`silverhand channel list\`
-or \`silverhand message search --scope workspace\`.
+or \`silverhand message search\` (which searches that workspace; omit it
+to search only the calling conversation).
 
 stdout: AgentListWorkspacesDto JSON.`,
   flags: [] as const,

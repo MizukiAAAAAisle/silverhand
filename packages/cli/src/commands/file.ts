@@ -23,7 +23,7 @@ const uploadCommand: Command = {
 
 Reads the file at --path (must be absolute) and uploads it as an
 attachment scoped to the current channel. Returns an attachment id you
-pass to \`silverhand message send --attachment <id>\`.
+pass to \`silverhand message send --attachment-id <id>\`.
 
 Flags:
   --path           Required. Absolute path on local disk.

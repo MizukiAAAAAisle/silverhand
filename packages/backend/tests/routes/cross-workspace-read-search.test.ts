@@ -164,14 +164,14 @@ describe('PR-B: cross-workspace read_history({target:{conversation_id}})', () =>
   });
 });
 
-describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
+describe('PR-B: cross-workspace search_messages (selector-only range)', () => {
   let t: TestApp | null = null;
   afterEach(() => {
     t?.cleanup();
     t = null;
   });
 
-  it('searches a different workspace when scope=workspace + workspace_id is supplied and the agent has access', async () => {
+  it('searches a different workspace when workspace_id is supplied and the agent has access', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -191,7 +191,6 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
 
     const res = await http(t).post(searchMessagesPath(alice.dmChannelId, alice.agentId), {
       q: 'cross-workspace-search-token',
-      scope: 'workspace',
       workspace_id: reg.workspaceId,
     });
     expect(res.status).toBe(200);
@@ -210,7 +209,6 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
 
     const res = await http(t).post(searchMessagesPath(alice.dmChannelId, alice.agentId), {
       q: 'whatever',
-      scope: 'workspace',
       workspace_id: bobOnly.workspaceId,
     });
     expect(res.status).toBe(403);
@@ -223,40 +221,63 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
 
     const res = await http(t).post(searchMessagesPath(alice.dmChannelId, alice.agentId), {
       q: 'whatever',
-      scope: 'workspace',
       workspace_id: bob.agentHomeWorkspaceId,
     });
     expect(res.status).toBe(403);
   });
 
-  it('rejects workspace_id with scope!=workspace as 400 (input schema)', async () => {
+  it('rejects two selectors, and the retired scope/channel_id keys, as 400 (input schema)', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
 
-    const withCurrent = await http(t).post(
+    // Two selectors name two ranges — there is no precedence rule to fall
+    // back on, so the request is refused rather than silently picking one.
+    const twoSelectors = await http(t).post(
       searchMessagesPath(alice.dmChannelId, alice.agentId),
       {
         q: 'whatever',
-        scope: 'current',
+        conversation_id: reg.onboardingChannelId,
         workspace_id: reg.workspaceId,
       },
     );
-    expect(withCurrent.status).toBe(400);
+    expect(twoSelectors.status).toBe(400);
 
-    const withChannel = await http(t).post(
+    const bothWorkspaceForms = await http(t).post(
       searchMessagesPath(alice.dmChannelId, alice.agentId),
       {
         q: 'whatever',
-        scope: 'channel',
-        channel_id: reg.onboardingChannelId,
+        current_workspace: true,
         workspace_id: reg.workspaceId,
       },
     );
-    expect(withChannel.status).toBe(400);
+    expect(bothWorkspaceForms.status).toBe(400);
+
+    // The retired mode+selector spelling must fail LOUDLY. If the schema
+    // merely stripped these keys, a stale caller asking for a workspace or
+    // channel search would silently get the calling conversation instead.
+    const retiredScope = await http(t).post(
+      searchMessagesPath(alice.dmChannelId, alice.agentId),
+      { q: 'whatever', scope: 'workspace', workspace_id: reg.workspaceId },
+    );
+    expect(retiredScope.status).toBe(400);
+
+    const retiredChannelId = await http(t).post(
+      searchMessagesPath(alice.dmChannelId, alice.agentId),
+      { q: 'whatever', channel_id: reg.onboardingChannelId },
+    );
+    expect(retiredChannelId.status).toBe(400);
+
+    // `current_workspace: false` is not "the default spelled out" — the
+    // presence of the key IS the signal, so only `true` is accepted.
+    const explicitFalse = await http(t).post(
+      searchMessagesPath(alice.dmChannelId, alice.agentId),
+      { q: 'whatever', current_workspace: false },
+    );
+    expect(explicitFalse.status).toBe(400);
   });
 
-  it('defaults workspace_id to the source workspace when omitted (back-compat)', async () => {
+  it('current_workspace: true searches the source workspace', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const messages = new MessageRepo(t.ctx.db);
@@ -268,12 +289,41 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
 
     const res = await http(t).post(searchMessagesPath(alice.dmChannelId, alice.agentId), {
       q: 'default-workspace-token',
-      scope: 'workspace',
+      current_workspace: true,
     });
     expect(res.status).toBe(200);
     const body = await res.json() as any;
+    expect(body.scope).toBe('workspace');
     expect(body.workspace_id).toBe(alice.agentHomeWorkspaceId);
     expect(body.hits.map((h: any) => h.message_ref.id)).toEqual([homeHit.id]);
+  });
+
+  it('omitting every selector searches the calling conversation', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
+    const messages = new MessageRepo(t.ctx.db);
+    const dmHit = messages.insertForConversation({
+      conversationId: alice.dmChannelId,
+      fromKind: 'user',
+      content: 'no-selector-token in the calling DM',
+    });
+    // Same token elsewhere in the same agent's reach must NOT appear:
+    // absence of a selector means the calling conversation, not "everything
+    // I can see".
+    messages.insertForConversation({
+      conversationId: reg.onboardingChannelId,
+      fromKind: 'user',
+      content: 'no-selector-token in another workspace',
+    });
+
+    const res = await http(t).post(searchMessagesPath(alice.dmChannelId, alice.agentId), {
+      q: 'no-selector-token',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.scope).toBe('current');
+    expect(body.hits.map((h: any) => h.message_ref.id)).toEqual([dmHit.id]);
   });
 
   it('search hits in the target workspace are still gated by conversation_agents membership', async () => {
@@ -298,7 +348,6 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
 
     const res = await http(t).post(searchMessagesPath(alice.dmChannelId, alice.agentId), {
       q: 'membership-guard-token',
-      scope: 'workspace',
       workspace_id: reg.workspaceId,
     });
     expect(res.status).toBe(200);
@@ -306,7 +355,7 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
     expect(body.hits.map((h: any) => h.message_ref.id)).toEqual([sharedHit.id]);
   });
 
-  it('scope=channel accepts a channel_id from another workspace where the agent is a member', async () => {
+  it('conversation_id accepts a conversation in another workspace where the agent is a member', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const reg = await createRegularWorkspace(t, 'team-x', [alice.agentId]);
@@ -319,8 +368,8 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
       fromKind: 'user',
       content: 'remote-channel-search-token in channel',
     });
-    // Same token in alice's home DM must NOT appear under channel
-    // scope.
+    // Same token in alice's home DM must NOT appear: the conversation
+    // selector IS the range.
     messages.insertForConversation({
       conversationId: alice.dmChannelId,
       fromKind: 'user',
@@ -331,14 +380,13 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
       searchMessagesPath(alice.dmChannelId, alice.agentId),
       {
         q: 'remote-channel-search-token',
-        scope: 'channel',
-        channel_id: remoteChannel,
+        conversation_id: remoteChannel,
       },
     );
     expect(res.status).toBe(200);
     const body = await res.json() as any;
-    expect(body.scope).toBe('channel');
-    expect(body.channel_id).toBe(remoteChannel);
+    expect(body.scope).toBe('conversation');
+    expect(body.conversation_id).toBe(remoteChannel);
     expect(body.hits.map((h: any) => h.message_ref.id)).toEqual([channelHit.id]);
     // Each hit's channel_id must point at the remote channel, not
     // the source DM channel.
@@ -347,7 +395,7 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
     }
   });
 
-  it('scope=channel still 403s on a remote channel the agent is not a member of', async () => {
+  it('conversation_id still 403s on a remote conversation the agent is not a member of', async () => {
     t = buildTestApp();
     const alice = await makeAgent(t, 'alice');
     const bob = await makeAgent(t, 'bob');
@@ -355,14 +403,13 @@ describe('PR-B: cross-workspace search_messages({workspace_id?})', () => {
     const bobOnly = await createChannel(t, reg.workspaceId, 'bob-only', [bob.agentId]);
 
     // Alice has workspace-level access to team-x but not to bobOnly.
-    // Channel scope must reject — conversation_agents is the bottom
-    // guard regardless of workspace.
+    // The conversation selector must reject — conversation_agents is the
+    // bottom guard regardless of workspace.
     const res = await http(t).post(
       searchMessagesPath(alice.dmChannelId, alice.agentId),
       {
         q: 'whatever',
-        scope: 'channel',
-        channel_id: bobOnly,
+        conversation_id: bobOnly,
       },
     );
     expect(res.status).toBe(403);

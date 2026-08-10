@@ -273,11 +273,12 @@ export function registerMessageRoutes(
     }
     {
       // Resolve the workspace the search actually lands in:
-      // scope='channel' → the channel's (global) workspace; else the
-      // explicit workspace_id arg; else the source conversation's. The dto
-      // builder still bottom-guards per-channel membership via JOIN.
-      const searchWorkspaceId = parsed.data.channel_id
-        ? conversations.get(parsed.data.channel_id)?.workspace_id ?? sourceConversation.workspace_id
+      // a conversation selector → that conversation's (global) workspace;
+      // else the explicit workspace_id arg; else the source conversation's
+      // (which is also what `current_workspace` means). The dto builder
+      // still bottom-guards per-conversation membership via JOIN.
+      const searchWorkspaceId = parsed.data.conversation_id
+        ? conversations.get(parsed.data.conversation_id)?.workspace_id ?? sourceConversation.workspace_id
         : parsed.data.workspace_id ?? sourceConversation.workspace_id;
       const denied = requireAgentCapability(c, ctx, principal, 'read_messages', searchWorkspaceId);
       if (denied) return denied;
@@ -288,9 +289,9 @@ export function registerMessageRoutes(
       {
         sourceConversationId: principal.conversationId,
         agentId: principal.agentId,
-        scope: parsed.data.scope,
+        currentWorkspace: parsed.data.current_workspace ?? false,
         workspaceId: parsed.data.workspace_id ?? null,
-        channelId: parsed.data.channel_id ?? null,
+        conversationId: parsed.data.conversation_id ?? null,
         limit: parsed.data.limit,
       },
       () =>

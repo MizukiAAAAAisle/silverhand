@@ -266,7 +266,7 @@ describe('agent list_channels / search_messages routes', () => {
 
     const res = await http(t).post(searchMessagesPath(channelId, aliceId), {
       q: 'workspace-scope',
-      scope: 'workspace',
+      current_workspace: true,
     });
     expect(res.status).toBe(200);
     const body = await res.json() as any;
@@ -302,7 +302,7 @@ describe('agent list_channels / search_messages routes', () => {
 
     const res = await http(t).post(searchMessagesPath(channelId, aliceId), {
       q: 'zqvq',
-      scope: 'workspace',
+      current_workspace: true,
     });
     expect(res.status).toBe(200);
     const body = await res.json() as any;
@@ -319,7 +319,7 @@ describe('agent list_channels / search_messages routes', () => {
     });
   });
 
-  it('rejects invalid channel scope combinations and non-member channels', async () => {
+  it('rejects a non-member conversation selector, the retired scope key, and a blank selector', async () => {
     t = buildTestApp();
     const { workspaceId, channelId, agentIds } = await createWorkspaceChannel(t, [
       'alice',
@@ -329,23 +329,34 @@ describe('agent list_channels / search_messages routes', () => {
     const bobId = agentIds.bob!;
     const bobOnly = await createChannel(t, workspaceId, 'bob-only', [bobId]);
 
-    const missing = await http(t).post(searchMessagesPath(channelId, aliceId), {
-      q: 'x',
-      scope: 'channel',
-    });
-    expect(missing.status).toBe(400);
-
-    const mixed = await http(t).post(searchMessagesPath(channelId, aliceId), {
+    // The retired mode word is refused, not ignored: silently dropping it
+    // would answer a workspace-wide question with one conversation.
+    const retired = await http(t).post(searchMessagesPath(channelId, aliceId), {
       q: 'x',
       scope: 'workspace',
-      channel_id: channelId,
     });
-    expect(mixed.status).toBe(400);
+    expect(retired.status).toBe(400);
+
+    // A blank selector is refused, not read as absent: the id IS the range
+    // here, so falling back to the calling conversation would answer a
+    // narrower question than the caller asked (an unset shell variable is
+    // the common way to get here). Blank-as-absent stays correct for the
+    // human search *filters*, which is a different input.
+    const blank = await http(t).post(searchMessagesPath(channelId, aliceId), {
+      q: 'x',
+      conversation_id: '',
+    });
+    expect(blank.status).toBe(400);
+
+    const blankWorkspace = await http(t).post(
+      searchMessagesPath(channelId, aliceId),
+      { q: 'x', workspace_id: '' },
+    );
+    expect(blankWorkspace.status).toBe(400);
 
     const forbidden = await http(t).post(searchMessagesPath(channelId, aliceId), {
       q: 'x',
-      scope: 'channel',
-      channel_id: bobOnly,
+      conversation_id: bobOnly,
     });
     expect(forbidden.status).toBe(403);
   });

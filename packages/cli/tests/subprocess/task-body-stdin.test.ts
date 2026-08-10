@@ -188,7 +188,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body'],
+      argv: ['5', '--body'],
       stdin: '## Acceptance\nMulti-line body',
     });
     expect(r.code, r.stderr).toBe(0);
@@ -205,7 +205,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body'],
+      argv: ['5', '--body'],
       stdin: '',
     });
     expect(r.code).toBe(1);
@@ -218,7 +218,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--clear-body'],
+      argv: ['5', '--clear-body'],
       // --clear-body never reads stdin; leaving the pipe open must not hang it.
       keepStdinOpen: true,
     });
@@ -234,7 +234,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     captured.length = 0;
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body', '--clear-body'],
+      argv: ['5', '--body', '--clear-body'],
       keepStdinOpen: true,
     });
     expect(r.killedByWatchdog, 'blocked on stdin before rejecting the flag combo').toBe(false);
@@ -250,7 +250,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     // must not read it, so the request still fires and the process exits.
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--title', 'renamed'],
+      argv: ['5', '--title', 'renamed'],
       keepStdinOpen: true,
     });
     expect(r.killedByWatchdog, 'edit blocked on stdin despite no --body').toBe(false);
@@ -265,7 +265,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     // inline form BEFORE any blocking read.
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body', 'inline text'],
+      argv: ['5', '--body', 'inline text'],
       keepStdinOpen: true,
     });
     expect(r.killedByWatchdog, 'edit blocked on stdin before rejecting inline --body').toBe(false);
@@ -279,28 +279,45 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
   it('task edit: --body=<value> is also the rejected inline form', async () => {
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body=inline'],
+      argv: ['5', '--body=inline'],
       stdin: '',
     });
     expect(r.code).toBe(1);
     expect(parseStderrJson(r.stderr).error.subkind).toBe('body_requires_stdin');
   });
 
-  it('task edit: missing --task-number fails fast even with an open stdin pipe', async () => {
+  it('task edit: missing <task_number> fails fast even with an open stdin pipe', async () => {
     const r = await runTask({
       verb: 'edit',
       argv: ['--body'],
       keepStdinOpen: true,
     });
-    expect(r.killedByWatchdog, 'edit blocked on stdin before validating --task-number').toBe(false);
+    expect(r.killedByWatchdog, 'edit blocked on stdin before validating <task_number>').toBe(false);
     expect(r.code).toBe(1);
-    expect(parseStderrJson(r.stderr).error.subkind).toBe('missing_required_flag');
+    expect(parseStderrJson(r.stderr).error.subkind).toBe('missing_task_number');
+  });
+
+  it('task edit: the removed --task-number flag is rejected as flag_removed, fail-fast', async () => {
+    // Reject-and-teach: an agent still reaching for the old flag must get a
+    // named replacement, not `unknown_flag` — and never a blocking stdin read.
+    captured.length = 0;
+    const r = await runTask({
+      verb: 'edit',
+      argv: ['--task-number', '5', '--body'],
+      keepStdinOpen: true,
+    });
+    expect(r.killedByWatchdog, 'edit blocked on stdin before rejecting --task-number').toBe(false);
+    expect(r.code).toBe(1);
+    const body = parseStderrJson(r.stderr);
+    expect(body.error.subkind).toBe('flag_removed');
+    expect(body.error.message).toContain('positional');
+    expect(businessRequests().length).toBe(0);
   });
 
   it('task edit: neither --title nor --body is rejected (empty stdin)', async () => {
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5'],
+      argv: ['5'],
       stdin: '',
     });
     expect(r.code).toBe(1);
@@ -310,7 +327,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
   it('task edit: rejects invalid UTF-8 on stdin as invalid_utf8', async () => {
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body'],
+      argv: ['5', '--body'],
       stdin: Buffer.from([0xff, 0xfe, 0xfd]),
     });
     expect(r.code).toBe(1);
@@ -330,7 +347,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     const at = 'a'.repeat(MAX_LEN);
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body'],
+      argv: ['5', '--body'],
       stdin: at,
     });
     expect(r.code, r.stderr).toBe(0);
@@ -344,7 +361,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     const cjk = '好'.repeat(MAX_LEN);
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body'],
+      argv: ['5', '--body'],
       stdin: cjk,
     });
     expect(r.code, r.stderr).toBe(0);
@@ -359,7 +376,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     const over = 'a'.repeat(MAX_LEN + 1);
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body'],
+      argv: ['5', '--body'],
       stdin: over,
     });
     expect(r.code).toBe(1);
@@ -378,7 +395,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     const huge = 'a'.repeat(400_000);
     const r = await runTask({
       verb: 'edit',
-      argv: ['--task-number', '5', '--body'],
+      argv: ['5', '--body'],
       stdin: huge,
     });
     expect(r.code).toBe(1);
@@ -459,7 +476,7 @@ describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_0
     async () => {
       const r = await runTask({
         verb: 'edit',
-        argv: ['--task-number', '5', '--body'],
+        argv: ['5', '--body'],
         withTty: true,
       });
       expect(r.code).toBe(1);

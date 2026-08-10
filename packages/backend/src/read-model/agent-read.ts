@@ -37,6 +37,7 @@ import type {
   AgentReadHistoryDto,
   AgentSearchMessageHit,
   AgentSearchMessagesDto,
+  AgentSearchMessagesScope,
   MessageAuthorDto,
   MessageRef,
   MessageRow,
@@ -694,26 +695,53 @@ export function buildAgentSearchMessagesDto(
   agentId: string,
   input: {
     q: string;
-    scope: 'current' | 'workspace' | 'channel';
+    current_workspace?: true;
     workspace_id?: string;
-    channel_id?: string;
+    conversation_id?: string;
     include_system: boolean;
     limit: number;
   },
 ): SearchMessagesResult {
   const where: string[] = [`m.content LIKE ? ESCAPE '\\'`];
   const params: Array<string | number> = [likeNeedle(input.q)];
-  let channelId: string | null = null;
+  let conversationId: string | null = null;
   let workspaceId: string | null = null;
 
   if (!input.include_system) {
     where.push(`m.from_kind != 'system'`);
   }
 
-  if (input.scope === 'current') {
+  // Selector-only input: the range is whichever selector arrived, so the
+  // scope below is DERIVED, never asserted twice by the caller.
+  let scope: AgentSearchMessagesScope;
+  if (input.conversation_id) {
+    scope = 'conversation';
+    const conversation = conversations.getChannelLike(input.conversation_id);
+    if (!conversation) {
+      return {
+        ok: false,
+        status: 404,
+        code: 'conversation_not_found',
+        message: 'conversation not found',
+      };
+    }
+    // conversation_id is globally unique. PR-B made list_channels return
+    // channels from any workspace the agent has access to, so the
+    // bottom guard is conversation-membership, not source-workspace
+    // identity.
+    if (!conversations.getAgent(conversation.id, agentId)) {
+      return {
+        ok: false,
+        status: 403,
+        code: 'not_conversation_member',
+        message: 'agent is not a member of this conversation',
+      };
+    }
+    conversationId = conversation.id;
     where.push(`conv.id = ?`);
-    params.push(sourceConversation.id);
-  } else if (input.scope === 'workspace') {
+    params.push(conversation.id);
+  } else if (input.current_workspace || input.workspace_id) {
+    scope = 'workspace';
     // Cross-workspace handled by the route before we get here:
     // `canAgentAccessWorkspace` already gated `input.workspace_id`
     // when it differs from `sourceConversation.workspace_id`. Here we
@@ -724,38 +752,9 @@ export function buildAgentSearchMessagesDto(
     where.push(`conv.workspace_id = ?`);
     params.push(workspaceId);
   } else {
-    channelId = input.channel_id ?? null;
-    if (!channelId) {
-      return {
-        ok: false,
-        status: 400,
-        code: 'channel_id_required',
-        message: 'channel_id is required for channel scope',
-      };
-    }
-    const channel = conversations.getChannelLike(channelId);
-    if (!channel) {
-      return {
-        ok: false,
-        status: 404,
-        code: 'channel_not_found',
-        message: 'channel not found',
-      };
-    }
-    // channel_id is globally unique. PR-B made list_channels return
-    // channels from any workspace the agent has access to, so the
-    // bottom guard is conversation-membership, not source-workspace
-    // identity.
-    if (!conversations.getAgent(channel.id, agentId)) {
-      return {
-        ok: false,
-        status: 403,
-        code: 'not_channel_member',
-        message: 'agent is not a member of this channel',
-      };
-    }
+    scope = 'current';
     where.push(`conv.id = ?`);
-    params.push(channel.id);
+    params.push(sourceConversation.id);
   }
 
   const sqlParams: Array<string | number> = [agentId, ...params, input.limit];
@@ -784,9 +783,9 @@ export function buildAgentSearchMessagesDto(
     ok: true,
     dto: {
       query: input.q,
-      scope: input.scope,
+      scope,
       workspace_id: workspaceId,
-      channel_id: channelId,
+      conversation_id: conversationId,
       include_system: input.include_system,
       limit: input.limit,
       hits: rows.map((row): AgentSearchMessageHit => {

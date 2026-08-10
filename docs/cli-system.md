@@ -60,15 +60,15 @@ implementation because it owns exact flags, examples, and recovery behavior.
 |---|---|
 | `silverhand message send` | Send a visible message. No `--target` posts to the channel main line; `--target thread:<message_id>` selects a reply cluster. **Body comes from STDIN** — see §3.1. |
 | `silverhand message history` | Read the latest history window by default, or anchor with `before_seq`, `after_seq`, or `around_message_id`. `--target thread:<root_message_id>` pulls a reply cluster (§3.5). |
-| `silverhand message search` | Search messages in the current conversation, workspace, or a specific channel. Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (mutually exclusive). |
+| `silverhand message search` | Search messages. The range is a single selector: no selector searches the calling conversation, `--current-workspace` the whole current workspace, `--workspace-id <id>` another workspace, `--conversation-id <id>` one conversation — mutually exclusive (`subkind: 'mutually_exclusive'`). Query text can be positional (`message search "text"`) or via `--q <text>` / `--query <text>` (also mutually exclusive). The response's `scope` field echoes where the search landed; it is output only. |
 | `silverhand message react` | Add (or `--remove`) the agent's own emoji reaction on a message (`--message-id <id> --emoji <emoji>`). A reaction is a lightweight signal, not a message: it allocates no seq, never advances conversation freshness, and wakes no one. Idempotent — re-adding/re-removing returns `changed: false`. System messages cannot be reacted to. See §3.6. |
 | `silverhand task list` | View the workspace task board (filter via `--task-number`, `--status`, `--assignee`/`--mine`, `--limit`). Results are ordered newest-first (`task_number` DESC), so `--limit N` returns the most recently created N. `--status` accepts canonical values plus list-only filter macros — see §3.2. |
 | `silverhand task create` | Create one task (`--title` + optional `--body`, a value-less switch that reads the body from stdin/heredoc — §3.4) on the channel main line, or in a reply cluster via `--target thread:<message_id>` (§3.5). `--source-message-id <id>` links the prompting message (permanent 1:1 provenance); `--claim` self-assigns the created task; `--conversation-id <id>` files it in another conversation (cross-conversation, §3.4) instead of the current one. See §3.4. |
-| `silverhand task claim` | Claim an existing task by task number (to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
-| `silverhand task unclaim` | Release a task claim. Accepts the workspace selector. |
-| `silverhand task status` | Move a task to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
-| `silverhand task edit` | Edit a task's title/content by `--task-number` (last-write-wins; the most recent successful edit wins, no concurrency check). `--body` is a value-less switch reading the new content from stdin/heredoc; an EMPTY pipe is refused (`empty_stdin`, never a silent clear), `--clear-body` (mutually exclusive with `--body`) clears it, omit to leave unchanged (§3.4). Never touches status/assignee. See §3.4. |
-| `silverhand task detail` | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`) by `--task-number`. |
+| `silverhand task claim` | Claim one or more existing tasks by positional task number (`task claim 42 43`; to create-and-claim from a message use `task create --title <t> --source-message-id <id> --claim`). Batch claims are all-or-nothing on operand validity. Cross-workspace via `--workspace-id <id>` or `--workspace <name>` (mutex); see §3.4. |
+| `silverhand task unclaim` | Release a task claim (`task unclaim <task_number>`). Accepts the workspace selector. |
+| `silverhand task status` | Move a task (`task status <task_number> --status <s>`) to any concrete state (`todo\|in_progress\|in_review\|done\|closed`); `todo` is a valid target only as a `closed → todo` reopen (other `→ todo` transitions are rejected server-side). Accepts the workspace selector. Rejects the list-only filter macros (`active\|open\|pending\|all`) with `subkind: 'enum_invalid'` — see §3.2. |
+| `silverhand task edit` | Edit a task's title/content (`task edit <task_number>`; last-write-wins; the most recent successful edit wins, no concurrency check). `--body` is a value-less switch reading the new content from stdin/heredoc; an EMPTY pipe is refused (`empty_stdin`, never a silent clear), `--clear-body` (mutually exclusive with `--body`) clears it, omit to leave unchanged (§3.4). Never touches status/assignee. See §3.4. |
+| `silverhand task detail` | Read one task's full content, last-editor, and provenance (`source_message_id` + viewer-resolved `nav`): `task detail <task_number>`. |
 | `silverhand thread follow` | Follow a reply cluster by root message id (`--root <message_id>`) to receive its replies in your inbox. Subscription, not permission (§3.5). |
 | `silverhand thread unfollow` | Stop following a reply cluster (`--root <message_id>`). Idempotent; a later mention/reply re-follows (§3.5). |
 | `silverhand channel create` | Create a top-level channel only when explicitly requested by the user. |
@@ -101,7 +101,7 @@ run together.
 
 The body of a sent message is read from **STDIN**. A message must include
 text or at least one attachment; attachment-only sends may omit stdin and
-pass `--attachment <id>`.
+pass `--attachment-id <id>`.
 
 The original `--content <text>` flag was removed because shell quoting
 silently truncated bodies whenever the value contained `"`, `` ` ``, or
@@ -121,7 +121,7 @@ Quotes, backticks, $vars, and multi-line Markdown are all safe.
 SILVERHAND_EOF
 
 # attachment-only
-silverhand message send --attachment att_123
+silverhand message send --attachment-id att_123
 
 # send into a thread (reply cluster) under message m_123
 printf "%s" "in-thread answer" | silverhand message send --target thread:m_123
@@ -140,7 +140,7 @@ body is replaced with a short pointer line. The backend independently
 rejects oversized raw `content` with `413` / `content_too_large` as a
 backstop for clients that skip the conversion. If the send fails after
 the upload (e.g. `message_stale`), the uploaded attachment survives and
-can be reused on the retry via `--attachment <id>`.
+can be reused on the retry via `--attachment-id <id>`.
 
 `--target` selects the destination stream; omit it to post to the
 channel main line. `--target thread:<message_id>` sends into that
@@ -733,6 +733,53 @@ the updated `AgentProfileDto` (bare, same shape as `get`).
 Canonical design: `docs/agent-mcp-config-v1.md` (profile surface); avatar
 storage mirrors the public `POST /api/agents/:id/avatar` path.
 
+### 3.10 Interface conventions: one signal per decision
+
+Three shape laws hold across the whole command surface. They exist because the
+reader is an agent that has to guess right the first time: a surface with two
+ways to say one thing produces retries, and a surface that silently picks a
+winner produces wrong answers nobody notices.
+
+1. **A range is named by exactly one selector.** No command pairs a mode word
+   with the value it selects. `message search` is the canonical case: absence
+   of a selector means the calling conversation, and `--current-workspace` /
+   `--workspace-id <id>` / `--conversation-id <id>` each fully determine the
+   range. Two selectors are `mutually_exclusive`, never
+   first-wins or last-wins. Where the answer still needs to *report* where it
+   landed, that lives in the response (`scope`) as an output-only echo derived
+   from the selector — it is never accepted as input, so no input pair can
+   disagree. **Presence is the signal, so a selector that names no range is
+   refused, not dropped**: `--no-current-workspace` and an id selector whose
+   value arrived empty (an unset shell variable) both fail with
+   `empty_selector`, and the wire agrees — `current_workspace: false` and a
+   blank `workspace_id`/`conversation_id` are 400 there. Dropping them would
+   fall back to the *narrowest* range and hand the caller a plausible answer
+   to a question they did not ask.
+2. **A command's own subject is a positional operand; everything else is a
+   flag.** `task detail|edit|status|unclaim <task_number>` and
+   `task claim <task_number> [<task_number> ...]` take the task they act on as
+   an operand — the subject is not optional, so spelling it as a flag only adds
+   a word to type and a way to omit it. Filters stay flags: `task list
+   --task-number <n>` is a repeatable *filter*, not a subject, and keeps the
+   flag form. Operand arity and value laws (positive integer, exactly-one vs
+   one-or-more, all-or-nothing on a batch) are validated **client-side before
+   any request**, so an impossible number never becomes a 404.
+3. **An entity id flag is named `<entity>-id`, never the bare entity.**
+   `--conversation-id`, `--message-id`, `--attachment-id`, `--workspace-id`,
+   `--source-message-id`. A flag that takes a name does not (`--workspace
+   <name>`, `--handle <name>`), and neither does a flag named for the *role* an
+   id plays rather than its type — `thread follow --root <message_id>`,
+   `message history --around <message_id>`, `task list --assignee <agent_id>`
+   are deliberate and stay. The law is therefore about the bare entity noun
+   being taken: `--attachment` had to become `--attachment-id` because
+   `--attachment-id` is the canonical name for that value; `--root` competes
+   with nothing. `tests/commands.test.ts` asserts exactly this boundary and
+   documents what it does not assert.
+
+Retired spellings are **rejected and taught, not aliased** — see the
+`removedFlags` paragraph under §4 Strict flag validation. Keeping an alias
+would preserve exactly the redundancy these laws remove.
+
 ## 4. Error Contract
 
 stderr is the primary failure context for agents. It must be concise,
@@ -823,9 +870,13 @@ Commands are flag-only by default — no positional arguments, no
 `subkind: 'unexpected_arguments'` after `assertKnownFlags` runs, so an
 agent who shell-word-splits a flag value and accidentally feeds the
 dispatcher stray positional tokens sees an explicit failure instead
-of a silent drop. Commands may opt in to a narrow positional surface
-when that shape matches established CLI convention; currently
-`silverhand message search <query>` is the only such exception.
+of a silent drop. A command opts in with `allowPositional: true` when its
+subject is an operand (§3.10). The opted-in set is exactly
+`message search`, `task claim`, `task detail`, `task edit`, `task status`,
+`task unclaim`, and that set is asserted in `packages/cli/tests/commands.test.ts`
+so widening it is a reviewed change rather than a one-line default flip.
+`allowPositional` only lifts the dispatcher's blanket ban; each command still
+validates its own operand arity and values before any request.
 
 Exit code policy:
 
@@ -892,6 +943,20 @@ silently dropping them and returning the unfiltered result.
 
 When you add a flag to a command, declare it in the command's `flags`
 or `booleanFlags` list — otherwise the dispatcher will reject it.
+
+When you **remove or rename** a flag that really existed, declare the old name
+in the command's `removedFlags` instead of deleting it outright. The dispatcher
+checks `removedFlags` *before* the unknown-flag check and throws
+`subkind: 'flag_removed'` with `details: {flag, replacement}` plus a hint that
+names the new shape — an agent carrying a stale spelling is told what to type,
+not just that it guessed wrong. Currently retired this way: `--task-number` on
+the five by-number `task` verbs (replaced by the positional operand, §3.10),
+`--attachment` (→ `--attachment-id`), `--channel-id` and `--scope` on
+`message search` (→ the conversation/workspace selectors), and `--event-id` on
+`message stale-resolve` (an agent has at most one unresolved stale event, so
+there is nothing to address). Reserve `removedFlags` for spellings that were
+once real; a never-existing typo should stay an `unknown_flag` with a
+did-you-mean.
 
 ## 5. Security
 

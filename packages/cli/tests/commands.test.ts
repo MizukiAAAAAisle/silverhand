@@ -106,6 +106,123 @@ describe('command catalogue', () => {
     }
   });
 
+  // ── Shape laws for the #task:1945 interface convergence ─────────────
+  // These are contract guards, not snapshots: each one locks a rule that
+  // typecheck cannot see, and each fails loudly when a future command
+  // quietly re-introduces the shape the convergence removed.
+
+  it('only the declared allowlist opts into positional arguments', () => {
+    // `allowPositional` is a bare boolean on each command, so it has no
+    // declaration surface a reviewer can diff — a new `true` anywhere
+    // would silently reopen the "bash word-split tail landed in
+    // positional" footgun that the dispatcher's A1 guard exists to
+    // prevent. This asserts the EXACT set, so adding a consumer forces
+    // an explicit change here (and therefore a review of its arity
+    // parsing). It deliberately does NOT verify arity: that lives in
+    // each command's own parser and its branch tests.
+    const positional = allCommands()
+      .filter(({ cmd }) => cmd.allowPositional === true)
+      .map(({ label }) => label)
+      .sort();
+    expect(positional).toEqual([
+      'message search', // free-text query
+      'task claim', // <task_number> ... (one-or-more)
+      'task detail', // <task_number> (exactly-one)
+      'task edit',
+      'task status',
+      'task unclaim',
+    ]);
+  });
+
+  it('--task-number is a list-only filter; the by-number verbs teach the positional shape', () => {
+    // One name, one role. On `task list` it is an OPTIONAL repeatable
+    // FILTER; on the by-number verbs it used to be the REQUIRED operand,
+    // which is now positional. Accepting both spellings there would
+    // leave two ways to say the same required argument — the redundancy
+    // this cut removes — so the flag must be `removedFlags` (an
+    // actionable `flag_removed` hint), never an accepted alias.
+    const byNumberVerbs = ['claim', 'unclaim', 'status', 'edit', 'detail'];
+    for (const verb of byNumberVerbs) {
+      const cmd = findCommand('task', verb)!;
+      expect(cmd.flags, `task ${verb} still accepts --task-number`).not.toContain(
+        'task-number',
+      );
+      expect(
+        cmd.removedFlags?.['task-number'],
+        `task ${verb} must teach the positional shape`,
+      ).toBeDefined();
+      expect(cmd.removedFlags!['task-number']!.hint).toContain('positional');
+    }
+    expect(findCommand('task', 'list')!.flags).toContain('task-number');
+  });
+
+  it('no command accepts --channel-id: conversation is the one name for the range', () => {
+    // Channel/thread/conversation had three spellings on the wire and in
+    // flags. `--conversation-id` is canonical; `message search` keeps
+    // `--channel-id` only as a removed-flag migration hint.
+    for (const { label, cmd } of allCommands()) {
+      expect(cmd.flags ?? [], `${label} accepts --channel-id`).not.toContain(
+        'channel-id',
+      );
+      expect(cmd.booleanFlags ?? [], `${label} accepts --channel-id`).not.toContain(
+        'channel-id',
+      );
+    }
+    const search = findCommand('message', 'search')!;
+    expect(search.removedFlags?.['channel-id']?.replacement).toBe(
+      '--conversation-id',
+    );
+    expect(search.flags).toContain('conversation-id');
+  });
+
+  it('message search is selector-only: no --scope, and the three selectors are declared', () => {
+    const search = findCommand('message', 'search')!;
+    expect(search.flags, 'search still takes a mode flag').not.toContain('scope');
+    expect(search.removedFlags?.['scope']).toBeDefined();
+    expect(search.flags).toContain('workspace-id');
+    expect(search.flags).toContain('conversation-id');
+    expect(search.booleanFlags).toContain('current-workspace');
+  });
+
+  it('an entity flag that carries that entity\'s id is spelled <entity>-id', () => {
+    // The naming law, in the only form the real surface supports: for an
+    // entity whose canonical flag IS the id (`--attachment-id`,
+    // `--conversation-id`, `--schedule-id`), the bare noun must never come
+    // back. Without the suffix an agent cannot tell from the flag name
+    // whether to pass an id or a name, which is the guess that produced
+    // repeated `--attachment <label>` failures.
+    //
+    // Deliberately NOT asserted, because the surface legitimately differs:
+    // role-named flags carry ids under a positional name (`--root
+    // <message_id>`, `--around <message_id>`, `--assignee <agent_id>`) —
+    // they name a relation, not an entity; and a bare noun that takes free
+    // TEXT is correct as-is (`schedule create --message <text>`). Widening
+    // this list therefore needs a real `-id` sibling to point at.
+    const bareEntityNouns = [
+      'attachment',
+      'conversation',
+      'channel',
+      'schedule',
+      'event',
+      'task',
+    ];
+    for (const { label, cmd } of allCommands()) {
+      const declared = [...(cmd.flags ?? []), ...(cmd.booleanFlags ?? [])];
+      for (const noun of bareEntityNouns) {
+        expect(
+          declared,
+          `${label} declares --${noun}; an id-bearing entity flag must be --${noun}-id`,
+        ).not.toContain(noun);
+      }
+    }
+  });
+
+  it('a stale event is not addressable: stale-resolve takes no --event-id', () => {
+    const cmd = findCommand('message', 'stale-resolve')!;
+    expect(cmd.flags).toEqual(['resolution']);
+    expect(cmd.removedFlags?.['event-id']).toBeDefined();
+  });
+
   it('command help blocks do not leak transport/credential semantics to agents', () => {
     // The CLI is already configured for the current session by the
     // backend. Help text the agent reads must not mention SILVERHAND_*

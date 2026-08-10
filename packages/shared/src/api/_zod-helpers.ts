@@ -1,8 +1,10 @@
 // Private api-local helpers split out of the former monolithic api/dto.ts
 // (#task:963). Intentionally NOT re-exported from api/index.ts: these are
 // shared internal zod preprocessors (currently SearchOptionalStringSchema,
-// used by both message search and the agent search_messages MCP input), not
-// part of the public @silverhand/shared surface.
+// used by the human message-search FILTERS), not part of the public
+// @silverhand/shared surface. Note the agent `search_messages` input does
+// NOT use it: there the ids are the search RANGE, so blank must fail rather
+// than fall back to a narrower range.
 import { z } from 'zod';
 import { AttachmentRefInputSchema } from './attachment.js';
 import { MAX_MESSAGE_ATTACHMENTS } from '../chat-limits.js';
@@ -12,7 +14,7 @@ export const SearchOptionalStringSchema = z.preprocess(
   z.string().trim().optional(),
 );
 
-/** A send references attachments as bare id strings (agent CLI `--attachment`,
+/** A send references attachments as bare id strings (agent CLI `--attachment-id`,
  *  daemon relay — no compose-time label) OR as `{id, label}` refs (the composer
  *  carries the label the user saw). Both branches normalize to a uniform ref
  *  list at the route boundary (`normalizeAttachmentRefs`); the union is confined

@@ -90,6 +90,32 @@ function unwrapShellLauncher(command: string): string {
 }
 
 /**
+ * Quote-aware end of the command starting at `start`: the index of the next
+ * UNQUOTED shell separator (`;` `&` `|` `(`), else the string end. Shares the
+ * exact separator + quote semantics of {@link findSilverhandCommand}, so a
+ * command's `args` never bleed into a following `&& echo --task-number 5`
+ * (which would otherwise fake a number / stale flag from the SUFFIX). Newlines
+ * are not separators — a heredoc body line is part of the command, matching
+ * the scanner; every metadata reader looks only before the body anyway.
+ */
+function commandEnd(inner: string, start: number): number {
+  let quote: string | null = null;
+  for (let i = start; i < inner.length; i++) {
+    const c = inner[i]!;
+    if (quote) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      continue;
+    }
+    if (c === ';' || c === '&' || c === '|' || c === '(') return i;
+  }
+  return inner.length;
+}
+
+/**
  * Scan an (unwrapped) shell command left-to-right, tracking `'` / `"` quote
  * state, and return the first `silverhand <noun> [verb]` that sits at a
  * COMMAND position — the command start or right after an UNQUOTED separator
@@ -98,10 +124,17 @@ function unwrapShellLauncher(command: string): string {
  * never accepted, so the trace can't fabricate a fake action. Deliberately a
  * small scanner, not a full shell parser: newline is NOT a separator (so a
  * heredoc body line isn't mistaken for a command) and backticks aren't tracked.
+ *
+ * `args` is the text AFTER the matched `silverhand <noun> [verb]`, up to the
+ * next UNQUOTED separator ({@link commandEnd}) — the identified command's OWN
+ * operands/flags, nothing from a compound prefix or suffix. All secondary
+ * metadata (task number, `--status`, stale suffix) reads `args`, so neither
+ * `sleep 5 && silverhand task claim 9` (prefix) nor `silverhand task create &&
+ * echo --task-number 5` (suffix) can leak a number/flag into it.
  */
 function findSilverhandCommand(
   inner: string,
-): { noun: string; verb?: string } | null {
+): { noun: string; verb?: string; args: string } | null {
   let quote: string | null = null;
   let atCmdPos = true;
   for (let i = 0; i < inner.length; i++) {
@@ -121,14 +154,63 @@ function findSilverhandCommand(
       continue;
     }
     if (atCmdPos) {
-      const m = /^silverhand\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/i.exec(
-        inner.slice(i),
-      );
-      if (m) return { noun: m[1]!.toLowerCase(), verb: m[2]?.toLowerCase() };
+      const slice = inner.slice(i);
+      const m = /^silverhand\s+([a-z][a-z-]*)(?:\s+([a-z][a-z-]*))?/i.exec(slice);
+      if (m) {
+        const argsStart = m[0].length;
+        return {
+          noun: m[1]!.toLowerCase(),
+          verb: m[2]?.toLowerCase(),
+          args: slice.slice(argsStart, commandEnd(slice, argsStart)),
+        };
+      }
     }
     atCmdPos = false;
   }
   return null;
+}
+
+/**
+ * The point task verbs that target a single task by number. After the
+ * #task:1945 CLI migration these carry the number as a POSITIONAL operand
+ * (`task claim 42`); older activity rows carry the now-retired `--task-number
+ * 42` flag. Activity rows are immutable historical command text, so the reader
+ * accepts BOTH forms permanently — this is history compatibility, not a
+ * migration window. `list` is deliberately excluded: it keeps `--task-number`
+ * as a filter (still matched by the flag form below), and a bare number there
+ * would be a query arg, never an operand. `create` (`--source-message-id …
+ * --claim`) never takes one either, so it must not be misread as `#<n>`.
+ */
+const TASK_NUMBER_VERBS = new Set(['detail', 'status', 'claim', 'unclaim', 'edit']);
+
+/**
+ * Extract the task number a `silverhand task <verb> …` action targets, given
+ * that command's `args` slice (everything AFTER `task <verb>`, from
+ * {@link findSilverhandCommand} — never the wider shell text). Two forms:
+ *
+ *  - the retired `--task-number N` flag, anywhere in `args`, any verb (history
+ *    rows + the surviving `task list --task-number` filter);
+ *  - the new positional operand, which — since Activity rows are canonical CLI
+ *    invocations — sits as the FIRST token right after the verb (`task claim
+ *    42`). Gated to {@link TASK_NUMBER_VERBS}, so `list 5` / a `create` with no
+ *    operand never yield a number. A batch claim (`task claim 42 43`) surfaces
+ *    the first only.
+ *
+ * We deliberately do NOT re-implement CLI flag parsing (skipping flag values to
+ * hunt a later positional): a non-canonical `task edit --clear-body 42` simply
+ * yields no number rather than risk a wrong one — `--clear-body`/`--json` are
+ * booleans and telling value-flags from boolean ones here would rebuild the
+ * whole parser. Returns null when there is no operand. Pure — branch-tested.
+ */
+export function taskNumberFromCommand(
+  verb: string | undefined,
+  args: string,
+): string | null {
+  const flag = /--task-number[=\s]+(\d+)/.exec(args)?.[1];
+  if (flag !== undefined) return flag;
+  if (verb === undefined || !TASK_NUMBER_VERBS.has(verb)) return null;
+  const first = args.trimStart().split(/\s+/)[0] ?? '';
+  return /^\d+$/.test(first) ? first : null;
 }
 
 /**
@@ -140,16 +222,17 @@ function findSilverhandCommand(
  * Wrapped launchers (`/bin/zsh -lc "silverhand …"`) are unwrapped first; the
  * quote-aware scanner (`findSilverhandCommand`) then accepts `silverhand` only
  * at a real command position, never inside a quoted argument. Flags / heredoc
- * bodies are dropped from the title, EXCEPT a `task` action surfaces its
- * `--task-number` / `--status` as light secondary metadata (`#1187 → in_review`)
- * — parsed only from the already-identified silverhand command, never the wider
- * shell text.
+ * bodies are dropped from the title, EXCEPT a `task` action surfaces its task
+ * number (`--task-number N` or the new positional `task <verb> N` — see
+ * {@link taskNumberFromCommand}) / `--status` as light secondary metadata
+ * (`#1187 → in_review`) — parsed only from the already-identified silverhand
+ * command, never the wider shell text.
  */
 function presentSilverhandCli(command: string): ToolPresentation | null {
   const inner = unwrapShellLauncher(command);
   const found = findSilverhandCommand(inner);
   if (!found) return null;
-  const { noun, verb: verbTok } = found;
+  const { noun, verb: verbTok, args } = found;
   const cap = noun.charAt(0).toUpperCase() + noun.slice(1);
   let label = verbTok ? `${cap} ${verbTok.replace(/-/g, ' ')}` : cap;
   // A few product-flavoured overrides (shiki/Cindy #task:1187):
@@ -160,18 +243,21 @@ function presentSilverhandCli(command: string): ToolPresentation | null {
   if (
     noun === 'message' &&
     verbTok === 'send' &&
-    /--stale-resolution|--anyway/.test(inner)
+    /--stale-resolution|--anyway/.test(args)
   ) {
     label = 'Message send stale';
   }
 
   // Task actions carry their target id + status change as secondary metadata.
-  // `--message-id` promote/claim has no task number → don't fabricate one.
+  // The number comes from the retired `--task-number` flag OR the new
+  // positional operand; `--message-id` promote/claim has none → don't
+  // fabricate one. Read only the identified command's `args`, never the wider
+  // shell text (a compound prefix must not leak a number/flag in).
   let arg: string | null = null;
   if (noun === 'task') {
-    const num = /--task-number[=\s]+(\d+)/.exec(inner)?.[1] ?? null;
+    const num = taskNumberFromCommand(verbTok, args);
     const status =
-      verbTok === 'status' ? (/--status[=\s]+([a-z_]+)/.exec(inner)?.[1] ?? null) : null;
+      verbTok === 'status' ? (/--status[=\s]+([a-z_]+)/.exec(args)?.[1] ?? null) : null;
     if (num && status) arg = `#${num} → ${status}`;
     else if (num) arg = `#${num}`;
     else if (status) arg = `→ ${status}`;
