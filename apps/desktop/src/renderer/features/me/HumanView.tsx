@@ -3,6 +3,7 @@ import { useUsers } from '@/features/users/hooks';
 import { useViewerUser, isRegistrationRequired, isBackendUnreachable, isUpdateRequired } from './hooks';
 import { HumanHeader } from './HumanHeader';
 import { HumanProfileCard } from './HumanProfileCard';
+import { paneChrome } from '@/components/layout/pane-chrome';
 
 interface HumanViewProps {
   /** Identifier from the URL (`/members/u/:userId`). */
@@ -50,11 +51,7 @@ export function HumanView({
     return (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{
-          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-          overflow: 'hidden',
-        }}
+        style={{ ...paneChrome, overflow: 'hidden' }}
       >
         Loading profile…
       </main>
@@ -65,11 +62,7 @@ export function HumanView({
     return (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{
-          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-          overflow: 'hidden',
-        }}
+        style={{ ...paneChrome, overflow: 'hidden' }}
       >
         This human is not viewable in this version.
       </main>
@@ -79,10 +72,7 @@ export function HumanView({
   return (
     <main
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-      }}
+      style={paneChrome}
     >
       <HumanHeader user={dto} />
       <div className="min-w-0 flex-1 overflow-y-auto">

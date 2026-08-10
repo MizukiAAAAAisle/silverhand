@@ -1,4 +1,5 @@
 import { Loader2, X } from 'lucide-react';
+import { paneChrome } from './pane-chrome';
 
 export type SidePlaceholderStatus = 'loading' | 'unauthorized' | 'not_found';
 
@@ -69,10 +70,7 @@ export function SideUnresolvedPlaceholder({
   return (
     <main
       className="flex h-full min-w-0 flex-1 flex-col bg-bg-chat"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-      }}
+      style={paneChrome}
     >
       <header className="flex h-[var(--titlebar-height,44px)] shrink-0 items-center justify-between border-b border-border px-3">
         <div className="min-w-0 flex-1 truncate text-sm font-medium text-text-muted">

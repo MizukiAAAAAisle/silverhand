@@ -13,6 +13,7 @@ import { MembersPanel } from '@/components/layout/MembersPanel';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
 import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
+import { paneChrome } from '@/components/layout/pane-chrome';
 import { SectionLayer } from '@/components/layout/SectionLayer';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
@@ -2098,11 +2099,7 @@ function RegisteredAppShell({
               <aside
                 data-sidebar="members"
                 className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-                style={{
-                  borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-                  boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-                  overflow: 'hidden',
-                }}
+                style={{ ...paneChrome, overflow: 'hidden' }}
               >
                 <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
                   <MembersPanel
@@ -2134,11 +2131,7 @@ function RegisteredAppShell({
               ) : (
                 <main
                   className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-                  style={{
-                    borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-                    boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-                    overflow: 'hidden',
-                  }}
+                  style={{ ...paneChrome, overflow: 'hidden' }}
                 >
                   Select an agent to see its details
                 </main>
@@ -2152,11 +2145,7 @@ function RegisteredAppShell({
               <aside
                 data-sidebar="computers"
                 className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-                style={{
-                  borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-                  boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-                  overflow: 'hidden',
-                }}
+                style={{ ...paneChrome, overflow: 'hidden' }}
               >
                 <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
                   <ComputersPanel
@@ -2174,11 +2163,7 @@ function RegisteredAppShell({
               ) : (
                 <main
                   className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-                  style={{
-                    borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-                    boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-                    overflow: 'hidden',
-                  }}
+                  style={{ ...paneChrome, overflow: 'hidden' }}
                 >
                   {hostsQuery.isLoading
                     ? 'Loading computers…'
@@ -2216,11 +2201,7 @@ function RegisteredAppShell({
                     ? 'flex h-full w-[var(--activity-list-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]'
                     : 'flex h-full min-w-0 flex-1 flex-col bg-[var(--bg-channels-sidebar)]'
                 }
-                style={{
-                  borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-                  boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-                  overflow: 'hidden',
-                }}
+                style={{ ...paneChrome, overflow: 'hidden' }}
               >
                 <ActivityView
                   workspaceRefById={workspaceRefById}

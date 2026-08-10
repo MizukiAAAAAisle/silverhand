@@ -26,6 +26,7 @@ import {
   partitionRailWorkspaces,
   type SelectedConversation,
 } from '@/lib/home-grouping';
+import { paneChrome } from './pane-chrome';
 
 interface SidebarProps {
   workspaces: WorkspaceItem[];
@@ -185,11 +186,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     <aside
       data-sidebar="workspaces"
       className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-        overflow: 'hidden',
-      }}
+      style={{ ...paneChrome, overflow: 'hidden' }}
     >
       <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
         {/* App-level tool entries (Search/Saved/Archived). Kept a SOFT group:

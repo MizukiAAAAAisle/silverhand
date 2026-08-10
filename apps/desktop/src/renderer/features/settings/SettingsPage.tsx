@@ -65,6 +65,7 @@ import {
   type SettingsSection,
 } from './settings-section';
 import { ConnectionPane } from './ConnectionPane';
+import { paneChrome } from '@/components/layout/pane-chrome';
 
 /** 4-color swatch preview and display name for each theme. */
 const THEME_META: Record<
@@ -194,10 +195,7 @@ export function SettingsPage(): JSX.Element {
       <SettingsRail section={section} onSelect={setSection} />
       <main
         className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
-        style={{
-          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-        }}
+        style={paneChrome}
       >
         {/* The card header names the OPEN pane, not the page (shiki 2026-08-06
             「右侧的 header 不要固定写 "settings" 文案,还是跟着选中的 nav 切换」)
@@ -300,11 +298,7 @@ function SettingsRail({
       aria-label="Settings sections"
       data-sidebar="settings"
       className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-        overflow: 'hidden',
-      }}
+      style={{ ...paneChrome, overflow: 'hidden' }}
     >
       <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
         <SidebarSection

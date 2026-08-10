@@ -30,6 +30,7 @@ import {
 import { canManageAgentSchedules, canViewAgentFiles } from './permissions';
 import { useAgentAvatarObjectUrl } from './avatar-hooks';
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from '@/features/me/hooks';
+import { paneChrome } from '@/components/layout/pane-chrome';
 
 const SECTION_STORAGE_KEY = 'silverhand:layout.agent-section';
 const VALID_SECTIONS: ReadonlyArray<AgentSection> = [
@@ -132,11 +133,7 @@ export function AgentView({
     ) : (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{
-          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-          overflow: 'hidden',
-        }}
+        style={{ ...paneChrome, overflow: 'hidden' }}
       >
         Loading agent…
       </main>
@@ -152,11 +149,7 @@ export function AgentView({
     ) : (
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-        style={{
-          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-          overflow: 'hidden',
-        }}
+        style={{ ...paneChrome, overflow: 'hidden' }}
       >
         Agent not found.
       </main>
@@ -184,10 +177,7 @@ export function AgentView({
   return (
     <main
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-      }}
+      style={paneChrome}
     >
       <AgentHeader
         agent={agent}
@@ -358,10 +348,7 @@ function SidePanelShell({
   return (
     <section
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-chat"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-      }}
+      style={paneChrome}
     >
       {/* Header row is the shared `SidePanelHeader` (components/layout), so the
           agent panel's height is locked to the channel header's `h-12` (48px)

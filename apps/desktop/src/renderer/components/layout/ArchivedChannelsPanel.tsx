@@ -27,6 +27,7 @@ import {
   type DateFilterValue,
 } from '@/components/ui/date-filter-select';
 import { ListRowsSkeleton } from './ListRowsSkeleton';
+import { paneChrome } from './pane-chrome';
 
 /** Archived-view filter selection. Lifted to App so it survives pane
  *  switches for the app session (shiki #task:1259) — NOT persisted, so a
@@ -112,11 +113,7 @@ export function ArchivedChannelsPanel({
   return (
     <main
       className="flex h-full min-w-0 flex-1 flex-col bg-bg-chat"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-        overflow: 'hidden',
-      }}
+      style={{ ...paneChrome, overflow: 'hidden' }}
     >
       <header className="flex h-[var(--titlebar-height)] shrink-0 items-center gap-2 border-b border-border-subtle px-4">
         <Archive className="size-3.5 text-accent" />

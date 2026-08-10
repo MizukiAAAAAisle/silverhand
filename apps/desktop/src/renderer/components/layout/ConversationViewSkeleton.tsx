@@ -23,6 +23,7 @@
  * are neutral utility tokens (`bg-bg-hover`) — a skeleton is chrome, never a
  * saturated status signal.
  */
+import { paneChrome } from './pane-chrome';
 
 // Per-row recipe: author-label width + the body-line widths beneath it. Hand-
 // varied so the block reads as a conversation, not a stack of identical bars.
@@ -80,10 +81,7 @@ export function ConversationViewSkeleton(): JSX.Element {
   return (
     <main
       className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-      }}
+      style={paneChrome}
       aria-hidden
       data-conversation-skeleton
     >

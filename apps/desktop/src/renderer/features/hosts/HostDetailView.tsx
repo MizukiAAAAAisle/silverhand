@@ -109,6 +109,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input, Label } from '@/components/ui/input';
 import { cn } from '@/lib/cn';
+import { paneChrome } from '@/components/layout/pane-chrome';
 import {
   hostStatusKey,
   useAgentOnlineByHost,
@@ -238,10 +239,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
   return (
     <main
       className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-bg-floating"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-      }}
+      style={paneChrome}
     >
       <HostHero
         host={host}

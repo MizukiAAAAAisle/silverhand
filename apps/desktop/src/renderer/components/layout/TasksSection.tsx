@@ -54,6 +54,7 @@ import {
 } from '@/components/tasks/CreateTaskDialog';
 import { Button } from '@/components/ui/button';
 import { primaryAction } from '@/features/common/PrimaryAction';
+import { paneChrome } from './pane-chrome';
 
 /**
  * NavRail "Tasks" section — global aggregate view across every channel
@@ -202,11 +203,7 @@ export const TasksSection = memo(function TasksSection({
   return (
     <main
       className="flex h-full flex-1 flex-col bg-bg-base"
-      style={{
-        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
-        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
-        overflow: 'hidden',
-      }}
+      style={{ ...paneChrome, overflow: 'hidden' }}
     >
       {/* Header padding: `pl-[6px]` matches the forza6 tasks-hero
         * sticker's 6px vertical clearance (22+1+1=24px sticker in 36px

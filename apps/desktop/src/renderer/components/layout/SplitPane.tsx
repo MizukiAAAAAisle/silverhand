@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { PANE_RADIUS } from './pane-chrome';
 
 interface SplitPaneProps {
   left: ReactNode;
@@ -326,9 +327,12 @@ export function SplitPane({
             // area that the inner card visually rounds away — producing
             // asymmetric header radii (left pane keeps its rounded
             // corners against App `bg-bg-base`, right pane looks square).
+            // Radius only — deliberately NOT the full `paneChrome`: this
+            // wrapper is a filler behind a real pane, and lifting it too
+            // would double the shadow under the inner one.
             style={{
               contain: 'layout paint',
-              borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+              borderRadius: PANE_RADIUS,
             }}
             className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-chat"
           >
