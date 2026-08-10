@@ -81,8 +81,8 @@ export function ConversationViewSkeleton(): JSX.Element {
     <main
       className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
       }}
       aria-hidden
       data-conversation-skeleton

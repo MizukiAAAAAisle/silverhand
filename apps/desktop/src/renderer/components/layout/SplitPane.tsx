@@ -328,7 +328,7 @@ export function SplitPane({
             // corners against App `bg-bg-base`, right pane looks square).
             style={{
               contain: 'layout paint',
-              borderRadius: 'var(--card-radius, 0)',
+              borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
             }}
             className="flex h-full min-w-0 flex-1 overflow-hidden bg-bg-chat"
           >

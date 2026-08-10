@@ -186,8 +186,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       data-sidebar="workspaces"
       className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
         overflow: 'hidden',
       }}
     >

@@ -209,8 +209,8 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
       <main
         className="flex h-full min-w-0 flex-1 items-center justify-center bg-bg-chat text-sm text-text-muted"
         style={{
-          borderRadius: 'var(--card-radius, 0)',
-          boxShadow: 'var(--card-shadow, none)',
+          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
         }}
       >
         Select a channel
@@ -598,8 +598,8 @@ function ActiveChannelView({
       ref={findRootRef}
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
       }}
     >
       <header className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4">

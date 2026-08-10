@@ -90,19 +90,22 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
       aria-label="App sections"
       className="flex h-full w-[var(--nav-rail-width)] shrink-0 flex-col items-center gap-1 bg-[var(--bg-nav-rail)] py-2"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
         overflow: 'hidden',
         // The rail is unconditionally the frame's first item, so its
         // bottom-left corner IS the app window's bottom-left corner. At a
         // 2px tile radius that corner reads as a chip inside the arc the
         // OS clips the window on, so it follows the app corner while the
         // other three stay tiles. Only forza6 declares
-        // `--app-corner-radius`; elsewhere this resolves back to
-        // `--card-radius` and nothing changes. The frame's bottom-RIGHT
-        // owner varies by section, so it is resolved structurally in
-        // `global.css` §App frame corners instead of inline.
-        borderBottomLeftRadius: 'var(--app-corner-radius, var(--card-radius, 0))',
+        // `--app-corner-radius`; elsewhere this resolves back to that
+        // theme's pane radius and nothing changes (iris resolves to 0 —
+        // its rail is a flat transparent strip on the gradient paper, not
+        // a card). The frame's bottom-RIGHT owner varies by section, so it
+        // is resolved structurally in `global.css` §App frame corners
+        // instead of inline.
+        borderBottomLeftRadius:
+          'var(--app-corner-radius, var(--pane-radius, var(--card-radius, 0)))',
       }}
     >
       {ITEMS.map(item => {

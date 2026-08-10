@@ -51,8 +51,8 @@ export function HumanView({
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={{
-          borderRadius: 'var(--card-radius, 0)',
-          boxShadow: 'var(--card-shadow, none)',
+          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
           overflow: 'hidden',
         }}
       >
@@ -66,8 +66,8 @@ export function HumanView({
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={{
-          borderRadius: 'var(--card-radius, 0)',
-          boxShadow: 'var(--card-shadow, none)',
+          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
           overflow: 'hidden',
         }}
       >
@@ -80,8 +80,8 @@ export function HumanView({
     <main
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
       }}
     >
       <HumanHeader user={dto} />

@@ -133,8 +133,8 @@ export function AgentView({
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={{
-          borderRadius: 'var(--card-radius, 0)',
-          boxShadow: 'var(--card-shadow, none)',
+          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
           overflow: 'hidden',
         }}
       >
@@ -153,8 +153,8 @@ export function AgentView({
       <main
         className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
         style={{
-          borderRadius: 'var(--card-radius, 0)',
-          boxShadow: 'var(--card-shadow, none)',
+          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
           overflow: 'hidden',
         }}
       >
@@ -185,8 +185,8 @@ export function AgentView({
     <main
       className="flex h-full flex-1 flex-col overflow-hidden bg-bg-base"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
       }}
     >
       <AgentHeader
@@ -359,8 +359,8 @@ function SidePanelShell({
     <section
       className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg-chat"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
       }}
     >
       {/* Header row is the shared `SidePanelHeader` (components/layout), so the

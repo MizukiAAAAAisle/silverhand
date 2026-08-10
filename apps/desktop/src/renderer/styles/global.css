@@ -11,6 +11,7 @@
 @import "./themes/forza6.css";
 @import "./themes/studio-light.css";
 @import "./themes/slack-dark.css";
+@import "./themes/iris.css";
 
 /* Forza6-only component-layer specialization. Every selector inside is
    `[data-theme='forza6']`-scoped; studio-light + slack-dark are pixel-
@@ -1481,11 +1482,14 @@ nav[aria-label='App sections'] button:not([aria-current='page']):hover {
 
    Universal but inert outside forza6: only `themes/forza6.css` declares
    `--app-corner-radius`, so the other themes resolve this back to their
-   own `--card-radius` and nothing moves. */
+   own pane radius and nothing moves. iris then resolves one rung further
+   in (`--pane-radius: 0`): its panes live inside ONE white sheet whose
+   own radius rounds the frame corner, so the pane itself must stay
+   square — see `themes/iris.css` § Sheet. */
 [data-section-layer] > *:last-child {
   border-bottom-right-radius: var(
     --app-corner-radius,
-    var(--card-radius, 0)
+    var(--pane-radius, var(--card-radius, 0))
   ) !important;
 }
 

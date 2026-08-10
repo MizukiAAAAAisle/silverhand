@@ -133,6 +133,10 @@ describe('theme markdown token cascade contract', () => {
     new URL('../styles/themes/slack-dark.css', import.meta.url),
     'utf8',
   );
+  const irisCss = readFileSync(
+    new URL('../styles/themes/iris.css', import.meta.url),
+    'utf8',
+  );
 
   // Cascade STRUCTURE guards: the whole no-leak model rests on the default
   // theme owning `:root` and being imported before any override theme. If
@@ -145,7 +149,7 @@ describe('theme markdown token cascade contract', () => {
     );
     const forzaIdx = order.indexOf('forza6.css');
     expect(forzaIdx).toBeGreaterThanOrEqual(0);
-    for (const override of ['studio-light.css', 'slack-dark.css']) {
+    for (const override of ['studio-light.css', 'slack-dark.css', 'iris.css']) {
       expect(order.indexOf(override)).toBeGreaterThan(forzaIdx);
     }
   });
@@ -157,6 +161,7 @@ describe('theme markdown token cascade contract', () => {
     expect(forza6Css).toMatch(/:root\s*,\s*\[data-theme=['"]forza6['"]\]/);
     expect(studioLightCss).not.toContain(':root');
     expect(slackDarkCss).not.toContain(':root');
+    expect(irisCss).not.toContain(':root');
   });
 
   // Component-layer root-ownership guard (restored, #task:788 failure path).
@@ -227,6 +232,7 @@ describe('theme markdown token cascade contract', () => {
     for (const [name, css] of [
       ['studio-light', studioLightCss],
       ['slack-dark', slackDarkCss],
+      ['iris', irisCss],
     ] as const) {
       const declared = declaredTokens(css);
       const missing = required.filter(t => !declared.has(t));

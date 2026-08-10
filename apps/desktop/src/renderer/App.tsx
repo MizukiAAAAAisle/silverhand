@@ -1935,7 +1935,32 @@ function RegisteredAppShell({
   }
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden">
+    <div
+      className="flex h-screen w-screen flex-col overflow-hidden"
+      style={{
+        // Window paper (#task:1965). A theme whose chrome is a GRADIENT
+        // can't express it through the colour tokens — every consumer of
+        // `--bg-app` / `--bg-base` reads them as `background-color` — so
+        // the gradient arrives through its own image slot. Themes that
+        // don't fill it resolve `none` and paint nothing, which is why
+        // this is one declaration and not a per-theme branch.
+        //
+        // Three constraints, all inherited from the upstream this is
+        // modelled on (block/buzz):
+        //   • painted ONCE, here — this node is the only full-viewport,
+        //     non-scrolling surface, so a gradient on it can't be dragged
+        //     by a scroll container or repeated per pane;
+        //   • sized `100vw 100vh` explicitly rather than left to `cover`,
+        //     so the ramp is anchored to the window and not to whatever
+        //     this box's content height happens to be;
+        //   • deliberately NOT `background-attachment: fixed` — WKWebView
+        //     keeps a stale raster of fixed backgrounds through window
+        //     resizes, which shows up as a torn gradient.
+        backgroundImage: 'var(--app-paper, none)',
+        backgroundSize: '100vw 100vh',
+        backgroundRepeat: 'no-repeat',
+      }}
+    >
       <Titlebar
         workspaceId={selectedWorkspace?.id ?? null}
         workspaceName={titlebarWorkspaceName}
@@ -1986,413 +2011,435 @@ function RegisteredAppShell({
             else nav.toComputers();
           }}
         />
-        {/* ===== Top-level section views (#task:1168 + #task:1170) =====
+        {/* Section sheet — the layer every section view lives in, one
+          * step inside the frame (#task:1965). It exists so a theme can
+          * decide whether the panes are separate cards floating in the
+          * gutter or ONE surface: it carries the same `--frame-padding`
+          * gap the frame used to apply directly, so themes that keep the
+          * card language are pixel-identical (a transparent pass-through).
+          * iris collapses the gap to 0 and paints this node as the single
+          * white sheet holding sidebar + main, which is why the rail stays
+          * OUTSIDE it — the rail is the one pane left standing on the
+          * gradient paper.
           *
-          * Rendered as INDEPENDENT conditional siblings (not a mutually-
-          * exclusive ternary) so that during a section switch the outgoing and
-          * incoming sections can briefly coexist — one visible, one hidden —
-          * which is what lets the chat shell paint instantly without dragging
-          * the previous section's teardown onto the click commit.
-          *
-          * Two axes, deliberately driven by DIFFERENT section values (this is
-          * intentional, not a typo — see the three invariants in #task:1170):
-          *
-          *   • MOUNT / UNMOUNT  ← `deferredSection` (low-priority).
-          *     Each `deferredSection === X` guard mounts a section and, once the
-          *     deferred value moves off X, truly UNMOUNTS it on the deferred
-          *     commit. So a heavy teardown (TasksSection's 274-card dnd-kit
-          *     cleanup; ChannelView's effects) never runs on the urgent click
-          *     commit that must paint the rail highlight. NB: this is a real
-          *     unmount, NOT keep-alive — display:none below only spans the
-          *     transition frames; a section is never left permanently
-          *     mounted-but-hidden (that would resurrect the mark-read side
-          *     effect we rejected, ChannelView.tsx:248-260).
-          *
-          *   • VISIBILITY  ← urgent `appSection`, via <SectionLayer> toggling
-          *     display:contents↔none. The rail click updates `appSection`
-          *     synchronously, so the click commit instantly flips WHICH mounted
-          *     section is shown, even though the deferred mount/unmount lags a
-          *     step behind.
-          *
-          * Non-chat sections are hidden only while `appSection === 'chat'` (chat
-          * is urgently taking over on top); during non-chat→non-chat switches
-          * the outgoing one stays visible until the incoming one mounts, so we
-          * never flash blank. */}
-        {deferredSection === 'settings' && (
-          <SectionLayer visible={appSection !== 'chat'}>
-            <SettingsPage />
-          </SectionLayer>
-        )}
-        {deferredSection === 'tasks' && (
-          <SectionLayer visible={appSection !== 'chat'}>
-            {/* The reveal id reaches this board only while `/tasks` IS the
-              * current section: `deferredSection` keeps it mounted for a frame
-              * after a rail click elsewhere, and a board on its way out must
-              * not deliver — nor be a second surface holding the one-shot. */}
-            <TasksSection
-              onOpenTask={openTaskInModal}
-              revealTaskId={sectionVisible ? reveal.taskId : null}
-              onRevealConsumed={clearReveal}
-            />
-          </SectionLayer>
-        )}
-        {deferredSection === 'members' && (
-          <SectionLayer visible={appSection !== 'chat'}>
-          <>
-            <aside
-              data-sidebar="members"
-              className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-              style={{
-                borderRadius: 'var(--card-radius, 0)',
-                boxShadow: 'var(--card-shadow, none)',
-                overflow: 'hidden',
-              }}
-            >
-              <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-                <MembersPanel
-                  selectedAgentId={selectedAgentId}
-                  onSelectAgent={id => nav.toMembers(id)}
-                  selectedUserId={selectedUserId}
-                  onSelectUser={id => nav.toMembersUser(id)}
-                />
-              </nav>
-            </aside>
-            {selectedUserId ? (
-              <HumanView
-                key={selectedUserId}
-                userId={selectedUserId}
-                onUnreachable={() => nav.toMembers()}
+          * Deliberately NO `overflow-hidden` here: the card themes let
+          * their panes' `--card-shadow` spill into the gutter, and clipping
+          * it at this boundary would shave the shadow off the outer edges.
+          * iris opts INTO clipping in `themes/iris.css` (its panes are
+          * square, so only the sheet's own corners need to cut). */}
+        <div
+          data-section-sheet=""
+          className="flex min-w-0 flex-1"
+          style={{ gap: 'var(--frame-padding, 0)' }}
+        >
+          {/* ===== Top-level section views (#task:1168 + #task:1170) =====
+            *
+            * Rendered as INDEPENDENT conditional siblings (not a mutually-
+            * exclusive ternary) so that during a section switch the outgoing and
+            * incoming sections can briefly coexist — one visible, one hidden —
+            * which is what lets the chat shell paint instantly without dragging
+            * the previous section's teardown onto the click commit.
+            *
+            * Two axes, deliberately driven by DIFFERENT section values (this is
+            * intentional, not a typo — see the three invariants in #task:1170):
+            *
+            *   • MOUNT / UNMOUNT  ← `deferredSection` (low-priority).
+            *     Each `deferredSection === X` guard mounts a section and, once the
+            *     deferred value moves off X, truly UNMOUNTS it on the deferred
+            *     commit. So a heavy teardown (TasksSection's 274-card dnd-kit
+            *     cleanup; ChannelView's effects) never runs on the urgent click
+            *     commit that must paint the rail highlight. NB: this is a real
+            *     unmount, NOT keep-alive — display:none below only spans the
+            *     transition frames; a section is never left permanently
+            *     mounted-but-hidden (that would resurrect the mark-read side
+            *     effect we rejected, ChannelView.tsx:248-260).
+            *
+            *   • VISIBILITY  ← urgent `appSection`, via <SectionLayer> toggling
+            *     display:contents↔none. The rail click updates `appSection`
+            *     synchronously, so the click commit instantly flips WHICH mounted
+            *     section is shown, even though the deferred mount/unmount lags a
+            *     step behind.
+            *
+            * Non-chat sections are hidden only while `appSection === 'chat'` (chat
+            * is urgently taking over on top); during non-chat→non-chat switches
+            * the outgoing one stays visible until the incoming one mounts, so we
+            * never flash blank. */}
+          {deferredSection === 'settings' && (
+            <SectionLayer visible={appSection !== 'chat'}>
+              <SettingsPage />
+            </SectionLayer>
+          )}
+          {deferredSection === 'tasks' && (
+            <SectionLayer visible={appSection !== 'chat'}>
+              {/* The reveal id reaches this board only while `/tasks` IS the
+                * current section: `deferredSection` keeps it mounted for a frame
+                * after a rail click elsewhere, and a board on its way out must
+                * not deliver — nor be a second surface holding the one-shot. */}
+              <TasksSection
+                onOpenTask={openTaskInModal}
+                revealTaskId={sectionVisible ? reveal.taskId : null}
+                onRevealConsumed={clearReveal}
               />
-            ) : selectedAgentId ? (
-              <AgentView
-                key={selectedAgentId}
-                agentId={selectedAgentId}
-                onDeleted={() => nav.toMembers()}
-                onOpenConversation={s => {
-                  // Jump back to chat view, focusing the agent's channel.
-                  const workspaceId = resolveNavWorkspaceId(s.workspace_id, s.channel_id);
-                  if (!workspaceId) return;
-                  nav.toChannel(workspaceId, s.channel_id);
-                }}
-              />
-            ) : (
-              <main
-                className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+            </SectionLayer>
+          )}
+          {deferredSection === 'members' && (
+            <SectionLayer visible={appSection !== 'chat'}>
+            <>
+              <aside
+                data-sidebar="members"
+                className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
                 style={{
-                  borderRadius: 'var(--card-radius, 0)',
-                  boxShadow: 'var(--card-shadow, none)',
+                  borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+                  boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
                   overflow: 'hidden',
                 }}
               >
-                Select an agent to see its details
-              </main>
-            )}
-          </>
-          </SectionLayer>
-        )}
-        {deferredSection === 'computers' && (
-          <SectionLayer visible={appSection !== 'chat'}>
-          <>
-            <aside
-              data-sidebar="computers"
-              className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-              style={{
-                borderRadius: 'var(--card-radius, 0)',
-                boxShadow: 'var(--card-shadow, none)',
-                overflow: 'hidden',
-              }}
-            >
-              <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-                <ComputersPanel
-                  hosts={computerHosts}
-                  localHostId={localHostIdForComputers}
-                  isLoading={hostsQuery.isLoading}
-                  selectedHostId={selectedHostId}
-                  onSelectHost={setSelectedHostId}
-                  onAddComputer={() => setNewComputerOpen(true)}
-                />
-              </nav>
-            </aside>
-            {selectedHost ? (
-              <HostDetailView key={selectedHost.id} host={selectedHost} />
-            ) : (
-              <main
-                className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
-                style={{
-                  borderRadius: 'var(--card-radius, 0)',
-                  boxShadow: 'var(--card-shadow, none)',
-                  overflow: 'hidden',
-                }}
-              >
-                {hostsQuery.isLoading
-                  ? 'Loading computers…'
-                  : 'Select a computer to see its details'}
-              </main>
-            )}
-          </>
-          </SectionLayer>
-        )}
-        {/* ACTIVITY: NavRail top-level section (#task:1394). Three columns:
-          * Activity-list navigator | full ChannelView | full ThreadPanel. The
-          * browse sidebars are intentionally absent — the Activity list column
-          * replaces them (the "省下一个 sidebar"). Mounts/unmounts on
-          * `deferredSection` like the other non-chat sections. */}
-        {deferredSection === 'activity' && (
-          <SectionLayer visible={appSection !== 'chat'}>
-          <>
-            {/* Activity list column — the global attention navigator: selection
-              * / sort / filter only, owns NO message or thread rendering. Two
-              * layout states, both a pure projection of the route (#task:1394,
-              * shiki): with NO channel in the route (bare `/activity`, incl. the
-              * caught-up empty state) it fills the whole content area — no right
-              * pane, no ChannelView/SplitPane, so we never carry back an implicit
-              * "unselected but a conversation surface exists" state. Once a row is
-              * clicked the route gains `/w/:wid/c/:cid` and it collapses to a
-              * resizable left column beside the reused ChannelView — the SAME
-              * progressive-disclosure primitive as chat's ChannelView→ThreadPanel
-              * (app-layout.md §1). Width is its OWN `--activity-list-width` (never
-              * chat's `--sidebar-width`) with an independent min/max clamp +
-              * persisted pref. */}
-            <aside
-              data-sidebar="activity"
-              className={
-                selectedChannelId != null
-                  ? 'flex h-full w-[var(--activity-list-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]'
-                  : 'flex h-full min-w-0 flex-1 flex-col bg-[var(--bg-channels-sidebar)]'
-              }
-              style={{
-                borderRadius: 'var(--card-radius, 0)',
-                boxShadow: 'var(--card-shadow, none)',
-                overflow: 'hidden',
-              }}
-            >
-              <ActivityView
-                workspaceRefById={workspaceRefById}
-                agentsById={agentsById}
-                onJump={handleJumpToMessageStable}
-              />
-            </aside>
-            {/* Split appears ONLY once the route carries a channel. The divider
-              * resizes the Activity list against the conversation column (clamp
-              * owned by the `activityList` hook). Right side = the SAME
-              * `parentView` / `secondaryView` chat renders — route-driven reuse is
-              * what makes "无条件自动同步" structural (composer / thread /
-              * inline-search / jump-prime / mark-read all inherit from the one
-              * ChannelView). Gated on URGENT `appSection === 'activity'` (not just
-              * the deferred mount): during an activity↔chat transition both blocks
-              * are briefly mounted, so this ensures only ONE renders the shared
-              * ChannelView, avoiding a transient double-mount of its effects; the
-              * hidden side shows the skeleton. */}
-            {selectedChannelId != null ? (
-              <>
-                <VerticalSplitter
-                  onPointerDown={activityList.startResize}
-                  active={activityList.isDragging}
-                />
-                {appSection === 'activity' ? (
-                  secondaryView &&
-                  shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
-                    secondaryView
-                  ) : (
-                    <SplitPane
-                      left={parentView}
-                      right={secondaryView}
-                      storageKey="silverhand.layout.activity-split-ratio"
-                    />
-                  )
-                ) : (
-                  <ConversationViewSkeleton />
-                )}
-              </>
-            ) : null}
-          </>
-          </SectionLayer>
-        )}
-        {/* CHAT: the cheap shell (workspace + channel sidebars + their
-          * splitters) mounts on URGENT `appSection` so a rail click paints it
-          * immediately (~5ms render, Alice CDP). It is mounted while EITHER
-          * value is 'chat': `appSection === 'chat'` covers instant ENTRY;
-          * `deferredSection === 'chat'` keeps the shell on screen for the
-          * one-step EXIT (chat→X) until the destination mounts, so we never
-          * flash blank. Whenever it's mounted it's the section to show, so it's
-          * always visible. The heavy conversation pane inside is gated
-          * separately on `deferredSection` with a skeleton (see below). */}
-        {(appSection === 'chat' || deferredSection === 'chat') && (
-          <SectionLayer visible>
-          <>
-            <div
-              className="sidebar-slot"
-              data-animating={
-                SIDEBAR_ANIMATE_LAYOUT && workspaceSidebarPane.transitioning
-                  ? 'true'
-                  : undefined
-              }
-              data-performance-variant={SIDEBAR_PERFORMANCE_VARIANT}
-              style={{
-                flexBasis: workspaceSidebarVisible
-                  ? 'var(--sidebar-width)'
-                  : '0px',
-                // When hidden, eat the right-side flex gap so the parent's
-                // `gap: var(--frame-padding)` doesn't render twice (once on
-                // each side of the 0-width slot). Animates alongside
-                // flex-basis so the collapse stays smooth end-to-end.
-                marginRight: workspaceSidebarVisible
-                  ? '0px'
-                  : 'calc(-1 * var(--frame-padding, 0px))',
-              }}
-              // hidden subtree must not steal focus or grab pointer events
-              // mid-slide; `inert` removes it from the a11y tree too.
-              {...(workspaceSidebarVisible ? {} : { inert: '' })}
-              aria-hidden={workspaceSidebarVisible ? undefined : true}
-            >
-              {workspaceSidebarPane.present ? (
-                <div
-                  className="sidebar-surface"
-                  data-state={workspaceSidebarPane.surfaceState}
-                  style={{ width: 'var(--sidebar-width)' }}
-                >
-                  <Sidebar
-                    workspaces={workspaces.map(w => ({
-                      id: w.id,
-                      name: w.name,
-                      kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
-                      dm_agent_id: w.dm_agent_id,
-                      unread: attentionBadges?.by_workspace?.[w.id] ?? 0,
-                      // Both row signals come from the ONE roll-up (#task:1870):
-                      // the count and the mute marker must never disagree about
-                      // the same workspace.
-                      muted:
-                        attentionBadges?.muted_workspace_ids?.includes(w.id) ??
-                        false,
-                      archived: w.archived_at !== null,
-                      created_at: w.created_at,
-                    }))}
-                    agentsById={agentsById}
-                    selectedWorkspaceId={selectedWorkspaceId}
-                    // The tree's ONE selection object. Carries forward the
-                    // secondary-pane preference the retired channel column owned:
-                    // highlight the secondary's row ONLY when it lives in the
-                    // workspace the primary is in — a cross-workspace `?side` id
-                    // leaves the primary's row filled instead of ghost-filling a
-                    // same-id row under a different parent.
-                    selectedChannelId={
-                      secondaryDescriptor?.status === 'resolved' &&
-                      secondaryDescriptor.workspaceId === selectedWorkspaceId
-                        ? secondaryDescriptor.id
-                        : selectedChannelId
-                    }
-                    onSelectChannel={handleSelectChannel}
-                    onCreateChannel={setCreateChannelWorkspaceId}
-                    // STARRED is global, so the parent workspace is explicit —
-                    // `handleSelectChannel` then opens a starred channel in another
-                    // workspace with the SAME remembered-layout restore as its home
-                    // row, instead of a bare jump.
-                    onSelectConversation={(workspaceId, conversationId) =>
-                      handleSelectChannel(conversationId, workspaceId)
-                    }
-                    onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
-                    savedActive={view === 'saved'}
-                    onSelectSaved={() => nav.toChatSaved()}
-                    archivedActive={view === 'archived'}
-                    onSelectArchived={() => nav.toChatArchived()}
-                    searchActive={view === 'search'}
-                    onSelectSearch={() => nav.toChatSearch()}
-                    savedCount={savedItems?.length}
+                <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
+                  <MembersPanel
+                    selectedAgentId={selectedAgentId}
+                    onSelectAgent={id => nav.toMembers(id)}
+                    selectedUserId={selectedUserId}
+                    onSelectUser={id => nav.toMembersUser(id)}
                   />
-                </div>
-              ) : null}
-            </div>
-            {/* Splitter stays mounted for the entire animation lifecycle —
-              * keying it to `present` (not `visible`) avoids the 4 px
-              * layout snap that happens if the splitter unmounts at frame
-              * zero of the hide animation while the slot is still 220 ms
-              * away from finishing its collapse. The splitter slides
-              * leftward in lockstep with the slot's right edge and
-              * unmounts together with the surface at the end. */}
-            {workspaceSidebarPane.present ? (
-              <VerticalSplitter
-                onPointerDown={sidebar.startResize}
-                active={sidebar.isDragging}
-              />
-            ) : null}
-            {view === 'saved' ? (
-              <SavedListView
-                workspaces={workspaces}
-                filter={savedFilter}
-                onFilterChange={setSavedFilter}
-                onJump={params => handleJumpToMessage(params)}
-              />
-            ) : view === 'search' ? (
-              <SearchPanel
-                workspaces={workspaces}
-                initialQuery={route.searchQuery ?? undefined}
-                filter={searchFilter}
-                onFilterChange={setSearchFilter}
-                onJumpMessage={params => handleJumpToMessage(params)}
-                onOpenWorkspace={id => nav.toWorkspace(id)}
-                onOpenConversation={(workspaceId, channelId) => {
-                  const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
-                  if (!navWorkspaceId) return;
-                  nav.toChannel(navWorkspaceId, channelId);
+                </nav>
+              </aside>
+              {selectedUserId ? (
+                <HumanView
+                  key={selectedUserId}
+                  userId={selectedUserId}
+                  onUnreachable={() => nav.toMembers()}
+                />
+              ) : selectedAgentId ? (
+                <AgentView
+                  key={selectedAgentId}
+                  agentId={selectedAgentId}
+                  onDeleted={() => nav.toMembers()}
+                  onOpenConversation={s => {
+                    // Jump back to chat view, focusing the agent's channel.
+                    const workspaceId = resolveNavWorkspaceId(s.workspace_id, s.channel_id);
+                    if (!workspaceId) return;
+                    nav.toChannel(workspaceId, s.channel_id);
+                  }}
+                />
+              ) : (
+                <main
+                  className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+                  style={{
+                    borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+                    boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
+                    overflow: 'hidden',
+                  }}
+                >
+                  Select an agent to see its details
+                </main>
+              )}
+            </>
+            </SectionLayer>
+          )}
+          {deferredSection === 'computers' && (
+            <SectionLayer visible={appSection !== 'chat'}>
+            <>
+              <aside
+                data-sidebar="computers"
+                className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
+                style={{
+                  borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+                  boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
+                  overflow: 'hidden',
                 }}
-              />
-            ) : view === 'archived' ? (
-              <ArchivedChannelsPanel
-                workspaces={workspaces}
-                filter={archivedFilter}
-                onFilterChange={setArchivedFilter}
-                onOpenChannel={(workspaceId, channelId) => {
-                  // Mirror SearchPanel: resolve through the same nav helper
-                  // so a cross-workspace open lands on the right UI workspace
-                  // item. For the archived aggregate `workspaceId` is already
-                  // the channel's own workspace id (agent_home for a DM), so
-                  // this is a no-op there — but it keeps both cross-workspace
-                  // panels on one resolution path (#task:1145).
-                  const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
-                  if (!navWorkspaceId) return;
-                  nav.toChannel(navWorkspaceId, channelId);
+              >
+                <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
+                  <ComputersPanel
+                    hosts={computerHosts}
+                    localHostId={localHostIdForComputers}
+                    isLoading={hostsQuery.isLoading}
+                    selectedHostId={selectedHostId}
+                    onSelectHost={setSelectedHostId}
+                    onAddComputer={() => setNewComputerOpen(true)}
+                  />
+                </nav>
+              </aside>
+              {selectedHost ? (
+                <HostDetailView key={selectedHost.id} host={selectedHost} />
+              ) : (
+                <main
+                  className="flex h-full flex-1 items-center justify-center bg-bg-base text-sm text-text-muted"
+                  style={{
+                    borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+                    boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {hostsQuery.isLoading
+                    ? 'Loading computers…'
+                    : 'Select a computer to see its details'}
+                </main>
+              )}
+            </>
+            </SectionLayer>
+          )}
+          {/* ACTIVITY: NavRail top-level section (#task:1394). Three columns:
+            * Activity-list navigator | full ChannelView | full ThreadPanel. The
+            * browse sidebars are intentionally absent — the Activity list column
+            * replaces them (the "省下一个 sidebar"). Mounts/unmounts on
+            * `deferredSection` like the other non-chat sections. */}
+          {deferredSection === 'activity' && (
+            <SectionLayer visible={appSection !== 'chat'}>
+            <>
+              {/* Activity list column — the global attention navigator: selection
+                * / sort / filter only, owns NO message or thread rendering. Two
+                * layout states, both a pure projection of the route (#task:1394,
+                * shiki): with NO channel in the route (bare `/activity`, incl. the
+                * caught-up empty state) it fills the whole content area — no right
+                * pane, no ChannelView/SplitPane, so we never carry back an implicit
+                * "unselected but a conversation surface exists" state. Once a row is
+                * clicked the route gains `/w/:wid/c/:cid` and it collapses to a
+                * resizable left column beside the reused ChannelView — the SAME
+                * progressive-disclosure primitive as chat's ChannelView→ThreadPanel
+                * (app-layout.md §1). Width is its OWN `--activity-list-width` (never
+                * chat's `--sidebar-width`) with an independent min/max clamp +
+                * persisted pref. */}
+              <aside
+                data-sidebar="activity"
+                className={
+                  selectedChannelId != null
+                    ? 'flex h-full w-[var(--activity-list-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]'
+                    : 'flex h-full min-w-0 flex-1 flex-col bg-[var(--bg-channels-sidebar)]'
+                }
+                style={{
+                  borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+                  boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
+                  overflow: 'hidden',
                 }}
-                onOpenWorkspace={handleSelectWorkspace}
-              />
-            ) : (
-              <>
-                {/* Heavy conversation pane — the only part of the chat section
-                  * kept on `deferredSection`. While the deferred value hasn't
-                  * caught up to 'chat' (i.e. we just entered chat and the shell
-                  * above is already painted), show a skeleton instead of
-                  * mounting ChannelView, so the mount's ~hundreds-of-ms commit
-                  * work stays off the click critical path.
-                  *
-                  * The gate is `deferredSection === 'chat'` — keyed by
-                  * DESTINATION, not predecessor. That's deliberate: on entry
-                  * `appSection` is already 'chat' but `deferredSection` still
-                  * names the previous section; gating on the predecessor would
-                  * briefly mount this pane over the half-torn-down old section.
-                  * Keying on the destination shows the skeleton for exactly the
-                  * frames before the conv is ready, never stale previous
-                  * content. (PERCEPTION win only — the deferred mount/teardown
-                  * longtask still runs a beat later behind the painted shell;
-                  * it does NOT reduce that CPU work, so don't drop the defer on
-                  * the assumption it does.) */}
-                {deferredSection === 'chat' ? (
-                  secondaryView &&
-                  shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
-                    secondaryView
+              >
+                <ActivityView
+                  workspaceRefById={workspaceRefById}
+                  agentsById={agentsById}
+                  onJump={handleJumpToMessageStable}
+                />
+              </aside>
+              {/* Split appears ONLY once the route carries a channel. The divider
+                * resizes the Activity list against the conversation column (clamp
+                * owned by the `activityList` hook). Right side = the SAME
+                * `parentView` / `secondaryView` chat renders — route-driven reuse is
+                * what makes "无条件自动同步" structural (composer / thread /
+                * inline-search / jump-prime / mark-read all inherit from the one
+                * ChannelView). Gated on URGENT `appSection === 'activity'` (not just
+                * the deferred mount): during an activity↔chat transition both blocks
+                * are briefly mounted, so this ensures only ONE renders the shared
+                * ChannelView, avoiding a transient double-mount of its effects; the
+                * hidden side shows the skeleton. */}
+              {selectedChannelId != null ? (
+                <>
+                  <VerticalSplitter
+                    onPointerDown={activityList.startResize}
+                    active={activityList.isDragging}
+                  />
+                  {appSection === 'activity' ? (
+                    secondaryView &&
+                    shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
+                      secondaryView
+                    ) : (
+                      <SplitPane
+                        left={parentView}
+                        right={secondaryView}
+                        storageKey="silverhand.layout.activity-split-ratio"
+                      />
+                    )
                   ) : (
-                    <SplitPane
-                      left={parentView}
-                      right={secondaryView}
-                      storageKey="silverhand.layout.split-ratio"
+                    <ConversationViewSkeleton />
+                  )}
+                </>
+              ) : null}
+            </>
+            </SectionLayer>
+          )}
+          {/* CHAT: the cheap shell (workspace + channel sidebars + their
+            * splitters) mounts on URGENT `appSection` so a rail click paints it
+            * immediately (~5ms render, Alice CDP). It is mounted while EITHER
+            * value is 'chat': `appSection === 'chat'` covers instant ENTRY;
+            * `deferredSection === 'chat'` keeps the shell on screen for the
+            * one-step EXIT (chat→X) until the destination mounts, so we never
+            * flash blank. Whenever it's mounted it's the section to show, so it's
+            * always visible. The heavy conversation pane inside is gated
+            * separately on `deferredSection` with a skeleton (see below). */}
+          {(appSection === 'chat' || deferredSection === 'chat') && (
+            <SectionLayer visible>
+            <>
+              <div
+                className="sidebar-slot"
+                data-animating={
+                  SIDEBAR_ANIMATE_LAYOUT && workspaceSidebarPane.transitioning
+                    ? 'true'
+                    : undefined
+                }
+                data-performance-variant={SIDEBAR_PERFORMANCE_VARIANT}
+                style={{
+                  flexBasis: workspaceSidebarVisible
+                    ? 'var(--sidebar-width)'
+                    : '0px',
+                  // When hidden, eat the right-side flex gap so the parent's
+                  // `gap: var(--frame-padding)` doesn't render twice (once on
+                  // each side of the 0-width slot). Animates alongside
+                  // flex-basis so the collapse stays smooth end-to-end.
+                  marginRight: workspaceSidebarVisible
+                    ? '0px'
+                    : 'calc(-1 * var(--frame-padding, 0px))',
+                }}
+                // hidden subtree must not steal focus or grab pointer events
+                // mid-slide; `inert` removes it from the a11y tree too.
+                {...(workspaceSidebarVisible ? {} : { inert: '' })}
+                aria-hidden={workspaceSidebarVisible ? undefined : true}
+              >
+                {workspaceSidebarPane.present ? (
+                  <div
+                    className="sidebar-surface"
+                    data-state={workspaceSidebarPane.surfaceState}
+                    style={{ width: 'var(--sidebar-width)' }}
+                  >
+                    <Sidebar
+                      workspaces={workspaces.map(w => ({
+                        id: w.id,
+                        name: w.name,
+                        kind: w.kind === 'dm' ? 'dm' as const : 'regular' as const,
+                        dm_agent_id: w.dm_agent_id,
+                        unread: attentionBadges?.by_workspace?.[w.id] ?? 0,
+                        // Both row signals come from the ONE roll-up (#task:1870):
+                        // the count and the mute marker must never disagree about
+                        // the same workspace.
+                        muted:
+                          attentionBadges?.muted_workspace_ids?.includes(w.id) ??
+                          false,
+                        archived: w.archived_at !== null,
+                        created_at: w.created_at,
+                      }))}
+                      agentsById={agentsById}
+                      selectedWorkspaceId={selectedWorkspaceId}
+                      // The tree's ONE selection object. Carries forward the
+                      // secondary-pane preference the retired channel column owned:
+                      // highlight the secondary's row ONLY when it lives in the
+                      // workspace the primary is in — a cross-workspace `?side` id
+                      // leaves the primary's row filled instead of ghost-filling a
+                      // same-id row under a different parent.
+                      selectedChannelId={
+                        secondaryDescriptor?.status === 'resolved' &&
+                        secondaryDescriptor.workspaceId === selectedWorkspaceId
+                          ? secondaryDescriptor.id
+                          : selectedChannelId
+                      }
+                      onSelectChannel={handleSelectChannel}
+                      onCreateChannel={setCreateChannelWorkspaceId}
+                      // STARRED is global, so the parent workspace is explicit —
+                      // `handleSelectChannel` then opens a starred channel in another
+                      // workspace with the SAME remembered-layout restore as its home
+                      // row, instead of a bare jump.
+                      onSelectConversation={(workspaceId, conversationId) =>
+                        handleSelectChannel(conversationId, workspaceId)
+                      }
+                      onCreateWorkspace={() => setCreateWorkspaceOpen(true)}
+                      savedActive={view === 'saved'}
+                      onSelectSaved={() => nav.toChatSaved()}
+                      archivedActive={view === 'archived'}
+                      onSelectArchived={() => nav.toChatArchived()}
+                      searchActive={view === 'search'}
+                      onSelectSearch={() => nav.toChatSearch()}
+                      savedCount={savedItems?.length}
                     />
-                  )
-                ) : (
-                  <ConversationViewSkeleton />
-                )}
-              </>
-            )}
-          </>
-          </SectionLayer>
-        )}
+                  </div>
+                ) : null}
+              </div>
+              {/* Splitter stays mounted for the entire animation lifecycle —
+                * keying it to `present` (not `visible`) avoids the 4 px
+                * layout snap that happens if the splitter unmounts at frame
+                * zero of the hide animation while the slot is still 220 ms
+                * away from finishing its collapse. The splitter slides
+                * leftward in lockstep with the slot's right edge and
+                * unmounts together with the surface at the end. */}
+              {workspaceSidebarPane.present ? (
+                <VerticalSplitter
+                  onPointerDown={sidebar.startResize}
+                  active={sidebar.isDragging}
+                />
+              ) : null}
+              {view === 'saved' ? (
+                <SavedListView
+                  workspaces={workspaces}
+                  filter={savedFilter}
+                  onFilterChange={setSavedFilter}
+                  onJump={params => handleJumpToMessage(params)}
+                />
+              ) : view === 'search' ? (
+                <SearchPanel
+                  workspaces={workspaces}
+                  initialQuery={route.searchQuery ?? undefined}
+                  filter={searchFilter}
+                  onFilterChange={setSearchFilter}
+                  onJumpMessage={params => handleJumpToMessage(params)}
+                  onOpenWorkspace={id => nav.toWorkspace(id)}
+                  onOpenConversation={(workspaceId, channelId) => {
+                    const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
+                    if (!navWorkspaceId) return;
+                    nav.toChannel(navWorkspaceId, channelId);
+                  }}
+                />
+              ) : view === 'archived' ? (
+                <ArchivedChannelsPanel
+                  workspaces={workspaces}
+                  filter={archivedFilter}
+                  onFilterChange={setArchivedFilter}
+                  onOpenChannel={(workspaceId, channelId) => {
+                    // Mirror SearchPanel: resolve through the same nav helper
+                    // so a cross-workspace open lands on the right UI workspace
+                    // item. For the archived aggregate `workspaceId` is already
+                    // the channel's own workspace id (agent_home for a DM), so
+                    // this is a no-op there — but it keeps both cross-workspace
+                    // panels on one resolution path (#task:1145).
+                    const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
+                    if (!navWorkspaceId) return;
+                    nav.toChannel(navWorkspaceId, channelId);
+                  }}
+                  onOpenWorkspace={handleSelectWorkspace}
+                />
+              ) : (
+                <>
+                  {/* Heavy conversation pane — the only part of the chat section
+                    * kept on `deferredSection`. While the deferred value hasn't
+                    * caught up to 'chat' (i.e. we just entered chat and the shell
+                    * above is already painted), show a skeleton instead of
+                    * mounting ChannelView, so the mount's ~hundreds-of-ms commit
+                    * work stays off the click critical path.
+                    *
+                    * The gate is `deferredSection === 'chat'` — keyed by
+                    * DESTINATION, not predecessor. That's deliberate: on entry
+                    * `appSection` is already 'chat' but `deferredSection` still
+                    * names the previous section; gating on the predecessor would
+                    * briefly mount this pane over the half-torn-down old section.
+                    * Keying on the destination shows the skeleton for exactly the
+                    * frames before the conv is ready, never stale previous
+                    * content. (PERCEPTION win only — the deferred mount/teardown
+                    * longtask still runs a beat later behind the painted shell;
+                    * it does NOT reduce that CPU work, so don't drop the defer on
+                    * the assumption it does.) */}
+                  {deferredSection === 'chat' ? (
+                    secondaryView &&
+                    shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
+                      secondaryView
+                    ) : (
+                      <SplitPane
+                        left={parentView}
+                        right={secondaryView}
+                        storageKey="silverhand.layout.split-ratio"
+                      />
+                    )
+                  ) : (
+                    <ConversationViewSkeleton />
+                  )}
+                </>
+              )}
+            </>
+            </SectionLayer>
+          )}
+        </div>
       </div>
 
       <CreateWorkspaceDialog

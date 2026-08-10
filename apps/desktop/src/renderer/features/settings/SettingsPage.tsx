@@ -137,6 +137,24 @@ const THEME_META: Record<
     accent: '#1D9BD1',
     border: '#350D36',
   },
+  iris: {
+    label: 'Iris',
+    // The only theme whose chrome is a GRADIENT, so the preview card's own
+    // `135deg` ramp doubles as a literal sample of the window paper: the
+    // two swatch stops ARE `--app-paper`'s endpoints (#task:1965). Picking
+    // the ramp over the white sheet is deliberate — the sheet is what this
+    // theme shares with Studio Light, the yellow-green → slate ramp is
+    // what tells them apart at 92px. Idle tile border is a warm ink
+    // hairline rather than a palette colour: the card's gradient ENDS in
+    // `#C4D0DA`, so a border in that colour would disappear along the
+    // bottom-right — the same way forza6's near-black vanished into its
+    // magenta side before it was repicked.
+    bg: '#E6E6B6',
+    surface: '#C4D0DA',
+    text: '#1F1A12',
+    accent: '#6D28C9',
+    border: 'rgba(31, 26, 18, 0.18)',
+  },
 };
 
 export function SettingsPage(): JSX.Element {
@@ -159,10 +177,10 @@ export function SettingsPage(): JSX.Element {
   /* Two islands, exactly the Computers / Members shape (shiki 2026-08-06
      「采用 computer rail 那种两栏 island 布局方式」): the section list is its
      own card at `--sidebar-width`, the panes are the content card, and the
-     app frame's own `gap: var(--frame-padding)` separates them. Rendered as a
-     fragment because `SectionLayer` is `display: contents` — the two cards are
-     siblings in the frame's flex row, like `aside[data-sidebar="computers"]`
-     and `HostDetailView`.
+     section sheet's own `gap: var(--frame-padding)` separates them. Rendered
+     as a fragment because `SectionLayer` is `display: contents` — the two
+     cards are siblings in the sheet's flex row, like
+     `aside[data-sidebar="computers"]` and `HostDetailView`.
 
      This replaces the in-card left column of the first round: as a real
      `aside[data-sidebar]` the list inherits every per-theme sidebar rule
@@ -175,8 +193,8 @@ export function SettingsPage(): JSX.Element {
       <main
         className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
         style={{
-          borderRadius: 'var(--card-radius, 0)',
-          boxShadow: 'var(--card-shadow, none)',
+          borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+          boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
         }}
       >
         {/* The card header names the OPEN pane, not the page (shiki 2026-08-06
@@ -281,8 +299,8 @@ function SettingsRail({
       data-sidebar="settings"
       className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
         overflow: 'hidden',
       }}
     >

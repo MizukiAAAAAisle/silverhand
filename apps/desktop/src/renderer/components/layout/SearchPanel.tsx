@@ -196,8 +196,8 @@ export function SearchPanel({
     <main
       className="flex h-full min-w-0 flex-1 flex-col bg-bg-chat"
       style={{
-        borderRadius: 'var(--card-radius, 0)',
-        boxShadow: 'var(--card-shadow, none)',
+        borderRadius: 'var(--pane-radius, var(--card-radius, 0))',
+        boxShadow: 'var(--pane-shadow, var(--card-shadow, none))',
         overflow: 'hidden',
       }}
     >
