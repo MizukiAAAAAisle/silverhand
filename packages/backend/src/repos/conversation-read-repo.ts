@@ -34,11 +34,95 @@ export interface StreamFirstUnread {
 }
 
 /**
+ * Per-stream unread for ONE conversation (#task:1226, rewritten #task:1967).
+ *
+ * Assembled in ONE exported constant so the query-plan contract test can
+ * EXPLAIN exactly what {@link ConversationReadRepo.streamUnreadForConversation}
+ * executes — an access-path assertion over a hand-rewritten copy of the query
+ * would prove nothing.
+ *
+ * Shape (the #1967 target model): the query is driven by the conversation's
+ * STREAMS, not by its message history.
+ *
+ *  1. `stream_cursor` enumerates the conversation's streams from
+ *     `conversation_stream_heads` (mainline row + one row per thread that has
+ *     messages) and resolves each one's cursor with a single indexed probe into
+ *     `conversation_reads` (idx_conversation_reads_user_conversation_stream).
+ *     `latest_seq` is deliberately NOT read: it is a FRESHNESS head, and
+ *     freshness-exempt rows (§5.2) advance `messages.seq` without it, so a
+ *     cursor can legitimately sit ABOVE the head. Only the cursor bounds unread.
+ *  2. `unread_tail` range-seeks each stream's unread tail on
+ *     idx_messages_thread_root (conversation_id, thread_root_id, seq > cursor),
+ *     so the rows touched are proportional to what is UNREAD, not to the
+ *     conversation's history.
+ *  3. `per_stream` aggregates that tail; the anchor row is fetched back by
+ *     (conversation_id, seq), a point lookup on the uniq_messages_conversation_seq
+ *     unique index. `seq` is unique per conversation, so the joined row is
+ *     necessarily the min-seq unread row of that stream — no window functions and
+ *     no reliance on SQLite's bare-column min()/max() special case.
+ *
+ * Stream ENUMERATION completeness (the equivalence-critical step, since the
+ * pre-#1967 query derived streams from `messages` itself): every non-exempt
+ * insert advances its stream's head, and the only exempt writer inserts
+ * `from_kind = 'system'` rows (schedule_fire), which this query excludes anyway.
+ * A stream holding an unread-eligible message therefore always has a head row.
+ *
+ * The WHERE on `m` is the same pair of guards as `unreadCountForStream` /
+ * `firstUnreadForStream`; archival is deliberately NOT filtered here (this is
+ * the per-conversation face, its caller already resolved the conversation).
+ *
+ * The join order is PINNED with `CROSS JOIN` (in SQLite that is an inner join
+ * that the planner may not reorder). Free to choose, the planner inverts the
+ * loop — drive from `messages` by `conversation_id` and test each row against the
+ * stream list — which is precisely the full-history scan this rewrite exists to
+ * remove. Streams-outer / tail-inner is the whole point, so it is stated, not
+ * hoped for.
+ */
+export const STREAM_UNREAD_FOR_CONVERSATION_SQL = `
+  WITH stream_cursor AS (
+    SELECT sh.thread_root_id            AS root,
+           COALESCE(cr.last_read_seq, 0) AS cursor_seq
+      FROM conversation_stream_heads sh
+      LEFT JOIN conversation_reads cr
+        ON cr.user_id = @viewer
+       AND cr.conversation_id = sh.conversation_id
+       AND cr.thread_root_id IS sh.thread_root_id
+     WHERE sh.conversation_id = @conv
+  ),
+  unread_tail AS (
+    SELECT sc.root AS root, m.seq AS seq
+      FROM stream_cursor sc
+      CROSS JOIN messages m
+        ON m.conversation_id = @conv
+       AND m.thread_root_id IS sc.root
+       AND m.seq > sc.cursor_seq
+     WHERE m.from_kind != 'system'
+       AND NOT (m.from_kind = 'user'
+                AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
+  ),
+  per_stream AS (
+    SELECT root,
+           COUNT(*) AS unread_count,
+           MIN(seq) AS first_unread_seq
+      FROM unread_tail
+     GROUP BY root
+  )
+  SELECT ps.root             AS root,
+         m.id                AS first_unread_message_id,
+         ps.first_unread_seq AS first_unread_seq,
+         ps.unread_count     AS unread_count
+    FROM per_stream ps
+    JOIN messages m
+      ON m.conversation_id = @conv AND m.seq = ps.first_unread_seq`;
+
+/**
  * Per-stream read cursor (#task:1226). `conversation_reads` carries one cursor
  * per STREAM — mainline (thread_root_id IS NULL) and each reply-cluster
  * (thread_root_id = root id) — mirroring the per-stream `conversation_stream_heads`
  * freshness model. Two partial-unique indexes enforce uniqueness, so a given
- * (user, conversation) has MANY rows, not one.
+ * (user, conversation) has MANY rows, not one; the full
+ * (user_id, conversation_id, thread_root_id) index added in #task:1967 is the
+ * ACCESS PATH for a dynamic-stream cursor probe and carries no uniqueness.
  *
  * IMPLEMENTATION INVARIANT (#task:1226 §4.1): every cursor read/write MUST be
  * stream-qualified (`thread_root_id IS NULL` or `= ?`). The ONLY exception is
@@ -194,11 +278,11 @@ export class ConversationReadRepo {
    *  = its root id), the unread count + the first (lowest-seq) unread message,
    *  each scored against THAT stream's own cursor — identical WHERE to
    *  `unreadCountForStream` / `firstUnreadForStream`, just batched across every
-   *  stream via window functions (PARTITION BY thread_root_id; SQLite groups the
-   *  NULL = mainline partition on its own). Follow-AGNOSTIC: a thread's unread is
-   *  independent of whether the viewer follows it (follow only gates the sidebar
-   *  roll-up / Activity, never per-thread display). `threads` is sparse — a root
-   *  appears only if it has >= 1 unread message; an absent root means 0. */
+   *  stream (see {@link STREAM_UNREAD_FOR_CONVERSATION_SQL} for the access-path
+   *  shape). Follow-AGNOSTIC: a thread's unread is independent of whether the
+   *  viewer follows it (follow only gates the sidebar roll-up / Activity, never
+   *  per-thread display). `threads` is sparse — a root appears only if it has
+   *  >= 1 unread message; an absent root means 0. */
   streamUnreadForConversation(
     conversationId: string,
     viewerUserId: string,
@@ -214,33 +298,7 @@ export class ConversationReadRepo {
       >(
         this.db,
         'reads.stream_unread_for_conversation',
-        `WITH unread AS (
-           SELECT m.id   AS message_id,
-                  m.seq  AS seq,
-                  m.thread_root_id AS root,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY m.thread_root_id ORDER BY m.seq ASC
-                  ) AS rn,
-                  COUNT(*) OVER (PARTITION BY m.thread_root_id) AS cnt
-             FROM messages m
-            WHERE m.conversation_id = @conv
-              AND m.from_kind != 'system'
-              AND NOT (m.from_kind = 'user'
-                       AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
-              AND m.seq > COALESCE(
-                (SELECT cr.last_read_seq FROM conversation_reads cr
-                  WHERE cr.user_id = @viewer
-                    AND cr.conversation_id = @conv
-                    AND cr.thread_root_id IS m.thread_root_id),
-                0
-              )
-         )
-         SELECT root,
-                message_id AS first_unread_message_id,
-                seq        AS first_unread_seq,
-                cnt        AS unread_count
-           FROM unread
-          WHERE rn = 1`,
+        STREAM_UNREAD_FOR_CONVERSATION_SQL,
       )
       .all({ conv: conversationId, viewer: viewerUserId });
 

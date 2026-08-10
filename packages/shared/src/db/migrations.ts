@@ -1225,6 +1225,37 @@ export const migrations: Migration[] = [
       DROP INDEX idx_tasks_workspace_status;
     `,
   },
+  {
+    version: 67,
+    name: 'conversation_reads_stream_cursor_lookup',
+    up: `
+      -- #task:1967 — the unread read-model resolves a cursor per STREAM
+      -- (user_id, conversation_id, thread_root_id), where the stream is a
+      -- variable, not a literal: the per-conversation and Activity queries walk
+      -- a set of streams and look up each one's cursor.
+      --
+      -- The two partial uniques (uniq_conversation_reads_main /
+      -- uniq_conversation_reads_thread) cannot serve that lookup. A partial
+      -- index is usable only when the WHERE clause IMPLIES its predicate, and a
+      -- dynamic root implies neither "thread_root_id IS NULL" nor
+      -- "IS NOT NULL" — so the planner fell back to
+      -- idx_conversation_reads_conversation(conversation_id) and filtered rows,
+      -- once per candidate message.
+      --
+      -- Hence a FULL (non-partial) index with the exact column order the lookup
+      -- binds. It carries NO uniqueness contract: the two partial uniques keep
+      -- owning mainline-NULL / thread-non-NULL uniqueness, and this index is
+      -- purely an access path. Leading user_id because every reader is
+      -- viewer-scoped; conversation_id then thread_root_id so a per-conversation
+      -- prefix scan is available as well as the full three-column probe.
+      --
+      -- The two existing single-column indexes stay: they cover the FK/cascade
+      -- probes (conversation_id, thread_root_id) that this index's leading
+      -- user_id cannot serve.
+      CREATE INDEX idx_conversation_reads_user_conversation_stream
+        ON conversation_reads(user_id, conversation_id, thread_root_id);
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

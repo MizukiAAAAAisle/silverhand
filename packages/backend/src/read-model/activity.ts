@@ -382,19 +382,141 @@ const assembleDirectedNotifications: ActivitySource = ac => {
   return [...directedByMessage.values(), ...agentFailedItems];
 };
 
+/**
+ * The positional-stream query (#task:1227 §8, rewritten #task:1967).
+ *
+ * Assembled in ONE exported constant so the query-plan contract test can EXPLAIN
+ * exactly what {@link assemblePositionalStreams} executes — an access-path
+ * assertion over a hand-rewritten copy would prove nothing.
+ *
+ * Driven by STREAMS, not by message history:
+ *
+ *  1. `entering_stream` enumerates the viewer's candidate streams — member ∩ live
+ *     ∩ (workspace filter) ∩ `enter()` — from `conversation_stream_heads`, and
+ *     resolves each one's cursor with an indexed probe into `conversation_reads`
+ *     (idx_conversation_reads_user_conversation_stream). `latest_seq` is
+ *     deliberately NOT read: it is the FRESHNESS head, which freshness-exempt
+ *     rows (§5.2) leave behind, so a cursor may legitimately exceed it. Only the
+ *     cursor bounds unread.
+ *     The `enter()` test moved UP here from the post-aggregation WHERE: it is a
+ *     per-(conversation, stream) predicate either way, so the answer is identical
+ *     — but a muted / mentions-only channel now never has its tail scanned at all.
+ *  2. `unread_tail` range-seeks each entering stream's unread tail on
+ *     idx_messages_thread_root (conversation_id, thread_root_id, seq > cursor).
+ *     §8 `positional \ directed` is applied HERE, before any aggregation, so both
+ *     the count and the anchor are over NON-directed messages.
+ *  3. `per_stream` aggregates that tail and the anchor row is fetched back by
+ *     (conversation_id, seq) — a point lookup on uniq_messages_conversation_seq.
+ *     `seq` is unique per conversation, so the joined row is necessarily that
+ *     stream's min-seq unread row; no window functions, and the shared
+ *     {@link SENDER_SELECT} can resolve the author off the real `messages` row
+ *     instead of a second hand-copied projection of it.
+ *
+ * Stream ENUMERATION completeness (equivalence-critical, since the pre-#1967
+ * query derived streams from `messages`): every non-exempt insert advances its
+ * stream's head, and the only exempt writer inserts `from_kind = 'system'` rows
+ * (schedule_fire), which this query excludes anyway — so a stream holding an
+ * unread-eligible message always has a head row.
+ *
+ * The tail join is a `CROSS JOIN` — in SQLite an inner join the planner may not
+ * reorder — and that is load-bearing, not decoration. Free to choose, the planner
+ * turns the `enter()` OR into a MULTI-INDEX OR over the head table and inverts
+ * the loop: drive from `messages` by `conversation_id` and probe a head per row,
+ * i.e. exactly the full-history scan this rewrite removes. Streams-outer /
+ * tail-inner is the entire point, so it is stated rather than hoped for.
+ */
+export const POSITIONAL_STREAMS_SQL = `
+  WITH entering_stream AS (
+    SELECT c.id                          AS conversation_id,
+           sh.thread_root_id             AS root,
+           COALESCE(cr.last_read_seq, 0) AS cursor_seq
+      FROM conversations c
+      JOIN conversation_users cu
+        ON cu.conversation_id = c.id AND cu.user_id = @viewer
+      JOIN conversation_stream_heads sh
+        ON sh.conversation_id = c.id
+      LEFT JOIN conversation_reads cr
+        ON cr.user_id = @viewer
+       AND cr.conversation_id = c.id
+       AND cr.thread_root_id IS sh.thread_root_id
+     WHERE c.kind IN ('channel', 'dm_channel')
+       AND ${LIVE_CONVERSATION_PREDICATE}
+       AND (@ws IS NULL OR c.workspace_id = @ws)
+       AND (
+         -- DM mainline: directed-grade, always enters (§5.1).
+         (sh.thread_root_id IS NULL AND c.kind = 'dm_channel')
+         -- Channel mainline: enters when the EFFECTIVE tier is 'all' — the
+         -- channel's own tier with the viewer's workspace mute folded in
+         -- (#task:1870). The workspace scope is a SUPPRESSOR above the tier, so
+         -- muting a workspace removes its ambient items without touching any
+         -- channel's stored choice; un-muting restores them exactly.
+         OR (sh.thread_root_id IS NULL AND c.kind = 'channel'
+             AND ${channelAmbientEntersPredicate('c.id', 'c.workspace_id')})
+         -- Thread ambient: aggregate-floor (#task:1268). Requires BOTH the
+         -- delivery precondition (viewer follows the cluster) AND the parent
+         -- channel's effective tier = 'all'. The head row's conversation IS the
+         -- parent channel for a reply-cluster, so the SAME preference gates
+         -- mainline and its threads. follow is a delivery decision and must not
+         -- force ambient on over the viewer's explicit mentions-only/muted pref
+         -- (delivery vs attention); thread @mentions still enter via directed.
+         OR (sh.thread_root_id IS NOT NULL
+             AND EXISTS (
+               SELECT 1 FROM thread_followers tf
+                WHERE tf.thread_root_id = sh.thread_root_id
+                  AND tf.principal_kind = 'human'
+                  AND tf.principal_id = @viewer
+             )
+             AND ${channelAmbientEntersPredicate('c.id', 'c.workspace_id')})
+       )
+  ),
+  unread_tail AS (
+    SELECT es.conversation_id AS conversation_id,
+           es.root            AS root,
+           m.seq              AS seq
+      FROM entering_stream es
+      CROSS JOIN messages m
+        ON m.conversation_id = es.conversation_id
+       AND m.thread_root_id IS es.root
+       AND m.seq > es.cursor_seq
+     WHERE m.from_kind != 'system'
+       AND NOT (m.from_kind = 'user'
+                AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
+       AND m.id NOT IN (SELECT value FROM json_each(@excluded))
+  ),
+  per_stream AS (
+    SELECT conversation_id,
+           root,
+           COUNT(*) AS unread_count,
+           MIN(seq) AS first_unread_seq
+      FROM unread_tail
+     GROUP BY conversation_id, root
+  )
+  SELECT
+    ps.conversation_id  AS conversation_id,
+    ps.root             AS root,
+    root.content        AS root_content,
+    c.kind              AS conversation_kind,
+    c.title             AS conversation_title,
+    c.workspace_id      AS workspace_id,
+    m.id                AS first_unread_message_id,
+    m.seq               AS first_unread_seq,
+    m.content           AS first_unread_content,
+    m.created_at        AS first_unread_created_at,
+    ps.unread_count     AS unread_count,${SENDER_SELECT}
+    FROM per_stream ps
+    JOIN messages m
+      ON m.conversation_id = ps.conversation_id AND m.seq = ps.first_unread_seq
+    JOIN conversations c ON c.id = ps.conversation_id
+    LEFT JOIN messages root ON root.id = ps.root
+    LEFT JOIN users su ON su.id = m.from_user_id
+    LEFT JOIN agents sa ON sa.id = m.from_agent_id`;
+
 /** Positional streams (ambient channel / DM / followed-thread unread),
  *  enter()-filtered in SQL. Subtracts the directed message ids the directed
  *  source claimed (§8), so both the count and the first-unread anchor are over
  *  NON-directed messages. */
 const assemblePositionalStreams: ActivitySource = ac => {
   const { ctx, viewerUserId, wsFilter } = ac;
-  // Mirrors the #1226 per-stream scorer (window functions, first-unread + count
-  // per (conversation, thread_root_id)). §8 `positional \ directed` is done IN
-  // this query by excluding the distinct directed message ids, so both the count
-  // and the first-unread anchor are over NON-directed messages (no anchoring an
-  // ambient row to a message already shown as a mention). The positional base
-  // already drops system / the viewer's own messages, so excluding a directed
-  // message that wouldn't be ambient is a harmless no-op.
   const excludedJson = JSON.stringify([...ac.directedMessageIds]);
   const positionalRows = prepareObserved<
       {
@@ -407,104 +529,7 @@ const assemblePositionalStreams: ActivitySource = ac => {
     >(
       ctx.db,
       'activity.positional_streams',
-      `WITH viewer_unread AS (
-         SELECT
-           m.conversation_id AS conversation_id,
-           m.thread_root_id  AS root,
-           m.id              AS message_id,
-           m.seq             AS seq,
-           m.content         AS content,
-           m.created_at      AS created_at,
-           m.from_kind       AS from_kind,
-           m.from_user_id    AS from_user_id,
-           m.from_agent_id   AS from_agent_id,
-           m.author_id       AS author_id,
-           m.author_name     AS author_name,
-           m.author_display_name AS author_display_name,
-           ROW_NUMBER() OVER (
-             PARTITION BY m.conversation_id, m.thread_root_id ORDER BY m.seq ASC
-           ) AS rn,
-           COUNT(*) OVER (
-             PARTITION BY m.conversation_id, m.thread_root_id
-           ) AS cnt
-         FROM messages m
-         JOIN conversations c ON c.id = m.conversation_id
-         JOIN conversation_users cu
-           ON cu.conversation_id = c.id AND cu.user_id = @viewer
-        WHERE c.kind IN ('channel', 'dm_channel')
-          AND ${LIVE_CONVERSATION_PREDICATE}
-          AND (@ws IS NULL OR c.workspace_id = @ws)
-          AND m.from_kind != 'system'
-          AND NOT (m.from_kind = 'user'
-                   AND (m.from_user_id = @viewer OR m.from_user_id IS NULL))
-          AND m.id NOT IN (SELECT value FROM json_each(@excluded))
-          AND m.seq > COALESCE(
-            (SELECT cr.last_read_seq FROM conversation_reads cr
-              WHERE cr.user_id = @viewer
-                AND cr.conversation_id = m.conversation_id
-                AND cr.thread_root_id IS m.thread_root_id),
-            0
-          )
-       )
-       SELECT
-         vu.conversation_id              AS conversation_id,
-         vu.root                         AS root,
-         root.content                    AS root_content,
-         c.kind                          AS conversation_kind,
-         c.title                         AS conversation_title,
-         c.workspace_id                  AS workspace_id,
-         vu.message_id                   AS first_unread_message_id,
-         vu.seq                          AS first_unread_seq,
-         vu.content                      AS first_unread_content,
-         vu.created_at                   AS first_unread_created_at,
-         vu.cnt                          AS unread_count,
-         vu.from_kind                                                  AS from_kind,
-         vu.from_user_id                                               AS from_user_id,
-         vu.from_agent_id                                              AS from_agent_id,
-         vu.author_id                                                  AS author_id,
-         vu.author_name                                                AS author_name,
-         vu.author_display_name                                        AS author_display_name,
-         CASE vu.from_kind WHEN 'user' THEN su.name
-                           WHEN 'agent' THEN sa.name END                AS live_name,
-         CASE vu.from_kind WHEN 'user' THEN su.display_name
-                           WHEN 'agent' THEN sa.display_name END        AS live_display_name,
-         CASE vu.from_kind WHEN 'user' THEN su.avatar_storage_key
-                           WHEN 'agent' THEN sa.avatar_storage_key END  AS live_avatar_key,
-         CASE vu.from_kind WHEN 'user' THEN su.updated_at
-                           WHEN 'agent' THEN sa.updated_at END          AS live_updated_at,
-         CASE vu.from_kind WHEN 'agent' THEN sa.runtime END             AS live_runtime
-       FROM viewer_unread vu
-       JOIN conversations c ON c.id = vu.conversation_id
-       LEFT JOIN messages root ON root.id = vu.root
-       LEFT JOIN users su ON su.id = vu.from_user_id
-       LEFT JOIN agents sa ON sa.id = vu.from_agent_id
-      WHERE vu.rn = 1
-        AND (
-          -- DM mainline: directed-grade, always enters (§5.1).
-          (vu.root IS NULL AND c.kind = 'dm_channel')
-          -- Channel mainline: enters when the EFFECTIVE tier is 'all' — the
-          -- channel's own tier with the viewer's workspace mute folded in
-          -- (#task:1870). The workspace scope is a SUPPRESSOR above the tier, so
-          -- muting a workspace removes its ambient items without touching any
-          -- channel's stored choice; un-muting restores them exactly.
-          OR (vu.root IS NULL AND c.kind = 'channel'
-              AND ${channelAmbientEntersPredicate('vu.conversation_id', 'c.workspace_id')})
-          -- Thread ambient: aggregate-floor (#task:1268). Requires BOTH the
-          -- delivery precondition (viewer follows the cluster) AND the parent
-          -- channel's effective tier = 'all'. vu.conversation_id IS the parent
-          -- channel for a reply-cluster, so the SAME preference gates mainline
-          -- and its threads. follow is a delivery decision and must not force
-          -- ambient on over the viewer's explicit mentions-only/muted pref
-          -- (delivery vs attention); thread @mentions still enter via directed.
-          OR (vu.root IS NOT NULL
-              AND EXISTS (
-                SELECT 1 FROM thread_followers tf
-                 WHERE tf.thread_root_id = vu.root
-                   AND tf.principal_kind = 'human'
-                   AND tf.principal_id = @viewer
-              )
-              AND ${channelAmbientEntersPredicate('vu.conversation_id', 'c.workspace_id')})
-        )`,
+      POSITIONAL_STREAMS_SQL,
     )
     .all({
       viewer: viewerUserId,
