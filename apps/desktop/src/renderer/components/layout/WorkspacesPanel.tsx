@@ -1,8 +1,7 @@
 import { Fragment, type ReactNode } from 'react';
 import type { AgentDto, SortGroup } from '@silverhand/shared';
 import { useSortable } from '@dnd-kit/sortable';
-import { LayoutGrid, MessagesSquare, Plus } from 'lucide-react';
-import { DisclosureTriangle } from '@/components/icons/DisclosureTriangle';
+import { ChevronDown, LayoutGrid, MessagesSquare, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { WorkspaceIcon } from '@/components/WorkspaceIcon';
 import {
@@ -390,9 +389,9 @@ function SortableWorkspaceItem({
       // right-side actions (sort, `+`) are revealed by pointing anywhere in the
       // BRANCH, not just at its header (shiki, 2026-08-08) — same reveal scope
       // the group headers use, one level down. The header keeps its own narrower
-      // `group/ws` for the glyph swap: a triangle appearing on the parent while
-      // the pointer is on a child would say the wrong thing about what is under
-      // the cursor.
+      // `group/ws` for the collapse caret (#task:1948): a disclosure hint lighting
+      // up on the parent while the pointer is on a child would say the wrong thing
+      // about what is under the cursor.
       className="touch-none group/wsbranch"
     >
       <WorkspaceBranch
@@ -578,34 +577,21 @@ function WorkspaceHeaderRow({
         aria-expanded={expanded}
         className="group/wstoggle flex min-w-0 flex-1 items-center text-left text-xs font-medium"
       >
-        {/* Identity at rest, disclosure triangle on hover / keyboard focus — the
-            SAME swap the three group headers use. The rule is drawn by CAPABILITY,
-            not by kind: every row that owns an `aria-expanded` (regular workspace
-            AND DM home — one `WorkspaceHeaderRow` serves both) swaps, and the leaf
-            rows (channel / STARRED) never do, because their glyph is not a hinge.
-            Until 2026-08-08 no instance row swapped at all, which left this line's
-            only affordance an ink lift: it said "hoverable", never "collapses"
-            (shiki: 「可点击提示不强」). A PERMANENT triangle was the other candidate
-            and was rejected — it needs its own column, and keeping the one indent
-            step then costs every channel another 12px in an already narrow list
-            (docs/app-layout.md §3).
-            Structure mirrors the group header: the fading wrapper carries no theme
-            hook, so a theme that paints the icon (forza6's `[data-workspace-icon]`
-            ink square, an agent avatar) can never win a specificity race against
-            the fade and leave both glyphs stacked. */}
-        <span className="relative flex size-4 shrink-0 items-center justify-center">
-          <span className="inline-flex items-center transition-opacity group-hover/ws:opacity-0 group-focus-visible/wstoggle:opacity-0">
-            {icon}
-          </span>
-          <span
-            aria-hidden
-            className="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity group-hover/ws:opacity-100 group-focus-visible/wstoggle:opacity-100"
-          >
-            <DisclosureTriangle
-              direction={expanded ? 'down' : 'right'}
-              className="size-3.5"
-            />
-          </span>
+        {/* Identity glyph, permanently (#task:1948). It used to cross-fade into a
+            disclosure triangle on hover — the SAME swap the three group headers
+            used — which meant "this collapses" was invisible until you already
+            pointed at the row. The state now rides in the trailing caret below, so
+            the glyph slot is identity only and the row keeps one glyph per job.
+            Still drawn by CAPABILITY, not by kind: every row that owns an
+            `aria-expanded` (regular workspace AND DM home — one
+            `WorkspaceHeaderRow` serves both) carries the caret, and the leaf rows
+            (channel / STARRED) never do, because their glyph is not a hinge.
+            A LEADING permanent triangle was the candidate rejected in #task:1889 —
+            it needs its own column, and keeping the one indent step then costs
+            every channel another 12px in an already narrow list
+            (docs/app-layout.md §3). The trailing caret costs no column. */}
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          {icon}
         </span>
         <span className="ml-2 min-w-0 truncate">{title}</span>
         {/* Mute rides WITH the name (shiki, 2026-08-09): it is a two-state fact
@@ -619,6 +605,38 @@ function WorkspaceHeaderRow({
             <MutedMarker />
           </span>
         ) : null}
+        {/* Collapse state, #task:1948. `aria-hidden` — the button's `aria-expanded`
+            already says it, and the caret must not become a second hit area. It
+            rests at the muted rung under this row's `--text-secondary` ink so the
+            hint sits below the name it belongs to, and lifts with the row's own
+            hover ink so it never jumps colour families. Placed after the mute
+            marker, i.e. last inside the toggle: mute is a fact about the workspace
+            and belongs beside its name, while this is a fact about the row's
+            disclosure.
+
+            Unlike the section header's caret this one is HOVER-REVEALED, and that
+            asymmetry is by density, not by taste (shiki `mmIS3WTMxQOVC7Xd`:
+            「group 可以加,dm/workspace 也加,感觉就是很多的重复」). There are three
+            section headers and a dozen-plus of these rows, so the same permanent
+            glyph reads as label chrome up there and as scatter down here —
+            especially since it trails a TRUNCATING name, so every row parks it at a
+            different x and the repetition never resolves into a column. Collapse is
+            learned once and transfers to all rows, so paying the resting-ink price
+            on every row buys nothing after the first. It keeps its box at rest
+            (opacity, not mount) so the name's truncation point never moves between
+            hover states. */}
+        <span
+          aria-hidden
+          data-sidebar-branch-caret
+          className="ml-1 inline-flex shrink-0 items-center text-text-muted opacity-0 transition-opacity group-hover/ws:opacity-100 group-focus-visible/wstoggle:opacity-100"
+        >
+          <ChevronDown
+            className={
+              'size-3 transition-transform duration-150 ' +
+              (expanded ? 'rotate-0' : '-rotate-90')
+            }
+          />
+        </span>
       </button>
       {/* No unread badge here (#task:1939): the workspace row shows NO unread number
           or dot. The old aggregate badge was UNANSWERABLE — a channel moved into
