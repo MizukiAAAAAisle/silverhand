@@ -61,11 +61,11 @@ const clamp = (v: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, v));
 
 /**
- * Image preview modal. A framed modal shell (forza6 picks up the poster
- * `data-modal-shell` chrome — 2px ink frame + hard drop shadow — exactly
- * like the export preview modal) with a header ("Image Preview" title +
- * a close icon on the right), the image well, and a bottom action bar
- * (zoom controls left, Copy/Download right).
+ * Image preview modal. An unframed modal shell (elevation only — `shadow-xl`,
+ * and in forza6 the `data-modal-shell` poster drop shadow; no resting border
+ * since #task:1959, exactly like the export preview modal) with a header
+ * ("Image Preview" title + a close icon on the right), the image well, and a
+ * bottom action bar (zoom controls left, Copy/Download right).
  *
  * The shell hugs the fitted image — `fit-content` under the
  * `min(920px, 88vw)` / `82vh` caps — so a small image gets a compact card
@@ -336,7 +336,7 @@ export function Lightbox({
           // stays crisp, whereas a 50% translate on an odd size lands mid-pixel
           // and blurs it (shiki "有时候图片不清晰"). `fit-content` is what makes
           // that trick shrink-to-fit — plain `auto` would stretch to `inset: 0`.
-          className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating shadow-xl focus:outline-none"
+          className="fixed inset-0 z-[var(--z-lightbox-chrome)] m-auto flex flex-col overflow-hidden rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating shadow-xl focus:outline-none"
           style={{
             width: frozenBox ? `${frozenBox.w}px` : 'fit-content',
             height: frozenBox ? `${frozenBox.h}px` : 'fit-content',

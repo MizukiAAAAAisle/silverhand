@@ -210,11 +210,12 @@ export function SelectionQuoteToolbar({
       // button handler reads it.
       onMouseDown={event => event.preventDefault()}
       style={{ position: 'fixed', top, left: centerX, transform }}
-      // Frame goes through the control token cluster (not a hardcoded 1px
-      // hairline) so forza6 gets its 2px hard-ink poster frame + 0 radius
-      // while warm/slack keep their softer 1px + 6px surface. Matches the
-      // Lightbox / ImagePreviewModal / SelectionToolbar floating idiom.
-      className="z-[var(--z-popover)] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
+      // No resting frame (#task:1959): `shadow-popover` plus `--bg-floating`
+      // sitting one step brighter than the prose already lifts it, and a border
+      // on a bubble this small reads as one layer too many — the same reason
+      // tooltips and the Select listbox stay out of the poster frame rule in
+      // global.css.
+      className="z-[var(--z-popover)] flex items-center gap-0.5 rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating p-0.5 text-xs text-text-primary shadow-popover"
     >
       <SelectionQuoteButton
         icon={<TextQuote className="size-3.5" />}
@@ -247,14 +248,14 @@ function SelectionQuoteButton({
       title={label}
       aria-label={label}
       // Concentric radius (shiki 2026-07-21): the hover fill is inset from the
-      // toolbar's rounded frame by the container's border + padding, so for the
-      // corners to share a center the inner radius must be
-      // `outer − border-width − padding`, not a flat `--control-radius`. The
-      // container is `rounded-[--floating-radius]` + `border-[--control-border-width]`
-      // + `p-0.5` (2px), so: warm 10−1−2=7, slack 6−1−2=3, forza6 0−2−2→0.
-      // Clamped at 0 so forza6's hard corners never go negative. Keep the `2px`
-      // in sync with the container's `p-0.5` if that padding changes.
-      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))_-_var(--control-border-width)_-_2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-outline"
+      // toolbar's rounded corner by the container's padding, so for the corners
+      // to share a center the inner radius must be `outer − padding`, not a flat
+      // `--control-radius`. The container is `rounded-[--floating-radius]` +
+      // `p-0.5` (2px) and has no border since #task:1959, so the border term is
+      // gone from this formula too. Clamped at 0 so forza6's hard corners
+      // (`--floating-radius: 0`) never go negative. Keep the `2px` in sync with
+      // the container's `p-0.5` if that padding changes.
+      className="inline-flex items-center gap-1 rounded-[max(0px,calc(var(--floating-radius,var(--radius-md))_-_2px))] px-2 py-0.5 font-medium text-text-primary transition-colors hover:bg-[var(--bg-option-hover)] focus-outline"
     >
       {icon}
       <span>{label}</span>

@@ -407,7 +407,7 @@ export function ImagePreviewModal({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-[var(--z-lightbox)] bg-black/40" />
-        <Dialog.Content data-modal-shell className="fixed left-1/2 top-1/2 z-[var(--z-lightbox-chrome)] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] border-[length:var(--control-border-width)] border-[color:var(--border-row-selected)] bg-bg-floating p-4 shadow-xl">
+        <Dialog.Content data-modal-shell className="fixed left-1/2 top-1/2 z-[var(--z-lightbox-chrome)] flex max-h-[80vh] w-[820px] -translate-x-1/2 -translate-y-1/2 flex-col rounded-[var(--floating-radius,var(--radius-md))] bg-bg-floating p-4 shadow-xl">
           <div className="flex items-center gap-2">
             <Dialog.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
               Image Preview

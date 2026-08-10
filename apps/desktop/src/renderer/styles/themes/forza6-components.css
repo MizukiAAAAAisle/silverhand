@@ -2339,10 +2339,13 @@
    (also a large block).
 
    Why `data-modal-shell` instead of selecting `[role='dialog']`
-   broadly: Lightbox.tsx is also built on Radix Dialog so it would
-   inherit `role='dialog'`, but Lightbox is a full-bleed image viewer
-   that doesn't want poster sticker chrome. `data-modal-shell` is the
-   opt-in hook the Dialog primitive applies; Lightbox doesn't. */
+   broadly: the hook is opt-in per shell, so a Radix-Dialog-based
+   surface only takes the poster shadow when it wants it. Current
+   opt-ins: the generic Dialog primitive, the three startup gates,
+   `ImagePreviewModal` and `Lightbox` (the two image viewers take the
+   shadow but carry NO resting frame since #task:1959 — a border over
+   the image competes with it). Only surfaces that also carry
+   `data-popover-frame="info"` get the 2px ink frame. */
 [data-theme='forza6'] [data-modal-shell] {
   box-shadow: var(--forza6-poster-shadow-lg);
 }

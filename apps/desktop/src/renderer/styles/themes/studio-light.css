@@ -528,11 +528,12 @@
   margin-right: 0.1em;
 }
 
-/* ── #task:1194 · modal shell frame ──
-   图片导出预览（`ImagePreviewModal`）和点开大图的 `Lightbox` 都用
-   `border-[color:var(--border-row-selected)]` 画外框，配上 modal 自己的
-   `shadow-xl` 读作多出来的一道框（shiki: 边框很奇怪）。这里的 modal 一律
-   无边框（通用 DialogContent 也只用 shadow）。 */
+/* ── #task:1194 / #task:1959 · modal shell frame ──
+   modal 一律无边框（shiki: 边框很奇怪）。`ImagePreviewModal` / `Lightbox`
+   手写的那道外框已在 #task:1959 从 TSX 删掉、三主题同一条路；这条规则现在
+   只压一件事 —— 通用 `DialogContent` 与三个 gate 经
+   `data-popover-frame="info"` 拿到的 `--floating-border`。删它 = 给
+   studio-light 的所有 dialog 加回 1px 边框。 */
 [data-theme='studio-light'] [data-modal-shell] {
   border-width: 0;
 }
