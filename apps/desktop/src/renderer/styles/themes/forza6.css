@@ -171,6 +171,15 @@
      reads as "thin teal frame" rather than a full poster border. */
   --bg-app: var(--forza6-poster-teal);
   --frame-padding: 4px;
+  /* Gap BETWEEN the sidebar and main panes inside the section sheet — distinct
+     from `--frame-padding` (the OUTER gutter round the rail + window edge). The
+     card themes want them equal, iris takes this to 0 (#task:1965). Declared
+     explicitly rather than left to fall back to `--frame-padding`: it is
+     load-bearing geometry for both splitters + the sidebar collapse + the
+     titlebar chrome width, and a load-bearing token must not hide behind a
+     fallback (#task:1972, shiki: bad smell). Declared here in `:root` ⇒ the
+     appearance.test per-theme fence now requires every theme to declare it. */
+  --pane-gap: 4px;
   --card-radius: 2px;          /* shiki 2026-08-07「我想改成 2px」— hard-cut tile */
   /* The frame's two BOTTOM corners are not tiles: they are the app
      window's own corners, which macOS clips on its own arc. A 2px tile

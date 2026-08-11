@@ -55,6 +55,9 @@
      "Slack 的紫红血脉"。 */
   --bg-app: #350D36;
   --frame-padding: 8px;
+  /* Inner sidebar↔main gap = outer gutter here (card theme). Explicit, not a
+     `--frame-padding` fallback: load-bearing splitter geometry (#task:1972). */
+  --pane-gap: 8px;
   --card-radius: 8px;
   /* 暗底 + 暗阴影几乎不可见，但保留 1px 微光以提供"卡片浮在 frame 上"
      的几何线索；popover/modal 用更强阴影（见下） */

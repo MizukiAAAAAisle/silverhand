@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { PANE_RADIUS } from './pane-chrome';
+import { SplitterTrack } from './SplitterTrack';
 
 interface SplitPaneProps {
   left: ReactNode;
@@ -278,7 +279,7 @@ export function SplitPane({
       // gutter on the left, a 4px lane in the middle (#task:1965 residual,
       // #task:1971). The divider straddles the gap with a negative margin
       // (see below), so the VISIBLE distance stays exactly `--pane-gap`.
-      style={{ gap: 'var(--pane-gap, var(--frame-padding, 0px))' }}
+      style={{ gap: 'var(--pane-gap)' }}
     >
       <div
         ref={leftPaneRef}
@@ -296,42 +297,19 @@ export function SplitPane({
       </div>
       {shellOpen ? (
         <>
-          <div
+          {/* Same track primitive as the sidebar seams (VerticalSplitter),
+            * but driven imperatively: `data-active` is toggled directly on
+            * `dividerRef` during the rAF drag (onPointerDown/Up) so no
+            * re-render fires mid-drag and the divider tracks the cursor 1:1.
+            * Paint, geometry (`--pane-gap` straddle) and a11y all live in
+            * SplitterTrack. */}
+          <SplitterTrack
             ref={dividerRef}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
             onPointerCancel={onPointerUp}
-            // Same paint vocabulary as VerticalSplitter — the track is
-            // transparent by default (themes set --splitter-bg: transparent),
-            // tints with --splitter-hover-bg (neutral safety-net fallback
-            // `--border`, never `--accent`) on hover, and stays that colour for
-            // the duration of an active drag. `transition-colors` smooths the
-            // hover fade so the divider doesn't pop in/out. Every theme sets
-            // --splitter-hover-bg (fence-enforced) — see VerticalSplitter.tsx
-            // for the full rationale.
-            //
-            // GEOMETRY mirrors VerticalSplitter exactly: the container sets a
-            // `--pane-gap` gap, and this negative inline margin pulls the 4px
-            // track back so the VISIBLE distance between panes stays that gap
-            // with the track centred in it. `zIndex` keeps a later positioned
-            // sibling from painting over the track's half at gap 0 (where it
-            // straddles the seam ±2px). Derived from `--pane-gap` so a theme
-            // changing its gap gets a matching seam here for free.
-            style={{
-              marginInline:
-                'calc((var(--pane-gap, var(--frame-padding, 0px)) + 4px) / -2)',
-              zIndex: 1,
-            }}
-            className={
-              'group/split relative w-1 shrink-0 cursor-col-resize bg-[var(--splitter-bg,var(--border-subtle))] transition-colors hover:bg-[var(--splitter-hover-bg,var(--border))] data-[active=true]:bg-[var(--splitter-hover-bg,var(--border))]'
-            }
-            role="separator"
-            aria-orientation="vertical"
-          >
-            {/* Wider invisible hit-target so users don't need pixel-perfect aim. */}
-            <div className="absolute -inset-x-1.5 inset-y-0" />
-          </div>
+          />
           <div
             // Same containment for the right pane — and we deliberately
             // delay rendering `right` until after the width transition

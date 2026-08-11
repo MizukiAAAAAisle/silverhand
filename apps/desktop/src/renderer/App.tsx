@@ -2020,9 +2020,11 @@ function RegisteredAppShell({
           *
           * The gap is its own token: `--pane-gap` is the gap BETWEEN PANES,
           * `--frame-padding` stays the OUTER gutter (window edge + around
-          * the rail). Unset → falls back to `--frame-padding`, so the three
-          * card themes are pixel-identical without declaring anything. It
-          * has to be a token rather than a theme-file override because this
+          * the rail). Every theme declares it explicitly (fence-enforced in
+          * appearance.test) — it's load-bearing geometry for both splitters,
+          * the sidebar collapse, and the titlebar chrome width, so it must not
+          * hide behind a `--frame-padding` fallback (#task:1972). It has to be
+          * a token rather than a theme-file override because this
           * declaration is inline: a `[data-theme=x] [data-section-sheet]
           * { gap: 0 }` rule loses to it on specificity, silently leaving
           * the panes 8px apart (#task:1965 review round 1 — that stray gap
@@ -2042,7 +2044,7 @@ function RegisteredAppShell({
         <div
           data-section-sheet=""
           className="flex min-w-0 flex-1"
-          style={{ gap: 'var(--pane-gap, var(--frame-padding, 0px))' }}
+          style={{ gap: 'var(--pane-gap)' }}
         >
           {/* ===== Top-level section views (#task:1168 + #task:1170) =====
             *
@@ -2267,7 +2269,7 @@ function RegisteredAppShell({
                   // flex-basis so the collapse stays smooth end-to-end.
                   marginRight: workspaceSidebarVisible
                     ? '0px'
-                    : 'calc(-1 * var(--pane-gap, var(--frame-padding, 0px)))',
+                    : 'calc(-1 * var(--pane-gap))',
                 }}
                 // hidden subtree must not steal focus or grab pointer events
                 // mid-slide; `inert` removes it from the a11y tree too.
