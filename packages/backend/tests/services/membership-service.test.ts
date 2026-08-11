@@ -1,99 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { AgentRepo } from '../../src/repos/agent-repo.js';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
-import { HostRepo } from '../../src/repos/host-repo.js';
-import { UserRepo } from '../../src/repos/user-repo.js';
-import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { MembershipService } from '../../src/services/membership-service.js';
-import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
+import { makeTestContext } from '../utils/test-context.js';
 
 function bootstrap() {
-  const { db, localHostId } = openTestDb();
-  // Strip the test-fixture autoseed triggers so each test controls
-  // exactly which users / agents are members of the conversation it
-  // builds. Without this, every fixture user (8 of them) gets inserted
-  // into conversation_users on every channel insert, which would
-  // wreck the deterministic order assertions below.
-  db.exec(
-    `DROP TRIGGER IF EXISTS test_seed_workspace_users;
-     DROP TRIGGER IF EXISTS test_seed_conversation_users;`,
-  );
-  const tmp = makeTempSilverhandDir();
-  new HostRepo(db).ensureLocal();
-  const agents = new AgentRepo(db);
-  const users = new UserRepo(db);
-  const workspaces = new WorkspaceRepo(db);
-  const conversations = new ConversationRepo(db);
-  const service = new MembershipService({ agents, users, conversations });
+  // Each test controls exactly which users / agents are members of the
+  // conversation it builds, so the fixture membership autoseed is off.
+  const ctx = makeTestContext({ seedAllFixtureMemberships: false });
+  const service = new MembershipService({
+    agents: ctx.repos.agents,
+    users: ctx.repos.users,
+    conversations: ctx.repos.conversations,
+  });
+  const workspace = ctx.createWorkspace('eng');
+  const channel = ctx.createChannel(workspace, 'general');
+  return { ctx, service, workspace, channel };
+}
 
-  const workspace = workspaces.insert({
-    name: 'eng',
-    description: null,
-  });
-  const channel = conversations.insertChannel({
-    workspaceId: workspace.id,
-    title: 'general',
-  });
-  return {
-    db,
-    agents,
-    users,
-    conversations,
-    workspaces,
-    workspace,
-    channel,
-    service,
-    cleanup: tmp.cleanup,
-    localHostId,
-  };
+function withContext(run: (t: ReturnType<typeof bootstrap>) => void): void {
+  const t = bootstrap();
+  try {
+    run(t);
+  } finally {
+    t.ctx.cleanup();
+  }
 }
 
 describe('MembershipService.listMembers', () => {
   it('returns agents (joined-order) followed by humans (joined-order)', () => {
-    const t = bootstrap();
-    try {
-      const alice = t.agents.create(
-        { name: 'alice', runtime: 'claude' },
-        t.localHostId,
-        'local',
-      );
-      const bob = t.agents.create(
-        { name: 'bob', runtime: 'codex' },
-        t.localHostId,
-        'local',
-      );
+    withContext(t => {
+      const alice = t.ctx.createAgent('alice');
+      const bob = t.ctx.createAgent('bob', { runtime: 'codex' });
       // Add bob first to verify joined-order ASC vs name-order or
       // creation-order: the resulting list must be [bob, alice], not
-      // [alice, bob]. Use direct SQL to pin distinct joined_at values
-      // so the test isn't flaky when two addAgent / addUser calls land
-      // in the same millisecond.
-      t.db
-        .prepare(
-          `INSERT INTO conversation_agents
-             (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-           VALUES (?, ?, NULL, NULL, 'idle', ?)`,
-        )
-        .run(t.channel.id, bob.id, 1000);
-      t.db
-        .prepare(
-          `INSERT INTO conversation_agents
-             (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-           VALUES (?, ?, NULL, NULL, 'idle', ?)`,
-        )
-        .run(t.channel.id, alice.id, 2000);
-
-      t.db
-        .prepare(
-          `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
-           VALUES (?, ?, ?)`,
-        )
-        .run(t.channel.id, 'teammate', 1500);
-      t.db
-        .prepare(
-          `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
-           VALUES (?, ?, ?)`,
-        )
-        .run(t.channel.id, 'local', 2500);
+      // [alice, bob]. Pin distinct joined_at values so the test isn't
+      // flaky when two membership adds land in the same millisecond.
+      t.ctx.addAgentMember(t.channel, bob, { joinedAt: 1000 });
+      t.ctx.addAgentMember(t.channel, alice, { joinedAt: 2000 });
+      t.ctx.addUserMember(t.channel, 'teammate', { joinedAt: 1500 });
+      t.ctx.addUserMember(t.channel, 'local', { joinedAt: 2500 });
 
       const members = t.service.listMembers(t.channel.id);
       expect(members.map(m => ({ kind: m.kind, name: m.name }))).toEqual([
@@ -102,28 +46,14 @@ describe('MembershipService.listMembers', () => {
         { kind: 'human', name: 'teammate-test' },
         { kind: 'human', name: 'local-test' },
       ]);
-    } finally {
-      t.cleanup();
-    }
+    });
   });
 
   it('returns the full DTO shape per member kind', () => {
-    const t = bootstrap();
-    try {
-      const alice = t.agents.create(
-        { name: 'alice', runtime: 'claude' },
-        t.localHostId,
-        'local',
-      );
-      // Patch display_name so the DTO carries something distinct from
-      // `name`. Repo doesn't expose updateProfile for agents, so write
-      // direct.
-      t.db
-        .prepare(`UPDATE agents SET display_name = ? WHERE id = ?`)
-        .run('Alice (lead)', alice.id);
-      t.conversations.addAgent(t.channel.id, alice.id);
-
-      t.conversations.addUser(t.channel.id, 'local');
+    withContext(t => {
+      const alice = t.ctx.createAgent('alice', { displayName: 'Alice (lead)' });
+      t.ctx.addAgentMember(t.channel, alice);
+      t.ctx.addUserMember(t.channel, 'local');
 
       const members = t.service.listMembers(t.channel.id);
       expect(members).toEqual([
@@ -142,22 +72,14 @@ describe('MembershipService.listMembers', () => {
           avatar_url: null,
         },
       ]);
-    } finally {
-      t.cleanup();
-    }
+    });
   });
 
   it('returns [] for a conversation with no members', () => {
-    const t = bootstrap();
-    try {
-      const empty = t.conversations.insertChannel({
-        workspaceId: t.workspace.id,
-        title: 'empty',
-      });
+    withContext(t => {
+      const empty = t.ctx.createChannel(t.workspace, 'empty');
       expect(t.service.listMembers(empty.id)).toEqual([]);
-    } finally {
-      t.cleanup();
-    }
+    });
   });
 
   it('drops orphaned agent / user rows whose primary record is gone', () => {
@@ -166,32 +88,15 @@ describe('MembershipService.listMembers', () => {
     // surface a half-resolved row. Same for users. Production should
     // never let this state happen (FK CASCADE is set), but the
     // service should be robust to it.
-    const t = bootstrap();
-    try {
-      const ghost = t.agents.create(
-        { name: 'ghost', runtime: 'claude' },
-        t.localHostId,
-        'local',
-      );
-      t.conversations.addAgent(t.channel.id, ghost.id);
-      // Force-insert a conversation_users row pointing at a user that
-      // doesn't exist. Bypass FK temporarily so the dangling reference
-      // can be observed.
-      t.db.pragma('foreign_keys = OFF');
-      t.db
-        .prepare(
-          `INSERT INTO conversation_users (conversation_id, user_id, joined_at)
-           VALUES (?, ?, ?)`,
-        )
-        .run(t.channel.id, 'phantom', Date.now());
-      // Now delete the ghost agent row directly, leaving the dangling
-      // conversation_agents reference.
-      t.db.prepare(`DELETE FROM agents WHERE id = ?`).run(ghost.id);
-      t.db.pragma('foreign_keys = ON');
+    withContext(t => {
+      const ghost = t.ctx.createAgent('ghost');
+      t.ctx.addAgentMember(t.channel, ghost);
+      t.ctx.forceDeleteAgentRowKeepingMemberships(ghost.id);
+      t.ctx.forceInsertDanglingUserMember(t.channel, 'phantom');
 
       // Add one real human so we can prove the live row survives
       // alongside the dropped phantom.
-      t.conversations.addUser(t.channel.id, 'local');
+      t.ctx.addUserMember(t.channel, 'local');
 
       const members = t.service.listMembers(t.channel.id);
       expect(members).toEqual([
@@ -203,8 +108,6 @@ describe('MembershipService.listMembers', () => {
           avatar_url: null,
         },
       ]);
-    } finally {
-      t.cleanup();
-    }
+    });
   });
 });
