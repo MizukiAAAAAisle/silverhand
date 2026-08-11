@@ -16,9 +16,12 @@
      双轨分层，不靠 saturation 跳。
 
    AA/AAA 对比度（design-new-theme §4.2 硬约束）已逐 token 验证：
-   - text-primary #D1D2D3 on #1A1D21 ≈ 11.31:1 (AAA)
-   - text-secondary #ABABAD on #1A1D21 ≈ 7.20:1 (AAA)
-   - text-muted #8E8E91 on #1A1D21 ≈ 5.23:1 (AA)
+   - text-primary #E2E3E3 on #1A1D21 ≈ 13.15:1 (AAA)
+   - text-secondary #BABABB on #1A1D21 ≈ 8.72:1 (AAA)
+   - text-muted #949497 on #1A1D21 ≈ 5.59:1 (AA) —— 三档在 #task:1973 整条
+     上移了一档：muted 之前在最暗的 `--bg-floating` 上只有 4.21:1（浮层里的
+     说明文字），钉到 4.55:1 之后 secondary / primary 跟着提亮，否则挤压只是
+     被推到上一级（组头↔行 1.42→1.56、主↔次 1.51 不变）
    - accent #1D9BD1 on #1A1D21 ≈ 5.65:1 (AA, 作为 text-accent foreground)
    - brand-primary #1164A3 + white text ≈ 6.04:1 (AA, 作为 bg-row-selected)
    - text-on-accent #0F1419 on #1D9BD1 ≈ 6.97:1 (AA) —— 注意 accent
@@ -104,11 +107,18 @@
   --bg-island-deep: #181B1E;
 
   /* ── Text ──
-     #D1D2D3 是 Slack default dark 的主前景色（约 78% 灰）。layered 阶梯：
-     primary #D1D2D3 (AAA) → secondary #ABABAD (AAA) → muted #8E8E91 (AA)。 */
-  --text-primary: #D1D2D3;
-  --text-secondary: #ABABAD;
-  --text-muted: #8E8E91;
+     layered 阶梯：primary #E2E3E3 (AAA) → secondary #BABABB (AAA) →
+     muted #949497 (AA)。整条比 Slack 原生阶梯（primary #D1D2D3，约 78% 灰）
+     上移一档：muted 在最暗的承载面 `--bg-floating` 上原本只有 4.21:1 —— 浮层里
+     承载 muted 说明文字（`ManageMembersPopover` 有 5 处），侧栏底那 5.44:1 是
+     最亮的一面、不构成豁免。三个值必须同时动：只动 muted 会让「组头↔行」从
+     1.42:1 掉到 1.32:1（分层比现状更差），只动 muted + 行会把挤压推到主↔次
+     （1.51:1 → 1.28:1）。三值同移后 muted/floating 4.55:1、组头↔行 1.56:1、
+     主↔次 1.51:1 不变。深色主题的墨只会更亮，浅底消费者只有 workspace 徽标
+     那块「浅填充 + 深字」（见下），填充变亮 = 字更清楚，单向变好。 */
+  --text-primary: #E2E3E3;
+  --text-secondary: #BABABB;
+  --text-muted: #949497;
   --text-inverse: #1A1D21;        /* dark text，反色用 — 浅底场景下 */
   --text-island: #D1D2D3;
   /* inline-code 字色：暖橙 #E8912D（Slack 实际 inline code 颜色）；
@@ -250,8 +260,11 @@
      dark ground, and fades the excerpt with black ink). The excerpt fades
      toward the ground the same way, which on a dark theme means WHITE at a
      single-decimal alpha: 4.75:1 on the resting wash, a clear step below the
-     replier name at 6.24:1, and still WCAG AA for normal text.
-     `--text-muted` is NOT usable here — 4.38:1 over this fill. */
+     replier name at 7.34:1 (the name is `--text-secondary`, lifted in
+     #task:1973), and still WCAG AA for normal text. `--text-muted` now reads
+     4.71:1 over this fill — level with this ink rather than under it, so the
+     block keeps its own token: the excerpt fades toward the ground, which is
+     not the same thing as borrowing the faintest rung of the ink ladder. */
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(1 0 0 / 0.5);

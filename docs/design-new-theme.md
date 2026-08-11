@@ -389,7 +389,10 @@ Radix `Select.Content` 和 `Select.Item` 共用一对 radius token，由 `global
 ### 4.2 必须遵守的 WCAG 硬约束
 
 - `--bg-base` 不能是用户感觉刺眼的纯色（纯白/纯黑仅当它是刻意的风格选择时允许）
-- `--text-primary` 在 `--bg-base` 上对比度 ≥ 7:1（AAA 正文）；`--text-muted` 至少 4.5:1
+- `--text-primary` 在 `--bg-base` 上对比度 ≥ 7:1（AAA 正文）；`--text-muted` 至少 4.5:1 ——
+  **但 muted 要量它真正会落到的最暗那一面，不是 `--bg-base`**（#task:1973）：`--bg-base` 通常是
+  全套里最亮的一档，只量它会放过 `--bg-hover`（侧栏行 hover）与 `--bg-floating` 上的同一段文字。
+  四个主题都是这么漏掉的：侧栏底都过、hover / floating 面 4.05–4.21 全 fail。
 - `--accent` 在 `--bg-base` 上对比度 ≥ 4.5:1（AA），在 `--text-on-accent` 上对比度 ≥ 4.5:1
 - `--bg-selected` 与所属容器（通常 `--bg-primary`）亮度差 ≥ 5%（3% 已是边缘，不能再淡）
 - `--bg-floating` 与下方所有非 floating 层都能看出层级（最亮一档）

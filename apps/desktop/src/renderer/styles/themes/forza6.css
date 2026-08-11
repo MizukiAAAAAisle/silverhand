@@ -299,13 +299,26 @@
 
   /* ── Text (cool-neutral on light, light on dark island) ── */
   --text-primary: #0F1F1D;
-  --text-secondary: #4A5C58;
-  /* `--text-muted` must clear 4.5:1 on light bgs (design-new-theme §4.2).
-     `#7A8A86` was 3.39:1 on `--bg-base` and 3.10:1 on `--bg-primary` —
-     fails AA. `#5A6B67` clears 4.5:1 on both light surfaces and is
-     still distinct enough from `--text-primary`. Cindy review
-     `jD0-Ik9O0c-QzuXd` blocker #2. */
-  --text-muted: #5A6B67;
+  /* Deepened together with `--text-muted` below (#task:1973). The sidebar's
+     two-rung type ladder is muted (12px bold group header) over secondary
+     (14px medium row), and at `#4A5C58` the two rungs sat 1.26:1 apart — the
+     tightest of the four themes. forza6 is the only theme with room to
+     redistribute: primary↔secondary was a wide 2.40:1, so the row takes the
+     deepening, the pair opens to 1.56:1, and primary↔secondary lands at
+     1.80:1 — still wider than the other three themes. 8.17:1 on the sidebar,
+     7.03:1 on `--bg-hover`. Safe on every surface: this is already a dark ink
+     on a light theme, so nothing dark-grounded can have been relying on it
+     (the island / teal chrome / structure faces have their own tokens). */
+  --text-secondary: #3B4946;
+  /* `--text-muted` must clear 4.5:1 on every surface it lands on, measured
+     against the DARKEST one — not `--bg-base` (design-new-theme §4.2, tightened
+     in #task:1973). History: `#7A8A86` was 3.39:1 on `--bg-base` and 3.10:1 on
+     `--bg-primary` (Cindy review `jD0-Ik9O0c-QzuXd` blocker #2); `#5A6B67`
+     fixed those two but was still 4.19:1 on `--bg-hover` — sidebar rows carry
+     muted text and hover, so that is the real worst face. `#566663` pins it at
+     4.50:1: sidebar 5.23:1, `--bg-elevated` 4.89:1, `--bg-chat` 5.87:1,
+     floating 6.04:1. */
+  --text-muted: #566663;
   --text-inverse: #F7F8F6;
   --text-island: #E8F1EF;
   /* `--text-inline-code` — near-black ink. The chip is now a quiet
@@ -433,8 +446,9 @@
      faintest ink this theme has (shiki 2026-07-31). A literal neutral at a
      single-decimal alpha, not a derived `color-mix`: the computed value stays
      round and the value is readable on sight. Resting 5.52:1 on the wash
-     (name above it 6.23:1, hover lifts the whole line to `--text-secondary`
-     5.57:1) — normal text stays at WCAG AA, per design-new-theme §4.2. */
+     (name above it ≈8.5:1, hover lifts the whole line to `--text-secondary`
+     ≈7.6:1 — both rose when the row ink deepened in #task:1973) — normal text
+     stays at WCAG AA, per design-new-theme §4.2. */
   --thread-preview-text: oklab(0 0 0 / 0.6);
 
   /* ── Row radius (review round 2 #task:912) ──

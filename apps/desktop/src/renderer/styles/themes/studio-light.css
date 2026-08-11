@@ -134,7 +134,14 @@
   /* ── Text ── */
   --text-primary: #111725;
   --text-secondary: #495064;
-  --text-muted: #8A93A6;
+  /* 同一支冷灰墨压深一档（色相 / 饱和不动：220.7° 13.6% → 222.0° 13.4%，
+     只把明度 59.6% 压到 43.9%）。`#8A93A6` 在侧栏底上只有 2.82:1，而侧栏组头是
+     12px bold —— 不吃 WCAG large-text 豁免（要 ≥18.66px bold），是硬的可读性
+     不合格。基准取 muted 真正会落到的**最暗**那一面 `--bg-elevated`（只钉侧栏的话
+     值会偏浅，4.15:1 在 elevated 上仍 fail）：4.53:1 —— 侧栏 4.95:1、
+     `--bg-hover` 4.65:1、白底 5.42:1，五个面全过 AA。深色面不受影响：NavRail
+     那块深板岩用自己的 `--text-nav-rail`，muted 从不落在深底上。 */
+  --text-muted: #616A7F;
   --text-inverse: #F7F9FC;
   --text-island: #1B2233;
   --text-inline-code: #39415A;  /* 冷墨，不吃 accent：inline code 的身份来自
@@ -264,7 +271,9 @@
      excerpt ink is a literal neutral at a single-decimal alpha (round computed
      value): 5.53:1 on the resting wash, one visible step below the replier
      name at 7.11:1, so the excerpt reads quieter and normal text still clears
-     WCAG AA. `--text-muted` is NOT usable here — 2.73:1 on this wash. */
+     WCAG AA. `--text-muted` clears AA on this wash too since #task:1973
+     (4.80:1, was 2.73:1) — the block still keeps its own token: the excerpt
+     fades toward each theme's own ground, which is not the ink ladder. */
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
   --thread-preview-text: oklab(0 0 0 / 0.6);

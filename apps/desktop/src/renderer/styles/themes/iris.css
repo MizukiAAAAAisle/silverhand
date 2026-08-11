@@ -153,10 +153,14 @@
   --bg-island: #F6F4F0;
   --bg-island-deep: #F1EEE8;
 
-  /* ── Text（暖墨阶梯，白底对比度标在后面）── */
+  /* ── Text（暖墨阶梯，白底对比度标在后面）──
+     例外是 muted：白底是 iris 最亮的一面，只量它会放过 `--bg-hover` /
+     `--bg-elevated` 上的同一段文字（旧值 #7E756A 白底刚好 4.53:1，但在 hover
+     上只有 4.05:1、elevated 4.12:1，AA 不合格）。所以 muted 钉在**最暗**的承载面
+     上（design-new-theme §4.2，#task:1973）：hover 4.56:1、elevated 4.64:1。 */
   --text-primary: #1F1A12; /* 17.3:1 */
   --text-secondary: #5A5145; /* 7.8:1 */
-  --text-muted: #7E756A; /* 4.5:1 */
+  --text-muted: #756D63; /* 4.56:1 on --bg-hover（最暗承载面）；白底 5.09:1 */
   --text-inverse: #FDFCFA;
   --text-island: #1F1A12;
   /* inline code 不吃 accent：它的身份来自等宽 + 暖洗底。一段技术消息里 code
@@ -244,7 +248,8 @@
   --chip-bg-hover: rgba(31, 26, 18, 0.11);
   --thread-preview-bg: var(--chip-bg);
   --thread-preview-bg-hover: var(--chip-bg-hover);
-  /* 摘要墨比回复者名低一档（`--text-muted` 在这层洗上只有 4.1:1，不能用）。 */
+  /* 摘要墨比回复者名低一档（`--text-muted` 在这层洗上 4.52:1，#task:1973 起过
+     AA 了，但它是墨阶梯最淡的一档、不是"朝底色褪"的那支，仍不用它）。 */
   --thread-preview-text: oklab(0 0 0 / 0.6);
 
   /* ── Primary control surface (CTA) ──

@@ -135,7 +135,7 @@ const THEME_META: Record<
     // a glance.
     bg: '#19171D',
     surface: '#350D36',
-    text: '#D1D2D3',
+    text: '#E2E3E3',
     accent: '#1D9BD1',
     border: '#350D36',
   },
