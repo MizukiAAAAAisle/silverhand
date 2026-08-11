@@ -270,6 +270,15 @@ export function SplitPane({
     <div
       ref={containerRef}
       className="flex h-full min-w-0 flex-1 overflow-hidden"
+      // The gutter between left | right is `--pane-gap`, same token the
+      // section sheet uses between sidebar | page — so the two seams a user
+      // sees side by side (sidebar↔conversation via VerticalSplitter, and
+      // conversation↔thread here) are always the SAME width. Without this the
+      // divider was a bare 4px flex item flush against both panes: an 8px
+      // gutter on the left, a 4px lane in the middle (#task:1965 residual,
+      // #task:1971). The divider straddles the gap with a negative margin
+      // (see below), so the VISIBLE distance stays exactly `--pane-gap`.
+      style={{ gap: 'var(--pane-gap, var(--frame-padding, 0px))' }}
     >
       <div
         ref={leftPaneRef}
@@ -301,6 +310,19 @@ export function SplitPane({
             // hover fade so the divider doesn't pop in/out. Every theme sets
             // --splitter-hover-bg (fence-enforced) — see VerticalSplitter.tsx
             // for the full rationale.
+            //
+            // GEOMETRY mirrors VerticalSplitter exactly: the container sets a
+            // `--pane-gap` gap, and this negative inline margin pulls the 4px
+            // track back so the VISIBLE distance between panes stays that gap
+            // with the track centred in it. `zIndex` keeps a later positioned
+            // sibling from painting over the track's half at gap 0 (where it
+            // straddles the seam ±2px). Derived from `--pane-gap` so a theme
+            // changing its gap gets a matching seam here for free.
+            style={{
+              marginInline:
+                'calc((var(--pane-gap, var(--frame-padding, 0px)) + 4px) / -2)',
+              zIndex: 1,
+            }}
             className={
               'group/split relative w-1 shrink-0 cursor-col-resize bg-[var(--splitter-bg,var(--border-subtle))] transition-colors hover:bg-[var(--splitter-hover-bg,var(--border))] data-[active=true]:bg-[var(--splitter-hover-bg,var(--border))]'
             }
