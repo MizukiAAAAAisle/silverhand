@@ -66,6 +66,7 @@ import {
 } from './settings-section';
 import { ConnectionPane } from './ConnectionPane';
 import { paneChrome } from '@/components/layout/pane-chrome';
+import { SectionShell } from '@/components/layout/SectionShell';
 
 /** 4-color swatch preview and display name for each theme. */
 const THEME_META: Record<
@@ -180,19 +181,23 @@ export function SettingsPage(): JSX.Element {
      own card at `--sidebar-width`, the panes are the content card, and the
      section sheet's own `gap: var(--pane-gap, var(--frame-padding))` separates
      them (0 in iris, where the sheet IS one sheet — hence this pane's
-     `border-right` in `themes/iris.css`). Rendered
-     as a fragment because `SectionLayer` is `display: contents` — the two
-     cards are siblings in the sheet's flex row, like
-     `aside[data-sidebar="computers"]` and `HostDetailView`.
+     `border-right` in `themes/iris.css`). The shared `SectionShell` owns the
+     list's `aside[data-sidebar]` island (Fragment, not a wrapper div, so the
+     two cards stay siblings in the sheet's flex row under
+     `SectionLayer`'s `display: contents`) — exactly the
+     `aside[data-sidebar="computers"]` + `HostDetailView` pair.
 
-     This replaces the in-card left column of the first round: as a real
-     `aside[data-sidebar]` the list inherits every per-theme sidebar rule
-     (carrier ground, ink ladder, row sticker states) instead of needing a
+     As a real `aside[data-sidebar]` the list inherits every per-theme sidebar
+     rule (carrier ground, ink ladder, row sticker states) instead of needing a
      parallel `[data-settings-nav]` scope and a `--bg-settings-nav` token — the
-     ground and the rows are now the rail's, not a copy of it. */
+     ground and the rows are the rail's, not a copy of it. */
   return (
-    <>
-      <SettingsRail section={section} onSelect={setSection} />
+    <SectionShell
+      name="settings"
+      label="Settings sections"
+      width="var(--sidebar-width)"
+      sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
+    >
       <main
         className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-bg-chat"
         style={paneChrome}
@@ -244,7 +249,7 @@ export function SettingsPage(): JSX.Element {
           </div>
         </div>
       </main>
-    </>
+    </SectionShell>
   );
 }
 
@@ -266,10 +271,12 @@ const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }
 };
 
 /** The Settings rail — one of the app's two-card sections, structurally
- *  identical to Computers / Members: an `aside[data-sidebar]` island at
+ *  identical to Computers / Members: it lives inside the shared
+ *  `SectionShell`'s `aside[data-sidebar="settings"]` island at
  *  `--sidebar-width` on the sidebar carrier ground, with the frame's own gap
  *  separating it from the content card (shiki 2026-08-06「采用 computer rail
- *  那种两栏 island 布局方式」).
+ *  那种两栏 island 布局方式」). This is only the rail's CONTENT (the nav); the
+ *  `aside` shell + pane chrome is the shell's.
  *
  *  Rows are the shared `SidebarRow`, not a look-alike — the whole point of
  *  living inside `aside[data-sidebar]` is that the per-theme row painting
@@ -286,7 +293,7 @@ const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }
  *
  *  `aria-current` marks the open pane for AT; `SidebarRow`'s `selected`
  *  carries the visual state. */
-function SettingsRail({
+function SettingsRailNav({
   section,
   onSelect,
 }: {
@@ -294,34 +301,27 @@ function SettingsRail({
   onSelect: (next: SettingsSection) => void;
 }): JSX.Element {
   return (
-    <aside
-      aria-label="Settings sections"
-      data-sidebar="settings"
-      className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-      style={{ ...paneChrome, overflow: 'hidden' }}
-    >
-      <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
-        <SidebarSection
-          label="SETTINGS"
-          icon={<Settings className="size-3.5" />}
-        >
-          {SETTINGS_SECTIONS.map(id => {
-            const { label, icon } = SECTION_CHROME[id];
-            const selected = id === section;
-            return (
-              <SidebarRow
-                key={id}
-                icon={icon}
-                title={label}
-                selected={selected}
-                aria-current={selected ? 'page' : undefined}
-                onClick={() => onSelect(id)}
-              />
-            );
-          })}
-        </SidebarSection>
-      </nav>
-    </aside>
+    <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
+      <SidebarSection
+        label="SETTINGS"
+        icon={<Settings className="size-3.5" />}
+      >
+        {SETTINGS_SECTIONS.map(id => {
+          const { label, icon } = SECTION_CHROME[id];
+          const selected = id === section;
+          return (
+            <SidebarRow
+              key={id}
+              icon={icon}
+              title={label}
+              selected={selected}
+              aria-current={selected ? 'page' : undefined}
+              onClick={() => onSelect(id)}
+            />
+          );
+        })}
+      </SidebarSection>
+    </nav>
   );
 }
 

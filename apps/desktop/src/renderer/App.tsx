@@ -14,6 +14,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { ChannelView } from '@/components/layout/ChannelView';
 import { ConversationViewSkeleton } from '@/components/layout/ConversationViewSkeleton';
 import { paneChrome } from '@/components/layout/pane-chrome';
+import { SectionShell } from '@/components/layout/SectionShell';
 import { SectionLayer } from '@/components/layout/SectionLayer';
 import { ThreadPanel } from '@/components/layout/ThreadPanel';
 import { ChannelThreadsPanel } from '@/components/layout/ChannelThreadsPanel';
@@ -2095,12 +2096,10 @@ function RegisteredAppShell({
           )}
           {deferredSection === 'members' && (
             <SectionLayer visible={appSection !== 'chat'}>
-            <>
-              <aside
-                data-sidebar="members"
-                className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-                style={{ ...paneChrome, overflow: 'hidden' }}
-              >
+            <SectionShell
+              name="members"
+              width="var(--sidebar-width)"
+              sidebar={
                 <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
                   <MembersPanel
                     selectedAgentId={selectedAgentId}
@@ -2109,7 +2108,8 @@ function RegisteredAppShell({
                     onSelectUser={id => nav.toMembersUser(id)}
                   />
                 </nav>
-              </aside>
+              }
+            >
               {selectedUserId ? (
                 <HumanView
                   key={selectedUserId}
@@ -2136,17 +2136,15 @@ function RegisteredAppShell({
                   Select an agent to see its details
                 </main>
               )}
-            </>
+            </SectionShell>
             </SectionLayer>
           )}
           {deferredSection === 'computers' && (
             <SectionLayer visible={appSection !== 'chat'}>
-            <>
-              <aside
-                data-sidebar="computers"
-                className="flex h-full w-[var(--sidebar-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]"
-                style={{ ...paneChrome, overflow: 'hidden' }}
-              >
+            <SectionShell
+              name="computers"
+              width="var(--sidebar-width)"
+              sidebar={
                 <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">
                   <ComputersPanel
                     hosts={computerHosts}
@@ -2157,7 +2155,8 @@ function RegisteredAppShell({
                     onAddComputer={() => setNewComputerOpen(true)}
                   />
                 </nav>
-              </aside>
+              }
+            >
               {selectedHost ? (
                 <HostDetailView key={selectedHost.id} host={selectedHost} />
               ) : (
@@ -2170,7 +2169,7 @@ function RegisteredAppShell({
                     : 'Select a computer to see its details'}
                 </main>
               )}
-            </>
+            </SectionShell>
             </SectionLayer>
           )}
           {/* ACTIVITY: NavRail top-level section (#task:1394). Three columns:
@@ -2180,69 +2179,62 @@ function RegisteredAppShell({
             * `deferredSection` like the other non-chat sections. */}
           {deferredSection === 'activity' && (
             <SectionLayer visible={appSection !== 'chat'}>
-            <>
-              {/* Activity list column — the global attention navigator: selection
-                * / sort / filter only, owns NO message or thread rendering. Two
-                * layout states, both a pure projection of the route (#task:1394,
-                * shiki): with NO channel in the route (bare `/activity`, incl. the
-                * caught-up empty state) it fills the whole content area — no right
-                * pane, no ChannelView/SplitPane, so we never carry back an implicit
-                * "unselected but a conversation surface exists" state. Once a row is
-                * clicked the route gains `/w/:wid/c/:cid` and it collapses to a
-                * resizable left column beside the reused ChannelView — the SAME
-                * progressive-disclosure primitive as chat's ChannelView→ThreadPanel
-                * (app-layout.md §1). Width is its OWN `--activity-list-width` (never
-                * chat's `--sidebar-width`) with an independent min/max clamp +
-                * persisted pref. */}
-              <aside
-                data-sidebar="activity"
-                className={
-                  selectedChannelId != null
-                    ? 'flex h-full w-[var(--activity-list-width)] shrink-0 flex-col bg-[var(--bg-channels-sidebar)]'
-                    : 'flex h-full min-w-0 flex-1 flex-col bg-[var(--bg-channels-sidebar)]'
-                }
-                style={{ ...paneChrome, overflow: 'hidden' }}
-              >
+            <SectionShell
+              name="activity"
+              /* Two layout states, both a pure projection of the route
+               * (#task:1394, shiki): with NO channel in the route (bare
+               * `/activity`, incl. the caught-up empty state) the list FILLS
+               * the content area — no page, no splitter, so we never carry
+               * back an implicit "unselected but a conversation surface
+               * exists" state. Once a row is clicked the route gains
+               * `/w/:wid/c/:cid` and it collapses to a resizable column beside
+               * the reused ChannelView — the SAME progressive-disclosure
+               * primitive as chat's ChannelView→ThreadPanel (app-layout.md §1).
+               * Width is its OWN `--activity-list-width` (never chat's
+               * `--sidebar-width`) with an independent clamp + persisted pref. */
+              fill={selectedChannelId == null}
+              width="var(--activity-list-width)"
+              sidebar={
                 <ActivityView
                   workspaceRefById={workspaceRefById}
                   agentsById={agentsById}
                   onJump={handleJumpToMessageStable}
                 />
-              </aside>
-              {/* Split appears ONLY once the route carries a channel. The divider
-                * resizes the Activity list against the conversation column (clamp
-                * owned by the `activityList` hook). Right side = the SAME
-                * `parentView` / `secondaryView` chat renders — route-driven reuse is
-                * what makes "无条件自动同步" structural (composer / thread /
-                * inline-search / jump-prime / mark-read all inherit from the one
-                * ChannelView). Gated on URGENT `appSection === 'activity'` (not just
-                * the deferred mount): during an activity↔chat transition both blocks
-                * are briefly mounted, so this ensures only ONE renders the shared
-                * ChannelView, avoiding a transient double-mount of its effects; the
-                * hidden side shows the skeleton. */}
-              {selectedChannelId != null ? (
-                <>
+              }
+              splitter={
+                selectedChannelId != null ? (
                   <VerticalSplitter
                     onPointerDown={activityList.startResize}
                     active={activityList.isDragging}
                   />
-                  {appSection === 'activity' ? (
-                    secondaryView &&
-                    shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
-                      secondaryView
-                    ) : (
-                      <SplitPane
-                        left={parentView}
-                        right={secondaryView}
-                        storageKey="silverhand.layout.activity-split-ratio"
-                      />
-                    )
+                ) : null
+              }
+            >
+              {/* The page is gated on URGENT `appSection === 'activity'` (not
+                * just the deferred mount): during an activity↔chat transition
+                * both blocks are briefly mounted, so this ensures only ONE
+                * renders the shared ChannelView, avoiding a transient
+                * double-mount of its effects; the hidden side shows the
+                * skeleton. Right side = the SAME `parentView` / `secondaryView`
+                * chat renders — route-driven reuse is what makes
+                * "无条件自动同步" structural. */}
+              {selectedChannelId != null ? (
+                appSection === 'activity' ? (
+                  secondaryView &&
+                  shouldSecondaryFullscreen(secondaryDescriptor, routeFullscreen) ? (
+                    secondaryView
                   ) : (
-                    <ConversationViewSkeleton />
-                  )}
-                </>
+                    <SplitPane
+                      left={parentView}
+                      right={secondaryView}
+                      storageKey="silverhand.layout.activity-split-ratio"
+                    />
+                  )
+                ) : (
+                  <ConversationViewSkeleton />
+                )
               ) : null}
-            </>
+            </SectionShell>
             </SectionLayer>
           )}
           {/* CHAT: the cheap shell (workspace + channel sidebars + their
