@@ -94,6 +94,24 @@ export function boardFilterKey(filters: TaskFilters): string {
   );
 }
 
+/**
+ * Does this filter scope narrow the ASSIGNEE axis?
+ *
+ * Read from the key rather than the filters because the consumers of this
+ * predicate hold cache keys, not `TaskFilters` — and it lives here, next to the
+ * only place that authors the format, so the two cannot drift.
+ *
+ * Why the axis matters on its own: an assignee change moves a row between
+ * assignee-filtered POPULATIONS without changing its status, so no column move
+ * can be derived from it. A scope that narrows nothing on that axis keeps the
+ * row it holds (membership cannot have changed) and needs no re-read; a scope
+ * that narrows it must re-read the one column holding the row (#task:1975).
+ */
+export function filterKeyConstrainsAssignee(filterKey: string): boolean {
+  const assignee = filterKey.split('|')[2];
+  return assignee !== undefined && assignee !== 'any';
+}
+
 /** Cache key for ONE status column's page list. Status is its own segment so a
  *  single column can be invalidated without touching its neighbours. */
 export const boardColumnKey = (status: TaskStatus, filterKey: string) =>

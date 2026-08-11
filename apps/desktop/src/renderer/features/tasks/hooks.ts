@@ -6,6 +6,7 @@ import {
   type QueryClient,
 } from '@tanstack/react-query';
 import { useEffect } from 'react';
+import { toast } from 'sonner';
 import {
   type CreatedTaskIdentity,
   type HumanCreateTaskInput,
@@ -30,6 +31,14 @@ import {
   taskDetailKey,
   type TaskDetailFrame,
 } from './taskDetail';
+import {
+  beginOptimisticStatusWrite,
+  closeOptimisticStatusWrite,
+  reconcileTaskStatusWrite,
+  restartRacingTaskReads,
+  revertOptimisticStatusWrite,
+  type OptimisticStatusWrite,
+} from './taskProjection';
 
 /** A board column's cached value: pages of rows keyed by opaque cursors. */
 type BoardColumnPages = InfiniteData<TaskBoardColumnDto, string | null>;
@@ -130,9 +139,33 @@ export function tasksHeldChannelIds(
 
 // ── Mutations (human UI overrides) ─────────────────────────────────
 
+/**
+ * Move a task to another status — the human override of the agent workflow.
+ *
+ * The card moves BEFORE the write is acknowledged (#task:1975). A status is a
+ * value the caller chose, so this client already knows what a success looks
+ * like; waiting for the round trip plus a re-read only meant the card sat still
+ * for the write (7–8 ms locally, 70–200 ms remote) and then jumped. See
+ * `taskProjection.ts` for why a status may be assigned locally where a reaction
+ * count may not, and for the three guards that make it safe: compare-and-swap
+ * rollback, no invented values, bounded authoritative round.
+ *
+ * NEITHER FACE OF THE COMMIT INVALIDATES THE ROOT any more. This mutation used
+ * to invalidate `['tasks']` and `['task-by-number']` wholesale while the same
+ * write's WS echo did it again — two refetch owners re-reading every loaded
+ * column, every counts scope, every cached chip, and the facets face a status
+ * write cannot even change. What is left is: the projections this client holds
+ * are PATCHED, and only what a patch cannot settle is re-read (the two `GROUP BY`
+ * aggregates, plus any column whose window could not place the row).
+ */
 export function useUpdateTaskStatus() {
   const qc = useQueryClient();
-  return useMutation({
+  return useMutation<
+    { success: boolean; reason?: string },
+    Error,
+    { taskId: string; status: TaskStatus },
+    OptimisticStatusWrite
+  >({
     mutationFn: async (args: { taskId: string; status: TaskStatus }) => {
       const res = await api<{ success: boolean; reason?: string }>(
         `/api/tasks/${args.taskId}/status`,
@@ -141,19 +174,38 @@ export function useUpdateTaskStatus() {
       if (!res.success) throw new Error(res.reason ?? 'update failed');
       return res;
     },
-    onSuccess: (_res, vars) => {
-      void qc.invalidateQueries({ queryKey: ['tasks'] });
-      // The board is NOT the only projection of a status: the open detail modal
-      // reads `['task-detail', id]` and inline `#task:n` sigils read
-      // `['task-by-number']`. Without these two a LOCAL status change only showed
-      // up once the WS `task_changed` echo arrived — a round trip the writer
-      // already knows the answer to, and one the two single-object caches would
-      // otherwise wait on with a stale status on screen.
-      void qc.invalidateQueries({
-        queryKey: taskDetailKey(vars.taskId),
-        exact: true,
+    onMutate: vars => beginOptimisticStatusWrite(qc, vars),
+    onError: (_err, _vars, write) => {
+      if (write) {
+        revertOptimisticStatusWrite(qc, write);
+        // Reconcile on the failure path too: the revert is refused wherever a
+        // newer authority has landed, and a refused write (409
+        // `already_at_status`) means the server's value was never ours to guess.
+        // `points` is what makes the failure path TOTAL — every chip this client
+        // holds for the task is settled by one authoritative read, so the cases
+        // the local rollback deliberately declines (a superseded write, a
+        // baseline no cache carried) cannot leave a pill stuck on a value the
+        // server never had.
+        reconcileTaskStatusWrite(qc, write.projection, {
+          detail: true,
+          points: true,
+        });
+      }
+      // The card has just moved back on its own. Four of the five surfaces that
+      // drive this mutation render no failure state, so without this the revert
+      // reads as the app undoing the user's click for no reason.
+      toast.error('Couldn’t update status.');
+    },
+    onSuccess: (_res, _vars, write) => {
+      restartRacingTaskReads(qc, write.taskId);
+      reconcileTaskStatusWrite(qc, write.projection, {
+        detail: write.closedAtUnknown,
       });
-      void qc.invalidateQueries({ queryKey: ['task-by-number'] });
+    },
+    // Closes this write's entry in the per-task local ledger — the fact that
+    // decides whether a LATER write still owns the value on screen.
+    onSettled: (_res, _err, _vars, write) => {
+      if (write) closeOptimisticStatusWrite(write);
     },
   });
 }
@@ -222,16 +274,22 @@ export function useAssignTask() {
  * fetch so a closed modal issues no request.
  *
  * This hook is also the SOLE realtime owner of the `['task-detail', id]`
- * projection (#task:1715). It used to ride the listener inside `useTasks`, which
- * only worked while a board was mounted — the modal now opens straight from
- * `?task=<task_id>` (a chat chip, a cold deep-link) with no board behind it, so
- * that arrangement lost both remote `task_changed` refresh and
+ * projection's REFETCH (#task:1715). It used to ride the listener inside
+ * `useTasks`, which only worked while a board was mounted — the modal now opens
+ * straight from `?task=<task_id>` (a chat chip, a cold deep-link) with no board
+ * behind it, so that arrangement lost both remote `task_changed` refresh and
  * `snapshot_required` gap recovery exactly when the modal was the only task
  * surface on screen. Owning the edge here also means one projection has one
  * owner: no second invalidation of the same key racing this one (a duplicate
  * `invalidateQueries` on a query that already has data CANCELS the in-flight
  * refetch and restarts it — `cancelRefetch` defaults to true — so a second
  * writer is a wasted round trip, not a free dedup).
+ *
+ * The event's SNAPSHOT is applied elsewhere and that is not a second owner:
+ * assignment is idempotent and order-free, so the App-level ingestor patches
+ * this projection along with every other one it holds and this listener re-reads
+ * only what a snapshot cannot settle — an `edit`'s body, or a gap
+ * (`shouldRefreshTaskDetail`, #task:1975).
  *
  * Viewer scope is the right carrier: the server fans `task_changed` out to every
  * human member of the task's conversation, and a human's detail read gate IS
@@ -265,6 +323,7 @@ export function useTaskDetail(
                 viewerScope: isCurrentViewerScope(frame.scope),
                 kind: frame.kind,
                 taskId: (frame.payload as TaskChangedEvent)?.task_id ?? null,
+                taskKind: (frame.payload as TaskChangedEvent)?.kind ?? null,
               }
             : { type: 'other' };
       if (!shouldRefreshTaskDetail(projected, taskId)) return;

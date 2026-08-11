@@ -37,7 +37,10 @@ import {
 } from './boardQuery';
 import { columnVisibleCount, type ColumnWindow } from './columnWindow';
 import type { PersonOption, TaskFilters } from './taskFilters';
-import { applyTaskChangedToTaskByNumberCache } from './useTaskByNumber';
+import {
+  applyTaskChangedToProjections,
+  reconcileTaskStatusWrite,
+} from './taskProjection';
 
 /**
  * The task board's read layer (#task:1885 against the #task:1884 authority).
@@ -342,24 +345,34 @@ export function useBoardFacets(opts?: {
  * data CANCELS the in-flight refetch and restarts it (`cancelRefetch` defaults to
  * true), so each event would cost an extra round trip per surface.
  *
- * INVALIDATE, never patch. A board holds a paginated prefix of five columns plus
- * two server aggregates, so a patched row cannot be placed: the event carries no
- * `previous_status`, page boundaries move when a row leaves a column, and counts
- * / facets are `GROUP BY` results that no client-side `±1` can reproduce. The
- * cost of re-reading instead of patching is what the window bounds — a refresh
- * re-reads the loaded pages (normally one per column), where the pre-window board
- * re-downloaded every task.
+ * PATCH WHAT THE EVENT PROVES, RE-READ ONLY THE REST (#task:1975). The event is
+ * an absolute snapshot on an ordered per-scope stream with replay and
+ * `snapshot_required` fencing, so it may be ASSIGNED — and the board's own cache
+ * supplies the two things the payload lacks: the column the row is LEAVING (it is
+ * the column we hold it in — `previous_status` was never needed for that) and the
+ * full `TaskSummaryDto` being moved. `applyTaskChangedToProjections` does that for
+ * every column, chip and open detail this client holds.
  *
- * The precision below is only what the event itself proves:
- *   - column bodies: ALWAYS all five. Without `previous_status`, the after-state
- *     cannot identify the column a task LEFT, so a selective refresh would leave
- *     the source column showing a row that moved out of it.
- *   - counts: every kind except `edit` (title/body only — it cannot change a
- *     status). `claim` and `unclaim` are included because both dispatch a status
- *     in the same write on one of their paths (`todo → in_progress` on claim,
- *     back to `todo` on release) and the payload does not distinguish them.
- *   - facets: `create` / `claim` / `unclaim` — the kinds that can change who
- *     appears as an assignee. `status` writes only `status`/`closed_at`.
+ * What is still re-read, and why only then:
+ *   - column bodies of the scopes involved: the move is exact for the loaded
+ *     prefix, but a row that was sitting just past the window belongs in the
+ *     source column's first page now. Scoped by `reconcileTaskStatusWrite` to the
+ *     source/destination pair per filter scope — plus every column of a scope
+ *     whose window could not place the row at all, which is the honest answer to
+ *     "we do not know where it was".
+ *   - counts: server `GROUP BY`, never a client `±1`.
+ *   - facets: only `create` / `claim` / `unclaim`, the kinds that can change who
+ *     appears as an assignee. A `status` write cannot, and used to refetch them
+ *     anyway through the `['tasks']` root.
+ *
+ * AND NOTHING AT ALL when the event brought no news: `needsReconcile` is false
+ * once the caches already agree on status and assignee, which is exactly the
+ * state the writer's own optimistic patch leaves them in. That is how the local
+ * write and its echo stop being two refetch owners — by VALUE, with no mutation
+ * identity, no `previous_status` and no self-echo timing window. The same
+ * comparison absorbs a replayed frame and a second delivery of one commit (the
+ * event is published on two scopes with independent seq spaces, so duplicate
+ * arrival is normal, not exceptional — Alice's wire audit on #task:1975).
  */
 export function useTaskBoardRealtime(): void {
   const qc = useQueryClient();
@@ -378,11 +391,7 @@ export function useTaskBoardRealtime(): void {
         return;
       }
       const payload = frame.payload as TaskChangedEvent;
-      applyTaskChangedToTaskByNumberCache(qc, payload);
-      void qc.invalidateQueries({ queryKey: ['tasks', 'board', 'column'] });
-      if (payload.kind !== 'edit') {
-        void qc.invalidateQueries({ queryKey: ['tasks', 'board', 'counts'] });
-      }
+      const outcome = applyTaskChangedToProjections(qc, payload);
       if (
         payload.kind === 'create' ||
         payload.kind === 'claim' ||
@@ -390,9 +399,13 @@ export function useTaskBoardRealtime(): void {
       ) {
         void qc.invalidateQueries({ queryKey: boardFacetsKey() });
       }
-      // `['task-detail', id]` is deliberately untouched: `useTaskDetail` owns
-      // that projection's realtime edge (ONE owner per projection), and the
-      // detail modal opens with no board behind it.
+      if (!outcome.needsReconcile) return;
+      reconcileTaskStatusWrite(qc, outcome.projection, {
+        // The detail projection's refetch has exactly one owner (`useTaskDetail`
+        // via `shouldRefreshTaskDetail`), and an `edit` is the only kind whose
+        // authority is wider than its own snapshot.
+        detail: false,
+      });
     });
     return () => {
       sub.unsubscribe();

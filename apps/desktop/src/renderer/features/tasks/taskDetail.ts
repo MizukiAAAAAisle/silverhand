@@ -1,4 +1,4 @@
-import type { TaskDetailDto } from '@silverhand/shared';
+import type { TaskChangedEvent, TaskDetailDto } from '@silverhand/shared';
 import { ApiError } from '@/lib/api';
 
 /** React Query key for a single task's on-demand detail read, keyed by the
@@ -153,21 +153,49 @@ export function resolveTaskDetailView(args: {
 
 /**
  * A realtime frame as the task-detail projection sees it. `useTaskDetail` is the
- * SOLE owner of `['task-detail', id]` (#task:1715), and ownership is decided by
- * the frame's SCOPE, not by which hook happens to be mounted: this projection
- * only listens on the viewer's private scope (`viewer:<userId>`), while the
- * conversation ingestor works `conversation:<id>` frames. A conversation-scope
- * frame therefore reaches `viewerScope: false` and refreshes nothing — if it
- * did, we would be back to two writers invalidating one key, and a duplicate
- * `invalidateQueries` on a query that already has data CANCELS the in-flight
- * refetch and restarts it (`cancelRefetch` defaults to true).
+ * SOLE owner of `['task-detail', id]`'s REFETCH (#task:1715), and ownership is
+ * decided by the frame's SCOPE, not by which hook happens to be mounted: this
+ * projection only listens on the viewer's private scope (`viewer:<userId>`),
+ * while the conversation ingestor works `conversation:<id>` frames. A
+ * conversation-scope frame therefore reaches `viewerScope: false` and refreshes
+ * nothing — if it did, we would be back to two writers invalidating one key, and
+ * a duplicate `invalidateQueries` on a query that already has data CANCELS the
+ * in-flight refetch and restarts it (`cancelRefetch` defaults to true).
+ *
+ * `kind` is the FRAME's kind (`'task_changed'`); `taskKind` is the task
+ * mutation's kind inside the payload, which is what decides whether the event's
+ * snapshot is wide enough to settle this projection by assignment.
  */
 export type TaskDetailFrame =
   | { type: 'snapshot_required'; viewerScope: boolean }
-  | { type: 'event'; viewerScope: boolean; kind: string; taskId: string | null }
+  | {
+      type: 'event';
+      viewerScope: boolean;
+      kind: string;
+      taskId: string | null;
+      taskKind: TaskChangedEvent['kind'] | null;
+    }
   /** Any other frame type — heartbeats, acks, unrelated envelopes. */
   | { type: 'other' };
 
+/**
+ * Whether an open detail modal still has to RE-READ after this frame.
+ *
+ * A `task_changed` event carries the full mutable state the detail shares with
+ * the board row (status, assignee, title, `closed_at`), and the App-level
+ * ingestor assigns it to every task projection this client holds, including this
+ * one (`applyTaskChangedToProjections`). So a `status` / `claim` / `unclaim` /
+ * `create` event is already settled by value and re-reading it would spend a
+ * round trip to learn what the frame just said (#task:1975).
+ *
+ * `edit` is the one kind whose authority is WIDER than its event: the body, the
+ * "edited by" byline and the edit timestamp are deliberately not on the wire
+ * (the event stays thin), so only a detail read can produce them.
+ *
+ * Assignment and re-reading are split on purpose: assigning the same snapshot
+ * twice is free and order-independent, whereas two owners of a REFETCH cost a
+ * cancelled round trip each time. This function keeps that second half single.
+ */
 export function shouldRefreshTaskDetail(
   frame: TaskDetailFrame,
   openTaskId: string,
@@ -175,12 +203,14 @@ export function shouldRefreshTaskDetail(
   switch (frame.type) {
     case 'snapshot_required':
       // Gap recovery: we may have missed this task's change while
-      // disconnected, so re-read rather than trust what is cached.
+      // disconnected, so re-read rather than trust what is cached — the one path
+      // where nothing local can be trusted to be a projection of the authority.
       return frame.viewerScope;
     case 'event':
       if (!frame.viewerScope) return false;
       if (frame.kind !== 'task_changed') return false;
-      return frame.taskId === openTaskId;
+      if (frame.taskId !== openTaskId) return false;
+      return frame.taskKind === 'edit';
     case 'other':
       return false;
   }

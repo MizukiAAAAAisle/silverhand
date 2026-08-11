@@ -9,6 +9,7 @@ import {
   type TaskSummaryDto,
 } from '@silverhand/shared';
 import { api, ApiError } from '@/lib/api';
+import { restartRacingRead } from './racingRead';
 
 /**
  * Fetch a single task by its workspace-scoped task_number for inline
@@ -37,18 +38,75 @@ export const taskByNumberKey = (
 ) => ['task-by-number', workspaceId ?? null, taskNumber ?? null] as const;
 
 /**
+ * What one event did to the by-number entry it names.
+ *
+ * `patched` is the only outcome that WROTE — which is what makes this cache's
+ * single refetch owner decidable: nothing else in the event path invalidates a
+ * `['task-by-number']` entry, so an assignment that landed over a read issued
+ * before the event has to restart that read itself, and one that changed nothing
+ * must not (restarting on a duplicate delivery would spend a round trip per echo,
+ * the same defect identity preservation fixes on the board rows).
+ */
+export type TaskByNumberPatchOutcome =
+  /** No entry for those axes, or one whose first load has not resolved: there is
+   *  no DTO to write over and the event cannot synthesize one. A first load that
+   *  is still IN FLIGHT is restarted, because it was issued before this event and
+   *  would otherwise commit pre-event state as the chip's initial value. */
+  | 'absent'
+  /** A cached MISS that has become a real task — only a read can build it. */
+  | 'invalidated'
+  /** The snapshot says what the entry already reads. */
+  | 'unchanged'
+  | 'patched';
+
+function sameTaskChangedFields(
+  row: TaskSummaryDto,
+  task: TaskChangedEvent,
+): boolean {
+  return (
+    row.id === task.task_id
+    && row.workspace_id === task.workspace_id
+    && row.channel_id === task.channel_id
+    && row.thread_root_id === task.thread_root_id
+    && row.status === task.status
+    && row.title === task.title
+    && row.closed_at === task.closed_at
+    && (row.assignee?.id ?? null) === (task.assignee?.id ?? null)
+    && (row.assignee?.type ?? null) === (task.assignee?.type ?? null)
+  );
+}
+
+/**
  * Keep inline `#task:<n>` popover cache coherent with realtime task
  * mutations. The `task_changed` payload has exactly the mutable fields
  * this cache needs (status, assignee, title); immutable context such as
  * creator/created_at stays from the original by-number fetch.
+ *
+ * The write is IDENTITY-PRESERVING and owns the freshness of its own key: an
+ * event that repeats what the entry holds writes nothing and restarts nothing,
+ * while one that carries news restarts a read issued before it — React Query
+ * commits a settled response over an interim `setQueryData`, so without that a
+ * point read in flight when the event arrives can put pre-event state back
+ * (#task:1975; the same rule as `restartRacingRead` on the board columns).
  */
 export function applyTaskChangedToTaskByNumberCache(
   qc: QueryClient,
   task: TaskChangedEvent,
-): void {
+): TaskByNumberPatchOutcome {
   const key = taskByNumberKey(task.workspace_id, task.task_number);
   const state = qc.getQueryState<TaskSummaryDto | null>(key);
-  if (!state) return;
+  if (!state) return 'absent';
+
+  // A COLD read — the entry exists but has never resolved. Nothing can be
+  // patched (there is no DTO yet, and the event cannot synthesize one), so the
+  // restart is the entire fix: that request was issued before this event, and
+  // React Query commits a settled response over anything written since, so
+  // leaving it alone lets the chip's FIRST paint be pre-event state with no
+  // bounded recovery behind it (`staleTime` does not re-read on a timer).
+  if (state.data === undefined) {
+    restartRacingRead(qc, key);
+    return 'absent';
+  }
 
   // A cached miss can become real if the task is created after a user
   // has already hovered the sigil. We cannot synthesize the full
@@ -56,26 +114,29 @@ export function applyTaskChangedToTaskByNumberCache(
   // let active observers refetch.
   if (state.data === null) {
     void qc.invalidateQueries({ queryKey: key, exact: true });
-    return;
+    return 'invalidated';
   }
+  const prev = state.data;
+  if (sameTaskChangedFields(prev, task)) return 'unchanged';
 
-  qc.setQueryData<TaskSummaryDto | null>(key, prev => {
-    if (!prev) return prev;
-    return {
-      ...prev,
-      id: task.task_id,
-      workspace_id: task.workspace_id,
-      channel_id: task.channel_id,
-      // Keep the navigation anchor fresh from the realtime event so
-      // an inline `#task:<n>` jump resolves to the right reply cluster
-      // instead of relying on stale by-number fetch values.
-      thread_root_id: task.thread_root_id,
-      status: task.status,
-      title: task.title,
-      assignee: task.assignee,
-      closed_at: task.closed_at,
-    };
+  qc.setQueryData<TaskSummaryDto | null>(key, {
+    ...prev,
+    id: task.task_id,
+    workspace_id: task.workspace_id,
+    channel_id: task.channel_id,
+    // Keep the navigation anchor fresh from the realtime event so
+    // an inline `#task:<n>` jump resolves to the right reply cluster
+    // instead of relying on stale by-number fetch values.
+    thread_root_id: task.thread_root_id,
+    status: task.status,
+    title: task.title,
+    assignee: task.assignee,
+    closed_at: task.closed_at,
   });
+  if (state.fetchStatus === 'fetching') {
+    restartRacingRead(qc, key);
+  }
+  return 'patched';
 }
 
 /**

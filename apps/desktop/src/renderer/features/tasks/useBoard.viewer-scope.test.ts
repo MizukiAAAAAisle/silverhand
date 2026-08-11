@@ -21,8 +21,10 @@ import { fileURLToPath } from 'node:url';
 //
 // Live vs replay convergence is NOT a separate path: replay re-delivers the same
 // `event` frames through the identical `onWsFrame` handler, and the cache
-// application (`applyTaskChangedToTaskByNumberCache`) is unit-tested in
-// `useTaskByNumber.test.ts`. This fence covers the scope boundary only.
+// application (`applyTaskChangedToProjections`, which routes the inline-chip half
+// through `applyTaskChangedToTaskByNumberCache`) is unit-tested in
+// `taskProjection.test.ts` / `useTaskByNumber.test.ts`. This fence covers the
+// scope boundary only.
 //
 // Desktop test env is `node` (no jsdom/RTL), so — like the sibling fences — we
 // assert the source structure rather than render the hook.
@@ -30,6 +32,10 @@ import { fileURLToPath } from 'node:url';
 describe('board refresh is viewer-scoped, never workspace-scoped', () => {
   const source = readFileSync(
     fileURLToPath(new URL('./useBoard.ts', import.meta.url)),
+    'utf8',
+  );
+  const projection = readFileSync(
+    fileURLToPath(new URL('./taskProjection.ts', import.meta.url)),
     'utf8',
   );
 
@@ -48,9 +54,12 @@ describe('board refresh is viewer-scoped, never workspace-scoped', () => {
     expect(source).not.toContain('subscribeWsScope');
   });
 
-  it('applies the absolute task_changed snapshot to the by-number cache', () => {
+  it('applies the absolute task_changed snapshot through the shared applier', () => {
     // The board convergence still flows through the shared idempotent applier
     // (unit-tested separately), so live + replay both settle to the snapshot.
-    expect(source).toContain('applyTaskChangedToTaskByNumberCache(qc, payload)');
+    expect(source).toContain('applyTaskChangedToProjections(qc, payload)');
+    // …and that applier is still the one keeping the inline `#task:<n>` chips
+    // coherent by exact key (the one path that also repairs a cached MISS).
+    expect(projection).toContain('applyTaskChangedToTaskByNumberCache(qc, event)');
   });
 });

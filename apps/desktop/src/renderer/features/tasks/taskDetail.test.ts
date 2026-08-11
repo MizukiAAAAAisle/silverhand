@@ -258,10 +258,11 @@ describe('shouldRefreshTaskDetail', () => {
       viewerScope: true,
       kind: 'task_changed',
       taskId: openTaskId,
+      taskKind: 'edit',
       ...over,
     }) as TaskDetailFrame;
 
-  it('refreshes on a matching viewer-scope task_changed', () => {
+  it('refreshes on a matching viewer-scope edit (body is not on the wire)', () => {
     expect(shouldRefreshTaskDetail(event(), openTaskId)).toBe(true);
   });
 
@@ -272,6 +273,20 @@ describe('shouldRefreshTaskDetail', () => {
         openTaskId,
       ),
     ).toBe(true);
+  });
+
+  it('does NOT refresh for kinds the event snapshot already settles', () => {
+    // status / claim / unclaim / create carry the full mutable state this
+    // projection shares with a board row, and the App-level ingestor assigns it
+    // (`applyTaskChangedToProjections`). Re-reading would spend a round trip to
+    // learn what the frame just said (#task:1975).
+    for (const taskKind of ['status', 'claim', 'unclaim', 'create'] as const) {
+      expect(shouldRefreshTaskDetail(event({ taskKind }), openTaskId)).toBe(false);
+    }
+    // A payload with no kind at all is not evidence of an edit.
+    expect(shouldRefreshTaskDetail(event({ taskKind: null }), openTaskId)).toBe(
+      false,
+    );
   });
 
   it('ignores another task, another kind, and unrelated frame types', () => {
