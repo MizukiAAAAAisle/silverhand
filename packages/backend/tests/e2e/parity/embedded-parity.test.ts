@@ -27,6 +27,7 @@
  * which BOTH adapters pass; embedded's command-level guard is covered by
  * the shared Phase C.
  */
+import { SqliteAuthSessionsRepo } from '../../../src/repos/auth-sessions-repo.js';
 import {
   resolveBackendDataPaths,
 } from '@silverhand/shared/app-data-layout';
@@ -327,7 +328,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
     userId,
     installationId: 'd5a4-emb-install',
   }).host.id;
-  const { userToken: bearer } = new AuthSessionService(db).issueSession({ userId });
+  const { userToken: bearer } = new AuthSessionService(new SqliteAuthSessionsRepo(db)).issueSession({ userId });
 
   // Wait until the embedded adapter has a live connection to the daemon.
   const adapter = () => {

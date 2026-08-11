@@ -31,7 +31,7 @@
 | 层 | 职责 | **不允许** |
 |---|---|---|
 | **Route(HTTP adapter,薄)** | 解析 body(zod)、解析 principal/身份、调用 use case、把 use-case 返回的具名错误(含 `forbidden`)映射成 HTTP status | 不写库、不开事务、不发事件、不调 runtime、不做跨聚合编排、**不做 target resolve / 授权判定** |
-| **Use Case(应用层,新)** | 拥有一次业务动作的**编排**:target resolve + **授权策略判定** → 前置校验/precondition → pre-commit 外部 precondition → **开事务**(跨上下文 DB 事实)→ 收集 post-commit effect。返回纯数据 + 具名错误(不含 HTTP) | 不依赖 Hono `Context`、不拼 HTTP status、不直接 `events.publish`(只收集 effect) |
+| **Use Case(应用层,新)** | 拥有一次业务动作的**编排**:target resolve + **授权策略判定** → 前置校验/precondition → pre-commit 外部 precondition → **持有原子边界**(跨上下文 DB 事实,经 UnitOfWork `atomically(tx => ...)`,见 §5)→ 收集 post-commit effect。返回纯数据 + 具名错误(不含 HTTP) | 不依赖 Hono `Context`、不拼 HTTP status、不直接 `events.publish`(只收集 effect)、**不持有原生 `Database`/SQL capability**(#task:1978 起;存量直用 `db.transaction` 属迁移中债务,由 db-boundary 台账钉住) |
 | **Repo(持久层)** | 只读写自己那张表/聚合,返回纯数据(含 `created` 这类持久化事实标志)。可在**单表内部**自开事务做批量原子写 | 不调别的 repo、不 seed 别的上下文的默认策略、不发事件、**不懂 host/placement 等业务规则** |
 
 **授权判定归 use case:** 授权是 application boundary,不一定要在 HTTP
@@ -57,7 +57,7 @@ use case **不得** import 任何返回 Hono `Response` / 依赖 `Context` 的 r
 
 | 类别 | 例子 | 时机 | 失败语义 |
 |---|---|---|---|
-| **① in-tx DB 事实** | `workspace_members` insert、`conversation_agents` addAgent、能力 seedDefaults、system message insert | 在**同一个 `db.transaction()`** 内 | 任一失败 → 整体回滚,无半状态 |
+| **① in-tx DB 事实** | `workspace_members` insert、`conversation_agents` addAgent、能力 seedDefaults、system message insert | 在**同一个原子边界**内(use case 经 UoW `atomically(tx => ...)`;persistence 层实现为 `db.transaction()`) | 任一失败 → 整体回滚,无半状态 |
 | **② pre-commit 外部 precondition** | L2 seed(daemon,`seedMemberAgentL2`)、placement 断言 | 事务**之前**,awaited,成功才进事务 | 失败 → 返回错误、**不写任何行** |
 | **③ post-commit effect** | `events.publish('message'/'conversation_members_changed')`、`publishToScope('workspace_channels_changed')`、runtime delivery/stop | 事务**提交之后**,按序执行 | best-effort;失败**不回滚** DB 事实(可 log/重试),只影响"外部世界何时知道" |
 
@@ -116,12 +116,14 @@ AgentCapabilityRepo.seedDefaults(ws, agent)                        # 已是纯 s
 
 AddWorkspaceAgentMemberUseCase.execute(...):
   # (host-equality precondition 已随 #task:1600 终片删除;成员可来自任何 computer)
-  await seedMemberAgentL2(...)  // 失败即返回,不写行   # ② pre-commit(HTTP-agnostic 版本;guest 走 agent-host pathless plan)
-  db.transaction(() => {                            # ① use case 显式持有 UoW
-    const { member, created } = workspaceRepo.insertMembership(ws, agent)
-    if (created) capabilityRepo.seedDefaults(ws, agent)   # 策略回应用层,仍同一事务
-  })()
+  await seedMemberAgentL2(...)  // 失败即返回,不写任何行   # ② pre-commit(HTTP-agnostic 版本;guest 走 agent-host pathless plan)
+  uow.atomically(tx => {                            # ① use case 显式持有原子边界(UoW)
+    const { member, created } = tx.workspaces.insertMembership(ws, agent)
+    if (created) tx.capabilities.seedDefaults(ws, agent)   # 策略回应用层,仍同一事务
+  })
   return member
+  # 注:此伪码为目标形态(#task:1978 UoW 合同)。现存实现仍直用 db.transaction —
+  # 属迁移中债务,随后续 slice 收敛;两种写法的原子性/排序不变量完全一致。
 ```
 
 **不变量(一字不丢,见 §6):**
@@ -140,9 +142,11 @@ AddWorkspaceAgentMemberUseCase.execute(...):
 type PostCommitEffect = () => void | Promise<void>;
 ```
 
-- **UoW 在代码里可见:** use case **显式**写
-  `db.transaction(() => { ...; effects.push(...) })()`,**不**把事务藏进通用 helper(不要
-  `runWithPostCommit(tx, effects)`)。
+- **原子边界在调用处显式可见:** use case **显式**写
+  `uow.atomically(tx => { ...; effects.push(...) })`(#task:1978 起的规范形态;persistence 层
+  与存量代码为 `db.transaction(() => ...)()`,同等显式)。禁止的是**合并 commit 与 drain 的
+  magic helper**(不要 `runWithPostCommit(tx, effects)`)与任何让原子边界在调用处不可见的封装;
+  UnitOfWork 原语本身不接管 drain,collect-then-drain 分离保持。
 - 事务内**只收集** effect(push 闭包),不执行。
 - 提交后调用一个**很薄**的 `runPostCommitEffects(effects, logger)`:只负责**按收集顺序**依次执行(可
   await)+ 统一 error-log。不是基类、不是 dispatcher。
@@ -153,6 +157,11 @@ type PostCommitEffect = () => void | Promise<void>;
 > 注:better-sqlite3 事务是同步的,现有代码(如 `task-service.ts:421/424`)的 `await broadcast` 已天然
 > 落在 `db.transaction()()` 之后 = 已是 post-commit。本机制把这个隐式属性**显式化、可复用**,
 > 并覆盖 route 层那些"DB 写与 publish 交错、无事务包住"的散点。
+>
+> UnitOfWork 合同(#task:1978):application/service 依赖 `AuthUnitOfWork` 类 port —
+> `atomically(fn: (tx: TxScope) => T): T`,callback 收 transaction-scoped 窄 ports,由 persistence
+> 实现保证同一事务/同一连接;锁获取策略(如 offline admin 的 BEGIN IMMEDIATE fail-fast)是
+> composition 时选定的 persistence-only policy,永不出现在 application 合同上。
 
 ---
 

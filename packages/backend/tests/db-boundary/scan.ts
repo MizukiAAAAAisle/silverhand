@@ -78,6 +78,85 @@ export function enclosingFunctionName(node: ts.Node): string {
 }
 
 // ---------------------------------------------------------------------------
+// Module-reference enumeration (single authority)
+// ---------------------------------------------------------------------------
+
+export type ModuleReferenceForm =
+  | 'static-import'
+  | 'static-export'
+  | 'import-equals'
+  | 'import-type'
+  | 'dynamic-import'
+  | 'require';
+
+export interface ModuleReference {
+  form: ModuleReferenceForm;
+  /** Module specifier text, or null when the argument is not a string
+   *  literal (dynamic expression) — consumers must FAIL LOUD on null for
+   *  boundary decisions, never treat it as "no reference". */
+  spec: string | null;
+  node: ts.Node;
+}
+
+/**
+ * Every module reference a TypeScript file can make, in one enumeration:
+ * static import/export declarations, `import x = require(...)`, inline
+ * `import('x').T` type references, dynamic `import()`, and `require()`.
+ * The better-sqlite3 import scanner and the boundary gates all consume THIS
+ * list, so a new reference form only ever needs to be added here.
+ */
+export function moduleReferencesOf(sf: ts.SourceFile): ModuleReference[] {
+  const refs: ModuleReference[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+      const spec = node.moduleSpecifier;
+      if (spec && ts.isStringLiteral(spec)) {
+        refs.push({
+          form: ts.isImportDeclaration(node) ? 'static-import' : 'static-export',
+          spec: spec.text,
+          node,
+        });
+      }
+    } else if (ts.isImportEqualsDeclaration(node)) {
+      const ref = node.moduleReference;
+      if (ts.isExternalModuleReference(ref)) {
+        const expr = ref.expression;
+        refs.push({
+          form: 'import-equals',
+          spec: expr && ts.isStringLiteralLike(expr) ? expr.text : null,
+          node,
+        });
+      }
+    } else if (ts.isImportTypeNode(node)) {
+      const arg = node.argument;
+      refs.push({
+        form: 'import-type',
+        spec:
+          ts.isLiteralTypeNode(arg) && ts.isStringLiteral(arg.literal)
+            ? arg.literal.text
+            : null,
+        node,
+      });
+    } else if (ts.isCallExpression(node)) {
+      const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
+      const isRequire =
+        ts.isIdentifier(node.expression) && node.expression.text === 'require';
+      if (isDynamicImport || isRequire) {
+        const arg = node.arguments[0];
+        refs.push({
+          form: isDynamicImport ? 'dynamic-import' : 'require',
+          spec: arg && ts.isStringLiteralLike(arg) ? arg.text : null,
+          node,
+        });
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return refs;
+}
+
+// ---------------------------------------------------------------------------
 // better-sqlite3 import scan
 // ---------------------------------------------------------------------------
 
@@ -94,83 +173,66 @@ const BETTER_SQLITE3 = 'better-sqlite3';
 export function scanBetterSqliteImports(entry: SourceEntry): ImportFinding[] {
   const sf = parse(entry);
   const findings: ImportFinding[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isImportDeclaration(node)) {
-      const spec = node.moduleSpecifier;
-      if (ts.isStringLiteral(spec) && spec.text === BETTER_SQLITE3) {
+  for (const ref of moduleReferencesOf(sf)) {
+    if (ref.spec !== BETTER_SQLITE3) continue;
+    switch (ref.form) {
+      case 'static-import': {
+        const node = ref.node as ts.ImportDeclaration;
         const clause = node.importClause;
         if (!clause) {
           findings.push({ file: entry.path, kind: 'value', form: 'bare import (side effect)' });
-        } else {
-          const wholeClauseTypeOnly = clause.isTypeOnly;
-          if (clause.name) {
+          break;
+        }
+        const wholeClauseTypeOnly = clause.isTypeOnly;
+        if (clause.name) {
+          findings.push({
+            file: entry.path,
+            kind: wholeClauseTypeOnly ? 'type' : 'value',
+            form: `default import ${clause.name.text}`,
+          });
+        }
+        const bindings = clause.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) {
+          findings.push({
+            file: entry.path,
+            kind: wholeClauseTypeOnly ? 'type' : 'value',
+            form: `namespace import ${bindings.name.text}`,
+          });
+        }
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const el of bindings.elements) {
             findings.push({
               file: entry.path,
-              kind: wholeClauseTypeOnly ? 'type' : 'value',
-              form: `default import ${clause.name.text}`,
+              kind: wholeClauseTypeOnly || el.isTypeOnly ? 'type' : 'value',
+              form: `named import ${(el.propertyName ?? el.name).text}`,
             });
-          }
-          const bindings = clause.namedBindings;
-          if (bindings && ts.isNamespaceImport(bindings)) {
-            findings.push({
-              file: entry.path,
-              kind: wholeClauseTypeOnly ? 'type' : 'value',
-              form: `namespace import ${bindings.name.text}`,
-            });
-          }
-          if (bindings && ts.isNamedImports(bindings)) {
-            for (const el of bindings.elements) {
-              findings.push({
-                file: entry.path,
-                kind: wholeClauseTypeOnly || el.isTypeOnly ? 'type' : 'value',
-                form: `named import ${(el.propertyName ?? el.name).text}`,
-              });
-            }
           }
         }
+        break;
       }
-      return;
-    }
-    if (ts.isImportEqualsDeclaration(node)) {
-      const ref = node.moduleReference;
-      if (
-        ts.isExternalModuleReference(ref) &&
-        ref.expression &&
-        ts.isStringLiteralLike(ref.expression) &&
-        ref.expression.text === BETTER_SQLITE3
-      ) {
+      case 'static-export': {
+        const node = ref.node as ts.ExportDeclaration;
+        findings.push({
+          file: entry.path,
+          kind: node.isTypeOnly ? 'type' : 'value',
+          form: 're-export from better-sqlite3',
+        });
+        break;
+      }
+      case 'import-equals':
         findings.push({ file: entry.path, kind: 'value', form: 'import = require' });
-      }
-      return;
-    }
-    // dynamic import('better-sqlite3')
-    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-      const arg = node.arguments[0];
-      if (arg && ts.isStringLiteralLike(arg) && arg.text === BETTER_SQLITE3) {
-        findings.push({ file: entry.path, kind: 'value', form: 'dynamic import' });
-      }
-    }
-    // require('better-sqlite3')
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require') {
-      const arg = node.arguments[0];
-      if (arg && ts.isStringLiteralLike(arg) && arg.text === BETTER_SQLITE3) {
-        findings.push({ file: entry.path, kind: 'value', form: 'require call' });
-      }
-    }
-    // TypeScript import type node: `let x: import('better-sqlite3').Database`
-    if (ts.isImportTypeNode(node)) {
-      const arg = node.argument;
-      if (
-        ts.isLiteralTypeNode(arg) &&
-        ts.isStringLiteral(arg.literal) &&
-        arg.literal.text === BETTER_SQLITE3
-      ) {
+        break;
+      case 'import-type':
         findings.push({ file: entry.path, kind: 'type', form: 'inline import type' });
-      }
+        break;
+      case 'dynamic-import':
+        findings.push({ file: entry.path, kind: 'value', form: 'dynamic import' });
+        break;
+      case 'require':
+        findings.push({ file: entry.path, kind: 'value', form: 'require call' });
+        break;
     }
-    ts.forEachChild(node, visit);
-  };
-  visit(sf);
+  }
   return findings;
 }
 
@@ -613,7 +675,7 @@ export function scanApiHazards(entry: SourceEntry): ApiHazardFinding[] {
 // Transaction boundary scan
 // ---------------------------------------------------------------------------
 
-export type TxMode = 'default' | 'immediate' | 'exclusive' | 'deferred' | 'stored';
+export type TxMode = 'default' | 'immediate' | 'exclusive' | 'deferred' | 'stored' | 'uow';
 
 export interface TxSiteFinding {
   file: string;
@@ -744,12 +806,16 @@ export function scanTransactions(entry: SourceEntry): TxScanResult {
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === 'transaction' &&
+      (node.expression.name.text === 'transaction' || node.expression.name.text === 'atomically') &&
       node.arguments.length >= 1
     ) {
+      // `atomically` is the application-facing UnitOfWork transaction point
+      // (#task:1978) — same ledger, same callback hygiene, so convergence to
+      // UoW does not blind the transaction ledger.
+      const isUow = node.expression.name.text === 'atomically';
       const fnName = enclosingFunctionName(node);
       const cb = node.arguments[0];
-      sites.push({ file: entry.path, fn: fnName, mode: txMode(node) });
+      sites.push({ file: entry.path, fn: fnName, mode: isUow ? 'uow' : txMode(node) });
       if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
         analyzeCallback(cb, fnName);
       } else if (cb) {

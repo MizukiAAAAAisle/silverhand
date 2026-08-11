@@ -36,6 +36,7 @@
  * **R4 (this IPC is local supervisor/control, not server↔daemon
  * formal semantics)**: same boundary lock as B1-B6.
  */
+import { SqliteAuthSessionsRepo } from '../../src/repos/auth-sessions-repo.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -174,7 +175,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
   // Mint a real bearer via the same `AuthSessionService` the
   // production `/auth/login` path uses, so HTTP requests carry the
   // canonical user-token bearer the route gates expect.
-  const { userToken } = new AuthSessionService(db).issueSession({
+  const { userToken } = new AuthSessionService(new SqliteAuthSessionsRepo(db)).issueSession({
     userId: harness.userId,
   });
 

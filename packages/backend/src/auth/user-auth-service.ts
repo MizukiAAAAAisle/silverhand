@@ -1,16 +1,16 @@
 import { randomBytes } from 'node:crypto';
-import type { Database as Db } from 'better-sqlite3';
 import type { AuthSignupInput } from '@silverhand/shared';
 import { DISPLAY_NAME_MAX_LENGTH } from '@silverhand/shared';
-import { isParticipantHandleAvailable } from '../application/name-availability.js';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import { UserRepo } from '../repos/user-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import {
   normalizeLoginEmail,
   type PasswordCredentialService,
 } from './password.js';
-import type { AuthSessionService } from './session.js';
+import type {
+  AuthUnitOfWork,
+  AuthUsersPort,
+  HandleNamespacePort,
+} from './ports.js';
 
 export interface UserPasswordResetResult {
   userId: string;
@@ -19,29 +19,26 @@ export interface UserPasswordResetResult {
 }
 
 export class UserAuthService {
-  private readonly db: Db;
-  private readonly users: UserRepo;
+  private readonly uow: AuthUnitOfWork;
+  private readonly users: AuthUsersPort;
   /** Signup needs the OTHER half of the @-handle namespace: a handle held by an
    *  agent is just as taken as one held by a human, and answering that before
    *  the credential check is what keeps the 409 off the email axis. */
-  private readonly agents: AgentRepo;
+  private readonly handles: HandleNamespacePort;
   private readonly passwordCredentials: PasswordCredentialService;
-  private readonly authSessions: AuthSessionService;
   private readonly events?: ScopeEventBus;
 
   constructor(opts: {
-    db: Db;
-    users: UserRepo;
-    agents: AgentRepo;
+    uow: AuthUnitOfWork;
+    users: AuthUsersPort;
+    handles: HandleNamespacePort;
     passwordCredentials: PasswordCredentialService;
-    authSessions: AuthSessionService;
     events?: ScopeEventBus;
   }) {
-    this.db = opts.db;
+    this.uow = opts.uow;
     this.users = opts.users;
-    this.agents = opts.agents;
+    this.handles = opts.handles;
     this.passwordCredentials = opts.passwordCredentials;
-    this.authSessions = opts.authSessions;
     this.events = opts.events;
   }
 
@@ -90,45 +87,30 @@ export class UserAuthService {
     // Decided on the handle alone, for both halves of the mention namespace.
     // Racy by construction — the catch below re-answers in this same order, so
     // the ordering holds on the DB-conflict path too.
-    if (
-      !isParticipantHandleAvailable(
-        { agents: this.agents, users: this.users },
-        input.name,
-      )
-    ) {
+    if (this.handles.isParticipantHandleTaken(input.name)) {
       return { ok: false, code: 'handle_taken' };
     }
     if (this.users.getByEmail(email)) return { ok: false, code: 'auth_failed' };
 
     const displayName =
       input.display_name ?? displayNameFromEmailLocalPart(emailLocalPart(email));
-    const tx = this.db.transaction(
-      (args: { id: string; name: string; displayName: string; email: string }) => {
-        const row = this.users.create({
-          id: args.id,
-          name: args.name,
-          displayName: args.displayName,
-          email: args.email,
-        });
-        this.passwordCredentials.setPreparedUserPasswordCredential(
-          row.id,
-          credential,
-        );
-        return row.id;
-      },
-    );
 
     // The retry loop covers ONLY internal id allocation. The handle is the
     // user's choice (#task:1830), so a name collision is a fact to report, not
     // something to work around by silently storing a suffixed variant of a
     // permanent, non-renamable identifier.
     for (let attempt = 0; attempt < 12; attempt += 1) {
+      const id = randomHex(8);
       try {
-        const userId = tx({
-          id: randomHex(8),
-          name: input.name,
-          displayName,
-          email,
+        const userId = this.uow.atomically(tx => {
+          const row = tx.users.create({
+            id,
+            name: input.name,
+            displayName,
+            email,
+          });
+          tx.credentials.upsertPreparedCredential(row.id, credential);
+          return row.id;
         });
         // The tx committed a brand-new user row — the existing-email case is
         // handled above and returns `auth_failed` before reaching here — so
@@ -148,12 +130,7 @@ export class UserAuthService {
           // — the very email-existence oracle the ordering above exists to
           // prevent. Re-reading the handle is authoritative because a conflict
           // proves the pre-check read is stale.
-          if (
-            !isParticipantHandleAvailable(
-              { agents: this.agents, users: this.users },
-              input.name,
-            )
-          ) {
+          if (this.handles.isParticipantHandleTaken(input.name)) {
             return { ok: false, code: 'handle_taken' };
           }
           // Handle free on re-read: either the email is the conflict, or a
@@ -182,19 +159,16 @@ export class UserAuthService {
     const credential = await this.passwordCredentials.hashPasswordCredential(
       input.password,
     );
-    const tx = this.db.transaction((): UserPasswordResetResult => {
-      this.passwordCredentials.setPreparedUserPasswordCredential(
-        user.id,
-        credential,
-      );
+    const reset = this.uow.atomically((tx): UserPasswordResetResult => {
+      tx.credentials.upsertPreparedCredential(user.id, credential);
       return {
         userId: user.id,
         email: user.email ?? email,
-        sessionsRevoked: this.authSessions.revokeAllForUser(user.id),
+        sessionsRevoked: tx.sessions.revokeAllForUser(user.id, Date.now()),
       };
     });
 
-    return { ok: true, reset: tx.immediate() };
+    return { ok: true, reset };
   }
 }
 

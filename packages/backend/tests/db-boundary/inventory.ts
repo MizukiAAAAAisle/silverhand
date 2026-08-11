@@ -29,9 +29,6 @@ export const BETTER_SQLITE3_IMPORT_INVENTORY: ImportInventoryEntry[] = [
   {file: 'packages/backend/src/db.ts',kinds: ['type','value'],zone: 'adapter'},
   {file: 'packages/backend/src/observability/observed-statement.ts',kinds: ['type'],zone: 'adapter'},
   {file: 'packages/backend/src/auth/host-token.ts',kinds: ['type'],zone: 'debt',reason: 'auth service holds raw Db and prepares directly; extract an auth repo when next touched'},
-  {file: 'packages/backend/src/auth/password.ts',kinds: ['type'],zone: 'debt',reason: 'auth service holds raw Db and prepares directly; extract an auth repo when next touched'},
-  {file: 'packages/backend/src/auth/session.ts',kinds: ['type'],zone: 'debt',reason: 'auth service holds raw Db and prepares directly; extract an auth repo when next touched'},
-  {file: 'packages/backend/src/auth/user-auth-service.ts',kinds: ['type'],zone: 'debt',reason: 'auth service holds raw Db for its tx owner role; queries live in repos it composes'},
   {file: 'packages/backend/src/context.ts',kinds: ['type'],zone: 'debt',reason: 'AppContext.db field typing — the composition root hands the handle to repos/services; shrinks when construction moves behind a persistence facade'},
   {file: 'packages/backend/src/mention-cc.ts',kinds: ['type'],zone: 'debt',reason: 'standalone helper prepares directly; fold into a repo when the mention/cc flow is next touched'},
   {file: 'packages/backend/src/runtime/outbound-event-fanout.ts',kinds: ['type'],zone: 'debt',reason: 'runtime fanout prepares directly and owns one tx; extract queries into repos when next touched'},
@@ -47,6 +44,9 @@ export const BETTER_SQLITE3_IMPORT_INVENTORY: ImportInventoryEntry[] = [
   {file: 'packages/backend/src/services/task/store.ts',kinds: ['type'],zone: 'debt',reason: 'TaskStore is a de-facto repository living under services/; move to repos/ when next touched'},
   {file: 'packages/backend/src/services/user-service.ts',kinds: ['type'],zone: 'debt',reason: 'service prepares directly; extract a users repo surface when next touched'},
   {file: 'packages/backend/src/repos/agent-capability-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/auth-credentials-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/auth-sessions-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/auth-uow.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/agent-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/attachment-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/attention-badge-repo.ts',kinds: ['type'],zone: 'repository'},
@@ -82,8 +82,6 @@ export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
   {file: 'packages/backend/src/observability/observed-statement.ts',zone: 'adapter'},
   {file: 'packages/shared/src/db/migrations.ts',zone: 'schema',count: 2},
   {file: 'packages/backend/src/auth/host-token.ts',zone: 'debt',count: 9},
-  {file: 'packages/backend/src/auth/password.ts',zone: 'debt',count: 3},
-  {file: 'packages/backend/src/auth/session.ts',zone: 'debt',count: 5},
   {file: 'packages/backend/src/mention-cc.ts',zone: 'debt',count: 2},
   {file: 'packages/backend/src/routes.ts',zone: 'debt',count: 3},
   {file: 'packages/backend/src/runtime/outbound-event-fanout.ts',zone: 'debt',count: 1},
@@ -97,6 +95,8 @@ export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
   {file: 'packages/backend/src/read-model/favorites.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/message-reactions.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/agent-capability-repo.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/auth-credentials-repo.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/auth-sessions-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/agent-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/attachment-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/attention-badge-repo.ts',zone: 'repository'},
@@ -129,7 +129,7 @@ export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
  * diff of this file; rejecting baseline growth is the reviewer's job.
  */
 export const SQL_HAZARD_INVENTORY: HazardFinding[] = [
-  {file: 'packages/backend/src/auth/password.ts',hazard: 'collate_nocase',count: 1},
+  {file: 'packages/backend/src/repos/auth-credentials-repo.ts',hazard: 'collate_nocase',count: 1},
   {file: 'packages/backend/src/db.ts',hazard: 'pragma_statement',count: 10},
   {file: 'packages/backend/src/db.ts',hazard: 'sqlite_catalog',count: 2},
   {file: 'packages/backend/src/mention-cc.ts',hazard: 'insert_or_action',count: 1},
@@ -208,7 +208,7 @@ export interface ApiHazardEntry {
 }
 
 export const API_HAZARD_INVENTORY: ApiHazardEntry[] = [
-  {file: 'packages/backend/src/auth/user-auth-service.ts',fn: 'UserAuthService.resetPassword',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/auth-uow.ts',fn: 'atomically',api: 'transaction_immediate'},
   {file: 'packages/backend/src/db.ts',fn: 'applySingleMigration',api: 'transaction_exclusive'},
   {file: 'packages/backend/src/db.ts',fn: 'runMigrations',api: 'transaction_exclusive'},
   {file: 'packages/backend/src/repos/conversation-event-repo.ts',fn: 'ConversationEventRepo.insert',api: 'lastInsertRowid'},
@@ -231,9 +231,11 @@ export interface TxInventoryEntry {
 export const TX_INVENTORY: TxInventoryEntry[] = [
   {file: 'packages/backend/src/auth/host-token.ts',fn: 'HostTokenService.completePreparedHostTokenRotation',mode: 'default',count: 1,owner: 'auth'},
   {file: 'packages/backend/src/auth/host-token.ts',fn: 'HostTokenService.rotateHostTokenImmediate',mode: 'default',count: 1,owner: 'auth'},
-  {file: 'packages/backend/src/auth/user-auth-service.ts',fn: 'UserAuthService.resetPassword',mode: 'stored',count: 1,owner: 'auth'},
-  {file: 'packages/backend/src/auth/user-auth-service.ts',fn: 'UserAuthService.signup',mode: 'stored',count: 1,owner: 'auth'},
+  {file: 'packages/backend/src/auth/user-auth-service.ts',fn: 'UserAuthService.resetPassword',mode: 'uow',count: 1,owner: 'auth'},
+  {file: 'packages/backend/src/auth/user-auth-service.ts',fn: 'UserAuthService.signup',mode: 'uow',count: 1,owner: 'auth'},
   {file: 'packages/backend/src/db.ts',fn: 'applySingleMigration',mode: 'exclusive',count: 1,owner: 'infra',reason: 'migration application requires exclusive lock escalation by design'},
+  {file: 'packages/backend/src/repos/auth-uow.ts',fn: 'atomically',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the persistence half of the application atomically() contract (deferred policy)'},
+  {file: 'packages/backend/src/repos/auth-uow.ts',fn: 'atomically',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: immediate policy for the offline admin composition (root-only, fail-loud when nested)'},
   {file: 'packages/backend/src/db.ts',fn: 'runMigrations',mode: 'exclusive',count: 1,owner: 'infra',reason: 'no-op migration phase takes an exclusive lock probe so concurrent boots fail fast'},
   {file: 'packages/backend/src/repos/agent-capability-repo.ts',fn: 'AgentCapabilityRepo.replaceSet',mode: 'default',count: 1,owner: 'repo-internal',reason: 'delete+reinsert of one capability set is a self-contained invariant; no caller composes it with other writes, savepoint under an outer tx is acceptable'},
   {file: 'packages/backend/src/repos/conversation-inbox-repo.ts',fn: 'ConversationInboxRepo.claimPending',mode: 'exclusive',count: 1,owner: 'repo-internal',reason: 'inbox delivery state machine owns claim atomicity; exclusive mode arbitrates cross-connection delivery contention — no outer service tx exists on this path'},
@@ -314,6 +316,7 @@ export const TEST_WHITEBOX_INVENTORY: WhiteboxTestEntry[] = [
   {file: 'packages/backend/tests/utils/db.ts',count: 3,reason: 'shared fixture infrastructure; the semantic builders wrap THIS file so business tests do not touch SQL'},
   {file: 'packages/backend/tests/utils/test-context.ts',count: 8,reason: 'the semantic fixture layer itself: repository-contract builders plus purpose-named impossible-state seams; native SQL concentrates here so business tests carry none'},
   {file: 'packages/server/tests/config.test.ts',count: 4,reason: 'simulates EXCLUSIVE lock contention on the raw file DB — engine behavior test'},
+  {file: 'packages/backend/tests/repos/auth-uow.test.ts',count: 3,reason: 'UnitOfWork adapter test: simulates a second-connection BEGIN IMMEDIATE writer and asserts rollback visibility — engine white-box by nature'},
   {file: 'packages/backend/tests/drivers/platform-prompt.test.ts',count: 1,reason: 'NOT SQL: RegExp.exec on an identifier receiver — ruled false positive of the exec sink boundary (only regex literals are exempt)'},
   {file: 'packages/backend/tests/observability/cli-route-map.test.ts',count: 1,reason: 'NOT SQL: RegExp.exec on an identifier receiver — ruled false positive of the exec sink boundary (only regex literals are exempt)'},
 ];

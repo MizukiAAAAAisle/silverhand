@@ -1,13 +1,16 @@
 import type { BackendLogger } from './context.js';
 import { openDatabase } from './db.js';
-import { AuthSessionService } from './auth/session.js';
 import { PasswordCredentialService } from './auth/password.js';
 import {
   UserAuthService,
   type UserPasswordResetResult,
 } from './auth/user-auth-service.js';
-import { AgentRepo } from './repos/agent-repo.js';
 import { UserRepo } from './repos/user-repo.js';
+import { SqliteAuthCredentialsRepo } from './repos/auth-credentials-repo.js';
+import {
+  createHandleNamespacePort,
+  createSqliteAuthUnitOfWork,
+} from './repos/auth-uow.js';
 
 export type AdminResetPasswordErrorCode = 'user_not_found' | 'db_locked';
 
@@ -44,13 +47,16 @@ export async function resetAdminPassword(
 
   try {
     const userAuth = new UserAuthService({
-      db,
+      // Offline admin competes with a running server for the same db file:
+      // the immediate policy takes the write lock up front, and this
+      // process's busyTimeoutMs=0 connection turns contention into an
+      // instant db_locked instead of a mid-transaction stall.
+      uow: createSqliteAuthUnitOfWork(db, { txMode: 'immediate' }),
       users: new UserRepo(db),
       // Unused by `resetPassword`, required by the service surface: signup's
       // handle check spans agents ∪ users (#task:1830).
-      agents: new AgentRepo(db),
-      passwordCredentials: new PasswordCredentialService(db),
-      authSessions: new AuthSessionService(db),
+      handles: createHandleNamespacePort(db),
+      passwordCredentials: new PasswordCredentialService(new SqliteAuthCredentialsRepo(db)),
     });
     const reset = await userAuth.resetPassword({
       email: opts.email,

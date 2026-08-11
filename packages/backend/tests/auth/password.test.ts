@@ -4,12 +4,15 @@ import {
   Argon2idPasswordHasher,
   PasswordCredentialService,
   benchmarkPasswordHashParams,
-  parsePasswordHashParams,
   type Argon2idPasswordHashParams,
   type PasswordHashResult,
   type PasswordHasher,
 } from '../../src/auth/password.js';
 import { openTestDb } from '../utils/db.js';
+import {
+  parsePasswordHashParams,
+  SqliteAuthCredentialsRepo,
+} from '../../src/repos/auth-credentials-repo.js';
 
 const TEST_PARAMS: Argon2idPasswordHashParams = {
   algorithm: 'argon2id',
@@ -122,7 +125,7 @@ describe('Argon2id password auth helpers', () => {
     db = opened.db;
     db.prepare(`UPDATE users SET email = 'Local@Example.com' WHERE id = 'local'`).run();
     const fake = new FakePasswordHasher();
-    const service = new PasswordCredentialService(db, fake);
+    const service = new PasswordCredentialService(new SqliteAuthCredentialsRepo(db), fake);
 
     const row = await service.setUserPasswordCredential('local', 'correct-horse');
     expect(row.password_hash).toBe('hash:correct-horse');
@@ -157,7 +160,7 @@ describe('Argon2id password auth helpers', () => {
     db = opened.db;
     db.prepare(`UPDATE users SET email = 'profile@example.com' WHERE id = 'alice'`).run();
     const fake = new FakePasswordHasher();
-    const service = new PasswordCredentialService(db, fake);
+    const service = new PasswordCredentialService(new SqliteAuthCredentialsRepo(db), fake);
 
     await expect(
       service.verifyLoginPassword({

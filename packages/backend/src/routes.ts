@@ -53,6 +53,10 @@ import {
 import { createAttentionApp } from './routes/attention.js';
 import { MembershipService } from './services/membership-service.js';
 import { UserRepo } from './repos/user-repo.js';
+import {
+  createHandleNamespacePort,
+  createSqliteAuthUnitOfWork,
+} from './repos/auth-uow.js';
 import { hostRuntimeDisabledResponse } from './routes/responses.js';
 import {
   type MembershipRouteDeps,
@@ -389,11 +393,10 @@ export function createApiRouter(
   const hostTokens = new HostTokenService(ctx.db);
   const membership = new MembershipService({ agents, users, conversations });
   const userAuth = new UserAuthService({
-    db: ctx.db,
+    uow: createSqliteAuthUnitOfWork(ctx.db, { txMode: 'deferred' }),
     users,
-    agents,
+    handles: createHandleNamespacePort(ctx.db),
     passwordCredentials: ctx.passwordCredentials,
-    authSessions: ctx.authSessions,
     events: ctx.events,
   });
   // Shared by the workspace and conversation membership sub-apps.

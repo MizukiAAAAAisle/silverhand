@@ -61,6 +61,7 @@
  * control") does NOT apply. The whole point of the test is to
  * verify the formal-semantics wire stays correct end-to-end.
  */
+import { SqliteAuthSessionsRepo } from '../../src/repos/auth-sessions-repo.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -216,7 +217,7 @@ describe('D4.d D6 — agent_materialize real-wire e2e', () => {
     // Need a session bearer for the public POST route. The
     // harness already inserted a user row at boot.
     const { userToken: bearer } = new AuthSessionService(
-      harness.backend.context.db,
+      new SqliteAuthSessionsRepo(harness.backend.context.db),
     ).issueSession({ userId: harness.userId });
 
     const baseUrl = harness.serverUrl;

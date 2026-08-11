@@ -74,6 +74,8 @@ import { UserRepo } from '../../src/repos/user-repo.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { createLogLevelControl } from '../../src/logger.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
+import { SqliteAuthCredentialsRepo } from '../../src/repos/auth-credentials-repo.js';
+import { SqliteAuthSessionsRepo } from '../../src/repos/auth-sessions-repo.js';
 import { RuntimeHostPlacementResolver } from '../../src/runtime/host-placement.js';
 import {
   HostWsCommandResponseError,
@@ -972,7 +974,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     events,
   });
   const passwordCredentials = new PasswordCredentialService(
-    db,
+    new SqliteAuthCredentialsRepo(db),
     new Argon2idPasswordHasher({
       paramsProvider: async () => TEST_PASSWORD_HASH_PARAMS,
       dummyPassword: 'test-dummy-password',
@@ -1022,7 +1024,7 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     silverhandCliLauncher: { command: 'noop', args: [] },
     agentTokens: new AgentTokenStore(),
     passwordCredentials,
-    authSessions: new AuthSessionService(db, {
+    authSessions: new AuthSessionService(new SqliteAuthSessionsRepo(db), {
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
     placement,

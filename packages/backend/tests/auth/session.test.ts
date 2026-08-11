@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AuthSessionService, hashSessionToken } from '../../src/auth/session.js';
 import { openTestDb } from '../utils/db.js';
+import { SqliteAuthSessionsRepo } from '../../src/repos/auth-sessions-repo.js';
 
 describe('AuthSessionService', () => {
   let db: Db | null = null;
@@ -14,7 +15,7 @@ describe('AuthSessionService', () => {
   it('issues opaque tokens, stores only hashes, touches on validate, and revokes', () => {
     const opened = openTestDb();
     db = opened.db;
-    const sessions = new AuthSessionService(db);
+    const sessions = new AuthSessionService(new SqliteAuthSessionsRepo(db));
 
     const issued = sessions.issueSession({
       userId: 'local',
@@ -64,7 +65,7 @@ describe('AuthSessionService', () => {
   it('denies sessions whose sliding TTL has expired', () => {
     const opened = openTestDb();
     db = opened.db;
-    const sessions = new AuthSessionService(db, { sessionTtlMs: 1 });
+    const sessions = new AuthSessionService(new SqliteAuthSessionsRepo(db), { sessionTtlMs: 1 });
     const issued = sessions.issueSession({ userId: 'local' });
     db.prepare(`UPDATE auth_sessions SET last_used_at = ? WHERE id = ?`).run(
       Date.now() - 10,
@@ -80,7 +81,7 @@ describe('AuthSessionService', () => {
   it('revokes every active session for one user only', () => {
     const opened = openTestDb();
     db = opened.db;
-    const sessions = new AuthSessionService(db);
+    const sessions = new AuthSessionService(new SqliteAuthSessionsRepo(db));
     const localOne = sessions.issueSession({ userId: 'local' });
     const localTwo = sessions.issueSession({ userId: 'local' });
     const alice = sessions.issueSession({ userId: 'alice' });

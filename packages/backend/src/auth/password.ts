@@ -2,8 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { cpus, totalmem } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { hash as argon2Hash, verify as argon2Verify } from '@node-rs/argon2';
-import type { Database as Db } from 'better-sqlite3';
 import type { UserPasswordCredentialRow } from '@silverhand/shared';
+import type {
+  Argon2idCostCandidate,
+  Argon2idPasswordHashParams,
+  PasswordHashResult,
+} from './credential-types.js';
+import type { AuthCredentialsPort } from './ports.js';
 
 type Argon2HashOptions = NonNullable<Parameters<typeof argon2Hash>[1]>;
 
@@ -12,35 +17,11 @@ const ARGON2_VERSION_0X13 = 1;
 const ARGON2_FLOOR_MEMORY_KIB = 19 * 1024;
 const ARGON2_FLOOR_TIME_COST = 2;
 
-export interface Argon2idCostCandidate {
-  memoryCostKiB: number;
-  timeCost: number;
-  parallelism: number;
-  outputLen: number;
-}
-
-export interface Argon2idPasswordHashParams extends Argon2idCostCandidate {
-  algorithm: 'argon2id';
-  library: '@node-rs/argon2';
-  version: '0x13';
-  benchmark: {
-    targetMs: number;
-    measuredMs: number;
-    candidateCount: number;
-    selectedAt: number;
-    cpuCount: number;
-    totalMemoryMiB: number;
-    flooredFrom?: {
-      memoryCostKiB: number;
-      timeCost: number;
-    };
-  };
-}
-
-export interface PasswordHashResult {
-  passwordHash: string;
-  passwordHashParams: Argon2idPasswordHashParams;
-}
+export type {
+  Argon2idCostCandidate,
+  Argon2idPasswordHashParams,
+  PasswordHashResult,
+} from './credential-types.js';
 
 export interface PasswordHasher {
   hashPassword(password: string): Promise<PasswordHashResult>;
@@ -108,19 +89,17 @@ export class Argon2idPasswordHasher implements PasswordHasher {
   }
 }
 
+/** Login/credential orchestration (Argon2 cost floor, dummy-verify
+ *  uniformity); persistence goes through the driver-free
+ *  `AuthCredentialsPort`. */
 export class PasswordCredentialService {
   constructor(
-    private readonly db: Db,
+    private readonly credentials: AuthCredentialsPort,
     private readonly hasher: PasswordHasher = new Argon2idPasswordHasher(),
   ) {}
 
   getCredential(userId: string): UserPasswordCredentialRow | null {
-    const row = this.db
-      .prepare<[string], UserPasswordCredentialRow>(
-        `SELECT * FROM user_password_credentials WHERE user_id = ?`,
-      )
-      .get(userId);
-    return row ?? null;
+    return this.credentials.getCredential(userId);
   }
 
   async setUserPasswordCredential(
@@ -139,27 +118,9 @@ export class PasswordCredentialService {
 
   setPreparedUserPasswordCredential(
     userId: string,
-    { passwordHash, passwordHashParams }: PasswordHashResult,
+    prepared: PasswordHashResult,
   ): UserPasswordCredentialRow {
-    const now = Date.now();
-    this.db
-      .prepare(
-        `INSERT INTO user_password_credentials
-           (user_id, password_hash, password_hash_params, password_updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-           password_hash = excluded.password_hash,
-           password_hash_params = excluded.password_hash_params,
-           password_updated_at = excluded.password_updated_at`,
-      )
-      .run(userId, passwordHash, serializePasswordHashParams(passwordHashParams), now);
-    const row = this.getCredential(userId);
-    if (!row) {
-      throw new Error(
-        `PasswordCredentialService.setUserPasswordCredential: row missing for user_id=${userId}`,
-      );
-    }
-    return row;
+    return this.credentials.upsertPreparedCredential(userId, prepared);
   }
 
   async verifyLoginPassword(input: {
@@ -167,16 +128,9 @@ export class PasswordCredentialService {
     password: string;
   }): Promise<{ ok: true; userId: string } | { ok: false; code: 'auth_failed' }> {
     const email = normalizeLoginEmail(input.email);
-    const row = this.db
-      .prepare<[string], { user_id: string; password_hash: string | null }>(
-        `SELECT u.id AS user_id, c.password_hash AS password_hash
-           FROM users u
-           LEFT JOIN user_password_credentials c ON c.user_id = u.id
-          WHERE u.email = ? COLLATE NOCASE`,
-      )
-      .get(email);
+    const row = this.credentials.lookupLoginCredential(email);
 
-    if (!row?.password_hash) {
+    if (!row?.passwordHash) {
       // Unknown email and profile-only users share the same credential
       // failure path: execute an Argon2id verify against the dummy PHC
       // before returning the generic auth failure.
@@ -184,9 +138,9 @@ export class PasswordCredentialService {
       return { ok: false, code: 'auth_failed' };
     }
 
-    const ok = await this.hasher.verifyPassword(input.password, row.password_hash);
+    const ok = await this.hasher.verifyPassword(input.password, row.passwordHash);
     if (!ok) return { ok: false, code: 'auth_failed' };
-    return { ok: true, userId: row.user_id };
+    return { ok: true, userId: row.userId };
   }
 }
 
@@ -242,29 +196,6 @@ export async function benchmarkPasswordHashParams(
       ...(flooredFrom ? { flooredFrom } : {}),
     },
   };
-}
-
-export function serializePasswordHashParams(
-  params: Argon2idPasswordHashParams,
-): string {
-  return JSON.stringify(params);
-}
-
-export function parsePasswordHashParams(raw: string): Argon2idPasswordHashParams {
-  const parsed = JSON.parse(raw) as Partial<Argon2idPasswordHashParams>;
-  if (
-    parsed.algorithm !== 'argon2id'
-    || parsed.library !== '@node-rs/argon2'
-    || parsed.version !== '0x13'
-    || !positiveInteger(parsed.memoryCostKiB)
-    || !positiveInteger(parsed.timeCost)
-    || !positiveInteger(parsed.parallelism)
-    || !positiveInteger(parsed.outputLen)
-    || !parsed.benchmark
-  ) {
-    throw new Error('invalid password_hash_params');
-  }
-  return parsed as Argon2idPasswordHashParams;
 }
 
 export function normalizeLoginEmail(email: string): string {
@@ -330,10 +261,6 @@ function readPositiveInt(value: string | undefined): number | null {
   if (!/^\d+$/.test(value)) return null;
   const parsed = Number.parseInt(value, 10);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
-}
-
-function positiveInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 function cpuCount(): number {

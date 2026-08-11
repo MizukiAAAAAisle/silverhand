@@ -5,6 +5,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resetAdminPassword } from '../src/admin.js';
 import { openDatabase } from '../src/db.js';
+import { SqliteAuthCredentialsRepo } from '../src/repos/auth-credentials-repo.js';
 
 const tmpDirs: string[] = [];
 let previousTargetMs: string | undefined;
@@ -51,5 +52,8 @@ describe('resetAdminPassword', () => {
     } finally {
       db.exec('ROLLBACK');
     }
+    // the failure left ZERO work behind: no credential row was written and no
+    // session was touched — the lock conflict surfaced before the callback ran
+    expect(new SqliteAuthCredentialsRepo(db).getCredential('user')).toBeNull();
   });
 });

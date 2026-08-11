@@ -16,6 +16,7 @@
  * connection serves — i.e. an old connection's late traffic cannot pollute
  * the current one, and replacing the old connection did not break the new.
  */
+import { SqliteAuthSessionsRepo } from '../../../src/repos/auth-sessions-repo.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -59,7 +60,7 @@ async function bootStandaloneRig(): Promise<StandaloneRigInternals> {
   if (!controller) throw new Error('standalone backend has no host ws controller');
   await waitForAttachment(controller, harness.hostId);
 
-  const { userToken: bearer } = new AuthSessionService(harness.backend.context.db).issueSession({
+  const { userToken: bearer } = new AuthSessionService(new SqliteAuthSessionsRepo(harness.backend.context.db)).issueSession({
     userId: harness.userId,
   });
 

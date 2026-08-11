@@ -9,7 +9,14 @@ import {
 } from '../../src/auth/password.js';
 import { AuthSessionService } from '../../src/auth/session.js';
 import { UserAuthService } from '../../src/auth/user-auth-service.js';
+import { isParticipantHandleAvailable } from '../../src/application/name-availability.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { SqliteAuthCredentialsRepo } from '../../src/repos/auth-credentials-repo.js';
+import { SqliteAuthSessionsRepo } from '../../src/repos/auth-sessions-repo.js';
+import {
+  createHandleNamespacePort,
+  createSqliteAuthUnitOfWork,
+} from '../../src/repos/auth-uow.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { openTestDb } from '../utils/db.js';
 
@@ -94,19 +101,18 @@ describe('UserAuthService.resetPassword', () => {
     db = opened.db;
     db.prepare(`UPDATE users SET email = 'Local@Example.com' WHERE id = 'local'`).run();
     db.prepare(`UPDATE users SET email = 'alice@example.com' WHERE id = 'alice'`).run();
-    const sessions = new AuthSessionService(db);
+    const sessions = new AuthSessionService(new SqliteAuthSessionsRepo(db));
     const hasher = new FakePasswordHasher();
-    const passwordCredentials = new PasswordCredentialService(db, hasher);
+    const passwordCredentials = new PasswordCredentialService(new SqliteAuthCredentialsRepo(db), hasher);
     await passwordCredentials.setUserPasswordCredential('local', 'old-password');
     const localSession = sessions.issueSession({ userId: 'local' });
     const aliceSession = sessions.issueSession({ userId: 'alice' });
 
     const service = new UserAuthService({
-      db,
+      uow: createSqliteAuthUnitOfWork(db, { txMode: 'deferred' }),
       users: new UserRepo(db),
-      agents: new AgentRepo(db),
+      handles: createHandleNamespacePort(db),
       passwordCredentials,
-      authSessions: sessions,
     });
     await expect(
       service.resetPassword({
@@ -142,14 +148,12 @@ describe('UserAuthService.resetPassword', () => {
   it('fails missing email without hashing or creating a user', async () => {
     const opened = openTestDb();
     db = opened.db;
-    const sessions = new AuthSessionService(db);
     const hasher = new FakePasswordHasher();
     const service = new UserAuthService({
-      db,
+      uow: createSqliteAuthUnitOfWork(db, { txMode: 'deferred' }),
       users: new UserRepo(db),
-      agents: new AgentRepo(db),
-      passwordCredentials: new PasswordCredentialService(db, hasher),
-      authSessions: sessions,
+      handles: createHandleNamespacePort(db),
+      passwordCredentials: new PasswordCredentialService(new SqliteAuthCredentialsRepo(db), hasher),
     });
 
     await expect(
@@ -179,11 +183,10 @@ describe('UserAuthService.signup — answer ordering and cost floor', () => {
     return {
       hasher,
       service: new UserAuthService({
-        db: database,
+        uow: createSqliteAuthUnitOfWork(database, { txMode: 'deferred' }),
         users: new UserRepo(database),
-        agents: new AgentRepo(database),
-        passwordCredentials: new PasswordCredentialService(database, hasher),
-        authSessions: new AuthSessionService(database),
+        handles: createHandleNamespacePort(database),
+        passwordCredentials: new PasswordCredentialService(new SqliteAuthCredentialsRepo(database), hasher),
       }),
     };
   }
@@ -257,15 +260,20 @@ describe('UserAuthService.signup — answer ordering and cost floor', () => {
     db = opened.db;
     db.prepare(`UPDATE users SET email = 'alice@example.com' WHERE id = 'alice'`).run();
     const users = new StaleReadsUserRepo(db);
+    // The handle probe must consume the SAME stale reader: the lie has to
+    // cover the pre-check so the conflict re-answer path is what gets tested.
+    const agents = new AgentRepo(db);
     const service = new UserAuthService({
-      db,
+      uow: createSqliteAuthUnitOfWork(db, { txMode: 'deferred' }),
       users,
-      agents: new AgentRepo(db),
+      handles: {
+        isParticipantHandleTaken: name =>
+          !isParticipantHandleAvailable({ agents, users }, name),
+      },
       passwordCredentials: new PasswordCredentialService(
-        db,
+        new SqliteAuthCredentialsRepo(db),
         new FakePasswordHasher(),
       ),
-      authSessions: new AuthSessionService(db),
     });
     const usersBefore = new UserRepo(db).list().length;
 

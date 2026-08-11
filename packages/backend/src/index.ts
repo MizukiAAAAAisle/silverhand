@@ -29,6 +29,8 @@ import {
 } from './auth/embedded-bootstrap.js';
 import { PasswordCredentialService } from './auth/password.js';
 import { AuthSessionService } from './auth/session.js';
+import { SqliteAuthCredentialsRepo } from './repos/auth-credentials-repo.js';
+import { SqliteAuthSessionsRepo } from './repos/auth-sessions-repo.js';
 import { HostRepo } from './repos/host-repo.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
 import { PresenceRegistry } from './presence/presence-registry.js';
@@ -402,8 +404,8 @@ export async function startBackend(
     presence,
     silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
-    passwordCredentials: new PasswordCredentialService(db),
-    authSessions: new AuthSessionService(db, {
+    passwordCredentials: new PasswordCredentialService(new SqliteAuthCredentialsRepo(db)),
+    authSessions: new AuthSessionService(new SqliteAuthSessionsRepo(db), {
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
     placement:

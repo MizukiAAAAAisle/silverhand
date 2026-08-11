@@ -49,6 +49,12 @@ ledger lines; making it green again is always a conscious, reviewable edit.
 | `sql-hazards.test.ts` | Per-file × per-hazard counts of SQLite-specific constructs (JSON1, PRAGMA, `COLLATE NOCASE`, `INSERT OR ...`, `IS ?`, `BEGIN IMMEDIATE/EXCLUSIVE`, triggers, `RAISE`, date functions, `rowid`, catalog queries, `GLOB`, ...) as **baseline + reviewed expansions**: growth's sanctioned path is a `SQL_HAZARD_EXPANSIONS` entry whose reason and semantic-test path the gate validates (the test file must exist). The gate cannot mechanically distinguish a baseline bump from an expansion — it guarantees a visible `inventory.ts` diff; keeping the baseline shrink-only is the review contract. Also: SQL sink call counts per file, `lastInsertRowid` / `.immediate()` / `.exclusive()` API sites, and the dynamic-SQL ledger. |
 | `transaction-boundary.test.ts` | Transaction site ledger (owner-classified), repo-internal reasons present, callback hygiene (sync-only, no direct effect calls, import-alias-insensitive), exemptions keyed per site and auto-staled. |
 | `test-native-sql.test.ts` | Per-test-file native statement counts — white-box files are **count-pinned too** (named reasons, no unbounded escape hatch); new files are zero-native. |
+| `auth-port-contract.test.ts` | (#task:1978) The auth application port module stays driver-free including one re-export hop; concrete SQLite auth persistence is imported only by named composition roots — application/service code depends on ports. |
+
+UnitOfWork transaction points (`atomically(tx => ...)`, the application-facing
+atomic boundary from #task:1978) enter the same transaction ledger as
+`db.transaction` sites (mode `uow`) with the same callback hygiene rules, so
+converging services onto the UoW contract never blinds the ledger.
 
 Sink recognition is alias-insensitive where an import edge exists:
 `prepareObserved` is recognized by its **imported** name (aliased and
