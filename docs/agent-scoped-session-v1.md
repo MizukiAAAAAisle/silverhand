@@ -77,8 +77,9 @@ placement 与 roster policy，不占 placement 唯一键。
 - **Conversation**（根）+ **两个正交的一等值**（§4.1 的核心修正）：
   - `Placement` = `Workspace(workspace_id)` | `DirectPair(endpoints)` | `AgentInbox(agent_id)` —— **住在哪**；
   - `RosterPolicy` = `open` | `fixed` —— **成员可变吗**。
-- **Runtime**：拆成四件事，不是一个「DB runtime 聚合」（§4.2）。
-- **Board**：task 编号 namespace 与治理体（§4.3）。**只管 task**；file 已 conversation-owned，
+- **Runtime**：拆成四件事，不是一个「DB runtime 聚合」（§4.3）。
+- **Task**（根）：**全局身份 `tasks.id`**，归属一个 conversation（决定 ACL）+ 一个 Board（决定局部编号）（§4.5）。
+- **Board**：task 编号 namespace 与聚合视图（§4.4）。**只管 task，且不是 ACL 单位**；file 已 conversation-owned，
   saved/favorite 是 user-owned read/write state，三者各自建模。
 - **Delivery**：`DeliveryTarget` 值对象 + §0 的 reference/recipient 边界。
 
@@ -165,9 +166,14 @@ ACL 读面收敛到**一个** placement-aware `participantsOf(conversation)` 解
   pair_key ON conversations → RAISE(ABORT)`（CHECK 管不了 UPDATE 后仍自洽的整体改写）。
 - **typed principal 校验**：endpoint kind ∈ {`human`,`agent`} 且 id 在对应表存在 —— 条件 FK 不可表达 ⇒
   `BEFORE INSERT` trigger 子查询校验，fail-closed。
-- **principal tombstone（新增前置件）**：`agents` / `users` 从硬删改为 tombstone（保留行 + `deleted_at`），
-  否则 endpoints 会指向不存在的 id，且 §0 的「保留历史」无处落。survivor 对该 DM 得到**只读 ACL**
-  （可读历史、不可发新消息），由 placement + tombstone 派生，不写第二份状态。
+- **endpoint identity 在 actor 硬删后存活（新增前置件 P0-e，**范围收在 endpoint 一侧**）**：endpoint 列是
+  **历史 principal 坐标，不带 FK**（存在性由 lookup 派生；创建时由 trigger 子查询校验，删除是合法转移），
+  并在删除事务内给该 endpoint 打 `endpoint_*_deleted_at`，使「对端已删」与「id 写错」可区分；actor 仍走**现有
+  硬删流程**。survivor 对该 DM 得到**只读 ACL**（可读历史、不可发新消息），由 placement + endpoint tombstone
+  派生，不写第二份状态。
+  **明确不做**：把 `agents` / `users` 整体改软删。那会牵动全部 FK cascade、handle 唯一性、登录/list、
+  `created_by`、agent teardown —— 本 feature 只需要 endpoint 侧的身份存活，全系统软删是另一个聚合的工程，
+  不能当一个小前置件塞进 P0-e（@Cindy 第三轮 finding 5）。
 
 ### 4.3 Runtime：四件不同的东西，不是一行
 
@@ -202,26 +208,57 @@ CREATE UNIQUE INDEX … (agent_id, conversation_id) WHERE conversation_id IS NOT
 
 `agents: + session_scope` + **`BEFORE UPDATE … RAISE(ABORT)`** trigger（「schema 里没有 UPDATE 路径」不是约束）。
 
-### 4.4 Board：只管 task，且它已经存在
+### 4.4 Board：只管 task 编号与聚合视图，**不管 ACL**
 
-§2 测到：DM 的 task board 今天就是 `agent_home`，持有 39 条按该 workspace 编号的 task。所以问题不是
-「要不要发明一个 board」，而是**已有的那个 board 不该继续伪装成 workspace**。
+§2 测到：DM 的 task board 今天就是 `agent_home`，持有 39 条按该 workspace 编号的 task。
 
-目标：**`Board = WorkspaceBoard | AgentBoard`**，`AgentBoard` 就是今天的 `agent_home` **降级为 board-only**
-（不再是 placement 的宿主、不再有 cwd、不再有 L2、不再参与 `JOIN workspaces` 的归属语义）。
+目标：**`Board = WorkspaceBoard | AgentBoard`**，且 **AgentBoard 是 new-row-only**：
 
-- `#task:N` 的**解析轴不变**（ambient board），39 条已编号 task **零重编号**；
-- DM / inbox 会话**不需要自己的编号空间**：它们的 board 就是对端 agent 的 AgentBoard —— 与今天行为逐格一致；
-- file 不进 Board：`attachments.channel_id → conversations`，本来就 conversation-owned、**没有 workspace_id**；
-- saved / favorite 是 user-owned state：`saved_messages` 的 `workspace_id NOT NULL` 是**冗余派生列**
+- **legacy 保持 legacy**：旧 conversation-scoped Agent 的 `agent_home` workspace、它里面的 14 条固定 roster 会话、
+  以及 39 条 task **原地不动**，继续是 WorkspaceBoard，直到该 Agent 自然被删除。**零搬迁、零重编号。**
+- **新的 agent-scoped Agent 只创建 AgentBoard，不创建 home workspace**（#2005 只授权这一条）。
+- ⇒ 这与 §4.1 的 DirectPair 结论**同构**：新概念只承接新行，旧行靠自然消亡退场（@Cindy 第三轮 finding 1）。
+
+**Board **不是** ACL 单位**：一个 AgentBoard 会同时聚合该 agent 与**多个不同 human** 的私线 task，
+若 ACL 取 board，另一位 human 就会看到别人的私线 task。⇒ **ACL 一律逐 task 从 `tasks.conversation_id` 派生**
+（走 §4.2 的 `participantsOf`）；Board 只提供**编号命名空间 + 聚合视图**。owner 可见全板，viewer 只见其有权
+的那些 task 行。
+
+其余三个「归属」各自建模，不进 Board：
+
+- file：`attachments.channel_id → conversations`，本来就 conversation-owned、**没有 workspace_id**；
+- saved / favorite 是 user-owned state：`saved_messages.workspace_id NOT NULL` 是**冗余派生列**
   （conversation 已决定它），改为可派生 / 可空 + placement-aware 分组键；favorites 的
   `list_key='channels:'||workspace_id`（`favorites.ts:153`）同样按 placement 派生。
 
-**旧稿的 `Board = Workspace | Conversation` 撤回。** 它会给 DM 造一个新的编号空间并要求 39 条 task 重编号，
-换来的只是「同号不同义」——而**这个歧义今天就存在**：`uniq_tasks_workspace_number` + `task.ts:244` 的
-「per-workspace counter」意味着 `#task:1` 在每个 workspace 各有一个，跨 workspace 复制早就会换义。
-⇒ 「缺一个可复制的限定 task 地址」是**先于本 feature 存在的独立缺口**（`#silverhand/task:42` 这类），
-应单独拆票，不该由本设计的 board 形状来偿付，也不该反过来阻止 AgentBoard。**Board 归属仍待 @shiki 确认**（§9）。
+**旧稿的 `Board = Workspace | Conversation` 撤回**（要求 39 条 task 重编号，换来的只是新一层歧义）。
+**Board 归属仍待 @shiki 确认**（§9）。
+
+### 4.5 Task identity 是全局的，Board 只是局部编号
+
+`tasks.id TEXT PRIMARY KEY` 已经是全局不可变身份；缺的不是一列，而是**把它提升为协议里的 canonical
+address**。这在本 feature 里是**承重件而非可选改进**（@Cindy 第三轮 finding 6）：没有 ambient conversation 之后，
+`task detail/edit/status <n>` 无从解析 —— 局部编号必须靠一个 board 才有意义，而 agent-scoped runtime 同时面对
+N 个 target。
+
+- **所有 task mutation 与跨会话引用最终解析到 `tasks.id`**；`#task:<n>` 只是**当前 board 的 shorthand**。
+- **canonical 文法本身 out of scope**（@shiki 2026-08-14 02:11 裁定：Task 会升级为 `silverhand://` URI 的一等
+  对象，但**协议设计与实现不进入本 feature**）。本 doc 只守两个接口条件：①`tasks.id` 是全局不可变 identity，
+  agent-scoped 的 task mutation 不依赖 ambient board；②Board 只管治理 / ACL 边界 / 局部编号，**局部
+  `task_number` 永不充当跨 conversation identity**。
+  - 现状事实（供那张票用）：`REFERENCE_KINDS = ['human','agent']`，docblock 明写 containers 与 tasks 没有
+    handle 可拼、继续用 `#conv:<id>` / `#task:<n>`；renderer 内部另有单冒号伪 scheme
+    `silverhand-task:<n>` / `silverhand-task-bare:<n>`（不出现在纯文本读面）。⇒ **今天不存在 task URI**，
+    且 task 是这套文法里唯一只有局部地址的一等对象（`#conv:` 已用不可变 id）。
+  - 我留一条**待那张票裁**的异议（不阻塞本 feature）：#2000 把 `silverhand://` 定为 **principal 寻址轴**
+    （写它 = 意图寻址 ⇒ 投递/唤醒），sigil 是**对象指针轴**（只导航）。把 task 放进寻址轴需要说明
+    「引用 task」为什么不产生投递语义，否则两根轴的判据会重新混起来。
+- **短形的可复制性按 placement 分档**：`#silverhand/task:42` 可复制（workspace name 是共享名字）；
+  **私线短形 `dm:@handle/task:7` 是 reader-relative**（同一 task 在两端拼出两个地址）⇒ **一旦跨 principal
+  或写入持久文本，一律序列化成 `#task:<id>`**。
+- **全局 id 不豁免 ACL**：resolver 先做 live ACL 再返回，且「不存在」与「无权」必须是**不可区分**的同一种
+  拒绝，否则 canonical ref 就成了 id 枚举探测面。
+- 不新增全局自增数字（全局取号热点 + 泄露任务总量）；现有 opaque id 更稳。
 
 ---
 
@@ -240,13 +277,20 @@ CAS finalize。OS 进程与 host IO 不能进 SQLite tx。
 | Start / respawn | slot 行 + `generation++` | daemon spawn | `observed_*` 投影 | CAS on `generation` | `(scope, generation)` |
 | Stop / crash | slot 行状态意图 | daemon signal | 同上 | CAS | `(scope, generation)` |
 | Delete Agent | 现有 durable deletion intent | host purge | purge count | CAS finalize（现状） | attempt id |
-| **Mention CC** | **必须新增 durable 记录** | 写入目标 inbox | —— | 标记已投递 | **source `message.id`** |
+| **Mention CC** | source message（write-once，已持久） | 写入目标 inbox | —— | **写入即 receipt**（UNIQUE 挡重复） | **`(source_message_id, target_inbox_conversation_id)`** |
 
 **Mention CC 的「commit 后可重试」旧稿是空口承诺**：`post-commit.ts` 的 effect 是 best-effort、失败只
 `logger.warn`，**没有任何持久记录**⇒ commit 后崩溃即永久丢 CC（正是今天 `warn`+`return` 的同族缺陷，
-只是换了触发条件）。二选一，必须选一：**(a) durable outbox 行**，或 **(b) 由 source `message.id` 幂等重放**
-（消息本身是持久的、`messages.content` write-once ⇒ 重放可判定）。我选 **(b)**：不新增 outbox 基础设施，
-重放判据来自已有的不可变事实。
+只是换了触发条件）。
+
+**上一版只写「由 source `message.id` 幂等重放」是不够的**（@Cindy 第三轮 finding 4）：source 行只证明
+**输入存在**，不证明某个 `(source_message_id, target_agent)` 的副本**已经写过** ⇒ 崩溃后重放照样重复写。
+恰好一次需要两半，缺一不可：**重放驱动**（source message，已有）+ **写入时可判定的 dedupe receipt**。
+
+选定形态：**CC 消息行自带 `cc_source_message_id`，并建
+`UNIQUE(cc_source_message_id, conversation_id)`（partial，仅 CC 行）**。⇒ receipt 就是**副本本身**，
+重放的第二次写入被 DB 约束拒绝（幂等），**不新增 outbox 表、不新增 per-item 状态机**。
+被否：只有 source replay 而无 UNIQUE（重复投递）；只有 receipt 表而无重放驱动（丢投递后无人重试）。
 
 同 tx 的只有这些：DM get-or-create（conversation + endpoints，**无投影行**）、AgentInbox 创建、
 roster join/leave、send message（message + stream head + follower/recipient plan）、board 内 task 取号。
@@ -259,8 +303,15 @@ roster join/leave、send message（message + stream head + follower/recipient pl
 - **`agent_status` 必须扩，不能声称「保持现状」**：现在的 payload 是
   `{agent_id, status, cli_session_id?}`（`status-projector.ts:127…`），**没有** `focus` / `pending` / `queue`。
   #task:2005 要求「UI derives **authorized** busy/focus/pending state from one runtime」⇒ 新增字段是新 wire
-  surface，要定版本；**可见性按 viewer 授权逐会话派生**：viewer 只看到「该 agent 在**本会话**忙 / 排队深度」，
-  **不泄露另一个会话的身份或标题**（否则 ACL 经 presence 侧漏）。
+  surface，要定版本。**授权投影按 viewer 逐字段裁**（@Cindy 第三轮小项 2 —— 一律只显示「本会话忙」会丢掉
+  可解释性）：
+
+  | viewer 对 focus conversation 的权限 | 可见内容 |
+  |---|---|
+  | 有 | **绝对 target**（`#ws/channel`、`thread:<root>`、`dm:@handle`）+ 排队深度 |
+  | 无 | `focus='other'` + 排队深度 —— 知道「在别处忙」但**不泄露**该会话的 id / 标题 / 对端 |
+
+  ⇒ 「忙」永远可解释，而会话身份不经 presence 侧漏。
 - **Delivery invariant（#2005 已拍板，旧稿漏抄，现在是硬合同）**：reference 解析与 follower/recipient 扩张
   只用 outbound target 的**当前成员**；B-targeted 的 reference 指向 A-only 成员时**不在 B 加人、不向 A 投递**，
   且 unresolved **可观测**。（与 #task:2000 的四层投递模型不冲突：那里说的是「thread reply 的 follower 插入
@@ -271,22 +322,37 @@ roster join/leave、send message（message + stream head + follower/recipient pl
 
 ## 7. 凭据与 CLI frame
 
-### 7.1 principal = Agent(generation)
+### 7.1 principal 是一个判别联合，不是一个扁平 tuple
 
 现状：全部 agent-facing API 挂 `/internal/conversations/:cid/agents/:aid/*`，token 按**路径**里的 `(cid,aid)`
 验（`internal-agent.ts:73`；签发 `outbound-event-fanout.ts:1183`），`SILVERHAND_CONVERSATION_ID` +
 `SILVERHAND_AUTH_TOKEN` **烘进磁盘 shim**（`spawn-prep.ts:46-63`）。一进程服务 N 会话时前提失效；
 「一进程持 N 个 per-conversation token」被否（shim 是一次性烘盘、N 随 join 动态变）。
 
-目标：`/internal/agents/:aid/*`，token 证明 `(agent_id, generation)`，目标是操作参数，**授权每请求 live 查
-membership**。
+**上一版把 principal 统一成 `(agent_id, generation)` 是错的**（@Cindy 第三轮 finding 2）：
+conversation-scoped 的同一 Agent 同时有 N 个 slot、各自的 `generation` 都可能等于 7 ⇒ 该 tuple **指不出哪个
+slot**，而且会让 A 会话的 runtime 凭 live membership 去操作 B 会话，**破坏旧模型现有的隔离**。
 
-**世代校验必须显式，不能靠 store 自己失效**：`AgentTokenStore` 是 per-process in-memory Map，只有显式
-`revoke` / `revokeFor`，**没有 generation 概念**（`auth/agent-token-store.ts`）。⇒ verifier 每请求把 token 里的
-generation 与 **live slot generation** 比较，不等即 401；`revokeFor` 退化为加速路径而不是正确性来源。
+目标是 **principal algebra**（一条路由、一个 verifier、**两种 target policy**）：
 
-**路由代数**：终局是**一条**路由 + 一个 principal 类型（conversation-scoped 只是「目标集恰好为一」的特例；
-留两套 auth 路径 = 永久双权威）。过渡期旧路由作**桥**，删除条件可观测（无 conversation-scoped runtime 在用）。
+```
+RuntimePrincipal =
+  | AgentSlot(agent_id, generation)                       -- session_scope='agent'
+  | ConversationSlot(conversation_id, agent_id, generation) -- session_scope='conversation'
+```
+
+| principal | target 判据 |
+|---|---|
+| `AgentSlot` | **live membership**（每请求查） |
+| `ConversationSlot` | live membership **且** `target == slot.conversation_id`（隔离与今天等价） |
+
+这不是两套 auth 权威，而是一个类型的两支：签发端由 slot 行决定签哪一支，verifier 先解构再套对应 policy。
+**世代校验必须显式**：`AgentTokenStore` 是 per-process in-memory Map，只有显式 `revoke` / `revokeFor`，
+**没有 generation 概念**（`auth/agent-token-store.ts`）。⇒ verifier 每请求把 token 的 generation 与
+**live slot generation** 比较，不等即 401；`revokeFor` 退化为加速路径而不是正确性来源。
+
+**路由代数**：终局是**一条**路由 `/internal/agents/:aid/*` + 上面这**一个** principal 类型（不是两条路由）。
+过渡期旧 `/internal/conversations/:cid/agents/:aid/*` 作**桥**，删除条件可观测（无 runtime 在用它）。
 「被移出会话就杀 runtime」从此是 **runtime lifecycle policy（按 `session_scope` 取值）**，不是 auth 机制 ——
 两根轴分开，才能同时满足「conversation-scoped 行为不变」和「agent-scoped 只拒 target」。
 
@@ -297,35 +363,40 @@ generation 与 **live slot generation** 比较，不等即 401；`revokeFor` 退
 | 面 | 目标寻址 | 额外 frame |
 |---|---|---|
 | `message send` / `history` / `search` / `react` | `--target`（channel / `thread:<root>` / `dm:@handle`） | —— |
-| `task *` | **显式 target conversation**，board 由它派生（§7.2.1） | provenance = source message |
+| `task *` | **全局 `tasks.id`**（§4.5）；`create` 用 `--target`，board 由它派生（§7.2.1） | provenance = source message |
 | `file upload/update/view` | conversation（attachment 本就 conversation-owned） | —— |
 | `schedule create/list/cancel` | 目标 conversation | 触发时唤醒该 target |
 | `thread follow/unfollow`、`member add`、`channel create` | 目标 conversation / workspace | —— |
 | 任何写文件的工具动作 | —— | **绝对 workdir**（cwd = agent root，相对路径会静默写错） |
 
-#### 7.2.1 task 的三层坐标：origin ≠ target ≠ board
+#### 7.2.1 task 的坐标：target ≠ board，且 origin 不是服务端能推出来的
 
-「在 `dm:@shiki` 里被要求为频道 A 建 task」这句话里有三个不同的坐标，必须分开，且**只有一根是命令参数**：
+「在 `dm:@shiki` 里被要求为频道 A 建 task」这句话里有两个必须分开的坐标，**只有一根是命令参数**：
 
-1. **command origin** = `dm:@shiki` —— 服务端从收到该指令的 delivery frame 自己记录（审计用）。
-   **永不决定 task 放哪**，agent 不传。
-2. **task target** = `#silverhand/A`（或 `#silverhand/A/thread:<root>`）—— **agent 显式传 `--target`**。
-   它决定 `tasks.conversation_id`、task 事件的投递位置、讨论上下文。
-3. **board** = 由 target conversation 的 placement **派生**（`workspace` 支 → 该 WorkspaceBoard；
-   `direct_pair` / `agent_inbox` 支 → §4.4 裁定的 board）。**不提供 `--board`**：两根参数会互相矛盾，
-   而 placement 已经是唯一权威。
+1. **task target** = `#silverhand/A`（或 `#silverhand/A/thread:<root>`）—— **agent 显式传 `--target`**。
+   它决定 `tasks.conversation_id`、task 事件的投递位置、讨论上下文与 ACL（§4.4）。
+2. **board** = 由 target conversation 的 placement **派生**（`workspace` 支 → 该 WorkspaceBoard；
+   其余支 → §9 裁定的 board）。**不提供 `--board`**：两根参数会互相矛盾，而 placement 已是唯一权威。
 
 ```bash
 silverhand task create --target '#silverhand/A' --title '……' --body
 ```
 
-`--target` **不排除 DM**：`--target 'dm:@shiki'` 建的是这条私线自己的 task（只对私线参与者可见，
+`--target` **不排除 DM**：`--target 'dm:@shiki'` 建的是这条私线自己的 task（ACL = 私线参与者，
 **不进** A 的 board）。能力完整，靠 target 区分意图，不靠模型猜「这句话属于哪」。
 
+**command origin 审计承诺删除**（@Cindy 第三轮 finding 3 —— 上一版写「服务端从 delivery frame 自动记录」，
+那是**虚构的 authority**）：Agent-generation token + `--target` 的 HTTP 请求到达时，server **无从得知**它是由
+哪条投递引发 —— 静态 shim 里没有这个关联，同一 session 内多次 steer 更没有。「取最近一条消息」是猜。
+⇒ 本设计**不承诺** command origin 审计。若将来要，只有一条合法形态：**agent 显式传不可变
+`origin_message_id`，verifier 校验它确实是投递给该 principal 的消息**；不得由 server 推断。
+
 **source message 的约束保留**：`source_message_id` 必须与 task 同 conversation。⇒ 在 DM 里为 A 建 task 有两条
-合法形态：(a) body 自带上下文、source 留空（origin 仍在审计里）；(b) 先向 A 发一条简短消息，再以那条 A 消息
-作 source。**禁止**让 A 的 task 引用 DM 消息 —— 要么向 A 泄露私线内容，要么让 A 的成员永远看到不可访问的
-provenance。
+合法形态：(a) body 自带上下文、source 留空；(b) 先向 A 发一条简短消息，再以那条 A 消息作 source。
+**禁止**让 A 的 task 引用 DM 消息 —— 要么向 A 泄露私线内容，要么让 A 的成员永远看到不可访问的 provenance。
+
+**mutation 一律解析到全局 `tasks.id`**（§4.5）：`task detail/edit/status` 在 agent-scoped runtime 下没有
+ambient board 可依，局部 `#task:<n>` 只在「当前 board 已由 `--target` 给定」时可用。
 
 同一 turn 内先收到 A 的消息、再被 steer 去别处时，**仍逐次显式复用收到的 `target`**；CLI 层可以提供复制便利，
 但**不得**恢复 ambient `SILVERHAND_CONVERSATION_ID` 默认值 —— 那正是 steer 误投的成因。
@@ -362,16 +433,18 @@ workspace-less 会话并成一条 session；cwd 随会话变动会让 agent-scop
 
 ```
 P0-a placement × roster_policy（kind 降级为派生桥）
-  ├─ P0-b AgentInbox（Mentions 迁离 workspace_id）
+  ├─ P0-b AgentInbox（Mentions 迁离 workspace_id + CC dedupe UNIQUE）
   ├─ P0-c conversations.name（partial UNIQUE + 保留表）
-  └─ P0-e principal tombstone（agents/users 停止硬删）
+  └─ P0-e endpoint identity 存活（endpoint 列去 FK + 删除事务打 endpoint tombstone；**不改全系统软删**）
         └─ P3 DirectPair（endpoints + 派生 pair_key + ACL 派生解析器）
               └─ P4 DeliveryTarget（含 §6 的 reference/recipient invariant）
 P0-d runtime slot 拆分（slot / CAS / observation / resume + scope 一致性 trigger）
-  └─ P1 Agent(generation) 凭据 + /internal/agents/:aid/*（含世代比较）
+  └─ P1 RuntimePrincipal 判别联合 + /internal/agents/:aid/*（含世代比较与两种 target policy）
         └─ P2 session_scope + RuntimeScope 分派 + 三档 cwd + scope 化 pidfile
-P0-f Board：agent_home 降级为 AgentBoard（§9 裁定后）
-  └─ P6 终局清理：删 kind 桥 + workspaces 的 agent_home 支（观测到零读者后）
+P0-g 全局 task identity 成为 canonical resolver（§4.5；task mutation 不再依赖 ambient board）
+P0-f Board：AgentBoard（new-row-only；legacy agent_home 原地不动）（§9 裁定后）
+  └─ P6 终局清理：删 kind 桥 + 删 workspaces 的 agent_home 支
+        （前置：**零 legacy conversation-scoped Agent / 零 home / 零 home 内会话**，不是「读点清零」）
 P5 端到端 slice ← 全部
 ```
 
@@ -380,26 +453,32 @@ P5 端到端 slice ← 全部
 - **P0-a** 行为零变化：14 行 `dm_channel` 仍私有、roster 仍不可变更、`kind` 派生值与迁移前逐行相同；
   非 workspace placement 的会话在 list/search/favorites/saved/task 全可见；`visibility` 无法被设成
   `public` + `roster_policy='fixed'`。
-- **P0-b** agent 无任何 workspace 归属会话时 CC 仍投递成功；并发只一行；**杀掉 CC 进程再重放 source
-  message.id，CC 恰好一次**（§5 的 (b)）。
+- **P0-b** agent 无任何 workspace 归属会话时 CC 仍投递成功；并发只一行；**在写入 CC 后杀进程、再重放 source
+  message，第二次写入被 UNIQUE 拒绝 ⇒ 收件箱里恰好一条**（§5）。
 - **P0-c** 改 `title` 不改 target 解析结果。
-- **P0-e** 删除一个 endpoint principal：**删除成功**（不是 ABORT）、DM 与历史保留、survivor 只读、
-  且 endpoints 仍指向 tombstone 行。
+- **P0-e** 硬删一个 endpoint principal：**删除成功**（不是 ABORT）、DM 与历史保留、survivor 只读、
+  endpoint 显示为 tombstone 而非「id 不存在」；**`agents`/`users` 的删除路径与今天逐格相同**（没有引入软删）。
 - **P0-d** conversation-scoped 行为零变化（status SSE、`cliSessionId:null` 竞态等价于
   `outbound-event-fanout.ts:781`）；ACL 读面不再与 runtime 写同行；**换 daemon 后每 scope 仍只有一行 slot**；
   agent-scoped agent 插 conversation slot（及反向）被 DB 拒。
 - **P1** 移出某会话后该 target 被拒而 runtime 存活；**generation++ 后旧 token 立即 401**（不依赖显式 revoke）；
-  旧路由行为不变。
+  **`ConversationSlot` token 对 `target != slot.conversation_id` 一律拒**（即使 live membership 通过）——
+  旧模型隔离逐格不变；旧路由行为不变。
 - **P2** 跨多 workspace 工作后 vendor session 仍 resume 同一条；`UPDATE agents SET session_scope` 被 DB 拒；
   两套 pidfile 不互相 reconcile 掉。
 - **P3** 并发同 pair 只一行；`UPDATE` endpoints / `pair_key` 被 DB 拒；endpoint kind/id 不合法被拒；
   DM 成员变更 API **不存在**；`participantsOf` 是唯一 ACL 解析入口（静态闸）。
 - **P4** 任何持久字段或跨 principal 读面出现字面 `dm:@…` 即不通过；**B 中引用 A-only 成员：B 的 follower/
   recipient 不变、A 无投递、unresolved 可观测**。
-- **P0-f** 39 条 agent_home task **零重编号**、`#task:N` 解析结果逐条不变。
-- **P6** 删桥前先证明 29 个文件 / 118 处 `dm_channel` 读点清零。
+- **P0-g** 无 `--target` 也能 `task detail/edit/status <global-id>`；跨 conversation 复制 canonical ref 后仍指向
+  同一 task；**无权 viewer 拿到与「不存在」不可区分的拒绝**；局部 `#task:<n>` 仅在 board 已给定时可用。
+- **P0-f** 39 条 legacy task **零搬迁零重编号**；**同一 AgentBoard 上另一位 human 的私线 task 不可见**
+  （ACL 逐 task 由 `conversation_id` 判，不由 board）。
+- **P6** 删 `agent_home` 支前：零 legacy Agent / 零 home / 零 home 内会话；删 `kind` 桥前：29 个文件 / 118 处
+  读点清零。
 - **P5** A 中 agent-scoped 工作 → B steer → `dm:@shiki` 回复 → A 继续，且同一 conversation 内另有
-  conversation-scoped agent 同时工作；`agent_status` 的 focus/pending 只对授权 viewer 可见且不泄露别的会话身份。
+  conversation-scoped agent 同时工作；`agent_status` 对有权 viewer 给绝对 target、对无权 viewer 给
+  `focus='other'` + 队列深度。
 
 有利条件：`session_scope` 不可变 ⇒ **无 scope 转换器、无 per-item 迁移状态机**；两类靠 placement + slot 键
 天然并存，现有 agent 永久 conversation-scoped。
@@ -412,17 +491,19 @@ P5 端到端 slice ← 全部
 
 | 方案 | DM 里建的 task 归谁 | 代价 |
 |---|---|---|
-| **A（我的）** `WorkspaceBoard \| AgentBoard`（`agent_home` 降级为 board-only） | 对端 agent 的 AgentBoard —— **与今天逐格一致** | 39 条 task 零重编号、`#task:N` 解析轴不变；`agent_home` 这个名字要改叫 board |
-| B（@Cindy 2026-08-14 02:02） `WorkspaceBoard \| DirectPairBoard(pair)` | 每条私线一个 board、各自从 1 编号 | 每对 principal 一个新编号空间；39 条历史 task 要搬迁；必须同时上限定地址 |
-| C（@Cindy 早先） 只有 WorkspaceBoard，workspace-less 会话建 task 必须显式选 workspace | 不存在 DM-local task | CLI surface 不完整；39 条历史 task 要搬迁 |
+| **A（我的）** `WorkspaceBoard \| AgentBoard`，AgentBoard **new-row-only** | 新 agent-scoped Agent 的私线 task 进它的 AgentBoard；legacy `agent_home` 原地不动 | **零搬迁、零重编号**；ACL 逐 task 由 `conversation_id` 判（board 不是 ACL 单位） |
+| B（@Cindy 2026-08-14 02:02） `WorkspaceBoard \| DirectPairBoard(pair)` | 每条私线一个 board、各自从 1 编号 | 每对 principal 一个新编号空间；board 数量随 pair 增长 |
+| C（@Cindy 早先） 只有 WorkspaceBoard，workspace-less 会话建 task 必须显式选 workspace | 不存在 DM-local task | CLI surface 不完整 |
 
 A 与 B 的实质分歧只有一条：**「私线里的私人事项」是按 agent 聚成一个个人板，还是按 pair 各自成板。**
-A 认为一个 agent 的私人待办天然是一份清单（且今天就是这样存的）；B 认为 board 应与 conversation placement 同构。
-两者都支持 `--target 'dm:@shiki'`，都不进 A 的 WorkspaceBoard —— 能力面相同，差别是编号空间数量与是否需要搬迁。
+A 认为一个 agent 的私人待办天然是一份清单（且今天的 `agent_home` 就是这样存的）；B 认为 board 应与
+conversation placement 同构。两者都支持 `--target 'dm:@handle'`，都不进 workspace 的 board —— 能力面相同，
+差别是编号空间数量。**两者都不再决定 Task identity**（§4.5：identity 恒为全局 `tasks.id`），
+也都不决定 ACL（恒为逐 task 的 `conversation_id`）。
 
-**可复制的限定 task 地址**（如 `#silverhand/task:42`）是**先于本 feature 的独立缺口**（今天 `#task:1` 在每个
-workspace 各有一个），建议单独拆票，不阻塞本设计。方案 B 会把它从「可选改进」变成**前置件**（board 数量随
-pair 增长，无限定地址则 `#task:N` 不可复制）。
+**可复制的限定 / canonical task 地址**：@shiki 已裁定 Task 会升级为 `silverhand://` URI 的一等对象，
+**但协议设计与实现不进入本 feature**（§4.5）。本 doc 只承担「identity 恒为全局 `tasks.id`、mutation 不依赖
+ambient board」这两个接口条件；**不预写文法**。
 
 ---
 
@@ -433,7 +514,16 @@ pair 增长，无限定地址则 `#task:N` 不可复制）。
 | P0-a 就删 `kind` | 118 处读点 + wire literal 失去判别式，而 DirectPair 到 P3 才存在；14 行私有会话的 fixed-roster 语义无处落 |
 | 把现有 `dm_channel` backfill 成 DirectPair | 实测同一 pair 有 4/3/2/2 行 ⇒ `UNIQUE(pair_key)` 直接冲突 |
 | `visibility='private' OR placement_kind='workspace'` | 会允许 public 的固定 roster 会话；忠实改写是 `roster_policy='open'` |
-| 无迁移地删 `workspaces` 的 `agent_home` 支 | 14 条会话 + 39 条已编号 task 无家；#2005 只授权「新 agent-scoped 不创建」 |
+| 无迁移地删 `workspaces` 的 `agent_home` 支 | 14 条会话 + 39 条已编号 task 无家；#2005 只授权「新 agent-scoped 不创建」。删除前置件是「零 legacy Agent/home/会话」，**不是**「`kind` 读点清零」 |
+| 把 `agent_home` 直接降级成 AgentBoard（搬迁现有行） | 与「DirectPair 只承接新行」不同构；旧 home 还挂着 cwd / L2 / vendor session，降级即一次全量迁移 |
+| principal token = 扁平 `(agent_id, generation)` | conversation-scoped 同一 agent 有 N 个 slot、generation 可同值 ⇒ 指不出 slot，且 A 的 runtime 能凭 live membership 操作 B，破坏现有隔离。正解是判别联合 + 两种 target policy |
+| 「服务端从 delivery frame 自动记录 command origin」 | Agent token + `--target` 的请求到达时 server 无从关联投递；「取最近一条消息」是猜 ⇒ 虚构 authority。要么不承诺，要么显式可校验的 `origin_message_id` |
+| Mention CC 只靠 source replay（无写入时 dedupe） | source 行只证明输入存在，不证明副本已写 ⇒ 崩溃重放重复投递。必须配 `(source_message_id, conversation_id)` UNIQUE |
+| 为 CC 幂等新建 outbox / per-item 状态机 | 副本自带 source 键 + UNIQUE 已经足够；新表是不必要的持久状态面 |
+| 把 `agents`/`users` 整体改软删当 P0-e 前置件 | 牵动全部 FK cascade、handle 唯一性、登录/list、`created_by`、teardown；本 feature 只需要 endpoint 侧身份存活 |
+| Board 当 ACL 单位 | 一个 AgentBoard 聚合多位 human 的私线 ⇒ 另一位 human 会看到别人的私线 task。ACL 必须逐 task 由 `conversation_id` 判 |
+| 局部 `task_number` 当跨 conversation identity | agent-scoped 无 ambient board ⇒ `task detail <n>` 不可解析；identity 必须是全局 `tasks.id` |
+| `agent_status` 一律只显示「本会话忙」 | 失去可解释性；正解是按 viewer 权限分档（有权 → 绝对 target，无权 → `focus='other'` + 队列深度） |
 | endpoints 投影成成员行 + 拒绝型 trigger | 保证不了投影存在；且实测 cascade 会触发子表 trigger ⇒ `DELETE FROM agents` 整条 ABORT，不是 tombstone |
 | `Board = Workspace \| Conversation` | 要求 39 条 task 重编号，并新造一层歧义换取零收益 |
 | 「一 scope 一 slot」但 UNIQUE 含 `daemon_instance_id` | 换 daemon 即有两行自称当前 |
