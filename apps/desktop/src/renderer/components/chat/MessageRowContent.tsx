@@ -122,9 +122,10 @@ export function MessageRowContent({
           property of the container here, not of the paragraph.
 
           Which is why the prose gets its OWN box (`w-fit ml-auto`) instead of
-          inheriting the column's width: the column is as wide as its widest
-          child, and an attachment strip or a code block is usually wider than
-          the words above it. Left-aligned text in a box sized by something
+          inheriting the column's width: this side's column is as wide as its
+          widest child (only this side hugs — the left column fills its cap,
+          #task:2010), and an attachment strip or a code block is usually wider
+          than the words above it. Left-aligned text in a box sized by something
           else dangles in mid-row; a shrink-to-fit box keeps a short message
           flush with the right edge and only lets prose that actually wraps
           reach the 85% cap — where a straight left edge is what we want.
@@ -149,8 +150,10 @@ export function MessageRowContent({
           min-content; `pre` and `table` are the two blocks that opt out, and
           both already carry `max-width: 100%` + their own `overflow: auto`, so
           capping the bubble is what hands them a definite width to scroll
-          inside. Left-aligned messages were never affected — there the prose
-          box is a plain block at the column's width. */}
+          inside. Left-aligned messages never overflowed — there the prose box
+          is a plain block at the column's width, and that column now fills its
+          cap (#task:2010) rather than hugging, so a fence there is as wide as
+          the message column instead of as wide as its own longest line. */}
       <div data-message-body className="text-sm text-text-primary">
         {/* `body` is null on an attachment-only message (Composer allows
             sending one) — without that the bubble would render as an empty

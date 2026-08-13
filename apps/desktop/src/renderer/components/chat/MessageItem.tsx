@@ -865,14 +865,30 @@ function ActorMessageItem({
       )}
       <MessageRowContent
         alignRight={alignRight}
-        // Hug-content bubble by default (`max-w-[85%]`, no grow). A root that
-        // heads a reply-preview block instead FILLS that 85% (`w-full`) so the
-        // cluster reads at one stable width across every root, rather than
-        // adapting to each root's own body width and rendering ragged (shiki).
-        // The blast radius is exactly the rows that show the block —
-        // reply-less messages keep hugging their content.
+        // The column FILLS its `max-w-[85%]` cap on the left side and HUGS its
+        // content on the own-message side. A shrink-to-fit flex item is as wide
+        // as its widest child's max-content, and a code fence's `pre`
+        // (`white-space: pre`) has a max-content of its LONGEST LINE — so a
+        // short message rendered its fence at whatever width the code happened
+        // to be, i.e. the fence's width was set by the sentence above it
+        // (shiki 2026-08-14, #task:2010). Prose never showed this:
+        // `.markdown-body` sets `overflow-wrap: anywhere`, so a paragraph
+        // reaches the cap by itself. Filling changes nothing visible for prose
+        // (no bubble on this side); it only gives the blocks that opt out of
+        // wrapping — fence, table, mermaid — and the reply-preview wash ONE
+        // stable width, the same geometry `.system-message-row`'s
+        // `max-width: 85%` and both non-live surfaces (screenshot column,
+        // loading skeleton) already use.
+        //
+        // The own side keeps hugging: there the prose box IS the bubble and its
+        // shrink-to-fit is the point (#task:1838 / #task:1852) — a bubble
+        // stretched to 85% would no longer read as "the words", so a fence
+        // there stays as wide as its code. `badgeHeadsPreview` remains that
+        // side's one exception: a root heading a reply cluster fills the cap so
+        // every root in the cluster reads at one width.
         columnClassName={
-          'min-w-0 max-w-[85%]' + (badgeHeadsPreview ? ' w-full' : '')
+          'min-w-0 max-w-[85%]' +
+          (!alignRight || badgeHeadsPreview ? ' w-full' : '')
         }
         /* A continuation row states neither author nor time in the content
            column: the group head already named the author, and this row's own
