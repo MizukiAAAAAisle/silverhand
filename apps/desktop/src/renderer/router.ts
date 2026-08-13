@@ -604,12 +604,13 @@ export function buildTaskOpenUrl(
 /**
  * Build the URL written by `openSide(conversationId)`. Opens the `side`
  * conversation pane (a `replace` pane): it clears every other secondary pane
- * and `?fullscreen`. Sigil clicks promise "side pane, doesn't replace your
- * main view" (see platform-prompt's "Referencing conversations in chat"); if
- * openSide inherited a stale `?fullscreen=1`, `shouldSecondaryFullscreen` would
- * render ONLY the side, hiding the channel the user was reading (PR-4 review
- * finding by @Cindy). Unrelated query params are preserved so closeSide falls
- * back to whatever was below.
+ * and `?fullscreen`. A conversation sigil click reaches this through
+ * `onOpenConversationRef`, and that affordance promises a side pane rather than
+ * a replacement for the main view; if openSide inherited a stale
+ * `?fullscreen=1`, `shouldSecondaryFullscreen` would render ONLY the side,
+ * hiding the channel the user was reading (PR-4 review finding by @Cindy).
+ * Unrelated query params are preserved so closeSide falls back to whatever was
+ * below.
  */
 export function buildSideOpenUrl(
   pathname: string,
