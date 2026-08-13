@@ -136,10 +136,10 @@ be a deliberate, called-out decision — never a side effect of rewording.
   most 20 entries with descriptions capped at 200 characters, and the
   complete rendered catalog block has a separate 4KB UTF-8 hard cap; MEMORY.md
   targets under 10KB and has its own 16KB hard inject cap.
-- **Checkpoint cleanup** — significant durable learning updates notes; MEMORY
-  changes only when a rule, route, or live handoff changes. `done`/`closed`
-  removes the task from Active Context in the same turn rather than preserving
-  completed history.
+- **Durable-memory admission** — code/docs/tests, task state, and conversation
+  history outrank L2. Notes accept only stable cross-task knowledge absent from
+  those authorities. `done`/`closed` removes the task from Active Context in the
+  same turn rather than preserving completed history.
 - **Active Context channel provenance** — L2 MEMORY is workspace-wide across
   channel sessions, so every live handoff is grouped or prefixed by source
   channel name (plus conversation id when ambiguous). Recovery treats only
@@ -251,7 +251,7 @@ be a deliberate, called-out decision — never a side effect of rewording.
   shiki (2026-08-06) as redundant. Which rules already cover it (this review's
   enumeration): the Operating Contract `computer=` bullet rules when another
   computer's path is usable, and `## Memory` routes commits to git. Restating it
-  under `### What to remember` bought a third phrasing of two existing rules.
+  in the durable-memory section bought a third phrasing of two existing rules.
 
 ## 4. Security-critical code — never weaken
 

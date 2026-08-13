@@ -74,9 +74,9 @@ Key model:
   one workspace. The daemon-resolved profile dir shown in the platform prompt
   is where they live; do not reconstruct that path from a layout convention.
 - **Write by scope.** Global identity / role / working-style guidance from
-  the user → update L1 \`system_prompt.md\`. Guidance about this workspace's
-  collaboration, tasks, project facts, or work logs → update L2 (MEMORY.md
-  / notes/).
+  the user → update L1 \`system_prompt.md\`. L2 holds only durable,
+  workspace-specific knowledge absent from the codebase, task board, and
+  channel/thread history.
 - **Current vs reference.** The current workspace's MEMORY.md is auto-loaded;
   other workspaces are paths only — open them only when the task needs
   cross-workspace context.
@@ -110,8 +110,9 @@ Decide whether the user's guidance is global identity or workspace-scoped:
 - **Global** (who you are, your default style, your responsibilities
   everywhere) → update L1 \`system_prompt.md\`. The next spawn in any
   workspace picks it up.
-- **Workspace-scoped** (review pairings, hand-off rules, project facts,
-  conventions, work log) → update this workspace's L2 MEMORY.md / notes/.
+- **Workspace-scoped** and absent from stronger project authorities → update
+  this workspace's L2 MEMORY.md / notes/ only when it will remain useful across
+  future tasks.
 
 If the user starts with a real task instead of role guidance, do the task. Let
 the role emerge later from explicit instructions or repeated preferences.
@@ -122,10 +123,6 @@ Do not leave the user with a list of options to decide between.
 
 ## Collaboration Patterns
 - **Claim tasks before substantive work** — prevents duplicate work.
-- **Update relevant notes** after meaningful interactions: user preferences
-  learned, decisions made, work completed. Update MEMORY.md only when the
-  Key Knowledge index or current active handoff changes — not after every
-  task.
 - **Keep global identity in L1**, workspace collaboration in L2.
 
 ## Onboarding Behavioral Rules
@@ -184,7 +181,8 @@ words based on the user's context. Do not copy these answers verbatim.
 ## FAQ 4: How does agent memory work?
 ### Answer idea
 - Each agent keeps MEMORY.md and a notes/ folder that persist across restarts.
-- Agents update their notes proactively after meaningful interactions.
+- Active Context preserves live handoffs. Durable notes hold only stable
+  knowledge absent from the codebase, task board, and channel/thread history.
 - Users can explicitly ask an agent to remember something important.
 ### Next step
 - If the user wants to check what an agent knows, suggest asking the agent
@@ -220,7 +218,8 @@ metadata:
 ---
 # User Preferences
 
-Record durable preferences that should shape future work.
+Record durable preferences absent from stronger project authorities that should
+shape future work.
 
 Examples:
 - Communication style and language preferences.
@@ -238,32 +237,22 @@ metadata:
 ---
 # Project Notes
 
-Record durable project context and architecture facts.
-
-Examples:
-- Tech stack, important modules, and ownership boundaries.
-- Stable terminology and data-model decisions.
-- Invariants or guardrails that future work must preserve.
-
-Keep transient task status in work-log.md instead.
+Record only stable, cross-task project knowledge absent from the codebase,
+repository documentation and tests, task board, and channel/thread history.
+Leave this note empty when stronger authorities already contain the knowledge.
 `;
 
 const WORK_LOG_MD = `---
 name: work-log
-description: Significant prior changes, decisions, verification evidence, failed approaches, and follow-ups; read when current work resembles a previous change or failure.
+description: Irrecoverable cross-task evidence and reusable failure lessons; read when current work resembles a costly prior failure.
 metadata:
   category: feedback
 ---
-# Work Log
+# Reusable Evidence
 
-Record significant completed work, decisions, and follow-ups.
-
-Use this for detail that would make MEMORY.md too large:
-- What changed and why.
-- Verification commands or evidence.
-- Follow-up risks that are not active blockers.
-
-Keep entries compact and merge related updates when a task iterates.
+Record only cross-task failure evidence that cannot be recovered from code,
+repository documentation and tests, the task board, or channel/thread history.
+Do not record completed work, task chronology, commands, or test inventories.
 `;
 
 const INITIAL_MEMORY_MD = [

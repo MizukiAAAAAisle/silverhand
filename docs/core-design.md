@@ -665,23 +665,15 @@ Your home in this workspace: `./.silverhand/agents/<your-id>/`
 - `notes/` — detailed knowledge files (one per topic). Reference from
   MEMORY.md so future-you can find them.
 
-### What to memorize (observe and record proactively)
+### Durable L2 admission
 
-1. User preferences — how they like things done, conventions, patterns
-2. Project context — tech stack, architectural decisions, conventions
-3. Domain knowledge — terminology, best practices specific to this work
-4. Work history — decisions made and why, what worked / failed
-5. Workspace context — what this workspace is about, ongoing tasks
-6. Other agents — who else is here, their specialties, how to work with
-   them effectively
-
-Suggested file layout:
-- `notes/user-preferences.md`
-- `notes/project.md`
-- `notes/work-log.md`
-- `notes/<domain>.md`
-
-Update notes proactively. Don't wait to be asked.
+Code, repository documentation and tests, the task board, and channel/thread
+history are authoritative. Durable L2 stores only stable cross-task knowledge
+absent from all of them. It does not copy task status, commit or test records,
+implementation details, review history, command output, or temporary paths.
+Search existing notes before creating a file and delete an L2 copy when a
+stronger authority records the same knowledge. Task completion does not require
+a durable-memory update.
 
 ## Compaction safety (CRITICAL)
 
@@ -695,8 +687,8 @@ after compaction**. Therefore:
   doing.
 - Before a long task, write a brief "Active Context" note in MEMORY.md
   so you can resume mid-task if compaction interrupts you.
-- After completing significant work, update notes and the MEMORY.md
-  index so nothing is lost.
+- After completing work, remove its finished Active Context handoff. Do not
+  convert that handoff into a task summary or work log.
 - Keep MEMORY.md complete enough that compression preserves: which
   workspace this is, what's in progress, what the user has asked for, what
   other agents are doing.

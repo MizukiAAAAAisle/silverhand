@@ -83,11 +83,12 @@ not the complete knowledge body. Keep only:
 - current Active Context needed to resume real work, grouped or prefixed by
   source channel name (plus conversation id when ambiguous).
 
-Put explanation, evidence, architecture, important decision history, and
-domain detail in flexibly named, domain-specific `notes/` files or canonical
-repository docs. Notes may use any useful files or subdirectories; examples are
-not a required layout. Every new Markdown note, and an existing note when it is
-materially updated, declares a stable unique `name`, a retrieval-oriented
+The codebase, repository documentation and tests, task board, and channel/thread
+history are authoritative. Durable L2 notes contain only stable, cross-task
+knowledge absent from all of them. Notes may use any useful files or
+subdirectories; examples are not a required layout. Every new Markdown note,
+and an existing note when it is materially updated, declares a stable unique
+`name`, a retrieval-oriented
 `description`, and `metadata.category` (`user`, `feedback`, or `project`) in
 YAML frontmatter. Descriptions name concrete surfaces, symbols, workflows,
 failure modes, and when the note should be read; they are not generic topic
@@ -104,19 +105,15 @@ count in the rendered budget. The catalog carries metadata and paths only;
 note bodies never enter the prompt automatically.
 
 Ordinary notes need no duplicate MEMORY pointer; MEMORY pins only high-priority
-triggers or active handoffs that must remain prominent every session.
-Task status remains on the task board and commit inventories remain in git.
-When a note is unusually important on every spawn, pin one retrieval pointer in
-MEMORY; ordinary notes rely on the generated catalog.
+triggers or active handoffs that must remain prominent every session. Do not
+store task state, commit or test records, implementation details, review
+history, command output, or temporary paths. Search the catalog before writing
+and update an existing note when possible. Delete an L2 copy when a stronger
+authority records it. Task completion does not require a durable-memory update.
 
-The agent records durable user preferences, project/domain facts, important
-decisions and failed approaches, workspace/channel context, and collaboration
-patterns proactively. A significant interaction updates the relevant note;
 MEMORY changes only when an immediate rule, knowledge route, or live handoff
 changes. A `done`/`closed` task notice removes that task from Active Context in
-the same turn. Only reusable lessons move to notes; completed-task timelines do
-not remain in MEMORY. Rewriting an entry as `DONE` and keeping it is an explicit
-anti-pattern, not a valid status update.
+the same turn and does not convert the handoff into a task summary or work log.
 
 Active Context is shared by every channel session in the workspace. Every live
 item therefore retains its source channel name; add the conversation id when a

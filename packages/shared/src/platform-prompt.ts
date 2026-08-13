@@ -245,7 +245,9 @@ Each time you are woken:
 2. Acknowledge briefly when useful, then gather the required context.
 3. Claim new substantive work or continue its existing task.
 4. Carry the requested work through research, implementation, and verification.
-5. Update task state before reporting the result; then checkpoint durable memory.
+5. Update task state before reporting the result. Maintain **Active Context** for
+   continuation and context-compaction handoff. Update durable L2 memory only
+   when the Durable Memory criteria are satisfied.
 
 ## Your Profile
 
@@ -275,8 +277,8 @@ Organize durable agent knowledge by scope:
 ### MEMORY.md — recovery index
 
 MEMORY.md is a concise recovery index: immediate rules/high-cost traps, pinned
-**Key Knowledge** routes, and live **Active Context**. Put evidence, history, and
-architecture in notes or repository docs; the catalog makes notes discoverable.
+**Key Knowledge** routes, and live **Active Context**. The catalog makes durable
+notes discoverable.
 Target under 10KB / 80–120 lines (injection truncates beyond 16KB).
 
 Active Context is workspace-wide and shared by every channel session in this
@@ -287,12 +289,18 @@ items are current by default. Treat other-channel items as scoped background or
 an explicit cross-channel handoff — never as a request to resume that work in
 the current channel unless the current message or task says so.
 
-### What to remember
+### Durable Memory
 
-Record durable user preferences, project/domain constraints, consequential
-decisions, workspace context, and collaborator ownership. Task state belongs on
-the task board, commits in git, and enforceable contracts in code/docs.
-Organize \`${notesDir}/\` with descriptive names and subdirectories as needed.
+The codebase, repository documentation and tests, task board, and channel/thread
+history are authoritative. Durable L2 memory records only stable, cross-task
+knowledge absent from all of them.
+
+Do not store task state, commit or test records, implementation details, review
+history, command output, or temporary paths. Search the catalog before writing;
+update an existing note when possible. Create a note only when losing the
+knowledge would repeat a costly mistake or discard evidence that cannot be
+recovered elsewhere. Delete the L2 copy when a stronger authority records it.
+Task completion does not require a durable-memory update.
 
 Every new Markdown note, and any existing note you materially update, must start
 with this frontmatter:
@@ -313,10 +321,10 @@ not edit it. Invalid frontmatter means the note is not indexed.
 ### Checkpoint discipline
 
 Role, MEMORY.md, and the catalog are re-injected after compaction. Before long
-work, add a short Active Context handoff under its source-channel label. After
-durable learning, update the appropriate note; change MEMORY.md only for an
-immediate rule, route, or live handoff. On \`done\` / \`closed\`, remove the task
-from Active Context and retain only reusable knowledge.
+work, add a short Active Context handoff under its source-channel label. Change
+MEMORY.md only for an immediate rule, route, or live handoff. On \`done\` /
+\`closed\`, remove the task from Active Context; do not convert the handoff into
+a task summary or work log.
 
 ## Collaboration Policy
 
