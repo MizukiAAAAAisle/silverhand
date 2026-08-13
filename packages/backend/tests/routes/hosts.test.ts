@@ -1,3 +1,4 @@
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   HOST_DISPLAY_LABEL_MAX_LENGTH,
@@ -87,7 +88,7 @@ describe('host routes', () => {
       kind: 'long_lived',
     });
     expect(credential!.token_hash).not.toBe(body.host_token);
-    expect(new HostTokenService(t.ctx.db).verifyHostToken(body.host_token))
+    expect(new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(body.host_token))
       .toMatchObject({
         ok: true,
         hostId: body.host_id,
@@ -173,7 +174,7 @@ describe('host routes', () => {
       )
       .get(first.host_id);
     expect(count?.c).toBe(2);
-    expect(new HostTokenService(t.ctx.db).verifyHostToken(second.host_token))
+    expect(new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(second.host_token))
       .toMatchObject({
         ok: true,
         hostId: first.host_id,
@@ -281,7 +282,7 @@ describe('host routes', () => {
       });
       // The new credential is verifiable end-to-end — same shape as
       // embedded mode.
-      expect(new HostTokenService(t.ctx.db).verifyHostToken(body.host_token))
+      expect(new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(body.host_token))
         .toMatchObject({
           ok: true,
           hostId: body.host_id,
@@ -357,7 +358,7 @@ describe('host routes', () => {
           revoked_at: null,
         });
         expect(credential!.token_hash).not.toBe(body.connect_token);
-        expect(new HostTokenService(t.ctx.db).verifyHostToken(body.connect_token))
+        expect(new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(body.connect_token))
           .toMatchObject({
             ok: true,
             hostId: body.host_id,
@@ -651,7 +652,7 @@ describe('host routes', () => {
           )
           .get(created.host_id)?.c,
       ).toBe(0);
-      expect(new HostTokenService(t.ctx.db).verifyHostToken(token)).toMatchObject({
+      expect(new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(token)).toMatchObject({
         ok: false,
         code: 'missing',
       });
@@ -684,7 +685,7 @@ describe('host routes', () => {
       expect(controller.disconnects).toEqual([created.host_id]);
       expect(new HostRepo(t.ctx.db).get(created.host_id)).toBeNull();
       expect(
-        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+        new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(created.connect_token),
       ).toMatchObject({
         ok: false,
         code: 'missing',
@@ -711,7 +712,7 @@ describe('host routes', () => {
       });
       expect(repo.get(created.host_id)).toBeNull();
       expect(
-        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+        new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(created.connect_token),
       ).toMatchObject({
         ok: false,
         code: 'missing',
@@ -780,7 +781,7 @@ describe('host routes', () => {
         t.fakeHostWs!.calls.some(call => call.kind === 'agent_files_purge'),
       ).toBe(false);
       expect(
-        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+        new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(created.connect_token),
       ).toMatchObject({
         ok: true,
         hostId: created.host_id,
@@ -1445,7 +1446,7 @@ describe('host routes', () => {
         revoked_at: null,
       });
       expect(
-        new HostTokenService(t.ctx.db).verifyHostToken(created.connect_token),
+        new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(created.connect_token),
       ).toMatchObject({
         ok: true,
         hostId: created.host_id,
@@ -1762,7 +1763,7 @@ describe('host routes', () => {
       expect(newRow!.revoked_at).toBeNull();
 
       // Within the grace window the old token still verifies.
-      const verifier = new HostTokenService(t.ctx.db);
+      const verifier = new HostTokenService(createSqliteHostPersistence(t.ctx.db));
       expect(verifier.verifyHostToken(oldToken)).toMatchObject({ ok: true });
       // Past the grace window, it's expired.
       expect(
@@ -1783,7 +1784,7 @@ describe('host routes', () => {
       }).userToken;
       const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId);
       expect(host).not.toBeNull();
-      const tokens = new HostTokenService(t.ctx.db);
+      const tokens = new HostTokenService(createSqliteHostPersistence(t.ctx.db));
       const old = tokens.issueHostToken({ hostId: host!.id });
       controller = new FakeHostWsController(async call => {
         expect(call).toMatchObject({
@@ -1833,7 +1834,7 @@ describe('host routes', () => {
         userId: t.viewerUserId,
       }).userToken;
       const host = new HostRepo(t.ctx.db).getOwnedLocalForUser(t.viewerUserId)!;
-      const tokens = new HostTokenService(t.ctx.db);
+      const tokens = new HostTokenService(createSqliteHostPersistence(t.ctx.db));
       const old = tokens.issueHostToken({ hostId: host.id });
       const beforeRows = t.ctx.db
         .prepare<[string], Record<string, unknown>>(
@@ -1965,7 +1966,7 @@ describe('host routes', () => {
         { hostId: created.host_id, reason: HOST_WS_CLOSE_REASON_REVOKED },
       ]);
 
-      const verifier = new HostTokenService(t.ctx.db);
+      const verifier = new HostTokenService(createSqliteHostPersistence(t.ctx.db));
       expect(verifier.verifyHostToken(oldToken)).toMatchObject({
         ok: false,
         code: 'credential_expired',
@@ -2041,7 +2042,7 @@ describe('host routes', () => {
       expect(after.revoked_at).toBeNull();
       expect(after.activated_at).toBe(before.activated_at);
       expect(after.finalized_at).toBe(before.finalized_at);
-      expect(new HostTokenService(t.ctx.db).verifyHostToken(connectToken)).toMatchObject({
+      expect(new HostTokenService(createSqliteHostPersistence(t.ctx.db)).verifyHostToken(connectToken)).toMatchObject({
         ok: true,
         hostId: created.host_id,
         userId: t.viewerUserId,

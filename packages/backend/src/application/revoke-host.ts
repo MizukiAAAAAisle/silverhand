@@ -1,7 +1,7 @@
 import type { HostDto } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
+import type { HostUnitOfWork } from '../auth/host-ports.js';
 import type { HostRepo } from '../repos/host-repo.js';
-import type { HostTokenService } from '../auth/host-token.js';
 
 /**
  * RevokeHost use case.
@@ -37,8 +37,10 @@ import type { HostTokenService } from '../auth/host-token.js';
 
 export type RevokeHostDeps = {
   ctx: BackendContext;
+  /** Read side (owner resolution + post-commit refetch/DTO). */
   hosts: HostRepo;
-  hostTokens: HostTokenService;
+  /** Atomic boundary: host soft-delete + credential sweep in ONE transaction. */
+  uow: HostUnitOfWork;
 };
 
 export type RevokeHostCommand = {
@@ -60,7 +62,7 @@ export function revokeHost(
   deps: RevokeHostDeps,
   cmd: RevokeHostCommand,
 ): RevokeHostResult {
-  const { ctx, hosts, hostTokens } = deps;
+  const { ctx, hosts, uow } = deps;
 
   // Owner resolution. Cross-user / missing collapse to `notFound` so the route
   // returns 404 either way — no host-id enumeration (spec §2).
@@ -75,12 +77,12 @@ export function revokeHost(
   // active credentials (covers idempotent re-revoke and reconciles a
   // half-failed prior run where the host row is revoked but credentials are
   // still active). Both writes commit together or not at all.
-  ctx.db.transaction(() => {
+  uow.atomically(tx => {
     if (host.revoked_at === null) {
-      hosts.revoke(cmd.hostId, now);
+      tx.hosts.revoke(cmd.hostId, now);
     }
-    hostTokens.revokeAllCredentialsForHost(cmd.hostId, now);
-  })();
+    tx.credentials.revokeAllForHost(cmd.hostId, now);
+  });
 
   const updated = hosts.get(cmd.hostId);
   if (!updated) {

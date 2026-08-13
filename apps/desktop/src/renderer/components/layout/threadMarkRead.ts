@@ -1,5 +1,9 @@
 import type { MessageSeq } from '@silverhand/shared';
 import type { JumpPhase } from '@/features/channels/messageJumpPhase';
+import {
+  lastCommittedSeq,
+  type CachedMessage,
+} from '@/features/channels/pending-message';
 
 /**
  * Pure freshness gate for thread mark-read (#task:1226 surface 4, §9).
@@ -129,6 +133,54 @@ export function threadClusterShowsLoader(input: {
   return input.isLoading || input.jumpPhase === 'priming';
 }
 
+/**
+ * The REPLY rows of a thread cluster window — the window minus its root.
+ *
+ * The cluster read predicate is `id = ? OR thread_root_id = ?`
+ * (`message-stream-scope.ts`), so a window that reaches the thread's start
+ * CONTAINS the root message. The root is a MAIN-LINE message: it is pinned above
+ * the divider (rendered separately), and its `seq` was allocated in the mainline
+ * stream. Everything downstream of this function — rendering, grouping, and
+ * above all the read cursor — is about the reply stream only.
+ *
+ * Single authority on purpose: the render list and the read cursor must not each
+ * carry their own "which rows are replies" predicate, or one can drift into
+ * treating the root as a reply again (#task:1992).
+ */
+export function threadReplyRows<T extends { id: string }>(
+  messages: readonly T[],
+  rootMessageId: string,
+): T[] {
+  return messages.filter(m => m.id !== rootMessageId);
+}
+
+/**
+ * The newest committed REPLY seq in a thread cluster window, or null when the
+ * window holds no committed reply — the only legal producer of
+ * {@link ThreadLiveMarkReadInput.maxVisibleReplySeq}.
+ *
+ * Why this exists as its own function (#task:1992): a thread read cursor lives
+ * in the THREAD stream, whose head (`conversation_stream_heads` keyed on a
+ * message's OWN `thread_root_id`) is advanced only by replies — a root bumps the
+ * MAINLINE row, so a reply-less thread has no row at all and its head is 0.
+ * Taking the max seq of the raw cluster window therefore yields the root's
+ * mainline seq on a reply-less thread, and posting that as a thread `at_seq` is
+ * a position beyond the thread head — which the backend correctly rejects with
+ * `position_future` 400 (observed once in the 2026-08-13 packaged smoke). The
+ * fix belongs here, in the cursor's domain, NOT in loosening that validation.
+ *
+ * A reply-less thread returns null, so the live gate holds and NO observe
+ * request is sent. Pending optimistic rows are skipped by `lastCommittedSeq`
+ * (they carry no server ordinal), so a just-sent reply advances the cursor only
+ * after its ack.
+ */
+export function threadVisibleReplySeq(
+  messages: readonly CachedMessage[],
+  rootMessageId: string,
+): MessageSeq | null {
+  return lastCommittedSeq(threadReplyRows(messages, rootMessageId));
+}
+
 export interface ThreadLiveMarkReadInput {
   /** The viewer's actual scroll viewport reaches the true stream tail — the
    *  newest reply is on screen. This is deliberately an observed DOM fact, not
@@ -139,11 +191,14 @@ export interface ThreadLiveMarkReadInput {
    *  backgrounded hasn't actually been seen, so a live append must not mark it
    *  read (Cindy bar #4). */
   documentVisible: boolean;
-  /** Highest seq the viewer has actually seen — at-tail this is the loaded
-   *  window's max (tail) reply seq. Deliberately NOT `stream_head_seq` and NOT
-   *  the max of every cached reply: the semantic is max-VISIBLE, not
-   *  latest-known (Cindy bar #3). Null when the window is empty. */
-  maxVisibleSeq: MessageSeq | null;
+  /** Highest REPLY seq the viewer has actually seen — at-tail this is the loaded
+   *  window's max (tail) reply seq, produced by {@link threadVisibleReplySeq}.
+   *  Deliberately NOT `stream_head_seq`, NOT the max of every cached reply
+   *  (the semantic is max-VISIBLE, not latest-known — Cindy bar #3), and NOT the
+   *  max of the raw cluster window (which contains the MAIN-LINE root, whose seq
+   *  is outside this stream — #task:1992). Null when there is no visible reply,
+   *  including the reply-less thread whose window holds only the root. */
+  maxVisibleReplySeq: MessageSeq | null;
   /** Highest seq already SUCCESSFULLY marked read this open — a MessageSeq, or
    *  null when nothing has been marked yet (explicit absence, not a 0 sentinel:
    *  #task:1267 Axis-B discipline forbids collapsing "none" into value 0). */
@@ -164,6 +219,10 @@ export interface ThreadLiveMarkReadInput {
  * until they actually see it. This preserves the no-swallow invariant: the
  * cursor never jumps past an unrendered tail.
  *
+ * The proposed seq is always a REPLY seq (see {@link threadVisibleReplySeq}):
+ * this cursor is written into the thread stream, so a main-line ordinal — the
+ * pinned root's — is not a candidate at any input, however visible it is.
+ *
  * The caller owns the side-effecting concerns this purposely excludes: advance
  * `lastMarkedSeq` only on mutation SUCCESS (Cindy bar #2), debounce bursts, and
  * skip while a mark is in flight. Pure so the gate is unit-tested without React
@@ -174,12 +233,15 @@ export function threadLiveMarkReadSeq(
 ): MessageSeq | null {
   if (!input.tailVisible) return null;
   if (!input.documentVisible) return null;
-  if (input.maxVisibleSeq === null) return null;
+  if (input.maxVisibleReplySeq === null) return null;
   // Same-stream (this thread) MessageSeq compare, guarded on explicit absence:
   // "nothing marked yet" (null) never blocks the first advance (#task:1267 B4).
-  if (input.lastMarkedSeq !== null && input.maxVisibleSeq <= input.lastMarkedSeq)
+  if (
+    input.lastMarkedSeq !== null &&
+    input.maxVisibleReplySeq <= input.lastMarkedSeq
+  )
     return null;
-  return input.maxVisibleSeq;
+  return input.maxVisibleReplySeq;
 }
 
 export interface ThreadTailVisibilityInput {

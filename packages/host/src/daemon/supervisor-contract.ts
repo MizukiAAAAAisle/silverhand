@@ -44,6 +44,7 @@ import type {
   RuntimeStopParams,
   RuntimeStopResult,
 } from '../protocol.js';
+import type { AgentHomeMutationCoordinator } from './agent-home-mutation-coordinator.js';
 
 /**
  * Daemon-internal delivery context (#task:1417 Stage 3, §11.4.1). Carries the
@@ -115,6 +116,13 @@ export function resolveDeliveryOwner(
 }
 
 export interface SupervisorContract {
+  /** Present on every purge-capable runtime supervisor. Dispatcher derives the
+   *  unique fence owner from here; a second injected owner is rejected. */
+  agentHomeMutationCoordinator?(): AgentHomeMutationCoordinator;
+  /** Terminal deletion barrier; the shared fence is installed before call. */
+  fenceAndQuiesceAgent?(
+    agentId: string,
+  ): { quiesced_count: number } | Promise<{ quiesced_count: number }>;
   agentMessageSend(
     params: AgentMessageSendParams,
   ): AgentMessageSendResult | Promise<AgentMessageSendResult>;

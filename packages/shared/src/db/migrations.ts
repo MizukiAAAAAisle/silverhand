@@ -1256,6 +1256,15 @@ export const migrations: Migration[] = [
         ON conversation_reads(user_id, conversation_id, thread_root_id);
     `,
   },
+  {
+    version: 68,
+    name: 'agent_deletion_intent',
+    up: `
+      -- Durable, fail-forward intent for terminal agent deletion. NULL is the
+      -- only active state; the timestamp is also the CAS token/audit fact.
+      ALTER TABLE agents ADD COLUMN deletion_started_at INTEGER;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

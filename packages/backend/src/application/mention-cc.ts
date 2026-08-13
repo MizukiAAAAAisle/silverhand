@@ -1,24 +1,93 @@
 import { extractMentions, inlineCode, systemSubtype } from '@silverhand/shared';
-import type { Database as Db } from 'better-sqlite3';
 import type {
   ConversationDto,
   DmChannelDto,
   MessageDto,
   WorkspaceDto,
 } from '@silverhand/shared';
-import type { AgentRepo } from './repos/agent-repo.js';
-import type { ConversationRepo } from './repos/conversation-repo.js';
-import type { MessageRepo } from './repos/message-repo.js';
-import type { NotificationRepo } from './repos/notification-repo.js';
-import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
-import type { BackendLogger } from './context.js';
-import type { ScopeEventBus } from './ws/scope-event-bus.js';
-import {
-  publishUnreadUpdatedToViewer,
-  singleConversationViewerUserId,
-} from './viewer-scope.js';
-import { ConversationReadRepo } from './repos/conversation-read-repo.js';
-import { AttentionBadgeRepo } from './repos/attention-badge-repo.js';
+import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
+import type { BackendLogger } from '../context.js';
+import type { ConversationViewerUnreadPublishPort } from '../services/conversation/unread-publish-port.js';
+import type { ScopeEventBus } from '../ws/scope-event-bus.js';
+import type { WorkspaceRosterUnitOfWork } from './membership-ports.js';
+
+/**
+ * The persistence capability this cc fan-out needs, stated as ports
+ * (#task:1982 W2). Every method is named after the DOMAIN act it performs, not
+ * after the table it touches, so the constant parts of each write (`role =
+ * 'member'`, `from_kind = 'system'`, `kind = 'mention_external'`) are decided
+ * by WHICH method the use case calls and cannot drift per call site.
+ *
+ * They live in this file rather than a separate `ports.ts` because this module
+ * is their only consumer — the concretes are assembled in
+ * `adapters/mention-cc.ts`, which is where the `Database` handle stops.
+ */
+export interface MentionCcAgentReadPort {
+  /** The mentioned handle, resolved to the addressable agent. Returns only the
+   *  two fields the wrap needs; a handle that names no agent is `null`. */
+  getByName(name: string): { id: string; name: string } | null;
+}
+
+export interface MentionCcConversationPort {
+  /** Agent members of the SOURCE conversation — the set that already received
+   *  the original message and therefore needs no DM copy. */
+  listAgentIds(conversationId: string): string[];
+  /** The agent's primary DM channel, or the one with the given title. `null`
+   *  for a legacy agent provisioned before auto-DM. */
+  findDmChannelForAgent(
+    agentId: string,
+    opts?: { title: string },
+  ): DmChannelDto | null;
+  /** Create the lazy `Mentions` DM inside the agent's home workspace. */
+  insertDmChannel(input: {
+    workspaceId: string;
+    title: string;
+    agentId: string;
+  }): DmChannelDto;
+  /** The sole human member of a conversation, or `null` when the answer is not
+   *  unique. Used only for the legacy null-author path; a non-unique answer
+   *  makes this pass skip its human-membership writes rather than guess. */
+  singleViewerUserId(conversationId: string): string | null;
+}
+
+export interface MentionCcReadCursorPort {
+  /** The viewer's cursor for ONE stream — `0` when they have no cursor row.
+   *  Stream-qualified: a (user, conversation) has many cursor rows, so the
+   *  mainline (`null`) and each thread root are distinct answers. */
+  lastReadSeq(
+    viewerUserId: string,
+    conversationId: string,
+    threadRootId: string | null,
+  ): number;
+}
+
+export interface MentionCcMessageWritePort {
+  /** Insert the wrapped `from_kind='system'` copy into the Mentions DM. */
+  insertSystemMessage(input: {
+    conversationId: string;
+    content: string;
+    metadata: Record<string, unknown>;
+  }): MessageDto;
+}
+
+export interface MentionCcNotificationWritePort {
+  /** Insert the viewer-scoped `mention_external` notification. */
+  insertMentionExternal(input: {
+    userId: string;
+    agentId: string;
+    workspaceId: string;
+    conversationId: string;
+    messageId: string;
+    sourceWorkspaceId: string;
+    sourceConversationId: string;
+    sourceMessageId: string;
+    payload: {
+      source_workspace_name: string;
+      source_conversation_title: string;
+      mention_excerpt: string;
+    };
+  }): void;
+}
 
 export interface MentionCcOpts {
   /** The user message that triggered this CC pass. Only `from_kind='user'`
@@ -30,12 +99,18 @@ export interface MentionCcOpts {
   sourceConversation: ConversationDto;
   /** Source workspace for context surfacing. */
   sourceWorkspace: WorkspaceDto;
-  /** SQLite handle — used for membership writes around lazy Mentions DMs. */
-  db: Db;
-  agents: AgentRepo;
-  conversations: ConversationRepo;
-  messages: MessageRepo;
-  notifications: NotificationRepo;
+  agents: MentionCcAgentReadPort;
+  conversations: MentionCcConversationPort;
+  /**
+   * The roster half of the membership UnitOfWork. The three placement rows below
+   * are ONE atomic unit, and they belong to two different subjects, so they
+   * coordinate on the workspace rather than on a member (#task:1987).
+   */
+  roster: WorkspaceRosterUnitOfWork;
+  reads: MentionCcReadCursorPort;
+  messages: MentionCcMessageWritePort;
+  notifications: MentionCcNotificationWritePort;
+  unread: ConversationViewerUnreadPublishPort;
   runtimeHost: AgentRuntimeHost;
   logger: BackendLogger;
   /** Event bus for WS push — publishes a viewer-scoped notification
@@ -53,7 +128,12 @@ const EXCERPT_LIMIT = 160;
  * Side effects per delivered mention:
  *  - Lazily creates a `Mentions` DM channel for the recipient
  *    (idempotent — re-uses an existing one).
- *  - Adds the agent as a member of that conversation (also idempotent).
+ *  - Grants the agent-home DM admission / ACL repair (#task:1989): the
+ *    recipient agent's edge, the author's edge, and the author's
+ *    agent-home workspace row — all idempotent. The workspace row is the
+ *    only one that carries a governance role, fixed at plain `member`;
+ *    the two conversation edges are role-less ACL edges
+ *    (a mention is DM admission, not a workspace invitation).
  *  - Inserts a wrapped system message in the Mentions conversation.
  *  - Auto-starts the agent if not running, then delivers the wrapped
  *    message to its inbox / stdin.
@@ -77,7 +157,7 @@ export async function ccMentionsFromUserMessage(opts: MentionCcOpts): Promise<vo
 
   // Pre-resolve conversation membership so we don't query per-handle.
   const sourceMembers = new Set(
-    opts.conversations.listAgents(opts.sourceConversation.id).map(ca => ca.agent_id),
+    opts.conversations.listAgentIds(opts.sourceConversation.id),
   );
 
   for (const handle of handles) {
@@ -155,40 +235,28 @@ async function deliverOne(
     opts.conversations,
   );
   const mentionsConversation = mentions.conversation;
-  // Make sure the agent is a member of the Mentions conversation — addAgent
-  // is INSERT OR IGNORE, so re-running is a no-op.
-  opts.conversations.addAgent(mentionsConversation.id, agent.id);
 
-  // v25 human membership: the original message author must be a member
-  // of the Mentions conversation, otherwise the v25 permission gates
-  // won't let them GET /messages on a DM that is literally about their
-  // own @-mention. Resolution order:
+  // agent-home DM admission / ACL repair (#task:1989): the original message
+  // author must be a member of the Mentions conversation, otherwise the
+  // permission gates won't let them GET /messages on a DM that is literally
+  // about their own @-mention. This is NOT a workspace invitation: it grants
+  // no regular-workspace membership, governance role, or agent capability —
+  // only the scaffolding that DM needs. Because there is no durable deny
+  // state, an absent row means "never provisioned / needs repair", not
+  // "revoked", so a later mention rebuilds it idempotently. Resolution order:
   //   1. The triggering user message's `from_user_id`.
   //   2. Legacy null user id → source conversation's sole human member.
   //   3. No unique answer → log+skip membership writes (do NOT insert
   //      empty or guessed membership rows).
-  // We also defensively `addUserMember` on the agent_home workspace
+  // We also defensively add the agent_home workspace admission
   // — pre-v25 agents are backfilled by the migration, post-v25
   // agents created via createAgentWithHome get the creator added,
   // but a multi-human v2 may have agents whose home was never
   // explicitly joined by this particular human.
   const humanMemberId =
     opts.message.from_user_id
-    ?? singleConversationViewerUserId(opts.conversations, opts.sourceConversation.id);
-  let humanMembershipCreated = false;
-  if (humanMemberId) {
-    humanMembershipCreated =
-      opts.conversations.getUser(mentionsConversation.id, humanMemberId) === null;
-    opts.conversations.addUser(mentionsConversation.id, humanMemberId);
-    // workspace_users is INSERT OR IGNORE — safe to re-run.
-    opts.db
-      .prepare(
-        `INSERT OR IGNORE INTO workspace_users
-           (workspace_id, user_id, joined_at)
-         VALUES (?, ?, ?)`,
-      )
-      .run(mentionsConversation.workspace_id, humanMemberId, Date.now());
-  } else {
+    ?? opts.conversations.singleViewerUserId(opts.sourceConversation.id);
+  if (!humanMemberId) {
     opts.logger.warn(
       {
         event: 'mention_cc.skip_user_membership',
@@ -202,9 +270,48 @@ async function deliverOne(
     );
   }
 
-  const wrapped = opts.messages.insertForConversation({
+  // ONE transaction for the placement (#task:1987). All three rows are idempotent
+  // on their own, which is exactly why they used to be written bare — and why
+  // that was wrong: they are not independent. The agent's edge makes the DM
+  // deliverable, the human's edge makes it readable, and the human's workspace
+  // row is what the permission gates read before either. A failure between them
+  // leaves a state no serial order produces: a conversation edge for a workspace
+  // non-member, or a Mentions DM the mention's own author cannot open. They also
+  // belong to TWO subjects, so the coordination axis is the workspace, not a
+  // member — and it is the workspace the Mentions conversation lives in, which is
+  // the agent's home, not the source workspace.
+  //
+  // Together the three rows ARE the agent-home DM admission (#task:1989): the
+  // workspace row admits the author into the home, the human edge makes this
+  // specific Mentions DM readable, the agent edge makes it deliverable. Only
+  // the workspace row carries a governance role, fixed at plain `member` — the
+  // roster scope has no face that grants governance — and the two conversation
+  // edges are role-less ACL edges. So a repair run on a later mention can only
+  // heal the scaffolding, never escalate it.
+  //
+  // `humanMembershipCreated` comes back from the port's in-lock `created`: it
+  // gates a `workspace_channels_changed` fan-out below, and an exactly-once
+  // effect may not hang off a read taken before the lock.
+  const humanMembershipCreated = opts.roster.atomicallyForWorkspace(
+    mentionsConversation.workspace_id,
+    tx => {
+      tx.roster.addConversationMember(mentionsConversation.id, {
+        kind: 'agent',
+        id: agent.id,
+      });
+      if (!humanMemberId) return false;
+      const human = tx.roster.addConversationMember(mentionsConversation.id, {
+        kind: 'human',
+        id: humanMemberId,
+      });
+      // Plain `member`, idempotent — safe to re-run on every mention.
+      tx.roster.addWorkspaceHumanMembership(humanMemberId);
+      return human.created;
+    },
+  );
+
+  const wrapped = opts.messages.insertSystemMessage({
     conversationId: mentionsConversation.id,
-    fromKind: 'system',
     content: renderMentionWrap(agent, opts),
     metadata: {
       subtype: systemSubtype('mention_cc'),
@@ -223,8 +330,7 @@ async function deliverOne(
   });
 
   if (humanMemberId) {
-    opts.notifications.insert({
-      kind: 'mention_external',
+    opts.notifications.insertMentionExternal({
       userId: humanMemberId,
       agentId: agent.id,
       workspaceId: mentionsConversation.workspace_id,
@@ -271,22 +377,17 @@ async function deliverOne(
   });
   if (
     humanMemberId
-    && viewerHasNotReadMessage(
-      opts.db,
-      mentionsConversation.id,
+    && opts.reads.lastReadSeq(
       humanMemberId,
-      wrapped.seq,
+      mentionsConversation.id,
       wrapped.thread_root_id ?? null,
-    )
+    ) < wrapped.seq
   ) {
     // The `Mentions` DM lives in an `agent_home` workspace, so it carries no
     // channel tier and no workspace suppressor — its badge IS its positional
     // unread (#task:1870). Emitted through the co-emitting seam anyway: the
     // frame pair is one fact, and the DM's own badge still has to move.
-    publishUnreadUpdatedToViewer(
-      opts.events,
-      new AttentionBadgeRepo(opts.db),
-      new ConversationReadRepo(opts.db),
+    opts.unread.publishUnreadUpdatedToViewer(
       mentionsConversation.id,
       mentionsConversation.workspace_id,
       humanMemberId,
@@ -324,7 +425,7 @@ async function deliverOne(
 function getOrCreateMentionsConversation(
   dm: DmChannelDto,
   agentId: string,
-  conversations: ConversationRepo,
+  conversations: MentionCcConversationPort,
 ): { conversation: DmChannelDto; created: boolean } {
   const existing = conversations.findDmChannelForAgent(
     agentId,
@@ -339,28 +440,6 @@ function getOrCreateMentionsConversation(
     }),
     created: true,
   };
-}
-
-function viewerHasNotReadMessage(
-  db: Db,
-  conversationId: string,
-  viewerUserId: string,
-  messageSeq: number,
-  threadRootId: string | null,
-): boolean {
-  // Per-stream cursor (#task:1226 §4.1): a (user, conversation) has many cursor
-  // rows, so the lookup MUST be stream-qualified or it would pick an arbitrary
-  // row. `IS ?` handles both the mainline (NULL) and a thread root id.
-  const row = db
-    .prepare<[string, string, string | null], { last_read_seq: number }>(
-      `SELECT last_read_seq
-         FROM conversation_reads
-        WHERE user_id = ?
-          AND conversation_id = ?
-          AND thread_root_id IS ?`,
-    )
-    .get(viewerUserId, conversationId, threadRootId);
-  return (row?.last_read_seq ?? 0) < messageSeq;
 }
 
 function renderMentionWrap(agent: { name: string }, opts: MentionCcOpts): string {

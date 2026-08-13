@@ -1,12 +1,25 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AGENT_CAPABILITIES, conversationSideScope } from '@silverhand/shared';
 import type { Principal } from '../../src/auth/principal.js';
-import { addConversationMember } from '../../src/application/conversation-member.js';
+import {
+  addConversationMember,
+  joinPublicChannel,
+  leaveChannel,
+  removeConversationHumanMember,
+  removeConversationMember,
+} from '../../src/application/conversation-member.js';
 import { addWorkspaceAgentMember } from '../../src/application/add-workspace-agent-member.js';
+import { addWorkspaceHumanMember } from '../../src/application/add-workspace-human-member.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { createSqliteMembershipPersistence } from '../../src/repos/membership-persistence.js';
+import type {
+  MembershipPersistence,
+  MembershipTxScope,
+} from '../../src/application/membership-ports.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 import { ChannelAttentionPreferenceRepo } from '../../src/repos/channel-attention-preference-repo.js';
@@ -55,11 +68,15 @@ async function createChannel(
   workspaceId: string,
   title: string,
   memberAgentIds: string[],
+  memberUserIds?: string[],
+  visibility?: 'public' | 'private',
 ): Promise<string> {
   const created = (await (
     await http(t).post(`/api/workspaces/${workspaceId}/channels`, {
       title,
       member_agent_ids: memberAgentIds,
+      member_user_ids: memberUserIds,
+      visibility,
     })
   ).json()) as any;
   return created.channel.id;
@@ -81,7 +98,69 @@ function conversationDeps(t: TestApp) {
     conversations,
     messages,
     channelAttentionPrefs,
+    membershipPersistence: createSqliteMembershipPersistence(t.ctx.db),
     membership,
+  };
+}
+
+/**
+ * The real SQLite persistence with ONE face poisoned: the in-transaction audit
+ * message insert throws. Wraps `atomically` rather than a repo because the
+ * membership write core reaches persistence only through the scope, so this is
+ * the sole injection point that can fail the commit half (#task:1987).
+ */
+function failingAuditPersistence(t: TestApp): MembershipPersistence {
+  const real = createSqliteMembershipPersistence(t.ctx.db);
+  return {
+    read: real.read,
+    uow: {
+      ...real.uow,
+      atomically: (key, fn) =>
+        real.uow.atomically(key, (tx, anchor) =>
+          fn(
+            {
+              authority: tx.authority,
+              membership: {
+                ...tx.membership,
+                insertMembershipAuditMessage: () => {
+                  throw new Error('boom');
+                },
+              },
+              // One cast, at the seam where a synthetic scope meets the
+              // kind-indexed scope type — the decorated port keeps the SAME
+              // member kind, so no face is added or removed.
+            } as MembershipTxScope as never,
+            anchor,
+          ),
+        ),
+    },
+  };
+}
+
+/**
+ * The real SQLite persistence with a WRITE injected into the one window the
+ * design cannot close: after the use case's pre-lock reads, before the
+ * coordinated transaction opens. Under this repo's single connection no other
+ * writer can actually land there, so the seam is the only way to exhibit the
+ * interleaving a pooled/PG adapter will allow — and it is a REAL committed write,
+ * not a lie told to the callback: the anchor and the edge state the callback sees
+ * are read from the DB under the lock, exactly as in production.
+ *
+ * It exists to pin WHERE the write decisions come from. A use case that carried
+ * its pre-lock booleans into the callback passes every same-thread test and fails
+ * these two.
+ */
+function interleavedPersistence(t: TestApp, interleave: () => void): MembershipPersistence {
+  const real = createSqliteMembershipPersistence(t.ctx.db);
+  return {
+    read: real.read,
+    uow: {
+      ...real.uow,
+      atomically: (key, fn) => {
+        interleave();
+        return real.uow.atomically(key, fn);
+      },
+    },
   };
 }
 
@@ -90,6 +169,7 @@ function workspaceAgentDeps(t: TestApp) {
     ctx: t.ctx,
     agents: new AgentRepo(t.ctx.db),
     workspaces: new WorkspaceRepo(t.ctx.db),
+    membershipPersistence: createSqliteMembershipPersistence(t.ctx.db),
   };
 }
 
@@ -583,14 +663,17 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     const bob = await makeAgent(t, 'bob');
     const ws = await createRegularWorkspace(t, 'rollback', [alice, bob]);
     const channelId = await createChannel(t, ws, 'room', [alice]);
-    const deps = conversationDeps(t);
-    // Force the message insert (inside the UoW, after addAgent) to throw so
-    // the transaction rolls back. The throw happens inside db.transaction()()
-    // — BEFORE the effect is ever collected — so no effect exists to drain
-    // and no phantom event can reach the bus.
-    vi.spyOn(deps.messages, 'insertForConversation').mockImplementation(() => {
-      throw new Error('boom');
-    });
+    // Force the audit-message insert (inside the UoW, after the conversation
+    // edge) to throw so the transaction rolls back. The injection point is the
+    // TX SCOPE, not a repo: since #task:1987 the use case holds no MessageRepo,
+    // so the only way to fail the write half is to decorate the face the
+    // callback actually calls. The throw happens inside `atomically` — BEFORE
+    // the effect is ever collected — so no effect exists to drain and no
+    // phantom event can reach the bus.
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: failingAuditPersistence(t),
+    };
     const cap = captureOrderedEvents(t, channelId, ws);
 
     await expect(
@@ -606,6 +689,142 @@ describe('AddConversationMemberUseCase (application layer)', () => {
     // event reached the bus.
     expect(deps.conversations.getAgent(channelId, bob)).toBeNull();
     expect(cap.events).toEqual([]);
+  });
+
+  it('auto-provision is ONE commit with the channel placement: a failed add leaves NO workspace enrollment', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const outsider = await makeAgent(t, 'outsider');
+    // `outsider` is deliberately NOT an initial member, so this add must
+    // auto-provision workspace membership on the way in.
+    const ws = await createRegularWorkspace(t, 'atomic-enroll', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: failingAuditPersistence(t),
+    };
+    expect(deps.workspaces.isMember(ws, outsider)).toBe(false);
+
+    await expect(
+      addConversationMember(deps, {
+        conversationId: channelId,
+        principal: LOCAL_USER,
+        member: { kind: 'agent', agent_id: outsider },
+      }),
+    ).rejects.toThrow('boom');
+
+    // The invariant #task:1987 bought: before this, workspace enrollment
+    // committed in its OWN transaction and only the channel placement rolled
+    // back, leaving the agent enrolled in a workspace it had joined no channel
+    // of — plus a capability set seeded for a membership nobody asked for.
+    expect(deps.workspaces.isMember(ws, outsider)).toBe(false);
+    expect(new AgentCapabilityRepo(t.ctx.db).list(ws, outsider)).toEqual([]);
+    expect(deps.conversations.getAgent(channelId, outsider)).toBeNull();
+  });
+
+  it('re-enrolls when the workspace row disappears between the pre-lock read and the transaction', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    // bob IS a workspace member, so the use case's pre-lock read says "no
+    // enrollment needed" — and then loses the race.
+    const ws = await createRegularWorkspace(t, 'interleave-ws', [alice, bob]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new WorkspaceRepo(t!.ctx.db).removeMember(ws, bob);
+      }),
+    };
+    expect(deps.workspaces.isMember(ws, bob)).toBe(true);
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'agent', agent_id: bob },
+    });
+
+    expect(result.ok).toBe(true);
+    // The state a stale `workspaceWasMember` produced: the conversation edge
+    // written for an agent the workspace no longer holds — a dangling member no
+    // serial order of add/remove can reach. The anchor is read under the lock, so
+    // the callback sees the removal and enrolls (with its capability set) in the
+    // same commit as the placement.
+    expect(deps.workspaces.isMember(ws, bob)).toBe(true);
+    expect([...new AgentCapabilityRepo(t.ctx.db).list(ws, bob)].sort()).toEqual(
+      [...AGENT_CAPABILITIES].sort(),
+    );
+    expect(deps.conversations.getAgent(channelId, bob)).not.toBeNull();
+  });
+
+  it('emits no second audit message or event when the edge appears between the pre-lock read and the transaction', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const ws = await createRegularWorkspace(t, 'interleave-edge', [alice, bob]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const messages = new MessageRepo(t.ctx.db);
+    const before = messages.listForConversation(channelId).length;
+    const deps = {
+      ...conversationDeps(t),
+      // The reverse direction: the pre-lock read finds no edge, but the member is
+      // placed before the transaction opens.
+      membershipPersistence: interleavedPersistence(t, () => {
+        new ConversationRepo(t!.ctx.db).addAgent(channelId, bob);
+      }),
+    };
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'agent', agent_id: bob },
+    });
+    cap.stop();
+
+    expect(result.ok).toBe(true);
+    // Driven by the port's in-lock `created`, not by the stale read: a duplicate
+    // "X added Y" system message and a duplicate member-added fan-out are exactly
+    // what the old `alreadyMember` guard could not prevent.
+    expect(messages.listForConversation(channelId).length).toBe(before);
+    expect(cap.events).toEqual([]);
+  });
+
+  it('does not re-announce a human workspace add whose row appears before the transaction', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'interleave-human', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    // Through the repos, not native SQL: the neighbouring tests predate the
+    // db-boundary ledger, and this one has no reason to add to it.
+    new WorkspaceRepo(t.ctx.db).removeUserMember(ws, 'teammate');
+    new ConversationRepo(t.ctx.db).removeUser(channelId, 'teammate');
+    const deps = {
+      ...conversationDeps(t),
+      // teammate joins the workspace by another door between the pre-lock read
+      // and the lock, so the anchor exists after the use case decided it did not.
+      membershipPersistence: interleavedPersistence(t, () => {
+        new WorkspaceRepo(t!.ctx.db).addUserMember(ws, 'teammate');
+      }),
+    };
+    const viewerEvents: string[] = [];
+    const offViewer = t.ctx.events.subscribeScope('viewer:teammate', e =>
+      viewerEvents.push(e.kind),
+    );
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'human', user_id: 'teammate' },
+    });
+    offViewer();
+
+    expect(result.ok).toBe(true);
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    // `viewer_workspaces_changed` announces a workspace membership THIS write
+    // created. Driven by the stale pre-lock `false` it would fire for a row
+    // somebody else already announced.
+    expect(viewerEvents).toEqual([]);
   });
 });
 
@@ -685,4 +904,404 @@ describe('AddWorkspaceAgentMemberUseCase (application layer)', () => {
    * another computer is a pure DB write with zero daemon dispatch is pinned in
    * `tests/application/cross-computer-membership.test.ts`.
    */
+});
+
+/**
+ * The removal / authority half of #task:1987, in the ONE window the design
+ * cannot close: after a use case's pre-lock gate, before its coordinated
+ * transaction opens.
+ *
+ * Every test here refuses or no-ops on a decision the pre-lock gate had already
+ * ANSWERED THE OTHER WAY, so each one fails against an implementation that carries
+ * its pre-lock booleans into the callback. The states they exclude are the ones NO
+ * serial order of two legal requests produces:
+ *  - a private channel with zero humans in it (`last_human_member`);
+ *  - a roster write nobody currently authorizes (the actor was demoted, or removed
+ *    from the channel, in the seam);
+ *  - a second removal audit row / member-changed fan-out for an edge another
+ *    request already deleted.
+ * A merely STALE decision is not in scope: last-writer-wins is a legal outcome and
+ * is deliberately left alone.
+ */
+describe('membership removal + authority revalidation inside the lock (#task:1987)', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('refuses a leave that strands a private channel: the other human leaves in the seam', async () => {
+    // Seeding off: the permissive fixture triggers would put all eight fixture
+    // users in the channel, and "the target is now the last human" needs a roster
+    // small enough to become one.
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'strand-ws', [alice]);
+    new WorkspaceRepo(t.ctx.db).addUserMember(ws, 'teammate');
+    const channelId = await createChannel(t, ws, 'room', [alice], ['teammate']);
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new ConversationRepo(t!.ctx.db).removeUser(channelId, 'local');
+      }),
+    };
+    // Pre-lock there are TWO humans, so the early gate lets teammate out.
+    expect(deps.conversations.listUsers(channelId).map(u => u.user_id).sort()).toEqual([
+      'local',
+      'teammate',
+    ]);
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await leaveChannel(deps, {
+      conversationId: channelId,
+      principal: { kind: 'user', userId: 'teammate' },
+    });
+    cap.stop();
+
+    // Two humans both leaving is legal in either serial order — the SECOND is
+    // refused. Only the in-lock evaluation can be that second one.
+    expect(result).toEqual({ ok: false, error: { code: 'last_human_member' } });
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    expect(cap.events).toEqual([]);
+  });
+
+  it('refuses a third-party human removal whose actor is demoted in the seam', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'demote-ws', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const workspaces = new WorkspaceRepo(t.ctx.db);
+    workspaces.setUserRole(ws, 'carol', 'admin');
+    const messages = new MessageRepo(t.ctx.db);
+    const before = messages.listForConversation(channelId).length;
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new WorkspaceRepo(t!.ctx.db).setUserRole(ws, 'carol', 'member');
+      }),
+    };
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await removeConversationHumanMember(deps, {
+      conversationId: channelId,
+      userId: 'teammate',
+      principal: { kind: 'user', userId: 'carol' },
+    });
+    cap.stop();
+
+    expect(result).toEqual({ ok: false, error: { code: 'forbidden' } });
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    expect(messages.listForConversation(channelId).length).toBe(before);
+    expect(cap.events).toEqual([]);
+  });
+
+  it('refuses a third-party human removal whose target is promoted above the actor in the seam', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'rank-ws', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const workspaces = new WorkspaceRepo(t.ctx.db);
+    workspaces.setUserRole(ws, 'carol', 'admin');
+    const messages = new MessageRepo(t.ctx.db);
+    const before = messages.listForConversation(channelId).length;
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        // A promotion, through the only repo face that can grant `owner`. It does
+        // not demote the creating owner, so the workspace briefly holds two owner
+        // ROWS — irrelevant here: the rank guard compares role rows, and this is
+        // the cheapest way to exhibit a promotion landing in the seam.
+        new WorkspaceRepo(t!.ctx.db).setOwnerUserId(ws, 'teammate');
+      }),
+    };
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await removeConversationHumanMember(deps, {
+      conversationId: channelId,
+      userId: 'teammate',
+      principal: { kind: 'user', userId: 'carol' },
+    });
+    cap.stop();
+
+    // The target's role comes from the ANCHOR, read under the mechanism — an admin
+    // evicting an owner from a channel is exactly what the rank guard exists to stop.
+    expect(result).toEqual({ ok: false, error: { code: 'target_outranks_actor' } });
+    expect(deps.conversations.getUser(channelId, 'teammate')).not.toBeNull();
+    expect(messages.listForConversation(channelId).length).toBe(before);
+    expect(cap.events).toEqual([]);
+  });
+
+  it('writes no second audit or fan-out when a human edge is deleted in the seam', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-edge-ws', [alice]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const messages = new MessageRepo(t.ctx.db);
+    const before = messages.listForConversation(channelId).length;
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new ConversationRepo(t!.ctx.db).removeUser(channelId, 'teammate');
+      }),
+    };
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await removeConversationHumanMember(deps, {
+      conversationId: channelId,
+      userId: 'teammate',
+      principal: LOCAL_USER,
+    });
+    cap.stop();
+
+    // The post-state the caller asked for already holds → success, but driven by
+    // the port's in-lock `removed`: a second "X removed Y" audit row and a second
+    // roster fan-out are a state no serial order of two removals produces.
+    expect(result.ok).toBe(true);
+    expect(deps.conversations.getUser(channelId, 'teammate')).toBeNull();
+    expect(messages.listForConversation(channelId).length).toBe(before);
+    expect(cap.events).toEqual([]);
+  });
+
+  it('refuses an agent removal whose actor loses their channel edge in the seam', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const ws = await createRegularWorkspace(t, 'agent-floor-ws', [alice, bob]);
+    const channelId = await createChannel(t, ws, 'room', [alice, bob]);
+    const messages = new MessageRepo(t.ctx.db);
+    const before = messages.listForConversation(channelId).length;
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new ConversationRepo(t!.ctx.db).removeUser(channelId, 'local');
+      }),
+    };
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await removeConversationMember(deps, {
+      conversationId: channelId,
+      agentId: bob,
+      principal: LOCAL_USER,
+    });
+    cap.stop();
+
+    // The visibility FLOOR is re-derived in-lock too, not just the governance half:
+    // an actor who is no longer in the channel may not write its roster, however
+    // senior they are in the workspace.
+    expect(result).toEqual({ ok: false, error: { code: 'forbidden' } });
+    expect(deps.conversations.getAgent(channelId, bob)).not.toBeNull();
+    expect(messages.listForConversation(channelId).length).toBe(before);
+    expect(cap.events).toEqual([]);
+  });
+
+  it('writes no second audit or fan-out when an agent edge is deleted in the seam', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const ws = await createRegularWorkspace(t, 'agent-edge-ws', [alice, bob]);
+    const channelId = await createChannel(t, ws, 'room', [alice, bob]);
+    const messages = new MessageRepo(t.ctx.db);
+    const before = messages.listForConversation(channelId).length;
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new ConversationRepo(t!.ctx.db).removeAgent(channelId, bob);
+      }),
+    };
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await removeConversationMember(deps, {
+      conversationId: channelId,
+      agentId: bob,
+      principal: LOCAL_USER,
+    });
+    cap.stop();
+
+    expect(result.ok).toBe(true);
+    expect(deps.conversations.getAgent(channelId, bob)).toBeNull();
+    expect(messages.listForConversation(channelId).length).toBe(before);
+    expect(cap.events).toEqual([]);
+  });
+
+  it('refuses an ADD whose actor loses their channel edge in the seam', async () => {
+    t = buildTestApp();
+    const alice = await makeAgent(t, 'alice');
+    const bob = await makeAgent(t, 'bob');
+    const ws = await createRegularWorkspace(t, 'add-floor-ws', [alice, bob]);
+    const channelId = await createChannel(t, ws, 'room', [alice]);
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new ConversationRepo(t!.ctx.db).removeUser(channelId, 'local');
+      }),
+    };
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: LOCAL_USER,
+      member: { kind: 'agent', agent_id: bob },
+    });
+    cap.stop();
+
+    expect(result).toEqual({ ok: false, error: { code: 'forbidden' } });
+    expect(deps.conversations.getAgent(channelId, bob)).toBeNull();
+    expect(cap.events).toEqual([]);
+  });
+
+  it('refuses a self-join whose workspace membership is removed in the seam, writing nothing', async () => {
+    // Seeding off: the permissive fixture triggers would make `teammate` a member
+    // of every conversation, so there would be no fresh join left to make.
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'join-ws', [alice]);
+    new WorkspaceRepo(t.ctx.db).addUserMember(ws, 'teammate');
+    const channelId = await createChannel(t, ws, 'lobby', [alice], undefined, 'public');
+    const messages = new MessageRepo(t.ctx.db);
+    // One message, so the join's read-cursor baseline has something to advance:
+    // without a stream head `markStreamRead` is never called and the cursor
+    // assertion below would hold for the wrong reason.
+    messages.insertForConversation({
+      conversationId: channelId,
+      fromKind: 'system',
+      content: 'welcome',
+      metadata: {},
+    });
+    expect(messages.listStreamHeads(channelId).length).toBeGreaterThan(0);
+    const reads = new ConversationReadRepo(t.ctx.db);
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new WorkspaceRepo(t!.ctx.db).removeUserMember(ws, 'teammate');
+      }),
+    };
+    // Pre-lock the joiner IS a workspace member, so `canJoinPublicChannel` admits.
+    expect(deps.workspaces.isUserMember(ws, 'teammate')).toBe(true);
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await joinPublicChannel(deps, {
+      conversationId: channelId,
+      principal: { kind: 'user', userId: 'teammate' },
+    });
+    cap.stop();
+
+    // On a self-join the actor IS the member being written, so the ANCHOR is the
+    // very authority fact the pre-lock gate read. Joining on an absent anchor
+    // would leave a channel edge — plus an attention preference and read cursors —
+    // for a non-member of the workspace: a state neither serial order reaches.
+    expect(result).toEqual({ ok: false, error: { code: 'forbidden' } });
+    expect(deps.conversations.getUser(channelId, 'teammate')).toBeNull();
+    expect(deps.channelAttentionPrefs.get('teammate', channelId)).toBeUndefined();
+    expect(reads.getLastReadSeq('teammate', channelId, null)).toBe(0);
+    expect(cap.events).toEqual([]);
+  });
+
+  it('refuses a human auto-provision whose actor is demoted in the seam, enrolling nobody', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'provision-ws', [alice]);
+    const workspaces = new WorkspaceRepo(t.ctx.db);
+    workspaces.addUserMember(ws, 'carol', 'admin');
+    const channelId = await createChannel(t, ws, 'room', [alice], ['carol']);
+    const deps = {
+      ...conversationDeps(t),
+      membershipPersistence: interleavedPersistence(t, () => {
+        new WorkspaceRepo(t!.ctx.db).setUserRole(ws, 'carol', 'member');
+      }),
+    };
+    expect(deps.workspaces.isUserMember(ws, 'other')).toBe(false);
+    const cap = captureOrderedEvents(t, channelId, ws);
+
+    const result = await addConversationMember(deps, {
+      conversationId: channelId,
+      principal: { kind: 'user', userId: 'carol' },
+      member: { kind: 'human', user_id: 'other' },
+    });
+    cap.stop();
+
+    // Auto-provision is the widest thing a roster write does — it creates workspace
+    // membership. Re-deriving `governs` in-lock is what keeps a demoted admin from
+    // enrolling a person into a workspace they no longer govern.
+    expect(result).toEqual({ ok: false, error: { code: 'forbidden' } });
+    expect(deps.workspaces.isUserMember(ws, 'other')).toBe(false);
+    expect(deps.conversations.getUser(channelId, 'other')).toBeNull();
+    expect(cap.events).toEqual([]);
+  });
+
+  it('refuses a workspace human ADD whose actor is demoted in the seam, enrolling nobody', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-add-ws', [alice]);
+    const workspaces = new WorkspaceRepo(t.ctx.db);
+    workspaces.addUserMember(ws, 'carol', 'admin');
+    const target = t.ctx.userService.getDto('other');
+    if (!target) throw new Error('fixture user missing');
+    const deps = {
+      ctx: t.ctx,
+      membershipPersistence: interleavedPersistence(t, () => {
+        new WorkspaceRepo(t!.ctx.db).setUserRole(ws, 'carol', 'member');
+      }),
+    };
+    // Pre-lock carol IS an admin, so the ROUTE's `canGovernWorkspace` gate admits.
+    expect(workspaces.getUserRole(ws, 'carol')).toBe('admin');
+    expect(workspaces.isUserMember(ws, target.id)).toBe(false);
+    const viewerEvents: string[] = [];
+    const offViewer = t.ctx.events.subscribeScope(`viewer:${target.id}`, e =>
+      viewerEvents.push(e.kind),
+    );
+
+    const result = await addWorkspaceHumanMember(deps, {
+      principal: { kind: 'user', userId: 'carol' },
+      workspaceId: ws,
+      user: target,
+    });
+    offViewer();
+
+    // The route's gate is a snapshot; the write's authority is the role row read
+    // inside the lock. Without that re-derivation a demoted admin still enrolls a
+    // person — and the enrollment is announced — in a workspace they no longer
+    // govern, which no serial order of demote-then-add reaches.
+    expect(result).toEqual({ ok: false, error: { code: 'forbidden' } });
+    expect(workspaces.isUserMember(ws, target.id)).toBe(false);
+    expect(viewerEvents).toEqual([]);
+  });
+
+  it('announces a workspace human ADD once when a racing add commits in the seam', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const alice = await makeAgent(t, 'alice');
+    const ws = await createRegularWorkspace(t, 'human-add-race-ws', [alice]);
+    const workspaces = new WorkspaceRepo(t.ctx.db);
+    const target = t.ctx.userService.getDto('other');
+    if (!target) throw new Error('fixture user missing');
+    const deps = {
+      ctx: t.ctx,
+      membershipPersistence: interleavedPersistence(t, () => {
+        // The OTHER request wins the race and enrolls them first.
+        new WorkspaceRepo(t!.ctx.db).addUserMember(ws, target.id);
+      }),
+    };
+    // Pre-lock they are NOT a member — the boolean the old route body would have
+    // carried into the write.
+    expect(workspaces.isUserMember(ws, target.id)).toBe(false);
+    const viewerEvents: string[] = [];
+    const offViewer = t.ctx.events.subscribeScope(`viewer:${target.id}`, e =>
+      viewerEvents.push(e.kind),
+    );
+
+    const result = await addWorkspaceHumanMember(deps, {
+      principal: LOCAL_USER,
+      workspaceId: ws,
+      user: target,
+    });
+    offViewer();
+
+    // The add stays successful and idempotent, but `created` comes from the ANCHOR,
+    // so the second request announces nothing: exactly one of two racing adds emits
+    // `viewer_workspaces_changed`.
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('unreachable');
+    expect(result.member.role).toBe('member');
+    expect(workspaces.isUserMember(ws, target.id)).toBe(true);
+    expect(viewerEvents).toEqual([]);
+  });
 });

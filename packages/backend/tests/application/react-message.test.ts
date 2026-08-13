@@ -479,7 +479,7 @@ describe('reactions read-model', () => {
     await addReaction(deps, { principal: agentPrincipal, messageId, emoji: '👍' });
     await addReaction(deps, { principal: agentPrincipal, messageId, emoji: '🎉' });
 
-    const forUser = loadReactionAggregates(t.ctx, [messageId], {
+    const forUser = loadReactionAggregates(t.ctx.db, [messageId], {
       kind: 'user',
       id: 'local',
     }).get(messageId);
@@ -493,7 +493,7 @@ describe('reactions read-model', () => {
     );
     expect(forUser).toHaveLength(2);
 
-    const forAgent = loadReactionAggregates(t.ctx, [messageId], {
+    const forAgent = loadReactionAggregates(t.ctx.db, [messageId], {
       kind: 'agent',
       id: alice,
     }).get(messageId);
@@ -506,12 +506,12 @@ describe('reactions read-model', () => {
     expect(forAgent).toHaveLength(2);
 
     // A null viewer never reports viewer_reacted.
-    const forNobody = loadReactionAggregates(t.ctx, [messageId], null).get(messageId);
+    const forNobody = loadReactionAggregates(t.ctx.db, [messageId], null).get(messageId);
     expect(forNobody?.every(a => a.viewer_reacted === false)).toBe(true);
 
     // A message with no reactions is absent from the map.
     const empty = insertMessage(t, channelId);
-    expect(loadReactionAggregates(t.ctx, [empty], null).has(empty)).toBe(false);
+    expect(loadReactionAggregates(t.ctx.db, [empty], null).has(empty)).toBe(false);
   });
 
   it('loadReactionDetail: groups reactors per emoji with resolved display names', async () => {
@@ -529,7 +529,7 @@ describe('reactions read-model', () => {
       emoji: '👍',
     });
 
-    const detail = loadReactionDetail(t.ctx, messageId);
+    const detail = loadReactionDetail(t.ctx.db, messageId);
     expect(detail).toHaveLength(1);
     expect(detail[0]!.emoji).toBe('👍');
     const reactors = detail[0]!.reactors;

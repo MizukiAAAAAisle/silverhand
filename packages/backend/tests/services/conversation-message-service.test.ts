@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
@@ -10,22 +9,25 @@ import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
-import { AttachmentService } from '../../src/services/attachment-service.js';
+import { createSqliteConversationPersistence } from '../../src/repos/conversation-persistence.js';
+import { createMentionCcAdapter } from '../../src/adapters/mention-cc.js';
+import { createUnreadPublishAdapter } from '../../src/adapters/unread-publish.js';
 import {
   ActorError,
   ConversationError,
   ConversationMessageService,
   PolicyError,
 } from '../../src/services/conversation-message-service.js';
+import type { MessageTxScope } from '../../src/services/conversation-message/ports.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
-import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
-import { ccMentionsFromUserMessage } from '../../src/mention-cc.js';
+import { ccMentionsFromUserMessage } from '../../src/application/mention-cc.js';
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
+import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 
-vi.mock('../../src/mention-cc.js', () => ({
+vi.mock('../../src/application/mention-cc.js', () => ({
   ccMentionsFromUserMessage: vi.fn(async () => {}),
 }));
 
@@ -95,11 +97,6 @@ function bootstrap() {
   const notifications = new NotificationRepo(db);
   const users = new UserRepo(db);
   const attachments = new AttachmentRepo(db);
-  const attachmentService = new AttachmentService({
-    storage: createLocalBlobFileStorage({ rootDir: join(tmp.silverhandDir, 'blobs') }),
-    attachments,
-    conversations,
-  });
   const events = new ScopeEventBus('test-epoch');
   const fake = new FakeConversationManager();
   const logger: BackendLogger = {
@@ -107,17 +104,22 @@ function bootstrap() {
     warn: vi.fn(),
     error: vi.fn(),
   };
+  const persistence = createSqliteConversationPersistence(db);
+  // #task:1981 §9: the only persistence seam the service still exposes is the
+  // tx scope. `txWrap.current` is read per transaction, so a test arms its
+  // fault / authority swap AFTER its setup writes committed normally.
+  const txWrap: { current: ((tx: MessageTxScope) => MessageTxScope) | null } = { current: null };
   const service = new ConversationMessageService({
-    db,
-    conversations,
-    conversationInboxes,
-    messages,
-    threadFollowers,
-    agents,
-    users,
-    notifications,
-    workspaces,
-    attachmentService,
+    uow: uowWithScopeWrap(persistence.message.uow, () => txWrap.current),
+    threadFollow: persistence.threadFollow,
+    delivery: persistence.delivery,
+    mentionCc: createMentionCcAdapter({
+      db,
+      runtimeHost: fake as unknown as AgentRuntimeHost,
+      events,
+      logger,
+    }),
+    unreadPublish: createUnreadPublishAdapter({ db, events }),
     runtimeHost: fake as unknown as AgentRuntimeHost,
     events,
     logger,
@@ -154,6 +156,8 @@ function bootstrap() {
     fake,
     logger,
     service,
+    persistence,
+    txWrap,
     workspace,
     channel,
     alice,
@@ -1052,9 +1056,17 @@ describe('ConversationMessageService.sendMessage', () => {
         content: 'newer reply',
         threadRootId: root.id,
       });
-      vi.spyOn(t.conversationInboxes, 'ensureDelivery').mockImplementation(() => {
-        throw new Error('disk full');
-      });
+      // The failure must be injected on the TX SCOPE: after #task:1981 the
+      // service materializes through `tx.inboxes`, so that is the only place a
+      // delivery-row write can fail from.
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          inboxes: {
+            ensureDelivery: () => {
+              throw new Error('disk full');
+            },
+          },
+        });
       // A signal that promises "wait for delivery" while the delivery row
       // could not be created is a fabricated promise — the send must fail
       // with the underlying error, NOT message_stale.
@@ -1757,6 +1769,316 @@ describe('ConversationMessageService.sendMessage', () => {
       // 500 and dropped the newest 20 — the most relevant context.
       expect(inbox).toContain(replyIds[REPLY_COUNT - 1]);
       expect(inbox).not.toContain(mention.committed.message.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * #task:1981 §9 — the boundary contracts themselves: what the transaction owns,
+ * what may only happen after it commits, and which read the delivery plan comes
+ * from. These are not re-tests of send behaviour; each one fails if the
+ * persistence boundary regresses while every behavioural test stays green.
+ */
+describe('ConversationMessageService persistence boundary (#task:1981)', () => {
+  it('a failed in-tx insert publishes nothing, delivers nothing, notifies nobody (§9.5)', async () => {
+    const t = bootstrap();
+    try {
+      const conversationEvents: string[] = [];
+      const unsubConversation = t.events.subscribe(t.channel.id, e => {
+        conversationEvents.push(e.kind);
+      });
+      const viewerEvents: string[] = [];
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        viewerEvents.push(e.kind);
+      });
+
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          messages: overrideScope(tx.messages, {
+            insertForConversation: () => {
+              throw new Error('insert exploded');
+            },
+          }),
+        });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'mentions @alice and would notify @local-test',
+        }),
+      ).rejects.toThrowError('insert exploded');
+      unsubConversation();
+      unsubViewer();
+
+      // The whole point of post-commit effects: a rolled-back write cannot have
+      // published, delivered, started a run, CC'd, or written a notification.
+      expect(conversationEvents).toEqual([]);
+      expect(viewerEvents).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+      expect(t.fake.starts).toEqual([]);
+      expect(vi.mocked(ccMentionsFromUserMessage).mock.calls).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      // and no half-written message row
+      expect(t.messages.listForConversation(t.channel.id)).toEqual([]);
+      expect(t.messages.latestSeqForConversation(t.channel.id)).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the mention notification row is committed BEFORE unread_updated publishes (§9.5, #task:1870)', async () => {
+    const t = bootstrap();
+    try {
+      // The tiered badge counts `mention_self`, so a viewer that recomputes on
+      // unread_updated must already be able to see the row.
+      const order: string[] = [];
+      const notificationsAtUnread: number[] = [];
+      const unsubViewer = t.events.subscribeScope('viewer:local', e => {
+        order.push(e.kind);
+        if (e.kind === 'unread_updated') {
+          notificationsAtUnread.push(t.notifications.list({ userId: 'local' }).length);
+        }
+      });
+
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'please look, @local-test',
+      });
+      unsubViewer();
+
+      expect(order).toContain('notification');
+      expect(order).toContain('unread_updated');
+      expect(order.indexOf('notification')).toBeLessThan(order.indexOf('unread_updated'));
+      expect(notificationsAtUnread).toEqual([1]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the follower-gated delivery plan comes from the TX scope, never a captured outside read (§9.10)', async () => {
+    const t = bootstrap();
+    try {
+      const carol = t.agents.create(
+        { name: 'carol', runtime: 'claude' },
+        t.localHostId,
+        'local',
+      );
+      t.workspaces.insertMembership(t.workspace.id, carol.id);
+      t.conversations.addAgent(t.channel.id, carol.id);
+
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'bob root',
+      });
+
+      // Authority split: the tx scope says "carol", the outside read port says
+      // "bob". The plan must follow the tx scope — reading it through a
+      // captured factory repo would compute the plan on another connection's
+      // snapshot under a pooled engine (R1).
+      const carolMembership = t.conversations.getAgent(t.channel.id, carol.id);
+      const bobMembership = t.conversations.getAgent(t.channel.id, t.bob.id);
+      expect(carolMembership).not.toBeNull();
+      expect(bobMembership).not.toBeNull();
+      const outsideRead = vi
+        .spyOn(t.persistence.threadFollow.read, 'listFollowerAgentsVisible')
+        .mockReturnValue([bobMembership!]);
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          threadFollowers: overrideScope(tx.threadFollowers, {
+            listFollowerAgentsVisible: () => [carolMembership!],
+          }),
+        });
+
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'human reply',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === carol.id && d.messageId === reply.committed.message.id,
+        ),
+      );
+      // bob is a real target_author follower AND what the outside port claims —
+      // so delivering to him would mean the plan came from the wrong read.
+      expect(t.fake.delivered.some(d => d.agentId === t.bob.id)).toBe(false);
+      expect(outsideRead).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    } finally {
+      vi.restoreAllMocks();
+      t.cleanup();
+    }
+  });
+
+  it('every scope slice the send path uses is the injected one — no captured repo survives (R1)', async () => {
+    const t = bootstrap();
+    try {
+      // A blunt structural falsifier for R1: if any persistence call inside the
+      // transaction still went through a captured repo instead of the scope,
+      // this counter would not see it.
+      const touched = new Set<string>();
+      t.txWrap.current = tx => {
+        const spy = <S extends object>(name: string, slice: S): S =>
+          new Proxy(slice, {
+            get(obj, prop) {
+              const value = Reflect.get(obj, prop) as unknown;
+              if (typeof value !== 'function') return value;
+              return (...args: unknown[]) => {
+                touched.add(`${name}.${String(prop)}`);
+                return (value as (...a: unknown[]) => unknown).apply(obj, args);
+              };
+            },
+          });
+        return overrideScope(tx, {
+          messages: spy('messages', tx.messages),
+          conversations: spy('conversations', tx.conversations),
+          agents: spy('agents', tx.agents),
+          inboxes: spy('inboxes', tx.inboxes),
+          threadFollowers: spy('threadFollowers', tx.threadFollowers),
+        });
+      };
+
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: 'reply',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      expect(touched).toContain('conversations.get');
+      expect(touched).toContain('messages.getInConversation');
+      expect(touched).toContain('messages.insertForConversation');
+      expect(touched).toContain('threadFollowers.upsert');
+      expect(touched).toContain('threadFollowers.listFollowerAgentsVisible');
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * Attachment admission parity (#task:1981 §9.8). The send path now resolves
+ * snapshots INSIDE its transaction through `tx.attachments`, while
+ * `AttachmentService.resolveSnapshotsForChannel` resolves them outside one.
+ * Both faces must feed the SAME facts to the shared pure leaf, or the same
+ * upload becomes attachable through one surface and not the other.
+ */
+describe('attachment admission parity across the two resolution faces (§9.8)', () => {
+  const REFUSAL_CASES = ['outside_channel', 'label_kind_mismatch'] as const;
+
+  it('both faces derive identical sources, and the tx face leaks no physical column (R4)', () => {
+    const t = bootstrap();
+    try {
+      const other = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        title: 'other',
+      });
+      const mine = t.attachments.insert({
+        channelId: t.channel.id,
+        sourceConversationId: t.channel.id,
+        filename: 'ok.png',
+        size: 12,
+        contentType: 'image/png',
+        storage: 'local',
+        storageKey: 'attachments/source/ok',
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const foreign = t.attachments.insert({
+        channelId: other.id,
+        sourceConversationId: other.id,
+        filename: 'x.pdf',
+        size: 10,
+        contentType: 'application/pdf',
+        storage: 'local',
+        storageKey: 'attachments/other/x',
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+      const ids = [mine.id, foreign.id, 'no-such-attachment'];
+
+      // The outside face's fetch (`AttachmentRepo.listByIds`, what
+      // `resolveSnapshotsForChannel` passes to the leaf) projected onto the
+      // facts the leaf reads.
+      const outside = t.attachments
+        .listByIds(ids)
+        .map(row => ({
+          id: row.id,
+          channel_id: row.channel_id,
+          filename: row.filename,
+          size: row.size,
+          content_type: row.content_type,
+        }))
+        .sort((a, b) => a.id.localeCompare(b.id));
+      const inside = t.persistence.message.uow
+        .atomically(tx => tx.attachments.listSnapshotSourcesByIds(ids))
+        .sort((a, b) => a.id.localeCompare(b.id));
+
+      expect(inside).toEqual(outside);
+      // R4: the message domain never sees storage physics.
+      for (const source of inside) {
+        expect(Object.keys(source).sort()).toEqual([
+          'channel_id',
+          'content_type',
+          'filename',
+          'id',
+          'size',
+        ]);
+      }
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it.each(REFUSAL_CASES)('the send path refuses %s with the matching typed code', async reason => {
+    const t = bootstrap();
+    try {
+      const other = t.conversations.insertChannel({
+        workspaceId: t.workspace.id,
+        title: 'other',
+      });
+      const attachment = t.attachments.insert({
+        channelId: reason === 'outside_channel' ? other.id : t.channel.id,
+        sourceConversationId: reason === 'outside_channel' ? other.id : t.channel.id,
+        filename: 'doc.pdf',
+        size: 10,
+        contentType: 'application/pdf',
+        storage: 'local',
+        storageKey: 'attachments/x/doc',
+        createdByKind: 'user',
+        createdById: 'local',
+      });
+
+      await expect(
+        t.service.sendMessage({
+          conversationId: t.channel.id,
+          actor: { kind: 'user', userId: 'local' },
+          content: 'file',
+          // A pdf labelled as an image is the mismatch case; the foreign
+          // attachment is refused before the label is even considered.
+          attachmentRefs: [{ id: attachment.id, label: 'Image #1' }],
+        }),
+      ).rejects.toMatchObject({
+        code: `attachment_${reason}`,
+        attachmentId: attachment.id,
+      });
+      expect(t.messages.listForConversation(t.channel.id)).toHaveLength(0);
+      expect(t.messages.latestSeqForConversation(t.channel.id)).toBe(0);
+      expect(t.fake.delivered).toEqual([]);
     } finally {
       t.cleanup();
     }

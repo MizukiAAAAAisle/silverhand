@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
+import { Hono } from 'hono';
 import {
   conversationSideScope,
   encodeUserPrincipalHeader,
@@ -9,6 +10,8 @@ import {
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import { channelServiceErrorResponse } from '../../src/routes/responses.js';
+import { ActorError } from '../../src/services/channel-service.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
@@ -2769,5 +2772,70 @@ describe('GET /api/workspaces/:id/channels — discovery union + per-item is_mem
       expect(item.kind).toBe('dm_channel');
       expect(item.is_member).toBe(true);
     }
+  });
+});
+
+/**
+ * #task:1987 — the channel-creation governance check exists TWICE: the route's
+ * pre-lock `canGovernWorkspace(…, 'admin')` gate, and the re-derivation from the
+ * role row inside the write lock (a demotion committing in the seam). They are
+ * ONE refusal, so they owe ONE HTTP response. This compares the real pre-lock
+ * response against the production mapper's rendering of the in-lock error, so
+ * changing either side reddens instead of silently splitting the contract into a
+ * public `forbidden` and an internal concurrency code.
+ */
+describe('POST /api/workspaces/:id/channels — governance refusal is one wire contract', () => {
+  let t: TestApp | null = null;
+  afterEach(() => {
+    t?.cleanup();
+    t = null;
+  });
+
+  it('renders the in-lock refusal exactly as the route pre-lock gate does', async () => {
+    // `seedAllFixtureMemberships: false` — the permissive fixture trigger would
+    // seat the viewer as `owner` and the gate would never refuse.
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const OWNER = {
+      [X_SILVERHAND_PRINCIPAL_HEADER]: encodeUserPrincipalHeader('teammate'),
+    };
+    const created = await (await http(t).post(
+      '/api/workspaces',
+      { name: 'governed', member_agent_ids: [] },
+      { headers: OWNER },
+    )).json() as any;
+    const workspaceId = created.workspace.id as string;
+    // `local` (the default identity of `http(t)`) joins as a plain member — the
+    // role the route's `admin` gate refuses.
+    expect(
+      (await http(t).post(
+        `/api/workspaces/${workspaceId}/members`,
+        { kind: 'human', user_id: 'local' },
+        { headers: OWNER },
+      )).status,
+    ).toBe(201);
+
+    const gate = await http(t).post(`/api/workspaces/${workspaceId}/channels`, {
+      title: 'nope',
+      member_agent_ids: [],
+      member_user_ids: [],
+    });
+    expect(gate.status).toBe(403);
+    const gateBody = await gate.json();
+    expect(gateBody).toEqual({ error: 'forbidden' });
+
+    // The same refusal reached one lock later, through the production mapper.
+    const mapper = new Hono();
+    mapper.get('/', c =>
+      channelServiceErrorResponse(
+        c,
+        new ActorError(
+          'user_cannot_govern_workspace',
+          'user does not govern this workspace',
+        ),
+      ) ?? c.text('unmapped', 500),
+    );
+    const mapped = await mapper.request('/');
+    expect(mapped.status).toBe(gate.status);
+    expect(await mapped.json()).toEqual(gateBody);
   });
 });

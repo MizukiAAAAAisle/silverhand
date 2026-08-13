@@ -28,6 +28,7 @@ const baseAgent: AgentDto = {
   materialization_status: 'active',
   materialization_failed_code: null,
   materialization_failed_at: null,
+  deletion_started_at: null,
   created_at: 0,
   updated_at: 0,
 };

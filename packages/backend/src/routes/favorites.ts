@@ -13,15 +13,17 @@ import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
 import { getUserPrincipal, requireViewerUserId } from '../auth/principal.js';
 import { canViewOwnedState } from '../permissions.js';
-import { listFavorites } from '../read-model/favorites.js';
+import type { FavoritesReadModel } from '../read-model/favorites.js';
 
 export interface FavoritesRouteDeps {
   ctx: BackendContext;
+  /** The projection, handle bound at composition time (#task:1983 W2). */
+  favorites: FavoritesReadModel;
 }
 
 export function createFavoritesApp(deps: FavoritesRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx } = deps;
+  const { ctx, favorites } = deps;
 
   // GET the viewer's flat Favorites list. The Favorites list is the viewer's
   // own state (like Activity / the unread summary), so the gate is owned-state,
@@ -33,7 +35,7 @@ export function createFavoritesApp(deps: FavoritesRouteDeps): Hono<AppEnv> {
     if (!canViewOwnedState(ctx, getUserPrincipal(c), viewerUserId)) {
       return c.json({ error: 'forbidden' }, 403);
     }
-    const dto: ListFavoritesDto = listFavorites(ctx, { viewerUserId });
+    const dto: ListFavoritesDto = favorites.list({ viewerUserId });
     return c.json(dto);
   });
 

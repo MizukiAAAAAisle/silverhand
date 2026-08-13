@@ -41,6 +41,7 @@
  * main ↔ backend IPC supervisor channel is not exercised here at
  * all.
  */
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,11 +75,14 @@ import {
   resolveBackendDataPaths,
 } from '@silverhand/shared/app-data-layout';
 import {
-  startBackend,
-  type RunningBackend,
   type HostWsEventSink,
   type HostWsServerController,
+  type RunningBackend,
 } from '../../src/index.js';
+import {
+  startTestBackend,
+  type TestRunningBackend,
+} from '../utils/test-backend.js';
 import type { BackendLogger } from '../../src/context.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { HostTokenService } from '../../src/auth/host-token.js';
@@ -122,8 +126,11 @@ export interface CapturedHostWsDisconnect {
 }
 
 export interface G2Harness {
-  /** Booted standalone backend. */
-  backend: RunningBackend;
+  /** Booted standalone backend. The harness seeds and inspects rows no
+   *  production writer/reader touches, so it boots through
+   *  `startTestBackend` and keeps the server's own connection
+   *  (#task:1983 W5). */
+  backend: TestRunningBackend;
   /** Live host id minted via `HostRepo.claimOrCreateLocal`. */
   hostId: string;
   /** Owning user (always `'local'` — uses the openTestDb fixture). */
@@ -212,7 +219,7 @@ export async function bootG2Harness(
     },
   };
 
-  const backend = await startBackend({
+  const backend = await startTestBackend({
     mode: 'standalone',
     dbPath,
     ...resolveBackendDataPaths(silverhandDir),
@@ -255,7 +262,7 @@ export async function bootG2Harness(
     preferredName: 'g2-harness-host',
     now,
   });
-  const tokens = new HostTokenService(backend.context.db);
+  const tokens = new HostTokenService(createSqliteHostPersistence(backend.context.db));
   const issued = tokens.issueHostToken({ hostId: host.id });
   const hostToken = issued.hostToken;
 
@@ -291,7 +298,7 @@ export async function bootG2Harness(
       // the SAME `host_id` / `host_token` to prove the credential
       // survives a backend restart on the same DB.
       await harness.backend.close().catch(() => undefined);
-      const newBackend = await startBackend({
+      const newBackend = await startTestBackend({
         mode: 'standalone',
         dbPath,
         ...resolveBackendDataPaths(silverhandDir),
@@ -509,6 +516,7 @@ export async function bootDaemonWithSupervisor(
       runtimePidRootDir: pidRoot,
       runtimeStartResolveDeps,
       controlPlaneServerUrl,
+      agentHomeMutationCoordinator,
     }) =>
       new Supervisor({
         emit,
@@ -522,6 +530,7 @@ export async function bootDaemonWithSupervisor(
         runtimePidRootDir: pidRoot,
         runtimeStartResolveDeps,
         controlPlaneServerUrl,
+        agentHomeMutationCoordinator,
         localSilverhandCliLauncher: { command: 'true', args: [] },
         // Tight watchdogs so a misbehaving fixture surfaces fast
         // rather than hanging at the production-default 5min cap.

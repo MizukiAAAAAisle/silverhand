@@ -181,8 +181,17 @@ import {
 // silent behavioral incompatibility into a loud fail-at-hello.
 // `OUTBOUND_PROTOCOL_VERSION` bumps alongside (8→9). No shim — the standalone
 // daemon epoch is unreleased and moves as one version.
+//
+// v11 (#task:1988): `agent_files_purge` is now a terminal deletion fence,
+// not a best-effort rm. Its strict success result gains REQUIRED
+// `quiesced_count`, purge errors gain `quiesce_failed`, and every agent-home
+// mutator may fail with `agent_deleting`. An old daemon would otherwise accept
+// the old purge and remove files without quiescing admitted work or live
+// children, reopening the deleted home after ack. Exact hello-version matching
+// must therefore reject mixed generations before any command runs.
+// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (9→10). No shim.
 
-export const HOST_PROTOCOL_VERSION = 10;
+export const HOST_PROTOCOL_VERSION = 11;
 
 // ── capability tokens ────────────────────────────────────────────────
 //
@@ -697,8 +706,11 @@ export type AgentStaleReceiveResult = z.infer<
  *     was respawned while waiting.
  *   - `handoff_unsupported`: the ingress cannot prove a response
  *     transport handoff (only the control socket can), so the pull is
- *     refused before any custody decision (fail closed). */
+ *     refused before any custody decision (fail closed).
+ *   - `agent_deleting`: the terminal deletion fence was installed before
+ *     this call could reserve custody. */
 export const AgentStaleReceiveErrorCodeSchema = z.enum([
+  'agent_deleting',
   'pull_already_active',
   'stale_event_replaced',
   'runtime_replaced',
@@ -1756,6 +1768,7 @@ export type AgentMaterializeResult = z.infer<typeof AgentMaterializeResultSchema
  * wire→HTTP mapping table.
  */
 export const AgentMaterializeErrorCodeSchema = z.enum([
+  'agent_deleting',
   'fs_quota_exceeded',
   'fs_unavailable',
   /**
@@ -1880,6 +1893,7 @@ const AgentMaterializeIpcErrorSchema = z
 //     as the agent-home ownership boundary. (Kept in the enum; a broader
 //     epoch-wide narrowing of the shared code is tracked with #1807/#1808.)
 export const RuntimeStartErrorCodeSchema = z.enum([
+  'agent_deleting',
   'workspace_not_provisioned',
   'workspace_bundle_missing',
   'registry_unavailable',
@@ -2161,6 +2175,7 @@ export const AgentL2SeedResultSchema = z
 export type AgentL2SeedResult = z.infer<typeof AgentL2SeedResultSchema>;
 
 export const AgentL2SeedErrorCodeSchema = z.enum([
+  'agent_deleting',
   /**
    * The daemon cannot form a bundle coordinate at all: no attached computer (no
    * agents root) or an unsafe workspace id segment (path-safety fail-closed,
@@ -2207,11 +2222,15 @@ export const AgentFilesPurgeResultSchema = z
     /** Number of target dirs that existed and were removed (ENOENT targets
      *  are NOT counted — there was nothing to purge). */
     purged_count: z.number().int().nonnegative(),
+    /** Runtime handles that reached a real child exit before rm began. */
+    quiesced_count: z.number().int().nonnegative(),
   })
   .strict();
 export type AgentFilesPurgeResult = z.infer<typeof AgentFilesPurgeResultSchema>;
 
 export const AgentFilesPurgeErrorCodeSchema = z.enum([
+  /** At least one runtime child remained alive after SIGKILL timeout. */
+  'quiesce_failed',
   /**
    * The agent home tree could not be removed because of a HARD fs error
    * (perm/IO/EROFS/ENOSPC — NOT ENOENT). Fail-closed (§3.3): the route keeps
@@ -2291,9 +2310,29 @@ export type AgentProfileMcpErrorCode = z.infer<
   typeof AgentProfileMcpErrorCodeSchema
 >;
 
+export const AgentProfileMcpWriteErrorCodeSchema = z.enum([
+  'invalid_config',
+  'fs_unavailable',
+  'internal_error',
+  'agent_deleting',
+]);
+export type AgentProfileMcpWriteErrorCode = z.infer<
+  typeof AgentProfileMcpWriteErrorCodeSchema
+>;
+
 const AgentProfileMcpIpcErrorSchema = z
   .object({
     code: z.union([ResponseErrorCodeSchema, AgentProfileMcpErrorCodeSchema]),
+    message: z.string(),
+  })
+  .strict();
+
+const AgentProfileMcpWriteIpcErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorCodeSchema,
+      AgentProfileMcpWriteErrorCodeSchema,
+    ]),
     message: z.string(),
   })
   .strict();
@@ -2334,6 +2373,7 @@ export type { McpProbeResult } from '@silverhand/shared';
 // result (`ok:false` + `phase`), they are not IPC errors.
 
 export const McpProbeErrorCodeSchema = z.enum([
+  'agent_deleting',
   /** Host-local fs fault that prevents reading the source config at all
    *  (perm/IO; ENOENT is handled as a normal `not_found` result). 503. */
   'fs_unavailable',
@@ -2551,7 +2591,7 @@ export const intentSchemas = {
   agent_profile_mcp_write: {
     params: AgentProfileMcpWriteParamsSchema,
     result: AgentProfileMcpWriteResultSchema,
-    error: AgentProfileMcpIpcErrorSchema,
+    error: AgentProfileMcpWriteIpcErrorSchema,
   },
   mcp_probe: {
     params: McpProbeParamsSchema,

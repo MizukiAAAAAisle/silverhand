@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
-import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { createSqliteAgentTeardownPersistence } from '../../src/repos/agent-teardown-persistence.js';
+import type { AgentTeardownPersistence } from '../../src/application/agent-teardown-ports.js';
 import {
   deleteComputer,
   type DeleteComputerDeps,
@@ -53,6 +54,36 @@ interface Fixture {
   deps: () => DeleteComputerDeps;
 }
 
+/**
+ * Fault injection at the PORT, not at a repo subclass: the real teardown scope,
+ * with `deleteComputerRow` throwing an unmodeled FK violation AFTER the agent
+ * rows and their homes are already deleted inside it. That is exactly the
+ * half-delete the old agent-by-agent loop produced, and the only way to prove the
+ * whole cascade rolls back is to fail at the very last write in the scope.
+ */
+function failingComputerRowDelete(t: TestApp): AgentTeardownPersistence {
+  const base = createSqliteAgentTeardownPersistence(t.ctx.db);
+  return {
+    read: base.read,
+    deletion: base.deletion,
+    uow: {
+      atomicallyForAgent: (key, fn) => base.uow.atomicallyForAgent(key, fn),
+      atomicallyForComputer: (key, fn) =>
+        base.uow.atomicallyForComputer(key, tx =>
+          fn({
+            computer: {
+              listAgentsForUpdate: () => tx.computer.listAgentsForUpdate(),
+              forAgent: agentId => tx.computer.forAgent(agentId),
+              deleteComputerRow: () => {
+                throw new Error('FOREIGN KEY constraint failed');
+              },
+            },
+          }),
+        ),
+    },
+  };
+}
+
 async function setup(t: TestApp): Promise<Fixture> {
   const hosts = new HostRepo(t.ctx.db);
   const host = hosts.createUserInvite({ userId: t.viewerUserId });
@@ -77,12 +108,12 @@ async function setup(t: TestApp): Promise<Fixture> {
   });
   conversations.addAgent(channel.id, agent.id);
   // A LIVE run, so the post-commit runtime stop has something to dispatch:
-  // `computeDeleteImpact` only reports `starting` / `active` pairs.
+  // only `starting` / `active` captured sessions are stopped.
   conversations.updateAgentRuntime(channel.id, agent.id, { status: 'active' });
 
   // The agent's own home + DM: this is what the cascade destroys, and the only
-  // place it can capture blob refs from (`collectAgentDmBlobRefs` walks the
-  // owned home's DM channels).
+  // place it can capture blob refs from (the in-scope capture walks the owned
+  // home's DM channels).
   const home = workspaces.insertAgentHome({ agent });
   const dm = conversations.insertDmChannel({
     workspaceId: home.id,
@@ -135,11 +166,7 @@ async function setup(t: TestApp): Promise<Fixture> {
       ).length,
     deps: () => ({
       ctx: t.ctx,
-      hosts,
-      agents: new AgentRepo(t.ctx.db),
-      workspaces,
-      conversations,
-      conversationInboxes: new ConversationInboxRepo(t.ctx.db),
+      teardown: createSqliteAgentTeardownPersistence(t.ctx.db),
     }),
   };
 }
@@ -232,6 +259,26 @@ describe('deleteComputer destruction boundaries', () => {
     // not be raced, so this answers "retry" rather than offering a cascade.
     expect(result).toEqual({ kind: 'pendingAgents', pendingAgents: 1 });
     expectIntact(f);
+  });
+
+  it('refuses and preserves the resumer anchor while an agent deletion is pending', async () => {
+    t = buildTestApp();
+    const f = await setup(t);
+    const teardown = createSqliteAgentTeardownPersistence(t.ctx.db);
+    expect(teardown.deletion.begin(f.agentId, 123).kind).toBe('started');
+
+    const result = await deleteComputer(f.deps(), {
+      hostId: f.hostId,
+      requesterUserId: t.viewerUserId,
+      cascadeDependents: true,
+    });
+
+    expect(result).toEqual({
+      kind: 'deletionInProgress',
+      deletingAgents: 1,
+    });
+    expectIntact(f);
+    expect(new AgentRepo(t.ctx.db).get(f.agentId)?.deletion_started_at).toBe(123);
   });
 
   it('a shared workspace is outside the cascade — its rows AND its bytes survive, whatever the requesters role in it', async () => {
@@ -348,19 +395,9 @@ describe('deleteComputer destruction boundaries', () => {
   it('rolls the whole cascade back — and fails loud — when the host row refuses to delete', async () => {
     t = buildTestApp();
     const f = await setup(t);
-    class RestrictingHostRepo extends HostRepo {
-      override deleteOwnedUserInvite(): boolean {
-        // An unmodeled RESTRICT reference, i.e. schema drift or a bug. It fires
-        // AFTER the agent rows and their homes have been deleted inside the
-        // transaction, which is exactly the half-delete the old agent-by-agent
-        // loop produced.
-        throw new Error('FOREIGN KEY constraint failed');
-      }
-    }
-
     await expect(
       deleteComputer(
-        { ...f.deps(), hosts: new RestrictingHostRepo(t.ctx.db) },
+        { ctx: t.ctx, teardown: failingComputerRowDelete(t) },
         {
           hostId: f.hostId,
           requesterUserId: t.viewerUserId,
@@ -414,16 +451,11 @@ describe('deleteComputer destruction boundaries', () => {
     it('rollback → publishes NO agent_changed (never signals a delete the transaction undid)', async () => {
       t = buildTestApp();
       const f = await setup(t);
-      class RestrictingHostRepo extends HostRepo {
-        override deleteOwnedUserInvite(): boolean {
-          throw new Error('FOREIGN KEY constraint failed');
-        }
-      }
       const changed = captureAgentChanged(t);
 
       await expect(
         deleteComputer(
-          { ...f.deps(), hosts: new RestrictingHostRepo(t.ctx.db) },
+          { ctx: t.ctx, teardown: failingComputerRowDelete(t) },
           {
             hostId: f.hostId,
             requesterUserId: t.viewerUserId,

@@ -4,13 +4,13 @@ import type { Principal } from '../auth/principal.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
-import type { NotificationRepo } from '../repos/notification-repo.js';
 import type { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
 import { canViewConversation } from '../permissions.js';
 import {
   publishAttentionBadgeUpdated,
   publishUnreadUpdatedToViewer,
 } from '../viewer-scope.js';
+import type { ObservationPersistence } from './observation-ports.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
 
 /**
@@ -41,9 +41,12 @@ import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
  *   - per-source auth (§6.1): the endpoint accepts arbitrary conversation ids,
  *     so every `stream` source is gated by `canViewConversation` + root
  *     validation. Any illegal source fails the WHOLE batch — never partial.
- *   - one transaction (§6.2) over the whole batch; coalesced `unread_updated`
- *     post-commit (per-conversation message-variant + at-most-one badge-variant,
- *     §4), only when something actually changed.
+ *   - one transaction (§6.2) over the whole batch — since #task:1987 E the
+ *     viewer-keyed `ObservationUnitOfWork`, so the batch cannot half-apply the
+ *     overlap and the use case cannot write a cursor outside it (or write another
+ *     viewer's read state at all); coalesced `unread_updated` post-commit
+ *     (per-conversation message-variant + at-most-one badge-variant, §4), only
+ *     when something actually changed.
  */
 export type ObserveErrorCode =
   | 'forbidden'
@@ -63,11 +66,14 @@ export type ObserveDeps = {
   conversations: ConversationRepo;
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
-  notifications: NotificationRepo;
   /** Tiered-badge projection (#task:1870). Reading is one of the three sources
    *  that move the badge, and a `notification` clear moves it WITHOUT moving any
    *  cursor — see the directed-only emit below. */
   attentionBadges: AttentionBadgeRepo;
+  /** The observation write boundary (#task:1987 E). The use case holds NO
+   *  transaction capability and no notification repo of its own: every cursor /
+   *  `read_at` write happens through the viewer-bound scope below. */
+  observations: ObservationPersistence;
 };
 
 export type ObserveInput = {
@@ -204,84 +210,77 @@ export async function observe(
     resolved.push(r.resolved);
   }
 
-  // Phase 2 — one transaction over the whole batch (§6.2). We track WHAT
+  // Phase 2 — ONE transaction over the whole batch (§6.2), through the
+  // viewer-bound observation scope (#task:1987 E): the use case holds no
+  // transaction and no way to write another viewer's read state. We track WHAT
   // changed, not just whether: the renderer discriminates `unread_updated` by
   // payload shape — a body WITH `conversation_id` refreshes the cursor / chip /
   // message-unread read-models, a body WITHOUT it refreshes the notification
   // badge. So a stream change must emit a per-conversation message-variant, and
   // any `read_at` change must emit a badge-variant; an empty coalesced event
   // would leave the cursor read-models stale.
-  const outcome = deps.ctx.db.transaction(() => {
-    const changedConversations = new Set<string>();
-    let notificationChanged = false;
-    // Workspaces whose TIERED badge (#task:1870) moved through a directed clear
-    // ONLY — a `notification` source flips `read_at` without touching any
-    // cursor, so no per-conversation frame would carry the new badge. Streams are
-    // absent from this set on purpose: their workspace is already covered by the
-    // co-emitting per-conversation seam.
-    const directedOnlyBadgeWorkspaces = new Set<string>();
-    // The notification ids this batch flipped unread→read. Carried out to the
-    // badge-variant event so the OS-notification-dismiss projection (#task:1431)
-    // can `.close()` exactly these — the client never re-derives read state.
-    const dismissedNotificationIds: string[] = [];
-    for (const r of resolved) {
-      if (r.kind === 'stream') {
-        const current = deps.conversationReads.getLastReadSeq(
-          input.viewerUserId,
-          r.conversationId,
-          r.threadRootId,
-        );
-        if (r.targetSeq > current) {
-          deps.conversationReads.markRead({
-            viewerUserId: input.viewerUserId,
+  const outcome = deps.observations.uow.atomicallyForViewer(
+    { viewerUserId: input.viewerUserId },
+    tx => {
+      const changedConversations = new Set<string>();
+      let notificationChanged = false;
+      // Workspaces whose TIERED badge (#task:1870) moved through a directed clear
+      // ONLY — a `notification` source flips `read_at` without touching any
+      // cursor, so no per-conversation frame would carry the new badge. Streams are
+      // absent from this set on purpose: their workspace is already covered by the
+      // co-emitting per-conversation seam.
+      const directedOnlyBadgeWorkspaces = new Set<string>();
+      // The notification ids this batch flipped unread→read. Carried out to the
+      // badge-variant event so the OS-notification-dismiss projection (#task:1431)
+      // can `.close()` exactly these — the client never re-derives read state.
+      const dismissedNotificationIds: string[] = [];
+      for (const r of resolved) {
+        if (r.kind === 'stream') {
+          const stream = {
             conversationId: r.conversationId,
             threadRootId: r.threadRootId,
-            seq: r.targetSeq,
-          });
-          changedConversations.add(r.conversationId);
-        }
-        // overlap (§3): fold the directed clear into the positional one, even
-        // when the cursor did not move (a lingering mention at/below the cursor
-        // is still a real change). `markStreamMentionsRead` is monotonic /
-        // idempotent — already-read mentions are skipped — and returns the ids
-        // it actually flipped.
-        const clearedIds = deps.notifications.markStreamMentionsRead({
-          userId: input.viewerUserId,
-          conversationId: r.conversationId,
-          threadRootId: r.threadRootId,
-          uptoSeq: r.targetSeq,
-        });
-        if (clearedIds.length > 0) {
-          changedConversations.add(r.conversationId);
-          notificationChanged = true;
-          dismissedNotificationIds.push(...clearedIds);
-        }
-      } else {
-        // Read BEFORE the write: the badge attribution needs the row's anchor,
-        // and `markRead` tells us only whether it flipped.
-        const notification = deps.notifications.get(r.notificationId);
-        if (deps.notifications.markRead(r.notificationId, input.viewerUserId)) {
-          notificationChanged = true;
-          dismissedNotificationIds.push(r.notificationId);
-          // Only `mention_self` in a live conversation feeds the badge's directed
-          // term, and the attribution is the CONVERSATION's workspace (same
-          // column the positional term groups by) — an anchorless
-          // `agent_start_failed` or a CC'd `mention_external` never counted, so
-          // clearing it moves no badge.
-          if (notification?.kind === 'mention_self' && notification.conversation_id) {
-            const conversation = deps.conversations.get(notification.conversation_id);
-            if (conversation) directedOnlyBadgeWorkspaces.add(conversation.workspace_id);
+            targetSeq: r.targetSeq,
+          };
+          if (tx.viewer.advanceStreamCursor(stream)) {
+            changedConversations.add(r.conversationId);
+          }
+          // overlap (§3): fold the directed clear into the positional one, even
+          // when the cursor did not move (a lingering mention at/below the cursor
+          // is still a real change). The port's clear is monotonic / idempotent —
+          // already-read mentions are skipped — and returns the ids it actually
+          // flipped, bounded by the SAME seq the cursor advanced to.
+          const clearedIds = tx.viewer.clearStreamMentions(stream);
+          if (clearedIds.length > 0) {
+            changedConversations.add(r.conversationId);
+            notificationChanged = true;
+            dismissedNotificationIds.push(...clearedIds);
+          }
+        } else {
+          const cleared = tx.viewer.clearNotification(r.notificationId);
+          if (cleared.cleared) {
+            notificationChanged = true;
+            dismissedNotificationIds.push(r.notificationId);
+            // Only `mention_self` in a live conversation feeds the badge's directed
+            // term, and the attribution is the CONVERSATION's workspace (same
+            // column the positional term groups by) — an anchorless
+            // `agent_start_failed` or a CC'd `mention_external` never counted, so
+            // clearing it moves no badge. The facts exist only in the `cleared`
+            // arm, so this attribution cannot be made for a row this batch did not
+            // clear.
+            if (cleared.kind === 'mention_self' && cleared.anchorWorkspaceId) {
+              directedOnlyBadgeWorkspaces.add(cleared.anchorWorkspaceId);
+            }
           }
         }
       }
-    }
-    return {
-      changedConversations,
-      notificationChanged,
-      dismissedNotificationIds,
-      directedOnlyBadgeWorkspaces,
-    };
-  })();
+      return {
+        changedConversations,
+        notificationChanged,
+        dismissedNotificationIds,
+        directedOnlyBadgeWorkspaces,
+      };
+    },
+  );
 
   const changed =
     outcome.changedConversations.size > 0 || outcome.notificationChanged;

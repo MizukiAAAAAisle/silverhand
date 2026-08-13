@@ -197,10 +197,10 @@ export class ConversationReadRepo {
       .get(viewerUserId, conversationId, threadRootId);
   }
 
-  /** Current cursor seq for ONE stream (0 if no cursor row yet). The observe()
-   *  use case (#task:1231) reads this to decide whether a `markRead` would
-   *  actually advance the cursor (it is monotonic `max()`, so re-marking an
-   *  already-read stream is a no-op) — driving the single coalesced
+  /** Current cursor seq for ONE stream (0 if no cursor row yet). The observation
+   *  write boundary (#task:1987 E) reads this inside its scope to decide whether
+   *  a `markRead` would actually advance the cursor (it is monotonic `max()`, so
+   *  re-marking an already-read stream is a no-op) — driving the single coalesced
    *  `unread_updated` event without a heavier unread recount. */
   getLastReadSeq(
     viewerUserId: string,

@@ -20,7 +20,9 @@ function liveMutatingGovernanceRoutes(t: TestApp): Set<string> {
   // Enumerate the live public route table and keep mutating routes that
   // live under a governance path prefix. Dedupe (Hono lists middleware +
   // handler separately) by `METHOD path`.
-  const router = createApiRouter(t.ctx);
+  const router = createApiRouter(t.ctx, t.persistence, {
+    agentDeletionRunner: t.agentDeletionRunner,
+  });
   const found = new Set<string>();
   for (const route of router.routes) {
     const method = route.method.toUpperCase();

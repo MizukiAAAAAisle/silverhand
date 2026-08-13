@@ -42,9 +42,9 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { openDatabase } from '../../src/db.js';
 import {
-  startBackend,
-  type RunningBackend,
-} from '../../src/index.js';
+  startTestBackend,
+  type TestRunningBackend,
+} from '../utils/test-backend.js';
 import type { BackendLogger } from '../../src/context.js';
 import { openTestDb } from '../utils/db.js';
 
@@ -468,7 +468,7 @@ describe('D4.d §5 — runBootMaterializeReconciler (orchestration)', () => {
 
 describe('D4.d §5 — sequencing: runs before HTTP listener binds (real boot)', () => {
   let tempDir: string;
-  let backend: RunningBackend | null = null;
+  let backend: TestRunningBackend | null = null;
 
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'silverhand-d4d-reconcile-'));
@@ -514,7 +514,7 @@ describe('D4.d §5 — sequencing: runs before HTTP listener binds (real boot)',
         max_depth: 1,
       },
     };
-    backend = await startBackend({
+    backend = await startTestBackend({
       mode: 'standalone',
       dbPath,
       ...resolveBackendDataPaths(silverhandDir),

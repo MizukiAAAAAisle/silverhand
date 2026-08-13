@@ -75,6 +75,13 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import { type EventPublisher } from '../../src/runtime/event-handler.js';
+import { EventPerimeterGuard } from '../../src/runtime/event-perimeter.js';
+import type {
+  RuntimeEventPerimeterPort,
+  RuntimePerimeterAgentReadPort,
+  RuntimePerimeterConversationReadPort,
+} from '../../src/runtime/event-perimeter.js';
+import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
 import { OutboundRuntimeEventFanout } from '../../src/runtime/outbound-event-fanout.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { HostWsServerController } from '../../src/ws/host-ws-server.js';
@@ -97,7 +104,12 @@ interface PerimeterFixture {
   cleanup(): void;
 }
 
-function makePerimeterFixture(): PerimeterFixture {
+function makePerimeterFixture(opts?: {
+  /** Replace the DB-backed guard with an alternate
+   *  {@link RuntimeEventPerimeterPort} implementation — see the injectability
+   *  contract at the bottom of this file (#task:1982 W3 P1). */
+  perimeter?: RuntimeEventPerimeterPort;
+}): PerimeterFixture {
   const { db, viewerUserId, localHostId } = openTestDb();
 
   // Host X = the bootstrapped local host (claimed by viewer).
@@ -168,7 +180,10 @@ function makePerimeterFixture(): PerimeterFixture {
 
   const transport = new FakeTransport();
   const fanout = new OutboundRuntimeEventFanout({
-    db,
+    ...createRuntimeFanoutDbDeps({ db, events: publisher, logger }),
+    // AFTER the spread: when a test supplies its own perimeter, the DB-backed
+    // guard is fully replaced rather than consulted as well.
+    ...(opts?.perimeter ? { perimeter: opts.perimeter } : {}),
     events: publisher,
     transport: () => transport,
     logger,
@@ -610,6 +625,134 @@ describe('OutboundRuntimeEventFanout — D4.c C5 perimeter', () => {
     } finally {
       fix.cleanup();
     }
+  });
+});
+
+/**
+ * #task:1982 W3 P1 (Cindy `dgCAVQ3fbHoOFvvN`) — substitutability contract.
+ *
+ * The tests above prove the POLICY. These prove the policy is not welded to
+ * SQLite. The earlier failure mode was invisible to an import scan: the fanout
+ * imported no `repos/*` module, yet its `perimeter` option was typed as the
+ * `EventPerimeterGuard` CLASS, whose private fields make the type nominal — an
+ * alternate deployment with an identical `assert()` still could not be assigned
+ * to it, so R2 was green by path only.
+ *
+ * Both arms are compile-time AND runtime evidence: the object literals are
+ * written inline (assignability is checked by `tsc`, so a re-widened option
+ * type reddens the build), and each is then shown to actually drive behavior.
+ */
+describe('perimeter substitutability — an alternate implementation is injectable', () => {
+  it('the fanout consumes a plain-object RuntimeEventPerimeterPort — no repo, no driver — and honors its refusal on a frame the DB-backed guard admits', () => {
+    const seen: Array<{ hostId: string; kind: string }> = [];
+    // A perimeter with no DB at all: it answers from its arguments. If the
+    // fanout's option type were the guard class again, this literal would not
+    // type-check.
+    const refuseAll: RuntimeEventPerimeterPort = {
+      assert: (hostId, event) => {
+        seen.push({ hostId, kind: event.kind });
+        return false;
+      },
+    };
+    const fix = makePerimeterFixture({ perimeter: refuseAll });
+    try {
+      // The exact frame the control test proves the DB-backed guard ADMITS.
+      fix.fanout.onEvent(
+        fix.hostX.id,
+        parsedEventFrame(fix.hostX.channelId, fix.hostX.agentId),
+        'conn-1',
+      );
+
+      // The injected verdict is the only one that counted.
+      expect(seen).toEqual([
+        { hostId: fix.hostX.id, kind: 'runtime_parsed_event' },
+      ]);
+      expect(fix.events).toEqual([]);
+      expect(fix.transport.calls).toEqual([]);
+      expect(fanoutStatesSize(fix.fanout)).toBe(0);
+      // The drop came from the injected port, so no guard warn was logged —
+      // proof the replacement is total rather than additive.
+      expect(perimeterWarns(fix.warns)).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('the injected port fully REPLACES the DB-backed guard — an admit verdict lets through a cross-host frame the guard would drop', () => {
+    const admitAll: RuntimeEventPerimeterPort = { assert: () => true };
+    const fix = makePerimeterFixture({ perimeter: admitAll });
+    try {
+      // Host X's connection claiming host Y's agent + conversation: the
+      // `agent_host_mismatch` shape the guard rejects two tests above.
+      fix.fanout.onEvent(
+        fix.hostX.id,
+        parsedEventFrame(fix.hostY.channelId, fix.hostY.agentId),
+        'conn-1',
+      );
+
+      const agentEvent = fix.events.find(
+        e => e.conv === fix.hostY.channelId && e.kind === 'agent_event',
+      );
+      expect(agentEvent).toBeDefined();
+      expect(perimeterWarns(fix.warns)).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  it('EventPerimeterGuard itself runs on plain-object read ports — the policy needs three answers, not AgentRepo / ConversationRepo / a Db', () => {
+    const warns: PerimeterFixture['warns'] = [];
+    const logger: BackendLogger = {
+      info: () => {},
+      warn: (obj, msg) => warns.push({ obj, msg }),
+      error: () => {},
+    };
+    // The three facts, answered from a literal table. No row ever reaches the
+    // guard, so it is structurally unable to depend on one.
+    const agents: RuntimePerimeterAgentReadPort = {
+      ownerHostIdOf: agentId =>
+        ({
+          'agent-mine': 'host-1',
+          'agent-guest': 'host-1',
+          'agent-theirs': 'host-2',
+        })[agentId] ?? null,
+    };
+    const conversations: RuntimePerimeterConversationReadPort = {
+      exists: conversationId => conversationId === 'conv-known',
+      hasAgent: (conversationId, agentId) =>
+        conversationId === 'conv-known' && agentId === 'agent-mine',
+    };
+    const guard = new EventPerimeterGuard({ agents, conversations, logger });
+
+    // Every arm of the chain, on a guard that has never seen a database.
+    expect(guard.assert('host-1', readyEvent())).toBe(true);
+    expect(guard.assert('host-1', shuttingDownEvent())).toBe(true);
+    expect(
+      guard.assert('host-1', parsedEventFrame('conv-known', 'agent-mine')),
+    ).toBe(true);
+    expect(warns).toEqual([]);
+
+    const reasons: Array<string | undefined> = [];
+    for (const frame of [
+      parsedEventFrame('conv-known', 'agent-nobody'),
+      parsedEventFrame('conv-known', 'agent-theirs'),
+      parsedEventFrame('conv-missing', 'agent-mine'),
+      parsedEventFrame('conv-known', 'agent-guest'),
+    ]) {
+      expect(guard.assert('host-1', frame)).toBe(false);
+      const obj = warns.at(-1)?.obj;
+      const record = isRecord(obj) ? obj : {};
+      reasons.push(
+        (record.reason as string | undefined) ??
+          (record.action as string | undefined),
+      );
+    }
+    expect(reasons).toEqual([
+      'outbound_event_unknown_agent',
+      'agent_host_mismatch',
+      'conversation_unknown',
+      'agent_not_in_conversation',
+    ]);
   });
 });
 

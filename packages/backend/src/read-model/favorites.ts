@@ -64,7 +64,11 @@
 // Favorites is human viewer-scoped — the only principal kind that stars — so the
 // visibility predicate is the canViewWorkspace USER branch (workspace_users
 // membership) plus the conversation-level reachability above, expressed as SQL.
-import type { BackendContext } from '../context.js';
+// #task:1983 W2 — the handle is bound at ASSEMBLY time
+// (`createFavoritesReadModel`), not read out of a god-context per call: this
+// projection only ever needed `db`, and taking the whole `BackendContext` is
+// what made the read side look like it had ambient access to everything.
+import type { Database as Db } from 'better-sqlite3';
 import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
 import type {
   FavoriteRowDto,
@@ -109,7 +113,7 @@ export function favoriteKey(kind: FavoriteRowDto['kind'], entityId: string): str
  * not pre-sort.
  */
 export function listFavorites(
-  ctx: BackendContext,
+  db: Db,
   params: ListFavoritesParams,
 ): ListFavoritesDto {
   const { viewerUserId } = params;
@@ -121,7 +125,7 @@ export function listFavorites(
   // conversation-level reachability from the header; archived conversations and
   // archived workspaces are excluded. `last_accessed_at` is the HOME-list
   // recent-opened stamp, so "recent" means recently-OPENED (from anywhere).
-  const conversationRows = ctx.db
+  const conversationRows = db
     .prepare<{ viewer: string }, ConversationFavoriteRow>(
       `SELECT
          use.entity_id        AS entity_id,
@@ -165,7 +169,7 @@ export function listFavorites(
   // Manual rank per favorite_key + the list-wide mode. These are the ONLY thing
   // Favorites stores for itself; membership above is the single source of truth.
   const rankByKey = new Map<string, number>();
-  for (const r of ctx.db
+  for (const r of db
     .prepare<{ viewer: string }, { entity_id: string; rank: number }>(
       `SELECT entity_id, rank FROM user_sort_entry
        WHERE user_id = @viewer AND list_key = 'favorites' AND rank IS NOT NULL`,
@@ -174,7 +178,7 @@ export function listFavorites(
     rankByKey.set(r.entity_id, r.rank);
   }
   const modes: Record<string, SortMode> = {};
-  for (const r of ctx.db
+  for (const r of db
     .prepare<{ viewer: string }, { scope: string; mode: SortMode }>(
       `SELECT scope, mode FROM user_list_sort_mode
        WHERE user_id = @viewer AND list_key = 'favorites'`,
@@ -192,7 +196,7 @@ export function listFavorites(
   // signal is simply lost. Source is the CANONICAL unread repo (the same
   // `ROLLUP_UNREAD` predicate an in-tree conversation row uses), so the STARRED
   // badge equals what the in-tree row would show — single source, no drift.
-  const reads = new ConversationReadRepo(ctx.db);
+  const reads = new ConversationReadRepo(db);
   const unreadByConversation = reads.unreadCountsByConversation(viewerUserId);
   // NO tiered badge aggregation here (#task:1875). The tiered badge lives on
   // `GET /api/attention/badges` alone — that is the face `attention_badge_updated`
@@ -258,4 +262,17 @@ export function listFavorites(
   );
 
   return { items, viewer_sort: { list_key: 'favorites', modes, entries } };
+}
+
+/**
+ * The favorites read surface a caller receives, handle already bound
+ * (#task:1983 W2). Route modules declare THIS in their deps rather than
+ * importing the module and passing a context.
+ */
+export interface FavoritesReadModel {
+  readonly list: (params: ListFavoritesParams) => ListFavoritesDto;
+}
+
+export function createFavoritesReadModel(db: Db): FavoritesReadModel {
+  return { list: params => listFavorites(db, params) };
 }

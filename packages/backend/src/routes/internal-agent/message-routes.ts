@@ -12,11 +12,6 @@ import {
   canPostToConversation,
   canViewConversation,
 } from '../../permissions.js';
-import {
-  buildAgentSearchMessagesDto,
-  buildReadHistoryDto,
-  resolveAgentReadHistoryTarget,
-} from '../../read-model/agent-read.js';
 import { timedRouteSpan } from '../../observability/route-span.js';
 import { requireAgentCapability } from '../capability.js';
 import { conversationMessageServiceErrorResponse } from '../responses.js';
@@ -39,7 +34,7 @@ export function registerMessageRoutes(
   app: Hono<AppEnv>,
   deps: InternalRouteDeps,
 ): void {
-  const { ctx, conversations } = deps;
+  const { ctx, agentReads, conversations } = deps;
 
   // Pre-parse bound: reject oversized request bodies (declared or
   // chunked) before buffering/JSON.parse. The precise UTF-8 content
@@ -197,8 +192,7 @@ export function registerMessageRoutes(
     }
     const sourceConversation = conversations.get(principal.conversationId);
     if (!sourceConversation) return c.json({ error: 'conversation not found' }, 404);
-    const target = resolveAgentReadHistoryTarget(
-      ctx,
+    const target = agentReads.resolveHistoryTarget(
       conversations,
       sourceConversation,
       principal.agentId,
@@ -222,10 +216,12 @@ export function registerMessageRoutes(
         limit: parsed.data.limit,
       },
       () =>
-        buildReadHistoryDto(ctx, target.conversation, parsed.data, target.threadRootId, {
-          kind: 'agent',
-          id: principal.agentId,
-        }),
+        agentReads.buildReadHistoryDto(
+          target.conversation,
+          parsed.data,
+          target.threadRootId,
+          { kind: 'agent', id: principal.agentId },
+        ),
       out => ({
         messageCount: 'messages' in out ? out.messages.length : 0,
       }),
@@ -295,8 +291,7 @@ export function registerMessageRoutes(
         limit: parsed.data.limit,
       },
       () =>
-        buildAgentSearchMessagesDto(
-          ctx,
+        agentReads.buildSearchMessagesDto(
           conversations,
           sourceConversation,
           principal.agentId,

@@ -11,6 +11,7 @@ import type {
   AuthUsersPort,
   HandleNamespacePort,
 } from './ports.js';
+import { UserWriteConflictError } from '../services/user/user-write-conflict.js';
 
 export interface UserPasswordResetResult {
   userId: string;
@@ -118,28 +119,26 @@ export class UserAuthService {
         this.publishCreated(userId);
         return { ok: true, userId };
       } catch (err) {
+        if (!(err instanceof UserWriteConflictError)) throw err;
         // Internal id allocation is a different axis: retry, and whatever else
         // is wrong resurfaces on the next attempt.
-        if (isUserIdConflict(err)) continue;
-        if (isNameConflict(err) || isEmailConflict(err)) {
-          // A conflict here means the world moved under the pre-checks, so
-          // RE-ANSWER in the same priority order instead of mapping each error
-          // 1:1. Mapping 1:1 would let SQLite pick the answer: when the handle
-          // and the email are both taken, `users.email` UNIQUE can fire before
-          // the name trigger, and a taken handle would then be reported as 401
-          // — the very email-existence oracle the ordering above exists to
-          // prevent. Re-reading the handle is authoritative because a conflict
-          // proves the pre-check read is stale.
-          if (this.handles.isParticipantHandleTaken(input.name)) {
-            return { ok: false, code: 'handle_taken' };
-          }
-          // Handle free on re-read: either the email is the conflict, or a
-          // handle taken at INSERT time has since been released (agent names
-          // can be hard-deleted). Never lose the name-conflict fact.
-          if (isEmailConflict(err)) return { ok: false, code: 'auth_failed' };
+        if (err.kind === 'user_id') continue;
+        // A conflict here means the world moved under the pre-checks, so
+        // RE-ANSWER in the same priority order instead of mapping each conflict
+        // 1:1. Mapping 1:1 would let the engine pick the answer: when the
+        // handle and the email are both taken, the email uniqueness can fire
+        // before the name one, and a taken handle would then be reported as 401
+        // — the very email-existence oracle the ordering above exists to
+        // prevent. Re-reading the handle is authoritative because a conflict
+        // proves the pre-check read is stale.
+        if (this.handles.isParticipantHandleTaken(input.name)) {
           return { ok: false, code: 'handle_taken' };
         }
-        throw err;
+        // Handle free on re-read: either the email is the conflict, or a
+        // handle taken at INSERT time has since been released (agent names
+        // can be hard-deleted). Never lose the name-conflict fact.
+        if (err.kind === 'email') return { ok: false, code: 'auth_failed' };
+        return { ok: false, code: 'handle_taken' };
       }
     }
     throw new Error('UserAuthService.signup: could not allocate unique user id');
@@ -199,31 +198,6 @@ function displayNameFromEmailLocalPart(localPart: string): string {
   return (normalized || 'User')
     .slice(0, DISPLAY_NAME_MAX_LENGTH)
     .trim();
-}
-
-function isEmailConflict(err: unknown): boolean {
-  const message = errorMessage(err);
-  return (
-    /UNIQUE constraint failed: users\.email/.test(message)
-    || /uniq_users_email_when_set/.test(message)
-  );
-}
-
-function isNameConflict(err: unknown): boolean {
-  const message = errorMessage(err);
-  return (
-    /users\.name collides with an existing agent name/.test(message)
-    || /UNIQUE constraint failed: users\.name/.test(message)
-  );
-}
-
-function isUserIdConflict(err: unknown): boolean {
-  return /UNIQUE constraint failed: users\.id/.test(errorMessage(err));
-}
-
-function errorMessage(err: unknown): string {
-  if (!err || typeof err !== 'object') return '';
-  return String((err as { message?: unknown }).message ?? '');
 }
 
 function randomHex(byteCount: number): string {

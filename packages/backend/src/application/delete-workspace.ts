@@ -6,6 +6,7 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { StoredFileRef } from '../storage/blob-file-storage.js';
 import type { BlobSweepOutcome } from '../services/attachment-service.js';
 import { canGovernWorkspace } from '../permissions.js';
+import { publishViewerWorkspacesChanged } from './viewer-workspaces.js';
 
 /**
  * DeleteWorkspace use case (#task:983 — P13a spec).
@@ -231,8 +232,8 @@ export function deleteWorkspaceRow(
  * emitted NOTHING to viewers, so a viewer with unread in the deleted workspace
  * kept a phantom workspace/total badge (the #1284 summary cache is patched in
  * place, never refetched, until this signal or a manual reload). Post-commit,
- * per-viewer on the `viewer:<id>` scope, mirroring conversation-member's
- * `viewer_workspaces_changed` shape (change/workspace_id; the wire stays
+ * per-viewer on the `viewer:<id>` scope, through the one owner of the
+ * `viewer_workspaces_changed` contract (`viewer-workspaces.ts`; the wire stays
  * `unknown` and each side validates independently —
  * docs/viewer-visibility-sync-v1.md). The renderer half (#task:1404) drops the
  * removed workspace's unread contribution from the summary on this same event.
@@ -242,7 +243,7 @@ export function publishWorkspaceRemoved(
   plan: WorkspaceTeardownPlan,
 ): void {
   for (const userId of plan.viewerUserIds) {
-    deps.ctx.events.publishToScope(`viewer:${userId}`, 'viewer_workspaces_changed', {
+    publishViewerWorkspacesChanged(deps.ctx, userId, {
       change: 'removed',
       workspace_id: plan.workspaceId,
     });

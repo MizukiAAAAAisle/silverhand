@@ -14,10 +14,7 @@
 // builder and `TaskStore.list`'s user branch.
 //
 // Every fragment assumes the `tasks` table is aliased `t`.
-import type {
-  TaskBoardAssigneeFilterType,
-  TaskBoardCreatorFilterType,
-} from '@silverhand/shared';
+import type { TaskBoardPopulationFilters } from '../services/task/board.js';
 
 /**
  * Which tasks a HUMAN viewer may see: those whose owning conversation the
@@ -35,28 +32,6 @@ export const USER_VISIBLE_TASK_PREDICATE = `EXISTS (
      WHERE cu.conversation_id = t.conversation_id
        AND cu.user_id = ?
   )`;
-
-/** The board's filter axes, already validated/normalized by the route. */
-export interface TaskBoardPopulationFilters {
-  /** The human viewer — always present; the board has no unscoped read. */
-  viewerUserId: string;
-  /** Optional narrowing. Absent = the default All-workspaces board. */
-  workspaceId?: string | undefined;
-  /** A channel conversation id: matches that channel AND its threads, because
-   *  a task's conversation IS its channel (the reply cluster is
-   *  `thread_root_id`, a separate column). */
-  channelId?: string | undefined;
-  /** `unassigned` names BOTH assignee columns being NULL — the aggregate
-   *  splits one concept across `assignee_agent_id` / `assignee_user_id`, so a
-   *  predicate that mentions only one of them is half a rule. */
-  assignee?:
-    | { type: Extract<TaskBoardAssigneeFilterType, 'agent' | 'user'>; id: string }
-    | { type: 'unassigned' }
-    | undefined;
-  /** `creator_kind` pairs exactly with its id column (table CHECK), so both are
-   *  asserted — a creator id alone would also match a row whose kind differs. */
-  creator?: { type: TaskBoardCreatorFilterType; id: string } | undefined;
-}
 
 /** A composable SQL fragment plus its positional bind values, in order. */
 export interface SqlFragment {

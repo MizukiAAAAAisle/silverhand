@@ -6,6 +6,8 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { createSqliteMembershipPersistence } from '../../src/repos/membership-persistence.js';
+import { createSqliteAgentTeardownPersistence } from '../../src/repos/agent-teardown-persistence.js';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -110,7 +112,11 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
 
     const workspaces = new WorkspaceRepo(t.ctx.db);
     const result = await addWorkspaceAgentMember(
-      { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
+      {
+        ctx: t.ctx,
+        agents: new AgentRepo(t.ctx.db),
+        membershipPersistence: createSqliteMembershipPersistence(t.ctx.db),
+      },
       {
         // #task:1681 — the guest agent's CREATOR drives its own enrollment;
         // the host axis under test is orthogonal to the ownership gate.
@@ -151,7 +157,11 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
 
     const workspaces = new WorkspaceRepo(t.ctx.db);
     const result = await addWorkspaceAgentMember(
-      { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
+      {
+        ctx: t.ctx,
+        agents: new AgentRepo(t.ctx.db),
+        membershipPersistence: createSqliteMembershipPersistence(t.ctx.db),
+      },
       {
         principal: { kind: 'user', userId: 'teammate' },
         workspace: { id: ws.id },
@@ -176,7 +186,11 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
 
     const workspaces = new WorkspaceRepo(t.ctx.db);
     const result = await addWorkspaceAgentMember(
-      { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces },
+      {
+        ctx: t.ctx,
+        agents: new AgentRepo(t.ctx.db),
+        membershipPersistence: createSqliteMembershipPersistence(t.ctx.db),
+      },
       {
         principal: { kind: 'user', userId: t.viewerUserId },
         workspace: { id: ws.id },
@@ -277,7 +291,11 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     // strand a managed tree, so the delete succeeds rather than spuriously
     // fail-closing.
     const established = await addWorkspaceAgentMember(
-      { ctx: t.ctx, agents: new AgentRepo(t.ctx.db), workspaces: new WorkspaceRepo(t.ctx.db) },
+      {
+        ctx: t.ctx,
+        agents: new AgentRepo(t.ctx.db),
+        membershipPersistence: createSqliteMembershipPersistence(t.ctx.db),
+      },
       {
         principal: { kind: 'user', userId: t.viewerUserId },
         workspace: { id: 'ws-foreign-del' },
@@ -290,10 +308,8 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const result = await deleteAgent(
       {
         ctx: t.ctx,
-        agents: new AgentRepo(t.ctx.db),
-        workspaces: new WorkspaceRepo(t.ctx.db),
-        conversations: new ConversationRepo(t.ctx.db),
-        conversationInboxes: new ConversationInboxRepo(t.ctx.db),
+        teardown: createSqliteAgentTeardownPersistence(t.ctx.db),
+        deletionRunner: t.agentDeletionRunner,
       },
       { agentId, requesterUserId: t.viewerUserId, body: { confirm: true } },
     );
@@ -347,14 +363,12 @@ describe('#task:1600 — cross-computer membership seed/purge planning', () => {
     const result = await deleteAgent(
       {
         ctx: t.ctx,
-        agents: new AgentRepo(t.ctx.db),
-        workspaces: new WorkspaceRepo(t.ctx.db),
-        conversations: new ConversationRepo(t.ctx.db),
-        conversationInboxes: new ConversationInboxRepo(t.ctx.db),
+        teardown: createSqliteAgentTeardownPersistence(t.ctx.db),
+        deletionRunner: t.agentDeletionRunner,
       },
       { agentId, requesterUserId: t.viewerUserId, body: { confirm: true } },
     );
-    expect(result.kind).toBe('failClosed');
+    expect(result.kind).toBe('deletionPendingRetry');
 
     // Agent row + BOTH memberships retained for retry.
     expect(new AgentRepo(t.ctx.db).get(agentId)).not.toBeNull();

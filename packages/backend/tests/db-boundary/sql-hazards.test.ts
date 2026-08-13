@@ -26,6 +26,7 @@ import {
   SQL_HAZARD_INVENTORY,
 } from './inventory.js';
 import { allProductionSources, asInventoryLines, REPO_ROOT, sqlScopeSources } from './sources.js';
+import { zoneSurfaceViolations } from './zones.js';
 
 describe('db-boundary: SQLite hazard ledger', () => {
   const all = allProductionSources();
@@ -95,6 +96,20 @@ describe('db-boundary: SQLite hazard ledger', () => {
       }
     }
     expect(problems).toEqual([]);
+  });
+
+  it('every SQL-caller row is on the owner surface its zone names (#task:1983 W8)', () => {
+    // Without this the ledger above is satisfiable by the offender: a new
+    // `src/services/*.ts` that calls `db.prepare()` and adds itself with
+    // `zone: 'repository'` matches its own row and every gate stays green. The
+    // zone is a claim about which module owns persisted state, so it is checked
+    // against that surface — statement capability is not something a consumer
+    // layer can label its way into.
+    expect(
+      zoneSurfaceViolations(SQL_CALLER_INVENTORY, 'sql-caller'),
+      'a SQL-caller row claims a zone it is not on. Issuing SQL is a persistence privilege: put the query in a ' +
+        'repository/read-model under src/repos/ or src/read-model/, or ask one for the fact you need',
+    ).toEqual([]);
   });
 
   it('dynamic (statically unresolvable) SQL sink arguments match the ledger exactly — never silently skipped', () => {

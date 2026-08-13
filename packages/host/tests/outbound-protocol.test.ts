@@ -217,6 +217,7 @@ describe('outbound protocol — command catalogue', () => {
 
   it('pins the agent_materialize error-code catalogue and rejects unknown codes', () => {
     expect(AgentMaterializeErrorCodeSchema.options).toEqual([
+      'agent_deleting',
       'fs_quota_exceeded',
       'fs_unavailable',
       'agent_dir_collision',

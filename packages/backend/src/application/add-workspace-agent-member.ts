@@ -2,8 +2,7 @@ import type { BackendContext } from '../context.js';
 import type { WorkspaceMemberDto } from '@silverhand/shared';
 import type { Principal } from '../auth/principal.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
-import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import { AgentCapabilityRepo } from '../repos/agent-capability-repo.js';
+import type { AgentMembershipTxPort, MembershipPersistence } from './membership-ports.js';
 import { canEnrollAgent } from '../permissions.js';
 
 /**
@@ -18,11 +17,19 @@ import { canEnrollAgent } from '../permissions.js';
  *    here because this use case is the ONLY writer of agent workspace
  *    membership on the request paths, so both doors (workspace member-add and
  *    the conversation member-add auto-provision) inherit the gate.
- *  - the unit-of-work is explicit and visible here: one `db.transaction`
- *    wraps the pure `insertMembership` persistence fact and the capability
- *    default-seed POLICY decision. `seedDefaults` runs only when the row was
- *    genuinely created (`created`), preserving cut2's no-silent-re-widen and
- *    "a member always has a cap set" invariants.
+ *  - the unit-of-work is explicit and visible here: one keyed
+ *    {@link MembershipPersistence} transaction wraps the pure `insertMembership`
+ *    persistence fact and the capability default-seed POLICY decision.
+ *    `seedDefaults` runs only when the row was genuinely created (`created`),
+ *    preserving cut2's no-silent-re-widen and "a member always has a cap set"
+ *    invariants.
+ *
+ * The WRITE half is {@link enrollAgentIntoWorkspace} — an in-transaction
+ * write-core, not a second use case (#task:1987): the conversation member-add
+ * door must enroll the agent and place it in the channel in ONE commit, so it
+ * calls that core inside its own `atomically` instead of calling this use case
+ * and committing twice. The GATE stays duplicated in neither place: both doors
+ * run `canEnrollAgent` before any write.
  *
  * relocation-v1 §7 task 4 — provisioning collapse: adding a member is now a
  * PURE DB write. There is no placement precondition (a workspace is not rooted
@@ -45,11 +52,28 @@ export type AddWorkspaceAgentMemberResult =
   | { ok: true; member: WorkspaceMemberDto }
   | { ok: false; error: AddWorkspaceAgentMemberError };
 
+/**
+ * The in-transaction write-core of agent workspace enrollment: the membership
+ * row plus the capability default-seed POLICY. Shared by this use case and the
+ * conversation member-add auto-provision door, so the "seed only when the row
+ * was genuinely created" rule exists ONCE.
+ *
+ * Takes the agent membership scope of an ALREADY-COORDINATED `atomically` — the
+ * agent is that transaction's key, so this core cannot be pointed at another
+ * agent or another workspace, and it holds no DB handle. The `if (created)`
+ * decision stays HERE (application policy), never in the adapter.
+ */
+export function enrollAgentIntoWorkspace(tx: AgentMembershipTxPort): WorkspaceMemberDto {
+  const inserted = tx.insertWorkspaceMembership();
+  if (inserted.created) tx.seedCapabilityDefaults();
+  return inserted.member;
+}
+
 export async function addWorkspaceAgentMember(
   deps: {
     ctx: BackendContext;
     agents: AgentRepo;
-    workspaces: WorkspaceRepo;
+    membershipPersistence: MembershipPersistence;
   },
   input: {
     /**
@@ -63,7 +87,7 @@ export async function addWorkspaceAgentMember(
     agentId: string;
   },
 ): Promise<AddWorkspaceAgentMemberResult> {
-  const { ctx, agents, workspaces } = deps;
+  const { ctx, agents } = deps;
   const agent = agents.get(input.agentId);
   if (!agent) return { ok: false, error: { code: 'agent_not_found' } };
 
@@ -94,16 +118,15 @@ export async function addWorkspaceAgentMember(
   // precondition; a member added but never spawned is a legal no-dir/no-L2
   // state.
 
-  // ① in-tx: explicit unit-of-work. Pure persistence + capability policy in
-  // one transaction so a member always has a cap set, and the no-silent
-  // re-widen rule holds (seed only when the row was genuinely created).
-  const member = ctx.db.transaction(() => {
-    const inserted = workspaces.insertMembership(input.workspace.id, agent.id);
-    if (inserted.created) {
-      new AgentCapabilityRepo(ctx.db).seedDefaults(input.workspace.id, agent.id);
-    }
-    return inserted.member;
-  })();
+  // ① in-tx: explicit unit-of-work, keyed on `(workspace, agent)` so this
+  // enrollment serializes against a concurrent removal cascade over the same
+  // pair. Pure persistence + capability policy in one transaction so a member
+  // always has a cap set, and the no-silent re-widen rule holds (seed only when
+  // the row was genuinely created).
+  const member = deps.membershipPersistence.uow.atomically(
+    { workspaceId: input.workspace.id, member: { kind: 'agent', id: agent.id } },
+    tx => enrollAgentIntoWorkspace(tx.membership),
+  );
 
   // This path emits no post-commit event today; keep it that way (spec §4 —
   // no new outward side-effect this cut).

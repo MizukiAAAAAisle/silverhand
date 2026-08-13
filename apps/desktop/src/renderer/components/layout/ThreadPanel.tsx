@@ -28,7 +28,9 @@ import {
   threadLiveMarkReadSeq,
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
+  threadReplyRows,
   threadTailIsVisible,
+  threadVisibleReplySeq,
 } from './threadMarkRead';
 import type { ConversationReference } from '@/components/chat/ConversationRef';
 import { type JumpPhase, jumpWindowLockedForPhase, threadLocateAllowed } from '@/features/channels/messageJumpPhase';
@@ -42,10 +44,7 @@ import {
   useThreadRoot,
   useUnfollowThread,
 } from '@/features/channels/hooks';
-import {
-  isCommittedMessage,
-  lastCommittedSeq,
-} from '@/features/channels/pending-message';
+import { isCommittedMessage } from '@/features/channels/pending-message';
 import type { MessageSeq } from '@silverhand/shared';
 import { useAgents } from '@/features/agents/hooks';
 import { useAgentAvatarObjectUrls } from '@/features/agents/avatar-hooks';
@@ -320,9 +319,11 @@ export function ThreadPanel({
   // The root is pinned separately (see below), so drop it from the
   // scrolled reply list to avoid rendering it twice — it can appear in
   // the cluster window for small threads (where the window reaches the
-  // start) but not for large ones (tail-anchored window).
+  // start) but not for large ones (tail-anchored window). `threadReplyRows` is
+  // the single authority for "which window rows are replies"; the read cursor
+  // below derives from the same predicate.
   const replyMessages = useMemo(
-    () => messages.filter(m => m.id !== rootMessageId),
+    () => threadReplyRows(messages, rootMessageId),
     [messages, rootMessageId],
   );
   const items = useMemo(() => groupMessages(replyMessages), [replyMessages]);
@@ -623,7 +624,12 @@ export function ThreadPanel({
   // (max-VISIBLE, not latest-known — `messages` is the loaded
   // window). `lastMarkedSeqRef` (advanced on success) keeps it forward-only.
   // `documentVisible` is a dep so returning to the foreground re-runs the gate.
-  const maxLoadedSeq = lastCommittedSeq(messages);
+  // The cursor comes from the REPLY rows only (`threadVisibleReplySeq`): the
+  // cluster window also contains the pinned main-line root, whose seq belongs to
+  // the channel stream and is beyond this thread's head — posting it would be a
+  // `position_future` 400 on a reply-less thread (#task:1992). Null there, so
+  // the gate holds and no request is sent.
+  const maxLoadedReplySeq = threadVisibleReplySeq(messages, rootMessageId);
   useEffect(() => {
     const viewport = scrollRef.current;
     const seq = threadLiveMarkReadSeq({
@@ -636,7 +642,7 @@ export function ThreadPanel({
           clientHeight: viewport.clientHeight,
         }),
       documentVisible,
-      maxVisibleSeq: maxLoadedSeq,
+      maxVisibleReplySeq: maxLoadedReplySeq,
       lastMarkedSeq: lastMarkedSeqRef.current,
     });
     // Track the gated seq for the close/switch flush. When the gate closes
@@ -673,7 +679,7 @@ export function ThreadPanel({
   }, [
     showScrollBottom,
     documentVisible,
-    maxLoadedSeq,
+    maxLoadedReplySeq,
     isAtTail,
     issueMarkRead,
   ]);

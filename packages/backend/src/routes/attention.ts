@@ -38,12 +38,15 @@ import {
   canViewOwnedState,
   canViewWorkspace,
 } from '../permissions.js';
-import { listActivity } from '../read-model/activity.js';
+import type { ActivityReadModel } from '../read-model/activity.js';
 import { observe, type ObserveErrorCode } from '../application/observe.js';
+import type { ObservationPersistence } from '../application/observation-ports.js';
 import { publishAttentionBadgeUpdated } from '../viewer-scope.js';
 
 export interface AttentionRouteDeps {
   ctx: BackendContext;
+  /** The Activity projection, handle bound at composition time (#task:1983 W2). */
+  activity: ActivityReadModel;
   conversations: ConversationRepo;
   messages: MessageRepo;
   workspaces: WorkspaceRepo;
@@ -52,6 +55,9 @@ export interface AttentionRouteDeps {
   channelAttentionPrefs: ChannelAttentionPreferenceRepo;
   workspaceAttentionPrefs: WorkspaceAttentionPreferenceRepo;
   attentionBadges: AttentionBadgeRepo;
+  /** The observation write boundary (#task:1987 E) the `observe` primitive
+   *  commits through. */
+  observations: ObservationPersistence;
 }
 
 /** Map a typed observe() error to an HTTP status. not-found → 404, auth → 403,
@@ -72,6 +78,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   const {
     ctx,
+    activity,
     conversations,
     workspaces,
     channelAttentionPrefs,
@@ -306,7 +313,7 @@ export function createAttentionApp(deps: AttentionRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'forbidden' }, 403);
     }
     const workspaceId = c.req.query('workspace_id') || undefined;
-    const dto: ListActivityDto = listActivity(ctx, { viewerUserId, workspaceId });
+    const dto: ListActivityDto = activity.list({ viewerUserId, workspaceId });
     return c.json(dto);
   });
 

@@ -19,6 +19,7 @@ export type SwitchAgentRuntimeErrorCode =
   | 'runtime_not_selectable'
   | 'runtime_not_installed'
   | 'runtime_transition_in_progress'
+  | 'agent_deletion_in_progress'
   | 'runtime_transition_lost'
   | 'runtime_session_clear_failed'
   | DataPlaneFailureCode;
@@ -125,6 +126,13 @@ export async function switchAgentRuntime(
       'runtime_transition_in_progress',
       409,
       `agent ${input.agentId} is already switching runtime`,
+    );
+  }
+  if (lock === 'deleting') {
+    throw new SwitchAgentRuntimeError(
+      'agent_deletion_in_progress',
+      409,
+      `agent ${input.agentId} is being deleted`,
     );
   }
 

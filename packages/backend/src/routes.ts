@@ -12,25 +12,10 @@ import {
   type DesktopApiEpochOptions,
 } from './auth/desktop-api-epoch.js';
 import type { BackendContext } from './context.js';
+import type { BackendPersistence } from './persistence/root.js';
+import type { AgentDeletionRunner } from './application/agent-deletion-resumer.js';
 import { elapsedSince } from './observability/route-span.js';
-import { AgentRepo } from './repos/agent-repo.js';
-import { AttachmentRepo } from './repos/attachment-repo.js';
-import { HostRepo } from './repos/host-repo.js';
 import { HostTokenService } from './auth/host-token.js';
-import { MessageRepo } from './repos/message-repo.js';
-import { MessageReactionRepo } from './repos/message-reaction-repo.js';
-import { NotificationRepo } from './repos/notification-repo.js';
-import { SavedMessageRepo } from './repos/saved-message-repo.js';
-import { SearchRepo } from './repos/search-repo.js';
-import { ConversationReadRepo } from './repos/conversation-read-repo.js';
-import { ChannelAttentionPreferenceRepo } from './repos/channel-attention-preference-repo.js';
-import { WorkspaceAttentionPreferenceRepo } from './repos/workspace-attention-preference-repo.js';
-import { AttentionBadgeRepo } from './repos/attention-badge-repo.js';
-import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
-import { WorkspaceRepo } from './repos/workspace-repo.js';
-import { ConversationRepo } from './repos/conversation-repo.js';
-import { ConversationEventRepo } from './repos/conversation-event-repo.js';
-import { SortRepo } from './repos/sort-repo.js';
 import { detectRuntimes } from '@silverhand/host/runtimes';
 import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import { createHostApp } from './routes/hosts.js';
@@ -52,11 +37,6 @@ import {
 } from './routes/conversations.js';
 import { createAttentionApp } from './routes/attention.js';
 import { MembershipService } from './services/membership-service.js';
-import { UserRepo } from './repos/user-repo.js';
-import {
-  createHandleNamespacePort,
-  createSqliteAuthUnitOfWork,
-} from './repos/auth-uow.js';
 import { hostRuntimeDisabledResponse } from './routes/responses.js';
 import {
   type MembershipRouteDeps,
@@ -117,7 +97,7 @@ function readinessResponse(ctx: BackendContext): {
   };
   status: 200 | 503;
 } {
-  const writable = probeDbWritable(ctx);
+  const writable = ctx.dbWriteProbe.probe();
   const baseChecks = {
     migrations_applied: ctx.readiness.migrationsApplied,
     listen_ready: ctx.readiness.listenReady,
@@ -157,36 +137,6 @@ function readinessResponse(ctx: BackendContext): {
       ts: Date.now(),
     },
   };
-}
-
-function probeDbWritable(
-  ctx: BackendContext,
-): { ok: true } | { ok: false; error: string } {
-  const startedAt = performance.now();
-  try {
-    ctx.db.exec('BEGIN IMMEDIATE');
-    ctx.db.exec('ROLLBACK');
-    ctx.metrics?.observeReadinessProbe('ok', elapsedSince(startedAt));
-    return { ok: true };
-  } catch (err) {
-    safeRollback(ctx);
-    ctx.metrics?.observeReadinessProbe(
-      sqliteProbeOutcome(err),
-      elapsedSince(startedAt),
-    );
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-function safeRollback(ctx: BackendContext): void {
-  try {
-    if (ctx.db.inTransaction) ctx.db.exec('ROLLBACK');
-  } catch {
-    // Best-effort cleanup after a failed readiness write probe.
-  }
 }
 
 function requireSessionBearerUser(
@@ -313,14 +263,6 @@ function normalizedRoute(c: Context): string {
   return matched && matched !== '*' ? matched : 'unmatched';
 }
 
-function sqliteProbeOutcome(err: unknown): 'busy' | 'locked' | 'error' {
-  if (!err || typeof err !== 'object' || !('code' in err)) return 'error';
-  const code = String((err as { code?: unknown }).code ?? '');
-  if (code.startsWith('SQLITE_BUSY')) return 'busy';
-  if (code.startsWith('SQLITE_LOCKED')) return 'locked';
-  return 'error';
-}
-
 function nextApiRequestId(): string {
   apiRequestSequence = (apiRequestSequence + 1) % Number.MAX_SAFE_INTEGER;
   return `api-${apiRequestSequence}`;
@@ -340,11 +282,13 @@ function isChannelSwitchDiagnosticPath(path: string): boolean {
 export interface ApiRouterOptions {
   /** #task:1761 test seam — see DesktopApiEpochOptions. */
   desktopApiEpoch?: DesktopApiEpochOptions;
+  agentDeletionRunner: AgentDeletionRunner;
 }
 
 export function createApiRouter(
   ctx: BackendContext,
-  options: ApiRouterOptions = {},
+  persistence: BackendPersistence,
+  options: ApiRouterOptions,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
   installApiTimingMiddleware(app, ctx);
@@ -369,47 +313,69 @@ export function createApiRouter(
   // `/internal/*` are anonymous / route-owned / agent-principal and skip the
   // relevant public layers. Under DB corruption (principal set but row missing)
   // it 500s.
-  installRequireRegisteredViewerMiddleware(app, ctx, {
+  installRequireRegisteredViewerMiddleware(app, persistence.repos.users, {
     whitelistPaths: [apiPaths.serverInfo, apiPaths.me],
   });
-  const hosts = new HostRepo(ctx.db);
-  const agents = new AgentRepo(ctx.db);
-  const workspaces = new WorkspaceRepo(ctx.db);
-  const conversations = new ConversationRepo(ctx.db);
-  const messages = new MessageRepo(ctx.db);
-  const reactions = new MessageReactionRepo(ctx.db);
-  const attachments = new AttachmentRepo(ctx.db);
-  const saved = new SavedMessageRepo(ctx.db);
-  const search = new SearchRepo(ctx.db);
-  const conversationInboxes = new ConversationInboxRepo(ctx.db);
-  const notifications = new NotificationRepo(ctx.db);
-  const conversationReads = new ConversationReadRepo(ctx.db);
-  const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(ctx.db);
-  const workspaceAttentionPrefs = new WorkspaceAttentionPreferenceRepo(ctx.db);
-  const attentionBadges = new AttentionBadgeRepo(ctx.db);
-  const conversationEvents = new ConversationEventRepo(ctx.db);
-  const sort = new SortRepo(ctx.db);
-  const users = new UserRepo(ctx.db);
-  const hostTokens = new HostTokenService(ctx.db);
+  // #task:1983 W1 — the router does NOT build persistence; it receives the
+  // already-composed bag and unpacks it into the per-route deps below. The bag
+  // dies here: no `*RouteDeps` object carries `BackendPersistence` itself, so a
+  // handler can only reach the repos/ports its own deps type names.
+  const {
+    hosts,
+    agents,
+    workspaces,
+    conversations,
+    messages,
+    reactions,
+    attachments,
+    saved,
+    search,
+    conversationInboxes,
+    notifications,
+    conversationReads,
+    channelAttentionPrefs,
+    workspaceAttentionPrefs,
+    attentionBadges,
+    conversationEvents,
+    sort,
+    users,
+  } = persistence.repos;
+  const hostUow = persistence.hostTokens.uow;
+  const hostTokens = new HostTokenService(persistence.hostTokens);
   const membership = new MembershipService({ agents, users, conversations });
   const userAuth = new UserAuthService({
-    uow: createSqliteAuthUnitOfWork(ctx.db, { txMode: 'deferred' }),
+    uow: persistence.auth.uow,
     users,
-    handles: createHandleNamespacePort(ctx.db),
+    handles: persistence.auth.handles,
     passwordCredentials: ctx.passwordCredentials,
     events: ctx.events,
   });
-  // Shared by the workspace and conversation membership sub-apps.
+  // Shared by the workspace, conversation and internal membership sub-apps: as
+  // of #task:1987 every one of them writes membership through the ports, so the
+  // persistence composition is part of the common deps.
+  const membershipPersistence = persistence.membership;
   const membershipDeps: MembershipRouteDeps = {
     ctx,
     agents,
     users,
     workspaces,
     conversations,
-    messages,
-    channelAttentionPrefs,
+    membershipPersistence,
     membership,
   };
+  // #task:1990 — the create-agent L3a dependent-row transaction, wired at the
+  // composition root so `application/create-agent.ts` never holds `BackendContext`.
+  const agentProvisioning = persistence.agentProvisioning;
+  // #task:1987 D — ONE teardown UnitOfWork for both destructive cascades
+  // (`DELETE /api/agents/:id` and `DELETE /api/hosts/:id`), so a computer
+  // delete cannot tear an agent down differently from a single-agent delete.
+  const agentTeardown = persistence.agentTeardown;
+  // #task:1987 E — the viewer-keyed observation write boundary, so the Attention
+  // eliminate primitive holds no transaction capability of its own.
+  const observations = persistence.observations;
+  // #task:1983 W2 — the projections, handle bound at composition time. Each
+  // route below names the ONE it reads; no `*RouteDeps` takes the whole set.
+  const readModels = persistence.readModels;
 
   // ── Auth / health / runtimes / hosts ─────────────────────────────
   app.get(apiPaths.serverInfo, c =>
@@ -511,10 +477,9 @@ export function createApiRouter(
       ctx,
       hosts,
       hostTokens,
+      hostUow,
       agents,
-      workspaces,
-      conversations,
-      conversationInboxes,
+      agentTeardown,
       requireSessionBearerUser,
       standaloneMode,
     }),
@@ -537,16 +502,26 @@ export function createApiRouter(
       conversations,
       messages,
       sort,
+      membershipPersistence,
     }),
   );
 
   // Per-user list sort mutations (rail + channel sidebar ordering).
-  app.route('/', createSortApp({ ctx, workspaces, conversations, sort }));
+  app.route(
+    '/',
+    createSortApp({
+      ctx,
+      favorites: readModels.favorites,
+      workspaces,
+      conversations,
+      sort,
+    }),
+  );
 
   // Favorites: the viewer's flat global STARRED list (read projection over the
   // sort context's starred_at in each workspace's conversation list; containers
   // cannot star at all since #task:1899). Read-only.
-  app.route('/', createFavoritesApp({ ctx }));
+  app.route('/', createFavoritesApp({ ctx, favorites: readModels.favorites }));
 
   // Client-side diagnostics intake (#task:1664): failures the server cannot
   // observe when they happen, reported by the desktop on its next
@@ -557,7 +532,14 @@ export function createApiRouter(
   app.route('/', createWorkspaceMembershipApp(membershipDeps));
 
   // Workspace-agent capability management routes.
-  app.route('/', createWorkspaceCapabilityApp({ ctx, workspaces }));
+  app.route(
+    '/',
+    createWorkspaceCapabilityApp({
+      ctx,
+      workspaces,
+      capabilities: persistence.repos.agentCapabilities,
+    }),
+  );
 
   // Conversation read, metadata, and log-debug routes.
   app.route(
@@ -568,6 +550,7 @@ export function createApiRouter(
       workspaces,
       messages,
       conversationReads,
+      reactionReads: readModels.reactions,
     }),
   );
 
@@ -578,6 +561,7 @@ export function createApiRouter(
     '/',
     createAttentionApp({
       ctx,
+      activity: readModels.activity,
       conversations,
       messages,
       workspaces,
@@ -586,6 +570,7 @@ export function createApiRouter(
       channelAttentionPrefs,
       workspaceAttentionPrefs,
       attentionBadges,
+      observations,
     }),
   );
 
@@ -624,6 +609,7 @@ export function createApiRouter(
       search,
       agents,
       reactions,
+      reactionReads: readModels.reactions,
     }),
   );
 
@@ -638,6 +624,9 @@ export function createApiRouter(
       messages,
       conversationInboxes,
       users,
+      agentProvisioning,
+      agentTeardown,
+      agentDeletionRunner: options.agentDeletionRunner,
     }),
   );
   // Current viewer, user directory, and avatar routes.

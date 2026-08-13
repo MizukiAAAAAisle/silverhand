@@ -24,7 +24,6 @@
 import { extractMentions } from '@silverhand/shared';
 import { resolveAttachmentLabels } from '@silverhand/shared';
 import type { AttachmentSnapshot, FromKind } from '@silverhand/shared';
-import type { PendingConversationInboxItem } from '../repos/conversation-inbox-repo.js';
 import {
   extractAttachmentSnapshotsFromRow,
   extractSubtypeFromRow,
@@ -61,12 +60,24 @@ export interface MessageLite {
 }
 
 /**
+ * One entry of an inbox batch, as the formatter needs it: the stdin
+ * projection plus a PRESENT (possibly null) `metadata` column — attachments,
+ * the subtype and the `task=#<n>` header suffix are all parsed out of it, so
+ * an entry that merely omitted the field would silently format without them.
+ * Structural on purpose: the caller's delivery type is a persistence
+ * projection, and this formatter must not depend on which one.
+ */
+export interface InboxBatchEntry {
+  message: MessageLite & { metadata: string | null };
+}
+
+/**
  * Format an inbox batch as one human-readable user message. Mirrors §3.1
  * "A 档" payload shape — gives the agent enough metadata to address each
  * sender appropriately. Order = enqueue order.
  */
 export function formatInboxBatch(
-  items: PendingConversationInboxItem[],
+  items: readonly InboxBatchEntry[],
   agentNameById: (id: string) => string | undefined,
   agentComputerIdById: (id: string) => string | undefined,
   userNameById: (id: string) => string | undefined,
@@ -285,7 +296,3 @@ export function formatDeliveryInstruction(
 
   return 'Respond as appropriate.';
 }
-
-/** PendingConversationInboxItem already carries the raw MessageRow
- *  shape (string `metadata` column). We extract attachments through
- *  the JSON parser, mirroring CM behavior. */

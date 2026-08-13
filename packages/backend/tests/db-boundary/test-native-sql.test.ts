@@ -64,6 +64,12 @@ describe('db-boundary: native SQL in tests', () => {
     expect(TEST_WHITEBOX_INVENTORY.filter(e => !e.reason.trim())).toEqual([]);
     const whitebox = new Set(TEST_WHITEBOX_INVENTORY.map(e => e.file));
     expect(TEST_NATIVE_SQL_DEBT.filter(e => whitebox.has(e.file))).toEqual([]);
+    // A debt row's `reason` is optional (it only annotates a REVIEWED raise), but
+    // a present-and-blank one is worse than none: it reads as "this growth was
+    // justified" while recording nothing. Absent or substantive, never theatre.
+    expect(
+      TEST_NATIVE_SQL_DEBT.filter(e => e.reason !== undefined && !e.reason.trim()),
+    ).toEqual([]);
   });
 
   it('fence self-test: native statement shapes in a synthetic test file are counted', () => {

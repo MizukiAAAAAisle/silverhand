@@ -1,4 +1,3 @@
-import type { Database } from 'better-sqlite3';
 import {
   EventFrameSchema,
   isHostActiveRuntimePhase,
@@ -24,24 +23,17 @@ import {
 import type { AgentTokenStore } from '../auth/agent-token-store.js';
 import type { BackendLogger, SilverhandCliLauncher } from '../context.js';
 import { systemSubtype } from '@silverhand/shared';
-import { AgentRepo } from '../repos/agent-repo.js';
-import {
-  ConversationInboxRepo,
-  type ClaimedConversationInboxItem,
-} from '../repos/conversation-inbox-repo.js';
-import { ConversationEventRepo } from '../repos/conversation-event-repo.js';
-import { ConversationRepo } from '../repos/conversation-repo.js';
-import { HostRepo } from '../repos/host-repo.js';
-import { MessageRepo } from '../repos/message-repo.js';
-import { UserRepo } from '../repos/user-repo.js';
-import { WorkspaceRepo } from '../repos/workspace-repo.js';
-import { MembershipService } from '../services/membership-service.js';
+import type {
+  RuntimeClaimedInboxDelivery,
+  RuntimeFanoutPersistence,
+  RuntimeMemberRosterPort,
+  RuntimeSessionTxScope,
+} from './persistence-ports.js';
 import type { HostWsEventSink } from '../ws/host-ws-server.js';
 import {
   OutboundFrameTransportError,
   type OutboundFrameAdapter,
 } from './outbound-frame-adapter.js';
-import { singleConversationViewerUserId } from '../viewer-scope.js';
 import { JsonlActivityLogWriter, type ActivityLogWriter } from './activity-log-writer.js';
 import { makeDaemonInstanceKey } from './daemon-instance-key.js';
 import {
@@ -55,28 +47,53 @@ import {
 import { RuntimeDeliveryCoordinator, type RuntimeDelivery } from './delivery-coordinator.js';
 import {
   RuntimeEventHandler,
+  type ConversationActivitySink,
   type EventPublisher,
   type InboxAckSink,
   type RuntimeEventSource,
   type RuntimeStatusBridge,
 } from './event-handler.js';
+import type { RuntimeStatusProjector } from './status-projector.js';
 import { RunStateCache, type CachedRuntimeEntry } from './run-state-cache.js';
 import type { HostRuntimeActivityView } from './host-status-read-model.js';
 import {
   formatInboxBatch,
   sendMessageToolName,
 } from './stdin-format.js';
-import { DbRuntimeStatusProjector } from './status-projector.js';
 import {
   buildRuntimeStartOptions,
 } from './runtime-start-options.js';
 import { type AgentL2SeedEnsurer } from './agent-l2-seed-ensurer.js';
 import { planRuntimeStartFilesystemEnsure } from './runtime-filesystem-plan.js';
-import { EventPerimeterGuard } from './event-perimeter.js';
+import type { RuntimeEventPerimeterPort } from './event-perimeter.js';
 import { ClearSessionWaiterRegistry } from './clear-session-registry.js';
 
 export interface OutboundRuntimeEventFanoutOptions {
-  db: Database;
+  /**
+   * Everything durable this fanout touches, as driver-free facets (#task:1982
+   * W3). The fanout holds no `Database`: process-state authority (cache,
+   * coordinator, waiter registry, perimeter) stays here, storage decisions do
+   * not.
+   */
+  persistence: RuntimeFanoutPersistence;
+  /** Conversation roster for a spawn's platform prompt. */
+  members: RuntimeMemberRosterPort;
+  /** D4.c C5 — validates inbound event ownership before dispatch. A PORT, not
+   *  the guard class: the verdict is all the fanout may know, and a class type
+   *  would be nominal (private fields) and so unimplementable by any other
+   *  deployment. Built in composition because its checks are DB-backed. */
+  perimeter: RuntimeEventPerimeterPort;
+  /** Owns the whole runtime-event → `conversation_agents.status` mapping plus
+   *  the matching `agent_status` publish. Stateless, so one instance serves
+   *  every host. */
+  statusProjector: RuntimeStatusProjector;
+  /**
+   * Persists `conversation_events` and publishes `conversation_activity`.
+   * REQUIRED even though `RuntimeEventHandler` takes it optionally: unwired,
+   * activity persistence stops silently with no type error, so composition is
+   * not allowed to omit it.
+   */
+  conversationActivity: ConversationActivitySink;
   events: EventPublisher;
   transport: () => OutboundFrameAdapter | null;
   logger: BackendLogger;
@@ -102,7 +119,7 @@ export interface OutboundRuntimeEventFanoutOptions {
    * host-status read model's eager seed so the FIRST `/status` read of
    * a generation is already a memory read.
    */
-  onHostReady?: (hostId: string) => void;
+  onHostReady?: (hostId: string, connectionId: string) => void;
   /**
    * Cross-computer slice 1 (#task:1596) — pre-spawn L2 seed on the dispatch
    * host. The active workspace's L2 for the spawning agent must exist under
@@ -177,49 +194,43 @@ const OUTBOUND_SOCKET_SENTINEL = 'outbound-ws';
 export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly states = new Map<string, HostFanoutState>();
   private readonly staleEventConnectionsWarned = new Set<string>();
-  private readonly inboxRepo: ConversationInboxRepo;
-  private readonly conversations: ConversationRepo;
-  private readonly conversationEvents: ConversationEventRepo;
-  private readonly agents: AgentRepo;
-  private readonly hosts: HostRepo;
-  private readonly users: UserRepo;
-  private readonly workspaces: WorkspaceRepo;
-  private readonly messages: MessageRepo;
-  private readonly membership: MembershipService;
+  // Named persistence facets, destructured once so the call sites below read as
+  // domain acts rather than as `opts.persistence.…` chains.
+  private readonly inbox: RuntimeFanoutPersistence['inbox'];
+  private readonly conversations: RuntimeFanoutPersistence['conversations'];
+  private readonly agents: RuntimeFanoutPersistence['agents'];
+  private readonly hosts: RuntimeFanoutPersistence['hosts'];
+  private readonly users: RuntimeFanoutPersistence['users'];
+  private readonly workspaces: RuntimeFanoutPersistence['workspaces'];
+  private readonly hydrateReconcile: RuntimeFanoutPersistence['hydrateReconcile'];
+  private readonly session: RuntimeFanoutPersistence['session'];
+  private readonly members: RuntimeMemberRosterPort;
   private readonly inboxAck: InboxAckSink;
   private readonly activityLog: ActivityLogWriter | null;
   private readonly ownsActivityLog: boolean;
   /** D4.c C5 — validates inbound event ownership before dispatch. */
-  private readonly perimeter: EventPerimeterGuard;
+  private readonly perimeter: RuntimeEventPerimeterPort;
   /** D4.c C7 — bounded-wait registry for `clearSession`. */
   private readonly clearSessions: ClearSessionWaiterRegistry;
 
   constructor(private readonly opts: OutboundRuntimeEventFanoutOptions) {
-    this.inboxRepo = new ConversationInboxRepo(opts.db);
-    this.conversations = new ConversationRepo(opts.db);
-    this.conversationEvents = new ConversationEventRepo(opts.db);
-    this.agents = new AgentRepo(opts.db);
-    this.hosts = new HostRepo(opts.db);
-    this.users = new UserRepo(opts.db);
-    this.workspaces = new WorkspaceRepo(opts.db);
-    this.messages = new MessageRepo(opts.db);
-    this.membership = new MembershipService({
-      agents: new AgentRepo(opts.db),
-      users: new UserRepo(opts.db),
-      conversations: new ConversationRepo(opts.db),
-    });
+    this.inbox = opts.persistence.inbox;
+    this.conversations = opts.persistence.conversations;
+    this.agents = opts.persistence.agents;
+    this.hosts = opts.persistence.hosts;
+    this.users = opts.persistence.users;
+    this.workspaces = opts.persistence.workspaces;
+    this.hydrateReconcile = opts.persistence.hydrateReconcile;
+    this.session = opts.persistence.session;
+    this.members = opts.members;
     this.clearSessions = new ClearSessionWaiterRegistry(
       opts.clearSessionExitTimeoutMs ?? CLEAR_SESSION_EXIT_TIMEOUT_MS,
     );
-    this.perimeter = new EventPerimeterGuard({
-      agents: this.agents,
-      conversations: this.conversations,
-      logger: opts.logger,
-    });
+    this.perimeter = opts.perimeter;
     this.inboxAck = {
-      markDelivered: ids => this.inboxRepo.markDelivered([...ids]),
+      markDelivered: ids => this.inbox.markDelivered([...ids]),
       markUndelivered: (ids, reason) => {
-        this.inboxRepo.rollbackInFlightAnyOwner(ids);
+        this.inbox.rollbackInFlightAnyOwner(ids);
         opts.logger.warn(
           { kind: 'inbox', delivery_ids: [...ids], reason },
           'outbound startup delivery failed; rows remain pending',
@@ -389,7 +400,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // Fresh connection generation: let the composition root eager-
       // seed the host-status read model (fire-and-forget there).
       try {
-        this.opts.onHostReady?.(hostId);
+        this.opts.onHostReady?.(hostId, connectionId);
       } catch (err) {
         this.opts.logger.warn(
           { kind: 'event', hostId, err: (err as Error).message },
@@ -401,7 +412,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   onDisconnect(hostId: string, connectionId: string): void {
-    this.inboxRepo.rollbackInFlightForOwner(connectionId);
+    this.inbox.rollbackInFlightForOwner(connectionId);
     const state = this.states.get(hostId);
     if (!state) return;
     if (state.currentConnectionId === connectionId || state.currentConnectionId === null) {
@@ -480,7 +491,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     state.lastLivenessSignature = signature;
     const publish = this.opts.publishHostScopeEvent;
     if (!publish) return;
-    const ownerUserId = this.hosts.get(hostId)?.user_id ?? null;
+    const ownerUserId = this.hosts.routingView(hostId)?.ownerUserId ?? null;
     if (ownerUserId === null) return;
     try {
       publish(ownerUserId, HOST_AGENT_LIVENESS_CHANGED_EVENT, {
@@ -509,38 +520,21 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         .map(entry => clearSessionKey(entry.conversationId, entry.agentId)),
     );
 
-    const staleRows = this.opts.db
-      .prepare<
-        [string],
-        {
-          conversation_id: string;
-          agent_id: string;
-          status: 'active' | 'starting';
-          pid: number | null;
-        }
-      >(
-        `SELECT ca.conversation_id, ca.agent_id, ca.status, ca.pid
-           FROM conversation_agents ca
-           JOIN agents a ON a.id = ca.agent_id
-          WHERE a.host_id = ?
-            AND ca.status IN ('active', 'starting')`,
-      )
-      .all(hostId);
+    const staleRows = this.hydrateReconcile.listDbLiveRuntimesForHost(hostId);
 
     for (const row of staleRows) {
-      if (livePairs.has(clearSessionKey(row.conversation_id, row.agent_id))) {
+      if (livePairs.has(clearSessionKey(row.conversationId, row.agentId))) {
         continue;
       }
-      const updated = this.conversations.updateAgentRuntime(
-        row.conversation_id,
-        row.agent_id,
-        { status: 'crashed', pid: null },
+      const updated = this.hydrateReconcile.markCrashed(
+        row.conversationId,
+        row.agentId,
       );
       if (!updated) continue;
-      this.opts.events.publishSide(row.conversation_id, {
+      this.opts.events.publishSide(row.conversationId, {
         kind: 'agent_status',
         payload: {
-          agent_id: row.agent_id,
+          agent_id: row.agentId,
           status: 'crashed',
           pid: null,
           reason: 'daemon_hydrate_missing',
@@ -551,8 +545,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           kind: 'runtime',
           action: 'stale_runtime_reconciled_after_hydrate',
           hostId,
-          conversationId: row.conversation_id,
-          agent_id: row.agent_id,
+          conversationId: row.conversationId,
+          agent_id: row.agentId,
           previous_status: row.status,
           previous_pid: row.pid,
         },
@@ -566,7 +560,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
     messageId: string,
   ): Promise<void> {
-    const delivery = this.inboxRepo.ensureDelivery(
+    const delivery = this.inbox.ensureDelivery(
       conversationId,
       agentId,
       messageId,
@@ -660,7 +654,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           continue;
         }
 
-        if (this.inboxRepo.hasUndeliveredForPair(entry.conversationId, entry.agentId)) {
+        if (this.inbox.hasUndeliveredForPair(entry.conversationId, entry.agentId)) {
           result.skipped++;
           continue;
         }
@@ -676,7 +670,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           ) ||
           state.currentConnectionId !== selectedConnectionId ||
           transport.connectionIdForHost(hostId) !== selectedConnectionId ||
-          this.inboxRepo.hasUndeliveredForPair(entry.conversationId, entry.agentId)
+          this.inbox.hasUndeliveredForPair(entry.conversationId, entry.agentId)
         ) {
           result.skipped++;
           continue;
@@ -876,19 +870,15 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
 
       // 8. DB tx — audit insert + cli_session_id clear in one shot.
       const shouldAudit = wasRunning || prevCliSessionId !== null;
-      const { updated, auditMessage } = this.opts.db.transaction(() => {
-        const updated = this.conversations.updateAgentRuntime(
-          conversationId,
-          agentId,
-          { cliSessionId: null },
-        );
+      const { updated, auditMessage } = this.session.atomically(scope => {
+        const updated = scope.clearCliSession(conversationId, agentId);
         if (!updated) {
           throw new Error(
             `agent ${agentId} is not a member of conversation ${conversationId}`,
           );
         }
         const auditMessage = shouldAudit
-          ? this.insertSessionClearedAuditMessage({
+          ? this.insertSessionClearedAuditMessage(scope, {
               conversationId,
               agentId,
               agentName: agent.name,
@@ -898,7 +888,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
             })
           : null;
         return { updated, auditMessage };
-      })();
+      });
 
       // 9. SSE + per-peer best-effort delivery (outside tx).
       this.opts.events.publishSide(conversationId, {
@@ -921,7 +911,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         // (its old session died; nothing else delivers this row). Row
         // only, NO dispatch: the fresh session drains it at next spawn —
         // clearing a session must not auto-respawn the runtime.
-        this.inboxRepo.ensureDelivery(conversationId, agentId, auditMessage.id);
+        this.inbox.ensureDelivery(conversationId, agentId, auditMessage.id);
         for (const ca of this.conversations.listAgents(conversationId)) {
           if (ca.agent_id === agentId) continue;
           await this.deliverMessage(
@@ -952,26 +942,29 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   /**
-   * D4.c C7 — insert the clear-session audit message. Kept inline here
-   * because the outbound fanout is now the single projection path.
-   * R4 invariant: same audit row shape on every
-   * deployment adapters.
+   * D4.c C7 — render and insert the clear-session audit message. The wording
+   * and metadata stay here (they are domain content, not a storage detail);
+   * only the insert belongs to the scope, which is why the scope is a
+   * parameter: this row can be written ONLY inside the atomic pair with
+   * `clearCliSession`, never on its own.
    */
-  private insertSessionClearedAuditMessage(params: {
-    conversationId: string;
-    agentId: string;
-    agentName: string;
-    actorUserId: string | null;
-    prevCliSessionId: string | null;
-    wasRunning: boolean;
-  }) {
+  private insertSessionClearedAuditMessage(
+    scope: RuntimeSessionTxScope,
+    params: {
+      conversationId: string;
+      agentId: string;
+      agentName: string;
+      actorUserId: string | null;
+      prevCliSessionId: string | null;
+      wasRunning: boolean;
+    },
+  ) {
     const actor = params.actorUserId ? `@${params.actorUserId}` : 'A user';
     const prevLabel = params.prevCliSessionId
       ? `${params.prevCliSessionId.slice(0, 8)}...`
       : 'none';
-    return this.messages.insertForConversation({
+    return scope.insertSystemMessage({
       conversationId: params.conversationId,
-      fromKind: 'system',
       fromUserId: params.actorUserId,
       content:
         `${actor} cleared @${params.agentName}'s CLI session context ` +
@@ -1007,7 +1000,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     if (this.runtimeTransitioning(agentId)) return false;
     const hostId = this.hostIdForAgent(agentId);
     const connectionId = this.connectedConnectionId(hostId, 'runtime_deliver');
-    const staleInFlight = this.inboxRepo.rollbackInFlightForPairExceptOwner(
+    const staleInFlight = this.inbox.rollbackInFlightForPairExceptOwner(
       conversationId,
       agentId,
       connectionId,
@@ -1025,7 +1018,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         'outbound start reclaimed stale inbox rows claimed by an old host connection',
       );
     }
-    if (this.inboxRepo.listPending(conversationId, agentId).length === 0) {
+    if (this.inbox.listPending(conversationId, agentId).length === 0) {
       // Idempotency guard for concurrent claimants. A pending row can
       // already be in-flight when an explicit `runtimeHost.start` / HTTP
       // POST `/start` races another path that just claimed it — the
@@ -1045,7 +1038,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // above; they must not make an explicit restart/start look
       // successful while dispatching nothing.
       if (
-        this.inboxRepo.countInFlightForPairOwner(
+        this.inbox.countInFlightForPairOwner(
           conversationId,
           agentId,
           connectionId,
@@ -1059,7 +1052,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     // submit `runtime_deliver`; the daemon decides spawn-vs-admit. The
     // ready-for-drain submit path runs the fs guards + injects
     // `spawn_options` in the coordinator's bridge closure.
-    const claimed = this.inboxRepo.claimPending(
+    const claimed = this.inbox.claimPending(
       conversationId,
       agentId,
       connectionId,
@@ -1090,10 +1083,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // nothing → roll back to pending. A thrown dispatch (transport /
       // fs-guard) rolls back below.
       if (decision.kind !== 'dispatched') {
-        this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+        this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
       }
     } catch (err) {
-      this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+      this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
       throw err;
     }
     return true;
@@ -1174,7 +1167,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       workspace,
       agent,
       sessionAgent,
-      members: this.membership.listMembers(conversation.id),
+      members: this.members.listMembers(conversation.id),
       workspacesForAgent: this.workspaces.listForAgent(agent.id),
       silverhandCli:
         this.opts.coLocatedHostId === hostId ? this.opts.silverhandCli : null,
@@ -1505,7 +1498,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
           this.deliverPending(cid, aid).then(() => undefined),
         hasPendingInbox: (cid, aid) =>
           !this.runtimeTransitioning(aid)
-          && this.inboxRepo.listPending(cid, aid).length > 0,
+          && this.inbox.listPending(cid, aid).length > 0,
         publishActivity: runState => {
           this.opts.events.publishSide(runState.conversationId, {
             kind: 'agent_activity',
@@ -1522,11 +1515,8 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       cache,
       events: this.opts.events,
       inboxAck: this.inboxAck,
-      statusProjector: new DbRuntimeStatusProjector(
-        new ConversationRepo(this.opts.db),
-        this.opts.events,
-      ),
-      conversationActivity: this.conversationEvents,
+      statusProjector: this.opts.statusProjector,
+      conversationActivity: this.opts.conversationActivity,
       onParsedEvent: (cid, aid, event) =>
         coordinator.onParsedEvent(cid, aid, event),
       onRuntimeExit: (cid, aid, meta) => {
@@ -1661,7 +1651,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         );
         return;
       }
-      if (this.inboxRepo.listPending(conversationId, agentId).length === 0) {
+      if (this.inbox.listPending(conversationId, agentId).length === 0) {
         continue;
       }
       try {
@@ -1687,7 +1677,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
   ): Promise<void> {
     if (this.runtimeTransitioning(agentId)) return;
-    const claimed = this.inboxRepo.claimPending(
+    const claimed = this.inbox.claimPending(
       conversationId,
       agentId,
       connectionId,
@@ -1720,10 +1710,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // incl. a live oneShot the daemon sync-refuses) took nothing → roll
       // back.
       if (decision.kind !== 'dispatched') {
-        this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+        this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
       }
     } catch (err) {
-      this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+      this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
       throw err;
     }
   }
@@ -1751,7 +1741,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
     agentId: string,
   ): Promise<void> {
     if (this.runtimeTransitioning(agentId)) return;
-    const claimed = this.inboxRepo.claimPending(
+    const claimed = this.inbox.claimPending(
       conversationId,
       agentId,
       connectionId,
@@ -1787,10 +1777,10 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
       // `rollbackInFlightForOwner` (paired with the daemon's owner-scoped
       // `cleanupDeferredForOwner`); a thrown dispatch rolls back below.
       if (decision.kind === 'refused') {
-        this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+        this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
       }
     } catch (err) {
-      this.inboxRepo.rollbackInFlight(batch.deliveryIds, connectionId);
+      this.inbox.rollbackInFlight(batch.deliveryIds, connectionId);
       throw err;
     }
   }
@@ -1798,7 +1788,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private pendingBatch(
     conversationId: string,
     agentId: string,
-    claimed: readonly ClaimedConversationInboxItem[],
+    claimed: readonly RuntimeClaimedInboxDelivery[],
   ): PendingDeliveryBatch {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
@@ -1819,7 +1809,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         // #task:1600 — the sender agent's CURRENT computer, resolved live
         // (never persisted on the message).
         id => this.agents.get(id)?.host_id,
-        id => this.users.get(id)?.name,
+        id => this.users.nameOf(id) ?? undefined,
         this.defaultUserHandle(conversationId),
         agent.name,
         sendMessageToolName(),
@@ -1834,22 +1824,19 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   }
 
   private defaultUserHandle(conversationId: string): string | undefined {
-    const viewerId = singleConversationViewerUserId(
-      this.conversations,
-      conversationId,
-    );
+    const viewerId = this.conversations.singleViewerUserId(conversationId);
     if (!viewerId) return undefined;
-    return this.users.get(viewerId)?.name ?? undefined;
+    return this.users.nameOf(viewerId) ?? undefined;
   }
 
   private hostIdForAgent(agentId: string): string {
     const agent = this.agents.get(agentId);
     if (!agent) throw new Error(`agent ${agentId} not found`);
-    const host = this.hosts.get(agent.host_id);
+    const host = this.hosts.routingView(agent.host_id);
     if (!host) {
       throw new Error(`host ${agent.host_id} for agent ${agentId} not found`);
     }
-    if (host.revoked_at !== null) {
+    if (host.revokedAt !== null) {
       throw new Error(`host ${host.id} for agent ${agentId} has been revoked`);
     }
     return host.id;

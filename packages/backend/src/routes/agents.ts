@@ -7,6 +7,13 @@ import {
   createAgent,
   type AgentMaterializeFailureCode,
 } from '../application/create-agent.js';
+import type {
+  AgentProvisioningPersistence,
+} from '../application/agent-provisioning-ports.js';
+import type {
+  AgentTeardownPersistence,
+} from '../application/agent-teardown-ports.js';
+import type { AgentDeletionRunner } from '../application/agent-deletion-resumer.js';
 import { isParticipantHandleAvailable } from '../application/name-availability.js';
 import {
   deleteAgent,
@@ -76,6 +83,13 @@ export interface AgentsRouteDeps {
   messages: MessageRepo;
   conversationInboxes: ConversationInboxRepo;
   users: UserRepo;
+  /** #task:1990 — the L3a dependent-row transaction scope (wired at
+   *  composition root; the use case never receives `BackendContext`). */
+  agentProvisioning: AgentProvisioningPersistence;
+  /** #task:1987 D — the teardown read + UnitOfWork shared with
+   *  `DELETE /api/hosts/:id`; the delete use case names no repo. */
+  agentTeardown: AgentTeardownPersistence;
+  agentDeletionRunner: AgentDeletionRunner;
 }
 
 // ── POST /api/agents — Idempotency-Key parsing (route-side, pure) ──
@@ -218,7 +232,17 @@ function resolveAgentWorkspaceScope(params: {
 
 export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, agents, workspaces, conversations, messages, conversationInboxes, users } = deps;
+  const {
+    ctx,
+    agents,
+    workspaces,
+    conversations,
+    messages,
+    conversationInboxes,
+    users,
+    agentProvisioning,
+    agentTeardown,
+  } = deps;
 
   app.get(apiPaths.agents, c => {
     const principal = getUserPrincipal(c);
@@ -325,7 +349,19 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     }
 
     const result = await createAgent(
-      { ctx, agents, workspaces, conversations, messages, users },
+      {
+        logger: ctx.logger,
+        events: ctx.events,
+        runtimeHost: ctx.runtimeHost,
+        outboundFrameAdapter: ctx.outboundFrameAdapter,
+        placement: ctx.placement,
+        agents,
+        workspaces,
+        conversations,
+        messages,
+        users,
+        agentProvisioning,
+      },
       {
         input: parsed.data,
         idempotencyKey: keyParse.key,
@@ -1025,11 +1061,16 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
   app.delete('/api/agents/:id', async c => {
     const body = await c.req.json().catch(() => ({}));
     const result = await deleteAgent(
-      { ctx, agents, workspaces, conversations, conversationInboxes },
+      {
+        ctx,
+        teardown: agentTeardown,
+        deletionRunner: deps.agentDeletionRunner,
+      },
       {
         agentId: c.req.param('id'),
         requesterUserId: getUserPrincipal(c).userId,
         body,
+        retry: c.req.query('retry') === 'true',
       },
     );
     switch (result.kind) {
@@ -1046,13 +1087,24 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
           },
           409,
         );
+      case 'deletionInProgress':
+        return c.json(
+          {
+            error: 'agent deletion is already in progress',
+            code: 'agent_deletion_in_progress',
+          },
+          409,
+        );
+      case 'deletionPendingRetry':
+        return c.json(
+          { error: result.error, code: 'agent_deletion_pending_retry' },
+          202,
+        );
       case 'confirmRequired':
         return c.json(
           { error: 'confirm flag required', detail: 'pass {"confirm": true}' },
           400,
         );
-      case 'failClosed':
-        return c.json({ error: result.error, code: result.code }, result.status);
       default: {
         const _exhaustive: never = result;
         throw new Error(

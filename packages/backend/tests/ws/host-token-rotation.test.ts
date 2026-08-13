@@ -1,3 +1,4 @@
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { describe, expect, it } from 'vitest';
 import type {
   OutboundServerCommandKind,
@@ -25,7 +26,7 @@ describe('HostTokenRotationCoordinator', () => {
       userId: viewerUserId,
       installationId: 'installation-rotation',
     });
-    const tokens = new HostTokenService(db);
+    const tokens = new HostTokenService(createSqliteHostPersistence(db));
     const old = tokens.issueHostToken({ hostId: host.id });
     const now = 1_700_000_000_000;
     const transport = new FakeHostWsController(async call => {
@@ -106,7 +107,7 @@ describe('HostTokenRotationCoordinator', () => {
       userId: viewerUserId,
       installationId: 'installation-rotation-fail',
     });
-    const tokens = new HostTokenService(db);
+    const tokens = new HostTokenService(createSqliteHostPersistence(db));
     const old = tokens.issueHostToken({ hostId: host.id });
     const beforeRows = credentialRows(db, host.id);
     const transport = new FakeHostWsController(async () => ({

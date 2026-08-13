@@ -1,103 +1,53 @@
 // Task-aggregate persistence gateway: every SQL read and write over the
-// first-class `tasks` table (v60), plus the row → DTO projection and the
-// per-viewer navigation resolution. The facade delegates its public reads
-// (`list` / `getById`) here and calls the low-level fetch / allocate / stamp
-// helpers inside its own transactions (same `db` handle ⇒ same transaction).
+// first-class `tasks` table (v60), plus the row → DTO projection hookup and
+// the per-viewer navigation resolution (#task:1980 — moved from
+// `services/task/store.ts` into the repository zone so task application code
+// holds no raw DB capability).
+//
+// Implements `TaskRepoReadPort` (the only tasks capability the service holds
+// outside a transaction) and `TaskRepoWritePort` (exists ONLY inside the task
+// UnitOfWork scope). Number allocation is an INTERNAL implementation detail of
+// `createTaskRow` — no allocator primitive is exposed to the application, so
+// "allocate number then insert row" can never be split into a TOCTOU.
 // No task-lifecycle policy lives here — only row access, the read-side
 // membership gate, and nav resolution.
 import { randomBytes } from 'node:crypto';
 import type { Database as Db } from 'better-sqlite3';
 import type {
   TaskAssigneeDto,
-  TaskCreatorDto,
   TaskDetailDto,
-  TaskEditorDto,
   TaskNavDto,
   TaskNavRef,
   TaskStatus,
   TaskSummaryDto,
 } from '@silverhand/shared';
-import type { ConversationRepo } from '../../repos/conversation-repo.js';
-import { USER_VISIBLE_TASK_PREDICATE } from '../../repos/task-board-population.js';
-import { prepareObserved } from '../../observability/observed-statement.js';
 import {
-  userCanAccessConversation,
-  type ListTasksFilters,
-  type MessageRef,
-  type ResolvedTaskRow,
-  type TaskActor,
-  type UserActor,
-} from './contracts.js';
+  assigneeFrom,
+  taskJoinedToSummary,
+  resolveEditor,
+  type TaskJoinedRow,
+} from '../services/task/dto.js';
+import type {
+  ListTasksFilters,
+  MessageRef,
+  ResolvedTaskRow,
+  TaskActor,
+  UserActor,
+} from '../services/task/contracts.js';
+import type {
+  TaskConversationAccessPort,
+  TaskRepoReadPort,
+  TaskRepoWritePort,
+} from '../services/task/ports.js';
+import { TaskSourceConflictError } from '../services/task/ports.js';
+import { USER_VISIBLE_TASK_PREDICATE } from './task-board-population.js';
+import { SELECT_TASK_JOINED } from './task-sql.js';
+import { prepareObserved } from '../observability/observed-statement.js';
 
 /** Fresh opaque task identity (same scheme as message ids). */
 function newTaskId(): string {
   return randomBytes(12).toString('base64url');
 }
-
-/** The joined row shape both this store and the board read face project from
- *  (one projection, one DTO — see `taskJoinedToSummary`). */
-export interface TaskJoinedRow {
-  id: string;
-  conversation_id: string;
-  task_number: number;
-  status: TaskStatus;
-  title: string;
-  closed_at: number | null;
-  workspace_id: string;
-  workspace_name: string;
-  channel_name: string;
-  thread_root_id: string | null;
-  assignee_agent_id: string | null;
-  assignee_user_id: string | null;
-  creator_kind: 'agent' | 'user' | 'system';
-  creator_agent_id: string | null;
-  creator_user_id: string | null;
-  created_at: number;
-  conversation_title: string;
-  assignee_agent_name: string | null;
-  assignee_user_name: string | null;
-  creator_agent_name: string | null;
-  creator_user_name: string | null;
-}
-
-/** The task-summary SELECT list + joins. Exported because the human board read
- *  face (`services/task/board.ts`) must project tasks THROUGH THE SAME columns
- *  and joins — a second hand-written SELECT would be a second projection that
- *  drifts (e.g. a deleted creator rendering differently in the board than in
- *  the CLI/list). The `tasks`→`conversations`/`workspaces` joins are INNER and
- *  cannot drop rows: both columns are NOT NULL with ON DELETE CASCADE, so the
- *  count face (which needs no joins) describes the same set. */
-export const SELECT_TASK_JOINED = `
-  SELECT
-    t.id                       AS id,
-    t.conversation_id          AS conversation_id,
-    t.task_number              AS task_number,
-    t.status                   AS status,
-    t.title                    AS title,
-    t.closed_at                AS closed_at,
-    t.workspace_id             AS workspace_id,
-    conv.title                 AS channel_name,
-    t.thread_root_id           AS thread_root_id,
-    t.assignee_agent_id        AS assignee_agent_id,
-    t.assignee_user_id         AS assignee_user_id,
-    t.creator_kind             AS creator_kind,
-    t.creator_agent_id         AS creator_agent_id,
-    t.creator_user_id          AS creator_user_id,
-    t.created_at               AS created_at,
-    conv.title                 AS conversation_title,
-    w.name                     AS workspace_name,
-    aa.display_name            AS assignee_agent_name,
-    au.display_name            AS assignee_user_name,
-    ca.display_name            AS creator_agent_name,
-    cu.display_name            AS creator_user_name
-  FROM tasks t
-  JOIN conversations conv ON conv.id = t.conversation_id
-  JOIN workspaces w ON w.id = t.workspace_id
-  LEFT JOIN agents aa ON aa.id = t.assignee_agent_id
-  LEFT JOIN users au ON au.id = t.assignee_user_id
-  LEFT JOIN agents ca ON ca.id = t.creator_agent_id
-  LEFT JOIN users cu ON cu.id = t.creator_user_id
-`;
 
 /** The shared column set the mutation paths read as a `ResolvedTaskRow`. */
 const SELECT_RESOLVED_TASK = `
@@ -111,16 +61,16 @@ const SELECT_RESOLVED_TASK = `
   JOIN conversations c ON c.id = t.conversation_id
 `;
 
-export interface TaskStoreDeps {
+export interface SqliteTaskRepoDeps {
   db: Db;
-  conversations: ConversationRepo;
+  conversations: TaskConversationAccessPort;
 }
 
-export class TaskStore {
+export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
   private readonly db: Db;
-  private readonly conversations: ConversationRepo;
+  private readonly conversations: TaskConversationAccessPort;
 
-  constructor(deps: TaskStoreDeps) {
+  constructor(deps: SqliteTaskRepoDeps) {
     this.db = deps.db;
     this.conversations = deps.conversations;
   }
@@ -217,7 +167,7 @@ export class TaskStore {
         if (!conv) return null;
         if (row.workspace_id !== conv.workspace_id) return null;
       }
-    } else if (!userCanAccessConversation(this.db, actor.userId, row.conversation_id)) {
+    } else if (!this.conversations.userCanAccessConversation(actor.userId, row.conversation_id)) {
       return null;
     }
     return taskJoinedToSummary(row);
@@ -375,11 +325,15 @@ export class TaskStore {
     if (actor.kind === 'agent') {
       return this.conversations.getAgent(conversationId, actor.agentId) != null;
     }
-    return userCanAccessConversation(this.db, actor.userId, conversationId);
+    return this.conversations.userCanAccessConversation(actor.userId, conversationId);
   }
 
-  /** Next per-workspace monotonic task number (1-based). Guarded by
-   *  `uniq_tasks_workspace_number`; a concurrent create races on that index. */
+  /** Next per-workspace monotonic task number (1-based). PRIVATE allocator —
+   *  never exposed on the port surface: `createTaskRow` is the single atomic
+   *  create capability, so application code cannot split allocate/insert into
+   *  a TOCTOU (#task:1980). The `uniq_tasks_workspace_number` unique index is
+   *  the backstop; SQLite's single-writer transaction makes the MAX+1 read +
+   *  INSERT atomic in this adapter. */
   private allocateTaskNumber(workspaceId: string): number {
     const row = prepareObserved<[string], { next: number }>(
         this.db,
@@ -418,42 +372,63 @@ export class TaskStore {
     const id = newTaskId();
     const taskNumber = this.allocateTaskNumber(args.workspaceId);
     const status: TaskStatus = args.claimByAgentId ? 'in_progress' : 'todo';
-    prepareObserved(
-        this.db,
-        'tasks.insert_row',
-        `INSERT INTO tasks (
-           id, workspace_id, task_number, conversation_id, thread_root_id,
-           title, content, status, assignee_agent_id, assignee_user_id,
-           creator_kind, creator_agent_id, creator_user_id,
-           source_message_id, created_event_message_id,
-           last_editor_kind, last_editor_id, last_edited_at,
-           created_at, closed_at
-         ) VALUES (
-           @id, @workspace_id, @task_number, @conversation_id, @thread_root_id,
-           @title, @content, @status, @assignee_agent_id, NULL,
-           @creator_kind, @creator_agent_id, @creator_user_id,
-           @source_message_id, NULL,
-           NULL, NULL, NULL,
-           @created_at, NULL
-         )`,
-      )
-      .run({
-        id,
-        workspace_id: args.workspaceId,
-        task_number: taskNumber,
-        conversation_id: args.conversationId,
-        thread_root_id: args.threadRootId,
-        title: args.title,
-        content: args.content,
-        status,
-        assignee_agent_id: args.claimByAgentId,
-        creator_kind: args.creatorKind,
-        creator_agent_id: args.creatorAgentId,
-        creator_user_id: args.creatorUserId,
-        source_message_id: args.sourceMessageId,
-        created_at: args.createdAt,
-      });
+    try {
+      prepareObserved(
+          this.db,
+          'tasks.insert_row',
+          `INSERT INTO tasks (
+             id, workspace_id, task_number, conversation_id, thread_root_id,
+             title, content, status, assignee_agent_id, assignee_user_id,
+             creator_kind, creator_agent_id, creator_user_id,
+             source_message_id, created_event_message_id,
+             last_editor_kind, last_editor_id, last_edited_at,
+             created_at, closed_at
+           ) VALUES (
+             @id, @workspace_id, @task_number, @conversation_id, @thread_root_id,
+             @title, @content, @status, @assignee_agent_id, NULL,
+             @creator_kind, @creator_agent_id, @creator_user_id,
+             @source_message_id, NULL,
+             NULL, NULL, NULL,
+             @created_at, NULL
+           )`,
+        )
+        .run({
+          id,
+          workspace_id: args.workspaceId,
+          task_number: taskNumber,
+          conversation_id: args.conversationId,
+          thread_root_id: args.threadRootId,
+          title: args.title,
+          content: args.content,
+          status,
+          assignee_agent_id: args.claimByAgentId,
+          creator_kind: args.creatorKind,
+          creator_agent_id: args.creatorAgentId,
+          creator_user_id: args.creatorUserId,
+          source_message_id: args.sourceMessageId,
+          created_at: args.createdAt,
+        });
+    } catch (e) {
+      // Translate the driver-specific UNIQUE(source_message_id) collision into
+      // a DRIVER-FREE sentinel. This is the ONLY place that reads SQLite error
+      // codes/constraint text for this domain; application code consumes
+      // `TaskSourceConflictError` and never parses driver dialects (#task:1980
+      // P1-1).
+      if (this.isSourceUniqueCollision(e)) {
+        throw new TaskSourceConflictError(args.sourceMessageId ?? '');
+      }
+      throw e;
+    }
     return { id, taskNumber };
+  }
+
+  /** Adapter-internal driver-dialect check: the permanent 1:1 provenance key
+   *  (UNIQUE source_message_id) collided. Any other constraint/error passes
+   *  through unchanged. */
+  private isSourceUniqueCollision(e: unknown): boolean {
+    const code = (e as { code?: string })?.code;
+    const message = e instanceof Error ? e.message : '';
+    return code === 'SQLITE_CONSTRAINT_UNIQUE' && message.includes('source_message_id');
   }
 
   /** Stamp the persisted task-created system-event message id (the nav ref for
@@ -555,8 +530,6 @@ export class TaskStore {
       .get(messageId);
     return row ?? null;
   }
-
-  // ── Mutation writes (run inside the caller's transaction) ──────────
 
   /** Atomic self-claim: assign the agent + advance a `todo` task to
    *  `in_progress`, but ONLY while unassigned and not terminal. "Unassigned"
@@ -704,95 +677,4 @@ export class TaskStore {
       assignee: assigneeFrom(row),
     };
   }
-
-}
-
-/** Row → `TaskSummaryDto`. Module-level and exported so the board read face
- *  reuses THIS projection rather than repeating it (one row shape, one SELECT,
- *  one DTO). */
-export function taskJoinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
-  return {
-    id: row.id,
-    task_number: row.task_number,
-    workspace_id: row.workspace_id,
-    workspace_name: row.workspace_name,
-    channel_id: row.conversation_id,
-    channel_name: row.channel_name,
-    thread_root_id: row.thread_root_id,
-    conversation: { id: row.conversation_id, title: row.conversation_title },
-    status: row.status,
-    title: row.title,
-    assignee: assigneeFrom(row),
-    creator: creatorFrom(row),
-    created_at: row.created_at,
-    closed_at: row.closed_at,
-  };
-}
-
-/** Build the assignee DTO from a row's assignee columns (name degrades to the
- *  id when the join is missing — deleted/unlinked actor). */
-function assigneeFrom(row: {
-  assignee_agent_id: string | null;
-  assignee_user_id: string | null;
-  assignee_agent_name: string | null;
-  assignee_user_name: string | null;
-}): TaskAssigneeDto | null {
-  if (row.assignee_agent_id) {
-    return {
-      type: 'agent',
-      id: row.assignee_agent_id,
-      name: row.assignee_agent_name ?? row.assignee_agent_id,
-    };
-  }
-  if (row.assignee_user_id) {
-    return {
-      type: 'user',
-      id: row.assignee_user_id,
-      name: row.assignee_user_name ?? row.assignee_user_id,
-    };
-  }
-  return null;
-}
-
-/** Build the creator DTO from a task row's creator columns. 'system' = the
- *  creating agent/user was since deleted. */
-function creatorFrom(row: {
-  creator_kind: 'agent' | 'user' | 'system';
-  creator_agent_id: string | null;
-  creator_user_id: string | null;
-  creator_agent_name: string | null;
-  creator_user_name: string | null;
-}): TaskCreatorDto {
-  if (row.creator_kind === 'agent' && row.creator_agent_id) {
-    return {
-      type: 'agent',
-      id: row.creator_agent_id,
-      name: row.creator_agent_name ?? row.creator_agent_id,
-    };
-  }
-  if (row.creator_kind === 'user' && row.creator_user_id) {
-    return {
-      type: 'user',
-      id: row.creator_user_id,
-      name: row.creator_user_name ?? row.creator_user_id,
-    };
-  }
-  return { type: 'system', id: null, name: 'system' };
-}
-
-/** Build the last-editor DTO from a row's attribution columns. Null when the
- *  task was never edited; name degrades to the id when the attribution join is
- *  missing (deleted/unlinked actor). */
-function resolveEditor(row: {
-  last_editor_kind: 'agent' | 'user' | null;
-  last_editor_id: string | null;
-  editor_agent_name: string | null;
-  editor_user_name: string | null;
-}): TaskEditorDto | null {
-  if (!row.last_editor_kind || !row.last_editor_id) return null;
-  const name =
-    row.last_editor_kind === 'agent'
-      ? (row.editor_agent_name ?? row.last_editor_id)
-      : (row.editor_user_name ?? row.last_editor_id);
-  return { kind: row.last_editor_kind, id: row.last_editor_id, name };
 }

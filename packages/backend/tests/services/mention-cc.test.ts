@@ -6,8 +6,12 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { NotificationRepo } from '../../src/repos/notification-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
-import { ccMentionsFromUserMessage } from '../../src/mention-cc.js';
+import { createMentionCcAdapter, createMentionCcComposition } from '../../src/adapters/mention-cc.js';
+import { ccMentionsFromUserMessage } from '../../src/application/mention-cc.js';
+import type { WorkspaceRosterUnitOfWork } from '../../src/application/membership-ports.js';
+import { overrideScope } from '../utils/tx-fault.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
@@ -103,22 +107,22 @@ function bootstrap() {
 }
 
 async function runMentionCc(t: ReturnType<typeof bootstrap>, message: MessageDto) {
-  await ccMentionsFromUserMessage({
+  // Wired through the real adapter: the use case takes ports now, and the
+  // adapter is the only place that turns a `db` into them, so composing it
+  // here keeps this suite testing the production path end to end.
+  await createMentionCcAdapter({
+    db: t.db,
+    runtimeHost: t.fake as unknown as AgentRuntimeHost,
+    events: t.events,
+    logger: t.logger,
+  }).ccMentionsFromUserMessage({
     message,
     sourceConversation: t.sourceChannel,
     sourceWorkspace: t.sourceWorkspace,
-    db: t.db,
-    agents: t.agents,
-    conversations: t.conversations,
-    messages: t.messages,
-    notifications: t.notifications,
-    runtimeHost: t.fake as unknown as AgentRuntimeHost,
-    logger: t.logger,
-    events: t.events,
   });
 }
 
-describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocker fix)', () => {
+describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', () => {
   it('writes message-author user_id into Mentions conversation_users + workspace_users', async () => {
     const t = bootstrap();
     try {
@@ -132,19 +136,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         content: 'hey @alice take a look',
       });
 
-      await ccMentionsFromUserMessage({
-        message: userMsg,
-        sourceConversation: t.sourceChannel,
-        sourceWorkspace: t.sourceWorkspace,
-        db: t.db,
-        agents: t.agents,
-        conversations: t.conversations,
-        messages: t.messages,
-        notifications: t.notifications,
-        runtimeHost: t.fake as unknown as AgentRuntimeHost,
-        logger: t.logger,
-        events: t.events,
-      });
+      await runMentionCc(t, userMsg);
 
       // The Mentions DM must now exist under alice's home workspace.
       const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
@@ -170,6 +162,10 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         .all(t.aliceHome.id)
         .map(r => r.user_id);
       expect(homeMembers).toContain('teammate');
+      // …as a plain member. Mentioning an agent must not confer governance over
+      // the recipient's home workspace (the delegation passes no role and the
+      // method's default is `member`).
+      expect(t.workspaces.getUserRole(t.aliceHome.id, 'teammate')).toBe('member');
     } finally {
       t.cleanup();
     }
@@ -189,19 +185,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         content: 'hey @alice legacy null author',
       });
 
-      await ccMentionsFromUserMessage({
-        message: userMsg,
-        sourceConversation: t.sourceChannel,
-        sourceWorkspace: t.sourceWorkspace,
-        db: t.db,
-        agents: t.agents,
-        conversations: t.conversations,
-        messages: t.messages,
-        notifications: t.notifications,
-        runtimeHost: t.fake as unknown as AgentRuntimeHost,
-        logger: t.logger,
-        events: t.events,
-      });
+      await runMentionCc(t, userMsg);
 
       const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
         title: 'Mentions',
@@ -234,19 +218,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         content: 'hey @alice no resolvable human',
       });
 
-      await ccMentionsFromUserMessage({
-        message: userMsg,
-        sourceConversation: t.sourceChannel,
-        sourceWorkspace: t.sourceWorkspace,
-        db: t.db,
-        agents: t.agents,
-        conversations: t.conversations,
-        messages: t.messages,
-        notifications: t.notifications,
-        runtimeHost: t.fake as unknown as AgentRuntimeHost,
-        logger: t.logger,
-        events: t.events,
-      });
+      await runMentionCc(t, userMsg);
 
       const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
         title: 'Mentions',
@@ -286,19 +258,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         content: 'hey @alice ambiguous human',
       });
 
-      await ccMentionsFromUserMessage({
-        message: userMsg,
-        sourceConversation: t.sourceChannel,
-        sourceWorkspace: t.sourceWorkspace,
-        db: t.db,
-        agents: t.agents,
-        conversations: t.conversations,
-        messages: t.messages,
-        notifications: t.notifications,
-        runtimeHost: t.fake as unknown as AgentRuntimeHost,
-        logger: t.logger,
-        events: t.events,
-      });
+      await runMentionCc(t, userMsg);
 
       const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
         title: 'Mentions',
@@ -326,19 +286,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         fromUserId: 'teammate',
         content: 'first @alice',
       });
-      await ccMentionsFromUserMessage({
-        message: m1,
-        sourceConversation: t.sourceChannel,
-        sourceWorkspace: t.sourceWorkspace,
-        db: t.db,
-        agents: t.agents,
-        conversations: t.conversations,
-        messages: t.messages,
-        notifications: t.notifications,
-        runtimeHost: t.fake as unknown as AgentRuntimeHost,
-        logger: t.logger,
-        events: t.events,
-      });
+      await runMentionCc(t, m1);
       // Second mention — addUser must be idempotent.
       const m2 = t.messages.insertForConversation({
         conversationId: t.sourceChannel.id,
@@ -346,19 +294,7 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         fromUserId: 'teammate',
         content: 'second @alice',
       });
-      await ccMentionsFromUserMessage({
-        message: m2,
-        sourceConversation: t.sourceChannel,
-        sourceWorkspace: t.sourceWorkspace,
-        db: t.db,
-        agents: t.agents,
-        conversations: t.conversations,
-        messages: t.messages,
-        notifications: t.notifications,
-        runtimeHost: t.fake as unknown as AgentRuntimeHost,
-        logger: t.logger,
-        events: t.events,
-      });
+      await runMentionCc(t, m2);
 
       const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
         title: 'Mentions',
@@ -370,6 +306,68 @@ describe('ccMentionsFromUserMessage — human membership writes (v25 PR-A blocke
         .all(mentionsDm!.id)
         .map(r => r.user_id);
       expect(dmMembers).toEqual(['teammate']);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('repairs agent-home DM ACL scaffolding that is missing on a later mention', async () => {
+    // #task:1989 — the product contract: a mention is an agent-home DM
+    // admission / ACL repair, NOT a workspace invitation. There is no durable
+    // deny state, so an ABSENT workspace_users / conversation_users row means
+    // "never provisioned / needs repair", not "revoked". A later mention from
+    // a still-legal source conversation must therefore rebuild the scaffolding
+    // idempotently — the workspace row at the fixed plain `member` role and the
+    // two role-less conversation edges — without conferring governance over the
+    // recipient's home workspace.
+    const t = bootstrap();
+    try {
+      // First mention seeds the Mentions DM + adds 'teammate'.
+      const m1 = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'first @alice',
+      });
+      await runMentionCc(t, m1);
+
+      const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
+        title: 'Mentions',
+      });
+      expect(mentionsDm).not.toBeNull();
+
+      // Simulate the absence the repair must heal: both ACL rows are gone.
+      // (No product route removes them today — see #task:1989 — but a raw
+      // delete / legacy migration / broken seam can leave exactly this state,
+      // and membership-row absence must not be read as durable revocation.)
+      // The pure-DELETE repo methods stand in for that removal without
+      // emitting any audit/event side effects.
+      t.conversations.removeUser(mentionsDm!.id, 'teammate');
+      t.workspaces.removeUserMember(t.aliceHome.id, 'teammate');
+
+      // A new mention from the same still-legal source conversation rebuilds
+      // the scaffolding — this is the repair half of the contract.
+      const m2 = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'second @alice after ACL removal',
+      });
+      await runMentionCc(t, m2);
+
+      const dmMembers = t.conversations
+        .listUsers(mentionsDm!.id)
+        .map(m => m.user_id);
+      expect(dmMembers).toEqual(['teammate']);
+
+      const homeMembers = t.workspaces
+        .listUserMembers(t.aliceHome.id)
+        .map(m => m.id);
+      expect(homeMembers).toContain('teammate');
+      // The repair never upgrades the author's governance: the fixed role is
+      // plain `member`, never owner/admin — mentioning an agent grants only
+      // DM admission, never governance over the recipient's home workspace.
+      expect(t.workspaces.getUserRole(t.aliceHome.id, 'teammate')).toBe('member');
     } finally {
       t.cleanup();
     }
@@ -672,4 +670,259 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
       t.cleanup();
     }
   });
+});
+
+/**
+ * The two statements this use case no longer prepares itself (#task:1982 W2).
+ * Moving them onto existing repo methods is only safe if the methods carry the
+ * SAME semantics, and neither property is visible from the mention-cc scenarios
+ * above: the role default is invisible while nothing reads it, and the cursor
+ * lookup is stream-qualified in a way a mainline-only test cannot distinguish.
+ * These pin both so a later change to either method reddens HERE rather than
+ * silently granting governance or reading an arbitrary thread's cursor.
+ */
+describe('mention-cc — the equivalence its delegations rest on', () => {
+  it('addUserMember defaults to plain member and is idempotent over an existing row', () => {
+    const t = bootstrap();
+    try {
+      const first = t.workspaces.addUserMember(t.aliceHome.id, 'teammate');
+      // The bare INSERT this replaced omitted `role` and took the column's
+      // DEFAULT 'member'; the method's default argument must be the same.
+      expect(first.role).toBe('member');
+
+      // Idempotent in the INSERT OR IGNORE sense: an existing row is left
+      // ALONE, not overwritten. A method that upserted would silently demote a
+      // human who had since been promoted — mention-cc runs on every mention.
+      t.workspaces.setOwnerUserId(t.aliceHome.id, 'teammate');
+      const again = t.workspaces.addUserMember(t.aliceHome.id, 'teammate');
+      expect(again.role).toBe('owner');
+      expect(again.joined_at).toBe(first.joined_at);
+      expect(t.workspaces.getUserRole(t.aliceHome.id, 'teammate')).toBe('owner');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('getLastReadSeq answers per stream — mainline and a thread root are distinct cursors', () => {
+    const t = bootstrap();
+    try {
+      const reads = new ConversationReadRepo(t.db);
+      const root = t.messages.insertForConversation({
+        conversationId: t.sourceChannel.id,
+        fromKind: 'user',
+        fromUserId: 'teammate',
+        content: 'thread root',
+      });
+
+      // No cursor row yet → 0, on both streams. This is the `?? 0` the old
+      // inline SELECT applied, and it is what makes an unread mention publish.
+      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, null)).toBe(0);
+      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, root.id)).toBe(0);
+
+      reads.markRead({
+        viewerUserId: 'teammate',
+        conversationId: t.sourceChannel.id,
+        threadRootId: null,
+        seq: 7,
+      });
+      // `thread_root_id IS ?` — a mainline cursor must NOT answer for a thread,
+      // and vice versa. An unqualified lookup would return an arbitrary row.
+      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, null)).toBe(7);
+      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, root.id)).toBe(0);
+
+      reads.markRead({
+        viewerUserId: 'teammate',
+        conversationId: t.sourceChannel.id,
+        threadRootId: root.id,
+        seq: 3,
+      });
+      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, root.id)).toBe(3);
+      expect(reads.getLastReadSeq('teammate', t.sourceChannel.id, null)).toBe(7);
+
+      // Another viewer shares neither cursor.
+      expect(reads.getLastReadSeq('other', t.sourceChannel.id, null)).toBe(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * What the generic roster-adapter rollback test CANNOT show (#task:1987): that
+ * this use case's own orchestration keeps all three placement writes inside the
+ * one transaction, and keeps every effect after it. Move one write out of the
+ * callback and the scenarios above stay green — they only ever observe the happy
+ * path. So the fault is injected into the PRODUCTION composition's roster scope
+ * (every other port stays the real one) and the assertion is about what did NOT
+ * happen.
+ */
+describe('ccMentionsFromUserMessage — the placement is one unit, and effects follow it', () => {
+  type RosterFace = 'addConversationMember' | 'addWorkspaceHumanMembership';
+
+  /** Wrap the real roster UnitOfWork so the nth call of one face throws INSIDE
+   *  the transaction. Calls before it delegate for real, which is what makes the
+   *  rollback observable rather than vacuous. */
+  function rosterFailingAt(
+    roster: WorkspaceRosterUnitOfWork,
+    failOn: (face: RosterFace, nth: number) => boolean,
+  ): WorkspaceRosterUnitOfWork {
+    return {
+      atomicallyForWorkspace: (workspaceId, fn) =>
+        roster.atomicallyForWorkspace(workspaceId, tx => {
+          const seen: Record<RosterFace, number> = {
+            addConversationMember: 0,
+            addWorkspaceHumanMembership: 0,
+          };
+          const gate = (face: RosterFace): void => {
+            seen[face] += 1;
+            if (failOn(face, seen[face])) {
+              throw new Error(`injected ${face} #${seen[face]} failure`);
+            }
+          };
+          return fn(
+            overrideScope(tx, {
+              roster: overrideScope(tx.roster, {
+                addConversationMember: (conversationId, member) => {
+                  gate('addConversationMember');
+                  return tx.roster.addConversationMember(conversationId, member);
+                },
+                addWorkspaceHumanMembership: userId => {
+                  gate('addWorkspaceHumanMembership');
+                  tx.roster.addWorkspaceHumanMembership(userId);
+                },
+              }),
+            }),
+          );
+        }),
+    };
+  }
+
+  async function runWithRosterFault(
+    t: ReturnType<typeof bootstrap>,
+    message: MessageDto,
+    failOn: (face: RosterFace, nth: number) => boolean,
+  ): Promise<void> {
+    const composition = createMentionCcComposition({
+      db: t.db,
+      runtimeHost: t.fake as unknown as AgentRuntimeHost,
+      events: t.events,
+      logger: t.logger,
+    });
+    await ccMentionsFromUserMessage({
+      ...composition,
+      roster: rosterFailingAt(composition.roster, failOn),
+      message,
+      sourceConversation: t.sourceChannel,
+      sourceWorkspace: t.sourceWorkspace,
+    });
+  }
+
+  /** Everything the placement transaction and its follow-up effects would have
+   *  produced, read back through repos (no new native SQL) / the event bus.
+   *
+   *  The Mentions DM is located WITHOUT the agent-membership join
+   *  `findDmChannelForAgent` uses: after a rolled-back placement the row exists
+   *  with no member, so that finder cannot see it — and the assertions below are
+   *  about the rows inside it, which would silently pass against `null`. */
+  function observeAftermath(t: ReturnType<typeof bootstrap>) {
+    const mentionsDm =
+      t.conversations
+        .list()
+        .find(
+          c =>
+            c.kind === 'dm_channel'
+            && c.workspace_id === t.aliceHome.id
+            && c.title === 'Mentions',
+        ) ?? null;
+    const inDm = <T>(read: (conversationId: string) => T, fallback: T): T =>
+      mentionsDm ? read(mentionsDm.id) : fallback;
+    return {
+      mentionsDm,
+      agentMembers: inDm(id => t.conversations.listAgents(id).length, 0),
+      humanMembers: inDm(id => t.conversations.listUsers(id).length, 0),
+      homeHumanMembers: t.workspaces.listUserMembers(t.aliceHome.id).length,
+      wrappedMessages: inDm(id => t.messages.listForConversation(id).length, 0),
+      notifications: t.notifications.list({ userId: 'teammate' }).length,
+      topologySeq: Number(t.events.currentSeq(`workspace:${t.aliceHome.id}`)),
+      conversationSeq: inDm(id => Number(t.events.currentSeq(`conversation:${id}`)), 0),
+      viewerSeq: Number(t.events.currentSeq('viewer:teammate')),
+      delivered: t.fake.delivered.length,
+    };
+  }
+
+  for (const [label, failOn] of [
+    [
+      // The 2nd face: the agent's conversation edge is already written when the
+      // human's fails.
+      'the human conversation edge (2nd write)',
+      (face: RosterFace, nth: number) => face === 'addConversationMember' && nth === 2,
+    ],
+    [
+      // The 3rd face: BOTH conversation edges are written when the workspace row
+      // fails — the case that used to leave a Mentions DM its own author could
+      // not open.
+      'the workspace membership row (3rd write)',
+      (face: RosterFace) => face === 'addWorkspaceHumanMembership',
+    ],
+  ] as const) {
+    it(`rolls the whole placement back when ${label} fails, and fires no effect`, async () => {
+      const t = bootstrap();
+      try {
+        const userMsg = t.messages.insertForConversation({
+          conversationId: t.sourceChannel.id,
+          fromKind: 'user',
+          fromUserId: 'teammate',
+          content: 'hey @alice take a look',
+        });
+
+        await runWithRosterFault(t, userMsg, failOn);
+
+        const after = observeAftermath(t);
+        // The lazy `Mentions` DM itself is created BEFORE the placement
+        // transaction, so it survives — a documented residual of this pass
+        // (#task:1987), sharpened by this test: because every lookup of it goes
+        // through the agent-membership join, the surviving row is UNREACHABLE and
+        // the next mention allocates a fresh DM instead of reusing it. Inert
+        // (empty, invisible) rather than wrong, and the price of fixing it is
+        // widening the membership roster scope with a conversation-creation face.
+        expect(after.mentionsDm).not.toBeNull();
+        expect(
+          t.conversations.findDmChannelForAgent(t.alice.id, { title: 'Mentions' }),
+        ).toBeNull();
+        expect({
+          agentMembers: after.agentMembers,
+          humanMembers: after.humanMembers,
+          homeHumanMembers: after.homeHumanMembers,
+        }).toEqual({ agentMembers: 0, humanMembers: 0, homeHumanMembers: 0 });
+        // …and no effect downstream of it may have happened: no wrapped message,
+        // no notification row, no topology / message / viewer frame, no runtime
+        // delivery. Each of these sits AFTER the callback in `deliverOne`, so a
+        // write moved out of the transaction would show up here as a landed row
+        // next to a rolled-back membership.
+        expect({
+          wrappedMessages: after.wrappedMessages,
+          notifications: after.notifications,
+          topologySeq: after.topologySeq,
+          conversationSeq: after.conversationSeq,
+          viewerSeq: after.viewerSeq,
+          delivered: after.delivered,
+        }).toEqual({
+          wrappedMessages: 0,
+          notifications: 0,
+          topologySeq: 0,
+          conversationSeq: 0,
+          viewerSeq: 0,
+          delivered: 0,
+        });
+        // The failure is swallowed per recipient (one bad mention must not fail
+        // the user's send) — but it is LOGGED, not silent.
+        expect(t.logger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ handle: 'alice', err: expect.any(Error) }),
+          'mention-cc: delivery failed for one recipient; continuing',
+        );
+      } finally {
+        t.cleanup();
+      }
+    });
+  }
 });

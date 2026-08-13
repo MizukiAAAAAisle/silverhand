@@ -18,6 +18,7 @@ import {
   SeedError,
   WorkspaceUnsuitableError,
 } from '../services/channel-service.js';
+import { ChannelError } from '../services/channel/errors.js';
 import {
   ActorError as MessageActorError,
   AttachmentError as MessageAttachmentError,
@@ -276,11 +277,34 @@ export function channelServiceErrorResponse(c: Context, err: unknown): Response 
     return c.json({ error: err.message, code: err.code }, 400);
   }
   if (err instanceof ChannelActorError) {
+    // The commit-time governance refusal (#task:1987) is the SAME refusal as the
+    // route's own pre-lock gate — `workspaces.ts` answers `{ error: 'forbidden' }`
+    // / 403 when the actor cannot govern the workspace — only observed one lock
+    // later, where the role is re-derived. Rendering it identically is the
+    // decision, not an omission: a client can do nothing different about "you
+    // still lacked the capability at commit time", and giving the seam its own
+    // code + message would publish an internal concurrency reason as public
+    // protocol. So this code never reaches the wire; `responses.test.ts`'s
+    // exhaustive actor table and the parity case in `channels.test.ts` pin both
+    // halves of that claim.
+    if (err.code === 'user_cannot_govern_workspace') {
+      return c.json({ error: 'forbidden' }, 403);
+    }
     const status =
       err.code === 'source_conversation_not_found' || err.code === 'agent_not_found'
         ? 404
         : 403;
     return c.json({ error: err.message, code: err.code }, status);
+  }
+  // The channel domain's own driver-free error (#task:1981). It used to be a
+  // `RepoError` raised by the service, and it maps through the SAME status
+  // table so the HTTP contract is unchanged — this branch pins that, rather
+  // than relying on `isRepoError`'s structural `code` check to keep catching it.
+  if (err instanceof ChannelError) {
+    return c.json(
+      { error: err.message, code: err.code },
+      repoErrorStatusMap[err.code] ?? 400,
+    );
   }
   if (isRepoError(err)) {
     return c.json(

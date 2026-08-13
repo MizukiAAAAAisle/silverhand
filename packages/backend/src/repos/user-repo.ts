@@ -1,5 +1,6 @@
 import type { Database as Db } from 'better-sqlite3';
 import { ParticipantNameSchema, type UserRow } from '@silverhand/shared';
+import { throwAsUserWriteConflict } from './sqlite-user-conflicts.js';
 
 /**
  * Repository for the `users` table.
@@ -67,6 +68,20 @@ export class UserRepo {
       .all();
   }
 
+  /**
+   * Existence, not rows: the V1 single-viewer registration gate only needs to
+   * know whether ANY human identity exists. `LIMIT 1` stops at the first row
+   * and no user column is selected, so the answer never depends on — nor pays
+   * for — reading and ordering the table (`list().length > 0` was the
+   * pre-#task:1982 form and its full-row read was never part of the contract).
+   */
+  anyExists(): boolean {
+    const row = this.db
+      .prepare<[], { one: number }>('SELECT 1 AS one FROM users LIMIT 1')
+      .get();
+    return row !== undefined;
+  }
+
   touchLastSeen(id: string, seenAt: number): boolean {
     const result = this.db
       .prepare(
@@ -84,8 +99,11 @@ export class UserRepo {
    *
    * The migration v21 cross-namespace uniqueness trigger throws if
    * `name` collides with an existing `agents.name`; the column UNIQUE
-   * fires for collisions inside `users`. better-sqlite3 surfaces both
-   * as SqliteError instances the caller can map to 409.
+   * fires for collisions inside `users`, and the partial index
+   * `uniq_users_email_when_set` for a duplicate login email. All of them
+   * leave this method as a `UserWriteConflictError` carrying the conflicting
+   * axis (`sqlite-user-conflicts.ts` is the only decoder), so neither create
+   * path has to read driver messages. Anything else propagates unchanged.
    *
    * `name` FORMAT is asserted here against `ParticipantNameSchema` — the
    * single declarative authority for "what an addressable participant name
@@ -120,21 +138,25 @@ export class UserRepo {
       );
     }
     const now = Date.now();
-    this.db
-      .prepare(
-        `INSERT INTO users
-           (id, name, display_name, avatar_storage_key, avatar_content_type,
-            email, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`,
-      )
-      .run(
-        input.id,
-        input.name,
-        input.displayName,
-        input.email ?? null,
-        now,
-        now,
-      );
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO users
+             (id, name, display_name, avatar_storage_key, avatar_content_type,
+              email, created_at, updated_at)
+           VALUES (?, ?, ?, NULL, NULL, ?, ?, ?)`,
+        )
+        .run(
+          input.id,
+          input.name,
+          input.displayName,
+          input.email ?? null,
+          now,
+          now,
+        );
+    } catch (err) {
+      throwAsUserWriteConflict(err);
+    }
     const row = this.get(input.id);
     if (!row) {
       throw new Error(`UserRepo.create: row not found post-INSERT for id=${input.id}`);

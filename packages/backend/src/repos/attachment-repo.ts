@@ -13,6 +13,7 @@ import type {
   StorageKind,
 } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
+import type { StoredFileRef } from '../storage/blob-file-storage.js';
 import { loadMessageAuthors } from './message-author.js';
 
 function newId(): string {
@@ -612,6 +613,18 @@ export function rowToDto(row: AttachmentRow): AttachmentDto {
     created_by_id: row.created_by_id,
     created_at: row.created_at,
   };
+}
+
+/**
+ * The physical-blob coordinates of an attachment row. Lives HERE, next to
+ * `rowToDto` / `rowToSnapshot`, because two callers now need it: the
+ * `AttachmentService` (serve / replace / delete) and the agent-teardown adapter,
+ * which must capture the refs on the transaction's own connection before the
+ * rows cascade away. One projection, so "which columns name the blob" cannot
+ * drift between them.
+ */
+export function rowToStoredRef(row: AttachmentRow): StoredFileRef {
+  return { storage: row.storage, storageKey: row.storage_key };
 }
 
 export function rowToSnapshot(row: AttachmentRow): AttachmentSnapshot {

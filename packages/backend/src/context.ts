@@ -1,5 +1,5 @@
-import type { Database as Db } from 'better-sqlite3';
 import type { BindAddressScope, ServerConfig } from '@silverhand/shared';
+import type { AuthorizationReadPort } from './authorization-ports.js';
 import type { ScopeEventBus } from './ws/scope-event-bus.js';
 import type { AgentRuntimeHost } from './runtime/agent-runtime-host.js';
 import type { AttachmentService } from './services/attachment-service.js';
@@ -24,6 +24,7 @@ import type { AgentL2SeedEnsurer } from './runtime/agent-l2-seed-ensurer.js';
 import type { HostWsServerController } from './ws/host-ws-server.js';
 import type { PresenceRegistry } from './presence/presence-registry.js';
 import type { BackendMetrics } from './observability/metrics.js';
+import type { DbWriteProbe } from './observability/db-write-probe.js';
 
 export type BackendDeploymentMode = 'embedded' | 'standalone';
 
@@ -66,11 +67,48 @@ export interface SilverhandCliLauncher {
   env?: Record<string, string>;
 }
 
+/**
+ * The per-process runtime capability bag: services, effect sinks, config that
+ * was decided once at boot, and the narrow ports a cross-cutting concern needs.
+ *
+ * **It carries no database handle (#task:1983 W5).** `db: Db` used to be the
+ * first field, and it made this interface a service locator with the widest
+ * possible reach: any module that already took a context — a route, a
+ * middleware, an authorization predicate — could construct any repository and
+ * issue any statement without declaring that it touches persistence. Removing
+ * the field is what turns every previous "reads the handle off the context" into
+ * a compile error instead of a ledger row. Persistence now enters the process
+ * exactly once, in `persistence/root.ts`, and reaches a consumer only through
+ * the ports/repos it names in its own deps.
+ *
+ * The remaining `db*` members are deliberately NOT handles: `dbWriteProbe` is a
+ * capability that answers "can this process write" without exposing what it
+ * asked, and `authorizationReads` is `permissions.ts`'s private fact port.
+ *
+ * Tests that genuinely need the handle (schema white-box, fixture seeding,
+ * contention setups) use `TestBackendContext` from `tests/utils/`, which
+ * intersects this type with `{ db: Db }`. That alias exists only under `tests/`
+ * — a production file cannot reach it, so the test convenience cannot become a
+ * production capability.
+ */
 export interface BackendContext {
-  db: Db;
   /** Optional process-local Prometheus registry. Disabled unless an operator
    * explicitly configures the private metrics listener. */
   metrics?: BackendMetrics;
+  /**
+   * #task:1982 W4 — the `/readyz` write probe as a capability, so the HTTP
+   * layer renders `db_writable` without holding the driver handle or knowing
+   * which dialect's lock statements answer the question.
+   */
+  dbWriteProbe: DbWriteProbe;
+  /**
+   * #task:1983 W3 — the fact source `permissions.ts` decides on, as a
+   * driver-free port instead of a raw handle it builds repos from. It is that
+   * module's PRIVATE surface: no other production file may read this field
+   * (Gate 8), because authorization's minimal read set is not a general
+   * repository — a route that needs a row asks its own port for it.
+   */
+  authorizationReads: AuthorizationReadPort;
   deploymentMode: BackendDeploymentMode;
   readiness: {
     migrationsApplied: boolean;

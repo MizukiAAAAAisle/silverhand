@@ -6,7 +6,9 @@ import {
   type ConversationKind,
   type ConversationVisibility,
   type MemberRemovabilityDto,
+  type MessageDto,
   type WorkspaceRoleDto,
+  type WorkspaceUserMemberDto,
   normalizeHandle,
   systemSubtype,
 } from '@silverhand/shared';
@@ -16,10 +18,16 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
-import { ConversationReadRepo } from '../repos/conversation-read-repo.js';
-import type { MessageRepo } from '../repos/message-repo.js';
-import type { ChannelAttentionPreferenceRepo } from '../repos/channel-attention-preference-repo.js';
 import type { MembershipService } from '../services/membership-service.js';
+import type {
+  AgentMembershipTxPort,
+  HumanMembershipTxPort,
+  HumanMembershipTxScope,
+  MembershipAuthorityTxPort,
+  MembershipChannelExitFacts,
+  MembershipPersistence,
+  WorkspaceMembershipAnchor,
+} from './membership-ports.js';
 import {
   canAddConversationMember,
   canEditAgent,
@@ -29,10 +37,25 @@ import {
   canViewConversation,
   userWorkspaceRole,
   workspaceRole,
-  workspaceRoleOutranks,
 } from '../permissions.js';
-import { addWorkspaceAgentMember } from './add-workspace-agent-member.js';
+import { workspaceRoleOutranks } from '../auth/workspace-role.js';
+import { enrollAgentIntoWorkspace } from './add-workspace-agent-member.js';
+import {
+  MembershipRevalidationRefusal,
+  readActorAuthority,
+  refusalOrRethrow,
+} from './membership-revalidation.js';
+import {
+  type ConversationMemberAddedActorSnapshot,
+  conversationMemberAddedAgentSnapshot,
+  conversationMemberAddedContent,
+  conversationMemberAddedHumanSnapshot,
+  conversationMemberAddedMetadata,
+  conversationMemberRemovedContent,
+  conversationMemberRemovedMetadata,
+} from './conversation-member-audit.js';
 import { type PostCommitEffect, runPostCommitEffects } from './post-commit.js';
+import { publishViewerWorkspacesChanged } from './viewer-workspaces.js';
 
 /**
  * Add a member (agent or human) to a channel/thread conversation
@@ -85,8 +108,7 @@ export type AddConversationMemberDeps = {
   users: UserRepo;
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
-  messages: MessageRepo;
-  channelAttentionPrefs: ChannelAttentionPreferenceRepo;
+  membershipPersistence: MembershipPersistence;
   membership: MembershipService;
 };
 
@@ -95,16 +117,21 @@ export type AddConversationMemberDeps = {
  * a channel", SHARED by {@link addConversationMember}'s human leg and
  * {@link joinPublicChannel} so the join invariants live in ONE place and cannot
  * drift into two models. The CALLER owns the enclosing DB transaction and any
- * visible system message / post-commit effects — this does only the membership
- * writes.
+ * post-commit effects — this does only the membership writes.
  *
- * PRECONDITION: call ONLY inside a transition the caller has confirmed to be a
- * fresh entry (target is NOT already a member). This is NOT a re-entrant upsert:
- * the read baseline uses `markRead` (monotonic max), which never regresses but
- * WOULD advance the cursor past new messages if re-run after the first entry —
- * so re-invoking it on an already-member is a silent cursor bug, not a no-op.
- * Zero-increment on an idempotent retry is the CALLER's `alreadyMember` guard,
- * not a property of this function.
+ * Returns whether this call was the FRESH ENTRY, and does nothing beyond the
+ * idempotent edge insert when it was not. That answer comes from the port's
+ * in-lock `created`, which is why it lives here rather than in the callers: the
+ * read baseline uses `markRead` (monotonic max), which never regresses but WOULD
+ * advance the cursor past new messages if re-run on an existing member. Under a
+ * caller-side `alreadyMember` guard that silent cursor bug was one stale read
+ * away; now it is unexpressible.
+ *
+ * `announce` runs after the edge insert and BEFORE the read baseline, and only on
+ * a fresh entry. That slot is the load-bearing ordering, not a convenience: the
+ * baseline seeds each stream to its CURRENT head, so a caller's visible
+ * "X added you" message must already be on the mainline or the new member would
+ * see it as unread (#task:1404). Self-join announces nothing and omits it.
  *
  * Writes:
  *  1. the `conversation_users` edge (`addUser` = INSERT OR IGNORE);
@@ -119,34 +146,87 @@ export type AddConversationMemberDeps = {
  *     thread cursors would see pre-join thread replies as `+n new`. markRead is
  *     monotonic max(), so remove-then-re-add advances to the re-join head.
  *
- * A caller that also inserts a member-added system message MUST insert it BEFORE
- * calling this, so the baseline's `listStreamHeads` read includes it.
+ * Takes the HUMAN membership scope, not a set of repos (#task:1987): the viewer
+ * is the coordinated member of the enclosing `atomically`, so this write-core
+ * cannot be pointed at anybody else and holds no DB handle.
  */
-function seedChannelHumanMembership(
-  deps: {
-    ctx: BackendContext;
-    conversations: ConversationRepo;
-    messages: MessageRepo;
-    channelAttentionPrefs: ChannelAttentionPreferenceRepo;
-  },
+function enterChannelAsHuman(
+  tx: HumanMembershipTxPort,
   conversationId: string,
-  userId: string,
-): void {
-  deps.conversations.addUser(conversationId, userId);
-  deps.channelAttentionPrefs.insertIfAbsent({
-    viewerUserId: userId,
-    conversationId,
-    mode: 'mentions',
-  });
-  const reads = new ConversationReadRepo(deps.ctx.db);
-  for (const head of deps.messages.listStreamHeads(conversationId)) {
-    reads.markRead({
-      viewerUserId: userId,
+  announce?: () => void,
+): boolean {
+  const { created } = tx.addConversationMember(conversationId);
+  if (!created) return false;
+  announce?.();
+  tx.insertAttentionPreferenceIfAbsent({ conversationId, mode: 'mentions' });
+  for (const head of tx.listStreamHeads(conversationId)) {
+    tx.markStreamRead({
       conversationId,
       threadRootId: head.threadRootId,
       seq: head.latestSeq,
     });
   }
+  return true;
+}
+
+/**
+ * Re-derive the whole ADD authorization inside the lock, and return the refusal that
+ * an ABSENT anchor must produce for this actor.
+ *
+ * Shaped as "the enrollment refusal" rather than a boolean because the pre-lock gates
+ * are a two-stage refusal (`workspace_membership_required` for a principal whose
+ * enrollment path can never run, `agent_not_owned` for one that can but does not own
+ * the agent), and the in-lock re-derivation must answer with the SAME code the
+ * pre-lock path would have. Whether the enrollment happens at all is the anchor's
+ * call, so this cannot decide it — only what to say when it is needed.
+ */
+function authorizeAddInsideLock(
+  authority: MembershipAuthorityTxPort,
+  input: {
+    principal: Principal;
+    conversationId: string;
+    target: { kind: 'agent'; ownedByActor: boolean } | { kind: 'human' };
+  },
+): { enrollmentRefusal: AddConversationMemberError | null } {
+  const refuse = (error: AddConversationMemberError): never => {
+    throw new MembershipRevalidationRefusal<AddConversationMemberError>(error);
+  };
+  const actor = readActorAuthority(authority, input.principal, input.conversationId);
+  // Stage 1 — the floor. An actor removed from the channel between the gate and the
+  // lock may not write its roster, and neither may one whose workspace role is gone.
+  if (!actor.inConversation) refuse({ code: 'forbidden' });
+  // Stage 2 — target-graded, for a non-admin human: the people roster and other
+  // people's agents stay governance; your OWN agents do not.
+  if (input.principal.kind === 'user' && !actor.governs) {
+    if (input.target.kind === 'human') refuse({ code: 'forbidden' });
+    else if (!input.target.ownedByActor) refuse({ code: 'agent_not_owned' });
+  }
+  if (input.principal.kind !== 'user') {
+    // Non-human principals never auto-provision — the target must already be a
+    // workspace member — so for them an absent anchor is always this refusal,
+    // whichever kind the target is.
+    return {
+      enrollmentRefusal: {
+        code: 'workspace_membership_required',
+        message:
+          input.target.kind === 'agent'
+            ? 'agent is not a member of this workspace'
+            : 'user is not a member of this workspace',
+      },
+    };
+  }
+  if (input.target.kind === 'human') {
+    // A non-admin human was refused by stage 2 above, so reaching here means the
+    // actor governs the workspace and may enroll people.
+    return { enrollmentRefusal: null };
+  }
+  // Enrollment authority for an AGENT target is creator-only: not even an admin
+  // enrolls someone else's agent (#task:1681). An admin adding a NON-owned agent is
+  // still fine when it is already a workspace member — that is the anchor's call,
+  // which is why this refusal is returned rather than thrown.
+  return {
+    enrollmentRefusal: input.target.ownedByActor ? null : { code: 'agent_not_owned' },
+  };
 }
 
 export async function addConversationMember(
@@ -196,13 +276,14 @@ export async function addConversationMember(
   // enroll people, so `canAutoProvisionHumanMember` means what it says.
   //
   // For an AGENT target there is deliberately NO such predicate here, because
-  // this use case does not hold enrollment authority — `addWorkspaceAgentMember`
-  // does (creator-only, #task:1681: not even an admin enrolls someone else's
-  // agent). What we decide here is only ROUTING: whether to walk the enrollment
-  // path and let it answer with its own typed refusal, or to stop with
+  // this use case does not hold enrollment authority — `canEnrollAgent` is the
+  // authority (creator-only, #task:1681: not even an admin enrolls someone
+  // else's agent), applied on the auto-provision branch below. What we decide
+  // here is only ROUTING: whether to walk the enrollment path and let that gate
+  // answer with its own typed refusal, or to stop with
   // `workspace_membership_required` because that path can never run for this
   // principal at all. Hence the name — an admin gets `true` and may still be
-  // refused with `agent_not_owned` one call later; that is a two-stage refusal,
+  // refused with `agent_not_owned` one gate later; that is a two-stage refusal,
   // not a permission. Non-human principals keep the old posture (they never
   // auto-provision — the target must already be a workspace member).
   const canAutoProvisionHumanMember = callerIsHuman && isWorkspaceAdmin;
@@ -248,8 +329,8 @@ export async function addConversationMember(
     const workspaceWasMember = deps.workspaces.isMember(conversation.workspace_id, agent.id);
     if (!workspaceWasMember) {
       // Not "you are allowed to enroll" — only "the enrollment path can run for
-      // this principal". `addWorkspaceAgentMember` below owns the real gate and
-      // answers `agent_not_owned` for anyone but the creator, admin included.
+      // this principal". The gate below owns the real answer and refuses anyone
+      // but the creator, admin included.
       if (!mayAttemptAgentEnrollment(agent.id)) {
         return {
           ok: false,
@@ -259,51 +340,66 @@ export async function addConversationMember(
           },
         };
       }
-      const workspace = deps.workspaces.get(conversation.workspace_id);
-      if (!workspace) {
+      if (!deps.workspaces.get(conversation.workspace_id)) {
         throw new Error(`conversation ${conversation.id} references missing workspace ${conversation.workspace_id}`);
       }
-      const workspaceMember = await addWorkspaceAgentMember(
-        { ctx: deps.ctx, agents: deps.agents, workspaces: deps.workspaces },
-        {
-          principal: input.principal,
-          workspace: {
-            id: workspace.id,
-          },
-          agentId: agent.id,
-        },
-      );
-      if (!workspaceMember.ok) {
-        switch (workspaceMember.error.code) {
-          case 'agent_not_found':
-            return {
-              ok: false,
-              error: { code: 'candidate_not_found', message: 'agent not found' },
-            };
-          case 'agent_not_owned':
-            // #task:1681 — this door auto-provisions WORKSPACE membership, so it
-            // is bound by the same enrollment authority as the workspace
-            // member-add route: a workspace admin may not pull a teammate's
-            // agent in. An agent already in the workspace is unaffected (the
-            // gate only runs on the auto-provision branch).
-            return { ok: false, error: { code: 'agent_not_owned' } };
-        }
+      // #task:1681 — this door auto-provisions WORKSPACE membership, so it is
+      // bound by the same enrollment authority as the workspace member-add
+      // route: a workspace admin may not pull a teammate's agent in. An agent
+      // already in the workspace is unaffected (the gate only runs on the
+      // auto-provision branch). It is the same gate `addWorkspaceAgentMember`
+      // applies; only the WRITE moved, into the single transaction below.
+      if (!canEnrollAgent(deps.ctx, input.principal, agent.id)) {
+        return { ok: false, error: { code: 'agent_not_owned' } };
       }
     }
-    const alreadyMember = deps.conversations.getAgent(conversation.id, agent.id) !== null;
-    if (!alreadyMember) {
-      const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
-      const memberSnap = conversationMemberAddedAgentSnapshot(agent);
-      const message = deps.ctx.db.transaction(() => {
-        deps.conversations.addAgent(conversation.id, agent.id);
-        return deps.messages.insertForConversation({
-          conversationId: conversation.id,
-          fromKind: 'system',
-          content: conversationMemberAddedContent({ actor, member: memberSnap }),
-          metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
-        });
-      })();
-      effects.push(() => publishMemberAdded(deps.ctx, deps.conversations, conversation, message));
+    // The IMMUTABLE half of the enrollment authority: who created this agent. A
+    // roster write cannot change it, so unlike the role and membership facts it is
+    // safe to carry into the transaction (#task:1681 — creator-only, admin included).
+    const ownedByActor = canEnrollAgent(deps.ctx, input.principal, agent.id);
+    const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
+    const memberSnap = conversationMemberAddedAgentSnapshot(agent);
+    // ONE keyed commit for the whole enrollment (#task:1987): the workspace
+    // row, the capability seed, the conversation edge and the audit message.
+    // Before this, the workspace enrollment committed on its own and a
+    // failure of the second transaction left the agent enrolled in a
+    // workspace it had joined no channel of.
+    //
+    // Every write below is decided INSIDE the lock — by the re-derived authority,
+    // the ANCHOR and the port's in-lock `created` — never by the reads above: those
+    // ran before the lock, so a removal or a demotion landing in between would
+    // otherwise write a conversation row for a non-member, enroll without placing,
+    // or complete a roster write its actor no longer has the authority for.
+    let message: MessageDto | null;
+    try {
+      message = deps.membershipPersistence.uow.atomically(
+        { workspaceId: conversation.workspace_id, member: { kind: 'agent', id: agent.id } },
+        (tx, anchor) => {
+          const { enrollmentRefusal } = authorizeAddInsideLock(tx.authority, {
+            principal: input.principal,
+            conversationId: conversation.id,
+            target: { kind: 'agent', ownedByActor },
+          });
+          if (anchor === null) {
+            if (enrollmentRefusal) {
+              throw new MembershipRevalidationRefusal<AddConversationMemberError>(enrollmentRefusal);
+            }
+            enrollAgentIntoWorkspace(tx.membership);
+          }
+          if (!tx.membership.addConversationMember(conversation.id).created) return null;
+          return tx.membership.insertMembershipAuditMessage({
+            conversationId: conversation.id,
+            content: conversationMemberAddedContent({ actor, member: memberSnap }),
+            metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
+          });
+        },
+      );
+    } catch (err) {
+      return { ok: false, error: refusalOrRethrow<AddConversationMemberError>(err) };
+    }
+    if (message) {
+      const added = message;
+      effects.push(() => publishMemberAdded(deps.ctx, deps.conversations, conversation, added));
     }
     await runPostCommitEffects(effects, deps.ctx.logger);
     return { ok: true, members: deps.membership.listMembers(conversation.id) };
@@ -323,69 +419,63 @@ export async function addConversationMember(
       },
     };
   }
-  const alreadyMember = deps.conversations.getUser(conversation.id, user.id) !== null;
-  if (!workspaceWasMember || !alreadyMember) {
-    const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
-    const memberSnap = conversationMemberAddedHumanSnapshot(user);
-    const write = deps.ctx.db.transaction(() => {
-      const workspaceMember = workspaceWasMember
-        ? null
-        : deps.workspaces.addUserMember(conversation.workspace_id, user.id);
-      let message: ReturnType<MessageRepo['insertForConversation']> | null = null;
-      if (!alreadyMember) {
-        // Insert the member-added system message FIRST, THEN run the shared
-        // membership transition. Order is load-bearing: seedChannelHumanMembership
-        // baselines the read cursor to each stream's CURRENT head, so the message
-        // must already be on the mainline for the new member to not see "X added
-        // you" as unread. The visible system message is admin-add-specific and
-        // stays HERE in the caller; the addUser + attention-pref + per-stream
-        // baseline write-core is shared with self-join so the join invariants
-        // cannot drift into two models.
-        message = deps.messages.insertForConversation({
+  const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
+  const memberSnap = conversationMemberAddedHumanSnapshot(user);
+  // Same shape as the agent arm above: the pre-lock reads refuse early, and every
+  // write is decided inside the lock — the caller's authority by the in-lock
+  // authority projection, the workspace enrollment by the ANCHOR, the edge and the
+  // audit message by the port's in-lock `created`.
+  let write: { workspaceMember: WorkspaceUserMemberDto | null; message: MessageDto | null };
+  try {
+    write = deps.membershipPersistence.uow.atomically(
+      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: user.id } },
+      (tx, anchor) => {
+        const { enrollmentRefusal } = authorizeAddInsideLock(tx.authority, {
+          principal: input.principal,
           conversationId: conversation.id,
-          fromKind: 'system',
-          content: conversationMemberAddedContent({ actor, member: memberSnap }),
-          metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
+          target: { kind: 'human' },
         });
-        seedChannelHumanMembership(deps, conversation.id, user.id);
-      }
-      return { workspaceMember, message };
-    })();
-    const workspaceMember = write.workspaceMember;
-    if (workspaceMember) {
-      effects.push(() =>
-        publishViewerWorkspacesChanged(deps.ctx, user.id, {
-          change: 'added',
-          workspace_id: conversation.workspace_id,
-          role: workspaceMember.role,
-        }),
-      );
-    }
-    const message = write.message;
-    if (message) {
-      effects.push(() => publishMemberAdded(deps.ctx, deps.conversations, conversation, message));
-    }
+        let workspaceMember: WorkspaceUserMemberDto | null = null;
+        if (anchor === null) {
+          if (enrollmentRefusal) {
+            throw new MembershipRevalidationRefusal<AddConversationMemberError>(enrollmentRefusal);
+          }
+          workspaceMember = tx.membership.addWorkspaceMembership();
+        }
+        let message: MessageDto | null = null;
+        // The visible member-added message is admin-add-specific and stays HERE
+        // in the caller; the write-core owns the edge + attention-pref + read
+        // baseline and the slot this runs in, so the "message before baseline"
+        // ordering it depends on cannot be got wrong from here.
+        enterChannelAsHuman(tx.membership, conversation.id, () => {
+          message = tx.membership.insertMembershipAuditMessage({
+            conversationId: conversation.id,
+            content: conversationMemberAddedContent({ actor, member: memberSnap }),
+            metadata: conversationMemberAddedMetadata({ actor, member: memberSnap }),
+          });
+        });
+        return { workspaceMember, message };
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: refusalOrRethrow<AddConversationMemberError>(err) };
+  }
+  const workspaceMember = write.workspaceMember;
+  if (workspaceMember) {
+    effects.push(() =>
+      publishViewerWorkspacesChanged(deps.ctx, user.id, {
+        change: 'added',
+        workspace_id: conversation.workspace_id,
+        role: workspaceMember.role,
+      }),
+    );
+  }
+  const message = write.message;
+  if (message) {
+    effects.push(() => publishMemberAdded(deps.ctx, deps.conversations, conversation, message));
   }
   await runPostCommitEffects(effects, deps.ctx.logger);
   return { ok: true, members: deps.membership.listMembers(conversation.id) };
-}
-
-type ViewerWorkspaceChange = 'added' | 'role_changed' | 'removed';
-
-function publishViewerWorkspacesChanged(
-  ctx: BackendContext,
-  userId: string,
-  payload: {
-    change: ViewerWorkspaceChange;
-    workspace_id: string;
-    role?: WorkspaceRoleDto;
-  },
-): void {
-  ctx.events.publishToScope(
-    `viewer:${userId}`,
-    'viewer_workspaces_changed',
-    payload,
-  );
 }
 
 /**
@@ -424,7 +514,7 @@ function publishMemberAdded(
   ctx: BackendContext,
   conversations: ConversationRepo,
   conversation: { id: string; workspace_id: string },
-  message: ReturnType<MessageRepo['insertForConversation']>,
+  message: MessageDto,
 ): void {
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
   deliverSystemMessageToConversationAgents(ctx, conversations, conversation.id, message.id);
@@ -450,13 +540,14 @@ function publishMemberAdded(
 export type JoinPublicChannelDeps = {
   ctx: BackendContext;
   conversations: ConversationRepo;
-  messages: MessageRepo;
-  channelAttentionPrefs: ChannelAttentionPreferenceRepo;
+  membershipPersistence: MembershipPersistence;
 };
+
+export type JoinPublicChannelError = { code: 'channel_not_found' } | { code: 'forbidden' };
 
 export type JoinPublicChannelResult =
   | { ok: true }
-  | { ok: false; error: { code: 'channel_not_found' } | { code: 'forbidden' } };
+  | { ok: false; error: JoinPublicChannelError };
 
 /**
  * Self-join a PUBLIC channel — the ONLY non-member mutation the public model
@@ -464,19 +555,29 @@ export type JoinPublicChannelResult =
  * is ALWAYS the joined member; the route takes no body, so there is no target
  * on the wire to forge.
  *
- * Admission (`canJoinPublicChannel`) is validated BEFORE the already-member
- * idempotency check, so an existing member of a private / `dm_channel` / legacy
- * thread / archived target cannot get a success from `/join`. On a fresh join
- * the membership transition runs through the SHARED
- * {@link seedChannelHumanMembership} primitive (same-source with admin-add).
+ * Admission (`canJoinPublicChannel`) is validated BEFORE any write, so an
+ * existing member of a private / `dm_channel` / legacy thread / archived target
+ * cannot get a success from `/join`. The membership transition itself runs through
+ * the SHARED {@link enterChannelAsHuman} primitive (same-source with admin-add),
+ * which also decides — in the transaction — whether this was a fresh join.
+ *
+ * The joiner's WORKSPACE membership is re-derived from the ANCHOR rather than from
+ * that pre-lock gate: here the actor IS the member being written, so the anchor —
+ * read under the coordination mechanism — is exactly the authority fact the gate
+ * checked. If a cascade removes the workspace membership in the seam, joining anyway
+ * would leave a channel edge (plus attention preference and read cursors) for a
+ * non-member of the workspace, a state neither serial order reaches. The channel's
+ * public/active SHAPE stays a pre-lock read on purpose: it is ordinary conversation
+ * state, not membership, so last-writer-wins is the correct answer for it.
  *
  * Post-commit fires ONLY `conversation_members_changed` (roster) +
  * `workspace_channels_changed` (discovery/list): NO `viewer_workspaces_changed`
  * (the joiner was already a workspace member — joining a channel does not change
  * workspace membership) and NO system message (self-join has no "actor added
- * member" semantic to reuse, and v1 has no distinct joined message). Every
- * effect is gated by `alreadyMember`, so an idempotent retry is zero-increment
- * on the row, the attention preference, the read cursors, AND the events.
+ * member" semantic to reuse, and v1 has no distinct joined message). Every effect
+ * is gated by the write-core's in-lock `created`, so an idempotent retry is
+ * zero-increment on the row, the attention preference, the read cursors, AND the
+ * events.
  */
 export async function joinPublicChannel(
   deps: JoinPublicChannelDeps,
@@ -491,11 +592,28 @@ export async function joinPublicChannel(
   }
   // canJoinPublicChannel guarantees `principal.kind === 'user'`.
   const userId = (input.principal as UserPrincipal).userId;
-  const alreadyMember = deps.conversations.getUser(conversation.id, userId) !== null;
-  if (!alreadyMember) {
-    deps.ctx.db.transaction(() => {
-      seedChannelHumanMembership(deps, conversation.id, userId);
-    })();
+  // Self-join writes no workspace-membership row (the joiner is already a
+  // workspace member) but it DOES write the same conversation-membership rows
+  // a removal cascades over, so it coordinates on the same key.
+  let joined: boolean;
+  try {
+    joined = deps.membershipPersistence.uow.atomically(
+      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: userId } },
+      (tx, anchor) => {
+        // An ABSENT anchor is the one case this path may NOT proceed on: unlike the
+        // add path it has no enrollment authority to fall back on (a self-join never
+        // enrolls anyone), so the only sound answer is the same refusal the pre-lock
+        // gate would have given.
+        if (anchor === null) {
+          throw new MembershipRevalidationRefusal<JoinPublicChannelError>({ code: 'forbidden' });
+        }
+        return enterChannelAsHuman(tx.membership, conversation.id);
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: refusalOrRethrow<JoinPublicChannelError>(err) };
+  }
+  if (joined) {
     await runPostCommitEffects(
       [() => publishSelfJoined(deps.ctx, conversation)],
       deps.ctx.logger,
@@ -539,6 +657,7 @@ function publishSelfJoined(
 export type LeaveChannelDeps = {
   ctx: BackendContext;
   conversations: ConversationRepo;
+  membershipPersistence: MembershipPersistence;
 };
 
 export type LeaveChannelResult =
@@ -551,17 +670,52 @@ export type LeaveChannelResult =
     };
 
 /**
+ * The four facts the exit rule branches on, as METHODS rather than a gathered
+ * bundle. Two reasons, both load-bearing:
+ *  - the rule short-circuits, and the per-member carrier
+ *    ({@link buildConversationMemberRemovability}) evaluates it once per roster
+ *    row, so eagerly gathering all four would turn today's cheap early exits into
+ *    a per-row `listUsers` + role lookup;
+ *  - the two sources answer from different places — repos before the lock, the
+ *    membership port and the ANCHOR inside it — and only a lazy source lets the
+ *    in-lock reader satisfy "one face, one point in the transaction".
+ *
+ * `isTargetWorkspaceOwner` is about the member being removed, never the actor.
+ */
+export interface ChannelMemberExitFactSource {
+  /** The channel row, or `null` when the conversation no longer exists — read by
+   *  the in-lock source as "there is no edge to end". */
+  channel(): {
+    kind: ConversationKind;
+    visibility: ConversationVisibility;
+    archived_at: number | null;
+  } | null;
+  isMember(): boolean;
+  isTargetWorkspaceOwner(): boolean;
+  humanMemberCount(): number;
+}
+
+/**
  * The SINGLE exit-eligibility rule for a human's `conversation_users` edge,
  * shared by every path that can end that membership: the {@link leaveChannel}
  * write (authoritative), the channel-detail `can_leave` carrier (advisory
  * display), and — since #task:1688 — third-party removal
  * ({@link evaluateChannelHumanMemberRemoval}) plus its per-member carrier.
- * Evaluated for the TARGET member (`userId`), which for self-leave is the
- * caller: whether the edge may end does not depend on who asked, so the rule
- * cannot fork into a "leave" copy and a "remove" copy. It is a pure predicate
- * over the member + channel row — returns `can_leave` plus the stable
+ * Evaluated for the TARGET member, which for self-leave is the caller: whether
+ * the edge may end does not depend on who asked, so the rule cannot fork into a
+ * "leave" copy and a "remove" copy. It is a pure predicate over the member +
+ * channel facts — returns `can_leave` plus the stable
  * {@link ChannelLeaveBlockedReason} when blocked (advisory ≠ correctness, but
  * same source — docs/architecture-principles.md §12.1#5).
+ *
+ * PURE over a {@link ChannelMemberExitFactSource} (#task:1987) so the two callers
+ * that need it at different points in time run the SAME rule: the pre-lock gate /
+ * advisory carriers read repos, and a path about to WRITE re-runs it on facts read
+ * inside the coordinated transaction. `channel_owner` and `last_human_member`
+ * protect a state no serial order of two legal exits can reach ("a private channel
+ * with no human in it"), so a decision taken before the lock is not merely stale,
+ * it is unsound — one rule, two fact sources is what makes the write path sound
+ * without letting the display path drift.
  *
  * Ordered so the most specific block wins:
  *  1. `not_member` — there is no edge to end. For self-leave that is a 403
@@ -575,9 +729,9 @@ export type LeaveChannelResult =
  *     owner-bound governance chain; ending that edge would make the channel
  *     invisible to them (private + non-member) and sever the chain from the
  *     resource even with other humans present. Authoritative
- *     `workspace_users.role='owner'` (`userWorkspaceRole`) — the model has NO
- *     per-channel creator, so this never guesses from row order / first member.
- *     Public channels are exempt (owner re-browses + re-joins freely).
+ *     `workspace_users.role='owner'` — the model has NO per-channel creator, so
+ *     this never guesses from row order / first member. Public channels are
+ *     exempt (owner re-browses + re-joins freely).
  *  4. `last_human_member` — ending the last HUMAN edge of a PRIVATE channel
  *     would strand it (no human, incl. admins, can see or re-join a private
  *     channel). `conversation_users` IS the human-membership table, so its row
@@ -597,6 +751,36 @@ export type LeaveChannelResult =
  * exists to prevent — because exit freedom outranks the recoverability of a
  * sub-resource. Add a new consulting path here, not a third exception.
  */
+export function evaluateChannelMemberExit(
+  source: ChannelMemberExitFactSource,
+): { can_leave: boolean; reason: ChannelLeaveBlockedReason | null } {
+  const channel = source.channel();
+  if (channel === null || channel.kind !== 'channel') {
+    return { can_leave: false, reason: 'not_member' };
+  }
+  if (!source.isMember()) {
+    return { can_leave: false, reason: 'not_member' };
+  }
+  if (channel.archived_at !== null) {
+    return { can_leave: false, reason: 'channel_archived' };
+  }
+  // Owner-bound governance guard (private only), checked ABOVE last_human_member
+  // so the owner-specific reason wins when both apply.
+  if (channel.visibility === 'private' && source.isTargetWorkspaceOwner()) {
+    return { can_leave: false, reason: 'channel_owner' };
+  }
+  if (channel.visibility === 'private' && source.humanMemberCount() <= 1) {
+    return { can_leave: false, reason: 'last_human_member' };
+  }
+  return { can_leave: true, reason: null };
+}
+
+/**
+ * The REPO-backed fact source: the pre-lock gate and every advisory carrier. Safe
+ * outside a transaction because a refusal it produces is only ever an early
+ * reject — the authoritative answer comes from
+ * {@link inLockChannelExitFactSource} under the coordination mechanism.
+ */
 export function evaluateChannelMemberExitEligibility(
   deps: { ctx: BackendContext; conversations: ConversationRepo },
   userId: string,
@@ -608,36 +792,36 @@ export function evaluateChannelMemberExitEligibility(
     archived_at: number | null;
   },
 ): { can_leave: boolean; reason: ChannelLeaveBlockedReason | null } {
-  if (conversation.kind !== 'channel') {
-    return { can_leave: false, reason: 'not_member' };
-  }
-  if (deps.conversations.getUser(conversation.id, userId) === null) {
-    return { can_leave: false, reason: 'not_member' };
-  }
-  if (conversation.archived_at !== null) {
-    return { can_leave: false, reason: 'channel_archived' };
-  }
-  // Owner-bound governance guard (private only): the workspace owner anchors
-  // the governance chain. Losing membership of a PRIVATE channel would make it
-  // invisible to them (private + non-member = no view / no re-join), severing
-  // the chain from the resource even when other humans remain. Authoritative
-  // owner relation (`workspace_users.role='owner'`) — never a
-  // first-member/display-name guess (no per-channel creator is modeled).
-  // Checked ABOVE last_human_member so the owner-specific reason wins when both
-  // apply. Public channels are exempt (owner can re-browse + re-join).
-  if (
-    conversation.visibility === 'private'
-    && userWorkspaceRole(deps.ctx, conversation.workspace_id, userId) === 'owner'
-  ) {
-    return { can_leave: false, reason: 'channel_owner' };
-  }
-  if (
-    conversation.visibility === 'private'
-    && deps.conversations.listUsers(conversation.id).length <= 1
-  ) {
-    return { can_leave: false, reason: 'last_human_member' };
-  }
-  return { can_leave: true, reason: null };
+  return evaluateChannelMemberExit({
+    channel: () => conversation,
+    isMember: () => deps.conversations.getUser(conversation.id, userId) !== null,
+    isTargetWorkspaceOwner: () =>
+      userWorkspaceRole(deps.ctx, conversation.workspace_id, userId) === 'owner',
+    humanMemberCount: () => deps.conversations.listUsers(conversation.id).length,
+  });
+}
+
+/**
+ * The IN-LOCK fact source for the coordinated member: three facts from ONE
+ * {@link HumanMembershipTxPort.readChannelExitFacts} call (memoized, so the rule's
+ * short-circuit cannot make them come from three points in the transaction) plus
+ * the target's workspace role from the ANCHOR — which the UnitOfWork read under
+ * the same mechanism, so there is nothing left to read it from twice.
+ */
+function inLockChannelExitFactSource(
+  membership: HumanMembershipTxPort,
+  conversationId: string,
+  anchor: WorkspaceMembershipAnchor | null,
+): ChannelMemberExitFactSource {
+  let facts: MembershipChannelExitFacts | null = null;
+  const read = (): MembershipChannelExitFacts =>
+    (facts ??= membership.readChannelExitFacts(conversationId));
+  return {
+    channel: () => read().channel,
+    isMember: () => read().isMember,
+    isTargetWorkspaceOwner: () => anchor?.role === 'owner',
+    humanMemberCount: () => read().humanMemberCount,
+  };
 }
 
 /**
@@ -686,16 +870,41 @@ export async function leaveChannel(
     conversation,
   );
   if (!eligibility.can_leave) {
+    // Early reject only — the authoritative evaluation is the in-lock one below.
     // reason is non-null whenever can_leave is false.
     return { ok: false, error: { code: eligibility.reason as ChannelLeaveBlockedReason } };
   }
-  deps.ctx.db.transaction(() => {
-    deps.conversations.removeUser(conversation.id, input.principal.userId);
-  })();
-  await runPostCommitEffects(
-    [() => publishSelfLeft(deps.ctx, conversation)],
-    deps.ctx.logger,
-  );
+  // Re-evaluated INSIDE the lock (#task:1987) on facts read under the mechanism,
+  // because two of the reasons guard a state no serial order of two legal exits
+  // reaches: if another human left this private channel in the seam above, the
+  // caller is now the last one and must be refused, not let out. `removed` — also
+  // decided under the lock — drives the effects, so an edge another request already
+  // deleted produces no second leave signal.
+  let removed: boolean;
+  try {
+    removed = deps.membershipPersistence.uow.atomically(
+      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: input.principal.userId } },
+      (tx, anchor) => {
+        const inLock = evaluateChannelMemberExit(
+          inLockChannelExitFactSource(tx.membership, conversation.id, anchor),
+        );
+        if (!inLock.can_leave) {
+          throw new MembershipRevalidationRefusal<ChannelLeaveBlockedReason>(
+            inLock.reason as ChannelLeaveBlockedReason,
+          );
+        }
+        return tx.membership.removeConversationMember(conversation.id).removed;
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: { code: refusalOrRethrow<ChannelLeaveBlockedReason>(err) } };
+  }
+  if (removed) {
+    await runPostCommitEffects(
+      [() => publishSelfLeft(deps.ctx, conversation)],
+      deps.ctx.logger,
+    );
+  }
   return { ok: true };
 }
 
@@ -789,7 +998,7 @@ export type RemoveConversationMemberDeps = {
   // the actor label to the raw userId (a behavior change).
   users: UserRepo;
   conversations: ConversationRepo;
-  messages: MessageRepo;
+  membershipPersistence: MembershipPersistence;
   membership: MembershipService;
 };
 
@@ -894,20 +1103,44 @@ export async function removeConversationMember(
       ),
     );
 
+  // The IMMUTABLE half of the removal authority: `canEditAgent` is the agent's
+  // creator (or the agent itself), which no roster write can change. The
+  // governance half IS mutable and is therefore re-derived inside the lock.
+  const ownsAgent = canEditAgent(deps.ctx, input.principal, agent.id);
   const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
   const member = conversationMemberAddedAgentSnapshot(agent);
-  const message = deps.ctx.db.transaction(() => {
-    deps.conversations.removeAgent(conversation.id, agent.id);
-    return deps.messages.insertForConversation({
-      conversationId: conversation.id,
-      fromKind: 'system',
-      content: conversationMemberRemovedContent({ actor, member }),
-      metadata: conversationMemberRemovedMetadata({ actor, member }),
-    });
-  })();
-
-  const effects: PostCommitEffect[] = [() => publishMemberRemoved(deps.ctx, deps.conversations, conversation, message)];
-  await runPostCommitEffects(effects, deps.ctx.logger);
+  // The audit message and every effect are driven by the port's in-lock `removed`
+  // (#task:1987): the `alreadyMember` read above ran before the lock, so a removal
+  // landing in the seam would otherwise commit a second removal audit and fan out a
+  // roster change for an edge that no longer exists — a state no serial order of two
+  // removals produces. The authority is re-derived here for the same reason.
+  let message: MessageDto | null;
+  try {
+    message = deps.membershipPersistence.uow.atomically(
+      { workspaceId: conversation.workspace_id, member: { kind: 'agent', id: agent.id } },
+      tx => {
+        const authority = readActorAuthority(tx.authority, input.principal, conversation.id);
+        if (!authority.inConversation || !(authority.governs || ownsAgent)) {
+          throw new MembershipRevalidationRefusal<'forbidden'>('forbidden');
+        }
+        if (!tx.membership.removeConversationMember(conversation.id).removed) return null;
+        return tx.membership.insertMembershipAuditMessage({
+          conversationId: conversation.id,
+          content: conversationMemberRemovedContent({ actor, member }),
+          metadata: conversationMemberRemovedMetadata({ actor, member }),
+        });
+      },
+    );
+  } catch (err) {
+    return { ok: false, error: { code: refusalOrRethrow<'forbidden'>(err) } };
+  }
+  if (message) {
+    const removedMessage = message;
+    await runPostCommitEffects(
+      [() => publishMemberRemoved(deps.ctx, deps.conversations, conversation, removedMessage)],
+      deps.ctx.logger,
+    );
+  }
   return { ok: true, members: deps.membership.listMembers(conversation.id) };
 }
 
@@ -920,7 +1153,7 @@ export function publishMemberRemoved(
   ctx: BackendContext,
   conversations: ConversationRepo,
   conversation: { id: string; workspace_id: string },
-  message: ReturnType<MessageRepo['insertForConversation']>,
+  message: MessageDto,
 ): void {
   ctx.events.publish(conversation.id, { kind: 'message', payload: { message } });
   // The removed member no longer appears in listAgents, so the remaining
@@ -968,7 +1201,7 @@ export type RemoveConversationHumanMemberDeps = {
   agents: AgentRepo;
   users: UserRepo;
   conversations: ConversationRepo;
-  messages: MessageRepo;
+  membershipPersistence: MembershipPersistence;
   membership: MembershipService;
 };
 
@@ -1092,6 +1325,42 @@ export function evaluateChannelHumanMemberRemoval(
 }
 
 /**
+ * The MUTABLE half of {@link evaluateChannelHumanMemberRemoval}, re-derived inside
+ * the coordinated transaction (#task:1987) — the actor's floor and `admin`
+ * authority, the actor↔target rank comparison, and the shared exit rule on facts
+ * read under the mechanism.
+ *
+ * The immutable half is deliberately NOT repeated: the conversation's kind, its
+ * `closed_at` and `self_target` are not roster facts, so the pre-lock gate above
+ * remains their only evaluation. The target's role comes from the ANCHOR — the same
+ * `workspace_users.role` `userWorkspaceRole` reads, taken once, under the lock.
+ *
+ * Refuses by THROWING, so a refusal is a rollback: `channel_owner` /
+ * `last_human_member` protect a state no serial order reaches, and a returned
+ * refusal could be ignored by a future edit that had already written.
+ */
+function revalidateHumanRemovalInsideLock(
+  tx: HumanMembershipTxScope,
+  input: { principal: Principal; conversationId: string; anchor: WorkspaceMembershipAnchor | null },
+): { outcome: 'allowed' | 'noop' } {
+  const refuse = (code: RemoveConversationHumanMemberRefusal): never => {
+    throw new MembershipRevalidationRefusal<RemoveConversationHumanMemberRefusal>(code);
+  };
+  const actor = readActorAuthority(tx.authority, input.principal, input.conversationId);
+  if (!actor.inConversation) refuse('forbidden');
+  if (!actor.governs) refuse('forbidden');
+  if (workspaceRoleOutranks(input.anchor?.role ?? null, actor.role)) {
+    refuse('target_outranks_actor');
+  }
+  const exit = evaluateChannelMemberExit(
+    inLockChannelExitFactSource(tx.membership, input.conversationId, input.anchor),
+  );
+  if (exit.can_leave) return { outcome: 'allowed' };
+  if (exit.reason === 'not_member') return { outcome: 'noop' };
+  return refuse(exit.reason as Exclude<ChannelLeaveBlockedReason, 'not_member'>);
+}
+
+/**
  * Remove another human's `conversation_users` edge.
  *
  * Deliberately narrower than the workspace-level human removal
@@ -1143,20 +1412,46 @@ export async function removeConversationHumanMember(
   }
   const actor = conversationMemberAddedActorSnapshot(deps, input.principal);
   const member = conversationMemberAddedHumanSnapshot(target);
-  const message = deps.ctx.db.transaction(() => {
-    deps.conversations.removeUser(conversation.id, input.userId);
-    return deps.messages.insertForConversation({
-      conversationId: conversation.id,
-      fromKind: 'system',
-      content: conversationMemberRemovedContent({ actor, member }),
-      metadata: conversationMemberRemovedMetadata({ actor, member }),
-    });
-  })();
-
-  await runPostCommitEffects(
-    [() => publishMemberRemoved(deps.ctx, deps.conversations, conversation, message)],
-    deps.ctx.logger,
-  );
+  // The authority, the exit eligibility and the audit message are all decided under
+  // the lock (#task:1987). The gate above ran before it, so another request could
+  // have deleted the edge (a second removal audit is a state no serial order
+  // produces), demoted the actor, or — by leaving this private channel — made the
+  // target its last human, which the exit rule must then refuse.
+  let message: MessageDto | null;
+  try {
+    message = deps.membershipPersistence.uow.atomically(
+      { workspaceId: conversation.workspace_id, member: { kind: 'human', id: input.userId } },
+      (tx, anchor) => {
+        const revalidated = revalidateHumanRemovalInsideLock(tx, {
+          principal: input.principal,
+          conversationId: conversation.id,
+          anchor,
+        });
+        if (revalidated.outcome === 'noop') return null;
+        // The audit follows the WRITE, not the read above it: both answers come from
+        // under the lock so they agree, and deriving it from `removed` means no future
+        // reordering can leave a lone audit row for an edge that was already gone.
+        if (!tx.membership.removeConversationMember(conversation.id).removed) return null;
+        return tx.membership.insertMembershipAuditMessage({
+          conversationId: conversation.id,
+          content: conversationMemberRemovedContent({ actor, member }),
+          metadata: conversationMemberRemovedMetadata({ actor, member }),
+        });
+      },
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      error: { code: refusalOrRethrow<RemoveConversationHumanMemberRefusal>(err) },
+    };
+  }
+  if (message) {
+    const removedMessage = message;
+    await runPostCommitEffects(
+      [() => publishMemberRemoved(deps.ctx, deps.conversations, conversation, removedMessage)],
+      deps.ctx.logger,
+    );
+  }
   return { ok: true, members: deps.membership.listMembers(conversation.id) };
 }
 
@@ -1327,20 +1622,12 @@ function resolveConversationMemberInput(
 }
 
 // ── member-added system-message snapshots (shared with the remove path) ──
-
-export type ConversationMemberAddedActorSnapshot = {
-  kind: 'user' | 'agent' | 'system';
-  id: string;
-  name: string;
-  displayName: string | null;
-};
-
-export type ConversationMemberAddedMemberSnapshot = {
-  kind: 'human' | 'agent';
-  id: string;
-  name: string;
-  displayName: string | null;
-};
+//
+// The pure language — the two snapshot types, the agent/human snapshots and the
+// added/removed content + metadata builders — lives in
+// `conversation-member-audit.ts` so a use case can compose an audit message
+// without importing this module's repos. Only the principal → snapshot
+// resolution stays here: it is a directory read, not wording.
 
 export function conversationMemberAddedActorSnapshot(
   deps: { agents: AgentRepo; users: UserRepo },
@@ -1369,106 +1656,5 @@ export function conversationMemberAddedActorSnapshot(
     id: 'system',
     name: 'system',
     displayName: null,
-  };
-}
-
-export function conversationMemberAddedAgentSnapshot(agent: {
-  id: string;
-  name: string;
-  display_name?: string | null;
-}): ConversationMemberAddedMemberSnapshot {
-  return {
-    kind: 'agent',
-    id: agent.id,
-    name: agent.name,
-    displayName: agent.display_name ?? null,
-  };
-}
-
-export function conversationMemberAddedHumanSnapshot(
-  // Structural, like {@link conversationMemberAddedAgentSnapshot}: the snapshot
-  // reads three identity fields, so a caller holding a `UserRow` (repo read) is
-  // as valid as one holding a `UserDto` (resolved DTO) — the helper has no reason
-  // to demand the wider shape.
-  user: { id: string; name: string; display_name?: string | null },
-): ConversationMemberAddedMemberSnapshot {
-  return {
-    kind: 'human',
-    id: user.id,
-    name: user.name,
-    displayName: user.display_name ?? null,
-  };
-}
-
-export function conversationMemberAddedContent(input: {
-  actor: ConversationMemberAddedActorSnapshot;
-  member: ConversationMemberAddedMemberSnapshot;
-}): string {
-  return `${conversationMemberAddedLabel(input.actor)} added ${conversationMemberAddedLabel(input.member)} to this conversation.`;
-}
-
-export function conversationMemberAddedLabel(
-  participant:
-    | ConversationMemberAddedActorSnapshot
-    | ConversationMemberAddedMemberSnapshot,
-): string {
-  return participant.kind === 'system' ? 'system' : `@${participant.name}`;
-}
-
-export function conversationMemberAddedMetadata(input: {
-  actor: ConversationMemberAddedActorSnapshot;
-  member: ConversationMemberAddedMemberSnapshot;
-}): Record<string, unknown> {
-  return {
-    subtype: systemSubtype('conversation_member_added'),
-    actor_kind: input.actor.kind,
-    actor_id: input.actor.id,
-    actor_name: input.actor.name,
-    actor_display_name: input.actor.displayName,
-    member_kind: input.member.kind,
-    member_id: input.member.id,
-    member_name: input.member.name,
-    member_display_name: input.member.displayName,
-  };
-}
-
-/**
- * Sentence for a `conversation_member_removed` system message. `content` is the
- * ONLY rendered carrier (the metadata below has no production reader), so the
- * self-departure case needs its own wording rather than the third-party one:
- * a workspace self-leave (`POST /api/workspaces/:id/leave`, #task:1930) cascades
- * through every channel of the workspace with actor === member, and "@x removed
- * @x from this conversation." would read as somebody else's moderation. Same
- * subtype either way — `actor_id === member_id` is what structurally marks the
- * self case, so a later first-class `left` event can derive history mechanically.
- */
-export function conversationMemberRemovedContent(input: {
-  actor: ConversationMemberAddedActorSnapshot;
-  member: ConversationMemberAddedMemberSnapshot;
-}): string {
-  if (
-    input.actor.kind === 'user'
-    && input.member.kind === 'human'
-    && input.actor.id === input.member.id
-  ) {
-    return `${conversationMemberAddedLabel(input.member)} left this conversation.`;
-  }
-  return `${conversationMemberAddedLabel(input.actor)} removed ${conversationMemberAddedLabel(input.member)} from this conversation.`;
-}
-
-export function conversationMemberRemovedMetadata(input: {
-  actor: ConversationMemberAddedActorSnapshot;
-  member: ConversationMemberAddedMemberSnapshot;
-}): Record<string, unknown> {
-  return {
-    subtype: systemSubtype('conversation_member_removed'),
-    actor_kind: input.actor.kind,
-    actor_id: input.actor.id,
-    actor_name: input.actor.name,
-    actor_display_name: input.actor.displayName,
-    member_kind: input.member.kind,
-    member_id: input.member.id,
-    member_name: input.member.name,
-    member_display_name: input.member.displayName,
   };
 }

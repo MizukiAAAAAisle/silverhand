@@ -48,10 +48,9 @@ import type { BackendContext } from '../context.js';
 import type { AppEnv } from '../auth/principal.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { AgentRepo } from '../repos/agent-repo.js';
-import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
-import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import { HostCredentialIssueError, HostTokenService } from '../auth/host-token.js';
+import type { HostUnitOfWork } from '../auth/host-ports.js';
+import { createHostInvite } from '../application/create-host-invite.js';
 import { HostWsCommandTransportError } from '../ws/host-ws-server.js';
 import {
   HostTokenRotationCoordinator,
@@ -68,7 +67,9 @@ import {
   type HostProxyConfigOutcome,
 } from '../runtime/host-proxy-config-dispatch.js';
 import { revokeHost } from '../application/revoke-host.js';
+import { updateHost } from '../application/update-host.js';
 import { deleteComputer } from '../application/delete-computer.js';
+import type { AgentTeardownPersistence } from '../application/agent-teardown-ports.js';
 import { listHostResources } from '../read-model/host-resources.js';
 import { hostRuntimeDisabledResponse } from './responses.js';
 
@@ -79,10 +80,11 @@ export interface HostRouteDeps {
   ctx: BackendContext;
   hosts: HostRepo;
   hostTokens: HostTokenService;
+  hostUow: HostUnitOfWork;
   agents: AgentRepo;
-  workspaces: WorkspaceRepo;
-  conversations: ConversationRepo;
-  conversationInboxes: ConversationInboxRepo;
+  /** #task:1987 D — the teardown read + UnitOfWork shared with
+   *  `DELETE /api/agents/:id`; the cascade use case names no repo. */
+  agentTeardown: AgentTeardownPersistence;
   /**
    * Injected session-bearer resolver (port). Verbatim signature from routes.ts
    * so handlers call it unchanged; returns the user id or a 401 Response.
@@ -116,10 +118,9 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     ctx,
     hosts,
     hostTokens,
+    hostUow,
     agents,
-    workspaces,
-    conversations,
-    conversationInboxes,
+    agentTeardown,
     requireSessionBearerUser,
     standaloneMode,
   } = deps;
@@ -140,16 +141,15 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
 
-    const created = ctx.db.transaction(() => {
-      const host = hosts.createUserInvite({ userId });
-      const issued = hostTokens.issueHostToken({ hostId: host.id });
-      return { host, connectToken: issued.hostToken };
-    })();
+    const created = createHostInvite(
+      { uow: hostUow },
+      { userId },
+    );
 
     return c.json({
       host_id: created.host.id,
       host: hosts.toDto(created.host),
-      connect_token: created.connectToken,
+      connect_token: created.issued.hostToken,
       daemon_npm_spec: daemonNpmSpec(),
     });
   });
@@ -227,7 +227,7 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     }
 
     const response: HostResourcesResponse = listHostResources(
-      { ctx, agents },
+      { agents },
       hostId,
     );
     return c.json(response);
@@ -262,7 +262,7 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     }
 
     const result = await deleteComputer(
-      { ctx, hosts, agents, workspaces, conversations, conversationInboxes },
+      { ctx, teardown: agentTeardown },
       {
         hostId,
         requesterUserId: userId,
@@ -288,6 +288,16 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
               'computer has agents whose creation is still in progress; try again after creation finishes',
             error_code: 'has_pending_agents',
             pending_agents: result.pendingAgents,
+          },
+          409,
+        );
+      case 'deletionInProgress':
+        return c.json(
+          {
+            error:
+              'computer has agents whose deletion is already in progress; retry after deletion finishes',
+            error_code: 'agent_deletion_in_progress',
+            deleting_agents: result.deletingAgents,
           },
           409,
         );
@@ -417,7 +427,7 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
     }
 
     const result = revokeHost(
-      { ctx, hosts, hostTokens },
+      { ctx, hosts, uow: hostUow },
       { hostId, requesterUserId: userId },
     );
     switch (result.kind) {
@@ -774,9 +784,13 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
   // PATCH /api/hosts/:id — rename, and finalizes a user-managed setup after
   // first daemon attach. Only `display_label` is mutable; `name` stays the
   // stable identifier set at claim time.
-  // Owner-only; 404 on cross-user / missing (no enumeration); the route
-  // also refuses revoked hosts so a renamed-then-revoked workflow can't
-  // silently mutate audit history. Body validation carries the shared
+  //
+  // #task:1982 W5: every fact the finalize decision rests on is now read
+  // INSIDE the transaction that acts on it (see `updateHost`), so this handler
+  // is pure HTTP: parse, delegate, map outcome → status. Owner-only; 404 on
+  // cross-user / missing (no enumeration) — including for a malformed body,
+  // which is why the parse result is handed to the use case instead of being
+  // answered here. Body validation carries the shared
   // `HOST_DISPLAY_LABEL_MAX_LENGTH` bound and an over-long label is a 400
   // (#task:1849 — the repo used to trim + slice-to-64, returning 200 with
   // a value the caller never sent). `normalizeDisplayLabel` still maps
@@ -792,35 +806,41 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
         404,
       );
     }
-    const host = hosts.get(hostId);
-    if (!host || host.user_id !== userId) {
-      return c.json(
-        { error: 'host not found', error_code: 'host_not_found' },
-        404,
-      );
-    }
-    if (host.revoked_at !== null) {
-      return c.json(
-        { error: 'host has been revoked', error_code: 'host_revoked' },
-        409,
-      );
-    }
 
     const body = await c.req.json().catch(() => null);
     const parsed = UpdateHostInputSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json(
-        { error: 'invalid input', issues: parsed.error.issues },
-        400,
-      );
-    }
+    const outcome = updateHost(
+      { uow: hostUow },
+      {
+        hostId,
+        requesterUserId: userId,
+        input: parsed.success
+          ? { valid: true, displayLabel: parsed.data.display_label }
+          : { valid: false },
+      },
+    );
 
-    const finalizingUserInvite =
-      host.provisioning_source === 'user_invite' &&
-      host.kind === 'remote' &&
-      host.finalized_at === null;
-    if (finalizingUserInvite) {
-      if (host.activated_at === null) {
+    switch (outcome.kind) {
+      case 'notFound':
+        return c.json(
+          { error: 'host not found', error_code: 'host_not_found' },
+          404,
+        );
+      case 'revoked':
+        return c.json(
+          { error: 'host has been revoked', error_code: 'host_revoked' },
+          409,
+        );
+      case 'invalidInput':
+        return c.json(
+          {
+            error: 'invalid input',
+            // Reached only when `safeParse` failed, so the error is present.
+            issues: parsed.success ? [] : parsed.error.issues,
+          },
+          400,
+        );
+      case 'pendingAttach':
         return c.json(
           {
             error: 'host has not completed its first daemon attachment',
@@ -828,8 +848,7 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
           },
           409,
         );
-      }
-      if (parsed.data.display_label === null || parsed.data.display_label.trim() === '') {
+      case 'labelRequired':
         return c.json(
           {
             error: 'computer name is required',
@@ -837,26 +856,14 @@ export function createHostApp(deps: HostRouteDeps): Hono<AppEnv> {
           },
           400,
         );
+      case 'renamed':
+      case 'finalized':
+        return c.json({ host: outcome.host });
+      default: {
+        const never: never = outcome;
+        throw new Error(`unhandled updateHost outcome: ${JSON.stringify(never)}`);
       }
     }
-
-    const updated = ctx.db.transaction(() => {
-      const renamed = hosts.updateDisplayLabel(hostId, parsed.data.display_label);
-      if (!renamed) return null;
-      if (finalizingUserInvite) {
-        return hosts.markFinalized(hostId);
-      }
-      return renamed;
-    })();
-    if (!updated) {
-      // Unreachable: SELECT immediately after the UPDATE we just ran on
-      // a row we know exists. Surface as 500 if it ever happens so the
-      // contract stays loud.
-      throw new Error(
-        `HostRepo.updateDisplayLabel returned null for ${hostId}`,
-      );
-    }
-    return c.json({ host: hosts.toDto(updated) });
   });
 
   // GET /api/hosts/:id/status — dynamic host snapshot.

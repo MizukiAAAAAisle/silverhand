@@ -6,8 +6,9 @@ import type { UserRepo } from '../repos/user-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
-import { AgentCapabilityRepo } from '../repos/agent-capability-repo.js';
+import type { MembershipPersistence } from './membership-ports.js';
 import { canEnrollAgent } from '../permissions.js';
+import { enrollAgentIntoWorkspace } from './add-workspace-agent-member.js';
 import { isWorkspaceNameAvailable } from './name-availability.js';
 
 /**
@@ -50,6 +51,7 @@ export type CreateWorkspaceDeps = {
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
+  membershipPersistence: MembershipPersistence;
 };
 
 export type CreateWorkspaceCommand = {
@@ -146,15 +148,15 @@ export async function createWorkspace(
   // (on another computer) get nothing on their daemon until they first spawn —
   // symmetric with the member-add door, no eager guest realization.
 
-  // Per-agent membership + capability default-seed as one unit-of-work. The
-  // `created` flag preserves no-silent-re-widen; on create it is always true.
+  // Per-agent membership + capability default-seed as one unit-of-work, through
+  // the SAME keyed write-core the two member-add doors use (#task:1987) — one
+  // owner of "a member always has a cap set", not a third copy. The `created`
+  // flag inside it preserves no-silent-re-widen; on create it is always true.
   for (const agent of memberAgents) {
-    ctx.db.transaction(() => {
-      const { created } = workspaces.insertMembership(workspace.id, agent.id);
-      if (created) {
-        new AgentCapabilityRepo(ctx.db).seedDefaults(workspace.id, agent.id);
-      }
-    })();
+    deps.membershipPersistence.uow.atomically(
+      { workspaceId: workspace.id, member: { kind: 'agent', id: agent.id } },
+      tx => enrollAgentIntoWorkspace(tx.membership),
+    );
   }
 
   const onboarding = conversations.insertChannel({

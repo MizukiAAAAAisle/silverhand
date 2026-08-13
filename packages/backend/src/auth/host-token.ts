@@ -1,9 +1,20 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { Database as Db } from 'better-sqlite3';
+import type { HostCredentialKind, HostCredentialRow } from '@silverhand/shared';
 import type {
-  HostCredentialKind,
-  HostCredentialRow,
-} from '@silverhand/shared';
+  CredentialWithHostStatus,
+  HostAuthStatePort,
+  HostAuthStateReadPort,
+  HostCredentialsPort,
+  HostTxScope,
+  HostUnitOfWork,
+  HostTokenVerifier,
+  VerifyHostTokenResult,
+} from './host-ports.js';
+
+export type {
+  VerifyHostTokenFailureCode,
+  VerifyHostTokenResult,
+} from './host-ports.js';
 
 export const HOST_TOKEN_ROTATION_GRACE_MS = 60_000;
 
@@ -18,26 +29,6 @@ export interface PreparedHostTokenRotation {
   issuedAt: number;
   graceUntil: number;
 }
-
-export type VerifyHostTokenFailureCode =
-  | 'missing'
-  | 'credential_not_usable'
-  | 'credential_revoked'
-  | 'credential_expired'
-  | 'host_revoked'
-  | 'host_unbound';
-
-export type VerifyHostTokenResult =
-  | {
-      ok: true;
-      hostId: string;
-      userId: string;
-      credentialId: string;
-    }
-  | {
-      ok: false;
-      code: VerifyHostTokenFailureCode;
-    };
 
 export type HostCredentialIssueFailureCode =
   | 'host_missing'
@@ -54,8 +45,27 @@ export class HostCredentialIssueError extends Error {
   }
 }
 
-export class HostTokenService {
-  constructor(private readonly db: Db) {}
+/** Host credential domain logic (token generation, lifecycle verdicts,
+ *  rotation semantics); persistence goes through the driver-free host-token
+ *  ports, atomic writes through the domain UnitOfWork. */
+export class HostTokenService implements HostTokenVerifier {
+  private readonly credentials: HostCredentialsPort;
+  private readonly hosts: HostAuthStateReadPort;
+  private readonly uow: HostUnitOfWork;
+
+  /** Reads and single-statement writes go straight through the ports; the
+   *  UnitOfWork is reserved for the REAL atomic operations (issuance's
+   *  eligibility+insert, the two rotations) — it is an atomic boundary, not
+   *  a repository locator. */
+  constructor(opts: {
+    credentials: HostCredentialsPort;
+    hosts: HostAuthStateReadPort;
+    uow: HostUnitOfWork;
+  }) {
+    this.credentials = opts.credentials;
+    this.hosts = opts.hosts;
+    this.uow = opts.uow;
+  }
 
   issueHostToken(input: {
     hostId: string;
@@ -64,15 +74,18 @@ export class HostTokenService {
     consumedAt?: number | null;
   }): IssuedHostToken {
     const kind = input.kind ?? 'long_lived';
-    this.assertHostCanReceiveCredential(input.hostId);
-
-    return this.insertHostToken({
-      hostId: input.hostId,
-      hostToken: randomBytes(32).toString('base64url'),
-      kind,
-      expiresAt: input.expiresAt ?? null,
-      consumedAt: input.consumedAt ?? null,
-    });
+    // The eligibility read and the insert share ONE transaction; the read is
+    // the LOCKING `getAuthStateForUpdate` so a concurrent revoke cannot
+    // commit between the read and the insert (atomicity alone is not
+    // isolation — see the port contract).
+    return this.uow.atomically(tx =>
+      issueHostTokenWithin(tx, {
+        hostId: input.hostId,
+        kind,
+        expiresAt: input.expiresAt ?? null,
+        consumedAt: input.consumedAt ?? null,
+      }),
+    );
   }
 
   prepareHostTokenRotation(input: {
@@ -82,7 +95,10 @@ export class HostTokenService {
   }): PreparedHostTokenRotation {
     const issuedAt = input.now ?? Date.now();
     const graceUntil = issuedAt + (input.graceMs ?? HOST_TOKEN_ROTATION_GRACE_MS);
-    this.assertHostCanReceiveCredential(input.hostId);
+    // Write-free, NON-LOCKING preflight: the authoritative eligibility check
+    // (locking read) re-runs inside completePreparedHostTokenRotation's
+    // transaction.
+    assertHostCanReceiveCredential(this.hosts, input.hostId);
     return {
       hostId: input.hostId,
       hostToken: randomBytes(32).toString('base64url'),
@@ -97,35 +113,23 @@ export class HostTokenService {
     if (input.graceUntil <= input.issuedAt) {
       throw new Error('HostTokenService.completePreparedHostTokenRotation: invalid grace window');
     }
-    return this.db.transaction(() => {
-      this.assertHostCanReceiveCredential(input.hostId);
-      const issued = this.insertHostToken({
+    return this.uow.atomically(tx => {
+      const issued = insertHostToken(tx, {
         hostId: input.hostId,
         hostToken: input.hostToken,
         kind: 'long_lived',
         expiresAt: null,
         consumedAt: null,
       });
-      this.db
-        .prepare(
-          `UPDATE host_credentials
-              SET revoked_at = ?,
-                  consumed_at = COALESCE(consumed_at, ?)
-            WHERE host_id = ?
-              AND id <> ?
-              AND kind = 'long_lived'
-              AND revoked_at IS NULL
-              AND (expires_at IS NULL OR expires_at > ?)`,
-        )
-        .run(
-          input.graceUntil,
-          input.issuedAt,
-          input.hostId,
-          issued.credential.id,
-          input.issuedAt,
-        );
+      tx.credentials.revokeOtherLongLivedForHost({
+        hostId: input.hostId,
+        keepCredentialId: issued.credential.id,
+        revokedAt: input.graceUntil,
+        consumedAt: input.issuedAt,
+        onlyUnexpiredAt: input.issuedAt,
+      });
       return issued;
-    })();
+    });
   }
 
   rotateHostToken(input: {
@@ -138,46 +142,27 @@ export class HostTokenService {
     );
   }
 
+  /** "Immediate" is the BUSINESS semantic — no grace window, every other
+   *  long-lived credential is revoked at once — not a storage lock mode. */
   rotateHostTokenImmediate(input: {
     hostId: string;
     now?: number;
   }): IssuedHostToken {
     const now = input.now ?? Date.now();
-    this.assertHostCanReceiveCredential(input.hostId);
-    return this.db.transaction(() => {
-      this.assertHostCanReceiveCredential(input.hostId);
-      const issued = this.insertHostToken({
+    return this.uow.atomically(tx => {
+      const issued = issueHostTokenWithin(tx, { hostId: input.hostId });
+      tx.credentials.revokeOtherLongLivedForHost({
         hostId: input.hostId,
-        hostToken: randomBytes(32).toString('base64url'),
-        kind: 'long_lived',
-        expiresAt: null,
-        consumedAt: null,
+        keepCredentialId: issued.credential.id,
+        revokedAt: now,
+        consumedAt: now,
       });
-      this.db
-        .prepare(
-          `UPDATE host_credentials
-              SET revoked_at = ?,
-                  consumed_at = COALESCE(consumed_at, ?)
-            WHERE host_id = ?
-              AND id <> ?
-              AND kind = 'long_lived'
-              AND revoked_at IS NULL`,
-        )
-        .run(now, now, input.hostId, issued.credential.id);
       return issued;
-    })();
+    });
   }
 
   revokeCredential(credentialId: string, revokedAt = Date.now()): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE host_credentials
-            SET revoked_at = ?
-          WHERE id = ?
-            AND revoked_at IS NULL`,
-      )
-      .run(revokedAt, credentialId);
-    return result.changes > 0;
+    return this.credentials.revokeById(credentialId, revokedAt);
   }
 
   /** Bulk-revoke every active credential for a host (Stage B.4 host
@@ -189,40 +174,30 @@ export class HostTokenService {
     hostId: string,
     revokedAt: number = Date.now(),
   ): number {
-    const result = this.db
-      .prepare(
-        `UPDATE host_credentials
-            SET revoked_at = ?
-          WHERE host_id = ?
-            AND revoked_at IS NULL`,
-      )
-      .run(revokedAt, hostId);
-    return result.changes;
+    return this.credentials.revokeAllForHost(hostId, revokedAt);
   }
 
   verifyHostToken(token: string, opts: { now?: number } = {}): VerifyHostTokenResult {
     const normalized = token.trim();
     if (!normalized) return { ok: false, code: 'missing' };
 
-    const row = this.db
-      .prepare<[string], HostCredentialJoinRow>(
-        `SELECT c.id,
-                c.host_id,
-                c.token_hash,
-                c.kind,
-                c.expires_at,
-                c.consumed_at,
-                c.revoked_at,
-                h.user_id AS host_user_id,
-                h.revoked_at AS host_revoked_at
-           FROM host_credentials c
-           JOIN hosts h ON h.id = c.host_id
-          WHERE c.token_hash = ?`,
-      )
-      .get(hashHostToken(normalized));
-
+    const row = this.credentials.lookupVerification(hashHostToken(normalized));
     if (!row) return { ok: false, code: 'missing' };
+    return this.credentialVerdict(row, opts.now ?? Date.now());
+  }
+
+  hasActiveLongLivedCredential(
+    hostId: string,
+    opts: { now?: number } = {},
+  ): boolean {
     const now = opts.now ?? Date.now();
+    return this.credentials.hasActiveLongLivedCredential(hostId, now);
+  }
+
+  private credentialVerdict(
+    row: CredentialWithHostStatus,
+    now: number,
+  ): VerifyHostTokenResult {
     if (row.kind !== 'long_lived') {
       return { ok: false, code: 'credential_not_usable' };
     }
@@ -251,90 +226,92 @@ export class HostTokenService {
     };
   }
 
-  hasActiveLongLivedCredential(
-    hostId: string,
-    opts: { now?: number } = {},
-  ): boolean {
-    const now = opts.now ?? Date.now();
-    const row = this.db
-      .prepare<[string, number], { c: number }>(
-        `SELECT COUNT(*) AS c
-           FROM host_credentials c
-           JOIN hosts h ON h.id = c.host_id
-          WHERE c.host_id = ?
-            AND c.kind = 'long_lived'
-            AND c.consumed_at IS NULL
-            AND c.revoked_at IS NULL
-            AND (c.expires_at IS NULL OR c.expires_at > ?)
-            AND h.revoked_at IS NULL
-            AND h.user_id IS NOT NULL`,
-      )
-      .get(hostId, now);
-    return (row?.c ?? 0) > 0;
-  }
+}
 
-  private getCredentialById(id: string): HostCredentialRow | null {
-    const row = this.db
-      .prepare<[string], HostCredentialRow>(
-        `SELECT * FROM host_credentials WHERE id = ?`,
-      )
-      .get(id);
-    return row ?? null;
+function hostEligibilityVerdict(
+  state: { userId: string | null; revokedAt: number | null } | null,
+  hostId: string,
+): void {
+  if (!state) {
+    throw new HostCredentialIssueError('host_missing', hostId);
   }
+  if (!state.userId) {
+    throw new HostCredentialIssueError('host_unbound', hostId);
+  }
+  if (state.revokedAt !== null) {
+    throw new HostCredentialIssueError('host_revoked', hostId);
+  }
+}
 
-  private insertHostToken(input: {
+/** Non-locking preflight eligibility (outside any transaction). */
+function assertHostCanReceiveCredential(
+  hosts: HostAuthStateReadPort,
+  hostId: string,
+): void {
+  hostEligibilityVerdict(hosts.getAuthState(hostId), hostId);
+}
+
+/** Locking in-transaction eligibility: `getAuthStateForUpdate` must conflict
+ *  with a concurrent revoke until commit (see the port contract). */
+function assertHostCanReceiveCredentialForUpdate(
+  hosts: HostAuthStatePort,
+  hostId: string,
+): void {
+  hostEligibilityVerdict(hosts.getAuthStateForUpdate(hostId), hostId);
+}
+
+/**
+ * Domain issuance: generates the random token and default lifecycle fields,
+ * then inserts INSIDE an already-open transaction scope (eligibility is the
+ * locking read `getAuthStateForUpdate`). Single authority for "issue a new
+ * host credential" — used by `HostTokenService.issueHostToken`,
+ * `rotateHostTokenImmediate` and the create-host-invite use case, so token
+ * format and default lifecycle policy never drift across callers. Never call
+ * it outside a UnitOfWork scope.
+ */
+export function issueHostTokenWithin(
+  tx: HostTxScope,
+  input: {
+    hostId: string;
+    kind?: HostCredentialKind;
+    expiresAt?: number | null;
+    consumedAt?: number | null;
+  },
+): IssuedHostToken {
+  return insertHostToken(tx, {
+    hostId: input.hostId,
+    hostToken: randomBytes(32).toString('base64url'),
+    kind: input.kind ?? 'long_lived',
+    expiresAt: input.expiresAt ?? null,
+    consumedAt: input.consumedAt ?? null,
+  });
+}
+
+/** Lower-level insert with an EXACT pre-generated token — only for prepared
+ *  rotation, whose token was minted by `prepareHostTokenRotation` and must be
+ *  kept byte-for-byte. */
+function insertHostToken(
+  tx: HostTxScope,
+  input: {
     hostId: string;
     hostToken: string;
     kind: HostCredentialKind;
     expiresAt: number | null;
     consumedAt: number | null;
-  }): IssuedHostToken {
-    const tokenHash = hashHostToken(input.hostToken);
-    const id = randomBytes(12).toString('base64url');
-    this.db
-      .prepare(
-        `INSERT INTO host_credentials
-           (id, host_id, token_hash, kind, expires_at, consumed_at, revoked_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL)`,
-      )
-      .run(
-        id,
-        input.hostId,
-        tokenHash,
-        input.kind,
-        input.expiresAt,
-        input.consumedAt,
-      );
-    const credential = this.getCredentialById(id);
-    if (!credential) {
-      throw new Error(`HostTokenService.insertHostToken: row missing for id=${id}`);
-    }
-    return { hostToken: input.hostToken, credential };
-  }
-
-  private assertHostCanReceiveCredential(hostId: string): void {
-    const row = this.db
-      .prepare<[string], { user_id: string | null; revoked_at: number | null }>(
-        `SELECT user_id, revoked_at FROM hosts WHERE id = ?`,
-      )
-      .get(hostId);
-    if (!row) {
-      throw new HostCredentialIssueError('host_missing', hostId);
-    }
-    if (!row.user_id) {
-      throw new HostCredentialIssueError('host_unbound', hostId);
-    }
-    if (row.revoked_at !== null) {
-      throw new HostCredentialIssueError('host_revoked', hostId);
-    }
-  }
+  },
+): IssuedHostToken {
+  assertHostCanReceiveCredentialForUpdate(tx.hosts, input.hostId);
+  const credential = tx.credentials.insert({
+    id: randomBytes(12).toString('base64url'),
+    hostId: input.hostId,
+    tokenHash: hashHostToken(input.hostToken),
+    kind: input.kind,
+    expiresAt: input.expiresAt,
+    consumedAt: input.consumedAt,
+  });
+  return { hostToken: input.hostToken, credential };
 }
 
 export function hashHostToken(token: string): string {
   return createHash('sha256').update(token).digest('base64url');
-}
-
-interface HostCredentialJoinRow extends HostCredentialRow {
-  host_user_id: string | null;
-  host_revoked_at: number | null;
 }

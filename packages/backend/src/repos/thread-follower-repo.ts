@@ -3,6 +3,7 @@ import type {
   ConversationAgentDto,
   ConversationAgentRow,
   ThreadFollowerRow,
+  ThreadFollowerSource,
 } from '@silverhand/shared';
 
 /**
@@ -15,12 +16,6 @@ import type {
  * A thread is identified by its root message id; replies carry
  * `messages.thread_root_id = <root id>` (the root itself has NULL).
  */
-
-export type ThreadFollowerSource =
-  | 'reply'
-  | 'mention'
-  | 'manual'
-  | 'target_author';
 
 export interface ThreadFollowerUpsert {
   threadRootId: string;

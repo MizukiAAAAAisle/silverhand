@@ -40,6 +40,7 @@
  * auth surface + the host-credential row in DB. No outbound WS, no
  * daemon-config, no IPC.
  */
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -56,9 +57,9 @@ import {
   resolveBackendDataPaths,
 } from '@silverhand/shared/app-data-layout';
 import {
-  startBackend,
-  type RunningBackend,
-} from '../../src/index.js';
+  startTestBackend,
+  type TestRunningBackend,
+} from '../utils/test-backend.js';
 import type { BackendLogger } from '../../src/context.js';
 import { HostTokenService, hashHostToken } from '../../src/auth/host-token.js';
 import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
@@ -70,7 +71,7 @@ const silentBackendLogger: BackendLogger = {
 };
 
 interface BackendOnlyHandle {
-  backend: RunningBackend;
+  backend: TestRunningBackend;
   dbPath: string;
   silverhandDir: string;
   tempDir: string;
@@ -104,7 +105,7 @@ async function bootBackendOnly(opts: {
     },
   };
 
-  const backend = await startBackend({
+  const backend = await startTestBackend({
     mode: 'standalone',
     dbPath,
     ...resolveBackendDataPaths(silverhandDir),
@@ -331,7 +332,7 @@ describe('Standalone G3 — signup-toggle real restart (D4.c C8)', () => {
       // restart, and the same row is the one `verifyHostToken`
       // resolves to". Pin both.
       {
-        const tokens = new HostTokenService(active.backend.context.db);
+        const tokens = new HostTokenService(createSqliteHostPersistence(active.backend.context.db));
         const verified = tokens.verifyHostToken(hostToken);
         expect(verified.ok).toBe(true);
         if (verified.ok) {

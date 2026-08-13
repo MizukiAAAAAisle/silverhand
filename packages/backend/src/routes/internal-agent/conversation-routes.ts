@@ -13,14 +13,12 @@ import {
   canPostToConversation,
   canViewConversation,
 } from '../../permissions.js';
-import { listAgentVisibleChannels } from '../../read-model/agent-read.js';
+
 import {
   SLOW_ROUTE_SPAN_MS,
   elapsedSince,
   timedRouteSpan,
 } from '../../observability/route-span.js';
-import { AgentRepo } from '../../repos/agent-repo.js';
-import { WorkspaceRepo } from '../../repos/workspace-repo.js';
 import {
   dispatchAgentWorkspaceIndex,
   resolveOutboundForHost,
@@ -75,10 +73,14 @@ type AgentListWorkspacesOutcome =
   | { kind: 'failed'; code: string; message: string; status: DataPlaneHttpStatus };
 
 async function buildAgentListWorkspacesDto(
-  ctx: BackendContext,
+  // #task:1983 W3 — the two reads this builder needs come from the facet's
+  // dependency bag (already constructed by the composition root); `ctx` is here
+  // for the outbound adapter thunk alone.
+  deps: Pick<InternalRouteDeps, 'ctx' | 'agents' | 'workspaces'>,
   agentId: string,
 ): Promise<AgentListWorkspacesOutcome> {
-  const workspaces = new WorkspaceRepo(ctx.db).listForAgent(agentId);
+  const { ctx } = deps;
+  const workspaces = deps.workspaces.listForAgent(agentId);
   if (workspaces.length === 0) {
     return { kind: 'ok', dto: { workspaces: [] } };
   }
@@ -90,7 +92,7 @@ async function buildAgentListWorkspacesDto(
   // agent runs on, so the agent's host is the single correct resolution
   // axis. There is no workspace-side axis to confuse it with any more —
   // relocation-v1 §7 retired the workspace's home computer entirely.
-  const agent = new AgentRepo(ctx.db).get(agentId);
+  const agent = deps.agents.get(agentId);
   if (!agent) {
     return {
       kind: 'failed',
@@ -162,7 +164,7 @@ export function registerConversationRoutes(
   app: Hono<AppEnv>,
   deps: InternalRouteDeps,
 ): void {
-  const { ctx, conversations } = deps;
+  const { ctx, agentReads, conversations } = deps;
 
   app.post(internalPaths.agentCreateChannel(':cid', ':aid'), async c => {
     const cid = c.req.param('cid');
@@ -294,7 +296,7 @@ export function registerConversationRoutes(
       return c.json({ error: 'forbidden' }, 403);
     }
     const startedAt = performance.now();
-    const outcome = await buildAgentListWorkspacesDto(ctx, principal.agentId);
+    const outcome = await buildAgentListWorkspacesDto(deps, principal.agentId);
     const elapsedMs = elapsedSince(startedAt);
     if (elapsedMs >= SLOW_ROUTE_SPAN_MS) {
       ctx.logger.warn(
@@ -358,7 +360,7 @@ export function registerConversationRoutes(
         agentId: principal.agentId,
       },
       () =>
-        listAgentVisibleChannels(ctx, targetWorkspaceId, principal.agentId),
+        agentReads.listVisibleChannels(targetWorkspaceId, principal.agentId),
       out => ({ channelCount: out.channels.length }),
     );
     return c.json(result);

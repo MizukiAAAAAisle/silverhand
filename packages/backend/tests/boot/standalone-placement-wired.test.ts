@@ -25,7 +25,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ServerConfig } from '@silverhand/shared';
-import { startBackend, type RunningBackend } from '../../src/index.js';
+import {
+  startTestBackend,
+  type TestRunningBackend,
+} from '../utils/test-backend.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 
 function makeServerConfig(): ServerConfig {
@@ -43,7 +46,7 @@ function makeServerConfig(): ServerConfig {
 }
 
 describe('startBackend(standalone).context.placement — D4.c C1 wiring', () => {
-  let running: RunningBackend | null = null;
+  let running: TestRunningBackend | null = null;
   let tmp: string | null = null;
 
   afterEach(async () => {
@@ -59,7 +62,7 @@ describe('startBackend(standalone).context.placement — D4.c C1 wiring', () => 
 
   it('returns 0 / 1 / N typed placement responses, NOT host_runtime_disabled', async () => {
     tmp = mkdtempSync(join(tmpdir(), 'silverhand-d4c-c1-placement-'));
-    running = await startBackend({
+    running = await startTestBackend({
       mode: 'standalone',
       dbPath: join(tmp, 'silverhand.db'),
       ...resolveBackendDataPaths(tmp),
@@ -123,7 +126,7 @@ describe('startBackend(standalone).context.placement — D4.c C1 wiring', () => 
 
   it('placement.listOwnedActiveLocalForUser exposes 0 / 1 / N visibility without leaking other tenants', async () => {
     tmp = mkdtempSync(join(tmpdir(), 'silverhand-d4c-c1-placement-list-'));
-    running = await startBackend({
+    running = await startTestBackend({
       mode: 'standalone',
       dbPath: join(tmp, 'silverhand.db'),
       ...resolveBackendDataPaths(tmp),

@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { Database as Db } from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -25,11 +26,16 @@ import type {
   BackendLogger,
 } from '../../src/context.js';
 import { silverhandCors } from '../../src/cors.js';
+import { createSqliteDbWriteProbe } from '../../src/observability/db-write-probe.js';
 import type { AppEnv } from '../../src/auth/principal.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { PresenceRegistry } from '../../src/presence/presence-registry.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { createSqliteTaskPersistence } from '../../src/repos/task-persistence.js';
+import { createSqliteConversationPersistence } from '../../src/repos/conversation-persistence.js';
+import { createMentionCcAdapter } from '../../src/adapters/mention-cc.js';
+import { createUnreadPublishAdapter } from '../../src/adapters/unread-publish.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
@@ -41,6 +47,10 @@ import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
 import { ThreadFollowerRepo } from '../../src/repos/thread-follower-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { HostStatusReadModel } from '../../src/runtime/host-status-read-model.js';
+import {
+  createBackendPersistence,
+  type BackendPersistence,
+} from '../../src/persistence/root.js';
 import { createApiRouter } from '../../src/routes.js';
 import { createInternalRouter } from '../../src/routes/internal-agent.js';
 import type {
@@ -70,7 +80,7 @@ import { canAgentUseCapability } from '../../src/permissions.js';
 import { ScheduleService } from '../../src/services/schedule-service.js';
 import { TaskService } from '../../src/services/task-service.js';
 import { UserService } from '../../src/services/user-service.js';
-import { UserRepo } from '../../src/repos/user-repo.js';
+import { createSqliteUserPersistence } from '../../src/repos/user-persistence.js';
 import { createLocalBlobFileStorage } from '../../src/storage/blob-file-storage.js';
 import { createLogLevelControl } from '../../src/logger.js';
 import { makeTempSilverhandDir, openTestDb } from './db.js';
@@ -91,6 +101,11 @@ import type {
 import { ensureAgentL1Dir } from './embedded-seed-fixtures.js';
 import { join as joinPath } from 'node:path';
 import { CURRENT_DESKTOP_EPOCH_HEADERS } from './desktop-client-epoch.js';
+import {
+  AgentDeletionResumer,
+  type AgentDeletionRunner,
+} from '../../src/application/agent-deletion-resumer.js';
+import { sweepStoredBlobs } from '../../src/application/delete-agent.js';
 
 /**
  * Records every call routes / provision make into the runtime host.
@@ -667,6 +682,7 @@ export class FakeHostWsServerController implements HostWsServerController {
       return {
         ok: true as const,
         purged_count: existed ? 1 : 0,
+        quiesced_count: 0,
       } as OutboundServerCommandResult<K>;
     }
     return {} as OutboundServerCommandResult<K>;
@@ -888,9 +904,32 @@ export interface BuildTestAppOptions {
   desktopApiEpoch?: { minimumClientEpoch?: number };
 }
 
+/**
+ * The test-only context (#task:1983 W5). `BackendContext` no longer carries a
+ * driver handle — that removal is what makes "reaches for the handle" a compile
+ * error in production — but a test legitimately needs one: seeding a fixture
+ * row no repo writes, white-boxing schema, or holding the write lock from a
+ * second connection to reproduce contention.
+ *
+ * This alias is the ONLY place that pairing exists, and it exists under
+ * `tests/` where no production module can import it. That is the whole design:
+ * the convenience is real, and it cannot leak into the product. A production
+ * file that wants a row asks for the repo or port it needs.
+ */
+export type TestBackendContext = BackendContext & { db: Db };
+
 export interface TestApp {
   app: Hono<AppEnv>;
-  ctx: BackendContext;
+  ctx: TestBackendContext;
+  /**
+   * #task:1983 — the composed persistence bag this fixture's router was built
+   * from. Tests that need to re-run `createApiRouter` (route-table enumeration)
+   * pass this rather than composing a second set of repositories.
+   */
+  persistence: BackendPersistence;
+  /** Fixture-owned durable deletion worker used by both route and direct
+   * application tests. */
+  agentDeletionRunner: AgentDeletionRunner;
   /** #task:1598 — the test fixture's app-data root. BackendContext no
    *  longer exposes a general root, so path-deriving tests read it here. */
   silverhandDir: string;
@@ -962,9 +1001,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     conversations: new ConversationRepo(db),
   });
   const events = new ScopeEventBus();
+  const userPersistence = createSqliteUserPersistence(db);
   const userService = new UserService({
-    db,
-    users: new UserRepo(db),
+    users: userPersistence.read,
+    profileWrites: userPersistence.profile,
+    registration: userPersistence.registration,
     blobStorage,
     events,
   });
@@ -980,19 +1021,25 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
       dummyPassword: 'test-dummy-password',
     }),
   );
+  // #task:1983 — the fixture composes persistence exactly the way boot does, so
+  // a test app and the real server disagree about repo wiring only where the
+  // test deliberately substitutes a fake.
+  const persistence = createBackendPersistence(db);
   const placement = new RuntimeHostPlacementResolver({
-    hosts: new HostRepo(db),
-    agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db),
+    hosts: persistence.repos.hosts,
+    agents: persistence.repos.agents,
+    workspaces: persistence.repos.workspaces,
   });
   const presence = new PresenceRegistry({
     events,
-    users: new UserRepo(db),
+    users: persistence.repos.users,
     logger: silentLogger,
   });
 
-  const ctx: BackendContext = {
+  const ctx: TestBackendContext = {
     db,
+    dbWriteProbe: createSqliteDbWriteProbe({ db }),
+    authorizationReads: persistence.authorizationReads,
     deploymentMode,
     readiness: {
       migrationsApplied: true,
@@ -1048,36 +1095,40 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     runtimeView: hostId => ctx.hostRuntimeView?.(hostId) ?? null,
   });
   ctx.hostStatusReadModel = () => hostStatusReadModel;
+  const conversationPersistence = createSqliteConversationPersistence(db);
+  const unreadPublish = createUnreadPublishAdapter({ db, events: ctx.events });
   ctx.channelService = new ChannelService({
-    db,
-    conversations: new ConversationRepo(db),
-    conversationReads: new ConversationReadRepo(db),
-    workspaces: new WorkspaceRepo(db),
-    agents: new AgentRepo(db),
-    messages: new MessageRepo(db),
+    channels: conversationPersistence.channel.read,
+    channelWrites: conversationPersistence.channel.directWrite,
+    workspaces: conversationPersistence.channel.workspaces,
+    agents: conversationPersistence.channel.agents,
+    uow: conversationPersistence.channel.uow,
+    unreadPublish,
     events: ctx.events,
     runtimeHost: ctx.runtimeHost,
     logger: silentLogger,
   });
   ctx.conversationMessageService = new ConversationMessageService({
-    db,
-    conversations: new ConversationRepo(db),
-    conversationInboxes: new ConversationInboxRepo(db),
-    messages: new MessageRepo(db),
-    threadFollowers: new ThreadFollowerRepo(db),
-    agents: new AgentRepo(db),
-    users: new UserRepo(db),
-    notifications: new NotificationRepo(db),
-    workspaces: new WorkspaceRepo(db),
-    attachmentService,
+    uow: conversationPersistence.message.uow,
+    threadFollow: conversationPersistence.threadFollow,
+    delivery: conversationPersistence.delivery,
+    mentionCc: createMentionCcAdapter({
+      db,
+      runtimeHost: ctx.runtimeHost,
+      events: ctx.events,
+      logger: silentLogger,
+    }),
+    unreadPublish,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger: silentLogger,
   });
+  const taskPersistence = createSqliteTaskPersistence(db);
   ctx.taskService = new TaskService({
-    db,
-    conversations: new ConversationRepo(db),
-    messages: new MessageRepo(db),
+    read: taskPersistence.read,
+    board: taskPersistence.board,
+    conversations: taskPersistence.conversations,
+    uow: taskPersistence.uow,
     agents: new AgentRepo(db),
     workspaces: new WorkspaceRepo(db),
     runtimeHost: ctx.runtimeHost,
@@ -1132,15 +1183,32 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
   }
 
   const authToken = ctx.authSessions.issueSession({ userId: viewerUserId }).userToken;
+  const agentDeletionRunner = new AgentDeletionResumer({
+    deletion: persistence.agentTeardown.deletion,
+    adapter: () => ctx.outboundFrameAdapter?.() ?? null,
+    logger: silentLogger,
+    onCommitted: async completed => {
+      ctx.agentService.publishDeleted(completed.facts.id);
+      await sweepStoredBlobs(ctx, completed.capture.dmBlobRefs);
+    },
+  });
 
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
-  app.route('/', createApiRouter(ctx, { desktopApiEpoch: options.desktopApiEpoch }));
-  app.route('/', createInternalRouter(ctx));
+  app.route(
+    '/',
+    createApiRouter(ctx, persistence, {
+      desktopApiEpoch: options.desktopApiEpoch,
+      agentDeletionRunner,
+    }),
+  );
+  app.route('/', createInternalRouter(ctx, persistence));
 
   return {
     app,
     ctx,
+    persistence,
+    agentDeletionRunner,
     silverhandDir: tmp.silverhandDir,
     fake,
     fakeHostWs,
@@ -1149,6 +1217,11 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     viewerUserId,
     cleanup: () => {
       hostStatusReadModel.close();
+      // Fixture cleanup is synchronous by long-standing contract. Every route
+      // helper awaits `app.fetch()` before cleanup, so this worker has no
+      // admitted deletion left to drain; make the intentionally ignored,
+      // already-resolved Promise explicit rather than silently dropping it.
+      void agentDeletionRunner.close();
       ctx.scheduleService.stop();
       ctx.idleReaperService.stop();
       try {

@@ -1,4 +1,3 @@
-import type { Database as Db } from 'better-sqlite3';
 import {
   type ChannelConversationDto,
   type ConversationVisibility,
@@ -8,15 +7,18 @@ import {
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import type { ConversationRepo, RepoError } from '../repos/conversation-repo.js';
-import type { ConversationReadRepo } from '../repos/conversation-read-repo.js';
-import type { MessageRepo } from '../repos/message-repo.js';
-import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
-import { publishUnreadUpdatedToConversationViewers } from '../viewer-scope.js';
-import { AttentionBadgeRepo } from '../repos/attention-badge-repo.js';
+import { ChannelError } from './channel/errors.js';
+import type {
+  ChannelAgentReadPort,
+  ChannelDirectWritePort,
+  ChannelReadPort,
+  ChannelUnitOfWork,
+  ChannelWorkspaceReadPort,
+} from './channel/ports.js';
+import type { ConversationUnreadPublishPort } from './conversation/unread-publish-port.js';
 import type { AgentPrincipal, UserPrincipal } from '../auth/principal.js';
+import { roleGovernsWorkspace } from '../auth/workspace-role.js';
 
 /**
  * ChannelService is the single owner of channel create / pin / unpin
@@ -106,8 +108,8 @@ export class WorkspaceUnsuitableError extends Error {
  * route maps these two codes to their exact `{ error }`-only bodies (no `code`
  * field); it must NOT route them through `channelServiceErrorResponse`, which
  * would add a `code`. This error type covers ONLY these two branches — every
- * other failure (workspace missing / not agent_home / a transaction
- * SqliteError) is left to surface as a generic 500.
+ * other failure (workspace missing / not agent_home / a persistence failure
+ * inside the transaction) is left to surface as a generic 500.
  */
 export type AgentHomeChannelErrorCode =
   | 'agent_home_missing_owner'
@@ -144,7 +146,13 @@ export type ActorErrorCode =
   | 'source_conversation_not_found'
   | 'agent_not_member_of_source_conv'
   | 'agent_workspace_mismatch'
-  | 'agent_cannot_create_public';
+  | 'agent_cannot_create_public'
+  /** The user actor no longer governs the workspace as of the write lock (an
+   *  `admin` demotion or a removal committed after the route's gate). It is an
+   *  INTERNAL name: `channelServiceErrorResponse` renders it as the route's own
+   *  `{ error: 'forbidden' }` / 403 — no `code`, message dropped — so the seam
+   *  adds no public protocol. */
+  | 'user_cannot_govern_workspace';
 
 export class ActorError extends Error {
   constructor(
@@ -169,12 +177,12 @@ export class SeedError extends Error {
 }
 
 export interface ChannelServiceOptions {
-  db: Db;
-  conversations: ConversationRepo;
-  conversationReads: ConversationReadRepo;
-  workspaces: WorkspaceRepo;
-  agents: AgentRepo;
-  messages: MessageRepo;
+  channels: ChannelReadPort;
+  channelWrites: ChannelDirectWritePort;
+  workspaces: ChannelWorkspaceReadPort;
+  agents: ChannelAgentReadPort;
+  uow: ChannelUnitOfWork;
+  unreadPublish: ConversationUnreadPublishPort;
   events: ScopeEventBus;
   runtimeHost: AgentRuntimeHost;
   logger: BackendLogger;
@@ -188,27 +196,23 @@ interface CreateChannelTxResult {
 }
 
 export class ChannelService {
-  private readonly db: Db;
-  /** Stateless wrapper over the same db — the tiered badge (#task:1870) rides
-   *  every `unread_updated` emit, archive/unarchive included. */
-  private readonly attentionBadges: AttentionBadgeRepo;
-  private readonly conversations: ConversationRepo;
-  private readonly conversationReads: ConversationReadRepo;
-  private readonly workspaces: WorkspaceRepo;
-  private readonly agents: AgentRepo;
-  private readonly messages: MessageRepo;
+  private readonly channels: ChannelReadPort;
+  private readonly channelWrites: ChannelDirectWritePort;
+  private readonly workspaces: ChannelWorkspaceReadPort;
+  private readonly agents: ChannelAgentReadPort;
+  private readonly uow: ChannelUnitOfWork;
+  private readonly unreadPublish: ConversationUnreadPublishPort;
   private readonly events: ScopeEventBus;
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly logger: BackendLogger;
 
   constructor(opts: ChannelServiceOptions) {
-    this.db = opts.db;
-    this.attentionBadges = new AttentionBadgeRepo(opts.db);
-    this.conversations = opts.conversations;
-    this.conversationReads = opts.conversationReads;
+    this.channels = opts.channels;
+    this.channelWrites = opts.channelWrites;
     this.workspaces = opts.workspaces;
     this.agents = opts.agents;
-    this.messages = opts.messages;
+    this.uow = opts.uow;
+    this.unreadPublish = opts.unreadPublish;
     this.events = opts.events;
     this.runtimeHost = opts.runtimeHost;
     this.logger = opts.logger;
@@ -262,14 +266,14 @@ export class ChannelService {
       if (!this.agents.get(input.actor.agentId)) {
         throw new ActorError('agent_not_found', 'agent not found');
       }
-      const sourceConversation = this.conversations.get(input.actor.conversationId);
+      const sourceConversation = this.channels.get(input.actor.conversationId);
       if (!sourceConversation) {
         throw new ActorError(
           'source_conversation_not_found',
           'source conversation not found',
         );
       }
-      if (!this.conversations.getAgent(input.actor.conversationId, input.actor.agentId)) {
+      if (!this.channels.getAgent(input.actor.conversationId, input.actor.agentId)) {
         throw new ActorError(
           'agent_not_member_of_source_conv',
           'agent is not a member of the source conversation',
@@ -301,69 +305,153 @@ export class ChannelService {
       );
     }
 
-    const created = this.db.transaction((): CreateChannelTxResult => {
-      const channel = this.conversations.insertChannel({
-        workspaceId: workspace.id,
-        title: input.title,
-        spawnedByAgentId:
-          input.actor.kind === 'agent' ? input.actor.agentId : null,
-        visibility: input.visibility,
-      });
-      for (const memberId of memberAgentIds) {
-        this.conversations.addAgent(channel.id, memberId);
-      }
-
-      // Human membership snapshot at creation:
-      //   - agent-created channel: inherit narrowly from the SOURCE
-      //     conversation's `conversation_users` (an agent in a private subset
-      //     of humans must not fan out to the whole workspace).
-      //   - user-created channel: the creator (implicit, so they can always
-      //     view what they made) plus any explicitly-selected humans. There is
-      //     NO full-workspace snapshot — a new channel starts scoped to the
-      //     creator + chosen members; others reach a `public` channel by
-      //     browsing (canReadConversation) and self-join, and never see a
-      //     `private` one they weren't added to.
-      const userMemberIds = input.actor.kind === 'agent'
-        ? this.conversations
-            .listUsers(input.actor.conversationId)
-            .map(u => u.user_id)
-        : Array.from(
-            new Set([input.actor.userId, ...(explicitUserMemberIds ?? [])]),
+    // Workspace-keyed: the channel row and every founding-member row belong to
+    // this one workspace, and the scope's faces are bound to it (#task:1987).
+    const created = this.uow.atomicallyInWorkspace(
+      workspace.id,
+      (tx): CreateChannelTxResult => {
+        // Re-derive, INSIDE the lock, every fact that authorizes a write below.
+        // The gates above are early refusals only: a roster change can commit in
+        // the seam between them and BEGIN, and the interleaving would leave a
+        // membership edge for a principal who is not a workspace member — a state
+        // no serial order produces (create-then-remove cascades the edge away;
+        // remove-then-create refuses). Any refusal here throws, which rolls the
+        // whole transaction back, and reuses the SAME typed error as its pre-lock
+        // twin so the HTTP mapping is unchanged.
+        const current = tx.workspace.get();
+        if (!current) {
+          throw new WorkspaceUnsuitableError(
+            'workspace_not_found',
+            'workspace not found',
           );
-      for (const userId of userMemberIds) {
-        this.conversations.addUser(channel.id, userId);
-      }
+        }
+        if (current.workspace_kind !== 'regular') {
+          throw new WorkspaceUnsuitableError(
+            'workspace_not_regular',
+            'workspace is not a regular workspace',
+          );
+        }
+        for (const agentId of memberAgentIds) {
+          if (!tx.agents.get(agentId)) {
+            throw new MemberError('agent_not_found', agentId, `agent ${agentId} not found`);
+          }
+          if (!tx.workspace.hasAgentMember(agentId)) {
+            throw new MemberError(
+              'agent_not_workspace_member',
+              agentId,
+              `agent ${agentId} is not a member of this workspace`,
+            );
+          }
+        }
+        if (input.actor.kind === 'agent') {
+          if (!tx.agents.get(input.actor.agentId)) {
+            throw new ActorError('agent_not_found', 'agent not found');
+          }
+          // The source conversation's `workspace_id` is immutable, so the
+          // pre-lock mismatch gate cannot go stale and this read cannot trip the
+          // scope's workspace binding; the edge, however, can be revoked in the
+          // seam.
+          if (!tx.channels.getAgent(input.actor.conversationId, input.actor.agentId)) {
+            throw new ActorError(
+              'agent_not_member_of_source_conv',
+              'agent is not a member of the source conversation',
+            );
+          }
+        } else {
+          // The user actor's AUTHORITY, re-derived from the role row as of the
+          // lock. The route's `canGovernWorkspace(…, 'admin')` gate stays where it
+          // is — a refusal should not take a write lock — but it cannot be the
+          // authority for the write: an `admin` demotion committing in the seam
+          // would otherwise still mint a channel. This is the same rule
+          // `addWorkspaceHumanMember` applies in this slice, and both writers of
+          // workspace-governed rows must sample authority at the same moment.
+          if (!roleGovernsWorkspace(tx.workspace.humanRole(input.actor.userId))) {
+            throw new ActorError(
+              'user_cannot_govern_workspace',
+              'user does not govern this workspace',
+            );
+          }
+        }
 
-      let contextMsg: MessageDto | null = null;
-      let promptMsg: MessageDto | null = null;
-      if (input.seed && input.actor.kind === 'agent') {
-        // Snapshot source identity at insert time so the renderer can
-        // draw the Spawned-from chip without a follow-up join, even if
-        // the source conversation or agent is later renamed/archived.
-        const sourceConv = this.conversations.get(input.actor.conversationId);
-        const sourceAgent = this.agents.get(input.actor.agentId);
-        contextMsg = this.messages.insertForConversation({
-          conversationId: channel.id,
-          fromKind: 'system',
-          content: input.seed.systemMessageBody,
-          metadata: {
-            subtype: systemSubtype('channel_context'),
-            source_conversation_id: input.actor.conversationId,
-            source_conversation_title: sourceConv?.title ?? undefined,
-            created_by_agent_id: input.actor.agentId,
-            created_by_agent_name: sourceAgent?.name ?? undefined,
-          },
+        const channel = tx.channels.insertChannel({
+          title: input.title,
+          spawnedByAgentId:
+            input.actor.kind === 'agent' ? input.actor.agentId : null,
+          visibility: input.visibility,
         });
-        promptMsg = this.messages.insertForConversation({
-          conversationId: channel.id,
-          fromKind: 'agent',
-          fromAgentId: input.actor.agentId,
-          content: input.seed.initialPrompt,
-        });
-      }
+        for (const memberId of memberAgentIds) {
+          tx.channels.addAgent(channel.id, memberId);
+        }
 
-      return { channel, contextMsg, promptMsg, humanMemberCount: userMemberIds.length };
-    })();
+        // Human membership snapshot at creation:
+        //   - agent-created channel: inherit narrowly from the SOURCE
+        //     conversation's `conversation_users` (an agent in a private subset
+        //     of humans must not fan out to the whole workspace).
+        //   - user-created channel: the creator (implicit, so they can always
+        //     view what they made) plus any explicitly-selected humans. There is
+        //     NO full-workspace snapshot — a new channel starts scoped to the
+        //     creator + chosen members; others reach a `public` channel by
+        //     browsing (canReadConversation) and self-join, and never see a
+        //     `private` one they weren't added to.
+        const userMemberIds = input.actor.kind === 'agent'
+          ? tx.channels
+              .listUsers(input.actor.conversationId)
+              .map(u => u.user_id)
+          : Array.from(
+              new Set([input.actor.userId, ...(explicitUserMemberIds ?? [])]),
+            );
+        for (const userId of userMemberIds) {
+          // Same in-lock eligibility rule as the agent members above, and it
+          // covers the IMPLICIT creator too: `canGovernWorkspace` is satisfied by
+          // a `workspace_users` role row, so a creator removed in the seam would
+          // otherwise get a `conversation_users` row with no membership behind it.
+          // A role row IS that membership, so the role projection answers it.
+          // The agent-actor branch needs no check — its list is READ in this
+          // lock, so the removal cascade has already taken those rows out.
+          if (
+            input.actor.kind === 'user'
+            && tx.workspace.humanRole(userId) === null
+          ) {
+            throw new MemberError(
+              'user_not_workspace_member',
+              userId,
+              `user ${userId} is not a human member of this workspace`,
+            );
+          }
+          tx.channels.addUser(channel.id, userId);
+        }
+
+        let contextMsg: MessageDto | null = null;
+        let promptMsg: MessageDto | null = null;
+        if (input.seed && input.actor.kind === 'agent') {
+          // Snapshot source identity at insert time so the renderer can
+          // draw the Spawned-from chip without a follow-up join, even if
+          // the source conversation or agent is later renamed/archived.
+          const sourceConv = tx.channels.get(input.actor.conversationId);
+          const sourceAgent = tx.agents.get(input.actor.agentId);
+          contextMsg = tx.messages.insert({
+            conversationId: channel.id,
+            fromKind: 'system',
+            content: input.seed.systemMessageBody,
+            metadata: {
+              subtype: systemSubtype('channel_context'),
+              source_conversation_id: input.actor.conversationId,
+              source_conversation_title: sourceConv?.title ?? undefined,
+              created_by_agent_id: input.actor.agentId,
+              created_by_agent_name: sourceAgent?.name ?? undefined,
+            },
+          });
+          promptMsg = tx.messages.insert({
+            conversationId: channel.id,
+            fromKind: 'agent',
+            fromAgentId: input.actor.agentId,
+            content: input.seed.initialPrompt,
+          });
+        }
+
+        return { channel, contextMsg, promptMsg, humanMemberCount: userMemberIds.length };
+      },
+    );
 
     this.publishWorkspaceChannelsChanged(workspace.id, created.channel.id);
     this.logger.info(
@@ -441,22 +529,55 @@ export class ChannelService {
       );
     }
 
-    const channel = this.db.transaction((): DmChannelDto => {
-      const dm = this.conversations.insertDmChannel({
-        workspaceId: workspace.id,
-        title: input.title,
-        agentId: owner.id,
-      });
-      this.conversations.addAgent(dm.id, owner.id);
-      // Human membership for the freshly-created DM: the creating user is a
-      // workspace member (the admin gate already passed), so they are a
-      // legitimate member of their own new DM. Without this row a follow-up
-      // GET /messages would 403 for the same principal that just created it.
-      if (input.actor.kind === 'user') {
-        this.conversations.addUser(dm.id, input.actor.userId);
-      }
-      return dm;
-    })();
+    const channel = this.uow.atomicallyInWorkspace(
+      workspace.id,
+      (tx): DmChannelDto => {
+        // In-lock re-derivation, same rule as `createChannel`: the kind/owner
+        // facts this transaction writes by must be read under the mechanism that
+        // protects them, not carried in from before BEGIN.
+        const current = tx.workspace.get();
+        if (!current) {
+          throw new WorkspaceUnsuitableError('workspace_not_found', 'workspace not found');
+        }
+        if (current.workspace_kind !== 'agent_home') {
+          throw new WorkspaceUnsuitableError(
+            'workspace_not_agent_home',
+            'workspace is not an agent_home workspace',
+          );
+        }
+        if (!current.owner_agent_id) {
+          throw new AgentHomeChannelError(
+            'agent_home_missing_owner',
+            'agent_home workspace missing owner',
+          );
+        }
+        const currentOwner = tx.agents.get(current.owner_agent_id);
+        if (!currentOwner) {
+          throw new AgentHomeChannelError(
+            'agent_home_owner_not_found',
+            'agent_home owner not found',
+          );
+        }
+        const dm = tx.channels.insertDmChannel({
+          title: input.title,
+          agentId: currentOwner.id,
+        });
+        tx.channels.addAgent(dm.id, currentOwner.id);
+        // Human membership for the freshly-created DM: the creating user is a
+        // workspace member (the admin gate already passed), so they are a
+        // legitimate member of their own new DM. Without this row a follow-up
+        // GET /messages would 403 for the same principal that just created it.
+        // No in-lock membership OR authority re-check here, unlike
+        // `createChannel`: every human-roster route (add, role change, removal,
+        // self-leave) refuses a non-`regular` workspace, so on an `agent_home` one
+        // the seam that would strip or demote this user's role row does not exist.
+        // The re-derivation would be unreachable code, not a missing gate.
+        if (input.actor.kind === 'user') {
+          tx.channels.addUser(dm.id, input.actor.userId);
+        }
+        return dm;
+      },
+    );
 
     this.publishWorkspaceChannelsChanged(workspace.id, channel.id);
     return { channel };
@@ -465,17 +586,17 @@ export class ChannelService {
   async setArchived(
     input: SetArchivedInput,
   ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
-    const existing = this.conversations.get(input.channelId);
+    const existing = this.channels.get(input.channelId);
     if (!existing) {
-      throw repoError('not_found', 'channel not found');
+      throw new ChannelError('not_found', 'channel not found');
     }
 
-    const updated = this.conversations.setArchived(
+    const updated = this.channelWrites.setArchived(
       input.channelId,
       input.archived,
     );
     if (!updated) {
-      throw repoError('not_found', 'channel not found');
+      throw new ChannelError('not_found', 'channel not found');
     }
 
     // Archiving a channel terminates its agent runtime: an agent still working
@@ -488,7 +609,7 @@ export class ChannelService {
     // the display roster excludes archived (see agent-repo). (#task:1398)
     if (input.archived) {
       this.runtimeHost.resolveConversationRuns(updated.id, 'conversation_closed');
-      for (const ca of this.conversations.listAgents(updated.id)) {
+      for (const ca of this.channels.listAgents(updated.id)) {
         void this.runtimeHost.stop(updated.id, ca.agent_id).catch(err =>
           this.logger.warn(
             { channelId: updated.id, agentId: ca.agent_id, err },
@@ -511,13 +632,7 @@ export class ChannelService {
     // decrements every affected viewer's badge, unarchive restores it (the
     // predicate re-includes the channel). Per-viewer absolutes ride the
     // `viewer:<id>` scope, so no broadcast-invariant risk.
-    publishUnreadUpdatedToConversationViewers(
-      this.events,
-      this.attentionBadges,
-      this.conversations,
-      this.conversationReads,
-      updated.id,
-    );
+    this.unreadPublish.publishUnreadUpdatedToConversationViewers(updated.id);
     return { channel: updated };
   }
 
@@ -538,54 +653,63 @@ export class ChannelService {
    * A no-op rename (same title) short-circuits: no system message, no
    * delivery, no event — returning the unchanged channel.
    *
-   * The title write and the `rename` system-message insert run in a
-   * single transaction (better-sqlite3 nests the insert's own
-   * transaction via a savepoint) so a failed broadcast can never leave
-   * a renamed channel with no audit/notification row. Delivery and the
-   * `workspace_channels_changed` publish are post-commit side effects.
+   * The authoritative old title, the no-op decision, the title write and the
+   * `rename` system-message insert ALL run in ONE `atomicallyForChannel`
+   * callback — keyed on this very channel, so every face addresses it and none
+   * can be pointed elsewhere — so a failed insert can never leave a renamed
+   * channel with no audit row — and two
+   * concurrent renames can never both read the same old title and write a
+   * from-title that never existed (see `getChannelLikeForUpdate`'s isolation
+   * obligation). Whether a nested write of the adapter's own needs a savepoint
+   * is the adapter's problem; the UnitOfWork's contract is that everything
+   * written through the scope commits together or not at all.
+   * Delivery and the `workspace_channels_changed` publish are post-commit side
+   * effects.
    */
   async renameChannel(
     input: RenameChannelInput,
   ): Promise<{ channel: ChannelConversationDto | DmChannelDto }> {
-    const existing = this.conversations.get(input.channelId);
-    if (!existing) {
-      throw repoError('not_found', 'channel not found');
-    }
+    const renamed = this.uow.atomicallyForChannel(
+      input.channelId,
+      (
+        tx,
+      ): {
+        channel: ChannelConversationDto | DmChannelDto;
+        announce: MessageDto | null;
+      } => {
+        const existing = tx.channels.getChannelLikeForUpdate();
+        if (!existing) {
+          throw new ChannelError('not_found', 'channel not found');
+        }
+        // No-op: nothing changed, so emit nothing.
+        const oldTitle = existing.title;
+        if (input.title === oldTitle) {
+          return { channel: existing, announce: null };
+        }
+        const updated = tx.channels.updateTitle(input.title);
+        if (!updated) {
+          throw new ChannelError('not_found', 'channel not found');
+        }
+        const announce = tx.messages.insert({
+          fromKind: 'system',
+          content:
+            `This channel was renamed from “${oldTitle}” to “${input.title}”. ` +
+            `Update any references in your MEMORY.md when you next edit it.`,
+          metadata: {
+            subtype: systemSubtype('rename'),
+            old_name: oldTitle,
+            new_name: input.title,
+            scope: 'conversation',
+          },
+        });
+        return { channel: updated, announce };
+      },
+    );
 
-    const oldTitle = existing.title;
-    if (input.title === oldTitle) {
-      // No-op: nothing changed, so emit nothing. Re-fetch through the
-      // channel-like getter to narrow `existing` (the wider
-      // ConversationDto) to a ChannelConversationDto | DmChannelDto.
-      const channel = this.conversations.getChannelLike(input.channelId);
-      if (!channel) {
-        throw repoError('not_found', 'channel not found');
-      }
-      return { channel };
-    }
+    const { channel: updated, announce } = renamed;
+    if (!announce) return { channel: updated };
 
-    const { updated, announce } = this.db.transaction(() => {
-      const updated = this.conversations.updateTitle(input.channelId, input.title);
-      if (!updated) {
-        throw repoError('not_found', 'channel not found');
-      }
-      const announce = this.messages.insertForConversation({
-        conversationId: updated.id,
-        fromKind: 'system',
-        content:
-          `This channel was renamed from “${oldTitle}” to “${input.title}”. ` +
-          `Update any references in your MEMORY.md when you next edit it.`,
-        metadata: {
-          subtype: systemSubtype('rename'),
-          old_name: oldTitle,
-          new_name: input.title,
-          scope: 'conversation',
-        },
-      });
-      return { updated, announce };
-    })();
-
-    for (const ca of this.conversations.listAgents(updated.id)) {
+    for (const ca of this.channels.listAgents(updated.id)) {
       await this.deliverBestEffort(
         updated.id,
         ca.agent_id,
@@ -627,9 +751,9 @@ export class ChannelService {
     visibility: ConversationVisibility;
     actor: ChannelActor;
   }): Promise<{ channel: ChannelConversationDto }> {
-    const existing = this.conversations.get(input.channelId);
+    const existing = this.channels.get(input.channelId);
     if (!existing || existing.kind !== 'channel') {
-      throw repoError('not_found', 'channel not found');
+      throw new ChannelError('not_found', 'channel not found');
     }
     if (input.visibility === 'public' && input.actor.kind !== 'user') {
       throw new ActorError(
@@ -639,15 +763,18 @@ export class ChannelService {
     }
     // Same-value no-op: nothing changed, so emit nothing.
     if (existing.visibility === input.visibility) {
-      const channel = this.conversations.getChannelLike(input.channelId);
+      const channel = this.channels.getChannelLike(input.channelId);
       if (!channel || channel.kind !== 'channel') {
-        throw repoError('not_found', 'channel not found');
+        throw new ChannelError('not_found', 'channel not found');
       }
       return { channel };
     }
-    const updated = this.conversations.setVisibility(input.channelId, input.visibility);
+    const updated = this.channelWrites.setVisibility(
+      input.channelId,
+      input.visibility,
+    );
     if (!updated) {
-      throw repoError('not_found', 'channel not found');
+      throw new ChannelError('not_found', 'channel not found');
     }
     this.publishWorkspaceChannelsChanged(updated.workspace_id, updated.id);
     this.logger.info(
@@ -687,7 +814,7 @@ export class ChannelService {
     excludeAgentId: string,
     messageId: string,
   ): Promise<void> {
-    const recipients = this.conversations
+    const recipients = this.channels
       .listAgents(conversationId)
       .filter(ca => ca.agent_id !== excludeAgentId);
     try {
@@ -709,7 +836,7 @@ export class ChannelService {
   }
 
   private async startAgentsBestEffort(conversationId: string): Promise<void> {
-    const recipients = this.conversations
+    const recipients = this.channels
       .listAgents(conversationId)
       .filter(ca => ca.status !== 'active' && ca.status !== 'starting');
     try {
@@ -727,10 +854,4 @@ export class ChannelService {
       this.logger.warn({ conversationId, err }, 'channel-service: auto-start failed');
     }
   }
-}
-
-function repoError(code: string, message: string): RepoError {
-  const err = new Error(message) as RepoError;
-  err.code = code;
-  return err;
 }

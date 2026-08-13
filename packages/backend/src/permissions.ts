@@ -1,12 +1,18 @@
+// Every predicate here reads its facts through `ctx.authorizationReads`
+// (#task:1983 W3) — this module's own narrow read port, declared in
+// `authorization-ports.js`. It constructs no repository and holds no
+// connection: authorization is a cross-cutting DECISION layer, so it gets
+// exactly the facts its rules mention and nothing else. `ctx` is still the
+// first parameter of every export so the 158 call sites are untouched; the
+// only field any of them reads is that port (W6's Gate 8 keeps every OTHER
+// production file out of it — it is this module's private source, not an
+// ambient repository).
 import type { AttachmentRow, AgentCapability, AgentMaterializationStatus, WorkspaceRole } from '@silverhand/shared';
 import { conversationScope, conversationSideScope } from '@silverhand/shared';
 import type { BackendContext } from './context.js';
+import type { AuthorizationConversationFacts } from './authorization-ports.js';
 import type { Principal, UserPrincipal } from './auth/principal.js';
-import { AgentRepo } from './repos/agent-repo.js';
-import { AgentCapabilityRepo } from './repos/agent-capability-repo.js';
-import { AttachmentRepo } from './repos/attachment-repo.js';
-import { ConversationRepo } from './repos/conversation-repo.js';
-import { WorkspaceRepo } from './repos/workspace-repo.js';
+import { workspaceRoleMeetsFloor } from './auth/workspace-role.js';
 
 export type ParsedWsScope =
   | { type: 'app'; scope: 'app' }
@@ -20,20 +26,8 @@ export type AttachmentAclRow = Pick<
   'id' | 'channel_id' | 'created_by_kind' | 'created_by_id'
 >;
 
-function workspaceRepo(ctx: BackendContext): WorkspaceRepo {
-  return new WorkspaceRepo(ctx.db);
-}
-
-function conversationRepo(ctx: BackendContext): ConversationRepo {
-  return new ConversationRepo(ctx.db);
-}
-
-function attachmentRepo(ctx: BackendContext): AttachmentRepo {
-  return new AttachmentRepo(ctx.db);
-}
-
 function workspaceExists(ctx: BackendContext, workspaceId: string): boolean {
-  return workspaceRepo(ctx).get(workspaceId) !== null;
+  return ctx.authorizationReads.workspace(workspaceId) !== null;
 }
 
 function principalConversationChannelId(
@@ -41,10 +35,10 @@ function principalConversationChannelId(
   principal: Principal,
 ): string | null {
   if (principal.kind !== 'agent') return null;
-  const repo = conversationRepo(ctx);
-  const conversation = repo.get(principal.conversationId);
+  const reads = ctx.authorizationReads;
+  const conversation = reads.conversation(principal.conversationId);
   if (!conversation) return null;
-  if (!repo.getAgent(conversation.id, principal.agentId)) return null;
+  if (!reads.isConversationAgent(conversation.id, principal.agentId)) return null;
   return conversation.id;
 }
 
@@ -100,16 +94,14 @@ export function canViewWorkspace(
     // table existed. Any user not in `workspace_users` for the queried
     // workspace is denied here. Multi-human v2 will use this same
     // gate — invite flows simply add another user to `workspace_users`.
-    return workspaceRepo(ctx).isUserMember(workspaceId, principal.userId);
+    return ctx.authorizationReads.isWorkspaceMember(workspaceId, principal.userId);
   }
 
-  const conversation = conversationRepo(ctx).get(principal.conversationId);
+  const reads = ctx.authorizationReads;
+  const conversation = reads.conversation(principal.conversationId);
   if (!conversation) return false;
   if (conversation.workspace_id !== workspaceId) return false;
-  return conversationRepo(ctx).getAgent(
-    principal.conversationId,
-    principal.agentId,
-  ) !== null;
+  return reads.isConversationAgent(principal.conversationId, principal.agentId);
 }
 
 /**
@@ -130,27 +122,8 @@ export function canAgentAccessWorkspace(
   agentId: string,
   workspaceId: string,
 ): boolean {
-  return workspaceRepo(ctx)
-    .listForAgent(agentId)
-    .some(w => w.id === workspaceId);
+  return ctx.authorizationReads.agentWorkspaceIds(agentId).includes(workspaceId);
 }
-
-/**
- * Graded-permissions Layer A — the human governance role axis.
- *
- * `owner` ⊇ `admin` ⊇ `member`. A higher role can do everything a lower
- * one can; callers pass the MINIMUM role an op requires. This axis is
- * deliberately separate from the agent capability axis: workspace roles
- * never reference agent capabilities and vice-versa (orthogonality, doc
- * §6.3/§6.4). System principals pass unconditionally (mirrors every
- * other `canX`); agent principals are NOT governance actors and always
- * fail — governance is a human-only surface in v1.
- */
-const ROLE_RANK: Record<WorkspaceRole, number> = {
-  member: 0,
-  admin: 1,
-  owner: 2,
-};
 
 /**
  * The governance role of a principal in a workspace, or `null` when the
@@ -167,7 +140,7 @@ export function workspaceRole(
 ): WorkspaceRole | null {
   if (!workspaceExists(ctx, workspaceId)) return null;
   if (principal.kind !== 'user') return null;
-  return workspaceRepo(ctx).getUserRole(workspaceId, principal.userId);
+  return ctx.authorizationReads.workspaceUserRole(workspaceId, principal.userId);
 }
 
 /**
@@ -190,21 +163,7 @@ export function userWorkspaceRole(
   userId: string,
 ): WorkspaceRole | null {
   if (!workspaceExists(ctx, workspaceId)) return null;
-  return workspaceRepo(ctx).getUserRole(workspaceId, userId);
-}
-
-/** Rank comparison on the human role axis (`owner` ⊇ `admin` ⊇ `member`), for
- *  the actor↔target questions the `minRole` floors cannot express. A missing
- *  role ranks below every real one. */
-export function workspaceRoleOutranks(
-  higher: WorkspaceRole | null,
-  lower: WorkspaceRole | null,
-): boolean {
-  return roleRankOrNegative(higher) > roleRankOrNegative(lower);
-}
-
-function roleRankOrNegative(role: WorkspaceRole | null): number {
-  return role === null ? -1 : ROLE_RANK[role];
+  return ctx.authorizationReads.workspaceUserRole(workspaceId, userId);
 }
 
 /**
@@ -215,6 +174,11 @@ function roleRankOrNegative(role: WorkspaceRole | null): number {
  * for existential / human role/removal ops (archive, delete, human-member
  * role changes/removal), `'admin'` for day-to-day governance (channel
  * create/delete, human-member add, settings incl. rename).
+ *
+ * System principals pass unconditionally (mirrors every other `canX`); agent
+ * principals are NOT governance actors and always fail — governance is a
+ * human-only surface in v1. The rank itself is the pure rule in
+ * `auth/workspace-role.ts`, shared with the in-lock re-derivations.
  *
  * On a COMPOSITE route this is the FLOOR, not the whole gate: the agent-roster
  * routes pass `'member'` and then AND in `canEnrollAgent`, graded by VERB
@@ -237,7 +201,7 @@ export function canGovernWorkspace(
   if (principal.kind === 'agent') return false;
   const role = workspaceRole(ctx, principal, workspaceId);
   if (role === null) return false;
-  return ROLE_RANK[role] >= ROLE_RANK[minRole];
+  return workspaceRoleMeetsFloor(role, minRole);
 }
 
 /**
@@ -282,7 +246,8 @@ export function canAgentUseCapability(
 ): boolean {
   if (principal.kind === 'system') return true;
   if (principal.kind !== 'agent') return false;
-  const workspace = workspaceRepo(ctx).get(scope.workspaceId);
+  const reads = ctx.authorizationReads;
+  const workspace = reads.workspace(scope.workspaceId);
   if (!workspace) return false;
   if (
     workspace.workspace_kind === 'agent_home' &&
@@ -290,11 +255,7 @@ export function canAgentUseCapability(
   ) {
     return true;
   }
-  return new AgentCapabilityRepo(ctx.db).has(
-    scope.workspaceId,
-    principal.agentId,
-    capability,
-  );
+  return reads.hasCapability(scope.workspaceId, principal.agentId, capability);
 }
 
 export function canViewConversation(
@@ -302,7 +263,8 @@ export function canViewConversation(
   principal: Principal,
   conversationId: string,
 ): boolean {
-  const conversation = conversationRepo(ctx).get(conversationId);
+  const reads = ctx.authorizationReads;
+  const conversation = reads.conversation(conversationId);
   if (!conversation) return false;
   if (!canViewWorkspace(ctx, principal, conversation.workspace_id)) return false;
   if (principal.kind === 'system') return true;
@@ -314,11 +276,10 @@ export function canViewConversation(
     // `workspace_users` at creation; threads inherit from the parent
     // conversation. v25 migration backfilled both for already-
     // registered DBs.
-    return conversationRepo(ctx).getUser(conversation.id, principal.userId)
-      !== null;
+    return reads.isConversationUser(conversation.id, principal.userId);
   }
   if (principal.conversationId !== conversation.id) return false;
-  return conversationRepo(ctx).getAgent(conversation.id, principal.agentId) !== null;
+  return reads.isConversationAgent(conversation.id, principal.agentId);
 }
 
 /**
@@ -361,7 +322,7 @@ export function canReadConversation(
   conversationId: string,
 ): boolean {
   if (canViewConversation(ctx, principal, conversationId)) return true;
-  const conversation = conversationRepo(ctx).get(conversationId);
+  const conversation = ctx.authorizationReads.conversation(conversationId);
   if (!conversation) return false;
   return isPublicChannelBranch(ctx, principal, conversation);
 }
@@ -378,7 +339,7 @@ export function canReadConversation(
 function isPublicChannelBranch(
   ctx: BackendContext,
   principal: Principal,
-  conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+  conversation: AuthorizationConversationFacts,
 ): boolean {
   if (principal.kind !== 'user') return false;
   if (conversation.kind !== 'channel') return false;
@@ -402,7 +363,7 @@ export function canJoinPublicChannel(
   principal: Principal,
   conversationId: string,
 ): boolean {
-  const conversation = conversationRepo(ctx).get(conversationId);
+  const conversation = ctx.authorizationReads.conversation(conversationId);
   if (!conversation) return false;
   return isPublicChannelBranch(ctx, principal, conversation);
 }
@@ -455,8 +416,7 @@ export function canEditAgent(
   agentId: string,
 ): boolean {
   if (principal.kind === 'system') return true;
-  const repo = new AgentRepo(ctx.db);
-  const agent = repo.get(agentId);
+  const agent = ctx.authorizationReads.agent(agentId);
   if (!agent) return false;
   if (principal.kind === 'user') {
     return agent.created_by_user_id === principal.userId;
@@ -540,7 +500,7 @@ export function canEnrollAgent(
 ): boolean {
   if (principal.kind === 'system') return true;
   if (principal.kind === 'agent') return false;
-  const agent = new AgentRepo(ctx.db).get(agentId);
+  const agent = ctx.authorizationReads.agent(agentId);
   if (!agent) return false;
   return agent.created_by_user_id === principal.userId;
 }
@@ -662,8 +622,8 @@ export function canViewAgent(
   // `canEditAgent` — system principals come from internal hosts
   // and migration jobs, not public surfaces.
   if (principal.kind === 'system') return true;
-  const repo = new AgentRepo(ctx.db);
-  const agent = repo.get(agentId);
+  const reads = ctx.authorizationReads;
+  const agent = reads.agent(agentId);
   if (!agent) return false;
 
   // ── ACL-first (Cindy `f0JxEM9nMhsVfLIo` refinement) ─────────────
@@ -680,9 +640,9 @@ export function canViewAgent(
   } else if (agent.created_by_user_id === principal.userId) {
     aclPass = true;
   } else {
-    aclPass = workspaceRepo(ctx)
-      .listForAgent(agentId)
-      .some(workspace => canViewWorkspace(ctx, principal, workspace.id));
+    aclPass = reads
+      .agentWorkspaceIds(agentId)
+      .some(workspaceId => canViewWorkspace(ctx, principal, workspaceId));
   }
   if (!aclPass) return false;
 
@@ -721,7 +681,7 @@ export function canViewAttachment(
   // (`GET /api/channels/:id/attachments`, a member tool) stays
   // `canViewConversation` separately in the route.
   if (!canReadConversation(ctx, principal, attachment.channel_id)) return false;
-  return attachmentRepo(ctx).isReferencedByChannelMessage(
+  return ctx.authorizationReads.isAttachmentReferencedByChannelMessage(
     attachment.id,
     attachment.channel_id,
   );

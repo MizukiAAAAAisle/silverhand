@@ -2,7 +2,6 @@ import { promises as fs } from 'node:fs';
 import type {
   AgentFilesPurgeErrorCode,
   AgentFilesPurgeParams,
-  AgentFilesPurgeResult,
 } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
 import { resolveAgentDir } from '../agent-materialize/handler.js';
@@ -55,10 +54,16 @@ export interface PurgeAgentFilesDeps {
   agentHomeRootDir: string;
 }
 
+/** Filesystem-layer result only; quiescence is composed by dispatcher. */
+export interface PurgeAgentFilesResult {
+  ok: true;
+  purged_count: number;
+}
+
 export async function purgeAgentFiles(
   params: AgentFilesPurgeParams,
   deps: PurgeAgentFilesDeps,
-): Promise<AgentFilesPurgeResult> {
+): Promise<PurgeAgentFilesResult> {
   // The agent's TERMINAL MANAGED footprint is a single tree: the agent home
   // holds L1 AND every per-workspace L2 bundle, nested at
   // `<home>/workspaces/<workspace_id>` (relocation-v1 §3.2). Removing the home

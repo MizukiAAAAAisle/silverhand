@@ -5,10 +5,9 @@ import {
   probePaths,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
-import type { BackendContext } from '../context.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
-import { UserRepo } from '../repos/user-repo.js';
+import type { UserRepo } from '../repos/user-repo.js';
 
 /**
  * Public user principal resolved from the request itself. Public API
@@ -111,7 +110,10 @@ export function installPublicPrincipalMiddleware(app: Hono<AppEnv>): void {
  */
 export function installRequireRegisteredViewerMiddleware(
   app: Hono<AppEnv>,
-  ctx: BackendContext,
+  // #task:1983 W3 — the gate asks ONE question ("does the viewer's row still
+  // exist"), so it takes the user repository the composition already built
+  // instead of a context it would construct one from.
+  users: UserRepo,
   options: { whitelistPaths: ReadonlyArray<string> },
 ): void {
   // Method+path tuples that bypass the gate. We narrow each whitelist
@@ -130,8 +132,6 @@ export function installRequireRegisteredViewerMiddleware(
       );
     }
   }
-
-  const users = new UserRepo(ctx.db);
 
   app.use('*', async (c, next) => {
     if (c.req.path.startsWith('/internal/')) {

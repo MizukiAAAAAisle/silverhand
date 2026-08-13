@@ -20,7 +20,9 @@ const MIGRATED_OWNER_FILES = [
   '../../src/repos/host-repo.ts',
   '../../src/repos/message-repo.ts',
   '../../src/repos/conversation-read-repo.ts',
-  '../../src/services/task/store.ts',
+  '../../src/repos/task-repo.ts',
+  '../../src/repos/task-board-read-model.ts',
+  '../../src/repos/task-persistence.ts',
   '../../src/repos/notification-repo.ts',
   '../../src/read-model/activity.ts',
 ] as const;
@@ -51,7 +53,7 @@ describe('prepareObserved coverage', () => {
     expect(sourceOf('../../src/repos/conversation-read-repo.ts')).toContain(
       "'reads.unread_counts_by_workspace'",
     );
-    expect(sourceOf('../../src/services/task/store.ts')).toContain(
+    expect(sourceOf('../../src/repos/task-repo.ts')).toContain(
       "'tasks.list_filtered'",
     );
     expect(sourceOf('../../src/repos/notification-repo.ts')).toContain(

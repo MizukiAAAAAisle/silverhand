@@ -5,26 +5,28 @@
 // and agent-start-failure notifications. All best-effort — a failure here never
 // unwinds the committed message. The facade constructs one of these and hands
 // off to it after commit.
-import type { Database as Db } from 'better-sqlite3';
+//
+// Persistence discipline (#task:1981): no raw DB and no concrete repo. This
+// coordinator runs entirely outside the send transaction, so it takes the
+// callback-free read / write ports plus the two named effect ports
+// (`MentionCcPort`, `ConversationUnreadPublishPort`) — neither of which is
+// reachable from `MessageTxScope`, which is what makes "a transaction callback
+// structurally cannot publish" true.
 import { extractMentions } from '@silverhand/shared';
-import type { MessageDto } from '@silverhand/shared';
+import type {
+  ConversationAgentDto,
+  ConversationDto,
+  MessageDto,
+} from '@silverhand/shared';
 import type { BackendLogger } from '../../context.js';
 import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
-import { ccMentionsFromUserMessage } from '../../mention-cc.js';
-import type { AgentRepo } from '../../repos/agent-repo.js';
-import type { ConversationRepo } from '../../repos/conversation-repo.js';
-import { ConversationReadRepo } from '../../repos/conversation-read-repo.js';
-import { AttentionBadgeRepo } from '../../repos/attention-badge-repo.js';
-import type { ConversationInboxRepo } from '../../repos/conversation-inbox-repo.js';
-import type { MessageRepo } from '../../repos/message-repo.js';
-import type { NotificationRepo } from '../../repos/notification-repo.js';
-import type { UserRepo } from '../../repos/user-repo.js';
-import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
 import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
-import {
-  conversationViewerUserIds,
-  publishUnreadUpdatedToConversationViewers,
-} from '../../viewer-scope.js';
+import type { ConversationUnreadPublishPort } from '../conversation/unread-publish-port.js';
+import type {
+  DeliveryReadPort,
+  DeliveryWritePort,
+  MentionCcPort,
+} from './ports.js';
 import {
   excerpt,
   nonEmptyName,
@@ -33,85 +35,57 @@ import {
 } from './contracts.js';
 
 export interface MessageDeliveryCoordinatorDeps {
-  db: Db;
-  conversations: ConversationRepo;
-  conversationInboxes: ConversationInboxRepo;
-  messages: MessageRepo;
-  agents: AgentRepo;
-  users: UserRepo;
-  notifications: NotificationRepo;
-  workspaces: WorkspaceRepo;
+  read: DeliveryReadPort;
+  write: DeliveryWritePort;
+  mentionCc: MentionCcPort;
+  unreadPublish: ConversationUnreadPublishPort;
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
 }
 
 export class MessageDeliveryCoordinator {
-  private readonly db: Db;
-  private readonly conversations: ConversationRepo;
-  private readonly conversationReads: ConversationReadRepo;
-  private readonly attentionBadges: AttentionBadgeRepo;
-  private readonly conversationInboxes: ConversationInboxRepo;
-  private readonly messages: MessageRepo;
-  private readonly agents: AgentRepo;
-  private readonly users: UserRepo;
-  private readonly notifications: NotificationRepo;
-  private readonly workspaces: WorkspaceRepo;
+  private readonly read: DeliveryReadPort;
+  private readonly write: DeliveryWritePort;
+  private readonly mentionCc: MentionCcPort;
+  private readonly unreadPublish: ConversationUnreadPublishPort;
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
 
   constructor(deps: MessageDeliveryCoordinatorDeps) {
-    this.db = deps.db;
-    this.conversations = deps.conversations;
-    // Stateless read-model wrapper over the same db (favorites read-model uses
-    // the same ad-hoc construction) — powers the authoritative unread counts on
-    // the `unread_updated` frame (#task:1283).
-    this.conversationReads = new ConversationReadRepo(deps.db);
-    // Same stateless-wrapper pattern: the tiered badge (#task:1870) is emitted
-    // alongside every `unread_updated`, so it is built from the same db handle.
-    this.attentionBadges = new AttentionBadgeRepo(deps.db);
-    this.conversationInboxes = deps.conversationInboxes;
-    this.messages = deps.messages;
-    this.agents = deps.agents;
-    this.users = deps.users;
-    this.notifications = deps.notifications;
-    this.workspaces = deps.workspaces;
+    this.read = deps.read;
+    this.write = deps.write;
+    this.mentionCc = deps.mentionCc;
+    this.unreadPublish = deps.unreadPublish;
     this.runtimeHost = deps.runtimeHost;
     this.events = deps.events;
     this.logger = deps.logger;
   }
 
-  /** Publish `unread_updated` to every human member of this conversation. */
+  /** Publish `unread_updated` to every human member of this conversation.
+   *  The adapter behind this port co-emits the tiered attention badge
+   *  (#task:1870) — that pairing stays enforced inside `viewer-scope.ts`. */
   publishUnreadUpdated(conversationId: string): void {
-    publishUnreadUpdatedToConversationViewers(
-      this.events,
-      this.attentionBadges,
-      this.conversations,
-      this.conversationReads,
-      conversationId,
-    );
+    this.unreadPublish.publishUnreadUpdatedToConversationViewers(conversationId);
   }
 
   notifyViewerMentionBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    conversation: ConversationDto,
     message: MessageDto,
   ): void {
     try {
       const mentionedHandles = new Set(extractMentions(message.content));
       if (mentionedHandles.size === 0) return;
 
-      for (const viewerUserId of conversationViewerUserIds(
-        this.conversations,
-        conversation.id,
-      )) {
+      for (const viewerUserId of this.read.viewerUserIds(conversation.id)) {
         if (message.from_kind === 'user' && message.from_user_id === viewerUserId) {
           continue;
         }
-        const viewer = this.users.get(viewerUserId);
+        const viewer = this.read.getUser(viewerUserId);
         if (!viewer || !mentionedHandles.has(viewer.name)) continue;
 
-        this.notifications.insert({
+        this.write.insertNotification({
           kind: 'mention_self',
           userId: viewerUserId,
           workspaceId: conversation.workspace_id,
@@ -147,7 +121,7 @@ export class MessageDeliveryCoordinator {
 
   private resolveMessageSenderName(message: MessageDto): string | null {
     if (message.from_kind === 'agent' && message.from_agent_id) {
-      const agent = this.agents.get(message.from_agent_id);
+      const agent = this.read.getAgent(message.from_agent_id);
       return (
         nonEmptyName(agent?.display_name)
         ?? nonEmptyName(agent?.name)
@@ -155,7 +129,7 @@ export class MessageDeliveryCoordinator {
       );
     }
     if (message.from_kind === 'user' && message.from_user_id) {
-      const user = this.users.get(message.from_user_id);
+      const user = this.read.getUser(message.from_user_id);
       return (
         nonEmptyName(user?.display_name)
         ?? nonEmptyName(user?.name)
@@ -168,7 +142,7 @@ export class MessageDeliveryCoordinator {
   async deliverBestEffort(
     conversationId: string,
     messageId: string,
-    recipients: ReturnType<ConversationRepo['listAgents']>,
+    recipients: readonly ConversationAgentDto[],
     excludeAgentId: string | null,
   ): Promise<void> {
     const selected = recipients.filter(ca => ca.agent_id !== excludeAgentId);
@@ -188,8 +162,8 @@ export class MessageDeliveryCoordinator {
     );
     if (failures.length === 0) return;
     // Only touch the DB on the failure path — the success path stays read-free.
-    const conversation = this.conversations.get(conversationId);
-    const message = this.messages.getById(messageId);
+    const conversation = this.read.getConversation(conversationId);
+    const message = this.read.getMessageById(messageId);
     if (conversation && message) {
       for (const { agentId, err } of failures) {
         this.notifyAgentStartFailureBestEffort(conversation, message, agentId, err);
@@ -202,16 +176,16 @@ export class MessageDeliveryCoordinator {
   }
 
   notifyAgentStartFailureBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    conversation: ConversationDto,
     message: MessageDto,
     agentId: string,
     err: unknown,
   ): void {
     if (message.from_kind !== 'user' || !message.from_user_id) return;
-    const agent = this.agents.get(agentId);
+    const agent = this.read.getAgent(agentId);
     const error = describeStartFailure(err);
     try {
-      const notification = this.notifications.insert({
+      const notification = this.write.insertNotification({
         kind: 'agent_start_failed',
         userId: message.from_user_id,
         agentId,
@@ -259,7 +233,7 @@ export class MessageDeliveryCoordinator {
    *  already-ready runtime's context without a turn needs the `delivery_kind`
    *  envelope and is 段2. */
   async deliverThreadReplyBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    conversation: ConversationDto,
     message: MessageDto,
     plan: ThreadDeliveryPlan,
   ): Promise<void> {
@@ -274,7 +248,7 @@ export class MessageDeliveryCoordinator {
               message.id,
             );
           } else {
-            this.conversationInboxes.ensureDelivery(
+            this.write.ensureDelivery(
               conversation.id,
               r.agentId,
               message.id,
@@ -297,24 +271,16 @@ export class MessageDeliveryCoordinator {
   }
 
   async ccMentionsBestEffort(
-    sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    sourceConversation: ConversationDto,
     message: MessageDto,
   ): Promise<void> {
-    const sourceWorkspace = this.workspaces.get(sourceConversation.workspace_id);
+    const sourceWorkspace = this.read.getWorkspace(sourceConversation.workspace_id);
     if (!sourceWorkspace) return;
     try {
-      await ccMentionsFromUserMessage({
+      await this.mentionCc.ccMentionsFromUserMessage({
         message,
         sourceConversation,
         sourceWorkspace,
-        db: this.db,
-        agents: this.agents,
-        conversations: this.conversations,
-        messages: this.messages,
-        notifications: this.notifications,
-        runtimeHost: this.runtimeHost,
-        logger: this.logger,
-        events: this.events,
       });
     } catch (err) {
       this.logger.warn(
@@ -325,9 +291,9 @@ export class MessageDeliveryCoordinator {
   }
 
   async startIdleRecipientsBestEffort(
-    conversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    conversation: ConversationDto,
     message: MessageDto,
-    recipients: ReturnType<ConversationRepo['listAgents']>,
+    recipients: readonly ConversationAgentDto[],
   ): Promise<void> {
     await Promise.all(
       recipients

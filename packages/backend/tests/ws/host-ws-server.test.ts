@@ -1,3 +1,4 @@
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -65,7 +66,7 @@ describe('host outbound WebSocket server', () => {
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local');
     expect(host).not.toBeNull();
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host!.id,
     });
 
@@ -93,7 +94,7 @@ describe('host outbound WebSocket server', () => {
     t.ctx.metrics = metrics;
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -126,7 +127,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -166,7 +167,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
 
@@ -198,7 +199,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -230,7 +231,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -277,7 +278,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -312,7 +313,7 @@ describe('host outbound WebSocket server', () => {
     server = await openServer(t);
     const hosts = new HostRepo(t.ctx.db);
     const remote = hosts.createUserInvite({ userId: t.viewerUserId });
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: remote.id,
     });
     const ownerEvents: Array<{ kind: string; payload: unknown }> = [];
@@ -365,7 +366,7 @@ describe('host outbound WebSocket server', () => {
     server = await openServer(t);
     const hosts = new HostRepo(t.ctx.db);
     const remote = hosts.createUserInvite({ userId: t.viewerUserId });
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: remote.id,
     });
     const ownerEvents: Array<{ kind: string; payload: unknown }> = [];
@@ -424,7 +425,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
 
@@ -475,7 +476,7 @@ describe('host outbound WebSocket server', () => {
       },
     });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -524,10 +525,10 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
-    new HostTokenService(t.ctx.db).revokeCredential(issued.credential.id);
+    new HostTokenService(createSqliteHostPersistence(t.ctx.db)).revokeCredential(issued.credential.id);
 
     await expect(connectHost(server.url, null)).rejects.toThrow(
       /unexpected response 401/,
@@ -559,7 +560,7 @@ describe('host outbound WebSocket server', () => {
       userId: 'local',
       installationId: 'remote-install',
     });
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: remote.id,
     });
 
@@ -587,7 +588,7 @@ describe('host outbound WebSocket server', () => {
       activated_at: null,
       finalized_at: null,
     });
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: remote.id,
     });
 
@@ -651,7 +652,7 @@ describe('host outbound WebSocket server', () => {
     server = await openServer(t);
     const hosts = new HostRepo(t.ctx.db);
     const remote = hosts.createUserInvite({ userId: t.viewerUserId });
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: remote.id,
     });
     const ownerEvents: Array<{ kind: string; payload: unknown }> = [];
@@ -702,7 +703,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -744,7 +745,7 @@ describe('host outbound WebSocket server', () => {
       },
     });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -799,7 +800,7 @@ describe('host outbound WebSocket server', () => {
     });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
     expect(t.ctx.coLocatedHostId).toBe(host.id);
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -860,7 +861,7 @@ describe('host outbound WebSocket server', () => {
     const hosts = new HostRepo(t.ctx.db);
     const remote = hosts.createUserInvite({ userId: 'local' });
     expect(remote.id).not.toBe(t.ctx.coLocatedHostId);
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: remote.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -909,7 +910,7 @@ describe('host outbound WebSocket server', () => {
     };
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -971,7 +972,7 @@ describe('host outbound WebSocket server', () => {
     };
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -1021,7 +1022,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
 
@@ -1044,7 +1045,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1061,7 +1062,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
 
@@ -1107,7 +1108,7 @@ describe('host outbound WebSocket server', () => {
       },
     });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const first = await connectHost(server.url, issued.hostToken);
@@ -1144,7 +1145,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
 
@@ -1192,7 +1193,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1224,7 +1225,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t);
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -1250,7 +1251,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -1275,7 +1276,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 10, pongTimeoutMs: 10 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await connectHost(server.url, issued.hostToken);
@@ -1298,7 +1299,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1333,7 +1334,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1366,7 +1367,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1388,7 +1389,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1410,7 +1411,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const first = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1449,7 +1450,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1474,7 +1475,7 @@ describe('host outbound WebSocket server', () => {
     t = buildTestApp();
     server = await openServer(t, { pingIntervalMs: 0 });
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local')!;
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const ws = await attachHost(server, sockets, issued.hostToken, host.id);
@@ -1506,13 +1507,17 @@ describe('host outbound WebSocket server', () => {
 
 async function openServer(
   t: TestApp,
-  opts: HostWsServerOptions = {},
+  opts: Partial<HostWsServerOptions> = {},
 ): Promise<TestHostWsServer> {
   const httpServer = createServer((_req, res) => {
     res.statusCode = 404;
     res.end();
   });
-  const controller = installHostWebSocketServer(httpServer, t.ctx, opts);
+  const controller = installHostWebSocketServer(httpServer, t.ctx, {
+    hostTokenVerifier: new HostTokenService(createSqliteHostPersistence(t.ctx.db)),
+    hosts: new HostRepo(t.ctx.db),
+    ...opts,
+  });
   await new Promise<void>(resolve => httpServer.listen(0, '127.0.0.1', resolve));
   const port = (httpServer.address() as AddressInfo).port;
   t.ctx.serverConfig = { ...t.ctx.serverConfig, url: `http://127.0.0.1:${port}` };

@@ -4,21 +4,22 @@ import type {
   AttachmentLocateDto,
   AttachmentRefInput,
   AttachmentRow,
-  AttachmentSnapshot,
   ConversationKind,
 } from '@silverhand/shared';
 import {
-  attachmentLabelKind,
   isGenericMimeHint,
   mimeFromFilename,
-  parseAttachmentLabel,
 } from '@silverhand/shared';
 import {
   AttachmentRepo,
   rowToDto,
-  rowToSnapshot,
+  rowToStoredRef,
 } from '../repos/attachment-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
+import {
+  resolveSnapshotsFromSources,
+  type SnapshotResolution,
+} from './attachment/snapshot-resolution.js';
 import type {
   BlobFileServeHeaders,
   BlobFileStorage,
@@ -247,7 +248,7 @@ export class AttachmentService {
     assertPayloadMatchesLockedType(buffer, row.content_type);
 
     // 1) New bytes at a fresh key — unreferenced, invisible until the commit.
-    const oldRef = refOf(row);
+    const oldRef = rowToStoredRef(row);
     const newRef = await this.storage.put({
       namespace: `attachments/${row.channel_id}`,
       id: randomBlobId(),
@@ -328,14 +329,14 @@ export class AttachmentService {
     const row = this.attachments.getById(id);
     if (!row) return null;
     if (!canView(row)) return null;
-    return this.storage.serve(refOf(row), serveHeadersOf(row));
+    return this.storage.serve(rowToStoredRef(row), serveHeadersOf(row));
   }
 
   /** Internal download after the caller has already resolved/authorized
    *  the row through `locateForAgent`. This keeps agent file-view fallback
    *  on the internal token surface instead of borrowing public user routes. */
   async serveForAgentLocated(row: AttachmentRow): Promise<Response | null> {
-    return this.storage.serve(refOf(row), serveHeadersOf(row));
+    return this.storage.serve(rowToStoredRef(row), serveHeadersOf(row));
   }
 
   /** Internal locate — agent asks "where can I read this attachment?".
@@ -358,7 +359,7 @@ export class AttachmentService {
       // handed this path to a viewer that expects it fixed — the alias keeps it
       // so the reviewer's local address survives every mockup iteration. Lazy +
       // self-healing: created on first locate, repointed on update.
-      const located = await this.storage.materializeAlias(refOf(row), row.id);
+      const located = await this.storage.materializeAlias(rowToStoredRef(row), row.id);
       if (!located) return null;
       return {
         row,
@@ -391,36 +392,23 @@ export class AttachmentService {
    *  lie, not a renderer concern. The sender's label is stamped onto the
    *  snapshot (a per-message-reference identity, not a property of the stored
    *  row). Returns the snapshots, or the first id that violated a rule with a
-   *  discriminated reason. */
+   *  discriminated reason.
+   *
+   *  The rules themselves live in the driver-free
+   *  `attachment/snapshot-resolution.ts` leaf, shared verbatim with the send
+   *  path — which resolves the same refs INSIDE its transaction (#task:1981).
+   *  This method is the outside-transaction face: fetch the rows, apply the
+   *  one rule set. */
   resolveSnapshotsForChannel(
     refs: AttachmentRefInput[],
     channelId: string,
-  ):
-    | { ok: true; snapshots: AttachmentSnapshot[] }
-    | { ok: false; offendingId: string; reason: 'outside_channel' | 'label_kind_mismatch' } {
+  ): SnapshotResolution {
     if (refs.length === 0) return { ok: true, snapshots: [] };
-    const rows = this.attachments.listByIds(refs.map(r => r.id));
-    const found = new Map(rows.map(r => [r.id, r] as const));
-    const snapshots: AttachmentSnapshot[] = [];
-    for (const ref of refs) {
-      const row = found.get(ref.id);
-      if (!row || row.channel_id !== channelId) {
-        return { ok: false, offendingId: ref.id, reason: 'outside_channel' };
-      }
-      if (ref.label !== undefined) {
-        // ref.label is wire-validated to the canonical form, so parse is
-        // non-null; reject when the declared kind contradicts the real type.
-        const parsed = parseAttachmentLabel(ref.label);
-        if (!parsed || parsed.kind !== attachmentLabelKind(row.content_type)) {
-          return { ok: false, offendingId: ref.id, reason: 'label_kind_mismatch' };
-        }
-      }
-      const snapshot = rowToSnapshot(row);
-      snapshots.push(
-        ref.label !== undefined ? { ...snapshot, label: ref.label } : snapshot,
-      );
-    }
-    return { ok: true, snapshots };
+    return resolveSnapshotsFromSources(
+      refs,
+      channelId,
+      this.attachments.listByIds(refs.map(r => r.id)),
+    );
   }
 
   /**
@@ -437,7 +425,7 @@ export class AttachmentService {
     const refs: StoredFileRef[] = [];
     for (const channelId of channelIds) {
       for (const row of this.attachments.listByChannel(channelId)) {
-        refs.push(refOf(row));
+        refs.push(rowToStoredRef(row));
       }
     }
     return refs;
@@ -504,10 +492,10 @@ export class AttachmentService {
     }
     this.attachments.deleteById(id);
     try {
-      await this.storage.delete(refOf(row));
+      await this.storage.delete(rowToStoredRef(row));
       // Drop the stable alias too so it doesn't dangle. Symlink-only, so this
       // never affected the physical blob's lifecycle — purely tidy-up.
-      await this.storage.deleteAlias(refOf(row), row.id);
+      await this.storage.deleteAlias(rowToStoredRef(row), row.id);
     } catch {
       // Best-effort: the row is already gone. A leaked blob will be
       // swept the next time the channel/workspace is deleted.
@@ -524,10 +512,6 @@ export class AttachmentService {
 
 function isChannelLikeKind(kind: ConversationKind): boolean {
   return kind === 'channel' || kind === 'dm_channel';
-}
-
-function refOf(row: AttachmentRow): StoredFileRef {
-  return { storage: row.storage, storageKey: row.storage_key };
 }
 
 function serveHeadersOf(row: AttachmentRow): BlobFileServeHeaders {

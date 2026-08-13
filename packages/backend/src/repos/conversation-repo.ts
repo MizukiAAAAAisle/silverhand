@@ -19,6 +19,54 @@ function newId(): string {
   return randomBytes(12).toString('base64url');
 }
 
+/**
+ * The MINIMAL conversation projection: the id that names a conversation and the
+ * workspace it belongs to, and nothing else (#task:1987).
+ *
+ * Deliberately not a `ConversationDto`. A caller that must not branch on titles,
+ * visibility or archive state should not be handed them — and a caller that only
+ * needs identity should not pay for the full UI read model either.
+ */
+export interface ConversationRef {
+  id: string;
+  workspace_id: string;
+}
+
+/**
+ * The member-keyed conversation-ref query, one per membership table — spelled out
+ * twice, in full, and NOT generated from a shared template. The two arms differ
+ * only in which table names the member, so a template would save these few lines;
+ * it would also make the `prepare` argument statically unresolvable, and dynamic
+ * SQL is debt this codebase is deliberately paying down ahead of the Postgres
+ * work. Drift between the arms is held by tests rather than by string reuse:
+ * `tests/repos/conversation-member-refs.test.ts` runs BOTH constants through the
+ * same differential oracle, the same projection assertion and the same plan
+ * contract, over the exported text below.
+ *
+ * Both terms must be reachable as index seeks — one member's edges on one side,
+ * one workspace's conversations on the other — so the join is bounded by a
+ * handful of rows either way. Which side the planner drives from is deliberately
+ * left to it: the two arms' selectivity is opposite (in v1 a human is a member of
+ * nearly every conversation, an agent of a few), so pinning one direction would
+ * pessimize the other arm.
+ *
+ * `ORDER BY c.updated_at DESC` is the pre-existing contract, unchanged. Ties stay
+ * undefined on purpose: `id` is a random identifier, and turning it into a
+ * tiebreaker would promote an accident to an externally observable ordering
+ * contract inside a change whose whole point is to replace a read shape.
+ */
+export const WORKSPACE_CONVERSATION_REFS_FOR_AGENT_SQL = `SELECT c.id AS id, c.workspace_id AS workspace_id
+     FROM conversation_agents m
+     JOIN conversations c ON c.id = m.conversation_id
+    WHERE m.agent_id = ? AND c.workspace_id = ?
+    ORDER BY c.updated_at DESC`;
+
+export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.workspace_id AS workspace_id
+     FROM conversation_users m
+     JOIN conversations c ON c.id = m.conversation_id
+    WHERE m.user_id = ? AND c.workspace_id = ?
+    ORDER BY c.updated_at DESC`;
+
 // `pinned_at` is a vestigial column (#task:1209): pin/star became per-viewer
 // state in `user_sort_entry`, so the shared column is no longer read or written
 // and must never reach the wire. These mappers strip it from the row before it
@@ -447,6 +495,24 @@ export class ConversationRepo {
     return rows.map(rowToDmChannel);
   }
 
+  /** Conversation refs for every conversation of ONE workspace that this AGENT is
+   *  a member of, newest-updated first (see
+   *  {@link WORKSPACE_CONVERSATION_REFS_FOR_AGENT_SQL}). One query: the caller
+   *  neither lists the table nor probes membership per row. */
+  listMemberConversationRefsForAgent(workspaceId: string, agentId: string): ConversationRef[] {
+    return this.db
+      .prepare<[string, string], ConversationRef>(WORKSPACE_CONVERSATION_REFS_FOR_AGENT_SQL)
+      .all(agentId, workspaceId);
+  }
+
+  /** The human arm of {@link listMemberConversationRefsForAgent} — same shape,
+   *  same order, `conversation_users` instead of `conversation_agents`. */
+  listMemberConversationRefsForUser(workspaceId: string, userId: string): ConversationRef[] {
+    return this.db
+      .prepare<[string, string], ConversationRef>(WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL)
+      .all(userId, workspaceId);
+  }
+
   insertChannel(params: {
     workspaceId: string;
     title: string;
@@ -581,6 +647,38 @@ export class ConversationRepo {
       )
       .all(conversationId)
       .map(r => ({ ...r }));
+  }
+
+  /**
+   * Every (conversation, agent) pair the DB still claims is RUNNING on the
+   * given computer. The host is not on `conversation_agents`, so the agent
+   * aggregate carries it — hence the join. Used by the post-hydrate reconcile
+   * pass, which compares this against the daemon's authoritative snapshot and
+   * projects a terminal state for whatever the snapshot omitted.
+   */
+  listLiveRuntimesForHost(hostId: string): Array<{
+    conversation_id: string;
+    agent_id: string;
+    status: 'active' | 'starting';
+    pid: number | null;
+  }> {
+    return this.db
+      .prepare<
+        [string],
+        {
+          conversation_id: string;
+          agent_id: string;
+          status: 'active' | 'starting';
+          pid: number | null;
+        }
+      >(
+        `SELECT ca.conversation_id, ca.agent_id, ca.status, ca.pid
+           FROM conversation_agents ca
+           JOIN agents a ON a.id = ca.agent_id
+          WHERE a.host_id = ?
+            AND ca.status IN ('active', 'starting')`,
+      )
+      .all(hostId);
   }
 
   removeAgent(conversationId: string, agentId: string): void {

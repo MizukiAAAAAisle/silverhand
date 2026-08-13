@@ -13,10 +13,14 @@ import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { SortRepo } from '../repos/sort-repo.js';
 import { type AppContext, getUserPrincipal } from '../auth/principal.js';
 import { canViewWorkspace } from '../permissions.js';
-import { favoriteKey, listFavorites } from '../read-model/favorites.js';
+import { favoriteKey } from '../read-model/favorites.js';
+import type { FavoritesReadModel } from '../read-model/favorites.js';
 
 export interface SortRouteDeps {
   ctx: BackendContext;
+  /** The Favorites projection, handle bound at composition time (#task:1983
+   *  W2). Reorder validation reads exactly the set the GET returns. */
+  favorites: FavoritesReadModel;
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   sort: SortRepo;
@@ -37,7 +41,7 @@ export interface SortRouteDeps {
  */
 export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, workspaces, conversations, sort } = deps;
+  const { ctx, favorites, workspaces, conversations, sort } = deps;
 
   /** The legal hard groups for a list kind.
    *  - workspace rail: partitions by KIND only (`dm` / `regular`). There is no
@@ -82,7 +86,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
   ) {
     const principal = getUserPrincipal(c);
     if (listKey === 'favorites') {
-      return listFavorites(ctx, { viewerUserId: principal.userId }).viewer_sort;
+      return favorites.list({ viewerUserId: principal.userId }).viewer_sort;
     }
     return sort.getState(principal.userId, listKey, visibleEntityIds);
   }
@@ -133,7 +137,7 @@ export function createSortApp(deps: SortRouteDeps): Hono<AppEnv> {
       // the GET response can never diverge. Always the viewer's own state — no
       // 404/403 (the route gate is canViewOwnedState). This list IS the starred
       // set, so there is no star sub-exclusion: `starred` is empty.
-      for (const item of listFavorites(ctx, { viewerUserId: principal.userId })
+      for (const item of favorites.list({ viewerUserId: principal.userId })
         .items) {
         groups.set(item.favorite_key, 'favorites');
       }

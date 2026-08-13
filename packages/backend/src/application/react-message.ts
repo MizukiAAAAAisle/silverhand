@@ -191,9 +191,20 @@ export async function addReaction(
   const { emoji, reactor, conversationId, threadRootId } = resolved;
 
   const now = Date.now();
-  const { created } = deps.ctx.db.transaction(() =>
-    deps.reactions.add(input.messageId, reactor.kind, reactor.id, emoji, now),
-  )();
+  // No transaction, and no UnitOfWork either (#task:1987 F): the whole write is
+  // ONE statement (`INSERT … ON CONFLICT DO NOTHING`), whose atomicity the engine
+  // already gives. Nothing else is written on this path — the authoritative count
+  // below is a read, and it was outside the wrapper before this too — so a scope
+  // here would have nothing to hold together. §4's CAS-exclusion invariant (a
+  // reaction never allocates a message seq or moves a stream head) is what keeps
+  // it that way; a second write appearing here is the signal to take a real scope.
+  const { created } = deps.reactions.add(
+    input.messageId,
+    reactor.kind,
+    reactor.id,
+    emoji,
+    now,
+  );
 
   // Re-adding an existing reaction is an idempotent no-op: no count change,
   // no event.
@@ -228,9 +239,13 @@ export async function removeReaction(
   if (!resolved.ok) return resolved;
   const { emoji, reactor, conversationId, threadRootId } = resolved;
 
-  const { removed } = deps.ctx.db.transaction(() =>
-    deps.reactions.remove(input.messageId, reactor.kind, reactor.id, emoji),
-  )();
+  // Single-statement DELETE — same reasoning as the add path above (#task:1987 F).
+  const { removed } = deps.reactions.remove(
+    input.messageId,
+    reactor.kind,
+    reactor.id,
+    emoji,
+  );
 
   const count = deps.reactions.countForEmoji(input.messageId, emoji);
   if (!removed) {

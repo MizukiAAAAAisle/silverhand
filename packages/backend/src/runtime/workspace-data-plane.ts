@@ -21,6 +21,7 @@ import {
   HostWsCommandTransportError,
 } from '../ws/host-ws-server.js';
 import type { OutboundFrameAdapter } from './outbound-frame-adapter.js';
+import { AgentDeletionPendingError } from './deletion-aware-outbound-frame-adapter.js';
 
 /**
  * D4.e — backend dispatch layer for the host data-plane intents
@@ -66,6 +67,8 @@ export type DataPlaneFailureCode =
   | 'unsupported_template'
   // typed wire code (agent_files_purge)
   | 'partial_purge'
+  | 'quiesce_failed'
+  | 'agent_deleting'
   // typed wire code (agent_profile_mcp_write)
   | 'invalid_config'
   // typed wire codes (agent_workspace_tree / agent_workspace_file_read)
@@ -97,7 +100,7 @@ export type DataPlaneOutcome<T> = { kind: 'ok'; result: T } | DataPlaneFailure;
 const INDEX_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 30_000;
 const SEED_TIMEOUT_MS = 30_000;
-const PURGE_TIMEOUT_MS = 30_000;
+const PURGE_TIMEOUT_MS = 60_000;
 const PROFILE_MCP_TIMEOUT_MS = 30_000;
 // #task:1137 — probe walks connect+initialize (≤10s) then optional tools/list
 // (≤10s) host-side; the data-plane wait must exceed that sum plus transport
@@ -137,6 +140,9 @@ export function resolveOutboundForHost(
  * `daemon_internal_error` (502).
  */
 export function mapDataPlaneError(err: unknown): DataPlaneFailure {
+  if (err instanceof AgentDeletionPendingError) {
+    return fail('agent_deleting', err.message, 409, false);
+  }
   if (err instanceof HostWsCommandResponseError) {
     // `err.code` is statically the narrow transport-level union, but a typed
     // per-intent wire code (e.g. `forbidden_path`) arrives here at runtime —
@@ -170,6 +176,10 @@ export function mapDataPlaneError(err: unknown): DataPlaneFailure {
         // the DB row so a later retry has its routing anchor. Retriable — the
         // operator can clear the fs condition (perm/space) and re-issue.
         return fail('partial_purge', err.message, 503, true);
+      case 'quiesce_failed':
+        return fail('quiesce_failed', err.message, 503, true);
+      case 'agent_deleting':
+        return fail('agent_deleting', err.message, 409, false);
       case 'forbidden_path':
         // #task:811 — agent_workspace_tree / agent_workspace_file_read: the
         // caller-supplied virtual path is shape-rejected (`.` / `..` /

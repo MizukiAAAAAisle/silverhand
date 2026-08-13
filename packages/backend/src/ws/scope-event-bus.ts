@@ -73,6 +73,16 @@ export interface ScopedEvent {
 
 export type ScopeHandler = (event: ScopedEvent) => void;
 
+/**
+ * Narrow publish-only face of {@link ScopeEventBus} (#task:1990). Application
+ * use cases that only announce (`agent_changed`) depend on this port, never on
+ * the bus class — so an ambient `BackendContext` (and its `db`) stays out of
+ * them. `ScopeEventBus` satisfies it structurally.
+ */
+export interface ScopeEventPublisher {
+  publishToScope(scope: string, kind: string, payload: unknown): void;
+}
+
 // ── ScopeEventBus ─────────────────────────────────────────────────────────────
 
 export class ScopeEventBus {

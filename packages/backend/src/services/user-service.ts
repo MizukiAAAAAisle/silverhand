@@ -1,9 +1,13 @@
-import type { Database as Db } from 'better-sqlite3';
-import type { UserRow } from '@silverhand/shared';
 import { apiPaths, validateAvatarFile } from '@silverhand/shared';
 import type { BlobFileStorage } from '../storage/blob-file-storage.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
-import type { UserRepo } from '../repos/user-repo.js';
+import type {
+  RegistrationUnitOfWork,
+  UserDirectWritePort,
+  UserProfileSnapshot,
+  UserReadPort,
+} from './user/ports.js';
+import { UserWriteConflictError } from './user/user-write-conflict.js';
 
 /**
  * Domain-typed errors so the route layer can map to HTTP status codes
@@ -30,8 +34,9 @@ export class UserServiceError extends Error {
 }
 
 export interface UserServiceOptions {
-  db: Db;
-  users: UserRepo;
+  users: UserReadPort;
+  profileWrites: UserDirectWritePort;
+  registration: RegistrationUnitOfWork;
   blobStorage: BlobFileStorage;
   events: ScopeEventBus;
 }
@@ -43,14 +48,16 @@ export interface UploadAvatarInput {
 }
 
 export class UserService {
-  private readonly db: Db;
-  private readonly users: UserRepo;
+  private readonly users: UserReadPort;
+  private readonly profileWrites: UserDirectWritePort;
+  private readonly registration: RegistrationUnitOfWork;
   private readonly blobStorage: BlobFileStorage;
   private readonly events: ScopeEventBus;
 
   constructor(opts: UserServiceOptions) {
-    this.db = opts.db;
     this.users = opts.users;
+    this.profileWrites = opts.profileWrites;
+    this.registration = opts.registration;
     this.blobStorage = opts.blobStorage;
     this.events = opts.events;
   }
@@ -82,11 +89,11 @@ export class UserService {
   getDto(id: string): UserDto | null {
     const row = this.users.get(id);
     if (!row) return null;
-    return rowToDto(row);
+    return snapshotToDto(row);
   }
 
   listDtos(): UserDto[] {
-    return this.users.list().map(rowToDto);
+    return this.users.list().map(snapshotToDto);
   }
 
   /**
@@ -109,8 +116,8 @@ export class UserService {
    *   2. INSERT into `users` (name, display_name).
    * Membership backfill shares the same transaction so partial states
    * (user row exists but is not a member of existing workspaces /
-   * conversations) are impossible. better-sqlite3's `db.transaction()`
-   * wraps DDL/DML and propagates exceptions to abort.
+   * conversations) are impossible. The registration UnitOfWork owns that
+   * atomicity and the isolation the single-viewer gate depends on.
    *
    * Note: the original V1 ship included a Deferred Adoption helper
    * here that imported pre-v21 staging tables into the freshly
@@ -128,78 +135,58 @@ export class UserService {
    *     `agents.name` (column UNIQUE / cross-namespace trigger).
    */
   register(input: { name: string; display_name?: string }): UserDto {
-    const tx = this.db.transaction((args: { name: string; displayName: string }) => {
-      // V1 single-user gate; multi-user invite path will replace this
-      // embedded-only profile creator in D-stage.
-      if (this.users.list().length > 0) {
-        throw new UserServiceError(
-          'already_registered',
-          'a viewer is already registered',
-        );
-      }
-      const id = randomHex(8); // 16 hex chars
-      const row = this.users.create({
-        id,
-        name: args.name,
-        displayName: args.displayName,
-      });
+    const displayName = input.display_name ?? input.name;
 
-      // v25 backfill on first embedded registration: this branch covers
-      // a DB that has workspaces/conversations but no users yet. Add
-      // membership rows now so permission gates immediately reflect the
-      // new human.
-      //
-      // v40 (graded-permissions Layer A): the first registered human is
-      // the OWNER of every pre-existing workspace — same "single local
-      // human → owner of every workspace" rule as the v40 migration
-      // backfill (which only fires when `viewer_user_id` was already set;
-      // this register path is the other entry, for a DB that has
-      // workspaces but registers its first human now). Without this the
-      // first user would be a plain `member` with `owner_user_id` NULL on
-      // pre-user workspaces — able to view/post but not govern — breaking
-      // Layer A neutrality. Membership + role + owner pointer all land in
-      // this same registration tx.
-      const now = Date.now();
-      const insertWorkspaceUser = this.db.prepare(
-        `INSERT OR IGNORE INTO workspace_users
-           (workspace_id, user_id, joined_at, role) VALUES (?, ?, ?, 'owner')`,
-      );
-      const insertConversationUser = this.db.prepare(
-        `INSERT OR IGNORE INTO conversation_users
-           (conversation_id, user_id, joined_at) VALUES (?, ?, ?)`,
-      );
-      const workspaceRows = this.db
-        .prepare<[], { id: string }>(`SELECT id FROM workspaces`)
-        .all();
-      for (const w of workspaceRows) {
-        insertWorkspaceUser.run(w.id, id, now);
-      }
-      // Stamp the denormalized owner pointer on every workspace that has
-      // no owner yet (all of them on this first-register path).
-      this.db
-        .prepare(
-          `UPDATE workspaces SET owner_user_id = ? WHERE owner_user_id IS NULL`,
-        )
-        .run(id);
-      const conversationRows = this.db
-        .prepare<[], { id: string }>(`SELECT id FROM conversations`)
-        .all();
-      for (const c of conversationRows) {
-        insertConversationUser.run(c.id, id, now);
-      }
-
-      return row;
-    });
-
-    let row: UserRow;
+    let row: UserProfileSnapshot;
     try {
-      row = tx({
-        name: input.name,
-        displayName: input.display_name ?? input.name,
+      row = this.registration.atomically(tx => {
+        // V1 single-user gate; multi-user invite path will replace this
+        // embedded-only profile creator in D-stage. The UnitOfWork holds the
+        // write lock from BEGIN, which is what makes this read-then-write gate
+        // more than a hope (see `RegistrationUnitOfWork`).
+        if (tx.users.anyExists()) {
+          throw new UserServiceError(
+            'already_registered',
+            'a viewer is already registered',
+          );
+        }
+        const id = randomHex(8); // 16 hex chars
+        const created = tx.users.create({ id, name: input.name, displayName });
+
+        // v25 backfill on first embedded registration: this branch covers
+        // a DB that has workspaces/conversations but no users yet. Add
+        // membership rows now so permission gates immediately reflect the
+        // new human.
+        //
+        // v40 (graded-permissions Layer A): the first registered human is
+        // the OWNER of every pre-existing workspace — same "single local
+        // human → owner of every workspace" rule as the v40 migration
+        // backfill (which only fires when `viewer_user_id` was already set;
+        // this register path is the other entry, for a DB that has
+        // workspaces but registers its first human now). Without this the
+        // first user would be a plain `member` with `owner_user_id` NULL on
+        // pre-user workspaces — able to view/post but not govern — breaking
+        // Layer A neutrality. Membership + role + owner pointer all land in
+        // this same registration tx.
+        for (const workspaceId of tx.workspaces.listIds()) {
+          tx.workspaces.addOwnerMember(workspaceId, id);
+        }
+        // Stamp the denormalized owner pointer on every workspace that has
+        // no owner yet (all of them on this first-register path).
+        tx.workspaces.claimUnowned(id);
+        for (const conversationId of tx.conversations.listIds()) {
+          tx.conversations.addMember(conversationId, id);
+        }
+
+        return created;
       });
     } catch (err) {
       if (err instanceof UserServiceError) throw err;
-      if (isNameConflict(err)) {
+      // The handle is the only conflict axis this path can lose on: it writes
+      // no email, and the id is freshly generated (a `user_id` conflict would
+      // be a genuine bug here, so it propagates untranslated rather than
+      // becoming a 409 about the name).
+      if (err instanceof UserWriteConflictError && err.kind === 'name') {
         throw new UserServiceError(
           'name_taken',
           `name "${input.name}" is already taken`,
@@ -213,7 +200,7 @@ export class UserService {
     // app-scope viewer converges its directory + identity carriers without a
     // remount (#task:1707).
     this.publishChanged(row.id);
-    return rowToDto(row);
+    return snapshotToDto(row);
   }
 
   /**
@@ -245,10 +232,10 @@ export class UserService {
     }
 
     if (Object.keys(patch).length === 0) {
-      return rowToDto(existing);
+      return snapshotToDto(existing);
     }
 
-    const updated = this.users.updateProfile(id, patch);
+    const updated = this.profileWrites.updateProfile(id, patch);
     if (!updated) {
       throw new UserServiceError(
         'user_not_found',
@@ -256,7 +243,7 @@ export class UserService {
       );
     }
     this.publishChanged(id);
-    return rowToDto(updated);
+    return snapshotToDto(updated);
   }
 
   /**
@@ -304,7 +291,7 @@ export class UserService {
     const previousKey = existing.avatar_storage_key;
     const previousStorage = stored.storage; // same kind for now (single backend)
 
-    const updated = this.users.setAvatar(id, {
+    const updated = this.profileWrites.setAvatar(id, {
       storageKey: stored.storageKey,
       contentType,
     });
@@ -325,7 +312,7 @@ export class UserService {
     }
 
     this.publishChanged(id);
-    return rowToDto(updated);
+    return snapshotToDto(updated);
   }
 
   /** Remove the avatar (DB + blob). Idempotent — calling on a user
@@ -336,10 +323,10 @@ export class UserService {
       throw new UserServiceError('user_not_found', `user ${id} does not exist`);
     }
     if (!existing.avatar_storage_key) {
-      return rowToDto(existing);
+      return snapshotToDto(existing);
     }
     const previousKey = existing.avatar_storage_key;
-    const updated = this.users.clearAvatar(id);
+    const updated = this.profileWrites.clearAvatar(id);
     if (!updated) {
       throw new UserServiceError('user_not_found', `user ${id} does not exist`);
     }
@@ -347,7 +334,7 @@ export class UserService {
       .delete({ storage: this.blobStorage.kind, storageKey: previousKey })
       .catch(() => {});
     this.publishChanged(id);
-    return rowToDto(updated);
+    return snapshotToDto(updated);
   }
 
   /** Resolve the storage ref for an avatar download. Returns null
@@ -376,7 +363,7 @@ export interface UserDto {
   updated_at: number;
 }
 
-function rowToDto(row: UserRow): UserDto {
+function snapshotToDto(row: UserProfileSnapshot): UserDto {
   return {
     id: row.id,
     name: row.name,
@@ -389,20 +376,9 @@ function rowToDto(row: UserRow): UserDto {
   };
 }
 
-function avatarFilename(row: UserRow): string {
+function avatarFilename(row: UserProfileSnapshot): string {
   const ext = (row.avatar_content_type ?? 'image/png').split('/')[1] ?? 'png';
   return `avatar.${ext}`;
-}
-
-function isNameConflict(err: unknown): boolean {
-  // Migration v21 cross-namespace trigger raises with "users.name
-  // collides" wording; the column UNIQUE also fires with the standard
-  // SQLITE_CONSTRAINT_UNIQUE message.
-  if (!err || typeof err !== 'object') return false;
-  const message = String((err as { message?: unknown }).message ?? '');
-  if (/users\.name collides with an existing agent name/.test(message)) return true;
-  if (/UNIQUE constraint failed: users\.name/.test(message)) return true;
-  return false;
 }
 
 function randomBlobId(): string {

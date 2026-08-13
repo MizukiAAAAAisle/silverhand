@@ -5,11 +5,12 @@
 // This module holds only declarations — no behavior, no `this`. The facade
 // re-exports the previously-public names (error classes + input/result types)
 // so external importers keep importing from `conversation-message-service.js`.
-import type { Database as Db } from 'better-sqlite3';
 import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
   AttachmentRefInput,
+  ConversationAgentDto,
+  ConversationDto,
   LegacySendMessageTarget,
   MessageDto,
   MessageEventPayload,
@@ -18,15 +19,15 @@ import type {
 } from '@silverhand/shared';
 import type { BackendLogger } from '../../context.js';
 import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
-import type { AgentRepo } from '../../repos/agent-repo.js';
-import type { ConversationRepo } from '../../repos/conversation-repo.js';
-import type { ConversationInboxRepo } from '../../repos/conversation-inbox-repo.js';
-import type { MessageRepo } from '../../repos/message-repo.js';
-import type { NotificationRepo } from '../../repos/notification-repo.js';
-import type { ThreadFollowerRepo } from '../../repos/thread-follower-repo.js';
-import type { UserRepo } from '../../repos/user-repo.js';
-import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
-import type { AttachmentService } from '../attachment-service.js';
+import type { ConversationUnreadPublishPort } from '../conversation/unread-publish-port.js';
+import type {
+  DeliveryReadPort,
+  DeliveryWritePort,
+  MentionCcPort,
+  MessageUnitOfWork,
+  ThreadFollowDirectWritePort,
+  ThreadFollowReadPort,
+} from './ports.js';
 import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
 import type {
   AgentPrincipal,
@@ -246,16 +247,20 @@ export class MessageFreshnessGuardError extends Error {
 }
 
 export interface ConversationMessageServiceOptions {
-  db: Db;
-  conversations: ConversationRepo;
-  conversationInboxes: ConversationInboxRepo;
-  messages: MessageRepo;
-  threadFollowers: ThreadFollowerRepo;
-  agents: AgentRepo;
-  users: UserRepo;
-  notifications: NotificationRepo;
-  workspaces: WorkspaceRepo;
-  attachmentService: AttachmentService;
+  /** The ONLY write boundary of the send path: every persistence call inside
+   *  the send / materialize / follow transactions comes from its scope. */
+  uow: MessageUnitOfWork;
+  threadFollow: {
+    read: ThreadFollowReadPort;
+    directWrite: ThreadFollowDirectWritePort;
+  };
+  delivery: {
+    read: DeliveryReadPort;
+    write: DeliveryWritePort;
+  };
+  /** Post-commit effects. Held OUTSIDE the transaction scope by construction. */
+  mentionCc: MentionCcPort;
+  unreadPublish: ConversationUnreadPublishPort;
   runtimeHost: AgentRuntimeHost;
   events: ScopeEventBus;
   logger: BackendLogger;
@@ -284,10 +289,10 @@ export interface ThreadDeliveryPlan {
 }
 
 export interface SendMessageTxResult {
-  sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>;
-  targetConversation: NonNullable<ReturnType<ConversationRepo['get']>>;
+  sourceConversation: ConversationDto;
+  targetConversation: ConversationDto;
   message: MessageDto;
-  recipients: ReturnType<ConversationRepo['listAgents']>;
+  recipients: ConversationAgentDto[];
   /** Non-null when this send is a thread reply: drives follower-gated
    *  delivery instead of the main-line channel-member fan-out. */
   threadDelivery: ThreadDeliveryPlan | null;

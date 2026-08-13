@@ -16,6 +16,13 @@
  * needs to spawn it does so through `spawnDaemonChild`.
  */
 export {
+  agentHomeCommandEffect,
+  commandAgentId,
+  isAgentHomeMutatorEffect,
+  type AgentHomeCommandEffect,
+  type AgentHomeCommandKind,
+} from './agent-home-command-effect.js';
+export {
   HostClient,
   HostClientError,
   ProtocolVersionMismatchError,

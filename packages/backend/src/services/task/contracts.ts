@@ -1,10 +1,9 @@
 // Shared contract surface for the task-service aggregate: the public input /
 // option types, the transition table, the internal row shapes exchanged
 // between the facade and its collaborators, and the stateless helpers
-// (failure-envelope builders, row predicates, access check). No behavior —
-// this is the ubiquitous-language module the facade + store + access +
-// broadcaster all import from.
-import type { Database as Db } from 'better-sqlite3';
+// (failure-envelope builders, row predicates). No behavior, no driver types —
+// this is the ubiquitous-language module the facade + ports + access all
+// import from (#task:1980).
 import {
   type AgentCapability,
   type ClaimErrorCode,
@@ -14,21 +13,11 @@ import {
   type TaskMutationResult,
   type TaskStatus,
 } from '@silverhand/shared';
-import type { BackendLogger } from '../../context.js';
-import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
-import type { AgentRepo } from '../../repos/agent-repo.js';
-import type { ConversationRepo } from '../../repos/conversation-repo.js';
-import type { MessageRepo } from '../../repos/message-repo.js';
-import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
-import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
-import type { AgentPrincipal, UserPrincipal } from '../../auth/principal.js';
+import type { AgentActor, TaskActor, UserActor } from './ports.js';
 
-export type TaskActor =
-  | UserPrincipal
-  | AgentPrincipal;
-
-export type UserActor = Extract<TaskActor, { kind: 'user' }>;
-export type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
+/** Re-exported actor faces (defined in ports.ts so the port closure stays
+ *  driver-free — auth/principal.ts transitively types raw repos). */
+export type { AgentActor, TaskActor, UserActor } from './ports.js';
 
 // H3 identity switch (v60): a task is a first-class aggregate, selected by its
 // per-workspace `task_number` (the agent/CLI resolver) or its `tasks.id` (the
@@ -124,25 +113,6 @@ export interface ListTasksFilters {
   assigneeAgentId?: string;
   /** Cap the number of rows returned. */
   limit?: number;
-}
-
-export interface TaskServiceOptions {
-  db: Db;
-  conversations: ConversationRepo;
-  messages: MessageRepo;
-  agents: AgentRepo;
-  workspaces: WorkspaceRepo;
-  runtimeHost: AgentRuntimeHost;
-  events: ScopeEventBus;
-  logger: BackendLogger;
-  /**
-   * Agent-capability gate (graded-permissions cut 2). Injected — not
-   * re-implemented here — so the agent_home exemption and table lookup
-   * have a SINGLE source (`canAgentUseCapability`). Evaluated on the
-   * task's RESOLVED workspace, which only the service knows (message-id
-   * claims land in the message's workspace, not the principal's).
-   */
-  canUseCapability: AgentCapabilityChecker;
 }
 
 /** Signature of the injected `canAgentUseCapability` binding (see
@@ -258,23 +228,4 @@ export function isThreadAnchor(metadata: string | null): boolean {
 export function firstLine(s: string): string {
   const line = s.split('\n', 1)[0]!.trim();
   return line.length > 120 ? line.slice(0, 120) + '…' : line || '(empty)';
-}
-
-/** Whether the user is a member of the conversation (task read/mutate access
- *  for the human actor). Stateless query over `conversation_users`; the store
- *  and the facade's user-mutation paths share this single definition. */
-export function userCanAccessConversation(
-  db: Db,
-  userId: string,
-  conversationId: string,
-): boolean {
-  return db
-    .prepare<[string, string], { ok: 1 }>(
-      `SELECT 1 AS ok
-         FROM conversation_users
-        WHERE conversation_id = ?
-          AND user_id = ?
-        LIMIT 1`,
-    )
-    .get(conversationId, userId) !== undefined;
 }

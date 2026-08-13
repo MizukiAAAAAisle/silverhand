@@ -1,52 +1,92 @@
 /**
- * DB boundary ledgers — the auditable baseline the four gates in this
- * directory compare against (see docs/db-boundary.md).
+ * DB boundary ledgers — the auditable baseline the gates in this directory
+ * compare against (see docs/db-boundary.md).
  *
  * Contract:
  * - The gates enforce EXACT equality with the current tree, so any change —
  *   up or down — is a conscious, reviewable edit of this file.
- * - Direction is shrink-only for every `debt`/`route-debt` entry, for
+ * - Direction is shrink-only for every `debt` entry, for
  *   DYNAMIC_SQL_INVENTORY and for TEST_NATIVE_SQL_DEBT: counts go down and
  *   entries disappear. Raising a count or adding a debt entry needs a
  *   reviewed justification; hazard growth additionally needs a semantic test
  *   for the new SQL.
  * - Everything is keyed per file (× function / hazard / mode), never by
  *   totals, so debt cannot be shuffled between files without a visible diff.
+ * - A `zone` / `owner` label is NOT self-certifying (#task:1983 W8): every one
+ *   is checked against the module surface that owns that responsibility, in
+ *   `zones.ts`. A file that is not on the surface cannot buy the capability by
+ *   describing itself as a repository.
  */
-import type { HazardFinding, ImportKind, TxMode } from './scan.js';
+import type { DialectSignal, HazardFinding, ImportKind, TxMode } from './scan.js';
 
 export type ImportInventoryEntry =
   | { file: string; kinds: ImportKind[]; zone: 'adapter' | 'repository' }
   | {
       file: string;
       kinds: ImportKind[];
-      zone: 'debt';
-      /** Required: what owns this coupling and the deletion direction. */
+      /**
+       * #task:1983 W1 — the persistence composition root. Distinct from
+       * `adapter`/`repository` (which each own SQL for one concern) and from
+       * `debt`: this file's WHOLE JOB is to receive the handle and hand back
+       * driver-free ports, so naming the driver type in its signature is the
+       * point, not a leak. Kept a separate zone so the gate can assert the
+       * cardinality — see the `composition` row's reason.
+       */
+      zone: 'composition';
+      reason: string;
+    }
+  | {
+      file: string;
+      kinds: ImportKind[];
+      /**
+       * #task:1983 W5 — the process's handle-LIFETIME owner. Boot opens the
+       * database, migrates it, hands it to `composePersistence` as a parameter,
+       * and closes it on shutdown. That role can never shrink away (someone has
+       * to own the lifetime), so it is not `debt`; it composes no persistence
+       * and owns no SQL, so it is neither `composition` nor `adapter`.
+       *
+       * The row exists because a `Db` has ALWAYS flowed through boot —
+       * `openDatabase()`'s inferred return type never produced an import, so the
+       * coupling was real but invisible to this gate. W5's test seam names the
+       * type explicitly, which is what makes it auditable. Singleton, asserted.
+       */
+      zone: 'lifecycle';
       reason: string;
     };
+/*
+ * There is no `debt` variant (#task:1983 W6). Its last row was `context.ts`'s
+ * `db: Db` field typing, deleted by W5 along with the field. Adding a driver
+ * import back in a business file is not something to classify and schedule — it
+ * is the thing this gate exists to refuse, so the type no longer offers a place
+ * to park it.
+ */
 
 export const BETTER_SQLITE3_IMPORT_INVENTORY: ImportInventoryEntry[] = [
   {file: 'packages/backend/src/db.ts',kinds: ['type','value'],zone: 'adapter'},
   {file: 'packages/backend/src/observability/observed-statement.ts',kinds: ['type'],zone: 'adapter'},
-  {file: 'packages/backend/src/auth/host-token.ts',kinds: ['type'],zone: 'debt',reason: 'auth service holds raw Db and prepares directly; extract an auth repo when next touched'},
-  {file: 'packages/backend/src/context.ts',kinds: ['type'],zone: 'debt',reason: 'AppContext.db field typing — the composition root hands the handle to repos/services; shrinks when construction moves behind a persistence facade'},
-  {file: 'packages/backend/src/mention-cc.ts',kinds: ['type'],zone: 'debt',reason: 'standalone helper prepares directly; fold into a repo when the mention/cc flow is next touched'},
-  {file: 'packages/backend/src/runtime/outbound-event-fanout.ts',kinds: ['type'],zone: 'debt',reason: 'runtime fanout prepares directly and owns one tx; extract queries into repos when next touched'},
-  {file: 'packages/backend/src/services/channel-service.ts',kinds: ['type'],zone: 'debt',reason: 'service types the raw Db for its tx owner role; move remaining direct queries behind repos when touched'},
-  {file: 'packages/backend/src/services/conversation-message-service.ts',kinds: ['type'],zone: 'debt',reason: 'service types the raw Db for its tx owner role; move remaining direct queries behind repos when touched'},
-  {file: 'packages/backend/src/services/conversation-message/contracts.ts',kinds: ['type'],zone: 'debt',reason: 'deps interface types the raw Db; narrows to repo contracts when the message domain is next touched'},
-  {file: 'packages/backend/src/services/conversation-message/delivery.ts',kinds: ['type'],zone: 'debt',reason: 'delivery pipeline types the raw Db; narrows to repo contracts when next touched'},
-  {file: 'packages/backend/src/services/conversation-message/thread-follow.ts',kinds: ['type'],zone: 'debt',reason: 'service types the raw Db for its tx owner role; narrows to repo contracts when next touched'},
-  {file: 'packages/backend/src/services/task-service.ts',kinds: ['type'],zone: 'debt',reason: 'task facade types the raw Db for its tx owner role; queries live in TaskStore'},
-  {file: 'packages/backend/src/services/task/board.ts',kinds: ['type'],zone: 'debt',reason: 'board reader prepares directly; task-domain read model — fold into read-model/ when next touched'},
-  {file: 'packages/backend/src/services/task/broadcaster.ts',kinds: ['type'],zone: 'debt',reason: 'broadcaster shares the task-service db handle for same-tx inserts; shrinks with the task domain'},
-  {file: 'packages/backend/src/services/task/contracts.ts',kinds: ['type'],zone: 'debt',reason: 'deps interface types the raw Db; narrows to repo contracts when the task domain is next touched'},
-  {file: 'packages/backend/src/services/task/store.ts',kinds: ['type'],zone: 'debt',reason: 'TaskStore is a de-facto repository living under services/; move to repos/ when next touched'},
-  {file: 'packages/backend/src/services/user-service.ts',kinds: ['type'],zone: 'debt',reason: 'service prepares directly; extract a users repo surface when next touched'},
+  {file: 'packages/backend/src/observability/db-write-probe.ts',kinds: ['type'],zone: 'adapter'},
+  {file: 'packages/backend/src/index.ts',kinds: ['type'],zone: 'lifecycle',reason: 'BOOT owns the handle lifetime (#task:1983 W5): it opens + migrates the database, passes it to composePersistence as a parameter, and closes it on shutdown. It names the driver type for exactly one signature — the labelled testHooks.onDatabaseOpened seam that replaced BackendContext.db, so an end-to-end test can seed/inspect rows on the SERVER OWN connection instead of opening a second one into a restart / crash-recovery scenario. Deleting this row means boot stopped owning the handle, not that the debt was paid'},
+  {file: 'packages/backend/src/adapters/mention-cc.ts',kinds: ['type'],zone: 'adapter'},
+  {file: 'packages/backend/src/adapters/runtime-fanout.ts',kinds: ['type'],zone: 'adapter'},
+  {file: 'packages/backend/src/adapters/unread-publish.ts',kinds: ['type'],zone: 'adapter'},
+  {file: 'packages/backend/src/persistence/root.ts',kinds: ['type'],zone: 'composition',reason: 'THE persistence composition root (#task:1983 W1): the one function that takes the raw handle and returns only driver-free repos / unit-of-work ports / read models / persistence adapters. Growth INSIDE this file is legal wiring; a second driver-IMPORTING composition file is not, which is what the cardinality assertion in import-ratchet.test.ts refuses — and note that gate is import-based, so the file that keeps BOOT from assembling persistence out of its own handle is the fence in port-contract.test.ts, not this row. It is not yet an engine seam either: BackendRepos still names concrete SQLite classes, so a PostgreSQL adapter needs those turned into ports first'},
+  {file: 'packages/backend/src/read-model/index.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/read-model/activity.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/read-model/agent-read.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/read-model/favorites.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/read-model/message-reactions.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/agent-capability-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/agent-provisioning-persistence.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/auth-credentials-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/auth-sessions-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/auth-uow.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/host-credentials-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/host-uow.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/conversation-persistence.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/task-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/task-board-read-model.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/task-persistence.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/agent-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/attachment-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/attention-badge-repo.ts',kinds: ['type'],zone: 'repository'},
@@ -56,47 +96,55 @@ export const BETTER_SQLITE3_IMPORT_INVENTORY: ImportInventoryEntry[] = [
   {file: 'packages/backend/src/repos/conversation-read-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/conversation-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/host-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/membership-persistence.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/message-author.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/message-reaction-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/message-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/notification-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/observation-persistence.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/saved-message-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/schedule-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/search-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/sort-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/thread-follower-repo.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/user-persistence.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/user-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/workspace-attention-preference-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/workspace-repo.ts',kinds: ['type'],zone: 'repository'},
 ];
 
+/**
+ * Who may CALL a SQL sink (Gate 2). Three legal zones, no `debt` zone: W6
+ * removed it because it had held no rows since #1968 and a permanently empty
+ * debt zone is not a ledger, it is a standing offer. A file that issues SQL is
+ * an adapter, a repository/read-model, or the schema — and W8 made that a
+ * question of LOCATION: each zone is legal only on its owner surface
+ * (`zones.ts`), so a service cannot issue SQL by labelling itself a repository.
+ */
 export interface SqlCallerEntry {
   file: string;
-  zone: 'adapter' | 'repository' | 'schema' | 'debt';
-  /** Exact sink-call count; pinned for debt and schema files. */
+  zone: 'adapter' | 'repository' | 'schema';
+  /** Exact sink-call count; pinned for schema files. */
   count?: number;
 }
 
 export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
   {file: 'packages/backend/src/db.ts',zone: 'adapter'},
   {file: 'packages/backend/src/observability/observed-statement.ts',zone: 'adapter'},
+  {file: 'packages/backend/src/observability/db-write-probe.ts',zone: 'adapter'},
   {file: 'packages/shared/src/db/migrations.ts',zone: 'schema',count: 2},
-  {file: 'packages/backend/src/auth/host-token.ts',zone: 'debt',count: 9},
-  {file: 'packages/backend/src/mention-cc.ts',zone: 'debt',count: 2},
-  {file: 'packages/backend/src/routes.ts',zone: 'debt',count: 3},
-  {file: 'packages/backend/src/runtime/outbound-event-fanout.ts',zone: 'debt',count: 1},
-  {file: 'packages/backend/src/services/task/board.ts',zone: 'debt',count: 5},
-  {file: 'packages/backend/src/services/task/contracts.ts',zone: 'debt',count: 1},
-  {file: 'packages/backend/src/services/task/store.ts',zone: 'debt',count: 19},
-  {file: 'packages/backend/src/services/user-service.ts',zone: 'debt',count: 5},
+  {file: 'packages/backend/src/repos/task-repo.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/task-board-read-model.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/task-persistence.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/activity.ts',zone: 'repository'},
-  {file: 'packages/backend/src/read-model/agent-delete-impact.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/agent-read.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/favorites.ts',zone: 'repository'},
   {file: 'packages/backend/src/read-model/message-reactions.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/agent-capability-repo.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/auth-credentials-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/auth-sessions-repo.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/host-credentials-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/agent-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/attachment-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/attention-badge-repo.ts',zone: 'repository'},
@@ -115,6 +163,7 @@ export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
   {file: 'packages/backend/src/repos/search-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/sort-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/thread-follower-repo.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/user-persistence.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/user-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/workspace-attention-preference-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/workspace-repo.ts',zone: 'repository'},
@@ -132,8 +181,6 @@ export const SQL_HAZARD_INVENTORY: HazardFinding[] = [
   {file: 'packages/backend/src/repos/auth-credentials-repo.ts',hazard: 'collate_nocase',count: 1},
   {file: 'packages/backend/src/db.ts',hazard: 'pragma_statement',count: 10},
   {file: 'packages/backend/src/db.ts',hazard: 'sqlite_catalog',count: 2},
-  {file: 'packages/backend/src/mention-cc.ts',hazard: 'insert_or_action',count: 1},
-  {file: 'packages/backend/src/mention-cc.ts',hazard: 'is_parameter',count: 1},
   {file: 'packages/backend/src/read-model/activity.ts',hazard: 'json1_function',count: 1},
   {file: 'packages/backend/src/repos/agent-capability-repo.ts',hazard: 'insert_or_action',count: 1},
   {file: 'packages/backend/src/repos/attachment-repo.ts',hazard: 'json1_function',count: 13},
@@ -149,8 +196,6 @@ export const SQL_HAZARD_INVENTORY: HazardFinding[] = [
   {file: 'packages/backend/src/repos/workspace-repo.ts',hazard: 'collate_nocase',count: 1},
   {file: 'packages/backend/src/repos/workspace-repo.ts',hazard: 'insert_or_action',count: 2},
   {file: 'packages/backend/src/repos/workspace-repo.ts',hazard: 'json1_function',count: 2},
-  {file: 'packages/backend/src/routes.ts',hazard: 'begin_immediate_exclusive',count: 1},
-  {file: 'packages/backend/src/services/user-service.ts',hazard: 'insert_or_action',count: 2},
   {file: 'packages/shared/src/db/baseline-schema.ts',hazard: 'collate_nocase',count: 1},
   {file: 'packages/shared/src/db/baseline-schema.ts',hazard: 'create_trigger',count: 16},
   {file: 'packages/shared/src/db/baseline-schema.ts',hazard: 'json1_function',count: 1},
@@ -176,6 +221,7 @@ export interface HazardExpansion {
  * test, so "just bump the count" cannot go green.
  */
 export const SQL_HAZARD_EXPANSIONS: HazardExpansion[] = [
+  {file: 'packages/backend/src/observability/db-write-probe.ts',hazard: 'begin_immediate_exclusive',added: 1,reason: '#task:1982 W4 relocation, not new capability: the readiness write probe moved out of routes.ts (whose baseline row is deleted in the same diff) so the HTTP layer stops holding transaction-control SQL. BEGIN IMMEDIATE is load-bearing — the probe must fail AT BEGIN when another writer holds the lock, which a deferred BEGIN does not do',semanticTest: 'packages/backend/tests/observability/db-write-probe.test.ts'},
 ];
 
 export interface DynamicSqlEntry {
@@ -197,8 +243,8 @@ export const DYNAMIC_SQL_INVENTORY: DynamicSqlEntry[] = [
   {file: 'packages/backend/src/repos/attention-badge-repo.ts',fn: 'AttentionBadgeRepo.badgeCountForWorkspace',sink: 'prepareObserved',exprKind: 'CallExpression',count: 1,reason: 'SQL from a local population-query builder; builder literals harvested at definition'},
   {file: 'packages/backend/src/repos/message-author.ts',fn: 'fetchLiveActors',sink: 'prepareObserved',exprKind: 'Identifier',count: 1,reason: 'shared helper receives LIVE_AGENTS_SQL/LIVE_USERS_SQL as a parameter; both consts are harvested at definition'},
   {file: 'packages/backend/src/repos/message-repo.ts',fn: 'MessageRepo.existsWithSeq',sink: 'prepareObserved',exprKind: 'Identifier',count: 1,reason: 'SQL branches on a comparator parameter; the branch literals are harvested at definition'},
-  {file: 'packages/backend/src/services/task/board.ts',fn: 'TaskBoardReader.column',sink: 'prepareObserved',exprKind: 'PropertyAccessExpression',count: 1,reason: 'SQL from the taskBoardColumnQuery builder; builder literals harvested at definition'},
-  {file: 'packages/backend/src/services/task/store.ts',fn: 'TaskStore.list',sink: 'prepareObserved',exprKind: 'Identifier',count: 1,reason: 'WHERE clauses assembled from typed filters; clause literals harvested at definition'},
+  {file: 'packages/backend/src/repos/task-board-read-model.ts',fn: 'SqliteTaskBoardReadModel.column',sink: 'prepareObserved',exprKind: 'PropertyAccessExpression',count: 1,reason: 'SQL from the taskBoardColumnQuery builder; builder literals harvested at definition'},
+  {file: 'packages/backend/src/repos/task-repo.ts',fn: 'SqliteTaskRepo.list',sink: 'prepareObserved',exprKind: 'Identifier',count: 1,reason: 'WHERE clauses assembled from typed filters; clause literals harvested at definition'},
 ];
 
 export interface ApiHazardEntry {
@@ -208,7 +254,17 @@ export interface ApiHazardEntry {
 }
 
 export const API_HAZARD_INVENTORY: ApiHazardEntry[] = [
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'begin',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'complete',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'atomicallyForAgent',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'atomicallyForComputer',api: 'transaction_immediate'},
   {file: 'packages/backend/src/repos/auth-uow.ts',fn: 'atomically',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/conversation-persistence.ts',fn: 'atomicallyForChannel',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/conversation-persistence.ts',fn: 'atomicallyInWorkspace',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/host-uow.ts',fn: 'atomically',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/membership-persistence.ts',fn: 'atomically',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/membership-persistence.ts',fn: 'atomicallyForWorkspace',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/user-persistence.ts',fn: 'atomically',api: 'transaction_immediate'},
   {file: 'packages/backend/src/db.ts',fn: 'applySingleMigration',api: 'transaction_exclusive'},
   {file: 'packages/backend/src/db.ts',fn: 'runMigrations',api: 'transaction_exclusive'},
   {file: 'packages/backend/src/repos/conversation-event-repo.ts',fn: 'ConversationEventRepo.insert',api: 'lastInsertRowid'},
@@ -223,21 +279,41 @@ export interface TxInventoryEntry {
   fn: string;
   mode: TxMode;
   count: number;
-  owner: 'use-case' | 'service' | 'auth' | 'repo-internal' | 'route-debt' | 'infra';
+  /**
+   * `route-debt` is deliberately ABSENT: #task:1982 W4/W5 took the last
+   * route-layer transaction (readiness probe → observability adapter, hosts
+   * finalize and the membership cascade → use cases with a UnitOfWork). A route
+   * opening a transaction again cannot be reclassified back into the ledger —
+   * it has to move into a use case.
+   *
+   * And since W8 the label is not a way in either: `owner` is checked against
+   * the layer it names, and a NATIVE mode (anything but `uow`) is refused
+   * outside the persistence surface whatever the owner says. Deleting
+   * `route-debt` restricted a word; the joint (mode, owner, surface) rule in
+   * `zones.ts` restricts the location.
+   */
+  owner: 'use-case' | 'service' | 'auth' | 'repo-internal' | 'infra';
   /** repo-internal entries MUST explain outer atomicity ownership. */
   reason?: string;
 }
 
 export const TX_INVENTORY: TxInventoryEntry[] = [
-  {file: 'packages/backend/src/auth/host-token.ts',fn: 'HostTokenService.completePreparedHostTokenRotation',mode: 'default',count: 1,owner: 'auth'},
-  {file: 'packages/backend/src/auth/host-token.ts',fn: 'HostTokenService.rotateHostTokenImmediate',mode: 'default',count: 1,owner: 'auth'},
+  {file: 'packages/backend/src/auth/host-token.ts',fn: 'HostTokenService.completePreparedHostTokenRotation',mode: 'uow',count: 1,owner: 'auth'},
+  {file: 'packages/backend/src/auth/host-token.ts',fn: 'HostTokenService.issueHostToken',mode: 'uow',count: 1,owner: 'auth'},
+  {file: 'packages/backend/src/auth/host-token.ts',fn: 'HostTokenService.rotateHostTokenImmediate',mode: 'uow',count: 1,owner: 'auth'},
   {file: 'packages/backend/src/auth/user-auth-service.ts',fn: 'UserAuthService.resetPassword',mode: 'uow',count: 1,owner: 'auth'},
   {file: 'packages/backend/src/auth/user-auth-service.ts',fn: 'UserAuthService.signup',mode: 'uow',count: 1,owner: 'auth'},
   {file: 'packages/backend/src/db.ts',fn: 'applySingleMigration',mode: 'exclusive',count: 1,owner: 'infra',reason: 'migration application requires exclusive lock escalation by design'},
   {file: 'packages/backend/src/repos/auth-uow.ts',fn: 'atomically',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the persistence half of the application atomically() contract (deferred policy)'},
   {file: 'packages/backend/src/repos/auth-uow.ts',fn: 'atomically',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: immediate policy for the offline admin composition (root-only, fail-loud when nested)'},
+  {file: 'packages/backend/src/repos/host-uow.ts',fn: 'atomically',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the host domain takes the write lock at BEGIN because BOTH its flows decide from an authoritative read that PRECEDES their writes (credential eligibility, setup/finalize facts) — a deferred BEGIN would lock only at the first write, after the fact it protects (root-only, fail-loud when nested)'},
   {file: 'packages/backend/src/db.ts',fn: 'runMigrations',mode: 'exclusive',count: 1,owner: 'infra',reason: 'no-op migration phase takes an exclusive lock probe so concurrent boots fail fast'},
   {file: 'packages/backend/src/repos/agent-capability-repo.ts',fn: 'AgentCapabilityRepo.replaceSet',mode: 'default',count: 1,owner: 'repo-internal',reason: 'delete+reinsert of one capability set is a self-contained invariant; no caller composes it with other writes, savepoint under an outer tx is acceptable'},
+  {file: 'packages/backend/src/repos/agent-provisioning-persistence.ts',fn: 'atomically',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the persistence half of AgentProvisioningUnitOfWork (deferred policy — atomicity only; the pending-only conditional transition inside the scope IS the single-winner gate, so no isolation claim and no write lock)'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'begin',mode: 'immediate',count: 1,owner: 'infra',reason: 'Deletion lifecycle persistence: BEGIN IMMEDIATE serializes the conditional active/unmarked gate with computer teardown and runtime-transition admission before publishing the durable deletion intent'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'complete',mode: 'immediate',count: 1,owner: 'infra',reason: 'Deletion lifecycle persistence: BEGIN IMMEDIATE revalidates the CAS-keyed host/timestamp attempt and captures the post-purge teardown facts in the same commit that deletes the agent row'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'atomicallyForAgent',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation, agent-keyed axis: the teardown takes the write lock at BEGIN because it re-reads delete eligibility (materialization_status) INSIDE the scope and the whole sequence is decided from it — a deferred BEGIN would lock only at the DELETE, after the read it protects (root-only, fail-loud when nested)'},
+  {file: 'packages/backend/src/repos/agent-teardown-persistence.ts',fn: 'atomicallyForComputer',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation, second coordination axis: the computer cascade tears down EVERY agent placed on one host in one commit, so it coordinates on the computer and its per-agent faces are bound to that key (an agent on another computer aborts the whole scope) — same BEGIN IMMEDIATE, which is file-wide here and therefore already excludes the agent-keyed axis (root-only, fail-loud when nested)'},
   {file: 'packages/backend/src/repos/conversation-inbox-repo.ts',fn: 'ConversationInboxRepo.claimPending',mode: 'exclusive',count: 1,owner: 'repo-internal',reason: 'inbox delivery state machine owns claim atomicity; exclusive mode arbitrates cross-connection delivery contention — no outer service tx exists on this path'},
   {file: 'packages/backend/src/repos/conversation-inbox-repo.ts',fn: 'ConversationInboxRepo.markDelivered',mode: 'stored',count: 1,owner: 'repo-internal',reason: 'delivery cursor + in-flight clear must move together; owned by the inbox state machine'},
   {file: 'packages/backend/src/repos/conversation-inbox-repo.ts',fn: 'ConversationInboxRepo.rollbackInFlight',mode: 'stored',count: 1,owner: 'repo-internal',reason: 'in-flight rollback is inbox-internal recovery; no outer owner'},
@@ -247,38 +323,49 @@ export const TX_INVENTORY: TxInventoryEntry[] = [
   {file: 'packages/backend/src/repos/message-repo.ts',fn: 'MessageRepo.insertForConversationIfFresh',mode: 'default',count: 1,owner: 'repo-internal',reason: 'freshness CAS throws StreamCasMiss to roll back the seq allocation — REQUIRES savepoint semantics; do not flatten into the outer tx'},
   {file: 'packages/backend/src/repos/sort-repo.ts',fn: 'SortRepo.reorder',mode: 'stored',count: 1,owner: 'repo-internal',reason: 'multi-row rank rewrite is one self-contained invariant; no outer owner'},
   {file: 'packages/backend/src/repos/workspace-repo.ts',fn: 'WorkspaceRepo.setOwnerUserId',mode: 'default',count: 1,owner: 'repo-internal',reason: 'owner column and owner-role membership row must flip together; callers do not compose it with other writes'},
-  {file: 'packages/backend/src/routes/hosts.ts',fn: 'createHostApp',mode: 'default',count: 2,owner: 'route-debt',reason: 'route-layer tx predates the use-case layer; move into application/* when next touched'},
-  {file: 'packages/backend/src/routes/membership.ts',fn: 'removeWorkspaceMemberAndConversationRows',mode: 'default',count: 1,owner: 'route-debt',reason: 'route-layer tx predates the use-case layer; move into application/* when next touched'},
-  {file: 'packages/backend/src/runtime/outbound-event-fanout.ts',fn: 'OutboundRuntimeEventFanout.clearSession',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/channel-service.ts',fn: 'ChannelService.createAgentHomeDmChannel',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/channel-service.ts',fn: 'ChannelService.createChannel',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/channel-service.ts',fn: 'ChannelService.renameChannel',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/conversation-message-service.ts',fn: 'ConversationMessageService.materializeAndDispatchThreadWindow',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/conversation-message-service.ts',fn: 'ConversationMessageService.sendMessage',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/conversation-message/thread-follow.ts',fn: 'ThreadFollowManager.followThread',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.applyTaskEdit',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.claimTaskAgent',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.claimTaskUser',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.createTasks',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.unclaimTaskAgent',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.unclaimTaskUser',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.updateStatusAgent',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.updateStatusUser',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/task/broadcaster.ts',fn: 'TaskBroadcaster.broadcast',mode: 'default',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/services/user-service.ts',fn: 'UserService.register',mode: 'stored',count: 1,owner: 'service'},
-  {file: 'packages/backend/src/application/add-workspace-agent-member.ts',fn: 'addWorkspaceAgentMember',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'addConversationMember',mode: 'default',count: 2,owner: 'use-case'},
-  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'joinPublicChannel',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'leaveChannel',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'removeConversationHumanMember',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'removeConversationMember',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/create-agent.ts',fn: 'insertProvisioningDependents',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/create-workspace.ts',fn: 'createWorkspace',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/delete-computer.ts',fn: 'deleteComputer',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/observe.ts',fn: 'observe',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/react-message.ts',fn: 'addReaction',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/react-message.ts',fn: 'removeReaction',mode: 'default',count: 1,owner: 'use-case'},
-  {file: 'packages/backend/src/application/revoke-host.ts',fn: 'revokeHost',mode: 'default',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/runtime/outbound-event-fanout.ts',fn: 'OutboundRuntimeEventFanout.clearSession',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/adapters/runtime-fanout.ts',fn: 'atomically',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the persistence half of RuntimeSessionUnitOfWork (deferred policy — atomicity only, no isolation claim)'},
+  {file: 'packages/backend/src/services/channel-service.ts',fn: 'ChannelService.createAgentHomeDmChannel',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/channel-service.ts',fn: 'ChannelService.createChannel',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/channel-service.ts',fn: 'ChannelService.renameChannel',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/conversation-message-service.ts',fn: 'ConversationMessageService.materializeAndDispatchThreadWindow',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/conversation-message-service.ts',fn: 'ConversationMessageService.sendMessage',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/conversation-message/thread-follow.ts',fn: 'ThreadFollowManager.followThread',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.applyTaskEdit',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.claimTaskAgent',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.claimTaskUser',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.createTasks',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.unclaimTaskAgent',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.unclaimTaskUser',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.updateStatusAgent',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/services/task-service.ts',fn: 'TaskService.updateStatusUser',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/repos/task-persistence.ts',fn: 'atomically',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the persistence half of the task atomically() contract (deferred only)'},
+  {file: 'packages/backend/src/repos/conversation-persistence.ts',fn: 'atomicallyForChannel',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation, conversation-keyed axis: the channel domain takes the write lock at BEGIN because getChannelLikeForUpdate states an isolation obligation its callback depends on, and the entry-point KEY is what its scope faces address (root-only, fail-loud when nested)'},
+  {file: 'packages/backend/src/repos/conversation-persistence.ts',fn: 'atomically',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: lock-window policy for the conversation-message domain — deferred so the thread-window reads are not held under the write lock. NOT a race-free claim: only the stream-head race is closed by a mechanism (insertForConversationIfFresh CAS); the other pre-write reads carry no declared cross-connection isolation obligation'},
+  {file: 'packages/backend/src/repos/conversation-persistence.ts',fn: 'atomicallyInWorkspace',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation, second coordination axis: channel creation writes the channel row plus one membership row per founding member plus the seed messages, all belonging to ONE workspace, so it coordinates on the workspace and its scope faces are bound to that key — same BEGIN IMMEDIATE as the conversation-keyed axis, which is file-wide here and therefore already excludes it (root-only, fail-loud when nested)'},
+  {file: 'packages/backend/src/services/user-service.ts',fn: 'UserService.register',mode: 'uow',count: 1,owner: 'service'},
+  {file: 'packages/backend/src/repos/membership-persistence.ts',fn: 'atomically',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the write lock is taken at BEGIN because the UoW itself reads the coordination anchor before the callback, and the whole cascade is decided from it — SQLite has no row lock to offer, and the anchor row may not even exist (root-only, fail-loud when nested)'},
+  {file: 'packages/backend/src/repos/membership-persistence.ts',fn: 'atomicallyForWorkspace',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation, second coordination axis: the roster scope writes membership rows for MORE THAN ONE subject in one commit, so it coordinates on the workspace and reads no anchor — same BEGIN IMMEDIATE, which is file-wide here and therefore already excludes the per-member axis (root-only, fail-loud when nested)'},
+  {file: 'packages/backend/src/repos/user-persistence.ts',fn: 'atomically',mode: 'immediate',count: 1,owner: 'infra',reason: 'UnitOfWork implementation: the registration domain takes the write lock at BEGIN because the single-viewer gate is a read-then-write invariant over an EMPTY set — no locking read can serialize it (root-only, fail-loud when nested)'},
+  {file: 'packages/backend/src/application/add-workspace-agent-member.ts',fn: 'addWorkspaceAgentMember',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/add-workspace-human-member.ts',fn: 'addWorkspaceHumanMember',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'addConversationMember',mode: 'uow',count: 2,owner: 'use-case'},
+  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'joinPublicChannel',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'leaveChannel',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'removeConversationHumanMember',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/conversation-member.ts',fn: 'removeConversationMember',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/create-agent.ts',fn: 'insertProvisioningDependents',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/create-workspace.ts',fn: 'createWorkspace',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/delete-agent.ts',fn: 'commitAgentTeardown',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/delete-computer.ts',fn: 'deleteComputer',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/mention-cc.ts',fn: 'deliverOne',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/observe.ts',fn: 'observe',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/repos/observation-persistence.ts',fn: 'atomicallyForViewer',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation, viewer-keyed axis: the observation batch takes NO write lock at BEGIN. A pre-write read does exist (the cursor face reads the current cursor) but no invariant rests on it — the cursor upsert is monotone (max(existing,new)) so a stale read costs at most a redundant upsert or a stale changed-boolean, and both clears are conditional on the row still being unread and report only what they themselves flipped, so a concurrent observer can neither be clobbered nor have its dismissal stolen; a read-only re-observe then never touches the write lock at all. Nesting is not refused: a deferred scope degrading to a savepoint loses no claim this port makes'},
+  {file: 'packages/backend/src/application/create-host-invite.ts',fn: 'createHostInvite',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/remove-workspace-member.ts',fn: 'purgeDanglingWorkspaceAgentMembership',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/remove-workspace-member.ts',fn: 'removeWorkspaceMember',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/revoke-host.ts',fn: 'revokeHost',mode: 'uow',count: 1,owner: 'use-case'},
+  {file: 'packages/backend/src/application/update-host.ts',fn: 'updateHost',mode: 'uow',count: 1,owner: 'use-case'},
 ];
 
 export interface TxEffectExemption {
@@ -294,7 +381,7 @@ export const TX_CALLBACK_EXEMPTIONS: TxEffectExemption[] = [
     fn: 'TaskService.claimTaskUser',
     violation: 'effect call .dispatchToAgent() inside transaction callback',
     reason:
-      'TaskStore.dispatchToAgent is a pure UPDATE (assignee handoff + todo→in_progress), not an external effect; rename candidate when the task domain is next touched',
+      'SqliteTaskRepo.dispatchToAgent is a pure UPDATE (assignee handoff + todo→in_progress), not an external effect; rename candidate when the task domain is next touched',
   },
 ];
 
@@ -313,23 +400,105 @@ export const TEST_WHITEBOX_INVENTORY: WhiteboxTestEntry[] = [
   {file: 'packages/backend/tests/tasks-aggregate-migration.test.ts',count: 15,reason: 'exercises one historical migration against hand-built legacy rows'},
   {file: 'packages/backend/tests/workspace-delete-cascade-index.test.ts',count: 22,reason: 'asserts index structure and query plans (EXPLAIN) — engine white-box by nature'},
   {file: 'packages/backend/tests/read-model/unread-stream-queries.test.ts',count: 6,reason: 'differential oracle: frozen legacy SQL compared against the live read model'},
+  {file: 'packages/backend/tests/repos/conversation-member-refs.test.ts',count: 5,reason: 'the membership cascade read shape (#task:1987): EXPLAIN QUERY PLAN over the exported production SQL plus the sqlite_master catalog read that proves no NEW index is needed, and UPDATEs that set `updated_at` to chosen values, because that column IS the ordering contract and no repo write can express a specific instant'},
   {file: 'packages/backend/tests/utils/db.ts',count: 3,reason: 'shared fixture infrastructure; the semantic builders wrap THIS file so business tests do not touch SQL'},
   {file: 'packages/backend/tests/utils/test-context.ts',count: 8,reason: 'the semantic fixture layer itself: repository-contract builders plus purpose-named impossible-state seams; native SQL concentrates here so business tests carry none'},
   {file: 'packages/server/tests/config.test.ts',count: 4,reason: 'simulates EXCLUSIVE lock contention on the raw file DB — engine behavior test'},
   {file: 'packages/backend/tests/repos/auth-uow.test.ts',count: 3,reason: 'UnitOfWork adapter test: simulates a second-connection BEGIN IMMEDIATE writer and asserts rollback visibility — engine white-box by nature'},
+  {file: 'packages/backend/tests/repos/conversation-persistence.test.ts',count: 7,reason: 'UnitOfWork adapter test: a second connection contends for the channel write lock (BEGIN IMMEDIATE / rival UPDATE / ROLLBACK) to prove the getChannelLikeForUpdate isolation obligation holds on SQLite, and the same contention is repeated for the workspace-keyed axis (#task:1987) because "two axes, ONE mechanism" is a claim about the engine — engine white-box by nature'},
+  {file: 'packages/backend/tests/repos/host-uow.test.ts',count: 17,reason: 'UnitOfWork adapter test: forces impossible credential/host states (expiry, consumed, kind, unbound, revoked) to pin every predicate of the semantic active-credential query, plus createHostInvite host-row/credential rollback visibility — engine white-box by nature. +3 for the second-connection isolation tests: a rival BEGIN IMMEDIATE / ROLLBACK and a rival UPDATE are the only way to show the write lock is the mechanism (a repo call would run on OUR connection and prove nothing)'},
+  {file: 'packages/backend/tests/application/remove-workspace-member.test.ts',count: 2,reason: 'UnitOfWork adapter test: a second connection holds the membership write lock (BEGIN IMMEDIATE / ROLLBACK) to prove the cascade callback does not run at all when the anchor is not ownable — engine white-box by nature'},
+  {file: 'packages/backend/tests/repos/user-persistence.test.ts',count: 10,reason: 'UnitOfWork adapter test: a second connection contends for the registration write lock (rival user INSERT / BEGIN IMMEDIATE / ROLLBACK) to prove the single-viewer gate is closed by a mechanism, plus archived-row and unowned-workspace states the semantic builders cannot express — engine white-box by nature'},
+  {file: 'packages/backend/tests/repos/agent-provisioning-persistence.test.ts',count: 7,reason: 'UnitOfWork adapter test: asserts the pending-only conditional transition fails closed for failed/active rows and that a mid-transaction throw rolls back every dependent row — engine white-box by nature'},
+  {file: 'packages/backend/tests/repos/agent-teardown-persistence.test.ts',count: 5,reason: 'UnitOfWork adapter test: the FK CASCADE is the persistence CONTRACT here (one DELETE FROM agents clears memberships, capability grants via the composite FK, conversation participation, inbox rows, schedules and the owned agent_home subtree while the shared workspace and its history survive), so every assertion must read RAW tables — a repo read joins agents and would report an orphan row as absent, passing whether or not the cascade fired. Includes the foreign_keys=OFF falsifier and the surviving-author snapshot read; engine white-box by nature'},
+  {file: 'packages/backend/tests/application/create-agent-provisioning.test.ts',count: 14,reason: 'application integration test: real DB + fake daemon proving L3b state-machine compensation on rollback and that lost eligibility never compensates the winner — engine white-box by nature'},
+  {file: 'packages/backend/tests/repos/sqlite-user-conflicts.test.ts',count: 1,reason: 'error-translation test: one native INSERT produces a REAL non-uniqueness rejection (avatar CHECK) to prove an unrecognized driver error passes through untranslated'},
+  {file: 'packages/backend/tests/observability/db-write-probe.test.ts',count: 5,reason: 'readiness-probe adapter test: a second connection holds the write lock (BEGIN IMMEDIATE / CREATE TABLE / ROLLBACK) so the probe fails the way production fails, and a deferred BEGIN on the probed connection is the falsifier proving BEGIN IMMEDIATE is load-bearing — engine white-box by nature'},
   {file: 'packages/backend/tests/drivers/platform-prompt.test.ts',count: 1,reason: 'NOT SQL: RegExp.exec on an identifier receiver — ruled false positive of the exec sink boundary (only regex literals are exempt)'},
   {file: 'packages/backend/tests/observability/cli-route-map.test.ts',count: 1,reason: 'NOT SQL: RegExp.exec on an identifier receiver — ruled false positive of the exec sink boundary (only regex literals are exempt)'},
+];
+
+/*
+ * `ContextDbReaderEntry` / `CONTEXT_DB_READER_INVENTORY` are GONE (#task:1983 W6).
+ *
+ * They froze who may read `BackendContext.db`, per file and by exact count, while
+ * that field existed. W3 emptied the ledger and W5 deleted the field, so there is
+ * nothing left to freeze: `ctx.db` in a production file no longer typechecks.
+ * Keeping a permanently empty table would have been an invitation to add the
+ * next row "just this once" — the deletion is what makes the wall unattractive to
+ * reopen. Gate 6 (`composition-handle.test.ts`) still runs, now asserting the two
+ * facts directly: `BackendContext` declares no `db` member, and the tree-wide
+ * scan finds zero readers.
+ */
+
+export interface DialectDecodingEntry {
+  file: string;
+  signal: DialectSignal;
+  count: number;
+  /**
+   * #task:1983 W8 split `error-translation` in two, because one label was
+   * covering two different responsibilities and the broader reading of it was
+   * "any file under repos/ may decode dialect" — a directory waiver by another
+   * name. `error-translation` is now exactly the modules whose WHOLE job is
+   * translation (and there are two); `adapter-internal` is a repository
+   * translating a constraint IT owns, which the gate checks against the SQL-sink
+   * ledger rather than believing from the reason.
+   */
+  zone: 'schema' | 'error-translation' | 'adapter-internal';
+  reason: string;
+}
+
+/**
+ * Where SQLite dialect (error codes, constraint text, trigger text) may be
+ * decoded (Gate 7). An EXACT file set — there is no directory waiver. The two
+ * legal zones are narrow on purpose: `schema` DEFINES the text,
+ * `error-translation` turns a driver rejection into a domain outcome. Anything
+ * else deciding on dialect has made the engine part of its contract.
+ *
+ * TWO AUTHORITIES since #task:1983 W4, and every row names one: `db-errors.ts`
+ * owns driver RESULT CODES, the schema (plus the two modules that translate its
+ * text) owns CONSTRAINT / TRIGGER TEXT.
+ *
+ * W6 deleted the `adapter` and `debt` zones from the type, not just their rows.
+ * `adapter` meant "turns a driver failure into a metric label" — the readiness
+ * probe and the statement chokepoint stopped matching codes themselves and ask
+ * `db-errors.ts` instead, so that is no longer a dialect-holding job and a row
+ * claiming it would be wrong rather than merely stale. Re-adding either zone is
+ * now a type error, which is the point: a debt zone with no rows is an invitation.
+ *
+ * W8's `adapter-internal` is NOT that zone coming back: it is narrower than the
+ * label it split off from (`error-translation`), it is bound to the repository
+ * surface, and it additionally has to own the SQL it translates. The deleted
+ * `adapter` zone let an instrumentation module decode codes for a metric label;
+ * nothing here can.
+ */
+export const DIALECT_DECODING_INVENTORY: DialectDecodingEntry[] = [
+  {file: 'packages/backend/src/db-errors.ts',signal: 'sqlite_error_code',count: 2,zone: 'error-translation',reason: 'THE driver-error-code decoder (#task:1983 W4): the SQLITE_BUSY* / SQLITE_LOCKED* families become a contention verdict, and nothing else in the process names a result code. It replaced three independent answers to "is this contention?" that had already drifted — admin.ts compared for equality against SQLITE_BUSY alone, so SQLITE_BUSY_SNAPSHOT and every SQLITE_LOCKED* variant reached the operator as a raw driver error instead of db_locked. Callers keep their own mapping (probe verdict / metric label / db_locked), which is not dialect'},
+  {file: 'packages/backend/src/repos/sqlite-user-conflicts.ts',signal: 'constraint_failed_text',count: 3,zone: 'error-translation',reason: 'THE user-conflict translation module: UNIQUE constraint failed on users.id/name/email becomes a domain conflict reason. Unrecognized driver errors pass through untranslated (pinned by sqlite-user-conflicts.test.ts)'},
+  {file: 'packages/backend/src/repos/sqlite-user-conflicts.ts',signal: 'trigger_text',count: 1,zone: 'error-translation',reason: 'same module: the cross-table name-collision TRIGGER message is the only signal SQLite gives for agents/users name uniqueness, so it is decoded here and nowhere else'},
+  {file: 'packages/backend/src/repos/task-repo.ts',signal: 'sqlite_error_code',count: 1,zone: 'adapter-internal',reason: 'the SQLite task adapter translating a constraint it owns: SQLITE_CONSTRAINT_UNIQUE on source_message_id becomes the source_conflict domain outcome. Legal because this file owns the SQL for that table (checked against the sink ledger, not taken on trust); a second engine would move it behind a per-engine translation module like sqlite-user-conflicts.ts'},
+  {file: 'packages/shared/src/db/baseline-schema.ts',signal: 'trigger_text',count: 1,zone: 'schema',reason: 'the schema DEFINES trigger text — this is the harvest authority Gate 7 fences everyone else against, not a decoding site'},
+  {file: 'packages/shared/src/db/migrations.ts',signal: 'constraint_failed_text',count: 1,zone: 'schema',reason: 'a SQL comment inside a migration literal explaining why a CHECK is expressed the way it is; prose that happens to live inside a literal, in the schema zone'},
+  {file: 'packages/shared/src/db/migrations.ts',signal: 'trigger_text',count: 4,zone: 'schema',reason: 'migrations define trigger text (the second half of the harvest authority)'},
 ];
 
 export interface TestDebtEntry {
   file: string;
   count: number;
+  /**
+   * Carried only by counts that were RAISED under review (the default direction
+   * is down): what the added statement expresses and why no semantic builder can.
+   * The file stays in this shrink-only zone rather than moving to
+   * TEST_WHITEBOX_INVENTORY, because whitebox pins the WHOLE file and would stop
+   * the pre-existing statements here from being pushed down.
+   */
+  reason?: string;
 }
 
 export const TEST_NATIVE_SQL_DEBT: TestDebtEntry[] = [
   {file: 'packages/backend/tests/admin.test.ts',count: 3},
   {file: 'packages/backend/tests/application/cross-computer-membership.test.ts',count: 5},
-  {file: 'packages/backend/tests/application/delete-agent.test.ts',count: 2},
+  {file: 'packages/backend/tests/application/delete-agent.test.ts',count: 3,reason: '+1 under review (#task:1987 D): one UPDATE agents SET host_id, the placement interleave the teardown port promises to refuse under its write lock. Production has NO placement writer, so no repo or route can express it — and adding a production mutation capability so a test could reach it would put the hazard in the product'},
   {file: 'packages/backend/tests/application/delete-computer.test.ts',count: 3},
   {file: 'packages/backend/tests/application/membership-use-cases.test.ts',count: 17},
   {file: 'packages/backend/tests/application/react-message.test.ts',count: 6},
@@ -424,4 +593,76 @@ export const TEST_NATIVE_SQL_DEBT: TestDebtEntry[] = [
   {file: 'packages/backend/tests/smoke.test.ts',count: 2},
   {file: 'packages/backend/tests/ws/host-token-rotation.test.ts',count: 3},
   {file: 'packages/backend/tests/ws/ws-server.test.ts',count: 1},
+];
+
+export interface PrivatePortEntry {
+  file: string;
+  reads: number;
+  installs: number;
+  declares: number;
+  /**
+   * `consumer` — the ONE module the port exists for; the only legal reader.
+   * `declaration` — states the member's type and nothing else.
+   * `composition` — supplies the implementation, or forwards it once at boot.
+   */
+  zone: 'consumer' | 'declaration' | 'composition';
+  reason: string;
+}
+
+/**
+ * `authorizationReads` — a port that is private to a single consumer (Gate 8).
+ *
+ * The other gates in this file fence a CAPABILITY (who may name the driver, who
+ * may issue SQL). This one fences an AUDIENCE: `authorizationReads` is a
+ * narrow read-only view of exactly the facts `permissions.ts` needs to decide
+ * access, and its value is that every predicate answering "may this principal
+ * do X" reads its facts from one auditable surface. A second consumer would not
+ * break a type; it would quietly turn a decision port into a general query
+ * shortcut, and the next reviewer would have no way to see that it happened.
+ *
+ * The scan matches the member BY NAME, receiver-independent, because the port
+ * hangs off two objects: the context AND the persistence bag that routes are
+ * handed. Fencing only `ctx.authorizationReads` would leave
+ * `persistence.authorizationReads` as an equally effective bypass that names no
+ * context at all. Cost of name matching, accepted deliberately: an unrelated
+ * member that happens to share this name must be renamed or appear here — the
+ * right direction of pressure for a name that is supposed to be private.
+ *
+ * Counts are per file and per kind, so moving a read between zones is a visible
+ * diff. `reads` in a non-`consumer` zone is what the gate treats as the
+ * violation; a `declaration` or `composition` row with reads > 0 must say why
+ * (boot's single forward is the only such row today).
+ */
+export const AUTHORIZATION_PORT_INVENTORY: PrivatePortEntry[] = [
+  {file: 'packages/backend/src/permissions.ts',reads: 15,installs: 0,declares: 0,zone: 'consumer',reason: 'THE consumer: every access predicate in the process reads its facts here and nowhere else, which is what makes the authorization surface auditable in one file. Count moves with the number of predicates that need a fact — it is not shrink-only, but a read appearing in ANY OTHER file is'},
+  {file: 'packages/backend/src/context.ts',reads: 0,installs: 0,declares: 1,zone: 'declaration',reason: 'declares the member on BackendContext — the type-level statement that the capability bag carries a fact port, not a database handle'},
+  {file: 'packages/backend/src/persistence/root.ts',reads: 0,installs: 1,declares: 1,zone: 'composition',reason: 'the persistence composition root declares the member on its own bag and supplies the SQLite implementation. Deleting this row means authorization facts stopped coming from persistence'},
+  {file: 'packages/backend/src/index.ts',reads: 1,installs: 1,declares: 0,zone: 'composition',reason: 'boot forwards the port from the persistence bag onto the context, once, in the context literal. This is the ONLY legal read outside the consumer: it moves the port, it does not ask it a question — a read here that fed a decision would be an authorization rule living in boot'},
+];
+
+export interface DriverCloseEntry {
+  file: string;
+  fn: string;
+  reason: string;
+}
+
+/**
+ * Who may end a driver handle's life (Gate 2b-B).
+ *
+ * `close()` is the driver capability that is neither SQL nor a transaction, and
+ * closing a handle another part of the process is still using is the failure this
+ * app has already been bitten by from the other direction (a stray connection
+ * into a live WAL). The rule every row here obeys — and which
+ * `driver-capability.test.ts` asserts mechanically, not just by reading these
+ * reasons — is CLOSE ONLY WHAT YOU OPENED: each of these files also calls
+ * `openDatabase`, and closes in the same scope that owns it. A file that closes a
+ * handle it received is the shape that produces "closed under the writer".
+ *
+ * Keyed by file × enclosing function so that moving the call inside a file is
+ * still a visible diff.
+ */
+export const DRIVER_CLOSE_INVENTORY: DriverCloseEntry[] = [
+  {file: 'packages/backend/src/db.ts',fn: 'openDatabase',reason: 'failed-open rollback: when migration throws, the opener closes the half-built handle it just created rather than leaking a connection into a process that is about to report boot failure. The most local ownership there is — open and close in one function'},
+  {file: 'packages/backend/src/index.ts',fn: 'close',reason: 'server shutdown phase 4: the handle boot opened is closed after the HTTP/WS listeners are down and connections have been terminated. The other half of the `lifecycle` row in BETTER_SQLITE3_IMPORT_INVENTORY — that row is why boot names the driver type, this one is why it may end the lifetime'},
+  {file: 'packages/backend/src/admin.ts',fn: 'resetAdminPassword',reason: 'the offline admin command opens its own handle in a process where the server is not running, and closes it in the same function\'s `finally`. Deleting this row means the admin tool stopped owning a connection'},
 ];

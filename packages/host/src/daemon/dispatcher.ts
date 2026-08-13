@@ -84,6 +84,12 @@ import type {
 } from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
 import { DaemonTypedError } from './typed-error.js';
+import {
+  agentHomeCommandEffect,
+  commandAgentId,
+  isAgentHomeMutatorEffect,
+} from '../agent-home-command-effect.js';
+import { AgentHomeMutationCoordinator } from './agent-home-mutation-coordinator.js';
 
 export interface DispatcherOptions {
   logger: DaemonLogger;
@@ -99,6 +105,8 @@ export interface DispatcherOptions {
    * concrete `Supervisor`.
    */
   supervisor?: SupervisorContract;
+  /** Single per-agent fence owner shared with Supervisor in production. */
+  agentHomeMutationCoordinator?: AgentHomeMutationCoordinator;
   /**
    * Stage D3.a Commit 3 — handler for the `host_outbound_attach`
    * intent. The daemon's `OutboundSupervisor.attach` is the
@@ -221,7 +229,9 @@ export interface DispatcherOptions {
    */
   agentFilesPurgeHandler?: (
     params: AgentFilesPurgeParams,
-  ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult>;
+  ) =>
+    | Omit<AgentFilesPurgeResult, 'quiesced_count'>
+    | Promise<Omit<AgentFilesPurgeResult, 'quiesced_count'>>;
   /**
    * #task:1135 — handlers for `agent_profile_mcp_read` /
    * `agent_profile_mcp_write` (the host-local truth behind
@@ -254,6 +264,7 @@ export class IntentDispatcher {
   private readonly now: () => number;
   private readonly helloResult: HelloResult;
   private readonly supervisor: SupervisorContract | undefined;
+  private readonly agentHomeMutationCoordinator: AgentHomeMutationCoordinator;
   private readonly hostOutboundAttachHandler:
     | ((
         params: HostOutboundAttachParams,
@@ -303,7 +314,9 @@ export class IntentDispatcher {
   private readonly agentFilesPurgeHandler:
     | ((
         params: AgentFilesPurgeParams,
-      ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult>)
+      ) =>
+        | Omit<AgentFilesPurgeResult, 'quiesced_count'>
+        | Promise<Omit<AgentFilesPurgeResult, 'quiesced_count'>>)
     | undefined;
   private readonly agentProfileMcpReadHandler:
     | ((
@@ -335,6 +348,26 @@ export class IntentDispatcher {
     this.helloResult =
       opts.helloResult ?? createDaemonHelloResult('__test_instance__');
     this.supervisor = opts.supervisor;
+    const supervisorCoordinator =
+      opts.supervisor?.agentHomeMutationCoordinator?.() ?? null;
+    if (
+      supervisorCoordinator &&
+      opts.agentHomeMutationCoordinator &&
+      supervisorCoordinator !== opts.agentHomeMutationCoordinator
+    ) {
+      throw new Error(
+        'IntentDispatcher refused split agent-home fence authorities',
+      );
+    }
+    if (opts.supervisor?.fenceAndQuiesceAgent && !supervisorCoordinator) {
+      throw new Error(
+        'purge-capable Supervisor must expose its agent-home mutation coordinator',
+      );
+    }
+    this.agentHomeMutationCoordinator =
+      supervisorCoordinator ??
+      opts.agentHomeMutationCoordinator ??
+      new AgentHomeMutationCoordinator();
     this.hostOutboundAttachHandler = opts.hostOutboundAttachHandler;
     this.hostOutboundDetachHandler = opts.hostOutboundDetachHandler;
     this.hostOutboundReloadHandler = opts.hostOutboundReloadHandler;
@@ -451,7 +484,42 @@ export class IntentDispatcher {
     }
     this.intentCount += 1;
     try {
-      const result = await this.runHandler(intent as IntentName, parsed.data, ctx);
+      const intentName = intent as IntentName;
+      const effect = agentHomeCommandEffect(intentName);
+      const execute = (): Promise<unknown> =>
+        this.runHandler(intentName, parsed.data, ctx);
+      let result: unknown;
+      if (isAgentHomeMutatorEffect(effect)) {
+        const scopedAgentId = commandAgentId(parsed.data);
+        if (!scopedAgentId) {
+          throw new Error(
+            `${intent} is classified as an agent mutator but has no agent_id`,
+          );
+        }
+        result = await this.agentHomeMutationCoordinator.runBounded(
+          scopedAgentId,
+          execute,
+        );
+      } else if (effect === 'purge') {
+        const scopedAgentId = commandAgentId(parsed.data);
+        if (!scopedAgentId) {
+          throw new Error(`${intent} is classified as purge but has no agent_id`);
+        }
+        result = await this.agentHomeMutationCoordinator.runPurge(
+          scopedAgentId,
+          async () => {
+            const quiesced = await this.requireAgentQuiescenceSupervisor()(
+              scopedAgentId,
+            );
+            const purged = await this.requireAgentFilesPurgeHandler()(
+              parsed.data as AgentFilesPurgeParams,
+            );
+            return { ...purged, quiesced_count: quiesced.quiesced_count };
+          },
+        );
+      } else {
+        result = await execute();
+      }
       // Validate the handler's own result against the declared schema
       // BEFORE sending it on the wire. If a handler ever drifts from
       // the contract (e.g. a refactor accidentally drops a field, or
@@ -875,6 +943,18 @@ export class IntentDispatcher {
     return this.supervisor;
   }
 
+  private requireAgentQuiescenceSupervisor(): NonNullable<
+    SupervisorContract['fenceAndQuiesceAgent']
+  > {
+    const supervisor = this.requireSupervisor();
+    if (!supervisor.fenceAndQuiesceAgent) {
+      throw new Error(
+        'agent_files_purge intent reached dispatcher with no agent quiescence supervisor wired',
+      );
+    }
+    return supervisor.fenceAndQuiesceAgent.bind(supervisor);
+  }
+
   /**
    * Owner-scoped deferred-queue cleanup (#task:1417 Stage 3, §11.4.1).
    * An ingress calls this when its connection drops so the daemon discards
@@ -1000,7 +1080,9 @@ export class IntentDispatcher {
 
   private requireAgentFilesPurgeHandler(): (
     params: AgentFilesPurgeParams,
-  ) => AgentFilesPurgeResult | Promise<AgentFilesPurgeResult> {
+  ) =>
+    | Omit<AgentFilesPurgeResult, 'quiesced_count'>
+    | Promise<Omit<AgentFilesPurgeResult, 'quiesced_count'>> {
     if (!this.agentFilesPurgeHandler) {
       throw new Error(
         'agent_files_purge intent reached dispatcher with no handler wired',

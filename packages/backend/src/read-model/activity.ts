@@ -42,7 +42,11 @@
 //      precondition, necessary not sufficient, #task:1268).
 // Then salience is derived (DM = directed-grade) and the list sorted §13.2:
 // directed tier first, most-recent-first within a tier.
-import type { BackendContext } from '../context.js';
+// #task:1983 W2 — the handle is bound at ASSEMBLY time
+// (`createActivityReadModel`), not read out of a god-context per call: this
+// projection only ever needed `db`, and taking the whole `BackendContext` is
+// what made the read side look like it had ambient access to everything.
+import type { Database as Db } from 'better-sqlite3';
 import { prepareObserved } from '../observability/observed-statement.js';
 import { channelAmbientEntersPredicate } from '../repos/attention-tier-predicates.js';
 import { LIVE_CONVERSATION_PREDICATE } from '../repos/conversation-liveness.js';
@@ -241,7 +245,7 @@ export type ActivitySourceId = (typeof ACTIVITY_SOURCE_IDS)[number];
  *  SUBTRACT them so an ambient row never anchors on a message already shown as a
  *  mention. */
 interface ActivityAssemblyContext {
-  ctx: BackendContext;
+  db: Db;
   viewerUserId: string;
   wsFilter: string | null;
   directedMessageIds: Set<string>;
@@ -257,7 +261,7 @@ type ActivitySource = (ac: ActivityAssemblyContext) => ActivityItemDto[];
  *  item per message (§7) and records the claimed message ids into the shared
  *  context so the positional source can subtract them. */
 const assembleDirectedNotifications: ActivitySource = ac => {
-  const { ctx, viewerUserId, wsFilter } = ac;
+  const { db, viewerUserId, wsFilter } = ac;
   // "Which claims exist" is NOT decided here: the WHERE clause interpolates
   // EFFECTIVE_DIRECTED_MENTION_PREDICATE (repos/directed-claim-predicate.ts),
   // the shared definition the badge and the per-channel directed count also
@@ -266,7 +270,7 @@ const assembleDirectedNotifications: ActivitySource = ac => {
   // requirement, so this query no longer needs to select a cursor column and
   // re-decide in TS.
   const notifRows = prepareObserved<{ viewer: string; ws: string | null }, DirectedNotificationRow>(
-      ctx.db,
+      db,
       'activity.directed_notifications',
       `SELECT
           n.id                AS id,
@@ -516,7 +520,7 @@ export const POSITIONAL_STREAMS_SQL = `
  *  source claimed (§8), so both the count and the first-unread anchor are over
  *  NON-directed messages. */
 const assemblePositionalStreams: ActivitySource = ac => {
-  const { ctx, viewerUserId, wsFilter } = ac;
+  const { db, viewerUserId, wsFilter } = ac;
   const excludedJson = JSON.stringify([...ac.directedMessageIds]);
   const positionalRows = prepareObserved<
       {
@@ -527,7 +531,7 @@ const assemblePositionalStreams: ActivitySource = ac => {
       },
       PositionalStreamRow
     >(
-      ctx.db,
+      db,
       'activity.positional_streams',
       POSITIONAL_STREAMS_SQL,
     )
@@ -582,11 +586,11 @@ const ACTIVITY_SOURCES = {
  * shared context (§8).
  */
 export function listActivity(
-  ctx: BackendContext,
+  db: Db,
   params: ListActivityParams,
 ): ListActivityDto {
   const ac: ActivityAssemblyContext = {
-    ctx,
+    db,
     viewerUserId: params.viewerUserId,
     wsFilter: params.workspaceId ?? null,
     directedMessageIds: new Set(),
@@ -607,4 +611,17 @@ export function listActivity(
   });
 
   return { items };
+}
+
+/**
+ * The Activity read surface a caller receives, handle already bound
+ * (#task:1983 W2). Route modules declare THIS in their deps rather than
+ * importing the module and passing a context.
+ */
+export interface ActivityReadModel {
+  readonly list: (params: ListActivityParams) => ListActivityDto;
+}
+
+export function createActivityReadModel(db: Db): ActivityReadModel {
+  return { list: params => listActivity(db, params) };
 }

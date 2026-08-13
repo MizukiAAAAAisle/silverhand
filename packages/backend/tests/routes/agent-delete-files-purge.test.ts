@@ -7,9 +7,9 @@
  * boundary):
  *   - happy: 204; `agent_files_purge` dispatched with `{ agent_id }`; DB rows
  *     gone.
- *   - fail-closed: a typed purge failure returns the code and KEEPS the agent
- *     row + memberships (no DB delete) so a retry's impact still routes.
- *   - daemon offline: 503 host_attach_pending, row preserved.
+ *   - fail-forward: a typed purge failure returns 202 and KEEPS the durable
+ *     marker + agent graph so the resumer retains its routing anchor.
+ *   - daemon offline: 202 pending-retry, row + marker preserved.
  *   - no path crosses the wire: params carry only the semantic agent id.
  */
 import { afterEach, describe, expect, it } from 'vitest';
@@ -63,7 +63,7 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     expect(member.n).toBe(0);
   });
 
-  it('fail-closed: a typed purge failure returns the code and KEEPS the agent + membership rows', async () => {
+  it('fail-forward: a typed purge failure returns 202 and KEEPS marker + graph', async () => {
     t = buildTestApp();
     const agentId = await makeActiveAgent(t, 'bob');
     const ws = (await (
@@ -82,11 +82,15 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     };
 
     const del = await delAgent(t, agentId);
-    expect(del.status).toBe(503);
-    expect(((await del.json()) as any).code).toBe('partial_purge');
+    expect(del.status).toBe(202);
+    expect(((await del.json()) as any).code).toBe(
+      'agent_deletion_pending_retry',
+    );
 
     // Row + membership preserved (the routing anchor for a retry).
-    expect((await http(t).get(`/api/agents/${agentId}`)).status).toBe(200);
+    const management = await http(t).get(`/api/agents/${agentId}`);
+    expect(management.status).toBe(200);
+    expect(((await management.json()) as any).agent.deletion_started_at).not.toBeNull();
     const member = t.ctx.db
       .prepare(
         'SELECT COUNT(*) as n FROM workspace_members WHERE workspace_id = ? AND agent_id = ?',
@@ -95,7 +99,7 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     expect(member.n).toBe(1);
   });
 
-  it('daemon offline: 503 host_attach_pending and the agent row is preserved', async () => {
+  it('daemon offline: 202 pending retry and the durable marker is preserved', async () => {
     t = buildTestApp();
     const agentId = await makeActiveAgent(t, 'carol');
 
@@ -103,9 +107,13 @@ describe('D4.e-4 — DELETE agent purges files via daemon agent_files_purge', ()
     t.fakeHostWs!.connectionIdForHostOverride = () => null;
 
     const del = await delAgent(t, agentId);
-    expect(del.status).toBe(503);
-    expect(((await del.json()) as any).code).toBe('host_attach_pending');
-    expect((await http(t).get(`/api/agents/${agentId}`)).status).toBe(200);
+    expect(del.status).toBe(202);
+    expect(((await del.json()) as any).code).toBe(
+      'agent_deletion_pending_retry',
+    );
+    const management = await http(t).get(`/api/agents/${agentId}`);
+    expect(management.status).toBe(200);
+    expect(((await management.json()) as any).agent.deletion_started_at).not.toBeNull();
   });
 
   // #task:1612 — DELETE performs no pre-purge backfill: L2 materializes

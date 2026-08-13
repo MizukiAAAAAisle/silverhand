@@ -66,6 +66,7 @@
  * multiplexer is host-isolated; no wire envelope shape change, no
  * new wire fields.
  */
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -84,6 +85,7 @@ import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
 import type { EventPublisher } from '../../src/runtime/event-handler.js';
+import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
 import { OutboundRuntimeEventFanout } from '../../src/runtime/outbound-event-fanout.js';
 import {
   HOST_WS_PATH,
@@ -133,7 +135,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   });
 
   // Issue a long-lived host token for each.
-  const tokens = new HostTokenService(db);
+  const tokens = new HostTokenService(createSqliteHostPersistence(db));
   const hostXToken = tokens.issueHostToken({ hostId: hostXRow.id }).hostToken;
   const hostYToken = tokens.issueHostToken({ hostId: hostYRow.id }).hostToken;
 
@@ -203,7 +205,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
   });
   let controller: HostWsServerController | null = null;
   const fanout = new OutboundRuntimeEventFanout({
-    db,
+    ...createRuntimeFanoutDbDeps({ db, events: publisher, logger }),
     events: publisher,
     transport: () => controller,
     logger,
@@ -212,6 +214,8 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     activityLog: null,
   });
   controller = installHostWebSocketServer(httpServer, t.ctx, {
+    hostTokenVerifier: new HostTokenService(createSqliteHostPersistence(t.ctx.db)),
+    hosts: new HostRepo(t.ctx.db),
     eventSink: fanout,
     pingIntervalMs: 0,
   });

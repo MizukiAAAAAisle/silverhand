@@ -1478,8 +1478,10 @@ describe('Task create/edit/detail routes', () => {
 
       // `slowStatementMs: 0` makes every observed statement log, which turns the
       // observability layer into an executed-query recorder. Filtering on the
-      // `tasks.` prefix is sound because the store owns that prefix and the
-      // viewer-visibility gate is an unobserved `db.prepare`.
+      // `tasks.` prefix is sound because the task repo owns that prefix; the
+      // viewer-visibility membership gate runs through the observed narrow port
+      // (`tasks.conversation_user_access`), so it appears once alongside the
+      // single summary read.
       const executed: string[] = [];
       configureDatabaseObservation(t.ctx.db, {
         slowStatementMs: 0,
@@ -1498,7 +1500,7 @@ describe('Task create/edit/detail routes', () => {
       );
 
       expect(res.status).toBe(200);
-      expect(executed).toEqual(['tasks.get_joined_by_number']);
+      expect(executed).toEqual(['tasks.get_joined_by_number', 'tasks.conversation_user_access']);
     });
   });
 });

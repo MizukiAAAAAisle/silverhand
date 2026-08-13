@@ -61,6 +61,9 @@ export const AgentDtoSchema = z.object({
    *  `materialization_failed_code`; NULL while the row is in
    *  `pending_materialization` or `active`. */
   materialization_failed_at: z.number().nullable(),
+  /** Durable terminal-deletion intent. Non-null means host cleanup/DB commit
+   *  is pending or retrying; management readers must not present it as active. */
+  deletion_started_at: z.number().nullable(),
   created_at: z.number(),
   updated_at: z.number(),
 });

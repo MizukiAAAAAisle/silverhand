@@ -1,3 +1,4 @@
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
@@ -34,10 +35,8 @@ runOutboundFrameAdapterContract('standalone (outbound WSS)', async () => {
   });
   // pingIntervalMs: 0 — disable server→daemon heartbeats so the fake
   // daemon's frame stream contains only command frames.
-  const controller: HostWsServerController = installHostWebSocketServer(
-    httpServer,
-    t.ctx,
-    { pingIntervalMs: 0 },
+  const controller: HostWsServerController = installHostWebSocketServer(httpServer, t.ctx, {
+    hostTokenVerifier: new HostTokenService(createSqliteHostPersistence(t.ctx.db)), hosts: new HostRepo(t.ctx.db), pingIntervalMs: 0 },
   );
   await new Promise<void>(resolve =>
     httpServer.listen(0, '127.0.0.1', resolve),
@@ -47,7 +46,7 @@ runOutboundFrameAdapterContract('standalone (outbound WSS)', async () => {
 
   const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local');
   if (!host) throw new Error('test app did not provision a local host');
-  const issued = new HostTokenService(t.ctx.db).issueHostToken({
+  const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
     hostId: host.id,
   });
 
@@ -244,10 +243,8 @@ describe('StandaloneOutboundFrameAdapter capability recording (#task:1486 P2-2)'
       res.statusCode = 404;
       res.end();
     });
-    const controller: HostWsServerController = installHostWebSocketServer(
-      httpServer,
-      t.ctx,
-      { pingIntervalMs: 0 },
+    const controller: HostWsServerController = installHostWebSocketServer(httpServer, t.ctx, {
+    hostTokenVerifier: new HostTokenService(createSqliteHostPersistence(t.ctx.db)), hosts: new HostRepo(t.ctx.db), pingIntervalMs: 0 },
     );
     await new Promise<void>(resolve =>
       httpServer.listen(0, '127.0.0.1', resolve),
@@ -257,7 +254,7 @@ describe('StandaloneOutboundFrameAdapter capability recording (#task:1486 P2-2)'
 
     const host = new HostRepo(t.ctx.db).getOwnedLocalForUser('local');
     if (!host) throw new Error('test app did not provision a local host');
-    const issued = new HostTokenService(t.ctx.db).issueHostToken({
+    const issued = new HostTokenService(createSqliteHostPersistence(t.ctx.db)).issueHostToken({
       hostId: host.id,
     });
     const adapter = new StandaloneOutboundFrameAdapter(() => controller);

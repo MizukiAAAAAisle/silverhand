@@ -4,23 +4,59 @@
 // just produced event E". Before the fanout mutates any per-host runtime
 // state or dispatches the event into projection / DB / SSE, this guard
 // validates that the claimed (agent, conversation) actually belong to the
-// connecting host. It is pure read-only policy over the repos and fails
-// closed — it owns no fanout runtime state, so the fanout core is
-// guaranteed to only ever see already-authenticated events.
+// connecting host. It is pure read-only policy and fails closed — it owns no
+// fanout runtime state, so the fanout core is guaranteed to only ever see
+// already-authenticated events.
+//
+// #task:1982 W3 review fix — the policy lives here, but its two DB reads do
+// not: the guard names {@link RuntimePerimeterAgentReadPort} /
+// {@link RuntimePerimeterConversationReadPort}, which are the three facts the
+// chain below actually consults and nothing more. Two consequences, both
+// deliberate: this module imports no repo and no driver, so a non-SQLite
+// deployment satisfies it by implementing three methods; and the guard is
+// STRUCTURALLY unable to widen its reads without a visible port change (it
+// never receives a row, so "while I'm here, also check the workspace" is not a
+// one-line edit). The fanout in turn depends on
+// {@link RuntimeEventPerimeterPort}, not on this class — a class type would be
+// nominal (private fields) and therefore unimplementable by anyone else.
 import type { OutboundDaemonToServerEventFrame } from '@silverhand/host';
 import type { BackendLogger } from '../context.js';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
+
+/**
+ * What the fanout requires of its perimeter: a verdict per frame. The fanout
+ * must not be able to see, or care, how the verdict is reached.
+ */
+export interface RuntimeEventPerimeterPort {
+  /** `true` = admit the frame into state mutation + dispatch. Never throws:
+   *  a perimeter that throws would fail OPEN in the fanout's error path. */
+  assert(hostId: string, event: OutboundDaemonToServerEventFrame): boolean;
+}
+
+export interface RuntimePerimeterAgentReadPort {
+  /**
+   * The host that owns `agentId`, or `null` when no such agent exists. The two
+   * cases are DIFFERENT operational signals (missing agent = DB/migration
+   * skew; wrong host = boundary crossing), so the guard needs to tell them
+   * apart — which this single read does, without handing over an agent row.
+   */
+  ownerHostIdOf(agentId: string): string | null;
+}
+
+export interface RuntimePerimeterConversationReadPort {
+  exists(conversationId: string): boolean;
+  /** Is `agentId` a member of `conversationId`? */
+  hasAgent(conversationId: string, agentId: string): boolean;
+}
 
 export interface EventPerimeterGuardDeps {
-  agents: AgentRepo;
-  conversations: ConversationRepo;
+  agents: RuntimePerimeterAgentReadPort;
+  conversations: RuntimePerimeterConversationReadPort;
   logger: BackendLogger;
 }
 
-export class EventPerimeterGuard {
-  private readonly agents: AgentRepo;
-  private readonly conversations: ConversationRepo;
+export class EventPerimeterGuard implements RuntimeEventPerimeterPort {
+  private readonly agents: RuntimePerimeterAgentReadPort;
+  private readonly conversations: RuntimePerimeterConversationReadPort;
   private readonly logger: BackendLogger;
 
   constructor(deps: EventPerimeterGuardDeps) {
@@ -91,8 +127,8 @@ export class EventPerimeterGuard {
       // construction (no per-agent target), admitted.
       return true;
     }
-    const agent = this.agents.get(event.agent_id);
-    if (!agent) {
+    const agentHostId = this.agents.ownerHostIdOf(event.agent_id);
+    if (agentHostId === null) {
       this.logger.warn(
         {
           connectionHostId: hostId,
@@ -104,12 +140,12 @@ export class EventPerimeterGuard {
       );
       return false;
     }
-    if (agent.host_id !== hostId) {
+    if (agentHostId !== hostId) {
       this.logger.warn(
         {
           connectionHostId: hostId,
           agentId: event.agent_id,
-          agentHostId: agent.host_id,
+          agentHostId,
           eventKind: event.kind,
           reason: 'agent_host_mismatch',
           action: 'outbound_event_perimeter_mismatch',
@@ -123,8 +159,7 @@ export class EventPerimeterGuard {
     // `agent_id` also has `conversation_id`). A missing field
     // here would be a schema bug.
     const conversationId = (event as { conversation_id: string }).conversation_id;
-    const conversation = this.conversations.get(conversationId);
-    if (!conversation) {
+    if (!this.conversations.exists(conversationId)) {
       this.logger.warn(
         {
           connectionHostId: hostId,
@@ -138,7 +173,7 @@ export class EventPerimeterGuard {
       );
       return false;
     }
-    if (!this.conversations.getAgent(conversationId, event.agent_id)) {
+    if (!this.conversations.hasAgent(conversationId, event.agent_id)) {
       this.logger.warn(
         {
           connectionHostId: hostId,

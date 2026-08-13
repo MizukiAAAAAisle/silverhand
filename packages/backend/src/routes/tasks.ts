@@ -25,7 +25,7 @@ import {
 import type { Context } from 'hono';
 import type { AppEnv } from '../auth/principal.js';
 import type { BackendContext } from '../context.js';
-import type { TaskBoardPopulationFilters } from '../repos/task-board-population.js';
+import type { TaskBoardPopulationFilters } from '../services/task/board.js';
 import { decodeTaskBoardCursor } from '../services/task/board.js';
 import { getUserPrincipal } from '../auth/principal.js';
 import { canPostToConversation } from '../permissions.js';

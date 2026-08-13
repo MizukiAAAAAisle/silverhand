@@ -1,3 +1,4 @@
+import { createSqliteHostPersistence } from '../../src/repos/host-uow.js';
 import { describe, expect, it } from 'vitest';
 import type { Database as Db } from 'better-sqlite3';
 import {
@@ -257,6 +258,6 @@ function createOwnedHostTokenFixture(db: Db, userId: string) {
     userId,
     installationId: 'installation-1',
   });
-  const tokens = new HostTokenService(db);
+  const tokens = new HostTokenService(createSqliteHostPersistence(db));
   return { hosts, hostId: host.id, tokens };
 }

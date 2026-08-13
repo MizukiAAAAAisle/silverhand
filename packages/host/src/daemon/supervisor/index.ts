@@ -96,6 +96,12 @@ import {
 } from '../spawn-prep.js';
 import { buildProfileMcpSpawnArgs } from '../mcp-spawn.js';
 import { chooseSilverhandCliLauncher } from '../silverhand-cli-launcher.js';
+import {
+  AgentCustodySettlementTimeoutError,
+  AgentDeletingError,
+  AgentHomeMutationCoordinator,
+  AgentQuiesceFailedError,
+} from '../agent-home-mutation-coordinator.js';
 import type {
   DeliveryOwnerContext,
   SupervisorContract,
@@ -202,6 +208,9 @@ export interface ResolvedRuntime {
 }
 
 export interface SupervisorOptions {
+  /** Optional composition-supplied owner. If omitted Supervisor creates one;
+   *  Dispatcher must derive this exact instance through the public accessor. */
+  agentHomeMutationCoordinator?: AgentHomeMutationCoordinator;
   /** Sink for outgoing events; wired by `runDaemon` to the per-socket
    *  broadcaster (with output backpressure applied per §2.2.2). */
   emit: (event: EventFrame) => void;
@@ -255,6 +264,7 @@ export interface SupervisorOptions {
   now?: () => number;
   sigtermToSigkillMs?: number;
   sigkillTimeoutMs?: number;
+  deletionCustodySettleTimeoutMs?: number;
   /** #task:1563 test seam: override the next-turn reservation stall warn
    *  threshold (default {@link NEXT_TURN_RESERVATION_STALL_WARN_MS}). */
   reservationStallWarnMs?: number;
@@ -667,6 +677,10 @@ function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
  *  long a CLI call can sit registered as the handle's waiter. */
 export const STALE_RECEIVE_DEFAULT_WAIT_MS = 20_000;
 export const STALE_RECEIVE_MAX_WAIT_MS = 120_000;
+/** A deletion attempt never invents a custody outcome. It may wait only this
+ * long for the ingress-owned response handoff to settle an already-reserved
+ * stale batch before returning retryable `quiesce_failed`. */
+export const DEFAULT_DELETION_CUSTODY_SETTLE_TIMEOUT_MS = 10_000;
 
 /** Typed non-custody arbitration failure for `agent_stale_receive`
  *  (taxonomy: `AgentStaleReceiveErrorCodeSchema` in protocol.ts). */
@@ -711,6 +725,7 @@ export class Supervisor implements SupervisorContract {
   private readonly now: () => number;
   private readonly sigtermToSigkillMs: number;
   private readonly sigkillTimeoutMs: number;
+  private readonly deletionCustodySettleTimeoutMs: number;
   private readonly reservationStallWarnMs: number;
   private readonly daemonInstanceId: string | null;
   private readonly runtimePidRootDir: string | null;
@@ -718,6 +733,7 @@ export class Supervisor implements SupervisorContract {
   private readonly localSilverhandCliLauncher: SilverhandCliLauncher | null;
   private readonly controlPlaneServerUrl: () => string | null;
   private readonly daemonSocketPath: string | null;
+  private readonly agentHomeCoordinator: AgentHomeMutationCoordinator;
 
   // ── 3c-b state ─────────────────────────────────────────────────
   /** Sticky per-(conv, agent) init failure counter + cooldown clock.
@@ -739,6 +755,13 @@ export class Supervisor implements SupervisorContract {
   private readonly activePullCallsByOwner = new Map<
     string,
     Set<{ cancelled: boolean }>
+  >();
+  /** Unsettled stale-receive custody, indexed independently of the current
+   * runtime handle. A handle may exit or be replaced after reserving a batch;
+   * deletion must still wait for the old response handoff proof. */
+  private readonly pullReservationsByAgent = new Map<
+    string,
+    Set<PullReservation>
   >();
   /** Per-(conv, agent) lifecycle serialization (Cindy plan v2 issue
    *  #6 + tightening `ixAq6GPTn4fVSpCF`). Each entry is the tail
@@ -772,6 +795,9 @@ export class Supervisor implements SupervisorContract {
     this.sigtermToSigkillMs =
       opts.sigtermToSigkillMs ?? DEFAULT_SIGTERM_TO_SIGKILL_MS;
     this.sigkillTimeoutMs = opts.sigkillTimeoutMs ?? DEFAULT_SIGKILL_TIMEOUT_MS;
+    this.deletionCustodySettleTimeoutMs =
+      opts.deletionCustodySettleTimeoutMs
+      ?? DEFAULT_DELETION_CUSTODY_SETTLE_TIMEOUT_MS;
     this.reservationStallWarnMs =
       opts.reservationStallWarnMs ?? NEXT_TURN_RESERVATION_STALL_WARN_MS;
     this.daemonInstanceId = opts.daemonInstanceId ?? null;
@@ -784,6 +810,8 @@ export class Supervisor implements SupervisorContract {
     this.localSilverhandCliLauncher = opts.localSilverhandCliLauncher ?? null;
     this.controlPlaneServerUrl = opts.controlPlaneServerUrl ?? (() => null);
     this.daemonSocketPath = opts.daemonSocketPath ?? null;
+    this.agentHomeCoordinator =
+      opts.agentHomeMutationCoordinator ?? new AgentHomeMutationCoordinator();
     this.initWatchdogMs = opts.initWatchdogMs ?? null;
     this.initLivenessSilenceMs = opts.initLivenessSilenceMs;
     this.initPreProtocolCapMs = opts.initPreProtocolCapMs;
@@ -844,7 +872,7 @@ export class Supervisor implements SupervisorContract {
     // real advance worth logging.
     if (prev !== undefined && prev >= observed) return;
     handle.observedSeqByStream.set(streamKey, observed);
-    this.logger.warn(
+    this.logger.info(
       {
         kind: 'process',
         action: 'freshness_observed_seq_advanced',
@@ -898,7 +926,7 @@ export class Supervisor implements SupervisorContract {
           if (entry.ownSeq > baseline) {
             current = decodeObservedSeq(entry.ownSeq);
             handle.observedSeqByStream.set(streamKey, current);
-            this.logger.warn(
+            this.logger.info(
               {
                 kind: 'process',
                 action: 'freshness_observed_seq_advanced',
@@ -1731,6 +1759,12 @@ export class Supervisor implements SupervisorContract {
         'pending stale event changed while the pull was waiting; re-issue against the new event',
       );
     }
+    // Dispatcher admission can precede a purge fence, so the definitive
+    // TOCTOU check belongs under the same lifecycle lock as the queue splice.
+    // Once fenced, no new pull reservation may be formed.
+    if (this.agentHomeCoordinator.isFenced(live.agentId)) {
+      throw new AgentDeletingError(live.agentId);
+    }
     if (live.pullWaiter !== null || live.pullReservation !== null) {
       // One waiter/reservation per handle. Our own waiter is always
       // cleared before re-evaluating, so anything present here belongs
@@ -1773,7 +1807,20 @@ export class Supervisor implements SupervisorContract {
       const settled = new Promise<void>(resolve => {
         markSettled = resolve;
       });
-      live.pullReservation = { staleEventId, batch, combined, settled, markSettled };
+      const reservation = {
+        staleEventId,
+        batch,
+        combined,
+        settled,
+        markSettled,
+      } satisfies PullReservation;
+      live.pullReservation = reservation;
+      let agentReservations = this.pullReservationsByAgent.get(live.agentId);
+      if (!agentReservations) {
+        agentReservations = new Set();
+        this.pullReservationsByAgent.set(live.agentId, agentReservations);
+      }
+      agentReservations.add(reservation);
       // Custody settles only at the response transport handoff; the
       // ingress invokes this exactly once (#task:1614 proof point).
       ctx.responseHandoff = handoffOk => {
@@ -1951,7 +1998,15 @@ export class Supervisor implements SupervisorContract {
       // The caller-visible settlement happens-before (P1-2 v2): resolve
       // AFTER the locked section completed, unconditionally — a hung
       // `settled` promise would block the send barrier forever.
-      (settledReservation as PullReservation | null)?.markSettled();
+      const reservation = settledReservation as PullReservation | null;
+      reservation?.markSettled();
+      if (reservation) {
+        const agentReservations = this.pullReservationsByAgent.get(handle.agentId);
+        agentReservations?.delete(reservation);
+        if (agentReservations?.size === 0) {
+          this.pullReservationsByAgent.delete(handle.agentId);
+        }
+      }
     }
   }
 
@@ -1993,7 +2048,12 @@ export class Supervisor implements SupervisorContract {
    *     entirely so an in-flight retry can complete.
    */
   async start(params: RuntimeStartParams): Promise<RuntimeStartResult> {
+    this.assertAgentHomeOpen(params.agent_id);
     return this.startWithLock(params, 0);
+  }
+
+  agentHomeMutationCoordinator(): AgentHomeMutationCoordinator {
+    return this.agentHomeCoordinator;
   }
 
   private startWithLock(
@@ -2008,6 +2068,7 @@ export class Supervisor implements SupervisorContract {
     params: StartUnlockedParams,
     initAttempt: number,
   ): Promise<RuntimeStartResult> {
+    this.assertAgentHomeOpen(params.agent_id);
     const k = key(params.conversation_id, params.agent_id);
 
     // Idempotent on (conv, agent) — second start while running
@@ -2791,6 +2852,18 @@ export class Supervisor implements SupervisorContract {
     });
   }
 
+  /** Settle daemon-held deferred custody exactly once before a hard stop.
+   *  Emptying happens only after each canonical failure event is emitted, so a
+   *  child that never exits cannot strand backend inbox rows in-flight. */
+  private failDeferredQueue(handle: RuntimeHandle): void {
+    if (handle.deferredQueue.length === 0) return;
+    const doomed = handle.deferredQueue;
+    handle.deferredQueue = [];
+    for (const entry of doomed) {
+      this.emitStartupDeliveryFailed(handle, entry.deliveryIds, 'child_exit');
+    }
+  }
+
   /**
    * Step-0 ready_for_drain gate. The single arbiter of when this
    * event fires; called from (a) start()'s setImmediate ready
@@ -2855,6 +2928,10 @@ export class Supervisor implements SupervisorContract {
   private hardStopHandle(handle: RuntimeHandle): Promise<RuntimeStopResult> {
     handle.intentionalExit = true;
     handle.phase = 'draining';
+    // A deletion fence (or any hard stop) makes queued custody impossible to
+    // flush. Settle now rather than waiting for `exit`: SIGKILL itself has a
+    // bounded timeout, and a non-exiting child must not strand rows forever.
+    this.failDeferredQueue(handle);
     // Cindy `HyC05fC-FEs94uoZ` B2: a user-initiated hard stop must
     // cancel any in-flight init watchdog (and compaction watchdog) AT
     // DRAINING ENTRY, mirroring CM (`conversation-manager.ts`
@@ -3004,6 +3081,7 @@ export class Supervisor implements SupervisorContract {
   ): Promise<RuntimeDeliverResult> {
     const k = key(params.conversation_id, params.agent_id);
     return this.withLifecycleLock(k, async () => {
+      this.assertAgentHomeOpen(params.agent_id);
       // Fail loud on a drifted batch before any custody decision — the
       // same consistency contract the spawn-time startup batch enforces.
       this.assertDeliveryMetadataConsistent(
@@ -3392,6 +3470,7 @@ export class Supervisor implements SupervisorContract {
       // Handle may have been replaced (respawn) or torn down since the
       // flush was scheduled — only act on the exact same live handle.
       if (!live || live !== handle) return;
+      if (this.agentHomeCoordinator.isFenced(live.agentId)) return;
       if (live.flushingDeferred) return;
       if (live.deferredQueue.length === 0) return;
       if (live.phase !== 'ready' || !driverReadyToEncode(live.driver)) return;
@@ -3554,6 +3633,98 @@ export class Supervisor implements SupervisorContract {
       ),
     );
     return { stopped_count: count };
+  }
+
+  /**
+   * Agent-wide terminal deletion barrier. Every selected handle is stopped
+   * under its existing lifecycle lock, and success requires the child's real
+   * `exit` event rather than merely sending SIGKILL.
+   */
+  async fenceAndQuiesceAgent(
+    agentId: string,
+  ): Promise<{ quiesced_count: number }> {
+    if (!this.agentHomeCoordinator.isFenced(agentId)) {
+      throw new Error(
+        `refusing to quiesce agent ${agentId} before the shared deletion fence is installed`,
+      );
+    }
+
+    const livingKeys = [...this.handles.entries()]
+      .filter(([, handle]) =>
+        handle.agentId === agentId && handle.phase !== 'exited'
+      )
+      .map(([k]) => k);
+
+    // A stale-receive reservation is custody already removed from the normal
+    // deferred queue. Its response handoff is the only valid proof of whether
+    // it was consumed or must be restored/failed. Wait outside every
+    // lifecycle lock so settlement can acquire that same lock. Timeout never
+    // fabricates an outcome and never starts rm: the coordinator retains its
+    // terminal fence in `fenced_retryable` for a later purge attempt.
+    const reservations = [
+      ...(this.pullReservationsByAgent.get(agentId) ?? []),
+    ];
+    const custodySettled = await Promise.all(
+      reservations.map(reservation =>
+        this.waitForDeletionCustodySettlement(agentId, reservation)
+      ),
+    );
+    const unsettledCount = custodySettled.filter(settled => !settled).length;
+    if (unsettledCount > 0) {
+      throw new AgentCustodySettlementTimeoutError(agentId, unsettledCount);
+    }
+
+    const outcomes = await Promise.all(
+      livingKeys.map(k =>
+        this.withLifecycleLock(k, async (): Promise<boolean> => {
+          const handle = this.handles.get(k);
+          this.initRetryStates.delete(k);
+          if (!handle || handle.agentId !== agentId || handle.phase === 'exited') {
+            return true;
+          }
+          const result = await this.hardStopHandle(handle);
+          return result.stopped;
+        }),
+      ),
+    );
+    const livingCount = outcomes.filter(stopped => !stopped).length;
+    if (livingCount > 0) {
+      throw new AgentQuiesceFailedError(agentId, livingCount);
+    }
+    return { quiesced_count: livingKeys.length };
+  }
+
+  private async waitForDeletionCustodySettlement(
+    agentId: string,
+    reservation: PullReservation,
+  ): Promise<boolean> {
+    const settlement = reservation.settled;
+
+    let timer: NodeJS.Timeout | null = null;
+    const outcome = await Promise.race([
+      settlement.then(() => 'settled' as const),
+      new Promise<'timeout'>(resolve => {
+        timer = setTimer(
+          () => resolve('timeout'),
+          this.deletionCustodySettleTimeoutMs,
+        );
+        timer.unref();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (outcome === 'settled') return true;
+
+    this.logger.warn(
+      {
+        kind: 'process',
+        action: 'deletion_custody_settlement_timeout',
+        agent_id: agentId,
+        delivery_ids: [...reservation.combined.deliveryIds],
+        timeout_ms: this.deletionCustodySettleTimeoutMs,
+      },
+      'agent deletion could not prove stale-receive custody settlement before timeout',
+    );
+    return false;
   }
 
   // ── runtime_close_activity_log ─────────────────────────────────
@@ -4570,12 +4741,7 @@ export class Supervisor implements SupervisorContract {
     // (oneShot respawn-with-batch or `ready_for_drain` replay re-drives).
     // No orphan: the DB rows were never acked. Emitted per-entry so each
     // owner's rollback is independent.
-    if (handle.deferredQueue.length > 0) {
-      for (const entry of handle.deferredQueue) {
-        this.emitStartupDeliveryFailed(handle, entry.deliveryIds, 'child_exit');
-      }
-      handle.deferredQueue = [];
-    }
+    this.failDeferredQueue(handle);
     this.clearReservationStallTimer(handle);
     // A waiting stale-receive pull (#task:1614) re-evaluates immediately
     // and observes `runtime_replaced` instead of running out its window.
@@ -5030,6 +5196,22 @@ export class Supervisor implements SupervisorContract {
     originalParams: RuntimeStartParams,
     newAttempt: number,
   ): Promise<void> {
+    if (this.agentHomeCoordinator.isFenced(originalParams.agent_id)) {
+      this.clearInitRetryState(
+        originalParams.conversation_id,
+        originalParams.agent_id,
+      );
+      this.logger.info(
+        {
+          kind: 'process',
+          action: 'init_retry_respawn_fenced',
+          conversationId: originalParams.conversation_id,
+          agent_id: originalParams.agent_id,
+        },
+        'skipping internal retry respawn: agent deletion fence is installed',
+      );
+      return;
+    }
     try {
       await this.startWithLock(originalParams, newAttempt);
     } catch (err) {
@@ -5044,6 +5226,12 @@ export class Supervisor implements SupervisorContract {
         },
         'init watchdog retry respawn failed',
       );
+    }
+  }
+
+  private assertAgentHomeOpen(agentId: string): void {
+    if (this.agentHomeCoordinator.isFenced(agentId)) {
+      throw new AgentDeletingError(agentId);
     }
   }
 

@@ -1,0 +1,254 @@
+/**
+ * Outbound runtime fanout composition (#task:1982 W3).
+ *
+ * THE one place where the fanout's durable needs meet a driver handle. This is
+ * a persistence composition module, not an allowlist of convenience: it may do
+ * `Db → RuntimeFanoutPersistence` concrete wiring and nothing else. It holds no
+ * fanout business judgement, no cache / coordinator / event logic, and its
+ * return surface exposes neither the raw `Db` nor any concrete repo — only the
+ * driver-free facets of {@link RuntimeFanoutPersistence} plus the collaborators
+ * whose construction is DB-backed (`members`, `perimeter`, `statusProjector`,
+ * `conversationActivity`). Production `index.ts` and every test construction
+ * site consume THIS factory, so there is one wiring rather than five drifting
+ * copies.
+ *
+ * ## Where the R4 projections happen
+ *
+ * Physical rows stop here. Three conversions are load-bearing rather than
+ * cosmetic, because each drops columns a runtime decision must not be able to
+ * read:
+ *  - `inbox.*` → {@link RuntimeInboxMessage}: the joined `MessageRow` also
+ *    carries `conversation_id`, the author snapshot and the retired `task_*`
+ *    columns.
+ *  - `hosts.get` → {@link RuntimeHostRoutingView}: `HostRow` also carries
+ *    install identity and onboarding phase markers, and a routing decision
+ *    must not see them.
+ *  - the reconcile JOIN → {@link DbLiveRuntime}: `ConversationRepo`'s
+ *    snake_case columns become the three facts the pass folds over.
+ * `users.nameOf` is the same rule at field granularity: the fanout needs a
+ * handle, so it never receives a `UserRow`. The perimeter guard's two reads are
+ * projected here for the same reason — it is handed an owning host id and two
+ * existence answers, so its policy cannot start depending on a row it was never
+ * given, and the guard itself names no repo.
+ *
+ * Everything durable is delegated to an existing repo method — the only driver
+ * call this file makes itself is the `db.transaction` behind
+ * `RuntimeSessionUnitOfWork`, because a transaction boundary is precisely the
+ * thing a composition module owes and a repo cannot decide.
+ */
+import type { Database as Db } from 'better-sqlite3';
+import { AgentRepo } from '../repos/agent-repo.js';
+import { ConversationEventRepo } from '../repos/conversation-event-repo.js';
+import { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
+import { ConversationRepo } from '../repos/conversation-repo.js';
+import { HostRepo } from '../repos/host-repo.js';
+import { MessageRepo } from '../repos/message-repo.js';
+import { UserRepo } from '../repos/user-repo.js';
+import { WorkspaceRepo } from '../repos/workspace-repo.js';
+import { MembershipService } from '../services/membership-service.js';
+import { EventPerimeterGuard } from '../runtime/event-perimeter.js';
+import { DbRuntimeStatusProjector } from '../runtime/status-projector.js';
+import type { ConversationActivitySink } from '../runtime/event-handler.js';
+import type { RuntimeEventPerimeterPort } from '../runtime/event-perimeter.js';
+import type { RuntimeStatusProjector } from '../runtime/status-projector.js';
+import type {
+  DbLiveRuntime,
+  RuntimeFanoutPersistence,
+  RuntimeHostRoutingView,
+  RuntimeInboxDelivery,
+  RuntimeInboxDeliveryKind,
+  RuntimeInboxMessage,
+  RuntimeMemberRosterPort,
+} from '../runtime/persistence-ports.js';
+import { singleConversationViewerUserId } from '../viewer-scope.js';
+import type { BackendLogger } from '../context.js';
+import type { EventPublisher } from '../runtime/event-handler.js';
+
+/**
+ * Everything `OutboundRuntimeEventFanout` needs that is DB-backed. Spread into
+ * its options at the call site; the fanout's own process-state authority
+ * (cache, coordinator, waiter registry) is NOT here and is not constructed
+ * from a driver.
+ */
+export interface RuntimeFanoutDbDeps {
+  persistence: RuntimeFanoutPersistence;
+  members: RuntimeMemberRosterPort;
+  perimeter: RuntimeEventPerimeterPort;
+  statusProjector: RuntimeStatusProjector;
+  conversationActivity: ConversationActivitySink;
+}
+
+/** Field-by-field, so a column added to `messages` cannot ride along into the
+ *  runtime by virtue of being on the joined row. The parameter is the
+ *  projection itself: a `MessageRow` satisfies it structurally, and the surplus
+ *  columns are dropped by construction rather than by a cast. */
+function toRuntimeInboxMessage(row: RuntimeInboxMessage): RuntimeInboxMessage {
+  return {
+    id: row.id,
+    seq: row.seq,
+    thread_root_id: row.thread_root_id,
+    from_kind: row.from_kind,
+    from_agent_id: row.from_agent_id,
+    from_user_id: row.from_user_id,
+    content: row.content,
+    created_at: row.created_at,
+    metadata: row.metadata,
+  };
+}
+
+/** `deliveryKind`'s assignment here is the drift alarm: a persistence-side
+ *  vocabulary that grows a member stops type-checking in this file rather than
+ *  reaching the runtime as an unmodelled string. */
+function toRuntimeInboxDelivery(item: {
+  inboxId: number;
+  deliveryKind: RuntimeInboxDeliveryKind;
+  message: RuntimeInboxMessage;
+}): RuntimeInboxDelivery {
+  return {
+    inboxId: item.inboxId,
+    deliveryKind: item.deliveryKind,
+    message: toRuntimeInboxMessage(item.message),
+  };
+}
+
+export function createRuntimeFanoutDbDeps(deps: {
+  db: Db;
+  events: EventPublisher;
+  logger: BackendLogger;
+}): RuntimeFanoutDbDeps {
+  const agents = new AgentRepo(deps.db);
+  const conversations = new ConversationRepo(deps.db);
+  const conversationEvents = new ConversationEventRepo(deps.db);
+  const hosts = new HostRepo(deps.db);
+  const inbox = new ConversationInboxRepo(deps.db);
+  const messages = new MessageRepo(deps.db);
+  const users = new UserRepo(deps.db);
+  const workspaces = new WorkspaceRepo(deps.db);
+
+  const persistence: RuntimeFanoutPersistence = {
+    inbox: {
+      ensureDelivery: (conversationId, agentId, messageId) =>
+        inbox.ensureDelivery(conversationId, agentId, messageId),
+      listPending: (conversationId, agentId) =>
+        inbox.listPending(conversationId, agentId).map(toRuntimeInboxDelivery),
+      claimPending: (conversationId, agentId, inFlightOwner) =>
+        inbox
+          .claimPending(conversationId, agentId, inFlightOwner)
+          .map(item => ({
+            ...toRuntimeInboxDelivery(item),
+            inFlightOwner: item.inFlightOwner,
+          })),
+      hasUndeliveredForPair: (conversationId, agentId) =>
+        inbox.hasUndeliveredForPair(conversationId, agentId),
+      countInFlightForPairOwner: (conversationId, agentId, inFlightOwner) =>
+        inbox.countInFlightForPairOwner(conversationId, agentId, inFlightOwner),
+      markDelivered: inboxIds => {
+        inbox.markDelivered([...inboxIds]);
+      },
+      rollbackInFlight: (inboxIds, inFlightOwner) => {
+        inbox.rollbackInFlight(inboxIds, inFlightOwner);
+      },
+      rollbackInFlightAnyOwner: inboxIds => {
+        inbox.rollbackInFlightAnyOwner(inboxIds);
+      },
+      rollbackInFlightForOwner: inFlightOwner => {
+        inbox.rollbackInFlightForOwner(inFlightOwner);
+      },
+      rollbackInFlightForPairExceptOwner: (conversationId, agentId, currentOwner) =>
+        inbox.rollbackInFlightForPairExceptOwner(
+          conversationId,
+          agentId,
+          currentOwner,
+        ),
+    },
+    agents: {
+      get: agentId => agents.get(agentId),
+      isRuntimeTransitioning: agentId => agents.isRuntimeTransitioning(agentId),
+    },
+    conversations: {
+      get: conversationId => conversations.get(conversationId),
+      getAgent: (conversationId, agentId) =>
+        conversations.getAgent(conversationId, agentId),
+      listAgents: conversationId => conversations.listAgents(conversationId),
+      singleViewerUserId: conversationId =>
+        singleConversationViewerUserId(conversations, conversationId),
+    },
+    workspaces: {
+      get: workspaceId => workspaces.get(workspaceId),
+      listForAgent: agentId => workspaces.listForAgent(agentId),
+    },
+    users: {
+      nameOf: userId => users.get(userId)?.name ?? null,
+    },
+    hosts: {
+      routingView: hostId => {
+        const row = hosts.get(hostId);
+        if (!row) return null;
+        const view: RuntimeHostRoutingView = {
+          id: row.id,
+          ownerUserId: row.user_id,
+          revokedAt: row.revoked_at,
+        };
+        return view;
+      },
+    },
+    hydrateReconcile: {
+      listDbLiveRuntimesForHost: hostId =>
+        conversations.listLiveRuntimesForHost(hostId).map<DbLiveRuntime>(row => ({
+          conversationId: row.conversation_id,
+          agentId: row.agent_id,
+          status: row.status,
+          pid: row.pid,
+        })),
+      markCrashed: (conversationId, agentId) =>
+        conversations.updateAgentRuntime(conversationId, agentId, {
+          status: 'crashed',
+          pid: null,
+        }),
+    },
+    session: {
+      // Plain deferred transaction: both statements are writes, so the write
+      // lock is taken at the first one and the pair cannot interleave with
+      // another writer. Atomicity only — see the R5 note on
+      // `RuntimeSessionUnitOfWork`. The callback is synchronous by contract;
+      // better-sqlite3 would not honor an `await` inside it.
+      atomically: fn =>
+        deps.db.transaction(() =>
+          fn({
+            clearCliSession: (conversationId, agentId) =>
+              conversations.updateAgentRuntime(conversationId, agentId, {
+                cliSessionId: null,
+              }),
+            insertSystemMessage: input =>
+              messages.insertForConversation({
+                conversationId: input.conversationId,
+                fromKind: 'system',
+                fromUserId: input.fromUserId,
+                content: input.content,
+                metadata: input.metadata,
+              }),
+          }),
+        )(),
+    },
+  };
+
+  return {
+    persistence,
+    members: new MembershipService({ agents, users, conversations }),
+    perimeter: new EventPerimeterGuard({
+      // The guard's reads are projections too (R4): it receives the owning
+      // host id and two existence answers, never an agent or conversation row.
+      agents: { ownerHostIdOf: agentId => agents.get(agentId)?.host_id ?? null },
+      conversations: {
+        exists: conversationId => conversations.get(conversationId) !== null,
+        hasAgent: (conversationId, agentId) =>
+          conversations.getAgent(conversationId, agentId) !== null,
+      },
+      logger: deps.logger,
+    }),
+    // DB-backed but stateless — the whole runtime-event → status mapping lives
+    // in the projector, so ONE instance serves every host the fanout tracks.
+    statusProjector: new DbRuntimeStatusProjector(conversations, deps.events),
+    conversationActivity: conversationEvents,
+  };
+}

@@ -4,6 +4,7 @@ import type { ConversationRepo } from '../../repos/conversation-repo.js';
 import type { MessageRepo } from '../../repos/message-repo.js';
 import type { MessageReactionRepo } from '../../repos/message-reaction-repo.js';
 import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
+import type { AgentReadModel } from '../../read-model/agent-read.js';
 
 /**
  * Shared dependency bag for the internal-agent route facets. Repos are
@@ -16,6 +17,9 @@ import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
 export interface InternalRouteDeps {
   ctx: BackendContext;
   agents: AgentRepo;
+  /** The agent-facing projections (history / channel list / search), handle
+   *  bound at composition time (#task:1983 W2). */
+  agentReads: AgentReadModel;
   conversations: ConversationRepo;
   messages: MessageRepo;
   reactions: MessageReactionRepo;

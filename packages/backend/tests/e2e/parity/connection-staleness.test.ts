@@ -24,6 +24,7 @@
  *     them), a fresh connection mints a DISTINCT id (old id never reused),
  *     and a closed adapter delivers no further events.
  */
+import { createSqliteHostPersistence } from '../../../src/repos/host-uow.js';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type Server as NetServer, type Socket } from 'node:net';
 import type { AddressInfo } from 'node:net';
@@ -46,6 +47,7 @@ import { HostRepo } from '../../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../../src/auth/agent-token-store.js';
 import type { EventPublisher } from '../../../src/runtime/event-handler.js';
+import { createRuntimeFanoutDbDeps } from '../../../src/adapters/runtime-fanout.js';
 import { OutboundRuntimeEventFanout } from '../../../src/runtime/outbound-event-fanout.js';
 import {
   HOST_WS_PATH,
@@ -120,7 +122,7 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
   const db = t.ctx.db;
 
   const hostRow = new HostRepo(db).getOwnedLocalForUser(t.viewerUserId)!;
-  const hostToken = new HostTokenService(db).issueHostToken({ hostId: hostRow.id }).hostToken;
+  const hostToken = new HostTokenService(createSqliteHostPersistence(db)).issueHostToken({ hostId: hostRow.id }).hostToken;
   const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
   const agents = new AgentRepo(db);
@@ -149,7 +151,7 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
   });
   let controller: HostWsServerController | null = null;
   const fanout = new OutboundRuntimeEventFanout({
-    db,
+    ...createRuntimeFanoutDbDeps({ db, events: publisher, logger }),
     events: publisher,
     transport: () => controller,
     logger,
@@ -158,6 +160,8 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     activityLog: null,
   });
   controller = installHostWebSocketServer(httpServer, t.ctx, {
+    hostTokenVerifier: new HostTokenService(createSqliteHostPersistence(t.ctx.db)),
+    hosts: new HostRepo(t.ctx.db),
     eventSink: fanout,
     pingIntervalMs: 0,
   });

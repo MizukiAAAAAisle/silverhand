@@ -403,6 +403,7 @@ describe('purgeAgentFiles', () => {
     // (relocation-v1 §3.2 / §7 task 4), so exactly one target is counted and
     // NO registry is consulted.
     expect(r).toEqual({ ok: true, purged_count: 1 });
+    expect(r).not.toHaveProperty('quiesced_count');
     expect(existsSync(l1Dir())).toBe(false);
     expect(existsSync(l2DirFor('ws_1'))).toBe(false);
     expect(existsSync(l2DirFor('ws_2'))).toBe(false);

@@ -5,6 +5,7 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { createSqliteTaskPersistence } from '../../src/repos/task-persistence.js';
 import { TaskService, type TaskServiceOptions } from '../../src/services/task-service.js';
 import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
@@ -66,10 +67,12 @@ function bootstrap(
     warn: vi.fn(),
     error: vi.fn(),
   };
+  const taskPersistence = createSqliteTaskPersistence(db, { messages });
   const service = new TaskService({
-    db,
-    conversations,
-    messages,
+    read: taskPersistence.read,
+    board: taskPersistence.board,
+    conversations: taskPersistence.conversations,
+    uow: taskPersistence.uow,
     agents,
     workspaces,
     runtimeHost: fake as unknown as AgentRuntimeHost,
@@ -2475,6 +2478,52 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
     }
   });
 
+  it('a same-batch duplicate source surfaces as a DRIVER-FREE source_conflict and rolls the whole batch back', async () => {
+    const t = bootstrap();
+    try {
+      // Both pre-checks pass (no task exists yet), then the SECOND row insert
+      // collides on UNIQUE(source_message_id) INSIDE the transaction. This is
+      // the only path that exercises the adapter's driver-dialect translation
+      // (`SqliteTaskRepo.isSourceUniqueCollision → TaskSourceConflictError`):
+      // the service must receive a typed `source_conflict`, never a raw
+      // driver error, and the whole batch (both rows) must roll back.
+      const src = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'user',
+        fromUserId: 'local',
+        content: 'source',
+      });
+      const actor = { kind: 'agent' as const, agentId: t.alice.id, conversationId: t.channel.id };
+      const tasksBefore = t.service.list({ actor });
+
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      t.fake.delivered = [];
+
+      const result = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor,
+        tasks: [
+          { title: 'first', sourceMessageId: src.id },
+          { title: 'second', sourceMessageId: src.id },
+        ],
+      });
+      unsub();
+
+      // Typed driver-free conflict — not a thrown SqliteError.
+      expect('error' in result && result.error).toBe('source_conflict');
+      // The whole batch rolled back: neither task is visible.
+      const after = t.service.list({ actor });
+      expect(after).toHaveLength(tasksBefore.length);
+      expect(after.some(x => x.title === 'first' || x.title === 'second')).toBe(false);
+      // No publish/deliver escaped.
+      expect(convKinds).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   it('source message that does not exist → source_message_not_found', async () => {
     const t = bootstrap();
     try {
@@ -2945,6 +2994,223 @@ describe('TaskService.editTask', () => {
       expect(fetchSystemMetadata(t, 'task_edit').length).toBe(0);
       expect(convKinds).toEqual([]);
       expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('notice INSERT failure rolls back claim: status unchanged, zero external effects', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        tasks: [{ title: 'claim rollback' }],
+      });
+      const id = taskId(created);
+
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      t.fake.delivered = [];
+      const insertSpy = vi
+        .spyOn(t.messages, 'insertForConversation')
+        .mockImplementationOnce(() => {
+          throw new Error('injected claim notice failure');
+        });
+
+      await expect(
+        t.service.claimTask({
+          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+        }),
+      ).rejects.toThrow('injected claim notice failure');
+      unsub();
+      expect(insertSpy).toHaveBeenCalledTimes(1);
+      insertSpy.mockRestore();
+
+      // The claim write rolled back with the failed event insert.
+      const after = refetch(t, id);
+      expect(after?.status).toBe('todo');
+      expect(after?.assignee).toBeNull();
+      // No durable event, no publish, no wake.
+      expect(fetchSystemMetadata(t, 'claim').length).toBe(0);
+      expect(convKinds).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('notice INSERT failure rolls back unclaim: status/assignee unchanged, zero external effects', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        tasks: [{ title: 'unclaim rollback' }],
+      });
+      const id = taskId(created);
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+
+      // Clean the create/claim deliveries so the assertion below is exact.
+      t.fake.delivered = [];
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      const insertSpy = vi
+        .spyOn(t.messages, 'insertForConversation')
+        .mockImplementationOnce(() => {
+          throw new Error('injected unclaim notice failure');
+        });
+
+      await expect(
+        t.service.unclaimTask({
+          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+        }),
+      ).rejects.toThrow('injected unclaim notice failure');
+      unsub();
+      expect(insertSpy).toHaveBeenCalledTimes(1);
+      insertSpy.mockRestore();
+
+      // The release write rolled back: the task is still claimed (in_progress,
+      // assigned to bob) — the unclaim did not escape.
+      const after = refetch(t, id);
+      expect(after?.status).toBe('in_progress');
+      expect(after?.assignee).toMatchObject({ type: 'agent', id: t.bob.id });
+      expect(fetchSystemMetadata(t, 'unclaim').length).toBe(0);
+      expect(convKinds).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('notice INSERT failure rolls back status: task status unchanged, zero external effects', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        tasks: [{ title: 'status rollback' }],
+      });
+      const id = taskId(created);
+      await t.service.claimTask({
+        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        by: { taskNumber: 1 },
+      });
+
+      t.fake.delivered = [];
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      const insertSpy = vi
+        .spyOn(t.messages, 'insertForConversation')
+        .mockImplementationOnce(() => {
+          throw new Error('injected status notice failure');
+        });
+
+      await expect(
+        t.service.updateStatus({
+          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          by: { taskNumber: 1 },
+          status: 'in_review',
+        }),
+      ).rejects.toThrow('injected status notice failure');
+      unsub();
+      expect(insertSpy).toHaveBeenCalledTimes(1);
+      insertSpy.mockRestore();
+
+      // The status write rolled back: still in_progress (the claim), not in_review.
+      const after = refetch(t, id);
+      expect(after?.status).toBe('in_progress');
+      expect(fetchSystemMetadata(t, 'status').length).toBe(0);
+      expect(convKinds).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('create is a single atomic capability: a failed SECOND batch step rolls back the whole batch, and the next create still gets a unique number in the committed set', async () => {
+    const t = bootstrap();
+    try {
+      // The write port exposes NO allocator primitive (#task:1980): numbering is
+      // internal to createTaskRow, so application code cannot split
+      // allocate/insert into a TOCTOU. This is enforced structurally at compile
+      // time; the behavior below pins the create+rollback contract through the
+      // OBSERVABLE read port — no native SQL in this test (native-SQL debt is
+      // shrink-only).
+      const actor = { kind: 'agent' as const, agentId: t.bob.id, conversationId: t.channel.id };
+      // Baseline: a committed task whose number anchors the later assertions
+      // (so the numbering check is not vacuous — the failed batch + success
+      // must not reuse or reorder below it).
+      const baseline = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor,
+        tasks: [{ title: 'baseline' }],
+      });
+      if (!('tasks' in baseline)) throw new Error('baseline create failed');
+      const baselineNumber = baseline.tasks[0]!.task_number;
+      const tasksBefore = t.service.list({ actor });
+      const eventsBefore = fetchSystemMetadata(t, 'create').length;
+
+      // Fault the SECOND event insert in a two-task batch: task A's row + event
+      // A succeed first, then event B throws. If create were not one atomic
+      // capability, A would remain visible — this proves the WHOLE batch
+      // (both rows + the first event) rolls back together, not just the
+      // failing task's.
+      const originalInsert = t.messages.insertForConversation.bind(t.messages);
+      const insertSpy = vi.spyOn(t.messages, 'insertForConversation');
+      let insertCalls = 0;
+      // NOTE: `insertForConversation` is SYNCHRONOUS (better-sqlite3) — the
+      // mock must throw synchronously, or the rejected Promise would escape the
+      // transaction callback unawaited and the batch would commit.
+      insertSpy.mockImplementation(((...args: Parameters<typeof t.messages.insertForConversation>) => {
+        insertCalls += 1;
+        if (insertCalls === 2) throw new Error('injected create notice failure');
+        return originalInsert(...args);
+      }) as never);
+
+      const convKinds: string[] = [];
+      const unsub = t.events.subscribe(t.channel.id, e => convKinds.push(e.kind));
+      t.fake.delivered = [];
+
+      await expect(
+        t.service.createTasks({
+          conversationId: t.channel.id,
+          actor,
+          tasks: [{ title: 'A' }, { title: 'B' }],
+        }),
+      ).rejects.toThrow('injected create notice failure');
+      expect(insertSpy).toHaveBeenCalledTimes(2);
+      unsub();
+      insertSpy.mockRestore();
+
+      // No visible task rows, no durable events, no publish/deliver escaped.
+      const after = t.service.list({ actor });
+      expect(after).toHaveLength(tasksBefore.length);
+      expect(after.some(x => x.title === 'A' || x.title === 'B')).toBe(false);
+      expect(fetchSystemMetadata(t, 'create').length).toBe(eventsBefore);
+      expect(convKinds).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+
+      // A subsequent successful create commits. Its number must be unique in
+      // the committed set AND strictly greater than the baseline (reusing a
+      // rolled-back number is allowed — we assert uniqueness/order, not
+      // gap-freeness). We do NOT rely on list order (the board is DESC).
+      const created = await t.service.createTasks({
+        conversationId: t.channel.id,
+        actor,
+        tasks: [{ title: 'post-rollback' }],
+      });
+      if (!('tasks' in created)) throw new Error('createTasks failed');
+      const newNumber = created.tasks[0]!.task_number;
+      const nums = t.service.list({ actor }).map(x => x.task_number);
+      expect(new Set(nums).size).toBe(nums.length); // no duplicates in committed set
+      expect(nums).toContain(baselineNumber);
+      expect(newNumber).toBeGreaterThan(baselineNumber);
     } finally {
       t.cleanup();
     }

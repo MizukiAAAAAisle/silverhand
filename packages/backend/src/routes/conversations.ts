@@ -55,7 +55,7 @@ import { timedRouteSpan } from '../observability/route-span.js';
 import { AnchorMessageNotInConversationError, InvalidThreadsCursorError } from '../repos/message-repo.js';
 import { addReaction, removeReaction } from '../application/react-message.js';
 import { buildChannelDetailResponse } from '../application/conversation-member.js';
-import { loadReactionAggregates, loadReactionDetail } from '../read-model/message-reactions.js';
+import type { MessageReactionsReadModel } from '../read-model/message-reactions.js';
 import {
   channelServiceErrorResponse,
   conversationMessageServiceErrorResponse,
@@ -79,13 +79,17 @@ export interface ConversationReadRouteDeps {
   workspaces: WorkspaceRepo;
   messages: MessageRepo;
   conversationReads: ConversationReadRepo;
+  /** Reaction aggregates for the message window, handle bound at composition
+   *  time (#task:1983 W2). Distinct from the write repo below. */
+  reactionReads: MessageReactionsReadModel;
 }
 
 export function createConversationReadApp(
   deps: ConversationReadRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, conversations, workspaces, messages, conversationReads } = deps;
+  const { ctx, conversations, workspaces, messages, conversationReads, reactionReads } =
+    deps;
 
   app.get('/api/workspaces/:id/message-unread', c => {
     const id = c.req.param('id');
@@ -263,8 +267,7 @@ export function createConversationReadApp(
           const viewerUserId = requireViewerUserId(c);
           const isMember =
             conversations.getUser(channel.id, viewerUserId) !== null;
-          const aggregates = loadReactionAggregates(
-            ctx,
+          const aggregates = reactionReads.loadAggregates(
             window.messages.map(message => message.id),
             isMember ? { kind: 'user', id: viewerUserId } : null,
           );
@@ -1006,13 +1009,17 @@ export interface ConversationRuntimeRouteDeps {
   search: SearchRepo;
   agents: AgentRepo;
   reactions: MessageReactionRepo;
+  /** The lazy reactor-detail projection, handle bound at composition time
+   *  (#task:1983 W2). Distinct from the `reactions` write repo above. */
+  reactionReads: MessageReactionsReadModel;
 }
 
 export function createConversationRuntimeApp(
   deps: ConversationRuntimeRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, conversations, messages, saved, search, agents, reactions } = deps;
+  const { ctx, conversations, messages, saved, search, agents, reactions, reactionReads } =
+    deps;
 
   app.post(apiPaths.messageSave(':id'), c => {
     const id = c.req.param('id');
@@ -1093,7 +1100,7 @@ export function createConversationRuntimeApp(
     if (!message || !canViewConversation(ctx, getUserPrincipal(c), message.conversation_id)) {
       return c.json({ error: 'message not found' }, 404);
     }
-    return c.json({ reactions: loadReactionDetail(ctx, id) });
+    return c.json({ reactions: reactionReads.loadDetail(id) });
   });
 
   app.get(apiPaths.search, c => {

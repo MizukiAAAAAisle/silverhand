@@ -541,11 +541,11 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/hello',
     description:
-      'v10 hello result — protocol_version + daemon identity + capabilities.',
+      'v11 hello result — protocol_version + daemon identity + capabilities.',
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 10,
+        protocol_version: 11,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -1339,6 +1339,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
       result: {
         ok: true,
         purged_count: 1,
+        quiesced_count: 2,
       },
     }),
     kind: { kind: 'response_success', intent: 'agent_files_purge' },
@@ -1450,6 +1451,15 @@ const RESPONSES_ERROR: WireFixture[] = [
 
 const RESPONSES_ERROR_TYPED: WireFixture[] = [
   {
+    name: 'response/agent_materialize-error-agent_deleting',
+    description: 'Terminal deletion fence rejected a late materialize writer.',
+    frame: enc({
+      id: 'req-agent-materialize-1',
+      error: { code: 'agent_deleting', message: 'agent is being deleted' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_materialize' },
+  },
+  {
     name: 'response/agent_materialize-error-agent_dir_collision',
     description:
       'Daemon refused to seed because the agent_dir is populated by foreign content (no sentinel) or carries a sentinel whose (agent_id, template_choice) identity does not match the request. §4.6 collision arms.',
@@ -1530,6 +1540,19 @@ const RESPONSES_ERROR_TYPED: WireFixture[] = [
   // #task:1614 agent_stale_receive non-custody arbitration failures —
   // each states "this call cannot arbitrate", never a custody fact
   // (custody facts travel only in the result outcomes).
+  {
+    name: 'response/agent_stale_receive-error-agent_deleting',
+    description:
+      'The terminal deletion fence refuses a new stale-receive custody reservation.',
+    frame: enc({
+      id: 'req-agent-stale-receive-1',
+      error: {
+        code: 'agent_deleting',
+        message: 'agent a1 is being deleted',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_stale_receive' },
+  },
   {
     name: 'response/agent_stale_receive-error-pull_already_active',
     description:
@@ -1776,6 +1799,15 @@ const AGENT_WORKSPACE_FILE_READ_ERROR_FIXTURES: WireFixture[] = [
 // missing. Seeding IS provisioning.
 const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
   {
+    name: 'response/agent_l2_seed-error-agent_deleting',
+    description: 'Terminal deletion fence rejected a late L2 writer.',
+    frame: enc({
+      id: 'req-agent-l2-seed-1',
+      error: { code: 'agent_deleting', message: 'agent is being deleted' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_l2_seed' },
+  },
+  {
     name: 'response/agent_l2_seed-error-registry_unavailable',
     description:
       'Legacy name, two real producers: no agents root resolved (no computer attached yet, or a bare daemon whose binding has neither a computers root nor an explicit agents root), or the workspace id segment is unsafe and can never form a bundle coordinate. NOT a registry consult.',
@@ -1829,6 +1861,15 @@ const AGENT_L2_SEED_ERROR_FIXTURES: WireFixture[] = [
 // D4.e-4 agent_files_purge typed errors. One per AgentFilesPurgeErrorCode slot.
 const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
   {
+    name: 'response/agent_files_purge-error-quiesce_failed',
+    description: 'A runtime child remained alive after SIGKILL timeout; rm did not run and the terminal fence remains.',
+    frame: enc({
+      id: 'req-agent-files-purge-1',
+      error: { code: 'quiesce_failed', message: 'runtime child did not exit' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_files_purge' },
+  },
+  {
     name: 'response/agent_files_purge-error-partial_purge',
     description:
       'The agent home tree could not be removed because of a HARD fs error (perm/IO/EROFS/ENOSPC — not ENOENT). Fail-closed (§3.3): the route keeps the DB row so a retry has its routing anchor.',
@@ -1863,6 +1904,15 @@ const AGENT_FILES_PURGE_ERROR_FIXTURES: WireFixture[] = [
 // attached computer, or an unsafe workspace id segment. One fixture per
 // RuntimeStartErrorCode slot.
 const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/runtime_start-error-agent_deleting',
+    description: 'Terminal deletion fence rejected a late runtime spawn.',
+    frame: enc({
+      id: 'req-runtime-start-1',
+      error: { code: 'agent_deleting', message: 'agent is being deleted' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_start' },
+  },
   {
     name: 'response/runtime_start-error-workspace_not_provisioned',
     description:
@@ -1911,6 +1961,15 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
 // same three typed failures to this intent so a legitimate resolver error can
 // never collapse into a taxonomy-drift `internal_error`.
 const RUNTIME_DELIVER_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/runtime_deliver-error-agent_deleting',
+    description: 'Terminal deletion fence rejected a delivery that could spawn or write a runtime.',
+    frame: enc({
+      id: 'req-runtime-deliver-1',
+      error: { code: 'agent_deleting', message: 'agent is being deleted' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
+  },
   {
     name: 'response/runtime_deliver-error-workspace_not_provisioned',
     description:
@@ -1998,6 +2057,15 @@ const AGENT_PROFILE_MCP_ERROR_FIXTURES: WireFixture[] = [
     kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_write' },
   },
   {
+    name: 'response/agent_profile_mcp_write-error-agent_deleting',
+    description: 'Terminal deletion fence rejected a late atomic mcp.json writer.',
+    frame: enc({
+      id: 'req-agent-profile-mcp-write-1',
+      error: { code: 'agent_deleting', message: 'agent is being deleted' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'agent_profile_mcp_write' },
+  },
+  {
     name: 'response/agent_profile_mcp_write-error-fs_unavailable',
     description: 'Hard fs error during the atomic tmp-write + rename of mcp.json.',
     frame: enc({
@@ -2020,6 +2088,15 @@ const AGENT_PROFILE_MCP_ERROR_FIXTURES: WireFixture[] = [
 // connection/handshake/tools failures are part of the McpProbeResult body
 // (ok:false + phase), never a typed IPC error.
 const MCP_PROBE_ERROR_FIXTURES: WireFixture[] = [
+  {
+    name: 'response/mcp_probe-error-agent_deleting',
+    description: 'Terminal deletion fence rejected a late probe child.',
+    frame: enc({
+      id: 'req-mcp-probe-1',
+      error: { code: 'agent_deleting', message: 'agent is being deleted' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'mcp_probe' },
+  },
   {
     name: 'response/mcp_probe-error-fs_unavailable',
     description:
@@ -2063,7 +2140,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 10,
+      protocol_version: 11,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',

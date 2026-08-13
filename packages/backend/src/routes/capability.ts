@@ -17,7 +17,7 @@ import type { AppEnv, Principal } from '../auth/principal.js';
 import { getUserPrincipal } from '../auth/principal.js';
 import { canAgentUseCapability, canEditAgentCapabilities, canViewWorkspace } from '../permissions.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
-import { AgentCapabilityRepo } from '../repos/agent-capability-repo.js';
+import type { AgentCapabilityRepo } from '../repos/agent-capability-repo.js';
 
 /**
  * Typed capability denial. Returns
@@ -61,6 +61,10 @@ export function requireAgentCapability(
 export interface CapabilityRouteDeps {
   ctx: BackendContext;
   workspaces: WorkspaceRepo;
+  /** #task:1983 W3 — the capability store, received instead of constructed:
+   *  these two handlers are the only capability WRITE/LIST surface, and the
+   *  enforcement read lives behind `canAgentUseCapability`. */
+  capabilities: AgentCapabilityRepo;
 }
 
 /**
@@ -86,7 +90,7 @@ export function createWorkspaceCapabilityApp(
   deps: CapabilityRouteDeps,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const { ctx, workspaces } = deps;
+  const { ctx, workspaces, capabilities: capabilityStore } = deps;
 
   app.get(apiPaths.workspaceAgentCapabilities(':id', ':agentId'), c => {
     const id = c.req.param('id');
@@ -102,7 +106,7 @@ export function createWorkspaceCapabilityApp(
     if (!workspaces.isMember(workspace.id, agentId)) {
       return c.json({ error: 'agent is not a member of this workspace' }, 404);
     }
-    const capabilities = new AgentCapabilityRepo(ctx.db).list(workspace.id, agentId);
+    const capabilities = capabilityStore.list(workspace.id, agentId);
     return c.json({ workspace_id: workspace.id, agent_id: agentId, capabilities });
   });
 
@@ -129,12 +133,11 @@ export function createWorkspaceCapabilityApp(
     if (!parsed.success) {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
-    const repo = new AgentCapabilityRepo(ctx.db);
-    repo.replaceSet(workspace.id, agentId, parsed.data.capabilities);
+    capabilityStore.replaceSet(workspace.id, agentId, parsed.data.capabilities);
     return c.json({
       workspace_id: workspace.id,
       agent_id: agentId,
-      capabilities: repo.list(workspace.id, agentId),
+      capabilities: capabilityStore.list(workspace.id, agentId),
     });
   });
 

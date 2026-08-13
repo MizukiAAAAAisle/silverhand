@@ -2,7 +2,12 @@
 // viewer-scoped aggregate projection + the lazy reactor detail live here as
 // raw SQL, separate from the write repo (`repos/message-reaction-repo.ts`).
 // Dependency direction is one-way: routes / read paths → read-model.
-import type { BackendContext } from '../context.js';
+//
+// #task:1983 W2 — the handle is bound at ASSEMBLY time (`createMessageReactionsReadModel`),
+// not read out of a god-context per call: these queries only ever needed `db`,
+// and taking the whole `BackendContext` is what made the read side look like it
+// had ambient access to everything.
+import type { Database as Db } from 'better-sqlite3';
 import type {
   MessageReactionDetailDto,
   ReactionAggregateDto,
@@ -31,7 +36,7 @@ interface AggregateRow {
  * don't reshuffle between reads.
  */
 export function loadReactionAggregates(
-  ctx: BackendContext,
+  db: Db,
   messageIds: readonly string[],
   viewer: ReactionViewer,
 ): Map<string, ReactionAggregateDto[]> {
@@ -42,7 +47,7 @@ export function loadReactionAggregates(
   // so a null viewer yields viewer_reacted = 0 everywhere.
   const viewerKind = viewer?.kind ?? '';
   const viewerId = viewer?.id ?? '';
-  const rows = ctx.db
+  const rows = db
     .prepare<Array<string>, AggregateRow>(
       `SELECT
          message_id,
@@ -88,10 +93,10 @@ interface DetailRow {
  * within a group ordered by when they reacted.
  */
 export function loadReactionDetail(
-  ctx: BackendContext,
+  db: Db,
   messageId: string,
 ): MessageReactionDetailDto[] {
-  const rows = ctx.db
+  const rows = db
     .prepare<[string], DetailRow>(
       `SELECT
          mr.emoji AS emoji,
@@ -128,4 +133,28 @@ export function loadReactionDetail(
     });
   }
   return out;
+}
+
+/**
+ * The reaction read surface a caller receives, with the handle already bound
+ * (#task:1983 W2). Route modules declare THIS in their deps instead of
+ * importing the module and passing a context around: the only capability a
+ * reaction read needs is its own two queries.
+ */
+export interface MessageReactionsReadModel {
+  readonly loadAggregates: (
+    messageIds: readonly string[],
+    viewer: ReactionViewer,
+  ) => Map<string, ReactionAggregateDto[]>;
+  readonly loadDetail: (messageId: string) => MessageReactionDetailDto[];
+}
+
+export function createMessageReactionsReadModel(
+  db: Db,
+): MessageReactionsReadModel {
+  return {
+    loadAggregates: (messageIds, viewer) =>
+      loadReactionAggregates(db, messageIds, viewer),
+    loadDetail: messageId => loadReactionDetail(db, messageId),
+  };
 }

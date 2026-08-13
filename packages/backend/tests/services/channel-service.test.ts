@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { readChannelContextMetadata } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
-import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { createSqliteConversationPersistence } from '../../src/repos/conversation-persistence.js';
+import { createUnreadPublishAdapter } from '../../src/adapters/unread-publish.js';
 import {
   ActorError,
   ChannelService,
@@ -14,9 +15,14 @@ import {
   WorkspaceUnsuitableError,
 } from '../../src/services/channel-service.js';
 import type { BackendLogger } from '../../src/context.js';
+import type {
+  ChannelTxScope,
+  WorkspaceChannelTxScope,
+} from '../../src/services/channel/ports.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
+import { overrideScope, twoAxisUowWithScopeWrap } from '../utils/tx-fault.js';
 
 class FakeConversationManager {
   starts: Array<{ conversationId: string; agentId: string }> = [];
@@ -66,7 +72,6 @@ function bootstrap() {
   const agents = new AgentRepo(db);
   const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
-  const conversationReads = new ConversationReadRepo(db);
   const messages = new MessageRepo(db);
   const events = new ScopeEventBus('test-epoch');
   const fake = new FakeConversationManager();
@@ -75,13 +80,30 @@ function bootstrap() {
     warn: vi.fn(),
     error: vi.fn(),
   };
+  const persistence = createSqliteConversationPersistence(db);
+  // #task:1981 §9: faults and authority swaps are injected on the tx scope —
+  // the only persistence seam the service has left. Read per transaction, so a
+  // test can arm it after its setup writes committed normally.
+  const txWrap: { current: ((tx: ChannelTxScope) => ChannelTxScope) | null } = { current: null };
+  // The workspace-keyed axis (channel creation) carries a DIFFERENT scope type,
+  // so it gets its own slot: a rename fault can never leak into a create.
+  const wsTxWrap: {
+    current: ((tx: WorkspaceChannelTxScope) => WorkspaceChannelTxScope) | null;
+  } = { current: null };
+  // A committed write in the gap between the service's pre-lock reads and BEGIN
+  // — the only place the roster races this transaction (see `twoAxisUowWithScopeWrap`).
+  const seam: { current: (() => void) | null } = { current: null };
   const service = new ChannelService({
-    db,
-    conversations,
-    conversationReads,
-    workspaces,
-    agents,
-    messages,
+    channels: persistence.channel.read,
+    channelWrites: persistence.channel.directWrite,
+    workspaces: persistence.channel.workspaces,
+    agents: persistence.channel.agents,
+    uow: twoAxisUowWithScopeWrap(persistence.channel.uow, {
+      wrapForChannel: () => txWrap.current,
+      wrapInWorkspace: () => wsTxWrap.current,
+      seam: () => seam.current,
+    }),
+    unreadPublish: createUnreadPublishAdapter({ db, events }),
     events,
     runtimeHost: fake as unknown as AgentRuntimeHost,
     logger,
@@ -113,6 +135,10 @@ function bootstrap() {
     fake,
     logger,
     service,
+    persistence,
+    txWrap,
+    wsTxWrap,
+    seam,
     workspace,
     source,
     alice,
@@ -354,10 +380,14 @@ describe('ChannelService.createChannel', () => {
       // members (others reach a public one by browse + self-join).
       t.db.exec(`DELETE FROM workspace_users WHERE workspace_id = '${t.workspace.id}'`);
       const now = Date.now();
+      // `local` is seeded as `admin`: the create route gates on
+      // `canGovernWorkspace(…, 'admin')` and the callback re-derives that same
+      // authority in the lock, so a plain-`member` creator is a state the product
+      // cannot reach (the column default is `member`, hence the explicit role).
       t.db
         .prepare(
-          `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
-             VALUES (?, 'local', ?), (?, 'alice', ?)`,
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at, role)
+             VALUES (?, 'local', ?, 'admin'), (?, 'alice', ?, 'member')`,
         )
         .run(t.workspace.id, now, t.workspace.id, now);
 
@@ -390,8 +420,8 @@ describe('ChannelService.createChannel', () => {
       const now = Date.now();
       t.db
         .prepare(
-          `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
-             VALUES (?, 'local', ?), (?, 'alice', ?)`,
+          `INSERT INTO workspace_users (workspace_id, user_id, joined_at, role)
+             VALUES (?, 'local', ?, 'admin'), (?, 'alice', ?, 'member')`,
         )
         .run(t.workspace.id, now, t.workspace.id, now);
 
@@ -691,6 +721,428 @@ describe('ChannelService.setChannelVisibility', () => {
           actor: { kind: 'user', userId: 'local' },
         }),
       ).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('ChannelService.renameChannel', () => {
+  it('audits the from-title read authoritatively INSIDE the rename transaction (§9.7)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'before',
+        memberAgentIds: [t.alice.id],
+        actor: { kind: 'user', userId: 'local' },
+      });
+
+      // `getChannelLikeForUpdate` carries an isolation obligation: its value is
+      // the ONLY source of the from-title audit. Feeding it a different title
+      // than any outside read would return proves the audit is not recomputed
+      // from a second, possibly stale, read.
+      t.txWrap.current = tx =>
+        overrideScope(tx, {
+          channels: overrideScope(tx.channels, {
+            getChannelLikeForUpdate: () => {
+              const row = tx.channels.getChannelLikeForUpdate();
+              return row ? { ...row, title: 'in-tx authority' } : null;
+            },
+          }),
+        });
+
+      const renamed = await t.service.renameChannel({
+        channelId: created.channel.id,
+        title: 'after',
+      });
+      expect(renamed.channel.title).toBe('after');
+
+      const announce = t.messages
+        .listForConversation(created.channel.id)
+        .find(m => (m.metadata as Record<string, unknown> | null)?.old_name !== undefined);
+      expect(announce).toBeTruthy();
+      expect((announce!.metadata as Record<string, unknown>).old_name).toBe('in-tx authority');
+      expect((announce!.metadata as Record<string, unknown>).new_name).toBe('after');
+      expect((announce!.metadata as Record<string, unknown>).scope).toBe('conversation');
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('a same-title rename is a no-op: no system message, no delivery, no publish (§9.7)', async () => {
+    const t = bootstrap();
+    try {
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'steady',
+        memberAgentIds: [t.alice.id],
+        actor: { kind: 'user', userId: 'local' },
+      });
+      const messagesBefore = t.messages.listForConversation(created.channel.id).length;
+      t.fake.delivered = [];
+      const publishes: string[] = [];
+      const unsub = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
+        publishes.push(e.kind);
+      });
+
+      const result = await t.service.renameChannel({
+        channelId: created.channel.id,
+        title: 'steady',
+      });
+      unsub();
+
+      expect(result.channel.title).toBe('steady');
+      expect(t.messages.listForConversation(created.channel.id)).toHaveLength(messagesBefore);
+      expect(t.fake.delivered).toEqual([]);
+      expect(publishes).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('rejects a missing channel with not_found', async () => {
+    const t = bootstrap();
+    try {
+      await expect(
+        t.service.renameChannel({
+          channelId: 'missing',
+          title: 'x',
+        }),
+      ).rejects.toMatchObject({ code: 'not_found' });
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe('ChannelService persistence boundary (#task:1981)', () => {
+  it('a failed seed insert leaves NO half-created channel and publishes nothing (§9.6)', async () => {
+    const t = bootstrap();
+    try {
+      const before = t.conversations.listAllChannelsForWorkspace(t.workspace.id).map(c => c.id);
+      const publishes: string[] = [];
+      const unsub = t.events.subscribeScope(`workspace:${t.workspace.id}`, e => {
+        publishes.push(e.kind);
+      });
+
+      // The channel row, its memberships and both seed messages are one atomic
+      // unit: failing the seed insert must take the channel with it.
+      const insertedIds: string[] = [];
+      t.wsTxWrap.current = tx =>
+        overrideScope(tx, {
+          channels: overrideScope(tx.channels, {
+            insertChannel: args => {
+              const row = tx.channels.insertChannel(args);
+              insertedIds.push(row.id);
+              return row;
+            },
+          }),
+          messages: {
+            insert: () => {
+              throw new Error('seed insert exploded');
+            },
+          },
+        });
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'doomed',
+          memberAgentIds: [t.alice.id, t.bob.id],
+          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+          seed: {
+            systemMessageBody: 'context',
+            initialPrompt: 'initial',
+            autoStartMembers: 'all',
+          },
+        }),
+      ).rejects.toThrowError('seed insert exploded');
+      unsub();
+
+      // Not vacuous: the channel really was inserted inside the transaction and
+      // then taken back by the rollback.
+      expect(insertedIds).toHaveLength(1);
+      expect(t.conversations.get(insertedIds[0]!)).toBeNull();
+      expect(t.conversations.listAllChannelsForWorkspace(t.workspace.id).map(c => c.id)).toEqual(
+        before,
+      );
+      expect(publishes).toEqual([]);
+      expect(t.fake.delivered).toEqual([]);
+      expect(t.fake.starts).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('create/rename persistence goes through the TX scope, not a captured repo (R1)', async () => {
+    const t = bootstrap();
+    try {
+      const touched = new Set<string>();
+      // One tracer for BOTH axes: every slice of whatever scope arrives is
+      // proxied by name, so the assertions below span the create (workspace-keyed)
+      // and rename (conversation-keyed) transactions without enumerating either
+      // scope's shape here.
+      const trace = <S extends object>(tx: S): S =>
+        new Proxy(tx, {
+          get(scope, sliceName) {
+            const slice = Reflect.get(scope, sliceName) as object;
+            return new Proxy(slice, {
+              get(obj, prop) {
+                const value = Reflect.get(obj, prop) as unknown;
+                if (typeof value !== 'function') return value;
+                return (...args: unknown[]) => {
+                  touched.add(`${String(sliceName)}.${String(prop)}`);
+                  return (value as (...a: unknown[]) => unknown).apply(obj, args);
+                };
+              },
+            });
+          },
+        });
+      t.txWrap.current = trace;
+      t.wsTxWrap.current = trace;
+
+      const created = await t.service.createChannel({
+        workspaceId: t.workspace.id,
+        title: 'traced',
+        memberAgentIds: [t.alice.id],
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.source.id },
+        seed: {
+          systemMessageBody: 'context',
+          initialPrompt: 'initial',
+          autoStartMembers: 'none',
+        },
+      });
+      await t.service.renameChannel({
+        channelId: created.channel.id,
+        title: 'traced-again',
+      });
+
+      expect([...touched]).toContain('channels.insertChannel');
+      expect([...touched]).toContain('channels.addAgent');
+      expect([...touched]).toContain('channels.getChannelLikeForUpdate');
+      expect([...touched]).toContain('channels.updateTitle');
+      expect([...touched]).toContain('messages.insert');
+      expect([...touched]).toContain('agents.get');
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * Write ELIGIBILITY is re-derived inside the lock (#task:1987, Cindy
+ * `WzFlaHtF_3-4Jdvx`). Binding the write target to the workspace key is only half
+ * the mechanism: the pre-lock gates are early refusals, and a roster change that
+ * commits in the seam between them and BEGIN would otherwise let the creation
+ * write a membership edge for a principal who is no longer a workspace member.
+ *
+ * That state is reachable by NO serial order — create-then-remove has the removal
+ * cascade take the edge out, remove-then-create refuses — which is exactly the
+ * test for a real defect rather than last-writer-wins (§CV). So each arm here
+ * COMMITS a rival roster write in the seam (`t.seam`, which runs before BEGIN, not
+ * inside the callback where it would roll back with the transaction under test)
+ * and then asserts the whole transaction left nothing behind: no channel, no
+ * membership edge, no message, no event, no runtime effect.
+ */
+describe('ChannelService.createChannel — in-lock write eligibility (#task:1987)', () => {
+  /** Every row/effect a refused creation must not have produced. Totalled over
+   *  the workspace rather than the new channel: "the channel does not exist" and
+   *  "the channel is empty" are different claims, and only the first is enough. */
+  function tally(t: ReturnType<typeof bootstrap>) {
+    const convs = t.conversations.list().filter(c => c.workspace_id === t.workspace.id);
+    return {
+      conversations: convs.length,
+      agentEdges: convs.reduce((n, c) => n + t.conversations.listAgents(c.id).length, 0),
+      userEdges: convs.reduce((n, c) => n + t.conversations.listUsers(c.id).length, 0),
+      messages: convs.reduce((n, c) => n + t.messages.listForConversation(c.id).length, 0),
+      workspaceSeq: Number(t.events.currentSeq(`workspace:${t.workspace.id}`)),
+      starts: t.fake.starts.length,
+      delivered: t.fake.delivered.length,
+    };
+  }
+
+  it('a founding AGENT member removed in the seam: typed refusal, nothing written', async () => {
+    const t = bootstrap();
+    try {
+      const before = tally(t);
+      // Committed before BEGIN — `bob` passed the pre-lock membership gate and is
+      // gone by the time the callback would place him.
+      t.seam.current = () => t.workspaces.removeMember(t.workspace.id, t.bob.id);
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'planning',
+          memberAgentIds: [t.alice.id, t.bob.id],
+          actor: { kind: 'user', userId: 'local' },
+        }),
+      ).rejects.toMatchObject({
+        name: 'MemberError',
+        code: 'agent_not_workspace_member',
+        memberId: t.bob.id,
+      });
+
+      // `alice` was placed BEFORE `bob` was rejected in the pre-lock order; the
+      // rollback is what makes this equal rather than "one edge and a channel".
+      expect(tally(t)).toEqual(before);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('an EXPLICIT human member removed in the seam: typed refusal, nothing written', async () => {
+    const t = bootstrap();
+    try {
+      // `teammate` is a fixture user (tests/utils/db.ts); the arm needs it to be a
+      // workspace member the caller may legitimately name at create time.
+      const teammate = 'teammate';
+      t.workspaces.addUserMember(t.workspace.id, teammate, 'member');
+      const before = tally(t);
+      t.seam.current = () => t.workspaces.removeUserMember(t.workspace.id, teammate);
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'planning',
+          memberAgentIds: [t.alice.id],
+          memberUserIds: [teammate],
+          actor: { kind: 'user', userId: 'local' },
+        }),
+      ).rejects.toMatchObject({
+        name: 'MemberError',
+        code: 'user_not_workspace_member',
+        memberId: teammate,
+      });
+      expect(tally(t)).toEqual(before);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it("the CREATOR's own role row removed in the seam: refused as a loss of AUTHORITY", async () => {
+    const t = bootstrap();
+    try {
+      const before = tally(t);
+      // The route's authority (`canGovernWorkspace`) IS a `workspace_users` role
+      // row, so losing it in the seam would otherwise leave the creator holding a
+      // `conversation_users` row in a workspace they no longer belong to. The
+      // in-lock order mirrors the PRE-LOCK order — authority, then member
+      // eligibility — so a role row that vanished in the seam refuses with the
+      // same class the route would have refused with before the request.
+      t.seam.current = () => t.workspaces.removeUserMember(t.workspace.id, 'local');
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'planning',
+          memberAgentIds: [t.alice.id],
+          actor: { kind: 'user', userId: 'local' },
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'user_cannot_govern_workspace',
+      });
+      expect(tally(t)).toEqual(before);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the actor is DEMOTED admin→member in the seam: typed refusal, nothing written', async () => {
+    const t = bootstrap();
+    try {
+      // `teammate` is a fixture user (tests/utils/db.ts). An `admin` — not the
+      // `owner`, whose role row is immutable — so the demotion this arm needs is
+      // expressible at all.
+      const admin = 'teammate';
+      t.workspaces.addUserMember(t.workspace.id, admin, 'admin');
+      const before = tally(t);
+      // Still a MEMBER afterwards, so `humanRole !== null` passes: only the RANK
+      // fails. This is the arm the membership predicate alone cannot catch, and it
+      // is why this axis projects the role instead of a boolean (Cindy
+      // `m6nN9WG8jvusBJA2`) — `addWorkspaceHumanMember` in this same slice already
+      // treats an in-seam demotion as a rollback, and two writers of
+      // workspace-governed rows must sample authority at the same moment.
+      t.seam.current = () => {
+        t.workspaces.setUserRole(t.workspace.id, admin, 'member');
+      };
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'planning',
+          memberAgentIds: [t.alice.id],
+          actor: { kind: 'user', userId: admin },
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        // 403 through `channelServiceErrorResponse`'s ChannelActorError branch —
+        // the same status the route's own `forbidden` gate returns.
+        code: 'user_cannot_govern_workspace',
+      });
+      expect(tally(t)).toEqual(before);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the ACTOR loses its source-conversation edge in the seam: no seeded channel, no messages', async () => {
+    const t = bootstrap();
+    try {
+      const before = tally(t);
+      t.seam.current = () => t.conversations.removeAgent(t.source.id, t.alice.id);
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'spawned',
+          memberAgentIds: [t.alice.id],
+          actor: {
+            kind: 'agent',
+            agentId: t.alice.id,
+            conversationId: t.source.id,
+          },
+          seed: {
+            systemMessageBody: 'ctx',
+            initialPrompt: 'go',
+            autoStartMembers: 'all',
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: 'ActorError',
+        code: 'agent_not_member_of_source_conv',
+      });
+
+      // The seam's own removal is the ONE difference — everything the refused
+      // transaction would have written is absent, including both seed messages
+      // and the auto-start of every member.
+      expect(tally(t)).toEqual({ ...before, agentEdges: before.agentEdges - 1 });
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('the WORKSPACE is deleted in the seam: a typed refusal instead of a foreign-key crash', async () => {
+    const t = bootstrap();
+    try {
+      t.seam.current = () => {
+        t.conversations.delete(t.source.id);
+        t.workspaces.delete(t.workspace.id);
+      };
+
+      await expect(
+        t.service.createChannel({
+          workspaceId: t.workspace.id,
+          title: 'planning',
+          memberAgentIds: [],
+          actor: { kind: 'user', userId: 'local' },
+        }),
+      ).rejects.toMatchObject({
+        name: 'WorkspaceUnsuitableError',
+        code: 'workspace_not_found',
+      });
+      expect(t.conversations.list().filter(c => c.workspace_id === t.workspace.id)).toEqual([]);
     } finally {
       t.cleanup();
     }

@@ -2,6 +2,7 @@ import { performance } from 'node:perf_hooks';
 import type DatabaseTypes from 'better-sqlite3';
 import type { Database as Db } from 'better-sqlite3';
 import type { BackendLogger } from '../context.js';
+import { classifySqliteContention, driverErrorCode } from '../db-errors.js';
 import type { BackendMetrics, DbStatementOperation, DbStatementOutcome } from './metrics.js';
 import { currentBackendRequestContext } from './request-context.js';
 
@@ -249,7 +250,7 @@ class StatementExecutionTimer {
           thresholdMs: observation.slowStatementMs,
           requestId: request?.requestId,
           method: request?.method,
-          errorCode: sqliteErrorCode(error),
+          errorCode: driverErrorCode(error),
         },
         error ? 'db: statement failed' : 'db: slow statement',
       );
@@ -266,16 +267,11 @@ function assertQueryName(queryName: string): void {
 }
 
 function statementOutcome(error: unknown): DbStatementOutcome {
-  const code = sqliteErrorCode(error);
-  if (code?.startsWith('SQLITE_BUSY')) return 'busy';
-  if (code?.startsWith('SQLITE_LOCKED')) return 'locked';
+  // Which driver codes mean contention is `db-errors.ts`'s answer (#task:1983
+  // W4); what a contended statement means for the metric is this file's.
+  const contention = classifySqliteContention(error);
+  if (contention) return contention;
   return error ? 'error' : 'ok';
-}
-
-function sqliteErrorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== 'object' || !('code' in error)) return undefined;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === 'string' ? code : undefined;
 }
 
 function roundMs(ms: number): number {

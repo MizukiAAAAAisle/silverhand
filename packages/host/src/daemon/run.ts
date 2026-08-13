@@ -31,6 +31,7 @@ import {
 import { readFileSync } from 'node:fs';
 import type { DaemonHostConfig } from '@silverhand/shared';
 import { IntentDispatcher } from './dispatcher.js';
+import { AgentHomeMutationCoordinator } from './agent-home-mutation-coordinator.js';
 import { DaemonServer } from './server.js';
 import { createDaemonLogger, type DaemonLogger } from './logger.js';
 import {
@@ -277,6 +278,7 @@ export interface RunDaemonOptions {
     | ((deps: {
         emit: (event: EventFrame) => void;
         logger: DaemonLogger;
+        agentHomeMutationCoordinator: AgentHomeMutationCoordinator;
         daemonInstanceId: string;
         runtimePidRootDir: string | null;
         daemonSocketPath: string;
@@ -730,8 +732,13 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     resolveComputerId: (): string =>
       resolveAuthenticatedComputerId(liveOutboundBinding()),
   };
+  // One authority is shared by both dispatcher ingresses and Supervisor.
+  // Installing a purge fence is therefore immediately visible to internal
+  // respawn; there is no second flag or await-sized handoff gap.
+  const agentHomeMutationCoordinator = new AgentHomeMutationCoordinator();
   const supervisor = opts.supervisorFactory
     ? opts.supervisorFactory({
+        agentHomeMutationCoordinator,
         emit: event => broadcaster(event),
         logger,
         daemonInstanceId,
@@ -753,6 +760,7 @@ export async function runDaemon(opts: RunDaemonOptions): Promise<RunningDaemon> 
     startedAt,
     helloResult,
     supervisor,
+    agentHomeMutationCoordinator,
     // #task:1608 — binding transitions are the ONLY places the computer
     // path context changes: freeze after an accepted attach/reload, fence
     // BEFORE detach so no in-flight operation can land in a stale (or,

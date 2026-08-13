@@ -25,8 +25,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { KNOWN_CAPABILITIES_V1, splitNdjson } from '@silverhand/host';
 import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import type { ServerConfig } from '@silverhand/shared';
-import { startBackend, type RunningBackend } from '../../src/index.js';
+import {
+  startTestBackend,
+  type TestRunningBackend,
+} from '../utils/test-backend.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
+import { AgentRepo } from '../../src/repos/agent-repo.js';
+import { UserRepo } from '../../src/repos/user-repo.js';
+import { createSqliteAgentTeardownPersistence } from '../../src/repos/agent-teardown-persistence.js';
+import { openDatabase } from '../../src/db.js';
 
 interface ReceivedCommand {
   id: string;
@@ -49,6 +56,8 @@ class FakeOutboundDaemon {
   readonly commands: ReceivedCommand[] = [];
   private connectedResolve: (() => void) | null = null;
   private readonly connected: Promise<void>;
+  holdAgentFilesPurge = false;
+  private heldAgentFilesPurge: ReceivedCommand | null = null;
 
   constructor(private readonly socketPath: string) {
     this.connected = new Promise<void>(resolve => {
@@ -101,6 +110,21 @@ class FakeOutboundDaemon {
 
   find(kind: string): ReceivedCommand | undefined {
     return this.commands.find(c => c.kind === kind);
+  }
+
+  isConnected(): boolean {
+    return this.socket !== null && !this.socket.destroyed;
+  }
+
+  releaseAgentFilesPurge(): void {
+    const held = this.heldAgentFilesPurge;
+    if (!held) throw new Error('no held agent_files_purge command');
+    this.heldAgentFilesPurge = null;
+    this.respondResult(held, {
+      ok: true,
+      purged_count: 1,
+      quiesced_count: 0,
+    });
   }
 
   async close(): Promise<void> {
@@ -172,6 +196,16 @@ class FakeOutboundDaemon {
         uptime_ms: 1,
         active_agent_ids: [],
       });
+    } else if (cmd.kind === 'agent_files_purge') {
+      if (this.holdAgentFilesPurge) {
+        this.heldAgentFilesPurge = cmd;
+      } else {
+        this.respondResult(cmd, {
+          ok: true,
+          purged_count: 0,
+          quiesced_count: 0,
+        });
+      }
     } else {
       this.respondResult(cmd, {});
     }
@@ -207,7 +241,7 @@ async function waitFor(
 }
 
 describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
-  let running: RunningBackend | null = null;
+  let running: TestRunningBackend | null = null;
   let daemon: FakeOutboundDaemon | null = null;
   let tmpDir: string | null = null;
 
@@ -240,7 +274,7 @@ describe('D5.a-3 embedded boot + shutdown order (real startBackend)', () => {
       },
     };
 
-    running = await startBackend({
+    running = await startTestBackend({
       mode: 'embedded',
       dbPath: join(tmpDir, 'silverhand.db'),
       ...resolveBackendDataPaths(tmpDir),
@@ -355,6 +389,86 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     );
   });
 
+  it('close drains an admitted deletion before transport and database teardown', async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'silverhand-delete-drain-'));
+    const socketPath = join(tmpDir, 'daemon-outbound.sock');
+    const dbPath = join(tmpDir, 'silverhand.db');
+    daemon = new FakeOutboundDaemon(socketPath);
+    daemon.holdAgentFilesPurge = true;
+    await daemon.listen();
+
+    // Seed a boot-discoverable durable attempt without any daemon IO.
+    const seedDb = openDatabase(dbPath, { allowSchemaUpgrade: true });
+    const userId = 'delete-drain-user';
+    new UserRepo(seedDb).create({
+      id: userId,
+      name: 'delete-drain-user',
+      displayName: 'Delete Drain User',
+    });
+    const hostId = new HostRepo(seedDb).ensureLocal().id;
+    const agent = new AgentRepo(seedDb).create(
+      { name: 'delete-drain-agent', runtime: 'claude' },
+      hostId,
+      userId,
+    );
+    expect(
+      createSqliteAgentTeardownPersistence(seedDb).deletion.begin(
+        agent.id,
+        123,
+      ).kind,
+    ).toBe('started');
+    seedDb.close();
+
+    const config: ServerConfig = {
+      mode: 'embedded',
+      url: 'http://127.0.0.1:0',
+      auth_token: 'c'.repeat(32),
+      refresh_token: null,
+      child_sessions: {
+        max_concurrent_per_parent: null,
+        spawn_cooldown_seconds: null,
+        max_depth: 1,
+      },
+    };
+    running = await startTestBackend({
+      mode: 'embedded',
+      dbPath,
+      ...resolveBackendDataPaths(tmpDir),
+      serverConfig: config,
+      silverhandCliLauncher: { command: 'true', args: [] },
+      logger: { info() {}, warn() {}, error() {} },
+      outboundSocketPath: socketPath,
+    });
+    await daemon.waitConnected();
+    daemon.sendReady();
+    await waitFor(() => !!daemon!.find('agent_files_purge'), {
+      label: 'boot deletion purge dispatch',
+    });
+
+    const toClose = running;
+    running = null;
+    let closeResolved = false;
+    const closing = toClose.close().then(() => {
+      closeResolved = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(closeResolved).toBe(false);
+    expect(daemon.isConnected()).toBe(true);
+
+    daemon.releaseAgentFilesPurge();
+    await closing;
+    await waitFor(() => !daemon!.isConnected(), {
+      label: 'outbound transport close after deletion drain',
+    });
+
+    // The completion CAS ran before db.close(). Reopening the file after close
+    // observes the row gone; closing DB first would have normalized an internal
+    // worker failure and left this durable marker behind.
+    const verifyDb = openDatabase(dbPath);
+    expect(new AgentRepo(verifyDb).get(agent.id)).toBeNull();
+    verifyDb.close();
+  });
+
   it('wires host-ws runtime event fanout in embedded mode for user-managed daemon computers', async () => {
     tmpDir = mkdtempSync(join(tmpdir(), 'sh-nohostws-'));
     const socketPath = join(tmpDir, 'daemon-outbound.sock');
@@ -372,7 +486,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     };
     let wrappedReal: unknown = 'not-called';
 
-    running = await startBackend({
+    running = await startTestBackend({
       mode: 'embedded',
       dbPath: join(tmpDir, 'silverhand.db'),
       ...resolveBackendDataPaths(tmpDir),

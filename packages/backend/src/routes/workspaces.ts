@@ -37,6 +37,7 @@ import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { SortRepo } from '../repos/sort-repo.js';
+import type { MembershipPersistence } from '../application/membership-ports.js';
 import { getUserPrincipal } from '../auth/principal.js';
 import { canGovernWorkspace, canViewWorkspace } from '../permissions.js';
 import { timedRouteSpan } from '../observability/route-span.js';
@@ -54,6 +55,7 @@ export interface WorkspacesRouteDeps {
   conversations: ConversationRepo;
   messages: MessageRepo;
   sort: SortRepo;
+  membershipPersistence: MembershipPersistence;
 }
 
 export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
@@ -106,7 +108,15 @@ export function createWorkspacesApp(deps: WorkspacesRouteDeps): Hono<AppEnv> {
       return c.json({ error: 'invalid input', issues: parsed.error.issues }, 400);
     }
     const result = await createWorkspace(
-      { ctx, agents, users, workspaces, conversations, messages },
+      {
+        ctx,
+        agents,
+        users,
+        workspaces,
+        conversations,
+        messages,
+        membershipPersistence: deps.membershipPersistence,
+      },
       {
         name: parsed.data.name,
         description: parsed.data.description ?? null,

@@ -30,6 +30,7 @@ import {
   OutboundRuntimeEventFanout,
   outboundEventToEventFrame,
 } from '../../src/runtime/outbound-event-fanout.js';
+import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
 import { AgentL2SeedEnsurer } from '../../src/runtime/agent-l2-seed-ensurer.js';
 import type { OutboundFrameAdapter } from '../../src/runtime/outbound-frame-adapter.js';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
@@ -2381,7 +2382,11 @@ function makeFixture(
           ensure: async () => ({ ok: true }),
         } as unknown as AgentL2SeedEnsurer);
   const fanout = new OutboundRuntimeEventFanout({
-    db,
+    ...createRuntimeFanoutDbDeps({
+      db,
+      events: publisher,
+      logger: opts.logger ?? SILENT_LOGGER,
+    }),
     events: publisher,
     transport: () => transport,
     logger: opts.logger ?? SILENT_LOGGER,

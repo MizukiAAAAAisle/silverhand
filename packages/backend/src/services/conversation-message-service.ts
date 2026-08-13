@@ -1,7 +1,8 @@
-import type { Database as Db } from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import type {
   AttachmentRefInput,
+  AttachmentSnapshot,
+  ConversationDto,
   LegacySendMessageTarget,
   MessageDto,
   MessageEventPayload,
@@ -9,13 +10,10 @@ import type {
 } from '@silverhand/shared';
 import type { BackendLogger } from '../context.js';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
-import type { MessageRepo } from '../repos/message-repo.js';
-import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
-import type { AttachmentService } from './attachment-service.js';
 import type { ScopeEventBus } from '../ws/scope-event-bus.js';
 import { assertActorConversationMatch } from '../auth/principal.js';
+import { resolveSnapshotsFromSources } from './attachment/snapshot-resolution.js';
+import type { MessageTxScope, MessageUnitOfWork } from './conversation-message/ports.js';
 import {
   POLICIES,
   REPLIED,
@@ -87,48 +85,38 @@ export type {
  * delivery/notification. The send-transaction target/freshness/attachment
  * helpers stay here because they are the aggregate's own internals, not a
  * separate reason to change.
+ *
+ * Persistence discipline (#task:1981): this aggregate holds NO raw DB and no
+ * concrete repo. It owns exactly one persistence capability — the injected
+ * `MessageUnitOfWork` — and every read/write it performs inside a transaction
+ * comes from the `MessageTxScope` that `atomically` hands its callback, which
+ * is passed explicitly down to each in-transaction helper. Post-commit effects
+ * live on the delivery coordinator, whose effect ports are unreachable from the
+ * scope, so a transaction callback structurally cannot publish.
  */
 export class ConversationMessageService {
-  private readonly db: Db;
-  private readonly conversations: ConversationRepo;
-  private readonly messages: MessageRepo;
-  private readonly agents: AgentRepo;
-  private readonly attachmentService: AttachmentService;
+  private readonly uow: MessageUnitOfWork;
   private readonly runtimeHost: AgentRuntimeHost;
   private readonly events: ScopeEventBus;
   private readonly logger: BackendLogger;
   private readonly threadFollow: ThreadFollowManager;
   private readonly delivery: MessageDeliveryCoordinator;
-  private readonly conversationInboxes: ConversationInboxRepo;
 
   constructor(opts: ConversationMessageServiceOptions) {
-    this.db = opts.db;
-    this.conversations = opts.conversations;
-    this.messages = opts.messages;
-    this.agents = opts.agents;
-    this.attachmentService = opts.attachmentService;
+    this.uow = opts.uow;
     this.runtimeHost = opts.runtimeHost;
     this.events = opts.events;
     this.logger = opts.logger;
-    this.conversationInboxes = opts.conversationInboxes;
     this.threadFollow = new ThreadFollowManager({
-      db: opts.db,
-      conversations: opts.conversations,
-      conversationInboxes: opts.conversationInboxes,
-      messages: opts.messages,
-      threadFollowers: opts.threadFollowers,
-      agents: opts.agents,
-      users: opts.users,
+      uow: opts.uow,
+      read: opts.threadFollow.read,
+      directWrite: opts.threadFollow.directWrite,
     });
     this.delivery = new MessageDeliveryCoordinator({
-      db: opts.db,
-      conversations: opts.conversations,
-      conversationInboxes: opts.conversationInboxes,
-      messages: opts.messages,
-      agents: opts.agents,
-      users: opts.users,
-      notifications: opts.notifications,
-      workspaces: opts.workspaces,
+      read: opts.delivery.read,
+      write: opts.delivery.write,
+      mentionCc: opts.mentionCc,
+      unreadPublish: opts.unreadPublish,
       runtimeHost: opts.runtimeHost,
       events: opts.events,
       logger: opts.logger,
@@ -148,8 +136,8 @@ export class ConversationMessageService {
 
     let txResult: SendMessageTxResult;
     try {
-      txResult = this.db.transaction((): SendMessageTxResult => {
-        const sourceConversation = this.conversations.get(input.conversationId);
+      txResult = this.uow.atomically((tx): SendMessageTxResult => {
+        const sourceConversation = tx.conversations.get(input.conversationId);
         if (!sourceConversation) {
           throw new ConversationError(
             'conversation_not_found',
@@ -168,23 +156,29 @@ export class ConversationMessageService {
             'conversation is archived',
           );
         }
-        this.validateActor(input.actor, policy, sourceConversation.id);
+        this.validateActor(tx, input.actor, policy, sourceConversation.id);
 
         const targetConversation = target.kind === 'legacy'
           ? this.resolveLegacyTarget(sourceConversation, target.target)
           : sourceConversation;
         const threadRootId = this.resolveThreadRootForTarget(
+          tx,
           targetConversation.id,
           target,
         );
         this.assertStreamKeyConsistent(input, threadRootId);
         const attachmentRefs = input.attachmentRefs ?? [];
-        const snapshots = this.resolveAttachmentSnapshots(targetConversation, attachmentRefs);
+        const snapshots = this.resolveAttachmentSnapshots(
+          tx,
+          targetConversation,
+          attachmentRefs,
+        );
         // `streamHeadBeforeSend` is the merge prerequisite owed to an agent
         // whose insert skipped the freshness CAS; the insert helper owns both
         // that decision and the pre-insert head read (see its docs).
         const { message, skippedFreshnessReason, streamHeadBeforeSend } =
           this.insertMessageWithFreshnessIfApplicable({
+            tx,
             input,
             sourceConversationId: sourceConversation.id,
             targetConversationId: targetConversation.id,
@@ -199,7 +193,7 @@ export class ConversationMessageService {
         // reply, executed best-effort after commit.
         const threadDelivery =
           threadRootId !== null
-            ? this.threadFollow.applyThreadFollowEffects({
+            ? this.threadFollow.applyThreadFollowEffects(tx, {
                 conversationId: targetConversation.id,
                 threadRootId,
                 message,
@@ -216,13 +210,13 @@ export class ConversationMessageService {
         let projections: MessageProjections | null = null;
         if (threadRootId !== null) {
           const replyCount =
-            this.messages.replyCountsByRoot(targetConversation.id, [
+            tx.messages.replyCountsByRoot(targetConversation.id, [
               threadRootId,
             ])[threadRootId] ?? 0;
           // P2 (§5/§6): viewer-invariant threads-list entry (ThreadSummary minus
           // per-viewer viewer_following, plus root_seq keyset tie-break). Null
           // only if the root has no non-system reply → omit; client keeps refetch.
-          const listEntry = this.messages.threadListEntryForRoot(
+          const listEntry = tx.messages.threadListEntryForRoot(
             targetConversation.id,
             threadRootId,
           );
@@ -242,14 +236,14 @@ export class ConversationMessageService {
           // `threadDelivery` (follower-gated), not the channel-wide fan-out.
           recipients:
             threadDelivery === null
-              ? this.conversations.listAgents(targetConversation.id)
+              ? tx.conversations.listAgents(targetConversation.id)
               : [],
           threadDelivery,
           skippedFreshnessReason,
           streamHeadBeforeSend,
           projections,
         };
-      })();
+      });
     } catch (err) {
       if (err instanceof MessageFreshnessGuardError) {
         const staleEventId = randomUUID();
@@ -486,17 +480,18 @@ export class ConversationMessageService {
   }
 
   private insertMessageWithFreshnessIfApplicable(params: {
+    tx: MessageTxScope;
     input: SendMessageInput;
     sourceConversationId: string;
     targetConversationId: string;
     threadRootId: string | null;
-    snapshots: NonNullable<Parameters<MessageRepo['insertForConversation']>[0]['attachments']>;
+    snapshots: AttachmentSnapshot[];
   }): {
     message: MessageDto;
     skippedFreshnessReason: string | null;
     streamHeadBeforeSend: number | null;
   } {
-    const { input } = params;
+    const { input, tx } = params;
     const base = {
       conversationId: params.targetConversationId,
       fromKind: input.actor.kind,
@@ -528,13 +523,13 @@ export class ConversationMessageService {
       streamHeadBeforeSend: number | null;
     } => {
       const streamHeadBeforeSend = opts.prerequisite
-        ? this.messages.streamHeadLatestSeq(
+        ? tx.messages.streamHeadLatestSeq(
             params.targetConversationId,
             params.threadRootId,
           )
         : null;
       return {
-        message: this.messages.insertForConversation(base),
+        message: tx.messages.insertForConversation(base),
         skippedFreshnessReason: opts.reason,
         streamHeadBeforeSend,
       };
@@ -543,7 +538,7 @@ export class ConversationMessageService {
     if (input.actor.kind !== 'agent') {
       // Users carry no per-stream cursor, so there is nothing to merge into.
       return {
-        message: this.messages.insertForConversation(base),
+        message: tx.messages.insertForConversation(base),
         skippedFreshnessReason: null,
         streamHeadBeforeSend: null,
       };
@@ -577,7 +572,11 @@ export class ConversationMessageService {
       });
     }
 
-    const result = this.messages.insertForConversationIfFresh({
+    // Freshness CAS: the port contract binds the adapter to run the seq
+    // allocation + per-stream compare-and-set inside ONE nested rollback
+    // boundary, so a miss rolls back only the burned seq and leaves this
+    // transaction alive to throw the guard error below.
+    const result = tx.messages.insertForConversationIfFresh({
       ...base,
       seenUpToSeq: input.seenUpToSeq,
     });
@@ -624,11 +623,12 @@ export class ConversationMessageService {
    *  joins the same root (no nested threads). Returns null for channel/main
    *  sends. Throws when the target message is not in the conversation. */
   private resolveThreadRootForTarget(
+    tx: MessageTxScope,
     targetConversationId: string,
     target: NormalizedMessageTarget,
   ): string | null {
     if (target.kind !== 'thread') return null;
-    const replied = this.messages.getInConversation(
+    const replied = tx.messages.getInConversation(
       targetConversationId,
       target.messageId,
     );
@@ -697,10 +697,11 @@ export class ConversationMessageService {
     currentSeq: number;
   }): void {
     if (args.threadRootId === null) return;
-    const materialized = this.db.transaction(() => {
-      const window = this.messages.listStreamWindowMeta(
+    const threadRootId = args.threadRootId;
+    const materialized = this.uow.atomically(tx => {
+      const window = tx.messages.listStreamWindowMeta(
         args.conversationId,
-        args.threadRootId,
+        threadRootId,
         args.seenUpToSeq,
         args.currentSeq,
       );
@@ -709,7 +710,7 @@ export class ConversationMessageService {
         const own =
           msg.from_kind === 'agent' && msg.from_agent_id === args.agentId;
         if (own) continue;
-        this.conversationInboxes.ensureDelivery(
+        tx.inboxes.ensureDelivery(
           args.conversationId,
           args.agentId,
           msg.id,
@@ -718,7 +719,7 @@ export class ConversationMessageService {
         count += 1;
       }
       return count;
-    })();
+    });
     if (materialized === 0) return;
     void this.runtimeHost
       .deliverPending(args.conversationId, args.agentId)
@@ -760,17 +761,18 @@ export class ConversationMessageService {
   }
 
   private validateActor(
+    tx: MessageTxScope,
     actor: SendMessageActor,
     policy: SendMessagePolicy,
     sourceConversationId: string,
   ): void {
     if (actor.kind !== 'agent') return;
-    if (!this.agents.get(actor.agentId)) {
+    if (!tx.agents.get(actor.agentId)) {
       throw new ActorError('agent_not_found', 'agent not found');
     }
     if (
       policy.requireSenderMembership
-      && !this.conversations.getAgent(sourceConversationId, actor.agentId)
+      && !tx.conversations.getAgent(sourceConversationId, actor.agentId)
     ) {
       throw new ActorError(
         'agent_not_member_of_conversation',
@@ -780,23 +782,34 @@ export class ConversationMessageService {
   }
 
   private resolveLegacyTarget(
-    sourceConversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    sourceConversation: ConversationDto,
     _target: LegacySendMessageTarget,
-  ): NonNullable<ReturnType<ConversationRepo['get']>> {
+  ): ConversationDto {
     // `self` (the current conversation) is now the only scalar send
     // target; `parent` was retired with the isolated-thread fossil
     // (#task:1303/2d).
     return sourceConversation;
   }
 
+  /** Validate the sender's attachment refs against the target channel and
+   *  stamp the per-reference labels — INSIDE the send transaction, reading the
+   *  ownership/label facts through the transaction scope so the check and the
+   *  insert see one snapshot. The decision itself is the pure
+   *  `resolveSnapshotsFromSources` leaf; this method only maps its refusal to
+   *  the service's error taxonomy. */
   private resolveAttachmentSnapshots(
-    targetConversation: NonNullable<ReturnType<ConversationRepo['get']>>,
+    tx: MessageTxScope,
+    targetConversation: ConversationDto,
     attachmentRefs: AttachmentRefInput[],
-  ): NonNullable<Parameters<MessageRepo['insertForConversation']>[0]['attachments']> {
+  ): AttachmentSnapshot[] {
     if (attachmentRefs.length === 0) return [];
-    const resolved = this.attachmentService.resolveSnapshotsForChannel(
+    const sources = tx.attachments.listSnapshotSourcesByIds(
+      attachmentRefs.map(ref => ref.id),
+    );
+    const resolved = resolveSnapshotsFromSources(
       attachmentRefs,
       targetConversation.id,
+      sources,
     );
     if (!resolved.ok) {
       throw new AttachmentError(

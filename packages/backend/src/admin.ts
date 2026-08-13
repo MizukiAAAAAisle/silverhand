@@ -1,5 +1,6 @@
 import type { BackendLogger } from './context.js';
 import { openDatabase } from './db.js';
+import { isSqliteContention } from './db-errors.js';
 import { PasswordCredentialService } from './auth/password.js';
 import {
   UserAuthService,
@@ -88,20 +89,16 @@ export async function resetAdminPassword(
 
 function mapAdminDbError(err: unknown): never {
   if (err instanceof AdminResetPasswordError) throw err;
-  if (isSqliteBusy(err)) {
+  // The contention verdict comes from the driver-dialect module (#task:1983 W4):
+  // this CLI-layer command decides the OPERATOR-facing outcome, never which
+  // driver codes mean "someone else holds the lock". It used to compare against
+  // `SQLITE_BUSY` alone, so `SQLITE_BUSY_SNAPSHOT` and the `SQLITE_LOCKED*`
+  // family reached the operator as a raw driver error instead of this advice.
+  if (isSqliteContention(err)) {
     throw new AdminResetPasswordError(
       'db_locked',
       'db_locked: another Silverhand process is writing the database; retry when the write lock is free',
     );
   }
   throw err;
-}
-
-function isSqliteBusy(err: unknown): boolean {
-  return (
-    !!err
-    && typeof err === 'object'
-    && 'code' in err
-    && String((err as { code?: unknown }).code) === 'SQLITE_BUSY'
-  );
 }

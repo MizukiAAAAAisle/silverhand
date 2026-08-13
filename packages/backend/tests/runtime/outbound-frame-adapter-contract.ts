@@ -352,7 +352,7 @@ export function runOutboundFrameAdapterContract(
     });
 
     // `agent_files_purge` is the D4.e-4 delete-path purger. It must round-trip
-    // its `{ agent_id }` param + `{ purged_count }` result, and honour
+    // its `{ agent_id }` param + `{ purged_count, quiesced_count }` result, and honour
     // per-command error scoping: its own `partial_purge` rides the envelope; a
     // foreign code is refused.
 
@@ -374,10 +374,12 @@ export function runOutboundFrameAdapterContract(
       daemon.respondResult(cmd.id, 'agent_files_purge', {
         ok: true,
         purged_count: 3,
+        quiesced_count: 2,
       });
 
       await expect(pending).resolves.toMatchObject({
         purged_count: 3,
+        quiesced_count: 2,
       });
     });
 

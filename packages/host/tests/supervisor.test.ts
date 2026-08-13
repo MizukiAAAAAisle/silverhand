@@ -5462,7 +5462,22 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
   });
 
   it('#task:1854 falsifier: a loose first-touch thread send merges its own seq once the skipped head is admitted (no permanent self-stale)', async () => {
-    const { supervisor, events } = makeSupervisor();
+    const infoLogs: Array<Record<string, unknown>> = [];
+    const warnLogs: Array<Record<string, unknown>> = [];
+    const logger: DaemonLogger = {
+      ...silentLogger(),
+      info: fields => {
+        if (fields && typeof fields === 'object') {
+          infoLogs.push(fields as Record<string, unknown>);
+        }
+      },
+      warn: fields => {
+        if (fields && typeof fields === 'object') {
+          warnLogs.push(fields as Record<string, unknown>);
+        }
+      },
+    };
+    const { supervisor, events } = makeSupervisor({ logger });
     const postedBodies: Record<string, unknown>[] = [];
     // Stateful backend for the `thread:mGhost` stream. A send carrying
     // stream_key is CAS-gated at the exact head; a loose send (no fields)
@@ -5551,6 +5566,29 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, 41);
+
+      // #task:1993: both the admitted prerequisite (41) and the own-seq
+      // convergence (42) are successful cursor progress, not an operator
+      // warning. Keep the structured events, but only on the info lane.
+      await waitFor(() =>
+        infoLogs.some(
+          l =>
+            l['action'] === 'freshness_observed_seq_advanced' &&
+            l['source'] === 'skipped_cas_own_seq_merged' &&
+            l['observed_seq'] === 42,
+        ),
+      );
+      expect(
+        infoLogs.some(
+          l =>
+            l['action'] === 'freshness_observed_seq_advanced' &&
+            l['source'] === 'startup_delivery_admitted' &&
+            l['observed_seq'] === 41,
+        ),
+      ).toBe(true);
+      expect(
+        warnLogs.some(l => l['action'] === 'freshness_observed_seq_advanced'),
+      ).toBe(false);
 
       const converged = await supervisor.agentMessageSend({
         conversation_id: 'c1',
@@ -6543,6 +6581,45 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     };
   }
 
+  it('one Supervisor-owned fence blocks late start, deliver, and internal retry respawn', async () => {
+    const { supervisor } = makeSupervisor();
+    const coordinator = supervisor.agentHomeMutationCoordinator();
+    await coordinator.runPurge('a1', async () => ({
+      ok: true,
+      purged_count: 0,
+      quiesced_count: 0,
+    }));
+
+    await expect(supervisor.start(baseStartParams)).rejects.toMatchObject({
+      code: 'agent_deleting',
+    });
+    await expect(
+      supervisor.deliver(
+        {
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          delivery_ids: [1],
+          kind: 'message',
+          text: 'late',
+          spawn_options: baseStartParams.options,
+        },
+        { owner: 'owner-A' },
+      ),
+    ).rejects.toMatchObject({ code: 'agent_deleting' });
+
+    await (
+      supervisor as unknown as {
+        internalRespawnForRetry(
+          params: typeof baseStartParams,
+          attempt: number,
+        ): Promise<void>;
+      }
+    ).internalRespawnForRetry(baseStartParams, 1);
+    expect(supervisor.status({ agent_id: 'a1' })).toEqual({
+      runtimes: [],
+    });
+  });
+
   it('gated: mid-turn deliveries DEFER (no ack), then flush combined into ONE consumed', async () => {
     const h = makeDriven('gated');
     // Spawn-with-batch [1]; a requires_first_message driver parks the write
@@ -6805,6 +6882,45 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
     await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
   });
+
+  it.each([
+    { label: 'child exits', preventExit: false },
+    { label: 'child survives SIGKILL timeout', preventExit: true },
+  ])(
+    'deletion quiesce settles every deferred entry exactly once when $label',
+    async ({ preventExit }) => {
+      const h = makeDriven('gated', 'next-turn-batch');
+      expect((await h.deliver([1])).disposition).toBe('spawning');
+      h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+      await waitForDeliveryConsumed(h.events, 1);
+      expect((await h.deliver([2])).disposition).toBe('deferred');
+      expect((await h.deliver([3])).disposition).toBe('deferred');
+      if (preventExit) h.stub.kill = () => true;
+
+      const coordinator = h.supervisor.agentHomeMutationCoordinator();
+      const purge = coordinator.runPurge('a1', async () => {
+        const quiesced = await h.supervisor.fenceAndQuiesceAgent('a1');
+        return { ok: true, purged_count: 1, ...quiesced };
+      });
+      if (preventExit) {
+        await expect(purge).rejects.toMatchObject({ code: 'quiesce_failed' });
+      } else {
+        await expect(purge).resolves.toMatchObject({ quiesced_count: 1 });
+      }
+
+      for (const id of [2, 3]) {
+        expect(
+          h.events.filter(
+            event =>
+              event.event === 'runtime_delivery_failed' &&
+              event.delivery_ids.includes(id) &&
+              event.reason === 'child_exit',
+          ),
+        ).toHaveLength(1);
+        expect(h.consumedFor(id)).toHaveLength(0);
+      }
+    },
+  );
 
   it('prompt-boundary falsifier (#task:1565): deliveries during an active prompt DEFER with observed locked; the prompt response reopens the boundary → ONE combined prompt, batch-boundary admission', async () => {
     const logs: Array<Record<string, unknown>> = [];
@@ -7448,7 +7564,9 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
 
   /** Gated next-turn-batch (qoder-class) harness with per-delivery seq
    *  metadata — the pull's coverage arithmetic needs real seqs. */
-  function makePullHarness() {
+  function makePullHarness(opts: {
+    deletionCustodySettleTimeoutMs?: number;
+  } = {}) {
     let stub = new PullDriveStub();
     const base = makeProgrammableDriver([], 'requires_first_message').driver;
     let nextParse: ParsedEvent[] = [];
@@ -7477,6 +7595,8 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
+      deletionCustodySettleTimeoutMs:
+        opts.deletionCustodySettleTimeoutMs ?? 200,
     });
     const drive = (events: ParsedEvent[]) => {
       nextParse = events;
@@ -7600,6 +7720,198 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       content,
       ...(staleResolution ? { stale_resolution_reason: staleResolution } : {}),
     });
+
+  const spyOnLastDeliveredWrite = (
+    supervisor: Supervisor,
+    order: string[],
+  ) => vi.spyOn(
+    supervisor as unknown as {
+      writeLastDeliveredSeq(
+        handle: unknown,
+        deliveredUpToSeq: number | undefined,
+      ): Promise<void>;
+    },
+    'writeLastDeliveredSeq',
+  ).mockImplementation(async (_handle, deliveredUpToSeq) => {
+    order.push(`seq:${deliveredUpToSeq ?? 'none'}`);
+  });
+
+  const runDeletionPurge = (
+    supervisor: Supervisor,
+    order: string[],
+  ) => supervisor.agentHomeMutationCoordinator().runPurge('a1', async () => {
+    const quiesced = await supervisor.fenceAndQuiesceAgent('a1');
+    order.push('rm');
+    return { ok: true as const, purged_count: 1, ...quiesced };
+  });
+
+  it('deletion fence closes stale-receive under the lifecycle lock before it can reserve custody', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    let releasePurge!: () => void;
+    const holdPurge = new Promise<void>(resolve => {
+      releasePurge = resolve;
+    });
+    try {
+      await h.boot();
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+
+      const coordinator = h.supervisor.agentHomeMutationCoordinator();
+      const purge = coordinator.runPurge('a1', async () => {
+        await holdPurge;
+        const quiesced = await h.supervisor.fenceAndQuiesceAgent('a1');
+        return { ok: true as const, purged_count: 1, ...quiesced };
+      });
+
+      await expect(h.pull(1_000)).rejects.toMatchObject({
+        code: 'agent_deleting',
+      });
+      expect(h.consumedFor(2)).toHaveLength(0);
+      releasePurge();
+      await expect(purge).resolves.toMatchObject({ quiesced_count: 1 });
+      expect(
+        h.events.filter(
+          event => event.event === 'runtime_delivery_failed'
+            && event.delivery_ids.includes(2),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      releasePurge();
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('deletion waits for successful response handoff settlement after handle exit before rm, then consumes exactly once', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    const order: string[] = [];
+    const writeSpy = spyOnLastDeliveredWrite(h.supervisor, order);
+    try {
+      await h.boot();
+      writeSpy.mockClear();
+      order.length = 0;
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+      // The reservation outlives the runtime handle. The deletion barrier
+      // must find custody through the agent-level registry, not only the
+      // current/living handle map.
+      h.stub.emit('exit', 0, null);
+      await waitFor(() =>
+        h.events.some(event => event.event === 'runtime_exit')
+      );
+
+      const purge = runDeletionPurge(h.supervisor, order);
+      await wait(30);
+      expect(order).not.toContain('rm');
+      expect(h.consumedFor(2)).toHaveLength(0);
+
+      settle!(true);
+      await expect(purge).resolves.toMatchObject({ quiesced_count: 0 });
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(['seq:2', 'rm']);
+      expect(h.consumedFor(2)).toHaveLength(1);
+      expect(
+        h.events.filter(
+          event => event.event === 'runtime_delivery_failed'
+            && event.delivery_ids.includes(2),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('deletion waits for failed response handoff settlement, then fails restored custody exactly once before rm', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    const order: string[] = [];
+    const writeSpy = spyOnLastDeliveredWrite(h.supervisor, order);
+    try {
+      await h.boot();
+      writeSpy.mockClear();
+      order.length = 0;
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      const purge = runDeletionPurge(h.supervisor, order);
+      await wait(30);
+      expect(order).not.toContain('rm');
+      settle!(false);
+      await expect(purge).resolves.toMatchObject({ quiesced_count: 1 });
+
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(order).toEqual(['rm']);
+      expect(h.consumedFor(2)).toHaveLength(0);
+      expect(
+        h.events.filter(
+          event => event.event === 'runtime_delivery_failed'
+            && event.delivery_ids.includes(2)
+            && event.reason === 'child_exit',
+        ),
+      ).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
+  it('deletion custody timeout returns retryable quiesce_failed without settlement or rm; handoff then retry converges', async () => {
+    const h = makePullHarness({ deletionCustodySettleTimeoutMs: 25 });
+    h.stubBackendWithCas(2);
+    const order: string[] = [];
+    const writeSpy = spyOnLastDeliveredWrite(h.supervisor, order);
+    try {
+      await h.boot();
+      writeSpy.mockClear();
+      order.length = 0;
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2)).disposition).toBe('deferred');
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      const timeoutError = await runDeletionPurge(h.supervisor, order).catch(
+        error => error as Error & { code?: string },
+      );
+      if (!(timeoutError instanceof Error)) {
+        throw new Error('expected deletion custody timeout to reject');
+      }
+      expect(timeoutError).toMatchObject({ code: 'quiesce_failed' });
+      expect(timeoutError.message).toContain('stale-receive custody reservation');
+      expect(timeoutError.message).toContain('response handoff settlement');
+      expect(timeoutError.message).not.toContain('runtime child');
+      expect(order).toEqual([]);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(h.consumedFor(2)).toHaveLength(0);
+      expect(
+        h.events.filter(
+          event => event.event === 'runtime_delivery_failed'
+            && event.delivery_ids.includes(2),
+        ),
+      ).toHaveLength(0);
+      await expect(h.deliverSeq(3, 3)).rejects.toMatchObject({
+        code: 'agent_deleting',
+      });
+
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+      await expect(runDeletionPurge(h.supervisor, order)).resolves.toMatchObject({
+        quiesced_count: 1,
+      });
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(order).toEqual(['seq:2', 'rm']);
+      expect(h.consumedFor(2)).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
 
   it('core falsifier: 409 → pull takes the deferred batch atomically → observed covers → same-turn revised send passes CAS → turn_end releases nothing twice', async () => {
     const h = makePullHarness();

@@ -16,7 +16,12 @@
 // buildReadHistoryDto, listAgentVisibleChannels, buildAgentSearchMessagesDto.
 // Everything else (refs, LIKE escaping, snippet, history SQL helpers) is
 // module-private.
-import type { BackendContext } from '../context.js';
+// #task:1983 W2 — the handle is bound at ASSEMBLY time
+// (`createAgentReadModel`), not read out of a god-context per call: every
+// projection below only ever needed `db`, and taking the whole
+// `BackendContext` is what made the read side look like it had ambient access
+// to everything.
+import type { Database as Db } from 'better-sqlite3';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { loadMessageAuthors } from '../repos/message-author.js';
 import {
@@ -74,10 +79,10 @@ type ReadHistoryTargetResult =
  *  form. Returns just the routing fields (no DTO assembly) for a
  *  message id, or `null` when no such message exists. */
 function lookupClusterRootMessage(
-  ctx: BackendContext,
+  db: Db,
   messageId: string,
 ): { id: string; conversation_id: string; thread_root_id: string | null } | null {
-  const row = ctx.db
+  const row = db
     .prepare<[string], { id: string; conversation_id: string; thread_root_id: string | null }>(
       `SELECT id, conversation_id, thread_root_id FROM messages WHERE id = ?`,
     )
@@ -86,7 +91,7 @@ function lookupClusterRootMessage(
 }
 
 export function resolveAgentReadHistoryTarget(
-  ctx: BackendContext,
+  db: Db,
   conversations: ConversationRepo,
   sourceConversation: ConversationDto,
   agentId: string,
@@ -105,7 +110,7 @@ export function resolveAgentReadHistoryTarget(
     // lives inside the root message's channel; normalize a reply to
     // its canonical root (symmetry with send-side resolveThreadRoot)
     // so `thread:<reply_id>` reads the whole cluster, not nothing.
-    const rootMsg = lookupClusterRootMessage(ctx, requested.thread_root_id);
+    const rootMsg = lookupClusterRootMessage(db, requested.thread_root_id);
     if (!rootMsg) {
       return {
         ok: false,
@@ -277,7 +282,7 @@ function historySelectSql(whereSql: string, orderSql: string, limitSql = 'LIMIT 
 }
 
 function listHistoryBefore(
-  ctx: BackendContext,
+  db: Db,
   conversationId: string,
   beforeSeq: number,
   includeSystem: boolean,
@@ -285,7 +290,7 @@ function listHistoryBefore(
   threadRootId: string | null,
 ): HistoryMessageRow[] {
   if (limit <= 0) return [];
-  const rows = ctx.db
+  const rows = db
     .prepare<(string | number)[], HistoryMessageRow>(
       `SELECT *
          FROM (
@@ -304,14 +309,14 @@ function listHistoryBefore(
 }
 
 function listHistoryHead(
-  ctx: BackendContext,
+  db: Db,
   conversationId: string,
   includeSystem: boolean,
   limit: number,
   threadRootId: string | null,
 ): HistoryMessageRow[] {
   if (limit <= 0) return [];
-  return ctx.db
+  return db
     .prepare<(string | number)[], HistoryMessageRow>(
       `SELECT *
          FROM (
@@ -328,7 +333,7 @@ function listHistoryHead(
 }
 
 function listHistoryAfter(
-  ctx: BackendContext,
+  db: Db,
   conversationId: string,
   afterSeq: number,
   includeSystem: boolean,
@@ -336,7 +341,7 @@ function listHistoryAfter(
   threadRootId: string | null,
 ): HistoryMessageRow[] {
   if (limit <= 0) return [];
-  return ctx.db
+  return db
     .prepare<(string | number)[], HistoryMessageRow>(
       historySelectSql(
         `m.conversation_id = ?
@@ -350,12 +355,12 @@ function listHistoryAfter(
 }
 
 function getHistoryAnchorSeq(
-  ctx: BackendContext,
+  db: Db,
   conversationId: string,
   messageId: string,
   threadRootId: string | null,
 ): number | null {
-  const row = ctx.db
+  const row = db
     .prepare<(string | number)[], { seq: number }>(
       `SELECT seq
          FROM messages
@@ -368,13 +373,13 @@ function getHistoryAnchorSeq(
 }
 
 function getHistoryRowById(
-  ctx: BackendContext,
+  db: Db,
   conversationId: string,
   messageId: string,
   includeSystem: boolean,
   threadRootId: string | null,
 ): HistoryMessageRow | null {
-  const row = ctx.db
+  const row = db
     .prepare<(string | number)[], HistoryMessageRow>(
       historySelectSql(
         `m.id = ?
@@ -390,14 +395,14 @@ function getHistoryRowById(
 }
 
 function hasHistoryBefore(
-  ctx: BackendContext,
+  db: Db,
   conversationId: string,
   seq: number,
   includeSystem: boolean,
   threadRootId: string | null,
 ): boolean {
   return (
-    ctx.db
+    db
       .prepare<(string | number)[], { found: 1 }>(
         `SELECT 1 AS found
            FROM messages m
@@ -412,14 +417,14 @@ function hasHistoryBefore(
 }
 
 function hasHistoryAfter(
-  ctx: BackendContext,
+  db: Db,
   conversationId: string,
   seq: number,
   includeSystem: boolean,
   threadRootId: string | null,
 ): boolean {
   return (
-    ctx.db
+    db
       .prepare<(string | number)[], { found: 1 }>(
         `SELECT 1 AS found
            FROM messages m
@@ -434,7 +439,7 @@ function hasHistoryAfter(
 }
 
 export function buildReadHistoryDto(
-  ctx: BackendContext,
+  db: Db,
   targetConversation: ConversationDto,
   input: {
     before_seq?: number;
@@ -454,7 +459,7 @@ export function buildReadHistoryDto(
   if (input.before_seq !== undefined) {
     anchor = { type: 'before_seq', seq: input.before_seq };
     rows = listHistoryBefore(
-      ctx,
+      db,
       targetConversation.id,
       input.before_seq,
       input.include_system,
@@ -464,7 +469,7 @@ export function buildReadHistoryDto(
   } else if (input.after_seq !== undefined) {
     anchor = { type: 'after_seq', seq: input.after_seq };
     rows = listHistoryAfter(
-      ctx,
+      db,
       targetConversation.id,
       input.after_seq,
       input.include_system,
@@ -474,7 +479,7 @@ export function buildReadHistoryDto(
   } else if (input.around_message_id !== undefined) {
     const messageId = input.around_message_id;
     const anchorSeq = getHistoryAnchorSeq(
-      ctx,
+      db,
       targetConversation.id,
       messageId,
       threadRootId,
@@ -489,7 +494,7 @@ export function buildReadHistoryDto(
     anchor = { type: 'around_message_id', message_id: messageId };
     const beforeCount = Math.floor((input.limit - 1) / 2);
     const before = listHistoryBefore(
-      ctx,
+      db,
       targetConversation.id,
       anchorSeq,
       input.include_system,
@@ -497,7 +502,7 @@ export function buildReadHistoryDto(
       threadRootId,
     );
     const anchorRow = getHistoryRowById(
-      ctx,
+      db,
       targetConversation.id,
       messageId,
       input.include_system,
@@ -508,7 +513,7 @@ export function buildReadHistoryDto(
       input.limit - before.length - (anchorRow ? 1 : 0),
     );
     const after = listHistoryAfter(
-      ctx,
+      db,
       targetConversation.id,
       anchorSeq,
       input.include_system,
@@ -519,7 +524,7 @@ export function buildReadHistoryDto(
   } else {
     anchor = { type: 'head' };
     rows = listHistoryHead(
-      ctx,
+      db,
       targetConversation.id,
       input.include_system,
       input.limit,
@@ -534,14 +539,14 @@ export function buildReadHistoryDto(
   // the map → `reactions: null` on that message. Serves the reply-cluster
   // pull form too, since the rows already carry cluster scoping (§12.C).
   const aggregates = loadReactionAggregates(
-    ctx,
+    db,
     rows.map(row => row.id),
     viewer,
   );
   // One batch author-resolve for the whole window (two queries, no N+1) via the
   // single server-authoritative resolver; each row's thin sender projection is
   // taken from this map (system rows resolve to null → sender null).
-  const authors = loadMessageAuthors(ctx.db, rows);
+  const authors = loadMessageAuthors(db, rows);
   return {
     target,
     anchor,
@@ -561,7 +566,7 @@ export function buildReadHistoryDto(
       minSeq === null
         ? false
         : hasHistoryBefore(
-            ctx,
+            db,
             targetConversation.id,
             minSeq,
             input.include_system,
@@ -571,7 +576,7 @@ export function buildReadHistoryDto(
       maxSeq === null
         ? false
         : hasHistoryAfter(
-            ctx,
+            db,
             targetConversation.id,
             maxSeq,
             input.include_system,
@@ -581,7 +586,7 @@ export function buildReadHistoryDto(
 }
 
 export function listAgentVisibleChannels(
-  ctx: BackendContext,
+  db: Db,
   workspaceId: string,
   agentId: string,
 ): AgentListChannelsDto {
@@ -599,7 +604,7 @@ export function listAgentVisibleChannels(
   // demoted by matching the public predicate first. Discovery grants nothing
   // beyond listing: no roster, messages, unread, search, delivery, restore, or
   // write, and no implicit join.
-  const rows = ctx.db
+  const rows = db
     .prepare<[string, string, string], ConversationDto & { is_member: number }>(
       `SELECT c.*,
               EXISTS (
@@ -689,7 +694,7 @@ type SearchMessagesResult =
     };
 
 export function buildAgentSearchMessagesDto(
-  ctx: BackendContext,
+  db: Db,
   conversations: ConversationRepo,
   sourceConversation: ConversationDto,
   agentId: string,
@@ -758,7 +763,7 @@ export function buildAgentSearchMessagesDto(
   }
 
   const sqlParams: Array<string | number> = [agentId, ...params, input.limit];
-  const rows = ctx.db
+  const rows = db
     .prepare<Array<string | number>, AgentSearchMessageRow>(
       `SELECT
           m.*,
@@ -778,7 +783,7 @@ export function buildAgentSearchMessagesDto(
     )
     .all(...sqlParams);
 
-  const authors = loadMessageAuthors(ctx.db, rows);
+  const authors = loadMessageAuthors(db, rows);
   return {
     ok: true,
     dto: {
@@ -800,3 +805,37 @@ export function buildAgentSearchMessagesDto(
     },
   };
 }
+
+/**
+ * The agent-facing read surface with the handle already bound (#task:1983 W2).
+ * Route modules declare THIS in their deps rather than importing the module and
+ * passing a context.
+ *
+ * The type is DERIVED from the factory instead of restated as an interface on
+ * purpose: three of these four projections take large inline input-object
+ * shapes, and a hand-copied interface would be a second authority for them that
+ * drifts silently. The functions above stay exported — they are the definition.
+ */
+export type AgentReadModel = ReturnType<typeof createAgentReadModel>;
+
+export function createAgentReadModel(db: Db) {
+  return {
+    resolveHistoryTarget: (
+      ...rest: Tail<Parameters<typeof resolveAgentReadHistoryTarget>>
+    ) => resolveAgentReadHistoryTarget(db, ...rest),
+    buildReadHistoryDto: (
+      ...rest: Tail<Parameters<typeof buildReadHistoryDto>>
+    ) => buildReadHistoryDto(db, ...rest),
+    listVisibleChannels: (
+      ...rest: Tail<Parameters<typeof listAgentVisibleChannels>>
+    ) => listAgentVisibleChannels(db, ...rest),
+    buildSearchMessagesDto: (
+      ...rest: Tail<Parameters<typeof buildAgentSearchMessagesDto>>
+    ) => buildAgentSearchMessagesDto(db, ...rest),
+  };
+}
+
+/** Everything after the leading bound `Db` parameter. */
+type Tail<P extends readonly unknown[]> = P extends readonly [unknown, ...infer R]
+  ? R
+  : never;

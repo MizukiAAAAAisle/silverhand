@@ -250,6 +250,8 @@ export interface AgentRow {
   runtime_transition_target: RuntimeKind | null;
   /** Epoch ms paired with `runtime_transition_target`; internal, not a DTO field. */
   runtime_transition_started_at: number | null;
+  /** Epoch ms durable terminal-deletion intent and attempt CAS token. */
+  deletion_started_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -549,6 +551,16 @@ export interface TaskRow {
   closed_at: number | null;
 }
 
+/** Entry path that first made a principal a follower. Immutable per row —
+ *  a later mention never rewrites a `manual` follow's provenance. Single
+ *  authority: the follower repo and the message-domain ports both name THIS
+ *  type instead of re-declaring the union (#task:1981). */
+export type ThreadFollowerSource =
+  | 'reply'
+  | 'mention'
+  | 'manual'
+  | 'target_author';
+
 /**
  * Thread delivery/notification subscription (v43) — NOT membership or
  * permission. `follower ⊆ parent channel member` is enforced at query
@@ -561,7 +573,7 @@ export interface ThreadFollowerRow {
   principal_kind: 'human' | 'agent';
   principal_id: string;
   followed_at: number;
-  source: 'reply' | 'mention' | 'manual' | 'target_author';
+  source: ThreadFollowerSource;
 }
 
 /**

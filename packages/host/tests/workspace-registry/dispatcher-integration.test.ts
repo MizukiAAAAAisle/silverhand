@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { IntentDispatcher } from '../../src/daemon/dispatcher.js';
+import { AgentHomeMutationCoordinator } from '../../src/daemon/agent-home-mutation-coordinator.js';
 import {
   AgentWorkspaceIndexError,
   AgentL2SeedError,
@@ -83,9 +84,21 @@ function dispatcherWithHandler(
   handlerKey: RegistryHandlerKey,
   handler: (params: never) => unknown,
 ): IntentDispatcher {
+  const coordinator = new AgentHomeMutationCoordinator();
   return new IntentDispatcher({
     logger: silentLogger(),
+    ...(handlerKey === 'agentFilesPurgeHandler'
+      ? {
+          supervisor: {
+            agentHomeMutationCoordinator: () => coordinator,
+            fenceAndQuiesceAgent: async () => ({ quiesced_count: 0 }),
+          },
+        }
+      : {}),
     [handlerKey]: handler,
+    ...(handlerKey === 'agentFilesPurgeHandler'
+      ? { agentHomeMutationCoordinator: coordinator }
+      : {}),
   } as unknown as DispatcherOptions);
 }
 
@@ -166,9 +179,10 @@ const registryIntentCases: RegistryIntentCase[] = [
     result: {
       ok: true,
       purged_count: 2,
+      quiesced_count: 0,
     } satisfies AgentFilesPurgeResult,
     errorName: 'AgentFilesPurgeError',
-    typedCodes: ['partial_purge', 'internal_error'],
+    typedCodes: ['quiesce_failed', 'partial_purge', 'internal_error'],
     makeTypedError: (code, message) =>
       new AgentFilesPurgeError(code as never, message),
     foreignError: () =>
@@ -274,7 +288,19 @@ describe.each(registryIntentCases)(
     );
 
     it('surfaces internal_error when no handler is wired', async () => {
-      const d = new IntentDispatcher({ logger: silentLogger() });
+      const coordinator = new AgentHomeMutationCoordinator();
+      const d = new IntentDispatcher({
+        logger: silentLogger(),
+        ...(testCase.intent === 'agent_files_purge'
+          ? {
+              agentHomeMutationCoordinator: coordinator,
+              supervisor: {
+                agentHomeMutationCoordinator: () => coordinator,
+                fenceAndQuiesceAgent: async () => ({ quiesced_count: 0 }),
+              } as never,
+            }
+          : {}),
+      });
 
       const r = await expectErrorCode(
         d.dispatch(

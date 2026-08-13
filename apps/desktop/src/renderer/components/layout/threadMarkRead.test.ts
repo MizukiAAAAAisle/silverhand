@@ -6,12 +6,47 @@ import {
   threadLiveMarkReadSeq,
   threadMarkReadSnapshot,
   threadOpenNeedsLatestRefetch,
+  threadReplyRows,
   threadTailIsVisible,
+  threadVisibleReplySeq,
   type ThreadMarkReadGateInput,
   type ThreadLiveMarkReadInput,
 } from './threadMarkRead';
 import { clusterFetchEpochKey } from '@/features/channels/hooks';
-import { decodeMessageSeq } from '@silverhand/shared';
+import type { CachedMessage } from '@/features/channels/pending-message';
+import { decodeMessageSeq, type MessageDto } from '@silverhand/shared';
+
+/** A committed reply/root row for the cursor-domain fixtures below. */
+function message(
+  overrides: Partial<Omit<MessageDto, 'seq'>> & { seq?: number } = {},
+): MessageDto {
+  const { seq, ...rest } = overrides;
+  return {
+    id: 'm1',
+    conversation_id: 'c1',
+    from_kind: 'user',
+    from_agent_id: null,
+    from_user_id: 'u1',
+    author: {
+      status: 'active',
+      kind: 'user',
+      id: 'u1',
+      name: 'User',
+      display_name: 'User',
+      avatar_url: null,
+      runtime: null,
+    },
+    content: 'body',
+    metadata: null,
+    attachments: null,
+    seq: decodeMessageSeq(seq ?? 1),
+    created_at: 0,
+    thread_root_id: null,
+    linked_task: null,
+    reactions: null,
+    ...rest,
+  };
+}
 
 // Baseline: a clean open whose fetch has succeeded after open, nothing marked
 // yet, window head loaded. Each test overrides only what it exercises.
@@ -256,27 +291,27 @@ describe('cluster freshness epoch carrier (primeAround → gate, §9.10)', () =>
 });
 
 describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
-  // `maxVisibleSeq` / `lastMarkedSeq` are taken as raw numbers (or null) and
+  // `maxVisibleReplySeq` / `lastMarkedSeq` are taken as raw numbers (or null) and
   // decoded to MessageSeq here (slice-A pattern), so overrides pass plain
   // literals. Default: actual tail visible, document visible, tail 42, marked 10.
   const live = (
     over: Partial<
-      Omit<ThreadLiveMarkReadInput, 'maxVisibleSeq' | 'lastMarkedSeq'>
+      Omit<ThreadLiveMarkReadInput, 'maxVisibleReplySeq' | 'lastMarkedSeq'>
     > & {
-      maxVisibleSeq?: number | null;
+      maxVisibleReplySeq?: number | null;
       lastMarkedSeq?: number | null;
     } = {},
   ): ThreadLiveMarkReadInput => {
-    const { maxVisibleSeq, lastMarkedSeq, ...rest } = over;
+    const { maxVisibleReplySeq, lastMarkedSeq, ...rest } = over;
     return {
       tailVisible: true,
       documentVisible: true,
-      maxVisibleSeq:
-        maxVisibleSeq === undefined
+      maxVisibleReplySeq:
+        maxVisibleReplySeq === undefined
           ? decodeMessageSeq(42)
-          : maxVisibleSeq === null
+          : maxVisibleReplySeq === null
             ? null
-            : decodeMessageSeq(maxVisibleSeq),
+            : decodeMessageSeq(maxVisibleReplySeq),
       lastMarkedSeq:
         lastMarkedSeq === undefined
           ? decodeMessageSeq(10)
@@ -300,23 +335,23 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
   });
 
   it('empty window (no visible seq) → null', () => {
-    expect(threadLiveMarkReadSeq(live({ maxVisibleSeq: null }))).toBeNull();
+    expect(threadLiveMarkReadSeq(live({ maxVisibleReplySeq: null }))).toBeNull();
   });
 
   it('nothing marked yet (lastMarkedSeq null) → marks the visible tail', () => {
     // Explicit-absence gate (#task:1267 Axis-B): a null "nothing marked" must
     // never block the first advance the way a 0 sentinel silently would.
     expect(
-      threadLiveMarkReadSeq(live({ maxVisibleSeq: 42, lastMarkedSeq: null })),
+      threadLiveMarkReadSeq(live({ maxVisibleReplySeq: 42, lastMarkedSeq: null })),
     ).toBe(42);
   });
 
   it('already marked at/after the visible tail → null (forward-only)', () => {
     expect(
-      threadLiveMarkReadSeq(live({ maxVisibleSeq: 42, lastMarkedSeq: 42 })),
+      threadLiveMarkReadSeq(live({ maxVisibleReplySeq: 42, lastMarkedSeq: 42 })),
     ).toBeNull();
     expect(
-      threadLiveMarkReadSeq(live({ maxVisibleSeq: 41, lastMarkedSeq: 42 })),
+      threadLiveMarkReadSeq(live({ maxVisibleReplySeq: 41, lastMarkedSeq: 42 })),
     ).toBeNull();
   });
 
@@ -324,7 +359,7 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
     // onSuccess is what advances lastMarkedSeq; a failed mutation leaves it
     // unchanged, so re-evaluating with the same window re-proposes the seq.
     expect(
-      threadLiveMarkReadSeq(live({ maxVisibleSeq: 42, lastMarkedSeq: 10 })),
+      threadLiveMarkReadSeq(live({ maxVisibleReplySeq: 42, lastMarkedSeq: 10 })),
     ).toBe(42);
   });
 
@@ -336,7 +371,7 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
       threadLiveMarkReadSeq(
         live({
           tailVisible: true,
-          maxVisibleSeq: 42,
+          maxVisibleReplySeq: 42,
           lastMarkedSeq: 10,
           documentVisible: false,
         }),
@@ -350,12 +385,82 @@ describe('threadLiveMarkReadSeq (#task:1226 visible-live mark-read)', () => {
       threadLiveMarkReadSeq(
         live({
           tailVisible: true,
-          maxVisibleSeq: 42,
+          maxVisibleReplySeq: 42,
           lastMarkedSeq: 10,
           documentVisible: true,
         }),
       ),
     ).toBe(42);
+  });
+});
+
+describe('thread reply-stream cursor domain (#task:1992)', () => {
+  // The cluster read predicate is `id = ? OR thread_root_id = ?`, so a window
+  // that reaches the thread's start CONTAINS the main-line root. These fixtures
+  // reproduce the shape the 2026-08-13 packaged smoke hit: root at mainline
+  // seq 6, first reply not yet written (it landed later at seq 13).
+  const root = message({ id: 'root', seq: 6, thread_root_id: null });
+  const reply = (id: string, seq: number): MessageDto =>
+    message({ id, seq, thread_root_id: 'root' });
+  const pendingReply = (id: string): CachedMessage => {
+    const { seq: _seq, ...rest } = reply(id, 0);
+    return { ...rest, pending: true };
+  };
+
+  it('threadReplyRows drops the pinned root and keeps reply order', () => {
+    const rows = threadReplyRows(
+      [root, reply('r1', 13), reply('r2', 20)],
+      'root',
+    );
+    expect(rows.map(m => m.id)).toEqual(['r1', 'r2']);
+  });
+
+  it('root-only window → null cursor (the reply-less thread that produced the 400)', () => {
+    // The thread stream head is 0 here (no `conversation_stream_heads` row is
+    // written until a REPLY exists), so proposing the root's mainline seq 6 is a
+    // position beyond the head — `position_future` 400. Null means the live gate
+    // holds and no observe request is sent at all.
+    expect(threadVisibleReplySeq([root], 'root')).toBeNull();
+  });
+
+  it('root + replies → the newest REPLY seq, never the root’s mainline seq', () => {
+    expect(threadVisibleReplySeq([root, reply('r1', 13)], 'root')).toBe(13);
+    // Identity, not ordinal comparison: a root row anywhere in the window, at
+    // any seq, is excluded. (A real root's mainline seq is always below its
+    // replies'; this pins the rule itself rather than that incidental ordering.)
+    const laterRoot = message({ id: 'root', seq: 99, thread_root_id: null });
+    expect(threadVisibleReplySeq([reply('r1', 13), laterRoot], 'root')).toBe(13);
+  });
+
+  it('around-window (root off-window) → that window’s newest reply seq', () => {
+    // A jump-opened mid-history window holds replies only; the cursor is still
+    // max-VISIBLE, so it stays at the loaded window's tail reply.
+    expect(
+      threadVisibleReplySeq([reply('r4', 40), reply('r5', 41)], 'root'),
+    ).toBe(41);
+  });
+
+  it('pending optimistic reply carries no ordinal → cursor stays at the last committed reply', () => {
+    expect(
+      threadVisibleReplySeq([root, reply('r1', 13), pendingReply('p1')], 'root'),
+    ).toBe(13);
+    // Root + a pending reply only: still nothing committed in this stream.
+    expect(threadVisibleReplySeq([root, pendingReply('p1')], 'root')).toBeNull();
+  });
+
+  it('composed with the live gate: a watched root-only thread proposes nothing, then follows the first reply', () => {
+    // Tail visible + foreground + nothing marked yet — every other gate term is
+    // OPEN, so this isolates the domain rule: the debounce fires against a null
+    // proposal, i.e. zero observe requests (not a swallowed 400).
+    const watched = (window: readonly CachedMessage[]): ThreadLiveMarkReadInput => ({
+      tailVisible: true,
+      documentVisible: true,
+      maxVisibleReplySeq: threadVisibleReplySeq(window, 'root'),
+      lastMarkedSeq: null,
+    });
+    expect(threadLiveMarkReadSeq(watched([root]))).toBeNull();
+    // The first reply arrives while the panel is watched: advance by REPLY seq.
+    expect(threadLiveMarkReadSeq(watched([root, reply('r1', 13)]))).toBe(13);
   });
 });
 

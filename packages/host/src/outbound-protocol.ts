@@ -39,6 +39,7 @@ import {
   AgentFilesPurgeParamsSchema,
   AgentFilesPurgeResultSchema,
   AgentProfileMcpErrorCodeSchema,
+  AgentProfileMcpWriteErrorCodeSchema,
   AgentProfileMcpReadParamsSchema,
   AgentProfileMcpReadResultSchema,
   AgentProfileMcpWriteParamsSchema,
@@ -213,7 +214,14 @@ const FrameIdSchema = z.string().min(1);
 // `protocol_version` against this constant) turns that otherwise-silent
 // incompatibility into a fail-closed refusal at hello. Bumps alongside
 // HOST_PROTOCOL_VERSION (9→10). No shim.
-export const OUTBOUND_PROTOCOL_VERSION = 9;
+//
+// v10 (#task:1988): terminal agent deletion fencing changes the strict
+// `agent_files_purge` result/error contract and adds `agent_deleting` to every
+// mutator error arm. A mixed-generation backend/daemon pair is unsafe: the old
+// daemon would rm without quiescing admitted handlers or children. Exact attach
+// admission rejects it before business commands. Bumps alongside
+// HOST_PROTOCOL_VERSION (10→11). No shim.
+export const OUTBOUND_PROTOCOL_VERSION = 10;
 
 // ── server → daemon command catalogue ──────────────────────────────
 
@@ -367,6 +375,16 @@ export type AgentProfileMcpWireError = z.infer<
   typeof AgentProfileMcpWireErrorSchema
 >;
 
+export const AgentProfileMcpWriteWireErrorSchema = z
+  .object({
+    code: z.union([
+      ResponseErrorSchema.shape.code,
+      AgentProfileMcpWriteErrorCodeSchema,
+    ]),
+    message: z.string(),
+  })
+  .strict();
+
 // #task:1137: mcp_probe widens its wire error with the same per-command
 // scoping — `fs_unavailable` (E* host-fs error reading the source config),
 // `internal_error`. Connection/handshake/tools failures are NOT errors; they
@@ -515,7 +533,7 @@ export const outboundServerCommandSchemas = {
   agent_profile_mcp_write: {
     params: AgentProfileMcpWriteParamsSchema,
     result: AgentProfileMcpWriteResultSchema,
-    error: AgentProfileMcpWireErrorSchema,
+    error: AgentProfileMcpWriteWireErrorSchema,
   },
   /** #task:1137 — mcp_probe: one-shot live MCP connection (initialize +
    *  optional tools/list) to a named server, closed immediately. Backs

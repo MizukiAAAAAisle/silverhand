@@ -4,10 +4,6 @@ import {
 } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { UserPrincipal } from '../auth/principal.js';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
-import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { StoredFileRef } from '../storage/blob-file-storage.js';
 import { canEditAgent, canViewAgent } from '../permissions.js';
 import {
@@ -15,20 +11,21 @@ import {
   resolveOutboundForHost,
   type DataPlaneHttpStatus,
 } from '../runtime/workspace-data-plane.js';
-import {
-  computeDeleteImpact,
-  type AgentDeleteImpact,
-} from '../read-model/agent-delete-impact.js';
+import type {
+  AgentRuntimeSessionFacts,
+  AgentTeardownCapture,
+  AgentTeardownFacts,
+  AgentTeardownPersistence,
+  AgentTeardownUnitOfWork,
+} from './agent-teardown-ports.js';
+import type { AgentDeletionRunner } from './agent-deletion-resumer.js';
 
 /**
  * DeleteAgent use case (#task:982 — P11a spec).
  *
- * Owns the full `DELETE /api/agents/:id` destructive cascade that previously
- * lived in the route body: materialization-status dispatch, authorization,
- * confirm gate, hard-stop of running conversation agents, the fail-closed
- * daemon `agent_files_purge` sequence (no DB row is deleted until the purge
- * acks), the regular-membership/conversation teardown, the DM
- * attachment sweep, and the final agent-row delete.
+ * Owns the full `DELETE /api/agents/:id` destructive cascade. Active deletion
+ * is a durable lifecycle: persist the intent, let the host worker establish its
+ * terminal fence + quiescence barrier and purge, then CAS-delete the DB row.
  *
  * HTTP-agnostic by construction (spec §1.1): it returns a typed
  * {@link DeleteAgentResult}; the route maps kind → HTTP status + body. It never
@@ -37,14 +34,12 @@ import {
  * exactly mirroring the route, which only validated confirm after the
  * pending/failed dispatch, so a failed row + malformed body stays 204 (not 400).
  *
- * There is intentionally NO outer `db.transaction` here: the original handler
- * tore down sequentially (per-conversation `removeAgent`, then `removeMember`,
- * then `agents.delete` relying on FK cascade), and this route deletes exactly
- * one agent, so a partial teardown cannot straddle two independent objects.
- * The delete-computer cascade is different — it deletes N agents plus the
- * computer as ONE user-visible act — so `teardownAgentControlPlaneRows` below
- * is factored out as a synchronous, transaction-safe step it can commit
- * together with the workspace and host rows (`delete-computer.ts`).
+ * Remote IO never runs under the SQLite write lock. The daemon fence, not an
+ * optimistic pre-stop, closes already-admitted commands and live children. The
+ * durable marker closes new backend dispatch and makes every failure
+ * fail-forward through {@link AgentDeletionRunner}. Failed materialization rows
+ * retain their pre-existing row-only behavior; they may still have partial
+ * host-local bytes, a named residual of this task.
  */
 
 // DELETE opts in to ALL three materialization statuses so the dispatch below can
@@ -60,10 +55,8 @@ const DELETE_INCLUDE_STATUSES: AgentMaterializationStatus[] = [
 
 export interface DeleteAgentDeps {
   ctx: BackendContext;
-  agents: AgentRepo;
-  workspaces: WorkspaceRepo;
-  conversations: ConversationRepo;
-  conversationInboxes: ConversationInboxRepo;
+  teardown: AgentTeardownPersistence;
+  deletionRunner: AgentDeletionRunner;
 }
 
 export interface DeleteAgentCommand {
@@ -77,32 +70,40 @@ export interface DeleteAgentCommand {
    * Hono/Response, just the command body).
    */
   body: unknown;
+  retry?: boolean;
 }
 
 /**
  * Named result — no HTTP status policy. The route maps kind → status/body with
- * an exhaustive `switch` + `never` fallback. The fail-closed sources
- * (outbound resolve / purge dispatch / partial purge) all
- * collapse into `failClosed`, whose body is uniformly `{ error, code }` at the
- * carried `status`.
+ * an exhaustive `switch` + `never` fallback. Once the durable marker exists,
+ * every daemon/worker failure is `deletionPendingRetry` (202), never an
+ * ephemeral fail-closed response that loses scheduling ownership.
  */
 export type DeleteAgentResult =
   | { kind: 'deleted' }
   | { kind: 'notFound' }
   | { kind: 'forbidden' }
   | { kind: 'pendingInFlight' }
-  | { kind: 'confirmRequired' }
-  | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus };
+  | { kind: 'deletionInProgress' }
+  | { kind: 'deletionPendingRetry'; code: string; error: string }
+  | { kind: 'confirmRequired' };
+
+/** Which conversation-agent statuses still own a live runtime child. A DOMAIN
+ *  rule, deliberately not pushed into the adapter: the teardown port hands back
+ *  raw `(conversation, status)` pairs so this predicate stays testable here. */
+export function isRunningSession(session: AgentRuntimeSessionFacts): boolean {
+  return session.status === 'starting' || session.status === 'active';
+}
 
 export async function deleteAgent(
   deps: DeleteAgentDeps,
   cmd: DeleteAgentCommand,
 ): Promise<DeleteAgentResult> {
-  const { ctx, agents } = deps;
+  const { ctx, teardown } = deps;
   const id = cmd.agentId;
   const principal: UserPrincipal = { kind: 'user', userId: cmd.requesterUserId };
 
-  const agent = agents.get(id);
+  const agent = teardown.read.readAgentFacts(id);
   if (!agent) return { kind: 'notFound' }; // idempotent on unknown id
   if (
     !canViewAgent(ctx, principal, agent.id, {
@@ -122,21 +123,34 @@ export async function deleteAgent(
   //     entire stop/sweep/purge flow, just drop the agents row — DB-only, no
   //     remote demolish).
   //   active → full destructive flow below.
-  if (agent.materialization_status === 'pending_materialization') {
+  if (agent.materializationStatus === 'pending_materialization') {
     return { kind: 'pendingInFlight' };
   }
-  if (agent.materialization_status === 'failed') {
-    deleteFailedAgentRowOnly(ctx, agents, agent);
+  if (agent.materializationStatus === 'failed') {
+    // No host-local work is dispatched on this branch, so no computer was
+    // purged and placement is not part of its eligibility (see
+    // `AgentTeardownEligibility.purgedHostId`).
+    const commit = commitAgentTeardown(teardown.uow, id, {
+      materializationStatus: 'failed',
+      purgedHostId: null,
+    });
+    if (commit.kind === 'gone') return { kind: 'notFound' };
+    if (commit.kind === 'eligibilityMoved') return eligibilityRefusal(commit);
+    ctx.logger.info(
+      {
+        agentId: commit.facts.id,
+        agentName: commit.facts.name,
+        failedCode: commit.facts.failedCode,
+      },
+      'failed agent row deleted (D5: row-only, no dependents)',
+    );
     // Post-commit identity-change fan-out: the row is gone, so historical author
-    // carriers reconcile to the `deleted` snapshot (#task:1791). Single-agent
-    // path deletes inline (no outer tx), so this fires post-commit here; the
-    // delete-computer cascade calls deleteFailedAgentRowOnly INSIDE its tx and
-    // publishes in its own post-commit phase — that's why the helper stays pure.
+    // carriers reconcile to the `deleted` snapshot (#task:1791).
     ctx.agentService.publishDeleted(agent.id);
     return { kind: 'deleted' };
   }
 
-  // ── active branch: full destructive flow (verbatim) ──────────────
+  // ── active branch: full destructive flow ────────────────────────────
   // confirm gate — parsed here (not in the route) so it only fires on the active
   // branch, preserving the failed-row-with-malformed-body → 204 behavior.
   const parsed = DeleteAgentInputSchema.safeParse(cmd.body);
@@ -144,89 +158,141 @@ export async function deleteAgent(
     return { kind: 'confirmRequired' };
   }
 
-  const impact = computeDeleteImpact(deps, id);
-
-  // 1. Hard-stop every running conversation_agent. Must precede any DB delete.
-  //    Runtime-only (does not mutate membership / delete the agent row), so it
-  //    is safe to run before the purge fail-closed gate.
-  for (const live of impact.running_conversation_agents) {
-    await ctx.runtimeHost
-      .stop(live.conversation_id, id)
-      .catch(err =>
-        ctx.logger.warn(
-          { conversationId: live.conversation_id, agentId: id, err },
-          'delete: stop failed (continuing)',
-        ),
-      );
+  // Persist the fail-forward intent BEFORE any daemon work. This is the crash
+  // recovery and new-dispatch gate; remote IO never runs inside the write lock.
+  const begun = teardown.deletion.begin(id, Date.now());
+  if (begun.kind === 'notFound') return { kind: 'notFound' };
+  if (begun.kind === 'notActive' || begun.kind === 'runtimeTransitionInProgress') {
+    return { kind: 'pendingInFlight' };
   }
-
-  // 2. Purge the agent's host-local files on the OWNING daemon BEFORE any DB
-  //    mutation. §3.3 fail-fast commit boundary: DB rows are NOT deleted until
-  //    the purge acks. relocation-v1 §3.2 / §7 task 4: the daemon removes the
-  //    agent's TERMINAL MANAGED footprint in one shot — the agent home tree
-  //    (L1 + every nested `workspaces/<id>` L2 bundle) — so it consults NO
-  //    registry and enumerates no per-workspace targets. The legacy relocation
-  //    SOURCE that the task-2 migration copies+retains
-  //    (`<workspace>/.silverhand/agents/<id>`) is DELIBERATELY not deleted:
-  //    shiki ruled it a permanent orphan even across hard-delete (relocation-v1),
-  //    so a surviving legacy L2 after this delete is a sanctioned data-retention
-  //    outcome, NOT a leak — do not "fix" it by re-adding legacy-source deletion.
-  const purge = await purgeAgentHostLocalFiles(deps, agent, impact);
-  if (purge.kind === 'failClosed') return purge;
-
-  // 3. Purge acked — commit the DB teardown. The same control-plane teardown is
-  //    reused by delete-computer's explicit agent cascade after the user has
-  //    chosen to remove the whole computer; that path may skip host-local purge
-  //    when the daemon is permanently unreachable, but the DB teardown stays one
-  //    source of truth.
-  await teardownAgentControlPlane(deps, id, impact);
-
-  // Post-commit identity-change fan-out (#task:1791): the authority commit
-  // (`agents.delete`) has landed, so publish the terminal `agent_changed` and
-  // let every historical-author carrier reconcile to the server's `deleted`
-  // snapshot. After the teardown, never on a fail-closed purge above — a request
-  // that refused never tells clients the identity changed.
-  ctx.agentService.publishDeleted(id);
-
-  ctx.logger.info(
-    {
-      agentId: id,
-      agentName: agent.name,
-      dmChannelId: impact.dm_channel?.id ?? null,
-      regularWorkspaces: impact.regular_memberships.length,
-      stoppedConversations: impact.running_conversation_agents.length,
-      purgedCount: purge.purgedCount,
-    },
-    'agent deleted',
-  );
+  if (begun.kind === 'alreadyPending' && !cmd.retry) {
+    return { kind: 'deletionInProgress' };
+  }
+  const run = await deps.deletionRunner.tryNow(begun.attempt);
+  if (run.kind === 'alreadyRunning') return { kind: 'deletionInProgress' };
+  if (run.kind === 'pending') {
+    return {
+      kind: 'deletionPendingRetry',
+      code: run.code,
+      error: run.message,
+    };
+  }
   return { kind: 'deleted' };
 }
 
-export function deleteFailedAgentRowOnly(
-  ctx: BackendContext,
-  agents: AgentRepo,
-  agent: NonNullable<ReturnType<AgentRepo['get']>>,
-): void {
-  agents.delete(agent.id);
-  ctx.logger.info(
-    {
-      agentId: agent.id,
-      agentName: agent.name,
-      failedCode: agent.materialization_failed_code,
-    },
-    'failed agent row deleted (D5: row-only, no dependents)',
-  );
+/**
+ * The outcome of the ONE transactional teardown step both row-deleting branches
+ * take. `gone` / `eligibilityMoved` are the in-lock eligibility re-read talking:
+ * the request decided its sequence (stop, purge, row-only) against a pre-lock
+ * snapshot, and a row that vanished or whose eligibility moved since is NOT the
+ * row that decision was made for.
+ */
+export type AgentTeardownCommit =
+  | { kind: 'gone' }
+  | {
+      kind: 'eligibilityMoved';
+      /** Which fact moved — the caller maps it to its refusal. */
+      moved: 'materialization' | 'placement';
+      /** The facts as read UNDER the lock, i.e. the state the refusal is about. */
+      facts: AgentTeardownFacts;
+    }
+  | { kind: 'committed'; facts: AgentTeardownFacts; capture: AgentTeardownCapture };
+
+/**
+ * What the pre-lock phase already acted on, re-checked under the write lock.
+ *
+ * Not "this looked true a moment ago" but "this request has ALREADY done
+ * something irreversible for this fact": the status chose the sequence (row-only
+ * vs stop+purge+cascade), and `purgedHostId` names the computer whose host-local
+ * tree was already destroyed.
+ *
+ * A DISCRIMINATED UNION, so the write core cannot be asked for a delete that
+ * skipped a phase it owes. `commitAgentTeardown` is exported and load-bearing, so
+ * caller discipline is not an acceptable substitute for the type:
+ *  - `active` + `null` would be an active graph deleted with NO host-local purge
+ *    and no placement re-check — expressible only if the two facts are
+ *    independent fields, which is why they are not;
+ *  - `failed` + a host id would claim a purge the row-only branch never
+ *    dispatches;
+ *  - `pending_materialization` is absent entirely: a materialization in flight is
+ *    refused BEFORE any of this, so "commit a pending teardown" is not a thing
+ *    this port can be asked for.
+ * Adding a third eligible status therefore means adding an arm here, where its
+ * host-local obligation has to be stated.
+ */
+export type AgentTeardownEligibility =
+  | {
+      /** The row-only branch: no runtime stops, no purge, nothing routed — so
+       *  placement cannot be wrong and is not part of the eligibility. */
+      materializationStatus: 'failed';
+      purgedHostId: null;
+    }
+  | {
+      /** The destructive branch, which has ALREADY destroyed this computer's
+       *  host-local tree. It MUST still match in-scope: deleting a row that has
+       *  since been placed elsewhere would delete an agent whose current computer
+       *  was never purged — a half-delete with no row left to retry from. The
+       *  check is deliberately not conditioned on "does anything move
+       *  `agents.host_id` today": the port owes this contract to every engine and
+       *  every future placement writer, and a UnitOfWork whose safety rests on
+       *  the absence of a writer documents nothing. */
+      materializationStatus: 'active';
+      purgedHostId: string;
+    };
+
+/** Map an in-lock eligibility refusal to its typed result. Both arms are 409-
+ *  shaped "nothing happened, re-read and retry" outcomes; they differ only in
+ *  which fact moved, which is what the operator needs to see. */
+function eligibilityRefusal(
+  commit: Extract<AgentTeardownCommit, { kind: 'eligibilityMoved' }>,
+): DeleteAgentResult {
+  return { kind: 'pendingInFlight' };
+}
+
+/**
+ * Delete ONE agent's control-plane rows inside the teardown UnitOfWork, and
+ * capture what the post-commit phase needs from the same snapshot.
+ *
+ * `expected` is what the caller's pre-lock phase already acted on
+ * ({@link AgentTeardownEligibility}). Re-reading it under the lock is what makes
+ * those pre-lock decisions safe to have been taken outside it.
+ *
+ * The capture is taken unconditionally — it is read-only and cheap on a `failed`
+ * row (no home, no runtime, no attachments), so there is ONE code path and no
+ * second capture semantics for the branch that "does not need it".
+ */
+export function commitAgentTeardown(
+  uow: AgentTeardownUnitOfWork,
+  agentId: string,
+  expected: AgentTeardownEligibility,
+): AgentTeardownCommit {
+  return uow.atomicallyForAgent({ agentId }, tx => {
+    const facts = tx.agent.readFacts();
+    if (!facts) return { kind: 'gone' };
+    if (facts.materializationStatus !== expected.materializationStatus) {
+      return { kind: 'eligibilityMoved', moved: 'materialization', facts };
+    }
+    // Only the destructive arm carries a purged computer, and it always carries
+    // one — so this is a plain comparison, not a "if the caller bothered" guard.
+    if (
+      expected.materializationStatus === 'active' &&
+      facts.hostId !== expected.purgedHostId
+    ) {
+      return { kind: 'eligibilityMoved', moved: 'placement', facts };
+    }
+    const capture = tx.agent.capture();
+    tx.agent.deleteAgentRow();
+    return { kind: 'committed', facts, capture };
+  });
 }
 
 export async function purgeAgentHostLocalFiles(
-  deps: DeleteAgentDeps,
-  agent: NonNullable<ReturnType<AgentRepo['get']>>,
-  impact: AgentDeleteImpact,
+  ctx: BackendContext,
+  agent: Pick<AgentTeardownFacts, 'id' | 'hostId'>,
 ): Promise<
   | { kind: 'purged'; purgedCount: number }
   | { kind: 'failClosed'; error: string; code: string; status: DataPlaneHttpStatus }
 > {
-  const { ctx } = deps;
   // #task:1612 — the purge performs NO workspace provision (the retired
   // pre-purge backfill would have MINTED an empty root on the agent's computer
   // just to delete it). relocation-v1 §3.2 / §7 task 4: the daemon removes the
@@ -237,7 +303,7 @@ export async function purgeAgentHostLocalFiles(
   // product-decided permanent orphan; see step 2's comment above.)
   const outbound = resolveOutboundForHost(
     ctx.outboundFrameAdapter?.() ?? null,
-    agent.host_id,
+    agent.hostId,
   );
   if (outbound.kind === 'failed') {
     return {
@@ -249,7 +315,7 @@ export async function purgeAgentHostLocalFiles(
   }
   const purge = await dispatchAgentFilesPurge(
     outbound.adapter,
-    agent.host_id,
+    agent.hostId,
     outbound.connectionId,
     {
       agent_id: agent.id,
@@ -269,100 +335,18 @@ export async function purgeAgentHostLocalFiles(
   };
 }
 
-async function teardownAgentControlPlane(
-  deps: DeleteAgentDeps,
-  agentId: string,
-  impact: AgentDeleteImpact,
-): Promise<void> {
-  // Sweep DM blobs before dropping rows. DB rows cascade through
-  // agent -> agent_home -> conversations, but physical files need an explicit
-  // pass. Best-effort — must not block the 204.
-  await sweepAgentDmAttachments(deps, agentId, impact);
-  teardownAgentControlPlaneRows(deps, agentId, impact);
-}
-
-/** The DM channels whose attachment blobs the delete must sweep. Captured
- *  BEFORE any row delete: afterwards the conversation rows are gone and the
- *  sweep could no longer enumerate them. */
-export function collectAgentDmChannelIds(
-  deps: DeleteAgentDeps,
-  impact: AgentDeleteImpact,
-): string[] {
-  const { conversations } = deps;
-  return impact.owned_home
-    ? conversations
-        .listAllDmChannelsForWorkspace(impact.owned_home.id)
-        .map(dm => dm.id)
-    : [];
-}
-
-/** The DM storage objects the delete must remove, captured while the
- *  `attachments` rows still exist. Required by any caller that deletes its rows
- *  inside a transaction and sweeps after the commit (delete-computer): by then
- *  no row is left to derive a `storageKey` from. */
-export function collectAgentDmBlobRefs(
-  deps: DeleteAgentDeps,
-  impact: AgentDeleteImpact,
-): StoredFileRef[] {
-  return deps.ctx.attachmentService.collectChannelBlobRefs(
-    collectAgentDmChannelIds(deps, impact),
-  );
-}
-
-/** Best-effort blob sweep for the single-agent path, whose rows still exist at
- *  call time. Never blocks or reverses the delete — but a swallowed storage
- *  failure is logged, because the rows that could name those bytes are gone. */
-export async function sweepAgentDmAttachments(
-  deps: DeleteAgentDeps,
-  agentId: string,
-  impact: AgentDeleteImpact,
-): Promise<void> {
-  const { ctx } = deps;
-  const refs = collectAgentDmBlobRefs(deps, impact);
-  const outcome = await ctx.attachmentService
-    .deleteBlobs(refs)
-    .catch((err: unknown) => ({
-      attempted: refs.length,
-      failed: refs.length,
-      firstError: err,
-    }));
-  if (outcome.failed > 0) {
-    ctx.logger.warn(
-      { agentId, blobs: outcome.attempted, failed: outcome.failed, err: outcome.firstError },
-      'delete agent: DM attachment sweep left blobs behind (continuing)',
-    );
-  }
-}
-
 /**
- * The agent's whole control-plane row teardown — SYNCHRONOUS by construction so
- * the delete-computer cascade can commit it inside one `db.transaction`
- * together with the workspace and host rows (`delete-computer.ts`). Anything
- * cross-process (runtime stop, host-local purge) or unrollbackable (blob sweep)
- * stays outside; putting it in the transaction would only manufacture a fake
- * atomicity where the DB rolls back but remote bytes are already gone.
+ * Best-effort physical blob delete, shared by both cascades. Never throws: the
+ * rows that could name these bytes are already gone, so the only useful outcome
+ * is a count the caller can log.
  */
-export function teardownAgentControlPlaneRows(
-  deps: DeleteAgentDeps,
-  agentId: string,
-  impact: AgentDeleteImpact,
-): void {
-  const { workspaces, conversations, agents } = deps;
-
-  // Remove from every regular workspace and its conversations.
-  for (const ws of impact.regular_memberships) {
-    const workspace = workspaces.get(ws.id);
-    if (!workspace) continue;
-    for (const conversation of conversations.list()) {
-      if (conversation.workspace_id === workspace.id) {
-        conversations.removeAgent(conversation.id, agentId);
-      }
-    }
-    workspaces.removeMember(workspace.id, agentId);
-  }
-
-  // Drop the agent. owner_agent_id ON DELETE CASCADE removes its agent_home
-  // subtree; regular conversation history keeps deleted sender rows via SET
-  // NULL on messages.from_agent_id.
-  agents.delete(agentId);
+export async function sweepStoredBlobs(
+  ctx: BackendContext,
+  refs: StoredFileRef[],
+): Promise<{ attempted: number; failed: number; firstError?: unknown }> {
+  return await ctx.attachmentService.deleteBlobs(refs).catch((err: unknown) => ({
+    attempted: refs.length,
+    failed: refs.length,
+    firstError: err,
+  }));
 }

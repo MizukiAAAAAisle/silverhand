@@ -5,6 +5,7 @@ import { isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { performance } from 'node:perf_hooks';
+import type { Database as Db } from 'better-sqlite3';
 import { silverhandCors } from './cors.js';
 import { openDatabase } from './db.js';
 import type { MigrationRunResult } from './db.js';
@@ -29,9 +30,8 @@ import {
 } from './auth/embedded-bootstrap.js';
 import { PasswordCredentialService } from './auth/password.js';
 import { AuthSessionService } from './auth/session.js';
-import { SqliteAuthCredentialsRepo } from './repos/auth-credentials-repo.js';
-import { SqliteAuthSessionsRepo } from './repos/auth-sessions-repo.js';
-import { HostRepo } from './repos/host-repo.js';
+import { createBackendPersistence } from './persistence/root.js';
+import { HostTokenService } from './auth/host-token.js';
 import { ScopeEventBus } from './ws/scope-event-bus.js';
 import { PresenceRegistry } from './presence/presence-registry.js';
 import {
@@ -53,19 +53,11 @@ import {
   type OutboundFrameAdapter,
 } from './runtime/outbound-frame-adapter.js';
 import { EmbeddedUnixOutboundFrameAdapter } from './runtime/embedded-unix-outbound-frame-adapter.js';
+import { DeletionAwareOutboundFrameAdapter } from './runtime/deletion-aware-outbound-frame-adapter.js';
+import { AgentDeletionResumer } from './application/agent-deletion-resumer.js';
+import { sweepStoredBlobs } from './application/delete-agent.js';
 import { RuntimeHostPlacementResolver } from './runtime/host-placement.js';
 import { runBootMaterializeReconciler } from './runtime/materialize-reconciler.js';
-import { AgentRepo } from './repos/agent-repo.js';
-import { AttachmentRepo } from './repos/attachment-repo.js';
-import { ConversationRepo } from './repos/conversation-repo.js';
-import { ConversationReadRepo } from './repos/conversation-read-repo.js';
-import { AttentionBadgeRepo } from './repos/attention-badge-repo.js';
-import { ConversationInboxRepo } from './repos/conversation-inbox-repo.js';
-import { MessageRepo } from './repos/message-repo.js';
-import { NotificationRepo } from './repos/notification-repo.js';
-import { ScheduleRepo } from './repos/schedule-repo.js';
-import { ThreadFollowerRepo } from './repos/thread-follower-repo.js';
-import { WorkspaceRepo } from './repos/workspace-repo.js';
 import { AgentL2SeedEnsurer } from './runtime/agent-l2-seed-ensurer.js';
 import { AttachmentService } from './services/attachment-service.js';
 import { AgentService } from './services/agent-service.js';
@@ -75,7 +67,6 @@ import { ScheduleService } from './services/schedule-service.js';
 import { IdleReaperService } from './services/idle-reaper-service.js';
 import { TaskService } from './services/task-service.js';
 import { UserService } from './services/user-service.js';
-import { UserRepo } from './repos/user-repo.js';
 import { createLocalBlobFileStorage } from './storage/blob-file-storage.js';
 import {
   classifyBindAddressScope,
@@ -92,6 +83,7 @@ import {
   startEventLoopHealthMonitor,
 } from './observability/metrics.js';
 import { configureDatabaseObservation } from './observability/observed-statement.js';
+import { createSqliteDbWriteProbe } from './observability/db-write-probe.js';
 
 export interface BackendListenOptions {
   hostname: string;
@@ -144,6 +136,23 @@ interface BaseBackendOptions {
     wrapHostWsEventSink?: (
       real: HostWsEventSink | undefined,
     ) => HostWsEventSink | undefined;
+    /**
+     * #task:1983 W5 — hands the just-opened, just-migrated driver handle to a
+     * TEST harness. Production callers MUST NOT pass this, and now cannot get a
+     * handle any other way: `BackendContext` no longer carries one and
+     * `RunningBackend` never did, so this hook is the single labelled seam
+     * instead of a field every consumer of the boot result would inherit.
+     *
+     * It exists because an end-to-end test boots the REAL server and then has to
+     * assert on rows no repository exposes (or seed one no production writer
+     * creates). The alternative — a second connection to the same file — would
+     * add a live reader/writer that the scenarios under test (restart, crash
+     * recovery, hard stop) do not have in production.
+     *
+     * The handle stays owned by boot: `close()` closes it, and a harness must
+     * not close it itself.
+     */
+    onDatabaseOpened?: (db: Db) => void;
   };
 }
 
@@ -260,6 +269,10 @@ export async function startBackend(
     );
     throw err;
   }
+  // #task:1983 W5 — the one labelled seam a test harness may take the handle
+  // through. After open + migrate, so a harness never sees a pre-migration
+  // schema; before anything is composed on top of it.
+  opts.testHooks?.onDatabaseOpened?.(db);
   if (
     migrationResult.current &&
     migrationResult.current.appliedVersions.length > 0
@@ -287,10 +300,22 @@ export async function startBackend(
     );
   }
 
+  // #task:1983 W1 — the ONE place the raw handle is turned into repositories,
+  // unit-of-work ports, read models and persistence adapters. What boot keeps is
+  // the DRIVER, not persistence: migrations above, pragma / statement
+  // observation, the write probe, and `close()` on shutdown. Everything else
+  // takes its dependency from this bag, and the fence that keeps it that way is
+  // mechanical — `tests/db-boundary/port-contract.test.ts` refuses any
+  // `repos/*` or `adapters/*` module reference from this file, so a second
+  // persistence assembly cannot be written here even though boot holds a handle.
+  // (It does NOT mean one repo instance per kind process-wide; see the
+  // composition root's header for what is and is not single.)
+  const persistence = createBackendPersistence(db);
+
   // Bootstrap: embedded desktop owns the local daemon-host identity.
   // Standalone server must not synthesize a local host that implies
   // access to the user's machine.
-  const hostRepo = new HostRepo(db);
+  const hostRepo = persistence.repos.hosts;
   if (opts.mode === 'embedded') {
     hostRepo.ensureLocal();
   } else {
@@ -299,27 +324,29 @@ export async function startBackend(
 
   const attachmentService = new AttachmentService({
     storage: blobStorage,
-    attachments: new AttachmentRepo(db),
-    conversations: new ConversationRepo(db),
+    attachments: persistence.repos.attachments,
+    conversations: persistence.repos.conversations,
   });
 
   const events = new ScopeEventBus(undefined, logger);
+  const userPersistence = persistence.users;
   const userService = new UserService({
-    db,
-    users: new UserRepo(db),
+    users: userPersistence.read,
+    profileWrites: userPersistence.profile,
+    registration: userPersistence.registration,
     blobStorage,
     events,
   });
 
   const agentService = new AgentService({
-    agents: new AgentRepo(db),
+    agents: persistence.repos.agents,
     blobStorage,
     events,
   });
   const placement = new RuntimeHostPlacementResolver({
-    hosts: new HostRepo(db),
-    agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db),
+    hosts: persistence.repos.hosts,
+    agents: persistence.repos.agents,
+    workspaces: persistence.repos.workspaces,
   });
   let outboundFanout: OutboundRuntimeEventFanout | null = null;
   let hostWs: HostWsServerController | null = null;
@@ -364,13 +391,14 @@ export async function startBackend(
   let startEmbeddedOutboundConnect: (() => void) | null = null;
   const presence = new PresenceRegistry({
     events,
-    users: new UserRepo(db),
+    users: persistence.repos.users,
     logger,
   });
 
   const ctx: BackendContext = {
-    db,
     metrics: opts.metrics,
+    dbWriteProbe: createSqliteDbWriteProbe({ db, metrics: opts.metrics }),
+    authorizationReads: persistence.authorizationReads,
     deploymentMode: opts.mode,
     // D4.e-1 3b P1-2 — the exact co-located host (embedded backend's own disk).
     // In embedded that is the single `local`-named host (`ensureLocal`); in
@@ -404,8 +432,10 @@ export async function startBackend(
     presence,
     silverhandCliLauncher,
     agentTokens: new AgentTokenStore(),
-    passwordCredentials: new PasswordCredentialService(new SqliteAuthCredentialsRepo(db)),
-    authSessions: new AuthSessionService(new SqliteAuthSessionsRepo(db), {
+    passwordCredentials: new PasswordCredentialService(
+      persistence.auth.credentials,
+    ),
+    authSessions: new AuthSessionService(persistence.auth.sessions, {
       sessionTtlMs: authConfig.sessionTtlMs,
     }),
     placement:
@@ -446,6 +476,35 @@ export async function startBackend(
     metrics: opts.metrics,
     logger,
   });
+  const agentDeletionResumer = new AgentDeletionResumer({
+    deletion: persistence.agentTeardown.deletion,
+    adapter: () => outboundAdapter,
+    logger,
+    onCommitted: async (completed, purge) => {
+      ctx.agentService.publishDeleted(completed.facts.id);
+      const swept = await sweepStoredBlobs(ctx, completed.capture.dmBlobRefs);
+      if (swept.failed > 0) {
+        logger.warn(
+          {
+            agentId: completed.facts.id,
+            failed: swept.failed,
+            attempted: swept.attempted,
+            err: swept.firstError,
+          },
+          'resumed agent deletion left attachment blobs behind',
+        );
+      }
+      logger.info(
+        {
+          agentId: completed.facts.id,
+          hostId: completed.facts.hostId,
+          purgedCount: purge.purgedCount,
+          quiescedCount: purge.quiescedCount,
+        },
+        'agent deletion committed after daemon purge',
+      );
+    },
+  });
   // ── Runtime host wiring ─────────────────────────────────────────
   // D5.a-3 — embedded and standalone are ONE runtime host over the
   // outbound frame transport. The host delegates to the
@@ -468,38 +527,43 @@ export async function startBackend(
     outboundFrameAdapter: () => ctx.outboundFrameAdapter?.() ?? null,
   });
 
+  const conversationPersistence = persistence.conversation;
+  const unreadPublish = persistence.effects.unreadPublish({
+    events: ctx.events,
+  });
   ctx.channelService = new ChannelService({
-    db,
-    conversations: new ConversationRepo(db),
-    conversationReads: new ConversationReadRepo(db),
-    workspaces: new WorkspaceRepo(db),
-    agents: new AgentRepo(db),
-    messages: new MessageRepo(db),
+    channels: conversationPersistence.channel.read,
+    channelWrites: conversationPersistence.channel.directWrite,
+    workspaces: conversationPersistence.channel.workspaces,
+    agents: conversationPersistence.channel.agents,
+    uow: conversationPersistence.channel.uow,
+    unreadPublish,
     events: ctx.events,
     runtimeHost: ctx.runtimeHost,
     logger,
   });
   ctx.conversationMessageService = new ConversationMessageService({
-    db,
-    conversations: new ConversationRepo(db),
-    conversationInboxes: new ConversationInboxRepo(db),
-    messages: new MessageRepo(db),
-    threadFollowers: new ThreadFollowerRepo(db),
-    agents: new AgentRepo(db),
-    users: new UserRepo(db),
-    notifications: new NotificationRepo(db),
-    workspaces: new WorkspaceRepo(db),
-    attachmentService,
+    uow: conversationPersistence.message.uow,
+    threadFollow: conversationPersistence.threadFollow,
+    delivery: conversationPersistence.delivery,
+    mentionCc: persistence.effects.mentionCc({
+      runtimeHost: ctx.runtimeHost,
+      events: ctx.events,
+      logger,
+    }),
+    unreadPublish,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
   });
+  const taskPersistence = persistence.tasks;
   ctx.taskService = new TaskService({
-    db,
-    conversations: new ConversationRepo(db),
-    messages: new MessageRepo(db),
-    agents: new AgentRepo(db),
-    workspaces: new WorkspaceRepo(db),
+    read: taskPersistence.read,
+    board: taskPersistence.board,
+    conversations: taskPersistence.conversations,
+    uow: taskPersistence.uow,
+    agents: persistence.repos.agents,
+    workspaces: persistence.repos.workspaces,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
@@ -507,13 +571,13 @@ export async function startBackend(
       canAgentUseCapability(ctx, actor, capability, { workspaceId }),
   });
   ctx.scheduleService = new ScheduleService({
-    schedules: new ScheduleRepo(db),
-    workspaces: new WorkspaceRepo(db),
-    conversations: new ConversationRepo(db),
-    conversationReads: new ConversationReadRepo(db),
-    attentionBadges: new AttentionBadgeRepo(db),
-    messages: new MessageRepo(db),
-    agents: new AgentRepo(db),
+    schedules: persistence.repos.schedules,
+    workspaces: persistence.repos.workspaces,
+    conversations: persistence.repos.conversations,
+    conversationReads: persistence.repos.conversationReads,
+    attentionBadges: persistence.repos.attentionBadges,
+    messages: persistence.repos.messages,
+    agents: persistence.repos.agents,
     runtimeHost: ctx.runtimeHost,
     events: ctx.events,
     logger,
@@ -545,13 +609,14 @@ export async function startBackend(
   // module header in `runtime/materialize-reconciler.ts` for the
   // boundary.
   runBootMaterializeReconciler({
-    agents: new AgentRepo(db),
+    agents: persistence.repos.agents,
     logger,
   });
   // A runtime transition never changes `agents.runtime` until its final
   // atomic commit. After a backend crash no transition executor survives, so
   // stale locks are safe to roll back before hydrate/scheduling can spawn.
-  const staleRuntimeTransitions = new AgentRepo(db).clearStaleRuntimeTransitions();
+  const staleRuntimeTransitions =
+    persistence.repos.agents.clearStaleRuntimeTransitions();
   if (staleRuntimeTransitions > 0) {
     logger.warn(
       { count: staleRuntimeTransitions },
@@ -583,8 +648,13 @@ export async function startBackend(
 
   const app = new Hono<AppEnv>();
   app.use('*', silverhandCors());
-  app.route('/', createApiRouter(ctx));
-  app.route('/', createInternalRouter(ctx));
+  app.route(
+    '/',
+    createApiRouter(ctx, persistence, {
+      agentDeletionRunner: agentDeletionResumer,
+    }),
+  );
+  app.route('/', createInternalRouter(ctx, persistence));
 
   return new Promise<RunningBackend>((resolve, reject) => {
     let eventWs: EventWsServerController | null = null;
@@ -660,6 +730,7 @@ export async function startBackend(
             // transports go away; a timer firing mid-teardown would
             // dispatch host_status into a closing daemon.
             hostStatusReadModel.close();
+            await agentDeletionResumer.close();
 
             // Phase 2: close WS lifecycle before the HTTP drain removes sockets.
             await Promise.all([eventWs?.close(), hostWs?.close()]);
@@ -709,7 +780,7 @@ export async function startBackend(
       // backend-side wiring indicator only; the daemon-side attachment
       // lifecycle is reported separately via `getAttachment`.
       outboundFanout = new OutboundRuntimeEventFanout({
-        db,
+        ...persistence.effects.runtimeFanout({ events: ctx.events, logger }),
         events: ctx.events,
         transport: () => outboundAdapter,
         logger,
@@ -725,14 +796,17 @@ export async function startBackend(
         // the full ScopeEventBus surface.
         publishHostScopeEvent: (ownerUserId, kind, payload) =>
           ctx.events.publishToScope(`viewer:${ownerUserId}`, kind, payload),
-        onHostReady: hostId => {
+        onHostReady: (hostId, connectionId) => {
           hostStatusReadModel.seedEagerly(hostId);
+          agentDeletionResumer.onHostReady(hostId, connectionId);
         },
       });
       ctx.readiness.outboundEventFanoutInstalled = true;
     }
     const hostWsEventSink = outboundFanout ?? undefined;
     hostWs = installHostWebSocketServer(server as HttpServer, ctx, {
+      hostTokenVerifier: new HostTokenService(persistence.hostTokens),
+      hosts: persistence.repos.hosts,
       eventSink: opts.testHooks?.wrapHostWsEventSink
         ? opts.testHooks.wrapHostWsEventSink(hostWsEventSink)
         : hostWsEventSink,
@@ -746,7 +820,10 @@ export async function startBackend(
       // Standalone: the daemon dials the backend over WSS; the adapter
       // is a thin view of the `hostWs` controller (owned by this
       // bootstrap, so the adapter's `close()` is a no-op).
-      outboundAdapter = new StandaloneOutboundFrameAdapter(() => hostWs);
+      outboundAdapter = new DeletionAwareOutboundFrameAdapter(
+        new StandaloneOutboundFrameAdapter(() => hostWs),
+        persistence.agentTeardown.read,
+      );
     } else {
       // Embedded: the backend dials the daemon's local outbound socket.
       const localHostId = hostRepo.ensureLocal().id;
@@ -767,10 +844,13 @@ export async function startBackend(
       // while user-managed `silverhand-daemon connect` instances dial
       // the same embedded backend over WS. Keep one backend dispatch
       // port and route by host id at the transport layer.
-      outboundAdapter = new CompositeOutboundFrameAdapter([
-        adapter,
-        new StandaloneOutboundFrameAdapter(() => hostWs),
-      ]);
+      outboundAdapter = new DeletionAwareOutboundFrameAdapter(
+        new CompositeOutboundFrameAdapter([
+          adapter,
+          new StandaloneOutboundFrameAdapter(() => hostWs),
+        ]),
+        persistence.agentTeardown.read,
+      );
       // Defer the connect to the listen callback (P1-1): construct now so
       // `outboundAdapter` is wired, but dial only after the bound URL is
       // finalized. Fire-and-forget once triggered (mirrors the standalone
@@ -781,6 +861,7 @@ export async function startBackend(
         void connectEmbeddedOutboundAdapter(adapter, socketPath, logger);
       };
     }
+    agentDeletionResumer.startConnectedHosts();
     server.on('error', reject);
   });
 }

@@ -51,6 +51,7 @@ describe('agent reasoning_effort validation', () => {
       materialization_status: 'active',
       materialization_failed_code: null,
       materialization_failed_at: null,
+      deletion_started_at: null,
       created_at: 1,
       updated_at: 1,
     });
@@ -216,6 +217,7 @@ describe('agent materialization fields (D4.d v33)', () => {
     description: null,
     created_by_user_id: 'u1',
     avatar_url: null,
+    deletion_started_at: null,
     created_at: 1,
     updated_at: 1,
   };
@@ -260,6 +262,17 @@ describe('agent materialization fields (D4.d v33)', () => {
         materialization_failed_at: null,
       }).success,
     ).toBe(false);
+  });
+
+  it('exposes the durable deletion timestamp to management readers', () => {
+    const parsed = AgentDtoSchema.parse({
+      ...baseAgent,
+      materialization_status: 'active',
+      materialization_failed_code: null,
+      materialization_failed_at: null,
+      deletion_started_at: 1_700_000_000_000,
+    });
+    expect(parsed.deletion_started_at).toBe(1_700_000_000_000);
   });
 
   it('does NOT expose idempotency_key on the default DTO (Cindy round-2 P2)', () => {

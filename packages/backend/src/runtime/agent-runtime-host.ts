@@ -30,6 +30,26 @@ export interface StartOptions {
 }
 
 /**
+ * Narrow delivery-only face of {@link AgentRuntimeHost} (#task:1990). Post-commit
+ * best-effort "hand this message to the runtime" effects depend on this port,
+ * not the host class — keeping ambient `BackendContext` (and its `db`) out of
+ * application use cases.
+ */
+export interface AgentMessageDeliveryPort {
+  deliverMessage(
+    conversationId: string,
+    agentId: string,
+    messageId: string,
+  ): Promise<void>;
+}
+
+/** Narrow start-only face of {@link AgentRuntimeHost} (#task:1990). Same reason:
+ *  the "spawn the onboarding DM runtime" effect depends on this port alone. */
+export interface AgentRuntimeStartPort {
+  start(conversationId: string, agentId: string): Promise<void>;
+}
+
+/**
  * Optional `stop()` overrides.
  *
  * `hostId` supplies the routing authority the dispatcher would otherwise

@@ -41,7 +41,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '@silverhand/host/drivers';
-import type { RunningBackend } from '../../../src/index.js';
+import type { TestRunningBackend } from '../../utils/test-backend.js';
 import type { OutboundFrameAdapter } from '../../../src/runtime/outbound-frame-adapter.js';
 import { ConversationInboxRepo } from '../../../src/repos/conversation-inbox-repo.js';
 import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../../utils/desktop-client-epoch.js';
@@ -104,8 +104,10 @@ export const PARITY_SESSION_PREFIX = '__D5A4_PARITY_SESSION__:';
 export interface ParityRig {
   /** Which transport this rig exercises. */
   readonly name: 'embedded' | 'standalone';
-  /** The booted backend (real `startBackend`, real fanout). */
-  readonly backend: RunningBackend;
+  /** The booted backend (real `startTestBackend`, real fanout — the shared
+   *  contract asserts on rows no repository projects, so it needs the
+   *  server's own connection, #task:1983 W5). */
+  readonly backend: TestRunningBackend;
   /** Final bound URL (never the `:0` placeholder). */
   readonly baseUrl: string;
   /** Session bearer for the public POST /api/agents route. */
@@ -608,13 +610,15 @@ export function registerParityPhases(getRig: () => ParityRig): void {
     expect(purge.purged_count).toBeGreaterThanOrEqual(1);
     expect(existsSync(l2)).toBe(false);
 
-    // ── 2) IDEMPOTENT re-purge: targets already gone → purged_count 0, no error.
+    // ── 2) IDEMPOTENT re-purge: the daemon keeps the terminal fence and
+    // returns its cached success. This is deliberately the same semantic ack,
+    // rather than re-entering the filesystem leaf through the fence.
     const repurge = (await adapter.sendCommand(
       rig.hostId,
       'agent_files_purge',
       { agent_id: agentId },
       { expectedConnectionId: conn, timeoutMs: 5_000 },
     )) as { ok: true; purged_count: number };
-    expect(repurge).toMatchObject({ ok: true, purged_count: 0 });
+    expect(repurge).toEqual(purge);
   }, 30_000);
 }

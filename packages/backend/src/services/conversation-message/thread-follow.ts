@@ -4,18 +4,20 @@
 // transaction (`applyThreadFollowEffects`), so a follower is never registered
 // without its catch-up inbox rows. The facade constructs one of these and
 // delegates its public thread-follow methods to it verbatim.
-import type { Database as Db } from 'better-sqlite3';
+//
+// Persistence discipline (#task:1981): this aggregate holds NO raw DB and no
+// concrete repo. Everything it does inside a transaction takes an explicit
+// `MessageTxScope`; the callback-free voluntary surface uses the narrow
+// read / direct-write ports. It never opens a transaction of its own except
+// through the injected UnitOfWork.
 import { extractMentions } from '@silverhand/shared';
-import type { MessageDto } from '@silverhand/shared';
-import type { AgentRepo } from '../../repos/agent-repo.js';
-import type { ConversationRepo } from '../../repos/conversation-repo.js';
-import type { ConversationInboxRepo } from '../../repos/conversation-inbox-repo.js';
-import type { MessageRepo } from '../../repos/message-repo.js';
+import type { MessageDto, ThreadFollowerSource } from '@silverhand/shared';
 import type {
-  ThreadFollowerRepo,
-  ThreadFollowerSource,
-} from '../../repos/thread-follower-repo.js';
-import type { UserRepo } from '../../repos/user-repo.js';
+  MessageTxScope,
+  MessageUnitOfWork,
+  ThreadFollowDirectWritePort,
+  ThreadFollowReadPort,
+} from './ports.js';
 import {
   TargetError,
   type SendMessageActor,
@@ -24,32 +26,38 @@ import {
 } from './contracts.js';
 
 export interface ThreadFollowManagerDeps {
-  db: Db;
-  conversations: ConversationRepo;
-  conversationInboxes: ConversationInboxRepo;
-  messages: MessageRepo;
-  threadFollowers: ThreadFollowerRepo;
-  agents: AgentRepo;
-  users: UserRepo;
+  uow: MessageUnitOfWork;
+  read: ThreadFollowReadPort;
+  directWrite: ThreadFollowDirectWritePort;
+}
+
+/** Normalize a message id (root or any reply) to its canonical thread root.
+ *  Takes the lookup as a parameter so the in-transaction and out-of-transaction
+ *  callers share one rule while reading through their own connection. */
+function resolveThreadRoot(
+  getMessage: (conversationId: string, messageId: string) => MessageDto | null,
+  conversationId: string,
+  rootMessageId: string,
+): string {
+  const root = getMessage(conversationId, rootMessageId);
+  if (!root) {
+    throw new TargetError(
+      'reply_target_not_found',
+      'thread root message not found in conversation',
+    );
+  }
+  return root.thread_root_id ?? root.id;
 }
 
 export class ThreadFollowManager {
-  private readonly db: Db;
-  private readonly conversations: ConversationRepo;
-  private readonly conversationInboxes: ConversationInboxRepo;
-  private readonly messages: MessageRepo;
-  private readonly threadFollowers: ThreadFollowerRepo;
-  private readonly agents: AgentRepo;
-  private readonly users: UserRepo;
+  private readonly uow: MessageUnitOfWork;
+  private readonly read: ThreadFollowReadPort;
+  private readonly directWrite: ThreadFollowDirectWritePort;
 
   constructor(deps: ThreadFollowManagerDeps) {
-    this.db = deps.db;
-    this.conversations = deps.conversations;
-    this.conversationInboxes = deps.conversationInboxes;
-    this.messages = deps.messages;
-    this.threadFollowers = deps.threadFollowers;
-    this.agents = deps.agents;
-    this.users = deps.users;
+    this.uow = deps.uow;
+    this.read = deps.read;
+    this.directWrite = deps.directWrite;
   }
 
   /** Voluntary manual follow of a reply cluster (§5 B / §8). The thread is
@@ -59,26 +67,30 @@ export class ThreadFollowManager {
    *  re-backfill). A newly-created follow backfills the cluster's full prior
    *  history into the agent's inbox (§6.1) — `MAX_SAFE_INTEGER` includes every
    *  existing reply since there is no "current reply" to exclude. Runs in one
-   *  transaction so the follower row and its backfill commit together. */
+   *  transaction so the root resolution, the follower row and its backfill all
+   *  see and commit the same snapshot. */
   followThread(params: {
     conversationId: string;
     rootMessageId: string;
     agentId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
-      params.conversationId,
-      params.rootMessageId,
-    );
-    const changed = this.db.transaction(() =>
-      this.followAgent(
+    return this.uow.atomically(tx => {
+      const threadRootId = resolveThreadRoot(
+        (conversationId, messageId) =>
+          tx.messages.getInConversation(conversationId, messageId),
+        params.conversationId,
+        params.rootMessageId,
+      );
+      const changed = this.followAgent(
+        tx,
         params.conversationId,
         threadRootId,
         params.agentId,
         'manual',
         Number.MAX_SAFE_INTEGER,
-      ),
-    )();
-    return { threadRootId, changed };
+      );
+      return { threadRootId, changed };
+    });
   }
 
   /** Voluntary unfollow (§5). Idempotent; deletes the follower row whatever
@@ -90,11 +102,11 @@ export class ThreadFollowManager {
     rootMessageId: string;
     agentId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
+    const threadRootId = this.resolveRootOutsideTx(
       params.conversationId,
       params.rootMessageId,
     );
-    const { removed } = this.threadFollowers.remove(
+    const { removed } = this.directWrite.remove(
       threadRootId,
       'agent',
       params.agentId,
@@ -111,18 +123,14 @@ export class ThreadFollowManager {
     viewerFollowing: boolean;
     followerAgentIds: string[];
   } {
-    const threadRootId = this.resolveExistingThreadRoot(
+    const threadRootId = this.resolveRootOutsideTx(
       params.conversationId,
       params.rootMessageId,
     );
     return {
       threadRootId,
-      viewerFollowing: this.threadFollowers.isFollower(
-        threadRootId,
-        'human',
-        params.userId,
-      ),
-      followerAgentIds: this.threadFollowers
+      viewerFollowing: this.read.isFollower(threadRootId, 'human', params.userId),
+      followerAgentIds: this.read
         .listFollowerAgentsVisible(threadRootId)
         .map(f => f.agent_id),
     };
@@ -133,11 +141,11 @@ export class ThreadFollowManager {
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
+    const threadRootId = this.resolveRootOutsideTx(
       params.conversationId,
       params.rootMessageId,
     );
-    const { inserted } = this.threadFollowers.upsert({
+    const { inserted } = this.directWrite.upsert({
       threadRootId,
       conversationId: params.conversationId,
       principalKind: 'human',
@@ -152,11 +160,11 @@ export class ThreadFollowManager {
     rootMessageId: string;
     userId: string;
   }): { threadRootId: string; changed: boolean } {
-    const threadRootId = this.resolveExistingThreadRoot(
+    const threadRootId = this.resolveRootOutsideTx(
       params.conversationId,
       params.rootMessageId,
     );
-    const { removed } = this.threadFollowers.remove(
+    const { removed } = this.directWrite.remove(
       threadRootId,
       'human',
       params.userId,
@@ -164,27 +172,22 @@ export class ThreadFollowManager {
     return { threadRootId, changed: removed };
   }
 
-  private resolveExistingThreadRoot(
+  private resolveRootOutsideTx(
     conversationId: string,
     rootMessageId: string,
   ): string {
-    const root = this.messages.getInConversation(
+    return resolveThreadRoot(
+      (cid, mid) => this.read.getMessageInConversation(cid, mid),
       conversationId,
       rootMessageId,
     );
-    if (!root) {
-      throw new TargetError(
-        'reply_target_not_found',
-        'thread root message not found in conversation',
-      );
-    }
-    return root.thread_root_id ?? root.id;
   }
 
   /**
    * Reply-cluster auto-follow + history backfill (§5/§6.1). Runs INSIDE the
-   * send transaction so a follower is never registered without its catch-up
-   * inbox rows (Cindy ruling). Registers as followers of the thread:
+   * send transaction — the caller passes its scope, and this method never opens
+   * one — so a follower is never registered without its catch-up inbox rows
+   * (Cindy ruling). Registers as followers of the thread:
    *   - the reply author (`source='reply'`),
    *   - the root message author (`source='target_author'`),
    *   - every @mentioned principal that is a current channel member
@@ -194,24 +197,28 @@ export class ThreadFollowManager {
    * (plus the root) into its inbox. Returns the follower-gated delivery plan
    * for the current reply, executed best-effort after commit.
    */
-  applyThreadFollowEffects(params: {
-    conversationId: string;
-    threadRootId: string;
-    message: MessageDto;
-    actor: SendMessageActor;
-  }): ThreadDeliveryPlan {
+  applyThreadFollowEffects(
+    tx: MessageTxScope,
+    params: {
+      conversationId: string;
+      threadRootId: string;
+      message: MessageDto;
+      actor: SendMessageActor;
+    },
+  ): ThreadDeliveryPlan {
     const { conversationId, threadRootId, message } = params;
     const currentSeq = message.seq;
 
     // reply author → follower
-    this.followMessageAuthor(conversationId, threadRootId, message, 'reply', currentSeq);
+    this.followMessageAuthor(tx, conversationId, threadRootId, message, 'reply', currentSeq);
 
     // root message author → follower. Delivery kind no longer has a
     // target-author carve-out: the current thread message follows channel
     // semantics and turns every visible follower agent except the sender.
-    const root = this.messages.getInConversation(conversationId, threadRootId);
+    const root = tx.messages.getInConversation(conversationId, threadRootId);
     if (root) {
       this.followMessageAuthor(
+        tx,
         conversationId,
         threadRootId,
         root,
@@ -227,16 +234,16 @@ export class ThreadFollowManager {
     // membership backdoor); their visibility is filtered at delivery anyway.
     let userMemberIds: Set<string> | null = null;
     for (const handle of new Set(extractMentions(message.content))) {
-      const agent = this.agents.getByName(handle);
-      if (agent && this.conversations.getAgent(conversationId, agent.id)) {
-        this.followAgent(conversationId, threadRootId, agent.id, 'mention', currentSeq);
+      const agent = tx.agents.getByName(handle);
+      if (agent && tx.conversations.getAgent(conversationId, agent.id)) {
+        this.followAgent(tx, conversationId, threadRootId, agent.id, 'mention', currentSeq);
         continue;
       }
-      const user = this.users.getByName(handle);
+      const user = tx.users.getByName(handle);
       if (user) {
-        userMemberIds ??= this.conversationUserMemberIds(conversationId);
+        userMemberIds ??= this.conversationUserMemberIds(tx, conversationId);
         if (userMemberIds.has(user.id)) {
-          this.threadFollowers.upsert({
+          tx.threadFollowers.upsert({
             threadRootId,
             conversationId,
             principalKind: 'human',
@@ -248,12 +255,15 @@ export class ThreadFollowManager {
     }
 
     // Current-reply delivery plan: follower agents that are channel-visible,
-    // excluding the sender. Current thread messages match channel delivery:
-    // every recipient gets a `turn`; `observe` is only used for historical
-    // backfill and other non-waking context paths.
+    // excluding the sender. Read through the TRANSACTION scope — the plan must
+    // see the follower rows this method just inserted, which a captured
+    // out-of-transaction read would miss on any engine that does not share one
+    // connection. Current thread messages match channel delivery: every
+    // recipient gets a `turn`; `observe` is only used for historical backfill
+    // and other non-waking context paths.
     const senderAgentId =
       message.from_kind === 'agent' ? message.from_agent_id : null;
-    const recipients: ThreadDeliveryRecipient[] = this.threadFollowers
+    const recipients: ThreadDeliveryRecipient[] = tx.threadFollowers
       .listFollowerAgentsVisible(threadRootId)
       .filter(ca => ca.agent_id !== senderAgentId)
       .map(ca => ({
@@ -269,6 +279,7 @@ export class ThreadFollowManager {
    *  members are recorded (follower ⊆ member, enforced again at delivery).
    *  Returns the agent id only when a NEW agent follower row was inserted. */
   private followMessageAuthor(
+    tx: MessageTxScope,
     conversationId: string,
     threadRootId: string,
     msg: MessageDto,
@@ -277,6 +288,7 @@ export class ThreadFollowManager {
   ): string | null {
     if (msg.from_kind === 'agent' && msg.from_agent_id) {
       return this.followAgent(
+        tx,
         conversationId,
         threadRootId,
         msg.from_agent_id,
@@ -286,8 +298,8 @@ export class ThreadFollowManager {
         ? msg.from_agent_id
         : null;
     } else if (msg.from_kind === 'user' && msg.from_user_id) {
-      if (this.conversationUserMemberIds(conversationId).has(msg.from_user_id)) {
-        this.threadFollowers.upsert({
+      if (this.conversationUserMemberIds(tx, conversationId).has(msg.from_user_id)) {
+        tx.threadFollowers.upsert({
           threadRootId,
           conversationId,
           principalKind: 'human',
@@ -304,14 +316,15 @@ export class ThreadFollowManager {
    *  are skipped (follower ⊆ member). Returns whether a NEW follower row was
    *  created (false = already following or not a member → no backfill). */
   private followAgent(
+    tx: MessageTxScope,
     conversationId: string,
     threadRootId: string,
     agentId: string,
     source: ThreadFollowerSource,
     currentSeq: number,
   ): boolean {
-    if (!this.conversations.getAgent(conversationId, agentId)) return false;
-    const { inserted } = this.threadFollowers.upsert({
+    if (!tx.conversations.getAgent(conversationId, agentId)) return false;
+    const { inserted } = tx.threadFollowers.upsert({
       threadRootId,
       conversationId,
       principalKind: 'agent',
@@ -319,7 +332,7 @@ export class ThreadFollowManager {
       source,
     });
     if (inserted) {
-      this.backfillThreadHistory(conversationId, threadRootId, agentId, currentSeq);
+      this.backfillThreadHistory(tx, conversationId, threadRootId, agentId, currentSeq);
     }
     return inserted;
   }
@@ -332,29 +345,31 @@ export class ThreadFollowManager {
    *  (§6.1). The catch-up is COMPLETE by design — no cap — so a mid-thread
    *  follower never lands with a hole in the replies nearest the current one. */
   private backfillThreadHistory(
+    tx: MessageTxScope,
     conversationId: string,
     threadRootId: string,
     agentId: string,
     currentSeq: number,
   ): void {
-    const root = this.messages.getInConversation(conversationId, threadRootId);
+    const root = tx.messages.getInConversation(conversationId, threadRootId);
     if (root && !(root.from_kind === 'agent' && root.from_agent_id === agentId)) {
-      this.conversationInboxes.ensureDelivery(conversationId, agentId, root.id, 'observe');
+      tx.inboxes.ensureDelivery(conversationId, agentId, root.id, 'observe');
     }
-    const replies = this.messages.listStreamBelowSeq(
+    const replies = tx.messages.listStreamBelowSeq(
       conversationId,
       threadRootId,
       currentSeq,
     );
     for (const reply of replies) {
       if (reply.from_kind === 'agent' && reply.from_agent_id === agentId) continue;
-      this.conversationInboxes.ensureDelivery(conversationId, agentId, reply.id, 'observe');
+      tx.inboxes.ensureDelivery(conversationId, agentId, reply.id, 'observe');
     }
   }
 
-  private conversationUserMemberIds(conversationId: string): Set<string> {
-    return new Set(
-      this.conversations.listUserMembers(conversationId).map(u => u.id),
-    );
+  private conversationUserMemberIds(
+    tx: MessageTxScope,
+    conversationId: string,
+  ): Set<string> {
+    return new Set(tx.conversations.listUserMemberIds(conversationId));
   }
 }

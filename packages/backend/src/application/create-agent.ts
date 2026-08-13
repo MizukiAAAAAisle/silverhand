@@ -6,13 +6,22 @@ import {
   systemSubtype,
 } from '@silverhand/shared';
 import { agentHomeWorkspaceId } from '../repos/workspace-repo.js';
-import type { BackendContext } from '../context.js';
+import type { BackendLogger } from '../context.js';
+import type { RuntimeHostPlacementControl } from '../runtime/host-placement.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
 import type { WorkspaceRepo } from '../repos/workspace-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import type { OutboundFrameAdapter } from '../runtime/outbound-frame-adapter.js';
+import type {
+  AgentMessageDeliveryPort,
+  AgentRuntimeStartPort,
+} from '../runtime/agent-runtime-host.js';
+import type { ScopeEventPublisher } from '../ws/scope-event-bus.js';
+import type {
+  AgentProvisioningPersistence,
+} from './agent-provisioning-ports.js';
 import {
   HostWsCommandResponseError,
   HostWsCommandTransportError,
@@ -36,21 +45,38 @@ import type { PostCommitEffect } from './post-commit.js';
  * collected as fire-and-forget closures on the `created` result and drained by
  * the route AFTER the L3a commit (spec §5/§5.1).
  *
- * Unit-of-work is explicit in three independent better-sqlite3 transactions
- * (spec §5 note / §2.2): the reserve INSERT, the L3a dependent-row tx
- * (`insertProvisioningDependents`), and the L3b compensation UPDATE
- * (`markMaterializationFailed`) — the last MUST stay outside the rolling-back
- * L3a tx, else a rollback would erase the failed stamp and strand the row at
- * `pending_materialization`.
+ * Unit-of-work is explicit in three independent transactions (spec §5 note /
+ * §2.2): the reserve INSERT, the L3a dependent-row tx
+ * (`insertProvisioningDependents`, via the injected
+ * {@link AgentProvisioningPersistence} scope — no raw `Db` here), and the L3b
+ * compensation UPDATE (`markMaterializationFailed`) — the last MUST stay
+ * outside the rolling-back L3a tx, else a rollback would erase the failed
+ * stamp and strand the row at `pending_materialization`.
  */
 
+/**
+ * Narrow ambient deps for the create-agent use case (#task:1990). No ambient
+ * `BackendContext`: it structurally carries `db`, and this use case must not
+ * hold raw DB capability. Each field is an independent NAMED port (one
+ * capability per port) so sibling use cases (#1987 D) can reuse the exact
+ * subset they need without a second decomposition; the composition root
+ * (routes.ts) satisfies them from the context.
+ */
 export type CreateAgentDeps = {
-  ctx: BackendContext;
+  logger: BackendLogger;
+  /** Narrow event face: the app-scope `agent_changed` announce only. */
+  events: ScopeEventPublisher;
+  /** Narrow runtime face: the two post-commit best-effort effects only. */
+  runtimeHost: AgentMessageDeliveryPort & AgentRuntimeStartPort;
+  outboundFrameAdapter?: () => OutboundFrameAdapter | null;
+  placement: RuntimeHostPlacementControl;
   agents: AgentRepo;
   workspaces: WorkspaceRepo;
   conversations: ConversationRepo;
   messages: MessageRepo;
   users: UserRepo;
+  /** Transaction-scoped provisioning persistence (the L3a dependent graph). */
+  agentProvisioning: AgentProvisioningPersistence;
 };
 
 export type CreateAgentCommand = {
@@ -235,53 +261,79 @@ const ONBOARDING_DM_CONTENT = (agentName: string): string =>
   ].join('\n');
 
 /**
+ * Thrown when the provisioning conditional transition loses to a concurrent
+ * writer: the row is no longer `pending_materialization` (another request
+ * failed it under its own stamp, activated it, or removed it). This is
+ * DISTINCT from a genuine dependent-row failure: the row's terminal state is
+ * authoritative, so the L3b compensation must NOT overwrite it with our
+ * `dependent_row_insert_failed`. The caller re-reads and reports the winner's
+ * state instead.
+ */
+class ProvisioningEligibilityLostError extends Error {
+  constructor() {
+    super('agent provisioning eligibility lost to a concurrent transition');
+  }
+}
+
+/**
  * L3a — flip→active + dependent-row graph in a single transaction. On any
  * failure the whole graph rolls back; the caller's catch runs
- * `markMaterializationFailed` in a SEPARATE tx (spec §2.2). Returns the
- * inserted records so the post-commit effects have the IDs they need.
+ * `markMaterializationFailed` in a SEPARATE tx (spec §2.2) — EXCEPT when the
+ * transition itself lost eligibility, which is a different control flow (the
+ * winner's state is preserved, never compensated). Returns the inserted records
+ * (minimal id projections, R4) so the post-commit effects have the IDs they
+ * need.
+ *
+ * ALL persistence inside the callback comes from the transaction scope — never
+ * a captured factory repo (a future pooled adapter would read/write on the
+ * wrong connection).
  */
 function insertProvisioningDependents(
-  deps: CreateAgentDeps,
+  deps: Pick<CreateAgentDeps, 'agentProvisioning'>,
   agentRow: AgentRow,
   creatorUserId: string,
 ): {
-  home: ReturnType<WorkspaceRepo['insertAgentHome']>;
-  dm: ReturnType<ConversationRepo['insertDmChannel']>;
-  onboardingMsg: ReturnType<MessageRepo['insertForConversation']>;
+  home: { id: string };
+  dm: { id: string };
+  onboardingMsg: { id: string };
 } {
-  const { ctx, agents, workspaces, conversations, messages } = deps;
-  return ctx.db.transaction(() => {
-    agents.flipToActive(agentRow.id);
-    // `insertAgentHome` reads the `AgentDto` shape — re-project from the
-    // post-flip row.
-    const flipped = agents.get(agentRow.id);
-    if (!flipped) throw new Error('row vanished post-flip');
-    const home = workspaces.insertAgentHome({
+  return deps.agentProvisioning.uow.atomically(tx => {
+    // Conditional transition FIRST (pending-only): the UPDATE only matches a
+    // row that still has eligibility. `lost` means another transition already
+    // won (row now failed / active / vanished) — fail closed BEFORE any
+    // dependent write, and signal the caller NOT to compensate.
+    const outcome = tx.agents.flipToActiveAndGet(agentRow.id);
+    if (outcome.status === 'lost') throw new ProvisioningEligibilityLostError();
+    const flipped = outcome.row;
+    const home = tx.workspaces.insertAgentHome({
       agent: flipped,
     });
-    const dm = conversations.insertDmChannel({
+    const dm = tx.conversations.insertDmChannel({
       workspaceId: home.id,
       title: 'Onboarding',
       agentId: agentRow.id,
     });
-    conversations.addAgent(dm.id, agentRow.id);
+    tx.conversations.addAgent(dm.id, agentRow.id);
     // v40 (graded-permissions): the human who creates an agent owns its home.
-    workspaces.addUserMember(home.id, creatorUserId, 'owner');
-    workspaces.setOwnerUserId(home.id, creatorUserId);
-    conversations.addUser(dm.id, creatorUserId);
-    const onboardingMsg = messages.insertForConversation({
+    tx.workspaces.addOwnerMember(home.id, creatorUserId);
+    tx.workspaces.setOwnerUserId(home.id, creatorUserId);
+    tx.conversations.addUser(dm.id, creatorUserId);
+    const onboardingMsg = tx.messages.insertForConversation({
       conversationId: dm.id,
       fromKind: 'system',
       content: ONBOARDING_DM_CONTENT(agentRow.name),
       metadata: { subtype: systemSubtype('onboarding') },
     });
     return { home, dm, onboardingMsg };
-  })();
+  });
 }
 
 type MaterializeOutcome =
   | { kind: 'ok'; inserted: ReturnType<typeof insertProvisioningDependents> }
-  | { kind: 'failed'; failedCode: AgentMaterializeFailureCode; message: string };
+  | { kind: 'failed'; failedCode: AgentMaterializeFailureCode; message: string }
+  /** Another transition won (row failed/active/vanished under a different
+   *  stamp). Do NOT compensate; the caller re-reads the row's actual state. */
+  | { kind: 'lost' };
 
 /**
  * Shared L2/L3a/L3b dispatch from a row already in `pending_materialization`,
@@ -300,7 +352,7 @@ async function materializeReservedAgent(
     creatorUserId: string;
   },
 ): Promise<MaterializeOutcome> {
-  const { ctx, agents } = deps;
+  const { logger, agents } = deps;
   const { reservedRow, controller, connectionId, creatorUserId } = args;
 
   // ── L2 wire intent ──────────────────────────────────────────────
@@ -345,7 +397,7 @@ async function materializeReservedAgent(
         failedCode = 'daemon_internal_error';
       }
     } else {
-      ctx.logger.error(
+      logger.error(
         { err, agentId: reservedRow.id },
         'unexpected error during agent_materialize dispatch',
       );
@@ -363,7 +415,7 @@ async function materializeReservedAgent(
   // agent_home_workspace_path; defense-in-depth keeps the route honest).
   if (ackResult.agent_dir !== ackResult.agent_home_workspace_path) {
     agents.flipToFailed(reservedRow.id, 'daemon_internal_error', Date.now());
-    ctx.logger.error(
+    logger.error(
       {
         agentId: reservedRow.id,
         agent_dir: ackResult.agent_dir,
@@ -388,7 +440,15 @@ async function materializeReservedAgent(
       creatorUserId,
     );
   } catch (err) {
-    ctx.logger.error(
+    // Eligibility lost ≠ dependent-row failure. Another transition already won
+    // (row failed under ITS code, or active with a graph): compensating here
+    // would OVERWRITE the winner's terminal stamp with our
+    // dependent_row_insert_failed. Report `lost` — the caller re-reads the row
+    // and returns its authoritative state, never compensating the winner.
+    if (err instanceof ProvisioningEligibilityLostError) {
+      return { kind: 'lost' };
+    }
+    logger.error(
       { err, agentId: reservedRow.id },
       'L3a dependent-row insert tx failed; flipping to failed',
     );
@@ -416,7 +476,7 @@ function buildPostCommitEffects(
   agentId: string,
   onboardingMessageId: string,
 ): PostCommitEffect[] {
-  const { ctx } = deps;
+  const { events, runtimeHost, logger } = deps;
   return [
     () => {
       // Announce the freshly materialized agent so every already-open
@@ -424,23 +484,23 @@ function buildPostCommitEffects(
       // a remount — the mirror of `UserService.publishChanged`, since human
       // and agent are isomorphic actors. Id-only payload (client re-reads the
       // authority); contract on `AgentChangedEventSchema` (#task:1707).
-      ctx.events.publishToScope('app', 'agent_changed', { agent_id: agentId });
+      events.publishToScope('app', 'agent_changed', { agent_id: agentId });
     },
     () => {
-      ctx.runtimeHost
+      runtimeHost
         .deliverMessage(dmId, agentId, onboardingMessageId)
         .catch(err =>
-          ctx.logger.error(
+          logger.error(
             { conversationId: dmId, agentId, err },
             'onboarding message deliver failed (post-commit best-effort)',
           ),
         );
     },
     () => {
-      ctx.runtimeHost
+      runtimeHost
         .start(dmId, agentId)
         .catch(err =>
-          ctx.logger.error(
+          logger.error(
             { conversationId: dmId, agentId, err },
             'dm onboarding spawn failed (post-commit best-effort)',
           ),
@@ -481,7 +541,7 @@ function resolveIdempotentCreateOutcome(
       controller: OutboundFrameAdapter;
       connectionId: string;
     } {
-  const { ctx, agents, conversations, messages } = deps;
+  const { logger, agents, conversations, messages } = deps;
   const { existingRow, input, retry } = args;
 
   const mismatchField = compareIdempotencyMetadata(
@@ -497,7 +557,7 @@ function resolveIdempotentCreateOutcome(
       // 200 echo — re-derive the fresh-L4 4-field payload from the graph.
       const dm = conversations.findDmChannelForAgent(existingRow.id);
       if (!dm) {
-        ctx.logger.error(
+        logger.error(
           { agentId: existingRow.id },
           'active agent has no DM channel — invariant violated by external mutation',
         );
@@ -511,7 +571,7 @@ function resolveIdempotentCreateOutcome(
         systemSubtype('onboarding'),
       );
       if (!onboarding) {
-        ctx.logger.error(
+        logger.error(
           { agentId: existingRow.id, dmChannelId: dm.id },
           'active agent has no onboarding system message — invariant violated by external mutation',
         );
@@ -548,7 +608,7 @@ function resolveIdempotentCreateOutcome(
       }
       // ── L1 (retry) — online check BEFORE flipping the row (Cindy D5
       // guard rail #2: do not bounce failed → pending when offline).
-      const controller = ctx.outboundFrameAdapter?.();
+      const controller = deps.outboundFrameAdapter?.();
       const connectionId = controller?.connectionIdForHost(existingRow.host_id) ?? null;
       if (!controller || !connectionId) {
         return { done: true, result: { kind: 'hostAttachPending' } };
@@ -562,7 +622,7 @@ function resolveIdempotentCreateOutcome(
       }
       const rowToRetry = agents.getRow(existingRow.id);
       if (!rowToRetry) {
-        ctx.logger.error(
+        logger.error(
           { agentId: existingRow.id },
           'agent row vanished between flipFailedToReserveAgain and re-read; treating as internal error',
         );
@@ -576,11 +636,44 @@ function resolveIdempotentCreateOutcome(
   }
 }
 
+/**
+ * Eligibility was lost to a concurrent transition (the row is now failed under
+ * ANOTHER writer's stamp, or active with a complete graph). The winner's
+ * terminal state is authoritative: we re-read the row and dispatch on its
+ * CURRENT status (retry:false — never re-arm a retry loop here, never
+ * compensate). active → echo, failed → previouslyFailed with the winner's code,
+ * pending → inProgress (a third writer flipped it again).
+ */
+function resolveLostProvisioning(
+  deps: CreateAgentDeps,
+  agentId: string,
+  input: CreateAgentInput,
+): CreateAgentResult {
+  const fresh = deps.agents.getRow(agentId);
+  if (!fresh) {
+    return {
+      kind: 'corruptGraph',
+      message: 'agent row vanished during provisioning',
+    };
+  }
+  const outcome = resolveIdempotentCreateOutcome(deps, {
+    existingRow: fresh,
+    input,
+    retry: false,
+  });
+  return outcome.done
+    ? outcome.result
+    : {
+        kind: 'corruptGraph',
+        message: 'agent row in non-terminal state after lost provisioning',
+      };
+}
+
 export async function createAgent(
   deps: CreateAgentDeps,
   cmd: CreateAgentCommand,
 ): Promise<CreateAgentResult> {
-  const { ctx, agents, users } = deps;
+  const { logger, agents, users } = deps;
   const { idempotencyKey, retry, creatorUserId } = cmd;
   const input = normalizeCreateAgentInput(cmd.input);
 
@@ -610,6 +703,11 @@ export async function createAgent(
         message: retryResult.message,
       };
     }
+    // Lost the race: another transition already won (failed under ITS code, or
+    // active). Do NOT compensate — report the winner's authoritative state.
+    if (retryResult.kind === 'lost') {
+      return resolveLostProvisioning(deps, dispatch.rowToRetry.id, input);
+    }
     return {
       kind: 'created',
       payload: successFromInserted(deps, dispatch.rowToRetry.id, retryResult.inserted),
@@ -631,8 +729,8 @@ export async function createAgent(
   let resolvedHostId: string;
   try {
     resolvedHostId = input.host_id
-      ? ctx.placement.assertOwnedActiveHost(input.host_id, creatorUserId).id
-      : ctx.placement.resolveOwnedReadyForPlacement(creatorUserId).id;
+      ? deps.placement.assertOwnedActiveHost(input.host_id, creatorUserId).id
+      : deps.placement.resolveOwnedReadyForPlacement(creatorUserId).id;
   } catch (err) {
     return { kind: 'placementError', err };
   }
@@ -648,7 +746,7 @@ export async function createAgent(
 
   // Controller online check BEFORE reserve (§6.2: no row reserved when daemon
   // offline). The captured `connectionId` locks the check → dispatch window.
-  const controller = ctx.outboundFrameAdapter?.();
+  const controller = deps.outboundFrameAdapter?.();
   const connectionId = controller?.connectionIdForHost(resolvedHostId) ?? null;
   if (!controller || !connectionId) {
     return { kind: 'hostAttachPending' };
@@ -675,7 +773,7 @@ export async function createAgent(
       idempotencyKey,
     );
   } catch (err) {
-    ctx.logger.warn(
+    logger.warn(
       { err, agentName: input.name, idempotencyKey },
       'reserveForMaterialize INSERT failed',
     );
@@ -697,6 +795,11 @@ export async function createAgent(
       failedCode: freshResult.failedCode,
       message: freshResult.message,
     };
+  }
+  // Lost the race: another transition already won. Report the winner's state,
+  // do NOT compensate.
+  if (freshResult.kind === 'lost') {
+    return resolveLostProvisioning(deps, reservedRow.id, input);
   }
   return {
     kind: 'created',

@@ -2,25 +2,17 @@ import type {
   HostAgentResource,
   HostDeleteDependents,
 } from '@silverhand/shared';
-import type { AgentDto } from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
-import type { AgentRepo } from '../repos/agent-repo.js';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
-import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
-import type { HostRepo } from '../repos/host-repo.js';
-import type { WorkspaceRepo } from '../repos/workspace-repo.js';
-import type { StoredFileRef } from '../storage/blob-file-storage.js';
+import type {
+  AgentTeardownCapture,
+  AgentTeardownFacts,
+  AgentTeardownPersistence,
+} from './agent-teardown-ports.js';
+import { teardownFactsToHostAgentResource } from '../read-model/host-resources.js';
 import {
-  computeDeleteImpact,
-  type AgentDeleteImpact,
-} from '../read-model/agent-delete-impact.js';
-import { toHostAgentResource } from '../read-model/host-resources.js';
-import {
-  collectAgentDmBlobRefs,
-  deleteFailedAgentRowOnly,
+  isRunningSession,
   purgeAgentHostLocalFiles,
-  teardownAgentControlPlaneRows,
-  type DeleteAgentDeps,
+  sweepStoredBlobs,
 } from './delete-agent.js';
 
 /**
@@ -51,23 +43,25 @@ import {
  *
  * ## Two phases, one authoritative read — the atomicity contract
  *
- *  1. **commit** (ONE synchronous `db.transaction`): read the CURRENT dependency
- *     set, check every precondition against it (`pending_materialization`, the
- *     cascade confirmation), CAPTURE everything the teardown will need
- *     (runtime-stop pairs *and their routing*, purge targets, attachment storage
- *     refs, viewer ids), then delete the agent rows and the host row as a single
- *     atomic unit. A failed precondition rolls the whole transaction back.
+ *  1. **commit** (ONE `atomicallyForComputer` scope — the SAME teardown
+ *     UnitOfWork `DELETE /api/agents/:id` uses, #task:1987 D): read the CURRENT
+ *     dependency set UNDER the write lock, check every precondition against it
+ *     (`pending_materialization`, the cascade confirmation), CAPTURE everything
+ *     the teardown will need (runtime-stop pairs *and their routing*, attachment
+ *     storage refs, log counts), then delete the agent rows and the host row as a
+ *     single atomic unit. A failed precondition rolls the whole scope back.
  *  2. **post-commit teardown** (best-effort, unrollbackable): runtime stops, the
  *     host-local `agent_files_purge` and the attachment blob deletes — all of it
  *     off the captures, never off a fresh query, because the rows are gone by
  *     now.
  *
- * The read and the capture live INSIDE the transaction on purpose. The cascade
- * deletes whatever belongs to the computer at execution time (see the consent
- * note below), so a set read before the transaction could differ from the set
- * deleted inside it: the drifted-in agent would be deleted with no captured blob
- * refs and no captured runtime pairs — leaked bytes and an orphan daemon child.
- * One authoritative read point makes that class of mismatch unstateable.
+ * The read and the capture live INSIDE the scope on purpose. The cascade deletes
+ * whatever belongs to the computer at execution time (see the consent note
+ * below), so a set read before the transaction could differ from the set deleted
+ * inside it: the drifted-in agent would be deleted with no captured blob refs and
+ * no captured runtime pairs — leaked bytes and an orphan daemon child. One
+ * authoritative read point makes that class of mismatch unstateable, and it is
+ * why the pre-flight read above is only an ownership/lifecycle HINT.
  *
  * "Off the captures" includes ROUTING, not just identity: `runtimeHost.stop`
  * normally resolves `agents.host_id` → `hosts` to pick the daemon, which
@@ -124,11 +118,7 @@ import {
  */
 export interface DeleteComputerDeps {
   ctx: BackendContext;
-  hosts: HostRepo;
-  agents: AgentRepo;
-  workspaces: WorkspaceRepo;
-  conversations: ConversationRepo;
-  conversationInboxes: ConversationInboxRepo;
+  teardown: AgentTeardownPersistence;
 }
 
 export interface DeleteComputerCommand {
@@ -155,10 +145,11 @@ export type DeleteComputerResult =
   | { kind: 'notFound' }
   | { kind: 'provisioningSourceNotSupported' }
   | { kind: 'pendingAgents'; pendingAgents: number }
+  | { kind: 'deletionInProgress'; deletingAgents: number }
   | { kind: 'hasDependents'; payload: ComputerDeleteDependentsPayload };
 
 /**
- * Thrown inside the commit transaction to roll it back when a precondition fails.
+ * Thrown inside the commit scope to roll it back when a precondition fails.
  * Never escapes this module: every refusal is raised from the same authoritative
  * read, so each reason maps straight to its typed result and the caller cannot
  * tell a mid-request change from a pre-request one.
@@ -166,6 +157,7 @@ export type DeleteComputerResult =
 type CommitRefusal =
   | { reason: 'hasDependents'; payload: ComputerDeleteDependentsPayload }
   | { reason: 'pendingAgents'; pendingAgents: number }
+  | { reason: 'deletionInProgress'; deletingAgents: number }
   | { reason: 'hostGone' };
 
 class CommitPreconditionFailed extends Error {
@@ -174,21 +166,20 @@ class CommitPreconditionFailed extends Error {
   }
 }
 
-interface ComputerDeletePlan {
-  hostAgents: AgentDto[];
-  pendingAgents: number;
-}
-
 /** One agent's teardown, fully captured before its rows are deleted. */
 interface AgentTeardown {
-  agent: AgentDto;
-  impact: AgentDeleteImpact;
-  blobRefs: StoredFileRef[];
+  agent: AgentTeardownFacts;
+  capture: AgentTeardownCapture;
 }
 
-/** Everything the post-commit teardown will act on, captured inside the
- *  transaction because every source row it derives from is deleted there. */
+/** Everything the post-commit phase acts on, captured inside the scope because
+ *  every source row it derives from is deleted there. */
 interface ComputerTeardownCapture {
+  /** Every agent the cascade deleted — the `agent_changed` fan-out set. */
+  deletedAgents: AgentTeardownFacts[];
+  /** The `failed` rows, deleted row-only: no dependents, no runtime, no tree. */
+  rowOnlyAgents: AgentTeardownFacts[];
+  /** The full cascades, with their post-commit facts. */
   agentTeardowns: AgentTeardown[];
 }
 
@@ -196,126 +187,164 @@ export async function deleteComputer(
   deps: DeleteComputerDeps,
   cmd: DeleteComputerCommand,
 ): Promise<DeleteComputerResult> {
-  const { ctx, hosts } = deps;
+  const { ctx, teardown } = deps;
 
-  const host = hosts.get(cmd.hostId);
-  if (!host || host.user_id !== cmd.requesterUserId) {
+  // Pre-flight ownership / lifecycle refusals — answered WITHOUT taking a write
+  // lock, because saying "not yours" or "not user-managed" needs no coordination.
+  // Only a hint: `deleteComputerRow` re-checks both conditions in its own WHERE.
+  const host = teardown.read.readComputerFacts(cmd.hostId);
+  if (!host || host.userId !== cmd.requesterUserId) {
     return { kind: 'notFound' };
   }
-  if (host.provisioning_source !== 'user_invite' || host.kind !== 'remote') {
+  if (host.provisioningSource !== 'user_invite' || host.kind !== 'remote') {
     return { kind: 'provisioningSourceNotSupported' };
   }
 
-  const agentDeps: DeleteAgentDeps = {
-    ctx,
-    agents: deps.agents,
-    workspaces: deps.workspaces,
-    conversations: deps.conversations,
-    conversationInboxes: deps.conversationInboxes,
-  };
-
-  // ── phase 1: read, check, capture and delete — one transaction ─────
+  // ── phase 1: read, check, capture and delete — one scope ────────────
   let capture: ComputerTeardownCapture;
-  let plan: ComputerDeletePlan;
   try {
-    const committed = ctx.db.transaction(() => {
-      // THE authoritative read. Every refusal below is raised from this one
-      // snapshot and rolls the transaction back, and the capture that phase 2
-      // acts on is derived from the very same snapshot the deletes consume.
-      const txPlan = buildPlan(deps, cmd);
+    capture = teardown.uow.atomicallyForComputer(
+      { hostId: cmd.hostId, userId: cmd.requesterUserId },
+      tx => {
+        // THE authoritative read, under the write lock. Every refusal below is
+        // raised from this one snapshot and rolls the scope back, and the
+        // capture phase 2 acts on is derived from the very same snapshot the
+        // deletes consume.
+        const hostAgents = tx.computer.listAgentsForUpdate();
 
-      // A materialization still in flight cannot be torn down safely (the
-      // reserve → flip transaction would race). Transient, so it answers
-      // "retry" rather than offering a cascade.
-      if (txPlan.pendingAgents > 0) {
-        throw new CommitPreconditionFailed({
-          reason: 'pendingAgents',
-          pendingAgents: txPlan.pendingAgents,
-        });
-      }
-      if (txPlan.hostAgents.length > 0 && !cmd.cascadeDependents) {
-        throw new CommitPreconditionFailed({
-          reason: 'hasDependents',
-          payload: buildPayload(txPlan),
-        });
-      }
-
-      // Capture BEFORE the deletes and inside the same transaction: after the
-      // FK cascade there is no row left to derive a storage key, a runtime pair
-      // or a viewer id from (read-only, so it cannot destroy anything even
-      // though a later precondition could still roll this back).
-      const txCapture = captureTeardown(agentDeps, txPlan);
-
-      for (const agent of txPlan.hostAgents) {
-        const current = deps.agents.get(agent.id);
-        if (!current) continue;
-        if (current.materialization_status === 'failed') {
-          deleteFailedAgentRowOnly(ctx, deps.agents, current);
-          continue;
+        // A materialization still in flight cannot be torn down safely (the
+        // reserve → flip transaction would race). Transient, so it answers
+        // "retry" rather than offering a cascade.
+        const pendingAgents = hostAgents.filter(
+          agent => agent.materializationStatus === 'pending_materialization',
+        ).length;
+        if (pendingAgents > 0) {
+          throw new CommitPreconditionFailed({
+            reason: 'pendingAgents',
+            pendingAgents,
+          });
         }
-        const impact: AgentDeleteImpact = computeDeleteImpact(agentDeps, agent.id);
-        teardownAgentControlPlaneRows(agentDeps, agent.id, impact);
-      }
-      if (!hosts.deleteOwnedUserInvite({ hostId: cmd.hostId, userId: cmd.requesterUserId })) {
-        // Someone deleted the host row concurrently. Roll back and answer 404
-        // rather than reporting a success this request did not cause.
-        throw new CommitPreconditionFailed({ reason: 'hostGone' });
-      }
-      return { capture: txCapture, plan: txPlan };
-    })();
-    capture = committed.capture;
-    plan = committed.plan;
+        // A single-agent deletion marker is the durable anchor for its purge
+        // resumer. The computer cascade must not delete that row underneath the
+        // worker (or strand a daemon fence with no control-plane attempt).
+        const deletingAgents = hostAgents.filter(
+          agent => agent.deletionStartedAt !== null,
+        ).length;
+        if (deletingAgents > 0) {
+          throw new CommitPreconditionFailed({
+            reason: 'deletionInProgress',
+            deletingAgents,
+          });
+        }
+        if (hostAgents.length > 0 && !cmd.cascadeDependents) {
+          throw new CommitPreconditionFailed({
+            reason: 'hasDependents',
+            payload: {
+              dependents: { agents: hostAgents.length },
+              agents: hostAgents.map(teardownFactsToHostAgentResource),
+            },
+          });
+        }
+
+        // Capture BEFORE any delete and inside the same scope: after the FK
+        // cascade there is no row left to derive a storage key or a runtime pair
+        // from. Read-only, so it cannot destroy anything even though the host-row
+        // precondition below could still roll all of this back.
+        const rowOnlyAgents: AgentTeardownFacts[] = [];
+        const agentTeardowns: AgentTeardown[] = [];
+        const doomed: Array<{ face: ReturnType<typeof tx.computer.forAgent> }> = [];
+        for (const agent of hostAgents) {
+          const face = tx.computer.forAgent(agent.id);
+          const facts = face.readFacts();
+          if (!facts) continue; // concurrent delete won — nothing left to tear down
+          doomed.push({ face });
+          if (facts.materializationStatus === 'failed') {
+            rowOnlyAgents.push(facts);
+            continue;
+          }
+          agentTeardowns.push({ agent: facts, capture: face.capture() });
+        }
+
+        for (const entry of doomed) {
+          entry.face.deleteAgentRow();
+        }
+        if (!tx.computer.deleteComputerRow()) {
+          // Someone deleted the host row concurrently, or it was never
+          // user-managed. Roll back and answer 404 rather than reporting a
+          // success this request did not cause.
+          throw new CommitPreconditionFailed({ reason: 'hostGone' });
+        }
+        return {
+          deletedAgents: [
+            ...rowOnlyAgents,
+            ...agentTeardowns.map(entry => entry.agent),
+          ],
+          rowOnlyAgents,
+          agentTeardowns,
+        };
+      },
+    );
   } catch (err) {
     if (err instanceof CommitPreconditionFailed) {
       return refusalToResult(err.refusal);
     }
-    // Anything else rolled the whole transaction back — including an FK
-    // violation, which here can only mean the schema holds a RESTRICT reference
-    // this cascade does not model (drift or a bug). It FAILS LOUD: dressing it
-    // up as a user-actionable `has_dependents` would hand the UI a dead end
-    // (blocked, nothing to remove, retry forever) and hide the broken invariant.
+    // Anything else rolled the whole scope back — including an FK violation,
+    // which here can only mean the schema holds a RESTRICT reference this
+    // cascade does not model (drift or a bug), and the coordination violation
+    // `forAgent` throws for an agent this computer does not own. It FAILS LOUD:
+    // dressing either up as a user-actionable `has_dependents` would hand the UI
+    // a dead end (blocked, nothing to remove, retry forever) and hide the broken
+    // invariant.
     throw err;
   }
 
   // ── phase 2: post-commit teardown (best-effort, capture-driven) ────
-  // Post-commit identity-change fan-out (#task:1791): the transaction deleted
-  // every `plan.hostAgents` row (active via teardown, failed via row-only), so
-  // publish the terminal `agent_changed` for each. Post-commit by construction —
-  // a rolled-back precondition returned above without reaching here, so clients
-  // are never told an agent is deleted while its row survives. Covers the
-  // failed-agent ids too (not in `agentTeardowns`), so no cascaded author is
-  // left stale.
-  for (const agent of plan.hostAgents) {
+  for (const agent of capture.rowOnlyAgents) {
+    ctx.logger.info(
+      {
+        agentId: agent.id,
+        agentName: agent.name,
+        failedCode: agent.failedCode,
+      },
+      'failed agent row deleted (D5: row-only, no dependents)',
+    );
+  }
+  // Post-commit identity-change fan-out (#task:1791): the scope deleted every
+  // agent row (active via the full cascade, failed via row-only), so publish the
+  // terminal `agent_changed` for each. Post-commit by construction — a
+  // rolled-back precondition returned above without reaching here, so clients
+  // are never told an agent is deleted while its row survives.
+  for (const agent of capture.deletedAgents) {
     ctx.agentService.publishDeleted(agent.id);
   }
   let blobsAttempted = 0;
   let blobsFailed = 0;
   // One stop per (conversation, agent) pair: an agent may be running in several
-  // conversations, and `impact.running_conversation_agents` is now the ONLY
-  // teardown authority — relocation-v1 §7-4 removed the workspace-cascade half,
-  // so there is no second source to union with.
+  // conversations, and the captured runtime sessions are now the ONLY teardown
+  // authority — relocation-v1 §7-4 removed the workspace-cascade half, so there
+  // is no second source to union with.
   const stopped = new Set<string>();
   const stopKey = (conversationId: string, agentId: string): string =>
     `${conversationId}\u0000${agentId}`;
   let purgeAttempts = 0;
   let purgeFailures = 0;
-  for (const teardown of capture.agentTeardowns) {
-    for (const live of teardown.impact.running_conversation_agents) {
-      if (stopped.has(stopKey(live.conversation_id, teardown.agent.id))) continue;
-      stopped.add(stopKey(live.conversation_id, teardown.agent.id));
+  for (const entry of capture.agentTeardowns) {
+    for (const live of entry.capture.runtimeSessions.filter(isRunningSession)) {
+      if (stopped.has(stopKey(live.conversationId, entry.agent.id))) continue;
+      stopped.add(stopKey(live.conversationId, entry.agent.id));
       // `{ hostId }` is the captured routing authority: the dispatcher would
       // otherwise re-read `agents`/`hosts`, which this cascade has just
       // deleted, and the stop would degrade to a warning while the daemon's
       // child keeps running.
       await ctx.runtimeHost
-        .stop(live.conversation_id, teardown.agent.id, {
-          hostId: teardown.agent.host_id,
+        .stop(live.conversationId, entry.agent.id, {
+          hostId: entry.agent.hostId,
         })
         .catch(err =>
           ctx.logger.warn(
             {
-              conversationId: live.conversation_id,
-              agentId: teardown.agent.id,
+              conversationId: live.conversationId,
+              agentId: entry.agent.id,
               err,
             },
             'delete computer cascade: stop failed (continuing)',
@@ -328,11 +357,7 @@ export async function deleteComputer(
     // See the module header: it runs after the commit precisely so it can never
     // destroy bytes for a request that then fails.
     purgeAttempts += 1;
-    const purge = await purgeAgentHostLocalFiles(
-      agentDeps,
-      teardown.agent,
-      teardown.impact,
-    ).catch(
+    const purge = await purgeAgentHostLocalFiles(ctx, entry.agent).catch(
       (err: unknown) =>
         ({ kind: 'failClosed', code: 'purge_threw', error: String(err) }) as const,
     );
@@ -341,27 +366,21 @@ export async function deleteComputer(
       ctx.logger.warn(
         {
           hostId: cmd.hostId,
-          agentId: teardown.agent.id,
+          agentId: entry.agent.id,
           code: purge.code,
           err: purge.error,
         },
         'delete computer cascade: host-local purge failed (continuing; files stay on that computer)',
       );
     }
-    const swept = await ctx.attachmentService
-      .deleteBlobs(teardown.blobRefs)
-      .catch((err: unknown) => ({
-        attempted: teardown.blobRefs.length,
-        failed: teardown.blobRefs.length,
-        firstError: err,
-      }));
+    const swept = await sweepStoredBlobs(ctx, entry.capture.dmBlobRefs);
     blobsAttempted += swept.attempted;
     blobsFailed += swept.failed;
     if (swept.failed > 0) {
       ctx.logger.warn(
         {
           hostId: cmd.hostId,
-          agentId: teardown.agent.id,
+          agentId: entry.agent.id,
           blobs: swept.attempted,
           failed: swept.failed,
           err: swept.firstError,
@@ -373,7 +392,7 @@ export async function deleteComputer(
   ctx.logger.info(
     {
       hostId: cmd.hostId,
-      cascadedAgents: plan.hostAgents.length,
+      cascadedAgents: capture.deletedAgents.length,
       purgeAttempts,
       purgeFailures,
       blobsAttempted,
@@ -384,61 +403,21 @@ export async function deleteComputer(
   return { kind: 'deleted' };
 }
 
-function buildPlan(
-  deps: DeleteComputerDeps,
-  cmd: DeleteComputerCommand,
-): ComputerDeletePlan {
-  const { agents } = deps;
-  const hostAgents = agents.listByHost(cmd.hostId);
-  return {
-    hostAgents,
-    pendingAgents: hostAgents.filter(
-      agent => agent.materialization_status === 'pending_materialization',
-    ).length,
-  };
-}
-
-/**
- * Snapshot every source row the post-commit teardown will need. Read-only and
- * synchronous: it must not be able to change anything, because it runs before
- * the commit decides whether the delete happens at all.
- */
-function captureTeardown(
-  agentDeps: DeleteAgentDeps,
-  plan: ComputerDeletePlan,
-): ComputerTeardownCapture {
-  const agentTeardowns: AgentTeardown[] = [];
-  for (const agent of plan.hostAgents) {
-    // A `failed` agent has no dependent rows, no runtime and no host-local tree
-    // (`deleteFailedAgentRowOnly`) — nothing to capture or tear down.
-    if (agent.materialization_status === 'failed') continue;
-    const impact = computeDeleteImpact(agentDeps, agent.id);
-    agentTeardowns.push({
-      agent,
-      impact,
-      blobRefs: collectAgentDmBlobRefs(agentDeps, impact),
-    });
-  }
-  return { agentTeardowns };
-}
-
 /** Map a rolled-back commit precondition to its typed result. The lists it
- *  carries were read inside the transaction, so they describe the state the
- *  refusal was actually decided on. */
+ *  carries were read inside the scope, so they describe the state the refusal
+ *  was actually decided on. */
 function refusalToResult(refusal: CommitRefusal): DeleteComputerResult {
   switch (refusal.reason) {
     case 'hasDependents':
       return { kind: 'hasDependents', payload: refusal.payload };
     case 'pendingAgents':
       return { kind: 'pendingAgents', pendingAgents: refusal.pendingAgents };
+    case 'deletionInProgress':
+      return {
+        kind: 'deletionInProgress',
+        deletingAgents: refusal.deletingAgents,
+      };
     case 'hostGone':
       return { kind: 'notFound' };
   }
-}
-
-function buildPayload(plan: ComputerDeletePlan): ComputerDeleteDependentsPayload {
-  return {
-    dependents: { agents: plan.hostAgents.length },
-    agents: plan.hostAgents.map(toHostAgentResource),
-  };
 }

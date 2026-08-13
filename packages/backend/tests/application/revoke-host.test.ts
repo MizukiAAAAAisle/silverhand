@@ -1,3 +1,4 @@
+import { createSqliteHostUnitOfWork } from '../../src/repos/host-uow.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { apiPaths } from '@silverhand/shared';
 import { revokeHost } from '../../src/application/revoke-host.js';
@@ -39,10 +40,10 @@ describe('revokeHost use case', () => {
     t = buildTestApp({ ownedLocalHostUserIds: [] });
     const hostId = await claimHost(t, '60000001-1111-4111-8111-111111111111');
     const hosts = new HostRepo(t.ctx.db);
-    const hostTokens = new HostTokenService(t.ctx.db);
+    const uow = createSqliteHostUnitOfWork(t.ctx.db);
 
     const result = revokeHost(
-      { ctx: t.ctx, hosts, hostTokens },
+      { ctx: t.ctx, hosts, uow },
       { hostId, requesterUserId: t.viewerUserId },
     );
 
@@ -66,7 +67,7 @@ describe('revokeHost use case', () => {
       {
         ctx: t.ctx,
         hosts: new HostRepo(t.ctx.db),
-        hostTokens: new HostTokenService(t.ctx.db),
+        uow: createSqliteHostUnitOfWork(t.ctx.db),
       },
       { hostId: 'no-such-host', requesterUserId: t.viewerUserId },
     );
@@ -82,7 +83,7 @@ describe('revokeHost use case', () => {
       {
         ctx: t.ctx,
         hosts: new HostRepo(t.ctx.db),
-        hostTokens: new HostTokenService(t.ctx.db),
+        uow: createSqliteHostUnitOfWork(t.ctx.db),
       },
       { hostId: bobHost!.id, requesterUserId: 'alice' },
     );
@@ -100,7 +101,7 @@ describe('revokeHost use case', () => {
     const app = (t = buildTestApp({ ownedLocalHostUserIds: [] }));
     const hostId = await claimHost(app, '60000002-1111-4111-8111-111111111111');
     const hosts = new HostRepo(app.ctx.db);
-    const hostTokens = new HostTokenService(app.ctx.db);
+    const uow = createSqliteHostUnitOfWork(app.ctx.db);
     const realRow = hosts.get(hostId);
     expect(realRow).not.toBeNull();
 
@@ -112,7 +113,7 @@ describe('revokeHost use case', () => {
 
     expect(() =>
       revokeHost(
-        { ctx: app.ctx, hosts, hostTokens },
+        { ctx: app.ctx, hosts, uow },
         { hostId, requesterUserId: app.viewerUserId },
       ),
     ).toThrow(/returned null for revoked host/);

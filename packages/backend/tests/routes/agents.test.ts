@@ -1692,7 +1692,7 @@ describe('DELETE /api/agents/:id (full flow)', () => {
   let t: TestApp | null = null;
   afterEach(() => { t?.cleanup(); t = null; });
 
-  it('hard-stops running, leaves regular channels (broadcast + wipe L2), drops DM, removes agent', async () => {
+  it('delegates quiescence to the daemon, leaves regular channels, drops DM, removes agent', async () => {
     t = buildTestApp();
     const created = await (
       await http(t).post('/api/agents', { name: 'alice', runtime: 'claude' })
@@ -1702,7 +1702,8 @@ describe('DELETE /api/agents/:id (full flow)', () => {
       member_agent_ids: [created.agent.id],
     });
 
-    // mark DM conversation_agent as active so the stop path is exercised
+    // Keep an active runtime edge. The backend must not try to stop it itself:
+    // daemon purge owns the fence + quiescence barrier before deleting files.
     const dmConversations = t.ctx.db
       .prepare(
         `SELECT conversation_id AS id
@@ -1736,7 +1737,6 @@ describe('DELETE /api/agents/:id (full flow)', () => {
     const workspaces = await (await http(t).get('/api/workspaces')).json() as any;
     expect(workspaces.workspaces.find((w: any) => w.name === 'engineering')).toBeDefined();
 
-    // running conversation_agent was stopped (hard) — at least one stop call
-    expect(t.fake.stops.some(s => s.agentId === created.agent.id)).toBe(true);
+    expect(t.fake.stops.some(s => s.agentId === created.agent.id)).toBe(false);
   });
 });

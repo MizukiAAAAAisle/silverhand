@@ -64,7 +64,10 @@ import {
   type SupervisorOptions,
 } from '@silverhand/host/daemon';
 import type { RuntimeKind, ServerConfig } from '@silverhand/shared';
-import { startBackend, type RunningBackend } from '../../../src/index.js';
+import {
+  startTestBackend,
+  type TestRunningBackend,
+} from '../../utils/test-backend.js';
 import { HostRepo } from '../../../src/repos/host-repo.js';
 import { AuthSessionService } from '../../../src/auth/session.js';
 import {
@@ -225,6 +228,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
       runtimePidRootDir: pidRoot,
       runtimeStartResolveDeps,
       controlPlaneServerUrl,
+      agentHomeMutationCoordinator,
     }) =>
       new Supervisor({
         emit,
@@ -239,6 +243,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
         runtimePidRootDir: pidRoot,
         runtimeStartResolveDeps,
         controlPlaneServerUrl,
+        agentHomeMutationCoordinator,
         initLivenessSilenceMs: 10_000,
         initPreProtocolCapMs: 10_000,
         initPostProtocolMs: 10_000,
@@ -301,7 +306,7 @@ async function bootEmbeddedRig(): Promise<EmbeddedRigInternals> {
       max_depth: 1,
     },
   };
-  const backend: RunningBackend = await startBackend({
+  const backend: TestRunningBackend = await startTestBackend({
     mode: 'embedded',
     dbPath: join(tmpDir, 'silverhand.db'),
     ...resolveBackendDataPaths(tmpDir),

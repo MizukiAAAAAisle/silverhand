@@ -10,8 +10,8 @@ import type {
   WorkspaceDto,
 } from '@silverhand/shared';
 import type { AgentRepo } from '../../repos/agent-repo.js';
-import type { ConversationRepo } from '../../repos/conversation-repo.js';
 import type { WorkspaceRepo } from '../../repos/workspace-repo.js';
+import type { TaskConversationAccessPort } from './ports.js';
 import {
   failClaim,
   type AgentActor,
@@ -20,13 +20,13 @@ import {
 
 export interface TaskAccessControlDeps {
   agents: AgentRepo;
-  conversations: ConversationRepo;
+  conversations: TaskConversationAccessPort;
   workspaces: WorkspaceRepo;
 }
 
 export class TaskAccessControl {
   private readonly agents: AgentRepo;
-  private readonly conversations: ConversationRepo;
+  private readonly conversations: TaskConversationAccessPort;
   private readonly workspaces: WorkspaceRepo;
 
   constructor(deps: TaskAccessControlDeps) {

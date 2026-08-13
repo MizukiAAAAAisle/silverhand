@@ -1,4 +1,5 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { HostTokenVerifier } from '../auth/host-ports.js';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { Duplex } from 'node:stream';
@@ -26,14 +27,35 @@ import {
   HOST_WS_CLOSE_REASON_UPDATE_REQUIRED,
   apiPaths,
   type HostConnectionChangedEvent,
+  type HostRow,
 } from '@silverhand/shared';
-import { HostTokenService } from '../auth/host-token.js';
 import type { BackendContext, BackendDeploymentMode } from '../context.js';
-import { HostRepo } from '../repos/host-repo.js';
 
 export const HOST_WS_PATH = apiPaths.hostConnect;
 
+/**
+ * #task:1983 W3 — the two host-row questions the SOCKET path itself asks, as a
+ * port rather than a repo built from a handle. Both are connection-time facts,
+ * not assembly-time ones: admission reads the row to decide whether this host
+ * may hold a transport slot at all, and the compatible `ready` frame stamps
+ * `activated_at` ("a daemon has attached", see the comment at the call site).
+ * Narrow on purpose — `HostRepo` satisfies it structurally, so the composition
+ * passes the instance it already has and this module keeps naming no concrete
+ * persistence (#task:1979).
+ */
+export interface HostWsHostAdmissionPort {
+  get(
+    hostId: string,
+  ): Pick<HostRow, 'kind' | 'provisioning_source' | 'user_id'> | null;
+  markActivated(hostId: string): void;
+}
+
 export interface HostWsServerOptions {
+  /** Injected verify face from the composition root — this transport module
+   *  never touches raw DB or concrete persistence (#task:1979). */
+  hostTokenVerifier: HostTokenVerifier;
+  /** Host admission / activation facts for the socket path (#task:1983 W3). */
+  hosts: HostWsHostAdmissionPort;
   path?: string;
   maxPayloadBytes?: number;
   shutdownGraceMs?: number;
@@ -275,7 +297,7 @@ export class HostWsCommandResponseError extends Error {
 export function installHostWebSocketServer(
   server: HttpServer,
   ctx: BackendContext,
-  opts: HostWsServerOptions = {},
+  opts: HostWsServerOptions,
 ): HostWsServerController {
   const path = opts.path ?? HOST_WS_PATH;
   const shutdownGraceMs = opts.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
@@ -331,7 +353,7 @@ export function installHostWebSocketServer(
       return;
     }
 
-    const auth = authenticateHost(req, ctx);
+    const auth = authenticateHost(req, opts.hosts, opts.hostTokenVerifier);
     if (!auth.ok) {
       ctx.metrics?.observeHostWsConnection(
         'upgrade',
@@ -411,7 +433,7 @@ export function installHostWebSocketServer(
           // A daemon that cannot speak our protocol correctly reads as "not
           // connected yet": the waiting phase it stays in shows the install /
           // connect command, which is the actual repair path.
-          new HostRepo(ctx.db).markActivated(auth.host.hostId);
+          opts.hosts.markActivated(auth.host.hostId);
           publishHostConnectionChanged(ctx, auth.host.userId, {
             host_id: auth.host.hostId,
           });
@@ -1325,19 +1347,19 @@ type HostAuthResult =
 
 function authenticateHost(
   req: IncomingMessage,
-  ctx: BackendContext,
+  hosts: HostWsHostAdmissionPort,
+  verifier: HostTokenVerifier,
 ): HostAuthResult {
   const token = bearerToken(req.headers.authorization);
   if (!token) {
     return { ok: false, statusCode: 401, reason: 'Unauthorized' };
   }
 
-  const verified = new HostTokenService(ctx.db).verifyHostToken(token);
+  const verified = verifier.verifyHostToken(token);
   if (!verified.ok) {
     return { ok: false, statusCode: 401, reason: 'Unauthorized' };
   }
 
-  const hosts = new HostRepo(ctx.db);
   const host = hosts.get(verified.hostId);
   if (!host) {
     return { ok: false, statusCode: 401, reason: 'Unauthorized' };

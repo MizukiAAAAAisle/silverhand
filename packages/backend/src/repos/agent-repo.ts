@@ -46,6 +46,7 @@ export function agentRowToDto(row: AgentRow): AgentDto {
     materialization_status: row.materialization_status,
     materialization_failed_code: row.materialization_failed_code,
     materialization_failed_at: row.materialization_failed_at,
+    deletion_started_at: row.deletion_started_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -249,20 +250,26 @@ export class AgentRepo {
   }
 
   /**
-   * Flip a `pending_materialization` row to `'active'`. Called by
-   * the route's L3a tx after the daemon ack arrives ok AND all
+   * Flip a `pending_materialization` row to `'active'`. Called by the
+   * create-agent L3a tx after the daemon ack arrives ok AND all
    * dependent rows have been inserted in the same tx.
    *
-   * No-op if the row is already active (legal under same-key
-   * retry hitting an active row — the route should have
-   * short-circuited at L0 dispatch, but defensive idempotence
-   * doesn't hurt). Refuses to flip `failed → active` — that's
-   * never legal (Cindy round-2 P1 #5: `failed → active` requires
-   * `?retry=true` which goes through the reserve path again, NOT
-   * an in-place flip).
+   * The ONLY legal pre-state is `pending_materialization`. `active` is
+   * deliberately NOT matched: a row that is already active already has its
+   * dependent graph, and matching it here would let a second provisioning run
+   * build a SECOND graph (a second DM channel, a second onboarding message).
+   * `failed` is not matched either — a failed row must never be activated
+   * in-place (`?retry=true` goes through the reserve path again).
+   *
+   * Returns the number of rows the conditional UPDATE matched: 1 when the
+   * transition succeeded, 0 when the row is not `pending_materialization`
+   * (failed / active / vanished — eligibility lost to a concurrent transition).
+   * The caller MUST fail closed on 0 — a row that lost eligibility must never
+   * get a dependent graph built under it. This is the saga's single-winner
+   * mechanism — see `application/agent-provisioning-ports.ts`.
    */
-  flipToActive(id: string): void {
-    this.db
+  flipToActive(id: string): number {
+    return this.db
       .prepare(
         `UPDATE agents
             SET materialization_status = 'active',
@@ -270,9 +277,9 @@ export class AgentRepo {
                 materialization_failed_at   = NULL,
                 updated_at = ?
           WHERE id = ?
-            AND materialization_status IN ('pending_materialization', 'active')`,
+            AND materialization_status = 'pending_materialization'`,
       )
-      .run(Date.now(), id);
+      .run(Date.now(), id).changes;
   }
 
   /**
@@ -475,18 +482,21 @@ export class AgentRepo {
     id: string,
     target: RuntimeKind,
     now = Date.now(),
-  ): 'started' | 'not_found' | 'in_progress' {
+  ): 'started' | 'not_found' | 'in_progress' | 'deleting' {
     const result = this.db
       .prepare(
         `UPDATE agents
             SET runtime_transition_target = ?,
                 runtime_transition_started_at = ?
           WHERE id = ?
-            AND runtime_transition_target IS NULL`,
+            AND runtime_transition_target IS NULL
+            AND deletion_started_at IS NULL`,
       )
       .run(target, now, id);
     if (result.changes > 0) return 'started';
-    return this.getRow(id) ? 'in_progress' : 'not_found';
+    const row = this.getRow(id);
+    if (!row) return 'not_found';
+    return row.deletion_started_at !== null ? 'deleting' : 'in_progress';
   }
 
   /** Release a matching transition lock after a pre-commit failure. */

@@ -25,8 +25,8 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import {
   decodeTaskBoardCursor,
   encodeTaskBoardCursor,
-  taskBoardColumnQuery,
 } from '../../src/services/task/board.js';
+import { taskBoardColumnQuery } from '../../src/repos/task-board-read-model.js';
 
 interface Place {
   workspaceId: string;

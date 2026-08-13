@@ -3,8 +3,8 @@ import type {
   HostAgentResource,
   HostResourcesResponse,
 } from '@silverhand/shared';
-import type { BackendContext } from '../context.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
+import type { AgentTeardownFacts } from '../application/agent-teardown-ports.js';
 
 /**
  * Read-model for `GET /api/hosts/:id/resources` — what is persistently rooted on
@@ -33,7 +33,6 @@ import type { AgentRepo } from '../repos/agent-repo.js';
  * all of them here — and it is exactly that computer the delete flow is for.
  */
 export interface HostResourcesDeps {
-  ctx: BackendContext;
   agents: AgentRepo;
 }
 
@@ -52,6 +51,24 @@ export function toHostAgentResource(agent: AgentDto): HostAgentResource {
     id: agent.id,
     name: agent.name,
     display_name: agent.display_name,
+    runtime: agent.runtime,
+  };
+}
+
+/**
+ * The same wire projection, from the delete cascade's driver-free facts
+ * (`application/agent-teardown-ports.ts`). Both spellings live HERE, next to the
+ * response type they serve, so the `has_dependents` refusal in
+ * `delete-computer.ts` cannot drift from `GET /api/hosts/:id/resources` — the
+ * dialog compares the two lists.
+ */
+export function teardownFactsToHostAgentResource(
+  agent: AgentTeardownFacts,
+): HostAgentResource {
+  return {
+    id: agent.id,
+    name: agent.name,
+    display_name: agent.displayName,
     runtime: agent.runtime,
   };
 }

@@ -20,32 +20,12 @@ import {
   createCliInvokeMiddleware,
 } from '../observability/cli-invoke-middleware.js';
 import {
-  AgentRepo,
-} from '../repos/agent-repo.js';
-import {
-  ConversationRepo,
-} from '../repos/conversation-repo.js';
-import {
-  MessageRepo,
-} from '../repos/message-repo.js';
-import {
-  MessageReactionRepo,
-} from '../repos/message-reaction-repo.js';
-import {
-  UserRepo,
-} from '../repos/user-repo.js';
-import {
-  WorkspaceRepo,
-} from '../repos/workspace-repo.js';
-import {
-  ChannelAttentionPreferenceRepo,
-} from '../repos/channel-attention-preference-repo.js';
-import {
   requireAgentCapability,
 } from './capability.js';
 import {
   createInternalMembershipApp,
 } from './membership.js';
+import type { BackendPersistence } from '../persistence/root.js';
 import {
   MembershipService,
 } from '../services/membership-service.js';
@@ -63,19 +43,22 @@ import {
   Hono,
 } from 'hono';
 
-export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
+// #task:1983 W1/W2 — the internal (agent-facing) router takes the composed
+// persistence for the same reason the public one does: it used to rebuild six
+// repos and a membership port from `ctx.db`, which is a second assembly of the
+// same set and the last reason this file needed the handle at all.
+export function createInternalRouter(
+  ctx: BackendContext,
+  persistence: BackendPersistence,
+): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
-  const agents = new AgentRepo(ctx.db);
-  const conversations = new ConversationRepo(ctx.db);
-  const messages = new MessageRepo(ctx.db);
-  const reactions = new MessageReactionRepo(ctx.db);
-  const workspaces = new WorkspaceRepo(ctx.db);
-  const users = new UserRepo(ctx.db);
-  const channelAttentionPrefs = new ChannelAttentionPreferenceRepo(ctx.db);
+  const { agents, conversations, messages, reactions, workspaces, users } =
+    persistence.repos;
   const membership = new MembershipService({ agents, users, conversations });
   const deps: InternalRouteDeps = {
     ctx,
     agents,
+    agentReads: persistence.readModels.agent,
     conversations,
     messages,
     reactions,
@@ -130,8 +113,11 @@ export function createInternalRouter(ctx: BackendContext): Hono<AppEnv> {
       users,
       workspaces,
       conversations,
-      messages,
-      channelAttentionPrefs,
+      // The SAME port instance the public router writes through. Coordination
+      // was never object identity — it is the connection's write lock (BEGIN
+      // IMMEDIATE), see `membership-ports.ts` — but there is no longer a second
+      // assembly here to keep in step with the first.
+      membershipPersistence: persistence.membership,
       membership,
       requireAgentCapability,
     }),
