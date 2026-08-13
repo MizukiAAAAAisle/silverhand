@@ -5,7 +5,8 @@ import type {
   ConversationAgentDto,
   ConversationAgentRow,
   ConversationDto,
-  ConversationKind,
+  ConversationPlacementKind,
+  ConversationRosterPolicy,
   ConversationRow,
   ConversationUserMemberDto,
   ConversationUserMemberRow,
@@ -71,9 +72,29 @@ export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.wo
 // state in `user_sort_entry`, so the shared column is no longer read or written
 // and must never reach the wire. These mappers strip it from the row before it
 // becomes a DTO — the type drops it too, but stripping kills the runtime leak.
+//
+// `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1) are
+// stripped for a different reason: they are the new AUTHORITATIVE axes, but the
+// wire contract for this release still speaks only the derived `kind`. Exposing
+// them here would ship an unversioned DTO change from a migration-only ticket
+// (#task:2012); the placement-aware wire shape lands with the placements
+// themselves. A spread does NOT get excess-property-checked, so — exactly like
+// `pinned_at` — only the explicit strip prevents a silent runtime leak.
+function stripInternalColumns(row: ConversationRow): Omit<
+  ConversationRow,
+  'pinned_at' | 'placement_kind' | 'roster_policy'
+> {
+  const {
+    pinned_at: _pinnedAt,
+    placement_kind: _placementKind,
+    roster_policy: _rosterPolicy,
+    ...rest
+  } = row;
+  return rest;
+}
+
 function rowToDto(row: ConversationRow): ConversationDto {
-  const { pinned_at: _pinnedAt, ...dto } = row;
-  return { ...dto };
+  return { ...stripInternalColumns(row) };
 }
 
 function assertChannelLike(row: ConversationRow): ChannelConversationDto | DmChannelDto {
@@ -85,16 +106,14 @@ function rowToChannel(row: ConversationRow): ChannelConversationDto {
   if (row.kind !== 'channel') {
     throw new Error('conversation is not a channel');
   }
-  const { pinned_at: _pinnedAt, ...rest } = row;
-  return { ...rest, kind: 'channel' };
+  return { ...stripInternalColumns(row), kind: 'channel' };
 }
 
 function rowToDmChannel(row: ConversationRow): DmChannelDto {
   if (row.kind !== 'dm_channel') {
     throw new Error('conversation is not a dm_channel');
   }
-  const { pinned_at: _pinnedAt, ...rest } = row;
-  return { ...rest, kind: 'dm_channel' };
+  return { ...stripInternalColumns(row), kind: 'dm_channel' };
 }
 
 export class ConversationRepo {
@@ -522,7 +541,8 @@ export class ConversationRepo {
   }): ChannelConversationDto {
     const row = this.insert({
       workspaceId: params.workspaceId,
-      kind: 'channel',
+      placementKind: 'workspace',
+      rosterPolicy: 'open',
       title: params.title,
       spawnedByAgentId: params.spawnedByAgentId ?? null,
       visibility: params.visibility ?? 'private',
@@ -537,7 +557,8 @@ export class ConversationRepo {
   }): DmChannelDto {
     const row = this.insert({
       workspaceId: params.workspaceId,
-      kind: 'dm_channel',
+      placementKind: 'workspace',
+      rosterPolicy: 'fixed',
       title: params.title,
       spawnedByAgentId: null,
     });
@@ -821,11 +842,15 @@ export class ConversationRepo {
 
   private insert(params: {
     workspaceId: string;
-    kind: ConversationKind;
+    /** The two authoritative axes (v69). `kind` is NOT passed and NOT written:
+     *  the DB derives it from `roster_policy` as a generated column, so this
+     *  layer must not carry a mirrored derivation. */
+    placementKind: ConversationPlacementKind;
+    rosterPolicy: ConversationRosterPolicy;
     title: string;
     spawnedByAgentId: string | null;
     /** Defaults to the DB column default ('private') when
-     *  omitted. Only 'channel' may be 'public' (the DB CHECK enforces it). */
+     *  omitted. Only an open roster may be 'public' (the DB CHECK enforces it). */
     visibility?: ConversationVisibility;
   }): ConversationRow {
     const id = newId();
@@ -833,15 +858,16 @@ export class ConversationRepo {
     this.db
       .prepare(
         `INSERT INTO conversations
-         (id, workspace_id, kind, title, status,
+         (id, workspace_id, placement_kind, roster_policy, title, status,
           spawned_by_agent_id, closed_at, close_summary,
           created_at, updated_at, visibility)
-         VALUES (?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'idle', ?, NULL, NULL, ?, ?, ?)`,
       )
       .run(
         id,
         params.workspaceId,
-        params.kind,
+        params.placementKind,
+        params.rosterPolicy,
         params.title,
         params.spawnedByAgentId,
         now,

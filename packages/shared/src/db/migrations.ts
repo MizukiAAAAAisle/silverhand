@@ -1265,6 +1265,117 @@ export const migrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN deletion_started_at INTEGER;
     `,
   },
+  {
+    version: 69,
+    name: 'conversation_placement_and_roster_policy',
+    // agent-scoped-session-v1 §4.1 / §8 P0-a (#task:2012) — split the overloaded
+    // `conversations.kind` into the two independent axes it was conflating:
+    //
+    //   placement_kind  WHERE the conversation lives / who its participants are
+    //                   derived from: workspace | direct_pair | agent_inbox
+    //                   (an exhaustive, mutually exclusive arc set)
+    //   roster_policy   WHETHER membership can change: open | fixed
+    //
+    // `kind` is NOT dropped here and is no longer a written column: it becomes
+    // GENERATED ALWAYS ... VIRTUAL over `roster_policy`, so the 118 existing read
+    // points and the wire literal keep working UNCHANGED while the DB itself
+    // proves the two can never drift — writing `kind` now fails at PARSE time
+    // ("cannot INSERT into generated column"), which is why the TS side has no
+    // mirrored derivation to keep in sync. Its removal is later one
+    // `DROP COLUMN kind` (§8 P6) once the read points are retired.
+    //
+    // This is a TABLE REBUILD, not `ALTER TABLE ADD COLUMN`: an existing plain
+    // column cannot become generated in place (SQLite has no alter-column-to-
+    // generated, `ADD COLUMN kind` collides with the existing name, and
+    // `DROP COLUMN kind` is refused because the table's `visibility` CHECK
+    // references it). Template = the v64 `conversations` rebuild directly above.
+    // With `foreignKeyEscape` the runner disables `foreign_keys` around the whole
+    // migration and runs `foreign_key_check` afterward, so `DROP TABLE
+    // conversations` cannot cascade-delete children and every surviving FK is
+    // re-validated. Every surviving column, constraint, and index is reproduced
+    // explicitly — a rebuild's failure mode is SILENTLY losing one of them, so
+    // the falsifiers assert the full normalized schema, not a sample.
+    //
+    // Two derived rewrites, both behavior-preserving by construction:
+    //   * the `visibility` cross-column CHECK now reads `roster_policy = 'open'`
+    //     instead of `kind = 'channel'`. That is the FAITHFUL rewrite: the rule
+    //     it encodes is "only an open-roster conversation may be public"
+    //     (placement is irrelevant — a public DirectPair is meaningless because
+    //     its roster is fixed, not because of where it lives).
+    //   * `idx_conversations_workspace` keeps indexing `kind`: indexes on a
+    //     VIRTUAL generated column are legal and the read plans that bind
+    //     `kind = ?` must not change in this migration.
+    //
+    // Backfill is total and derived only from the retiring column's own domain
+    // (the old CHECK admitted exactly two values): every existing row is a
+    // workspace-placed conversation — 'channel' rows have an open roster,
+    // 'dm_channel' rows a fixed one. The 14 live `dm_channel` rows therefore stay
+    // private with a byte-identical derived `kind`; no row changes any other
+    // column, so behavior is row-for-row unchanged.
+    //
+    // `CHECK (placement_kind = 'workspace')` is deliberate and NOT dead weight:
+    // at this version a non-workspace placement is not REPRESENTABLE (there is no
+    // `pair_key` / `inbox_agent_id` column yet and `workspace_id` is still
+    // NOT NULL), so declaring the wider enum without this gate would make the
+    // column's declared domain a lie. It also makes the P0-b/P3 audit
+    // unavoidable: the migration that first admits a `direct_pair` or
+    // `agent_inbox` row must relax this CHECK, and that is exactly the point at
+    // which the 10 `JOIN workspaces` read surfaces have to be re-checked for
+    // silently dropped rows.
+    foreignKeyEscape: true,
+    up: `
+      CREATE TABLE conversations_new (
+        id                      TEXT PRIMARY KEY,
+        workspace_id            TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        placement_kind          TEXT NOT NULL
+          CHECK (placement_kind IN ('workspace', 'direct_pair', 'agent_inbox')),
+        roster_policy           TEXT NOT NULL
+          CHECK (roster_policy IN ('open', 'fixed')),
+        kind                    TEXT GENERATED ALWAYS AS
+          (CASE WHEN roster_policy = 'open' THEN 'channel' ELSE 'dm_channel' END) VIRTUAL,
+        title                   TEXT NOT NULL,
+        status                  TEXT NOT NULL,
+        spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        closed_at               INTEGER,
+        close_summary           TEXT,
+        pinned_at               INTEGER,
+        created_at              INTEGER NOT NULL,
+        updated_at              INTEGER NOT NULL,
+        archived_at             INTEGER,
+        latest_message_seq      INTEGER NOT NULL DEFAULT 0,
+        visibility              TEXT NOT NULL DEFAULT 'private'
+          CHECK (
+            visibility IN ('private', 'public')
+            AND (visibility = 'private' OR roster_policy = 'open')
+          ),
+        CHECK (placement_kind = 'workspace')
+      );
+
+      INSERT INTO conversations_new (
+        id, workspace_id, placement_kind, roster_policy, title, status,
+        spawned_by_agent_id, closed_at, close_summary, pinned_at,
+        created_at, updated_at, archived_at, latest_message_seq, visibility
+      )
+        SELECT
+          id, workspace_id,
+          'workspace',
+          CASE WHEN kind = 'channel' THEN 'open' ELSE 'fixed' END,
+          title, status,
+          spawned_by_agent_id, closed_at, close_summary, pinned_at,
+          created_at, updated_at, archived_at, latest_message_seq, visibility
+        FROM conversations;
+
+      DROP TABLE conversations;
+      ALTER TABLE conversations_new RENAME TO conversations;
+
+      CREATE INDEX idx_conversations_workspace
+        ON conversations(workspace_id, kind, updated_at DESC);
+      CREATE INDEX idx_conversations_status
+        ON conversations(status);
+      CREATE INDEX idx_conversations_archived_at
+        ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

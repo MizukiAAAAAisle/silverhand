@@ -397,6 +397,7 @@ export const TEST_WHITEBOX_INVENTORY: WhiteboxTestEntry[] = [
   {file: 'packages/backend/tests/migration-baseline.test.ts',count: 1,reason: 'baseline drift guard reads schema catalog directly'},
   {file: 'packages/backend/tests/migration-baseline-gen.test.ts',count: 14,reason: 'baseline generator diffs live schema against the frozen snapshot'},
   {file: 'packages/backend/tests/conversation-visibility-migration.test.ts',count: 19,reason: 'exercises one historical migration against hand-built legacy rows'},
+  {file: 'packages/backend/tests/conversation-placement-migration.test.ts',count: 43,reason: 'exercises the v69 conversations table rebuild: hand-built v68 rows carried across, schema catalog + PRAGMA table_xinfo reads that prove the generated column and every index survived, EXPLAIN over the generated column, and DDL-level write gates (parse-time refusal, CHECK fail-closed) that no repository API can express'},
   {file: 'packages/backend/tests/tasks-aggregate-migration.test.ts',count: 15,reason: 'exercises one historical migration against hand-built legacy rows'},
   {file: 'packages/backend/tests/workspace-delete-cascade-index.test.ts',count: 22,reason: 'asserts index structure and query plans (EXPLAIN) — engine white-box by nature'},
   {file: 'packages/backend/tests/read-model/unread-stream-queries.test.ts',count: 6,reason: 'differential oracle: frozen legacy SQL compared against the live read model'},

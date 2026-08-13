@@ -286,10 +286,10 @@ describe('D4.c C3 — workspace route preflights (standalone guard lift)', () =>
     t.ctx.db
       .prepare(
         `INSERT INTO conversations
-          (id, workspace_id, kind,
+          (id, workspace_id, placement_kind, roster_policy,
 title, status, spawned_by_agent_id, closed_at, close_summary,
            pinned_at, created_at, updated_at)
-         VALUES (?, ?, 'dm_channel', ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
+         VALUES (?, ?, 'workspace', 'fixed', ?, 'idle', NULL, NULL, NULL, NULL, ?, ?)`,
       )
       .run(
         dmId,

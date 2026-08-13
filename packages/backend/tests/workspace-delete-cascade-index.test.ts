@@ -96,8 +96,8 @@ describe('#task:1677 — workspace delete cascade stays indexed', () => {
        VALUES (?, ?, 'regular', 'local', ?, ?)`,
     );
     const insertConversation = db.prepare(
-      `INSERT INTO conversations (id, workspace_id, kind, title, status, created_at, updated_at)
-       VALUES (?, ?, 'channel', ?, 'active', ?, ?)`,
+      `INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, status, created_at, updated_at)
+       VALUES (?, ?, 'workspace', 'open', ?, 'active', ?, ?)`,
     );
     const insertMessage = db.prepare(
       `INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at, thread_root_id)

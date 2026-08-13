@@ -727,11 +727,11 @@ describe('database migrations', () => {
             ('ws_main', 'Main', NULL, 'regular',
              NULL, NULL, NULL, 1, 1);
           INSERT INTO conversations
-            (id, workspace_id, kind, title,
+            (id, workspace_id, placement_kind, roster_policy, title,
              status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
              archived_at, created_at, updated_at)
           VALUES
-            ('conv_main', 'ws_main', 'channel', 'general',
+            ('conv_main', 'ws_main', 'workspace', 'open', 'general',
              'idle', NULL, NULL, NULL, NULL, NULL, 1, 1);
         `);
 
@@ -869,9 +869,9 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
-             (id, workspace_id, kind, title, status,
+             (id, workspace_id, placement_kind, roster_policy, title, status,
               created_at, updated_at)
-           VALUES ('c1', 'ws1', 'channel', 't', 'open', ?, ?)`,
+           VALUES ('c1', 'ws1', 'workspace', 'open', 't', 'open', ?, ?)`,
         ).run(now, now);
         db.prepare(
           `INSERT INTO workspace_users (workspace_id, user_id, joined_at)
@@ -1029,10 +1029,10 @@ describe('database migrations', () => {
         ).run(now, now);
         db.prepare(
           `INSERT INTO conversations
-             (id, workspace_id, kind, title,
+             (id, workspace_id, placement_kind, roster_policy, title,
               status, spawned_by_agent_id, closed_at, close_summary, pinned_at,
               archived_at, created_at, updated_at)
-           VALUES ('c1', 'ws1', 'channel', 'general',
+           VALUES ('c1', 'ws1', 'workspace', 'open', 'general',
                    'idle', NULL, NULL, NULL, NULL, NULL, ?, ?)`,
         ).run(now, now);
 

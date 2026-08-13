@@ -73,16 +73,53 @@ export type HostCredentialKind = z.infer<typeof HostCredentialKindSchema>;
 export const WorkspaceKindSchema = z.enum(['regular', 'agent_home']);
 export type WorkspaceKind = z.infer<typeof WorkspaceKindSchema>;
 
+/**
+ * The legacy single-axis conversation classifier. Since migration v69 this is a
+ * DERIVED value: the DB computes it from {@link ConversationRosterPolicy} via a
+ * GENERATED ALWAYS ... VIRTUAL column, and writing it fails at parse time. It
+ * stays as a read-only projection for the existing read points and the wire
+ * contract; new logic must branch on placement/roster, never on `kind`
+ * (agent-scoped-session-v1 §4.1).
+ */
 export const ConversationKindSchema = z.enum(['channel', 'dm_channel']);
 export type ConversationKind = z.infer<typeof ConversationKindSchema>;
+
+/**
+ * WHERE a conversation lives, and therefore how its participant set is derived
+ * (agent-scoped-session-v1 §3/§4.1). Exhaustive and mutually exclusive:
+ * `workspace` keeps explicit membership rows; `direct_pair` and `agent_inbox`
+ * derive their participants from the placement itself. Migration v69 introduces
+ * the axis with only `workspace` representable — the placement-specific columns
+ * arrive with the placements themselves (§8 P0-b / P3).
+ */
+export const ConversationPlacementKindSchema = z.enum([
+  'workspace',
+  'direct_pair',
+  'agent_inbox',
+]);
+export type ConversationPlacementKind = z.infer<
+  typeof ConversationPlacementKindSchema
+>;
+
+/**
+ * WHETHER a conversation's roster can change: `open` (members may be added or
+ * removed) | `fixed` (the participant set is determined at creation and
+ * immutable). Independent of placement, and the sole input to the derived
+ * {@link ConversationKind}.
+ */
+export const ConversationRosterPolicySchema = z.enum(['open', 'fixed']);
+export type ConversationRosterPolicy = z.infer<
+  typeof ConversationRosterPolicySchema
+>;
 
 /**
  * Channel visibility. `private` is the historical, membership-
  * gated semantic — only explicit `conversation_users` members can read or
  * interact. `public` widens READ (browse content) to any human workspace
  * member while leaving every interaction gated on membership (join to
- * participate). Meaningful only for `kind='channel'`; `dm_channel` is always
- * `private` (enforced by a DB CHECK, migration v58).
+ * participate). Meaningful only for an OPEN roster; a fixed-roster
+ * conversation is always `private` (enforced by a DB CHECK — introduced in
+ * migration v58 against `kind`, rewritten in v69 to read `roster_policy`).
  */
 export const ConversationVisibilitySchema = z.enum(['private', 'public']);
 export type ConversationVisibility = z.infer<typeof ConversationVisibilitySchema>;
@@ -416,6 +453,12 @@ export interface WorkspaceAgentCapabilityRow {
 export interface ConversationRow {
   id: string;
   workspace_id: string;
+  /** Authoritative placement axis (v69+). */
+  placement_kind: ConversationPlacementKind;
+  /** Authoritative roster axis (v69+); `kind` is derived from it. */
+  roster_policy: ConversationRosterPolicy;
+  /** DERIVED by the DB from `roster_policy` (GENERATED VIRTUAL, v69+) —
+   *  present in `SELECT *` and readable, but never writable. */
   kind: ConversationKind;
   title: string;
   status: ConversationStatus;
@@ -429,7 +472,7 @@ export interface ConversationRow {
   updated_at: number;
   /** `private` (default, membership-gated) | `public` (workspace
    *  members may browse; interaction still requires membership). Always
-   *  `private` for `dm_channel`. */
+   *  `private` when `roster_policy = 'fixed'`. */
   visibility: ConversationVisibility;
 }
 
