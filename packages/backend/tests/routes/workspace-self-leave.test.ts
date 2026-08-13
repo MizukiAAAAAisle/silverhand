@@ -237,8 +237,8 @@ describe('workspace self-leave (#task:1930)', () => {
       .run(workspaceId, agentId, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(roomId, agentId, now);
 

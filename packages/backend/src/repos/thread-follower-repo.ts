@@ -2,9 +2,16 @@ import type { Database as Db } from 'better-sqlite3';
 import type {
   ConversationAgentDto,
   ConversationAgentRow,
+  ConversationAgentStatus,
   ThreadFollowerRow,
   ThreadFollowerSource,
 } from '@silverhand/shared';
+
+type FollowerAgentProjectionRow = ConversationAgentRow & {
+  cli_session_id: string | null;
+  pid: number | null;
+  status: ConversationAgentStatus;
+};
 
 /**
  * Thread followers are a delivery/notification subscription, NOT a
@@ -118,12 +125,27 @@ export class ThreadFollowerRepo {
    */
   listFollowerAgentsVisible(threadRootId: string): ConversationAgentDto[] {
     return this.db
-      .prepare<[string], ConversationAgentRow>(
-        `SELECT ca.*
+      .prepare<[string], FollowerAgentProjectionRow>(
+        `SELECT ca.conversation_id,
+                ca.agent_id,
+                ca.joined_at,
+                s.cli_session_id,
+                s.observed_pid AS pid,
+                s.observed_status AS status
            FROM thread_followers tf
            JOIN conversation_agents ca
              ON ca.conversation_id = tf.conversation_id
             AND ca.agent_id = tf.principal_id
+           JOIN agents a ON a.id = ca.agent_id
+           JOIN agent_runtime_slots s
+             ON s.agent_id = ca.agent_id
+            AND (
+              (a.session_scope = 'conversation'
+               AND s.conversation_id = ca.conversation_id)
+              OR
+              (a.session_scope = 'agent'
+               AND s.conversation_id IS NULL)
+            )
           WHERE tf.thread_root_id = ?
             AND tf.principal_kind = 'agent'
           ORDER BY ca.joined_at ASC`,

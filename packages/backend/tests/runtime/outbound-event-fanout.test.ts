@@ -17,6 +17,7 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationEventRepo } from '../../src/repos/conversation-event-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
@@ -289,7 +290,7 @@ describe('OutboundRuntimeEventFanout', () => {
   it('marks DB-active runtimes missing from a daemon hydrate snapshot as crashed', async () => {
     const fix = makeFixture({ runtime: 'codex' });
     try {
-      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, fix.agentId, {
+      new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(fix.channelId, fix.agentId, {
         status: 'active',
         pid: 999,
       });
@@ -1886,7 +1887,7 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.viewerUserId,
       );
       new ConversationRepo(fix.db).addAgent(fix.channelId, secondAgent.id);
-      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, secondAgent.id, {
+      new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(fix.channelId, secondAgent.id, {
         status: 'active',
       });
       fix.transport.snapshot = {
@@ -1963,7 +1964,7 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.viewerUserId,
       );
       new ConversationRepo(fix.db).addAgent(fix.channelId, secondAgent.id);
-      new ConversationRepo(fix.db).updateAgentRuntime(fix.channelId, secondAgent.id, {
+      new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(fix.channelId, secondAgent.id, {
         status: 'active',
       });
       fix.transport.snapshot = {
@@ -2042,7 +2043,7 @@ describe('OutboundRuntimeEventFanout', () => {
         );
 
         // 2. Seed a known cli_session_id so the audit row fires.
-        new ConversationRepo(fix.db).updateAgentRuntime(
+        new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(
           fix.channelId,
           fix.agentId,
           { cliSessionId: 'sess-abcdef-12345' },
@@ -2130,7 +2131,7 @@ describe('OutboundRuntimeEventFanout', () => {
           () => fix.fanout.getAgentRunStates(fix.channelId).length === 1,
         );
 
-        new ConversationRepo(fix.db).updateAgentRuntime(
+        new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(
           fix.channelId,
           fix.agentId,
           { cliSessionId: 'sess-old' },
@@ -2173,7 +2174,7 @@ describe('OutboundRuntimeEventFanout', () => {
         fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
         // No need to wait — empty hydrate is a no-op for cache.
 
-        new ConversationRepo(fix.db).updateAgentRuntime(
+        new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(
           fix.channelId,
           fix.agentId,
           { cliSessionId: 'sess-orphan' },
@@ -2235,7 +2236,7 @@ describe('OutboundRuntimeEventFanout', () => {
         // be trusted as a "no live runtime" oracle.
         fix.transport.snapshot = { runtimes: [] };
 
-        new ConversationRepo(fix.db).updateAgentRuntime(
+        new RuntimeSlotRepo(fix.db).updateCurrentConversationProjection(
           fix.channelId,
           fix.agentId,
           { cliSessionId: 'sess-pre-restart' },
@@ -2426,7 +2427,7 @@ function makeFixture(
     viewerUserId,
   );
   conversations.addAgent(channel.id, agent.id);
-  conversations.updateAgentRuntime(channel.id, agent.id, {
+  new RuntimeSlotRepo(db).updateCurrentConversationProjection(channel.id, agent.id, {
     status: 'starting',
   });
 
@@ -2517,7 +2518,7 @@ function makeUnixHandler(fix: Fixture): RuntimeEventHandler {
     },
     inboxAck: { markDelivered: () => {}, markUndelivered: () => {} },
     statusProjector: new DbRuntimeStatusProjector(
-      new ConversationRepo(fix.db),
+      new RuntimeSlotRepo(fix.db),
       {
         publish: (conv, payload) =>
           fix.events.push({ conv, kind: payload.kind, payload: payload.payload }),

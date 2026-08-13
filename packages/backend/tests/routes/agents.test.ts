@@ -1282,8 +1282,8 @@ describe('PUT /api/agents/:id/runtime', () => {
     const agentId: string = created.agent.id;
     const conversationId: string = created.dm_channel_id;
     t.ctx.db.prepare(
-      `UPDATE conversation_agents
-          SET status = 'active', cli_session_id = 'claude-session'
+      `UPDATE agent_runtime_slots
+          SET observed_status = 'active', cli_session_id = 'claude-session'
         WHERE conversation_id = ? AND agent_id = ?`,
     ).run(conversationId, agentId);
     const changed: string[] = [];
@@ -1383,7 +1383,7 @@ describe('PUT /api/agents/:id/runtime', () => {
     ).json() as any;
     const agentId: string = created.agent.id;
     t.ctx.db.prepare(
-      `UPDATE conversation_agents SET status = 'active'
+      `UPDATE agent_runtime_slots SET observed_status = 'active'
         WHERE conversation_id = ? AND agent_id = ?`,
     ).run(created.dm_channel_id, agentId);
     t.fake.clearError = new Error('clear failed');
@@ -1517,7 +1517,7 @@ describe('PUT /api/agents/:id/runtime', () => {
       await http(t).post('/api/agents', { name: 'partial-switch', runtime: 'claude' })
     ).json() as any;
     t.ctx.db.prepare(
-      `UPDATE conversation_agents SET status = 'active'
+      `UPDATE agent_runtime_slots SET observed_status = 'active'
         WHERE conversation_id = ? AND agent_id = ?`,
     ).run(created.dm_channel_id, created.agent.id);
     t.fake.startError = new Error('restart unavailable');
@@ -1619,7 +1619,7 @@ describe('POST /api/agents/:id/stop', () => {
       .all(created.agent.id) as { id: string }[];
     t.ctx.db
       .prepare(
-        `UPDATE conversation_agents SET status = 'active'
+        `UPDATE agent_runtime_slots SET observed_status = 'active'
          WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run(dmConversations[0]!.id, created.agent.id);
@@ -1714,7 +1714,7 @@ describe('DELETE /api/agents/:id (full flow)', () => {
       .all(created.agent.id) as { id: string }[];
     t.ctx.db
       .prepare(
-        `UPDATE conversation_agents SET status = 'active'
+        `UPDATE agent_runtime_slots SET observed_status = 'active'
          WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run(dmConversations[0]!.id, created.agent.id);

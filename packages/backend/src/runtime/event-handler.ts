@@ -252,7 +252,7 @@ export interface RuntimeEventHandlerDeps {
   cache: RunStateCache;
   events: EventPublisher;
   inboxAck: InboxAckSink;
-  /** Sink for events that mutate `conversation_agents` AND
+  /** Sink for events that mutate the scoped runtime slot AND
    *  publish `agent_status` SSE. Default is the noop projector — tests
    *  that don't exercise DB projection don't need to inject one.
    *  Production wires `DbRuntimeStatusProjector` in `index.ts`. See

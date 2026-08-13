@@ -84,7 +84,7 @@ export interface OutboundRuntimeEventFanoutOptions {
    *  would be nominal (private fields) and so unimplementable by any other
    *  deployment. Built in composition because its checks are DB-backed. */
   perimeter: RuntimeEventPerimeterPort;
-  /** Owns the whole runtime-event → `conversation_agents.status` mapping plus
+  /** Owns the whole runtime-event → runtime-slot observation mapping plus
    *  the matching `agent_status` publish. Stateless, so one instance serves
    *  every host. */
   statusProjector: RuntimeStatusProjector;
@@ -778,7 +778,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
    *      delivery-state cleanup (cancel delivery watchdog, drop
    *      pending/busy markers).
    *   8. DB transaction (Cindy `szDHSdeKwtEUlxZb` P3): the
-   *      `updateAgentRuntime(cliSessionId: null)` write AND the
+   *      runtime-slot `cli_session_id=null` write AND the
    *      audit-message insert MUST land in the same SQLite tx so a
    *      crash between them can't leave a row with a dangling audit
    *      pointer (or vice versa).

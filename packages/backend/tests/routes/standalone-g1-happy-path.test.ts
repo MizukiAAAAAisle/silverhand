@@ -526,8 +526,8 @@ describe('standalone backend G1 — user-facing happy path (no daemon attached)'
       );
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(channelId, agentId, now);
 

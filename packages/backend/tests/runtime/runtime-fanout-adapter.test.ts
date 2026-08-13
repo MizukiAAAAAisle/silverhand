@@ -25,6 +25,7 @@ import { describe, expect, it } from 'vitest';
 import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import type { BackendLogger } from '../../src/context.js';
@@ -58,6 +59,7 @@ const RUNTIME_INBOX_MESSAGE_KEYS = [
 function makeFixture() {
   const { db, viewerUserId, localHostId } = openTestDb();
   const conversations = new ConversationRepo(db);
+  const runtimeSlots = new RuntimeSlotRepo(db);
   const messages = new MessageRepo(db);
 
   const workspace = new WorkspaceRepo(db).insert({
@@ -84,6 +86,7 @@ function makeFixture() {
   return {
     db,
     conversations,
+    runtimeSlots,
     messages,
     viewerUserId,
     localHostId,
@@ -168,7 +171,7 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
 
   it('the reconcile pass sees the three facts it folds over, in domain casing (R4)', () => {
     const f = makeFixture();
-    f.conversations.updateAgentRuntime(f.channelId, f.agentId, {
+    f.runtimeSlots.updateCurrentConversationProjection(f.channelId, f.agentId, {
       status: 'active',
       pid: 4242,
     });
@@ -215,7 +218,7 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
 
   it('the clear-session UoW commits both writes or neither', () => {
     const f = makeFixture();
-    f.conversations.updateAgentRuntime(f.channelId, f.agentId, {
+    f.runtimeSlots.updateCurrentConversationProjection(f.channelId, f.agentId, {
       cliSessionId: 'session-1',
     });
     const messageCount = (): number =>
@@ -238,7 +241,7 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     expect(messageCount()).toBe(before + 1);
 
     // (b) a throw after the first write rolls BOTH back
-    f.conversations.updateAgentRuntime(f.channelId, f.agentId, {
+    f.runtimeSlots.updateCurrentConversationProjection(f.channelId, f.agentId, {
       cliSessionId: 'session-2',
     });
     const midpoint = messageCount();
@@ -263,7 +266,7 @@ describe('#task:1982 W3 — runtime fanout persistence adapter contract', () => 
     // That is the half state (b) proves impossible; without this contrast (b)
     // would also pass for an `atomically` that merely called the callback.
     try {
-      f.conversations.updateAgentRuntime(f.channelId, f.agentId, {
+      f.runtimeSlots.updateCurrentConversationProjection(f.channelId, f.agentId, {
         cliSessionId: null,
       });
       throw new Error('boom');

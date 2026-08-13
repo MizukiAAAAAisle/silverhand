@@ -102,6 +102,7 @@ export const BETTER_SQLITE3_IMPORT_INVENTORY: ImportInventoryEntry[] = [
   {file: 'packages/backend/src/repos/message-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/notification-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/observation-persistence.ts',kinds: ['type'],zone: 'repository'},
+  {file: 'packages/backend/src/repos/runtime-slot-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/saved-message-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/schedule-repo.ts',kinds: ['type'],zone: 'repository'},
   {file: 'packages/backend/src/repos/search-repo.ts',kinds: ['type'],zone: 'repository'},
@@ -158,6 +159,7 @@ export const SQL_CALLER_INVENTORY: SqlCallerEntry[] = [
   {file: 'packages/backend/src/repos/message-reaction-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/message-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/notification-repo.ts',zone: 'repository'},
+  {file: 'packages/backend/src/repos/runtime-slot-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/saved-message-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/schedule-repo.ts',zone: 'repository'},
   {file: 'packages/backend/src/repos/search-repo.ts',zone: 'repository'},
@@ -222,6 +224,10 @@ export interface HazardExpansion {
  */
 export const SQL_HAZARD_EXPANSIONS: HazardExpansion[] = [
   {file: 'packages/backend/src/observability/db-write-probe.ts',hazard: 'begin_immediate_exclusive',added: 1,reason: '#task:1982 W4 relocation, not new capability: the readiness write probe moved out of routes.ts (whose baseline row is deleted in the same diff) so the HTTP layer stops holding transaction-control SQL. BEGIN IMMEDIATE is load-bearing — the probe must fail AT BEGIN when another writer holds the lock, which a deferred BEGIN does not do',semanticTest: 'packages/backend/tests/observability/db-write-probe.test.ts'},
+  {file: 'packages/shared/src/db/migrations.ts',hazard: 'autoincrement',added: 2,reason: '#task:2013 v70 gives current runtime slots and append-only runtime events independent stable integer identities; neither identity is derived from daemon/process observation',semanticTest: 'packages/backend/tests/db-migrations.test.ts'},
+  {file: 'packages/shared/src/db/migrations.ts',hazard: 'create_trigger',added: 9,reason: '#task:2013 v70 enforces immutable Agent scope, slot scope/identity/generation consistency, automatic scope-correct slot creation, and append-only event history in the DB authority',semanticTest: 'packages/backend/tests/db-migrations.test.ts'},
+  {file: 'packages/shared/src/db/migrations.ts',hazard: 'raise_function',added: 7,reason: '#task:2013 v70 fails loud on scope mutation/mismatch, slot identity or non-monotonic generation mutation, and runtime event mutation; semantic falsifiers exercise every invariant class',semanticTest: 'packages/backend/tests/db-migrations.test.ts'},
+  {file: 'packages/shared/src/db/migrations.ts',hazard: 'sqlite_datetime_function',added: 1,reason: '#task:2013 v70 timestamps the one-time migration events inside the migration statement so history and slot backfill commit together',semanticTest: 'packages/backend/tests/db-migrations.test.ts'},
 ];
 
 export interface DynamicSqlEntry {
@@ -264,6 +270,7 @@ export const API_HAZARD_INVENTORY: ApiHazardEntry[] = [
   {file: 'packages/backend/src/repos/host-uow.ts',fn: 'atomically',api: 'transaction_immediate'},
   {file: 'packages/backend/src/repos/membership-persistence.ts',fn: 'atomically',api: 'transaction_immediate'},
   {file: 'packages/backend/src/repos/membership-persistence.ts',fn: 'atomicallyForWorkspace',api: 'transaction_immediate'},
+  {file: 'packages/backend/src/repos/runtime-slot-repo.ts',fn: 'RuntimeSlotRepo.claimGeneration',api: 'transaction_immediate'},
   {file: 'packages/backend/src/repos/user-persistence.ts',fn: 'atomically',api: 'transaction_immediate'},
   {file: 'packages/backend/src/db.ts',fn: 'applySingleMigration',api: 'transaction_exclusive'},
   {file: 'packages/backend/src/db.ts',fn: 'runMigrations',api: 'transaction_exclusive'},
@@ -361,6 +368,10 @@ export const TX_INVENTORY: TxInventoryEntry[] = [
   {file: 'packages/backend/src/application/mention-cc.ts',fn: 'deliverOne',mode: 'uow',count: 1,owner: 'use-case'},
   {file: 'packages/backend/src/application/observe.ts',fn: 'observe',mode: 'uow',count: 1,owner: 'use-case'},
   {file: 'packages/backend/src/repos/observation-persistence.ts',fn: 'atomicallyForViewer',mode: 'default',count: 1,owner: 'infra',reason: 'UnitOfWork implementation, viewer-keyed axis: the observation batch takes NO write lock at BEGIN. A pre-write read does exist (the cursor face reads the current cursor) but no invariant rests on it — the cursor upsert is monotone (max(existing,new)) so a stale read costs at most a redundant upsert or a stale changed-boolean, and both clears are conditional on the row still being unread and report only what they themselves flipped, so a concurrent observer can neither be clobbered nor have its dismissal stolen; a read-only re-observe then never touches the write lock at all. Nesting is not refused: a deferred scope degrading to a savepoint loses no claim this port makes'},
+  {file: 'packages/backend/src/repos/runtime-slot-repo.ts',fn: 'RuntimeSlotRepo.claimGeneration',mode: 'immediate',count: 1,owner: 'repo-internal',reason: 'stable-slot custody claim is one self-contained CAS: BEGIN IMMEDIATE serializes read-current-generation → conditional increment → append matching history, so a successful slot generation can never exist without its claimed event'},
+  {file: 'packages/backend/src/repos/runtime-slot-repo.ts',fn: 'RuntimeSlotRepo.compareAndSetProjection',mode: 'default',count: 1,owner: 'repo-internal',reason: 'generation-bound projection and its append-only event are one persistence invariant; the conditional UPDATE is the stale-writer gate and the event must commit or roll back with it'},
+  {file: 'packages/backend/src/repos/runtime-slot-repo.ts',fn: 'RuntimeSlotRepo.finalizeGeneration',mode: 'default',count: 1,owner: 'repo-internal',reason: 'named generation finalization atomically clears the active daemon claim, writes terminal observation, and appends the one finalized event; the full generation+daemon custody token in the conditional UPDATE prevents post-finalize revival'},
+  {file: 'packages/backend/src/repos/runtime-slot-repo.ts',fn: 'RuntimeSlotRepo.updateCurrentProjection',mode: 'default',count: 1,owner: 'repo-internal',reason: 'dormant P0 compatibility projection and its append-only event are one persistence invariant; P1/P2 callers use the generation-bound sibling while existing runtime paths preserve wire behavior'},
   {file: 'packages/backend/src/application/create-host-invite.ts',fn: 'createHostInvite',mode: 'uow',count: 1,owner: 'use-case'},
   {file: 'packages/backend/src/application/remove-workspace-member.ts',fn: 'purgeDanglingWorkspaceAgentMembership',mode: 'uow',count: 1,owner: 'use-case'},
   {file: 'packages/backend/src/application/remove-workspace-member.ts',fn: 'removeWorkspaceMember',mode: 'uow',count: 1,owner: 'use-case'},
@@ -393,7 +404,7 @@ export interface WhiteboxTestEntry {
 }
 
 export const TEST_WHITEBOX_INVENTORY: WhiteboxTestEntry[] = [
-  {file: 'packages/backend/tests/db-migrations.test.ts',count: 191,reason: 'migration semantics are the test subject; native DDL/DML is the point'},
+  {file: 'packages/backend/tests/db-migrations.test.ts',count: 212,reason: 'migration semantics are the test subject; native DDL/DML is the point'},
   {file: 'packages/backend/tests/migration-baseline.test.ts',count: 1,reason: 'baseline drift guard reads schema catalog directly'},
   {file: 'packages/backend/tests/migration-baseline-gen.test.ts',count: 14,reason: 'baseline generator diffs live schema against the frozen snapshot'},
   {file: 'packages/backend/tests/conversation-visibility-migration.test.ts',count: 19,reason: 'exercises one historical migration against hand-built legacy rows'},
@@ -412,6 +423,7 @@ export const TEST_WHITEBOX_INVENTORY: WhiteboxTestEntry[] = [
   {file: 'packages/backend/tests/repos/user-persistence.test.ts',count: 10,reason: 'UnitOfWork adapter test: a second connection contends for the registration write lock (rival user INSERT / BEGIN IMMEDIATE / ROLLBACK) to prove the single-viewer gate is closed by a mechanism, plus archived-row and unowned-workspace states the semantic builders cannot express — engine white-box by nature'},
   {file: 'packages/backend/tests/repos/agent-provisioning-persistence.test.ts',count: 7,reason: 'UnitOfWork adapter test: asserts the pending-only conditional transition fails closed for failed/active rows and that a mid-transaction throw rolls back every dependent row — engine white-box by nature'},
   {file: 'packages/backend/tests/repos/agent-teardown-persistence.test.ts',count: 5,reason: 'UnitOfWork adapter test: the FK CASCADE is the persistence CONTRACT here (one DELETE FROM agents clears memberships, capability grants via the composite FK, conversation participation, inbox rows, schedules and the owned agent_home subtree while the shared workspace and its history survive), so every assertion must read RAW tables — a repo read joins agents and would report an orphan row as absent, passing whether or not the cascade fired. Includes the foreign_keys=OFF falsifier and the surviving-author snapshot read; engine white-box by nature'},
+  {file: 'packages/backend/tests/repos/runtime-slot-repo.test.ts',count: 4,reason: '#task:2013 persistence-authority falsifiers: count stable slot rows across daemon custody changes, inject a contradictory historical event to prove current reads never fold history, delete the Agent to prove retained history is not a cascade blocker, and run foreign_key_check afterward'},
   {file: 'packages/backend/tests/application/create-agent-provisioning.test.ts',count: 14,reason: 'application integration test: real DB + fake daemon proving L3b state-machine compensation on rollback and that lost eligibility never compensates the winner — engine white-box by nature'},
   {file: 'packages/backend/tests/repos/sqlite-user-conflicts.test.ts',count: 1,reason: 'error-translation test: one native INSERT produces a REAL non-uniqueness rejection (avatar CHECK) to prove an unrecognized driver error passes through untranslated'},
   {file: 'packages/backend/tests/observability/db-write-probe.test.ts',count: 5,reason: 'readiness-probe adapter test: a second connection holds the write lock (BEGIN IMMEDIATE / CREATE TABLE / ROLLBACK) so the probe fails the way production fails, and a deferred BEGIN on the probed connection is the falsifier proving BEGIN IMMEDIATE is load-bearing — engine white-box by nature'},
@@ -480,7 +492,7 @@ export const DIALECT_DECODING_INVENTORY: DialectDecodingEntry[] = [
   {file: 'packages/backend/src/repos/task-repo.ts',signal: 'sqlite_error_code',count: 1,zone: 'adapter-internal',reason: 'the SQLite task adapter translating a constraint it owns: SQLITE_CONSTRAINT_UNIQUE on source_message_id becomes the source_conflict domain outcome. Legal because this file owns the SQL for that table (checked against the sink ledger, not taken on trust); a second engine would move it behind a per-engine translation module like sqlite-user-conflicts.ts'},
   {file: 'packages/shared/src/db/baseline-schema.ts',signal: 'trigger_text',count: 1,zone: 'schema',reason: 'the schema DEFINES trigger text — this is the harvest authority Gate 7 fences everyone else against, not a decoding site'},
   {file: 'packages/shared/src/db/migrations.ts',signal: 'constraint_failed_text',count: 1,zone: 'schema',reason: 'a SQL comment inside a migration literal explaining why a CHECK is expressed the way it is; prose that happens to live inside a literal, in the schema zone'},
-  {file: 'packages/shared/src/db/migrations.ts',signal: 'trigger_text',count: 4,zone: 'schema',reason: 'migrations define trigger text (the second half of the harvest authority)'},
+  {file: 'packages/shared/src/db/migrations.ts',signal: 'trigger_text',count: 5,zone: 'schema',reason: 'migrations define trigger text (the second half of the harvest authority)'},
 ];
 
 export interface TestDebtEntry {

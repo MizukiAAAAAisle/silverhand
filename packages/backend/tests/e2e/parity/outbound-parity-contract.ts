@@ -22,7 +22,7 @@
  *      claims a pending inbox row, dispatches `runtime_start` over the
  *      adapter, the real daemon supervisor spawns the fixture which emits
  *      a session_init sentinel; the real fanout projects it to
- *      `conversation_agents.cli_session_id`.
+ *      `agent_runtime_slots.cli_session_id`.
  *   B. agent_materialize create. POST /api/agents → route → adapter →
  *      daemon `IntentDispatcher` → real `materializeAgent` → wire response
  *      → row flips `materialization_status='active'` + real L1 template on
@@ -209,8 +209,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
   ).run(conversationId, rig.userId, now);
   db.prepare(
     `INSERT INTO conversation_agents
-      (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-      VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+      (conversation_id, agent_id, joined_at)
+     VALUES (?, ?, ?)`,
   ).run(conversationId, agentId, now);
 
   const messageId = `msg-parity-${suffix}`;
@@ -268,7 +268,7 @@ export function registerParityPhases(getRig: () => ParityRig): void {
       () => {
         const row = rig.backend.context.db
           .prepare(
-            `SELECT cli_session_id, status FROM conversation_agents
+            `SELECT cli_session_id, observed_status AS status FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(conversationId, agentId) as
@@ -276,12 +276,12 @@ export function registerParityPhases(getRig: () => ParityRig): void {
           | undefined;
         return row && row.cli_session_id === rig.expectedSessionId ? row : null;
       },
-      { timeoutMs: 15_000, label: 'session_init projected to conversation_agents' },
+      { timeoutMs: 15_000, label: 'session_init projected to runtime slot' },
     );
 
     const row = rig.backend.context.db
       .prepare(
-        `SELECT cli_session_id, status FROM conversation_agents
+        `SELECT cli_session_id, observed_status AS status FROM agent_runtime_slots
           WHERE conversation_id = ? AND agent_id = ?`,
       )
       .get(conversationId, agentId) as { cli_session_id: string | null; status: string };

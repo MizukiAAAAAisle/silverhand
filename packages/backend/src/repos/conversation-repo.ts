@@ -4,6 +4,7 @@ import type {
   ChannelConversationDto,
   ConversationAgentDto,
   ConversationAgentRow,
+  ConversationAgentStatus,
   ConversationDto,
   ConversationPlacementKind,
   ConversationRosterPolicy,
@@ -15,6 +16,36 @@ import type {
   UserRow,
   WorkspaceChannelListItem,
 } from '@silverhand/shared';
+
+type ConversationAgentProjectionRow = ConversationAgentRow & {
+  cli_session_id: string | null;
+  pid: number | null;
+  status: ConversationAgentStatus;
+};
+
+/**
+ * Membership stays on `conversation_agents`; runtime fields are joined from
+ * the slot selected by the Agent's immutable session_scope. This is a read
+ * projection only — no runtime writer may target the membership table.
+ */
+const CONVERSATION_AGENT_PROJECTION_SQL = `
+  SELECT ca.conversation_id,
+         ca.agent_id,
+         ca.joined_at,
+         s.cli_session_id,
+         s.observed_pid AS pid,
+         s.observed_status AS status
+    FROM conversation_agents ca
+    JOIN agents a ON a.id = ca.agent_id
+    JOIN agent_runtime_slots s
+      ON s.agent_id = ca.agent_id
+     AND (
+       (a.session_scope = 'conversation'
+        AND s.conversation_id = ca.conversation_id)
+       OR
+       (a.session_scope = 'agent'
+        AND s.conversation_id IS NULL)
+     )`;
 
 function newId(): string {
   return randomBytes(12).toString('base64url');
@@ -645,14 +676,14 @@ export class ConversationRepo {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO conversation_agents
-         (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-         VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+         (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(conversationId, agentId, now);
     const row = this.db
-      .prepare<[string, string], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE conversation_id = ? AND agent_id = ?`,
+      .prepare<[string, string], ConversationAgentProjectionRow>(
+        `${CONVERSATION_AGENT_PROJECTION_SQL}
+         WHERE ca.conversation_id = ? AND ca.agent_id = ?`,
       )
       .get(conversationId, agentId);
     if (!row) throw new Error('conversation_agents insert failed');
@@ -661,45 +692,13 @@ export class ConversationRepo {
 
   listAgents(conversationId: string): ConversationAgentDto[] {
     return this.db
-      .prepare<[string], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE conversation_id = ?
-         ORDER BY joined_at ASC`,
+      .prepare<[string], ConversationAgentProjectionRow>(
+        `${CONVERSATION_AGENT_PROJECTION_SQL}
+         WHERE ca.conversation_id = ?
+         ORDER BY ca.joined_at ASC`,
       )
       .all(conversationId)
       .map(r => ({ ...r }));
-  }
-
-  /**
-   * Every (conversation, agent) pair the DB still claims is RUNNING on the
-   * given computer. The host is not on `conversation_agents`, so the agent
-   * aggregate carries it — hence the join. Used by the post-hydrate reconcile
-   * pass, which compares this against the daemon's authoritative snapshot and
-   * projects a terminal state for whatever the snapshot omitted.
-   */
-  listLiveRuntimesForHost(hostId: string): Array<{
-    conversation_id: string;
-    agent_id: string;
-    status: 'active' | 'starting';
-    pid: number | null;
-  }> {
-    return this.db
-      .prepare<
-        [string],
-        {
-          conversation_id: string;
-          agent_id: string;
-          status: 'active' | 'starting';
-          pid: number | null;
-        }
-      >(
-        `SELECT ca.conversation_id, ca.agent_id, ca.status, ca.pid
-           FROM conversation_agents ca
-           JOIN agents a ON a.id = ca.agent_id
-          WHERE a.host_id = ?
-            AND ca.status IN ('active', 'starting')`,
-      )
-      .all(hostId);
   }
 
   removeAgent(conversationId: string, agentId: string): void {
@@ -711,45 +710,11 @@ export class ConversationRepo {
       .run(conversationId, agentId);
   }
 
-  updateAgentRuntime(
-    conversationId: string,
-    agentId: string,
-    fields: {
-      status?: 'starting' | 'active' | 'idle' | 'crashed';
-      pid?: number | null;
-      cliSessionId?: string | null;
-    },
-  ): ConversationAgentDto | null {
-    const sets: string[] = [];
-    const values: (string | number | null)[] = [];
-    if (fields.status !== undefined) {
-      sets.push('status = ?');
-      values.push(fields.status);
-    }
-    if (fields.pid !== undefined) {
-      sets.push('pid = ?');
-      values.push(fields.pid);
-    }
-    if (fields.cliSessionId !== undefined) {
-      sets.push('cli_session_id = ?');
-      values.push(fields.cliSessionId);
-    }
-    if (sets.length === 0) return this.getAgent(conversationId, agentId);
-    values.push(conversationId, agentId);
-    this.db
-      .prepare(
-        `UPDATE conversation_agents SET ${sets.join(', ')}
-         WHERE conversation_id = ? AND agent_id = ?`,
-      )
-      .run(...values);
-    return this.getAgent(conversationId, agentId);
-  }
-
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null {
     const row = this.db
-      .prepare<[string, string], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE conversation_id = ? AND agent_id = ?`,
+      .prepare<[string, string], ConversationAgentProjectionRow>(
+        `${CONVERSATION_AGENT_PROJECTION_SQL}
+         WHERE ca.conversation_id = ? AND ca.agent_id = ?`,
       )
       .get(conversationId, agentId);
     return row ? { ...row } : null;
@@ -828,16 +793,6 @@ export class ConversationRepo {
          WHERE conversation_id = ? AND user_id = ?`,
       )
       .run(conversationId, userId);
-  }
-
-  listLiveStatusAgents(): ConversationAgentDto[] {
-    return this.db
-      .prepare<[], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE status IN ('starting', 'active')`,
-      )
-      .all()
-      .map(r => ({ ...r }));
   }
 
   private insert(params: {

@@ -123,7 +123,7 @@ function makeInboxAck(): {
  * that the EventHandler used to emit inline (pre-B1) so the existing
  * 38 SSE-shape tests keep passing without rewriting every fixture.
  * Production wires `DbRuntimeStatusProjector` which ALSO writes
- * `conversation_agents`; tests that need to assert the DB side use the
+ * `agent_runtime_slots`; tests that need to assert the DB side use the
  * production class directly (see status-projector.test.ts).
  */
 function makeForwardingProjector(publisher: EventPublisher): RuntimeStatusProjector {

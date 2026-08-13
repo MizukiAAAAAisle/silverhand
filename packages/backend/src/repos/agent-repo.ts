@@ -665,10 +665,20 @@ export class AgentRepo {
            c.kind             AS conversation_kind,
            c.id               AS channel_id,
            c.title            AS channel_title,
-           ca.status          AS status,
-           ca.pid             AS pid,
+           s.observed_status  AS status,
+           s.observed_pid     AS pid,
            c.closed_at        AS closed_at
          FROM conversation_agents ca
+         JOIN agents a ON a.id = ca.agent_id
+         JOIN agent_runtime_slots s
+           ON s.agent_id = ca.agent_id
+          AND (
+            (a.session_scope = 'conversation'
+             AND s.conversation_id = ca.conversation_id)
+            OR
+            (a.session_scope = 'agent'
+             AND s.conversation_id IS NULL)
+          )
          JOIN conversations c ON c.id = ca.conversation_id
          JOIN workspaces w ON w.id = c.workspace_id
          WHERE ca.agent_id = ? ${archivedFilter}

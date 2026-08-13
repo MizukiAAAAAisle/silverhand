@@ -377,8 +377,8 @@ describe('agent start/stop — typed-fail gate (D4.a Commit 6 G1)', () => {
     ): Promise<void> {
       t.ctx.db
         .prepare(
-          `UPDATE conversation_agents
-              SET status = 'active', pid = 12345
+          `UPDATE agent_runtime_slots
+              SET observed_status = 'active', observed_pid = 12345
             WHERE conversation_id = ? AND agent_id = ?`,
         )
         .run(channelId, agentId);

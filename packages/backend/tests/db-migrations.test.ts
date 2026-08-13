@@ -2470,3 +2470,214 @@ describe('database migrations', () => {
     });
   });
 });
+
+describe('v70 runtime slots scoped authority (#task:2013)', () => {
+  it('migrates every membership runtime row exactly once and enforces scope authority', () => {
+    const db = openDbAt(68);
+    try {
+      db.exec(`
+        INSERT INTO users (
+          id, name, display_name, created_at, updated_at
+        ) VALUES ('u_runtime', 'runtime-owner', 'Runtime Owner', 1, 1);
+        INSERT INTO hosts (
+          id, name, kind, created_at, user_id
+        ) VALUES ('h_runtime', 'runtime-host', 'local', 1, 'u_runtime');
+        INSERT INTO agents (
+          id, name, display_name, runtime, host_id, created_by_user_id,
+          materialization_status, created_at, updated_at
+        ) VALUES
+          ('a_one', 'runtime-one', 'Runtime One', 'codex', 'h_runtime',
+           'u_runtime', 'active', 1, 1),
+          ('a_two', 'runtime-two', 'Runtime Two', 'claude', 'h_runtime',
+           'u_runtime', 'active', 2, 2);
+        INSERT INTO workspaces (
+          id, name, description, workspace_kind, owner_agent_id,
+          created_at, updated_at
+        ) VALUES ('w_runtime', 'Runtime', NULL, 'regular', NULL, 1, 1);
+        INSERT INTO conversations (
+          id, workspace_id, kind, title, status,
+          created_at, updated_at, visibility
+        ) VALUES
+          ('c_one', 'w_runtime', 'channel', 'One', 'open', 1, 1, 'private'),
+          ('c_two', 'w_runtime', 'dm_channel', 'Two', 'open', 2, 2, 'private');
+        INSERT INTO conversation_agents (
+          conversation_id, agent_id, cli_session_id, pid, status, joined_at
+        ) VALUES
+          ('c_one', 'a_one', 'resume-one', 101, 'active', 11),
+          ('c_two', 'a_one', NULL, NULL, 'crashed', 12),
+          ('c_one', 'a_two', 'resume-two', 202, 'starting', 13);
+      `);
+
+      applyMigrationsThrough(db, 70);
+
+      expect(
+        db
+          .prepare<[], { name: string }>('PRAGMA table_info(conversation_agents)')
+          .all()
+          .map(row => row.name),
+      ).toEqual(['conversation_id', 'agent_id', 'joined_at']);
+      expect(
+        db
+          .prepare(
+            `SELECT conversation_id, agent_id, joined_at
+               FROM conversation_agents
+              ORDER BY conversation_id, agent_id`,
+          )
+          .all(),
+      ).toEqual([
+        { conversation_id: 'c_one', agent_id: 'a_one', joined_at: 11 },
+        { conversation_id: 'c_one', agent_id: 'a_two', joined_at: 13 },
+        { conversation_id: 'c_two', agent_id: 'a_one', joined_at: 12 },
+      ]);
+      expect(
+        db
+          .prepare(
+            `SELECT agent_id, conversation_id, generation,
+                    claimed_by_daemon_instance_id, observed_status,
+                    observed_pid, cli_session_id
+               FROM agent_runtime_slots
+              ORDER BY conversation_id, agent_id`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          agent_id: 'a_one',
+          conversation_id: 'c_one',
+          generation: 0,
+          claimed_by_daemon_instance_id: null,
+          observed_status: 'active',
+          observed_pid: 101,
+          cli_session_id: 'resume-one',
+        },
+        {
+          agent_id: 'a_two',
+          conversation_id: 'c_one',
+          generation: 0,
+          claimed_by_daemon_instance_id: null,
+          observed_status: 'starting',
+          observed_pid: 202,
+          cli_session_id: 'resume-two',
+        },
+        {
+          agent_id: 'a_one',
+          conversation_id: 'c_two',
+          generation: 0,
+          claimed_by_daemon_instance_id: null,
+          observed_status: 'crashed',
+          observed_pid: null,
+          cli_session_id: null,
+        },
+      ]);
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_events
+              WHERE event_kind = 'slot_migrated'`,
+          )
+          .get()?.count,
+      ).toBe(3);
+      expect(
+        db
+          .prepare<[], { session_scope: string }>(
+            'SELECT DISTINCT session_scope FROM agents',
+          )
+          .all(),
+      ).toEqual([{ session_scope: 'conversation' }]);
+      expect(() =>
+        db.exec(`UPDATE agents SET session_scope = 'agent' WHERE id = 'a_one'`),
+      ).toThrow(/session_scope is immutable/);
+
+      db.exec(`
+        INSERT INTO conversations (
+          id, workspace_id, placement_kind, roster_policy, title, status,
+          created_at, updated_at, visibility
+        ) VALUES (
+          'c_three', 'w_runtime', 'workspace', 'open', 'Three', 'open',
+          3, 3, 'private'
+        );
+        INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+        VALUES ('c_three', 'a_one', 14);
+      `);
+      expect(
+        db
+          .prepare<[], { count: number }>(
+            `SELECT COUNT(*) AS count FROM agent_runtime_slots
+              WHERE agent_id = 'a_one' AND conversation_id = 'c_three'`,
+          )
+          .get()?.count,
+      ).toBe(1);
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_runtime_slots (agent_id, conversation_id)
+          VALUES ('a_one', NULL)
+        `),
+      ).toThrow(/scope must match/);
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_runtime_slots (agent_id, conversation_id)
+          VALUES ('a_one', 'c_one')
+        `),
+      ).toThrow(/UNIQUE/);
+      expect(() =>
+        db.exec(`
+          UPDATE agent_runtime_slots SET generation = generation + 2
+          WHERE agent_id = 'a_one' AND conversation_id = 'c_one'
+        `),
+      ).toThrow(/generation must advance by one/);
+      expect(() =>
+        db.exec(`
+          UPDATE agent_runtime_slots SET generation = generation - 1
+          WHERE agent_id = 'a_one' AND conversation_id = 'c_one'
+        `),
+      ).toThrow(/generation must advance by one/);
+
+      db.exec(`
+        INSERT INTO agents (
+          id, name, display_name, runtime, host_id, created_by_user_id,
+          materialization_status, created_at, updated_at, session_scope
+        ) VALUES (
+          'a_scoped', 'runtime-scoped', 'Runtime Scoped', 'codex',
+          'h_runtime', 'u_runtime', 'active', 3, 3, 'agent'
+        );
+        INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+        VALUES ('c_one', 'a_scoped', 15);
+      `);
+      expect(
+        db
+          .prepare<[], { conversation_id: string | null }>(
+            `SELECT conversation_id FROM agent_runtime_slots
+              WHERE agent_id = 'a_scoped'`,
+          )
+          .all(),
+      ).toEqual([{ conversation_id: null }]);
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_runtime_slots (agent_id, conversation_id)
+          VALUES ('a_scoped', 'c_one')
+        `),
+      ).toThrow(/scope must match/);
+      expect(() =>
+        db.exec(`
+          INSERT INTO agent_runtime_slots (agent_id, conversation_id)
+          VALUES ('a_scoped', NULL)
+        `),
+      ).toThrow(/UNIQUE/);
+
+      const migratedEventId = db
+        .prepare<[], { id: number }>(
+          `SELECT id FROM agent_runtime_events ORDER BY id LIMIT 1`,
+        )
+        .get()!.id;
+      expect(() =>
+        db.prepare('UPDATE agent_runtime_events SET occurred_at = 0 WHERE id = ?')
+          .run(migratedEventId),
+      ).toThrow(/append-only/);
+      expect(() =>
+        db.prepare('DELETE FROM agent_runtime_events WHERE id = ?').run(migratedEventId),
+      ).toThrow(/append-only/);
+      expect(db.pragma('foreign_key_check')).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});

@@ -181,7 +181,7 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
       (
         db
           .prepare(
-            `SELECT cli_session_id FROM conversation_agents
+            `SELECT cli_session_id FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(channel.id, agent.id) as { cli_session_id: string | null } | undefined

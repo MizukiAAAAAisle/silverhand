@@ -43,6 +43,7 @@ import { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { MessageRepo } from '../repos/message-repo.js';
+import { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { MembershipService } from '../services/membership-service.js';
@@ -122,6 +123,7 @@ export function createRuntimeFanoutDbDeps(deps: {
   const hosts = new HostRepo(deps.db);
   const inbox = new ConversationInboxRepo(deps.db);
   const messages = new MessageRepo(deps.db);
+  const runtimeSlots = new RuntimeSlotRepo(deps.db);
   const users = new UserRepo(deps.db);
   const workspaces = new WorkspaceRepo(deps.db);
 
@@ -194,17 +196,20 @@ export function createRuntimeFanoutDbDeps(deps: {
     },
     hydrateReconcile: {
       listDbLiveRuntimesForHost: hostId =>
-        conversations.listLiveRuntimesForHost(hostId).map<DbLiveRuntime>(row => ({
-          conversationId: row.conversation_id,
+        runtimeSlots.listLiveConversationSlotsForHost(hostId).map<DbLiveRuntime>(row => ({
+          conversationId: row.conversation_id!,
           agentId: row.agent_id,
-          status: row.status,
-          pid: row.pid,
+          status: row.observed_status as 'active' | 'starting',
+          pid: row.observed_pid,
         })),
       markCrashed: (conversationId, agentId) =>
-        conversations.updateAgentRuntime(conversationId, agentId, {
+        runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
           status: 'crashed',
           pid: null,
-        }),
+          claimedByDaemonInstanceId: null,
+        })
+          ? conversations.getAgent(conversationId, agentId)
+          : null,
     },
     session: {
       // Plain deferred transaction: both statements are writes, so the write
@@ -216,9 +221,11 @@ export function createRuntimeFanoutDbDeps(deps: {
         deps.db.transaction(() =>
           fn({
             clearCliSession: (conversationId, agentId) =>
-              conversations.updateAgentRuntime(conversationId, agentId, {
+              runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
                 cliSessionId: null,
-              }),
+              })
+                ? conversations.getAgent(conversationId, agentId)
+                : null,
             insertSystemMessage: input =>
               messages.insertForConversation({
                 conversationId: input.conversationId,
@@ -248,7 +255,7 @@ export function createRuntimeFanoutDbDeps(deps: {
     }),
     // DB-backed but stateless — the whole runtime-event → status mapping lives
     // in the projector, so ONE instance serves every host the fanout tracks.
-    statusProjector: new DbRuntimeStatusProjector(conversations, deps.events),
+    statusProjector: new DbRuntimeStatusProjector(runtimeSlots, deps.events),
     conversationActivity: conversationEvents,
   };
 }

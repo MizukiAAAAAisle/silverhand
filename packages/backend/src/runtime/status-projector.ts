@@ -1,6 +1,6 @@
 /**
  * `RuntimeStatusProjector` — sink for the runtime status events
- * that mutate `conversation_agents.{status,pid,cli_session_id}` AND
+ * that mutate the scoped runtime-slot projection AND
  * publish the matching `agent_status` SSE.
  *
  * ## Why a sink (Cindy `usjxj8AxX4AvJ5E-` B1 refinement)
@@ -30,7 +30,7 @@
  * ## Idempotence
  *
  * All methods are idempotent at the DB layer (re-applying the
- * same `updateAgentRuntime` call is a no-op write) and at the SSE
+ * same runtime-slot projection is a no-op write) and at the SSE
  * layer (a re-broadcast of an identical `agent_status` payload is a
  * benign duplicate for the renderer). `session_init` in particular
  * fires at the start of every claude turn (`system.init` is per-turn,
@@ -41,7 +41,7 @@
  * (B3), not by this sink.
  */
 import type { AgentRunState } from '@silverhand/shared';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { EventPublisher } from './event-handler.js';
 
 export type InitTimeoutReason =
@@ -95,14 +95,14 @@ export interface RuntimeStatusProjector {
 }
 
 /**
- * Production projector: writes `conversation_agents` via
- * `ConversationRepo` AND publishes `agent_status` SSE via the shared
+ * Production projector: writes `agent_runtime_slots` via
+ * `RuntimeSlotRepo` AND publishes `agent_status` SSE via the shared
  * `EventPublisher`. Status mapping (idle/crashed/active/starting) lives
  * here so EventHandler's branches don't carry status logic.
  */
 export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
   constructor(
-    private readonly conversations: ConversationRepo,
+    private readonly runtimeSlots: RuntimeSlotRepo,
     private readonly events: EventPublisher,
   ) {}
 
@@ -119,7 +119,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     agentId,
     cliSessionId,
   }: SessionInitProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
+    this.runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
       status: 'active',
       cliSessionId,
     });
@@ -143,7 +143,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * fill/refresh it once the driver emits a real session id.
    */
   runtimeReady({ conversationId, agentId }: RuntimeReadyProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
+    this.runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
       status: 'active',
     });
     this.events.publishSide(conversationId, {
@@ -191,9 +191,10 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
         : intentional || code === 0
           ? 'idle'
           : 'crashed';
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
+    this.runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
       status,
       pid: null,
+      claimedByDaemonInstanceId: null,
       ...(clearCliSessionId ? { cliSessionId: null } : {}),
     });
     this.events.publishSide(conversationId, {
@@ -225,7 +226,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     maxRetries,
     timeoutReason,
   }: InitRetryingProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
+    this.runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
       status: 'starting',
       pid: null,
     });
@@ -256,7 +257,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     cooldownUntil,
     attemptsExhausted,
   }: InitCooldownProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
+    this.runtimeSlots.updateCurrentConversationProjection(conversationId, agentId, {
       status: 'crashed',
       pid: null,
     });

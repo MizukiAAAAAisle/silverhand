@@ -1376,6 +1376,229 @@ export const migrations: Migration[] = [
         ON conversations(workspace_id) WHERE archived_at IS NOT NULL;
     `,
   },
+  {
+    version: 70,
+    name: 'runtime_slots_scoped_authority',
+    up: `
+      -- #task:2013 (P0-d) — runtime authority is not membership.
+      --
+      -- session_scope lands dormant: every existing/new product path still
+      -- creates conversation-scoped agents, while P2 later activates the
+      -- agent-scoped creation/runtime behavior. The DB invariant lands now so
+      -- there is never an intermediate schema that can accept a slot whose
+      -- scope disagrees with its owning agent.
+      ALTER TABLE agents ADD COLUMN session_scope TEXT NOT NULL
+        DEFAULT 'conversation'
+        CHECK (session_scope IN ('conversation', 'agent'));
+
+      CREATE TRIGGER agents_session_scope_immutable
+        BEFORE UPDATE OF session_scope ON agents
+        WHEN NEW.session_scope != OLD.session_scope
+        BEGIN
+          SELECT RAISE(ABORT, 'agents.session_scope is immutable');
+        END;
+
+      -- Preserve the runtime payload while rebuilding conversation_agents as
+      -- the membership/ACL edge it actually is. The staging table is local to
+      -- this migration and is dropped before commit.
+      CREATE TEMP TABLE runtime_slot_stage AS
+        SELECT conversation_id, agent_id, cli_session_id, pid, status
+          FROM conversation_agents;
+
+      CREATE TABLE conversation_agents_new (
+        conversation_id TEXT NOT NULL
+          REFERENCES conversations(id) ON DELETE CASCADE,
+        agent_id        TEXT NOT NULL
+          REFERENCES agents(id) ON DELETE CASCADE,
+        joined_at       INTEGER NOT NULL,
+        PRIMARY KEY (conversation_id, agent_id)
+      );
+
+      INSERT INTO conversation_agents_new (
+        conversation_id, agent_id, joined_at
+      )
+        SELECT conversation_id, agent_id, joined_at
+          FROM conversation_agents;
+
+      DROP TABLE conversation_agents;
+      ALTER TABLE conversation_agents_new RENAME TO conversation_agents;
+
+      CREATE INDEX idx_conversation_agents_agent
+        ON conversation_agents(agent_id);
+
+      -- One stable CURRENT slot per runtime scope. daemon_instance_id is an
+      -- observation/custody field, never part of identity. Two partial unique
+      -- indexes are required because SQLite NULL values do not deduplicate in
+      -- a composite UNIQUE constraint.
+      CREATE TABLE agent_runtime_slots (
+        id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id                      TEXT NOT NULL
+          REFERENCES agents(id) ON DELETE CASCADE,
+        conversation_id               TEXT
+          REFERENCES conversations(id) ON DELETE CASCADE,
+        generation                    INTEGER NOT NULL DEFAULT 0
+          CHECK (generation >= 0),
+        claimed_by_daemon_instance_id TEXT,
+        observed_status               TEXT NOT NULL DEFAULT 'idle'
+          CHECK (observed_status IN ('idle', 'starting', 'active', 'crashed')),
+        observed_pid                  INTEGER,
+        cli_session_id                TEXT,
+        FOREIGN KEY (conversation_id, agent_id)
+          REFERENCES conversation_agents(conversation_id, agent_id)
+          ON DELETE CASCADE
+      );
+
+      CREATE UNIQUE INDEX uniq_agent_runtime_slots_agent_scope
+        ON agent_runtime_slots(agent_id)
+        WHERE conversation_id IS NULL;
+
+      CREATE UNIQUE INDEX uniq_agent_runtime_slots_conversation_scope
+        ON agent_runtime_slots(agent_id, conversation_id)
+        WHERE conversation_id IS NOT NULL;
+
+      CREATE INDEX idx_agent_runtime_slots_conversation
+        ON agent_runtime_slots(conversation_id, agent_id);
+
+      CREATE TRIGGER agent_runtime_slots_scope_consistency_insert
+        BEFORE INSERT ON agent_runtime_slots
+        WHEN COALESCE(
+          (SELECT session_scope FROM agents WHERE id = NEW.agent_id), ''
+        ) != CASE
+          WHEN NEW.conversation_id IS NULL THEN 'agent'
+          ELSE 'conversation'
+        END
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot scope must match agents.session_scope');
+        END;
+
+      CREATE TRIGGER agent_runtime_slots_scope_consistency_update
+        BEFORE UPDATE OF agent_id, conversation_id ON agent_runtime_slots
+        WHEN COALESCE(
+          (SELECT session_scope FROM agents WHERE id = NEW.agent_id), ''
+        ) != CASE
+          WHEN NEW.conversation_id IS NULL THEN 'agent'
+          ELSE 'conversation'
+        END
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot scope must match agents.session_scope');
+        END;
+
+      -- Slot scope is identity, not mutable placement. A caller that wants a
+      -- different scope creates a different immutable Agent.
+      CREATE TRIGGER agent_runtime_slots_identity_immutable
+        BEFORE UPDATE OF agent_id, conversation_id ON agent_runtime_slots
+        WHEN NEW.agent_id != OLD.agent_id
+          OR NEW.conversation_id IS NOT OLD.conversation_id
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot identity is immutable');
+        END;
+
+      CREATE TRIGGER agent_runtime_slots_generation_monotonic
+        BEFORE UPDATE OF generation ON agent_runtime_slots
+        WHEN NEW.generation != OLD.generation + 1
+        BEGIN
+          SELECT RAISE(ABORT, 'runtime slot generation must advance by one');
+        END;
+
+      INSERT INTO agent_runtime_slots (
+        agent_id, conversation_id, generation,
+        claimed_by_daemon_instance_id,
+        observed_status, observed_pid, cli_session_id
+      )
+        SELECT agent_id, conversation_id, 0, NULL,
+               status, pid, cli_session_id
+          FROM runtime_slot_stage;
+
+      -- Future membership rows create their conversation-scoped slot in the
+      -- same statement transaction. Agent-scoped memberships deliberately do
+      -- not create N conversation slots; their single slot is created with the
+      -- Agent row by the next trigger.
+      CREATE TRIGGER conversation_agents_create_runtime_slot
+        AFTER INSERT ON conversation_agents
+        WHEN (SELECT session_scope FROM agents WHERE id = NEW.agent_id)
+             = 'conversation'
+        BEGIN
+          INSERT INTO agent_runtime_slots (
+            agent_id, conversation_id, generation,
+            observed_status, observed_pid, cli_session_id
+          ) VALUES (
+            NEW.agent_id, NEW.conversation_id, 0,
+            'idle', NULL, NULL
+          );
+        END;
+
+      CREATE TRIGGER agents_create_agent_runtime_slot
+        AFTER INSERT ON agents
+        WHEN NEW.session_scope = 'agent'
+        BEGIN
+          INSERT INTO agent_runtime_slots (
+            agent_id, conversation_id, generation,
+            observed_status, observed_pid, cli_session_id
+          ) VALUES (
+            NEW.id, NULL, 0,
+            'idle', NULL, NULL
+          );
+        END;
+
+      -- Historical generations and projection transitions are append-only.
+      -- Current-slot reads never consult this table.
+      CREATE TABLE agent_runtime_events (
+        id                            INTEGER PRIMARY KEY AUTOINCREMENT,
+        -- Historical coordinate, deliberately no FK: deleting an Agent/slot
+        -- must not mutate the append-only runtime history or be blocked by its
+        -- anti-DELETE trigger.
+        slot_id                       INTEGER NOT NULL,
+        agent_id                      TEXT NOT NULL,
+        conversation_id               TEXT,
+        generation                    INTEGER NOT NULL
+          CHECK (generation >= 0),
+        event_kind                    TEXT NOT NULL CHECK (event_kind IN (
+          'slot_migrated',
+          'generation_claimed',
+          'projection_updated',
+          'generation_finalized'
+        )),
+        daemon_instance_id            TEXT,
+        observed_status               TEXT NOT NULL
+          CHECK (observed_status IN ('idle', 'starting', 'active', 'crashed')),
+        observed_pid                  INTEGER,
+        cli_session_id                TEXT,
+        occurred_at                   INTEGER NOT NULL
+      );
+
+      CREATE INDEX idx_agent_runtime_events_slot_generation
+        ON agent_runtime_events(slot_id, generation, id);
+
+      CREATE INDEX idx_agent_runtime_events_scope_generation
+        ON agent_runtime_events(agent_id, conversation_id, generation, id);
+
+      CREATE TRIGGER agent_runtime_events_append_only_update
+        BEFORE UPDATE ON agent_runtime_events
+        BEGIN
+          SELECT RAISE(ABORT, 'agent_runtime_events is append-only');
+        END;
+
+      CREATE TRIGGER agent_runtime_events_append_only_delete
+        BEFORE DELETE ON agent_runtime_events
+        BEGIN
+          SELECT RAISE(ABORT, 'agent_runtime_events is append-only');
+        END;
+
+      INSERT INTO agent_runtime_events (
+        slot_id, agent_id, conversation_id,
+        generation, event_kind, daemon_instance_id,
+        observed_status, observed_pid, cli_session_id, occurred_at
+      )
+        SELECT id, agent_id, conversation_id,
+               generation, 'slot_migrated',
+               claimed_by_daemon_instance_id,
+               observed_status, observed_pid, cli_session_id,
+               CAST(strftime('%s', 'now') AS INTEGER) * 1000
+          FROM agent_runtime_slots;
+
+      DROP TABLE runtime_slot_stage;
+    `,
+  },
 ];
 
 export const CURRENT_SCHEMA_VERSION =

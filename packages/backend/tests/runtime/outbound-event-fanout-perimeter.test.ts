@@ -71,6 +71,7 @@ import {
 import { OUTBOUND_PROTOCOL_VERSION } from '@silverhand/host';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
@@ -125,6 +126,7 @@ function makePerimeterFixture(opts?: {
   });
   const workspaces = new WorkspaceRepo(db);
   const conversations = new ConversationRepo(db);
+  const runtimeSlots = new RuntimeSlotRepo(db);
   const agents = new AgentRepo(db);
 
   const wsX = workspaces.insert({
@@ -141,7 +143,7 @@ function makePerimeterFixture(opts?: {
     viewerUserId,
   );
   conversations.addAgent(channelX.id, agentX.id);
-  conversations.updateAgentRuntime(channelX.id, agentX.id, {
+  runtimeSlots.updateCurrentConversationProjection(channelX.id, agentX.id, {
     status: 'starting',
   });
 
@@ -159,7 +161,7 @@ function makePerimeterFixture(opts?: {
     'teammate',
   );
   conversations.addAgent(channelY.id, agentY.id);
-  conversations.updateAgentRuntime(channelY.id, agentY.id, {
+  runtimeSlots.updateCurrentConversationProjection(channelY.id, agentY.id, {
     status: 'starting',
   });
 
@@ -201,7 +203,7 @@ function makePerimeterFixture(opts?: {
     hostY: { id: hostY.id, channelId: channelY.id, agentId: agentY.id },
     addAgentXToHostYChannel: (): void => {
       conversations.addAgent(channelY.id, agentX.id);
-      conversations.updateAgentRuntime(channelY.id, agentX.id, {
+      runtimeSlots.updateCurrentConversationProjection(channelY.id, agentX.id, {
         status: 'starting',
       });
     },

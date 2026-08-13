@@ -168,8 +168,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
   ).run(conversationId, harness.userId, now);
   db.prepare(
     `INSERT INTO conversation_agents
-      (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-      VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+      (conversation_id, agent_id, joined_at)
+     VALUES (?, ?, ?)`,
   ).run(conversationId, agentId, now);
 
   // Mint a real bearer via the same `AuthSessionService` the
@@ -285,7 +285,7 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
       () => {
         const row = harness!.backend.context.db
           .prepare<[string, string], { cli_session_id: string | null; status: string }>(
-            `SELECT cli_session_id, status FROM conversation_agents
+            `SELECT cli_session_id, observed_status AS status FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(env.conversationId, env.agentId);
@@ -367,8 +367,8 @@ describe('Standalone G2 — route-level runtime path (D4.b P1-1)', () => {
               cli_session_id: string | null;
             }
           >(
-            `SELECT status, pid, cli_session_id
-               FROM conversation_agents
+            `SELECT observed_status AS status, observed_pid AS pid, cli_session_id
+               FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(env.conversationId, env.agentId);

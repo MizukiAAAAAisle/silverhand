@@ -40,6 +40,7 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
@@ -89,7 +90,9 @@ function bootstrap() {
     capabilities.seedDefaults(workspace.id, agent.id);
     conversations.addAgent(channel.id, agent.id);
   }
-  conversations.updateAgentRuntime(channel.id, subject.id, { status: 'active' });
+  new RuntimeSlotRepo(db).updateCurrentConversationProjection(channel.id, subject.id, {
+    status: 'active',
+  });
 
   // History authored by the subject, with a pending delivery for it.
   const authored = messages.insertForConversation({
