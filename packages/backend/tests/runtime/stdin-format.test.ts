@@ -4,8 +4,14 @@ import {
   formatStdinMessageHeader,
   type MessageLite,
 } from '../../src/runtime/stdin-format.js';
+import { createReferenceMemo } from '../../src/runtime/reference-memo.js';
 
 const TOOL = 'silverhand message send';
+
+// #task:2000 — the formatter no longer parses; it asks the phase's one
+// derivation for the addressing set. A fresh memo per call keeps these cases
+// independent of each other.
+const REFERENCES = () => createReferenceMemo().referencesOf;
 
 describe('formatDeliveryInstruction system-message subtypes', () => {
   it('keeps ordinary system-only messages informational', () => {
@@ -14,6 +20,7 @@ describe('formatDeliveryInstruction system-message subtypes', () => {
         [systemMessage({ subtype: 'rename' })],
         'Cindy',
         TOOL,
+        REFERENCES(),
       ),
     ).toBe(
       'Respond as appropriate. System messages do not require a reply unless they explicitly ask for one.',
@@ -26,6 +33,7 @@ describe('formatDeliveryInstruction system-message subtypes', () => {
         [systemMessage({ subtype: 'thread_summary' })],
         'Cindy',
         TOOL,
+        REFERENCES(),
       ),
     ).toBe(
       'Respond as appropriate. System messages do not require a reply unless they explicitly ask for one.',
@@ -48,6 +56,7 @@ describe('formatDeliveryInstruction system-message subtypes', () => {
       ],
       'Cindy',
       TOOL,
+      REFERENCES(),
     );
 
     expect(instruction).toContain('Respond as appropriate');

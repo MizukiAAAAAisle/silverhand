@@ -221,7 +221,19 @@ const FrameIdSchema = z.string().min(1);
 // daemon would rm without quiescing admitted handlers or children. Exact attach
 // admission rejects it before business commands. Bumps alongside
 // HOST_PROTOCOL_VERSION (10→11). No shim.
-export const OUTBOUND_PROTOCOL_VERSION = 10;
+//
+// v11 (#task:2000): the addressing contract moves to canonical
+// `<silverhand://<kind>/<name>>` autolinks and plain `@name` stops addressing
+// anyone.
+// Command framing is unchanged; the incompatibility is that the daemon composes
+// the platform prompt from its own bundled `@silverhand/shared`, so its
+// generation decides which addressing form the agents it spawns are taught. A
+// mixed pair produces mentions that direct nothing at their subject — a
+// main-line message still reaches every member, but with no notification, no
+// auto-follow (so a thread reply can miss the person it names), no CC, and
+// undirected framing — with no error on either side.
+// Bumps alongside HOST_PROTOCOL_VERSION (11→12). No shim.
+export const OUTBOUND_PROTOCOL_VERSION = 11;
 
 // ── server → daemon command catalogue ──────────────────────────────
 

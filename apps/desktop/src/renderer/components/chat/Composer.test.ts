@@ -8,6 +8,8 @@ import type {
 } from '@silverhand/shared';
 import {
   buildMentionHumans,
+  buildShorthandResolver,
+  canResolveShorthandNow,
   detectTrigger,
   filterChannels,
   filterMentionPeople,
@@ -411,9 +413,9 @@ describe('detectTrigger', () => {
   it('opens right after CJK prose with no separating space (#task:1822)', () => {
     // Chinese/Japanese prose has no inter-word spaces, so requiring one
     // before `@` made the picker unusable there. Both parsers that decide
-    // what a mention MEANS (`extractMentions`, `canStartRef`) treat a
-    // preceding CJK char as a boundary and do produce `@alice` here — the
-    // picker must not be stricter than the message it would send.
+    // what a bare `@handle` becomes (`PLAIN_MENTION_PATTERN`, `canStartRef`)
+    // treat a preceding CJK char as a boundary and do produce `@alice` here —
+    // the picker must not be stricter than the message it would send.
     const text = '谢谢@alice';
     expect(detectTrigger(text, text.length)).toEqual({
       kind: '@',
@@ -462,6 +464,95 @@ describe('buildMentionHumans', () => {
   it('keeps everyone when there is no viewer id', () => {
     const out = buildMentionHumans([wsHuman({ id: 'u-1' })], null);
     expect(out.map(h => h.id)).toEqual(['u-1']);
+  });
+});
+
+/**
+ * #task:2001 — which bare handles the send-time rewrite converts. Behaviour, not
+ * painting: the resolver decides what the STORED body says, and every wrong
+ * answer here is silent (a chip that addresses nobody, or a chip that addresses
+ * the wrong principal).
+ */
+describe('buildShorthandResolver', () => {
+  it('resolves each kind of workspace member', () => {
+    const resolve = buildShorthandResolver(
+      [agent({ name: 'alice' })],
+      [wsHuman({ name: 'shiki' })],
+    );
+    expect(resolve('alice')).toBe('agent');
+    expect(resolve('shiki')).toBe('human');
+  });
+
+  it('refuses a handle nobody in this workspace has', () => {
+    // `null` is what leaves the shorthand as authored — a chip that addresses
+    // nobody, which is the truth.
+    const resolve = buildShorthandResolver([agent({ name: 'alice' })], []);
+    expect(resolve('elsewhere')).toBeNull();
+  });
+
+  it('is case-sensitive, like every other handle resolver', () => {
+    const resolve = buildShorthandResolver([agent({ name: 'alice' })], []);
+    expect(resolve('Alice')).toBeNull();
+  });
+
+  it('resolves a colliding handle to the agent, matching the renderer', () => {
+    // `Markdown.tsx` consults `agentsByName` before `humansByName`. If this
+    // disagreed, the chip would show an agent while the body delivered to a
+    // human.
+    const resolve = buildShorthandResolver(
+      [agent({ name: 'shiki' })],
+      [wsHuman({ name: 'shiki' })],
+    );
+    expect(resolve('shiki')).toBe('agent');
+  });
+
+  it('resolves nothing when the workspace is known to have nobody by that name', () => {
+    // Empty lists mean an ANSWERED roster with no such member. Whether the
+    // roster has answered at all is a separate question the send path asks
+    // first — see `canResolveShorthandNow`; this resolver cannot express it.
+    const resolve = buildShorthandResolver([], []);
+    expect(resolve('alice')).toBeNull();
+  });
+});
+
+/**
+ * #task:2001 review — the gate that keeps an UNLOADED roster from being read as
+ * an empty one. Behaviour, and the failure it prevents has no other detector: a
+ * body sent in the cold window keeps its `@Alice` spelling, renders a chip,
+ * reports success, and addresses nobody — on the main line it still reaches every
+ * member but loses its targeting (no notification, no CC, read as undirected); in
+ * a thread reply, where delivery is follower-gated, the named member may not
+ * receive it at all. The server never rewrites a body, so this is the only place
+ * it can be caught.
+ */
+describe('canResolveShorthandNow', () => {
+  it('lets an ordinary body through whatever the roster state', () => {
+    expect(canResolveShorthandNow('ship it', false)).toBe(true);
+    expect(canResolveShorthandNow('ship it', true)).toBe(true);
+  });
+
+  it('waits when the roster is unknown and the body names someone', () => {
+    expect(canResolveShorthandNow('cc @Alice please', false)).toBe(false);
+  });
+
+  it('goes straight out once the roster is known', () => {
+    // Including the case where that roster turns out not to contain them: an
+    // answered "nobody by that name" is a fact, and leaving the shorthand as
+    // authored is the honest outcome.
+    expect(canResolveShorthandNow('cc @Alice please', true)).toBe(true);
+  });
+
+  it('does not stall on an @ that could never have addressed anyone', () => {
+    // The position predicate is the rewrite's own, so an email address, a code
+    // span, a quote, or a link label cannot hold a send hostage.
+    for (const body of [
+      'mail me@example.com',
+      'write `@Alice`',
+      '> @Alice said so',
+      '[ask @Alice](https://example.com)',
+    ]) {
+      expect(canResolveShorthandNow(body, false), body).toBe(true);
+    }
   });
 });
 
@@ -558,5 +649,27 @@ describe('mention source wiring (falsifier for the workspace-scoped boundary)', 
   it('never reads the global user / agent directories', () => {
     expect(src).not.toContain('useUsers');
     expect(src).not.toContain('useAgents');
+  });
+
+  // #task:2001 review: `canResolveShorthandNow` is pure, so every branch test
+  // above stays green if `submit()` stops asking it — and the regression is
+  // invisible (a message that sends, renders a chip, and addresses nobody). These
+  // pin the three wiring facts that make the gate real.
+  it('gates the send on the gate, and on the roster having answered', () => {
+    expect(src).toContain(
+      'canResolveShorthandNow(content, workspaceRosterKnown)',
+    );
+    expect(src).toContain('const workspaceRosterKnown = memberLists.data !==');
+  });
+
+  it('waits for the authoritative roster instead of sending unresolved', () => {
+    // The waiting path must both refetch and rewrite with the roster it got back
+    // — rewriting with the stale closure resolver would defeat the wait.
+    expect(src).toContain('memberLists\n      .refetch()');
+    expect(src).toContain('buildShorthandResolver(roster.agents, roster.humans)');
+  });
+
+  it('hands the draft back rather than sending when the roster cannot be had', () => {
+    expect(src).toContain('restoreDraft()');
   });
 });

@@ -1,4 +1,9 @@
-// Cross-environment barrel: keep Node-only globals/imports behind explicit subpath exports.
+// Cross-environment barrel: keep Node-only globals/imports behind explicit
+// subpath exports. `./reference-markdown` is also deliberately absent — it is
+// environment-agnostic but drags in a Markdown parser, and the CLI and daemon
+// import this barrel without ever needing to judge reference POSITION (see that
+// module's docblock). The destination grammar itself (`./reference.js`) is
+// dependency-free and stays here.
 export * from './api/index.js';
 export * from './agent-home-workspace.js';
 export * from './bind-address-scope.js';
@@ -19,6 +24,7 @@ export * from './mime.js';
 export * from './opencode-config.js';
 export * from './platform-prompt.js';
 export * from './proxy-env.js';
+export * from './reference.js';
 export * from './runtime-catalog.js';
 export * from './seq.js';
 export * from './server-connection-profile.js';

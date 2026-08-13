@@ -21,9 +21,8 @@
  * path), plus the name-resolver callbacks the formatters call to turn
  * agent/user ids into `@<handle>` text.
  */
-import { extractMentions } from '@silverhand/shared';
 import { resolveAttachmentLabels } from '@silverhand/shared';
-import type { AttachmentSnapshot, FromKind } from '@silverhand/shared';
+import type { AttachmentSnapshot, FromKind, Reference } from '@silverhand/shared';
 import {
   extractAttachmentSnapshotsFromRow,
   extractSubtypeFromRow,
@@ -72,6 +71,24 @@ export interface InboxBatchEntry {
 }
 
 /**
+ * How a formatter obtains the addressing set of a message it is framing.
+ *
+ * A parameter rather than a call to the parser (#task:2000, shiki's option B):
+ * the batch is re-framed per recipient while the addressing set is not
+ * per-recipient, so the derivation belongs to the phase's one authority —
+ * `runtime/reference-memo.ts`, which memoizes it under the immutability of
+ * `messages.content`. Required, not defaulted: a default would let a caller
+ * silently reintroduce the per-recipient parse this removed.
+ *
+ * Keyed by message id on the memo side, so the per-recipient re-projection
+ * `formatInboxBatch` does below (a fresh object per framing) is irrelevant to
+ * the hit.
+ */
+export type DeliveryReferencesOf = (
+  message: MessageLite,
+) => readonly Reference[];
+
+/**
  * Format an inbox batch as one human-readable user message. Mirrors §3.1
  * "A 档" payload shape — gives the agent enough metadata to address each
  * sender appropriately. Order = enqueue order.
@@ -84,6 +101,7 @@ export function formatInboxBatch(
   defaultUserHandle: string | undefined,
   recipientAgentName: string | undefined,
   sendMessageTool: string,
+  referencesOf: DeliveryReferencesOf,
 ): string {
   const header =
     items.length === 1
@@ -111,6 +129,7 @@ export function formatInboxBatch(
     })),
     recipientAgentName,
     sendMessageTool,
+    referencesOf,
   )}`;
 }
 
@@ -239,28 +258,44 @@ export function formatAttachmentSuffix(
 /** Append a directive line at the end of the stdin payload that tells
  *  the agent what kind of reply is expected. The directive varies by
  *  whether the batch includes a user-authored message addressed at the
- *  recipient, only references them by mention, or is system-only. */
+ *  recipient, only references them by mention, or is system-only.
+ *
+ *  #task:2000 — "addressed" is the reference contract, evaluated in THIS phase
+ *  and not inherited from the send path: this is a different phase (a wake batch,
+ *  read per recipient) with a different question ("does this batch address me"),
+ *  and a value threaded from insert time would be a second, staler authority on
+ *  it. Which message addresses whom still comes from one derivation per message
+ *  here — see {@link DeliveryReferencesOf}.
+ *
+ *  The undirected sentinel keeps its meaning — a user message that addresses
+ *  nobody is for everyone — and now says so by the same rule the rest of the
+ *  system uses. A user message whose only handle sits in a code span or a quote
+ *  therefore classifies as undirected, which is a deliberate consequence of
+ *  having ONE definition of "addressed" rather than a lexical one here and a
+ *  structural one everywhere else. */
 export function formatDeliveryInstruction(
   messages: MessageLite[],
   recipientAgentName: string | undefined,
   sendMessageTool: string,
+  referencesOf: DeliveryReferencesOf,
 ): string {
-  const nonSystemMentionsRecipient =
-    recipientAgentName !== undefined &&
-    messages.some(
-      m =>
-        m.from_kind !== 'system' &&
-        extractMentions(m.content).includes(recipientAgentName),
+  const parsed = messages.map(m => ({
+    message: m,
+    references: referencesOf(m),
+  }));
+  const addressesRecipient = (refs: readonly Reference[]): boolean =>
+    recipientAgentName !== undefined
+    && refs.some(
+      ref => ref.kind === 'agent' && ref.handle === recipientAgentName,
     );
-  const userMessages = messages.filter(m => m.from_kind === 'user');
+  const nonSystemMentionsRecipient = parsed.some(
+    p => p.message.from_kind !== 'system' && addressesRecipient(p.references),
+  );
+  const userMessages = parsed.filter(p => p.message.from_kind === 'user');
   const hasUserMessage = userMessages.length > 0;
-  const hasUserMessageForRecipient = userMessages.some(m => {
-    const mentions = extractMentions(m.content);
-    return (
-      mentions.length === 0 ||
-      (recipientAgentName !== undefined && mentions.includes(recipientAgentName))
-    );
-  });
+  const hasUserMessageForRecipient = userMessages.some(
+    p => p.references.length === 0 || addressesRecipient(p.references),
+  );
   const hasOnlySystemMessages = messages.every(m => m.from_kind === 'system');
 
   if (hasUserMessage && hasUserMessageForRecipient) {

@@ -88,7 +88,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       channelId,
       // the channel snapshots the workspace agents; reuse the member alice
       (await firstChannelAgent(t, channelId)) ?? aliceId,
-      'hey @local-test can you look?',
+      'hey <silverhand://human/local-test> can you look?',
     );
 
     const items = await getActivity(t);
@@ -112,7 +112,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
 
-    const mentionMsg = await sendAsAgent(t, channelId, sender, 'needs you @local-test');
+    const mentionMsg = await sendAsAgent(t, channelId, sender, 'needs you <silverhand://human/local-test>');
     await sendAsAgent(t, channelId, sender, 'plain follow-up');
 
     const cursor = t.ctx.db
@@ -221,7 +221,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
       channelId,
       sender,
       rootMsg,
-      'over here @local-test',
+      'over here <silverhand://human/local-test>',
     );
     const threadMention = (await getActivity(t)).filter(
       i => i.kind === 'mention' && i.message_id === mentionMsg,
@@ -238,7 +238,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
     // 1 mention + 2 plain unread.
-    const mentionMsg = await sendAsAgent(t, channelId, sender, 'ping @local-test');
+    const mentionMsg = await sendAsAgent(t, channelId, sender, 'ping <silverhand://human/local-test>');
     await sendAsAgent(t, channelId, sender, 'plain one');
     await sendAsAgent(t, channelId, sender, 'plain two');
 
@@ -301,7 +301,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     t = buildTestApp();
     const a = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, a.channelId))!;
-    await sendAsAgent(t, a.channelId, sender, 'mention @local-test in ws A');
+    await sendAsAgent(t, a.channelId, sender, 'mention <silverhand://human/local-test> in ws A');
 
     // A second workspace with its own mention.
     const bAlice = await makeAgent(t, 'beth');
@@ -313,7 +313,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     ).json()) as any;
     const bChannel = wsB.onboarding_channel_id as string;
     const bSender = (await firstChannelAgent(t, bChannel))!;
-    await sendAsAgent(t, bChannel, bSender, 'mention @local-test in ws B');
+    await sendAsAgent(t, bChannel, bSender, 'mention <silverhand://human/local-test> in ws B');
 
     const scoped = (await (
       await http(t).get(`/api/activity?workspace_id=${a.workspaceId}`)
@@ -332,7 +332,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     t = buildTestApp();
     const { workspaceId, channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'ping @local-test review this');
+    const msgId = await sendAsAgent(t, channelId, sender, 'ping <silverhand://human/local-test> review this');
     t.ctx.db
       .prepare(
         `UPDATE messages
@@ -356,7 +356,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
     // mention is the LOWEST-seq unread; a plain message follows it.
-    await sendAsAgent(t, channelId, sender, 'ping @local-test');
+    await sendAsAgent(t, channelId, sender, 'ping <silverhand://human/local-test>');
     const plainMsg = await sendAsAgent(t, channelId, sender, 'plain follow-up');
 
     await http(t).put(`/api/conversations/${channelId}/attention-preference`, {
@@ -376,7 +376,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'look @local-test');
+    const msgId = await sendAsAgent(t, channelId, sender, 'look <silverhand://human/local-test>');
 
     const notif = t.ctx.db
       .prepare(
@@ -397,7 +397,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
-    const msgId = await sendAsAgent(t, channelId, sender, 'archived ping @local-test');
+    const msgId = await sendAsAgent(t, channelId, sender, 'archived ping <silverhand://human/local-test>');
 
     expect(
       (await getActivity(t)).some(i => i.kind === 'mention' && i.message_id === msgId),
@@ -579,7 +579,7 @@ describe('activity list (#task:1227 ②c GET /api/activity)', () => {
     t = buildTestApp();
     const { channelId } = await createWorkspaceChannel(t);
     const sender = (await firstChannelAgent(t, channelId))!;
-    await sendAsAgent(t, channelId, sender, 'look @local-test');
+    await sendAsAgent(t, channelId, sender, 'look <silverhand://human/local-test>');
 
     const mention = (await getActivity(t)).find(i => i.kind === 'mention');
     expect(mention).toBeTruthy();

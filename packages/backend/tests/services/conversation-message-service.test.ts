@@ -23,6 +23,7 @@ import type { BackendLogger } from '../../src/context.js';
 import type { AgentRuntimeHost } from '../../src/runtime/agent-runtime-host.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import { ccMentionsFromUserMessage } from '../../src/application/mention-cc.js';
+import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import { PrincipalConversationMismatchError } from '../../src/auth/principal.js';
 import { makeTempSilverhandDir, openTestDb } from '../utils/db.js';
 import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
@@ -30,6 +31,22 @@ import { overrideScope, uowWithScopeWrap } from '../utils/tx-fault.js';
 vi.mock('../../src/application/mention-cc.js', () => ({
   ccMentionsFromUserMessage: vi.fn(async () => {}),
 }));
+
+// #task:2000 (Cindy round-2 MUST FIX 1): the REAL parser, spy-wrapped. The send
+// boundary owns the single derivation of "who does this message address" and
+// hands the resulting set to thread auto-follow / the `mention_self`
+// notification / the cross-channel CC as a required argument. Wrapping instead
+// of stubbing keeps every other test in this file on production behavior, while
+// making a re-parse by any consumer observable as a second call.
+vi.mock('@silverhand/shared/reference-markdown', async importOriginal => {
+  const actual = await importOriginal<
+    typeof import('@silverhand/shared/reference-markdown')
+  >();
+  return {
+    ...actual,
+    extractMessageReferences: vi.fn(actual.extractMessageReferences),
+  };
+});
 
 type TerminalReason = Parameters<AgentRuntimeHost['resolveRun']>[2];
 
@@ -84,6 +101,7 @@ class FakeConversationManager {
 
 function bootstrap() {
   vi.mocked(ccMentionsFromUserMessage).mockClear();
+  vi.mocked(extractMessageReferences).mockClear();
   const { db, localHostId } = openTestDb();
   const tmp = makeTempSilverhandDir();
   const hosts = new HostRepo(db);
@@ -192,6 +210,8 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
+        // The plain `@handle` alias addresses nobody (#task:2000), so this
+        // stays an undirected user message: both agents are woken.
         content: 'hello @alice',
       });
       unsubConversation();
@@ -300,7 +320,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const result = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: 'can you check this, @local-test?',
+        content: 'can you check this, <silverhand://human/local-test>?',
       });
       unsubViewer();
 
@@ -355,7 +375,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const reply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: 'in the thread: @local-test can you take this?',
+        content: 'in the thread: <silverhand://human/local-test> can you take this?',
         target: { kind: 'thread', message_id: root.id },
       });
       unsubViewer();
@@ -394,7 +414,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'user', userId: 'local' },
-        content: 'note to @local-test',
+        content: 'note to <silverhand://human/local-test>',
       });
 
       expect(t.notifications.list({ userId: 'local', unread: true })).toEqual([]);
@@ -1578,7 +1598,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const mentionReply = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
-        content: '@carol please look',
+        content: '<silverhand://agent/carol> please look',
         target: { kind: 'thread', message_id: reply1.committed.message.id },
       });
 
@@ -1603,6 +1623,78 @@ describe('ConversationMessageService.sendMessage', () => {
           d => d.agentId === carol.id && d.messageId === mentionReply.committed.message.id,
         ),
       );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('derives the addressing set ONCE per send and hands that same set to every in-send consumer (#task:2000)', async () => {
+    // Regression guard for the round-2 finding: the addressing contract had
+    // three independent derivations (thread-follow, the `mention_self`
+    // notification, the CC pass each parsed `message.content` themselves), so
+    // one send parsed the same immutable body three times and "what this
+    // message addresses" had three authorities that could drift apart.
+    //
+    // The guard is deliberately two-sided:
+    //   - CALL COUNT — exactly one parse for a send that reaches ALL THREE
+    //     consumers (a thread reply, from a user actor so `ccMentions` is on,
+    //     addressing both a human and an agent). A consumer that re-parses
+    //     turns this into 2+.
+    //   - IDENTITY — the CC port receives the very array the boundary derived
+    //     (`toBe`, not `toEqual`), so a future consumer cannot satisfy the
+    //     count by parsing an equal-looking set from somewhere else.
+    // Thread-follow has no injectable seam here, so it is pinned by its
+    // effect: the mentioned agent ends up followed with `source='mention'`,
+    // which is only reachable through the passed set.
+    const t = bootstrap();
+    try {
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+
+      vi.mocked(extractMessageReferences).mockClear();
+      const content =
+        'in-thread: <silverhand://human/teammate-test> <silverhand://agent/alice> please look';
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content,
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      // ONE derivation, at the send boundary, off the caller's bytes (the
+      // insert copies `content` verbatim, so this is the same body the
+      // consumers would have re-parsed).
+      expect(vi.mocked(extractMessageReferences).mock.calls).toEqual([[content]]);
+      const derived = vi.mocked(extractMessageReferences).mock.results[0]!.value;
+      expect(derived).toEqual([
+        { kind: 'human', handle: 'teammate-test' },
+        { kind: 'agent', handle: 'alice' },
+      ]);
+
+      // Consumer 1 (in-tx): thread auto-follow used the passed set.
+      const aliceFollow = t.threadFollowers
+        .listFollowers(root.id)
+        .find(f => f.principal_id === t.alice.id);
+      expect(aliceFollow?.source).toBe('mention');
+
+      // Consumer 2 (post-commit): the `mention_self` notification.
+      expect(t.notifications.list({ userId: 'teammate', unread: true })).toEqual([
+        expect.objectContaining({
+          kind: 'mention_self',
+          user_id: 'teammate',
+          message_id: reply.committed.message.id,
+        }),
+      ]);
+
+      // Consumer 3 (post-commit, across the port): the CC pass is handed the
+      // identical array — no second parse, no second authority.
+      await waitFor(() => vi.mocked(ccMentionsFromUserMessage).mock.calls.length === 1);
+      const ccArgs = vi.mocked(ccMentionsFromUserMessage).mock.calls[0]![0];
+      expect(ccArgs.references).toBe(derived);
     } finally {
       t.cleanup();
     }
@@ -1633,7 +1725,7 @@ describe('ConversationMessageService.sendMessage', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
-        content: '@alice ping',
+        content: '<silverhand://agent/alice> ping',
         target: { kind: 'thread', message_id: root.id },
       });
 
@@ -1704,7 +1796,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const mention = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: '@carol catch up',
+        content: '<silverhand://agent/carol> catch up',
         target: { kind: 'thread', message_id: root.id },
       });
 
@@ -1756,7 +1848,7 @@ describe('ConversationMessageService.sendMessage', () => {
       const mention = await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: '@carol catch up on everything',
+        content: '<silverhand://agent/carol> catch up on everything',
         target: { kind: 'thread', message_id: root.id },
       });
 
@@ -1807,7 +1899,7 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
         t.service.sendMessage({
           conversationId: t.channel.id,
           actor: { kind: 'user', userId: 'local' },
-          content: 'mentions @alice and would notify @local-test',
+          content: 'addresses <silverhand://agent/alice> and would notify <silverhand://human/local-test>',
         }),
       ).rejects.toThrowError('insert exploded');
       unsubConversation();
@@ -1846,7 +1938,7 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       await t.service.sendMessage({
         conversationId: t.channel.id,
         actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
-        content: 'please look, @local-test',
+        content: 'please look, <silverhand://human/local-test>',
       });
       unsubViewer();
 

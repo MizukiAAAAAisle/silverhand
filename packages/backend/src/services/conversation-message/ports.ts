@@ -28,6 +28,7 @@ import type {
   MessageDto,
   NotificationDto,
   NotificationKind,
+  Reference,
   ThreadFollowerSource,
   ThreadSummaryInvariant,
   WorkspaceDto,
@@ -259,5 +260,9 @@ export interface MentionCcPort {
     message: MessageDto;
     sourceConversation: ConversationDto;
     sourceWorkspace: WorkspaceDto;
+    /** The send boundary's single derivation of what the message addresses
+     *  (#task:2000). Carried across the port so the CC pass never re-parses
+     *  the body it was handed. */
+    references: readonly Reference[];
   }): Promise<void>;
 }

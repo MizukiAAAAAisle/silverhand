@@ -5,6 +5,22 @@ import { z } from 'zod';
 export const ENTITY_NAME_MAX_LENGTH = 64;
 
 /**
+ * The participant-handle CHARACTER grammar, as a regex source fragment with no
+ * anchors and no capture group.
+ *
+ * Exported because a handle is spelled in more than one syntax and every one of
+ * them must admit exactly the same set of names: the stored value
+ * ({@link ParticipantNameSchema} below), the plain `@name` display alias
+ * (`PLAIN_MENTION_PATTERN` in `api/message.ts`), and the handle segment of a
+ * canonical reference destination (`reference.ts`). A second copy of the
+ * character class is how one syntax comes to accept a name another rejects —
+ * which, for the destination form, means a chip that never delivers. The LENGTH
+ * half of the domain is {@link ENTITY_NAME_MAX_LENGTH}; a consumer that needs
+ * the full stored domain must apply both.
+ */
+export const PARTICIPANT_HANDLE_PATTERN = '[a-zA-Z][a-zA-Z0-9_-]*';
+
+/**
  * Stored participant-name grammar. A participant name is a durable mention
  * handle, so every name admitted here must also be representable by the
  * message and renderer `@mention` parsers. The optional display `@` belongs to
@@ -29,7 +45,7 @@ export const ParticipantNameSchema = z
   .min(1)
   .max(ENTITY_NAME_MAX_LENGTH)
   .regex(
-    /^[a-zA-Z][a-zA-Z0-9_-]*$/,
+    new RegExp(`^${PARTICIPANT_HANDLE_PATTERN}$`),
     'participant name must start with a letter and contain only letters, numbers, dash, or underscore',
   );
 

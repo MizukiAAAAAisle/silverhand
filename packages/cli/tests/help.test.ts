@@ -97,7 +97,13 @@ describe('per-noun and per-verb help', () => {
 
   it('keeps chat reference grammar discoverable from message noun help', () => {
     const text = nounHelp('message');
-    expect(text).toContain('@<handle>');
+    // #task:2000 — the addressing form an agent copies from help must be the
+    // canonical reference autolink. The bare `@<name>` alias stays documented,
+    // but only as display-only.
+    expect(text).toContain('<silverhand://agent/<name>>');
+    expect(text).toContain('<silverhand://human/<name>>');
+    expect(text).toContain('display only');
+    expect(text).toContain('@<name>');
     expect(text).toContain('#conv:<id>');
     expect(text).toContain('#task:<n>');
   });

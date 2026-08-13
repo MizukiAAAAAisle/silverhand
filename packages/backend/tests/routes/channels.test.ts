@@ -5,10 +5,10 @@ import { Hono } from 'hono';
 import {
   conversationSideScope,
   encodeUserPrincipalHeader,
-  extractMentions,
   readRenameMetadata,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
+import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { channelServiceErrorResponse } from '../../src/routes/responses.js';
 import { ActorError } from '../../src/services/channel-service.js';
@@ -16,10 +16,11 @@ import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationReadRepo } from '../../src/repos/conversation-read-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 
-/** Drop every Markdown code span, matching the containers the renderer's
- *  `remarkRefs` walker skips. What remains is the text a mention / `#ref` could
- *  actually be parsed out of. `extractMentions` itself is code-span-blind, so
- *  the strip — not the raw string — is what encodes the real hazard. */
+/** Drop every Markdown code span, which is where these bodies put a
+ *  user-chosen label. What remains is the open text a `#ref` sigil or a
+ *  Markdown construct could be read out of — the real hazard for the assertions
+ *  below. The mention assertions need no strip: `extractMessageReferences` is
+ *  itself position-aware (#task:2000), so it is asserted against the RAW body. */
 function stripCodeSpans(text: string): string {
   return text.replace(/(`+)[\s\S]*?\1/g, ' ');
 }
@@ -83,11 +84,15 @@ describe('POST /api/workspaces', () => {
     expect(onboardingMessages[0].content).toContain('auto-loaded above');
     expect(onboardingMessages[0].content).toContain('Active Workspace Memory');
     // Scope rule: global → L1 system_prompt.md, workspace-scoped → L2.
+    // #1998 rephrased this sentence ("write by scope … → L2 MEMORY.md" became
+    // "Write global identity … to L1 / Use this workspace's L2 only for …") and
+    // left these literals behind; the rule itself is unchanged, so the guard is
+    // re-anchored on the current wording.
     // Drift guard for R1: must NOT contain "DM-only / redirect-to-DM"
     // wording — that restriction was retracted.
-    expect(onboardingMessages[0].content).toContain('write by scope');
+    expect(onboardingMessages[0].content).toContain('Write global identity');
     expect(onboardingMessages[0].content).toContain('L1 system_prompt.md');
-    expect(onboardingMessages[0].content).toContain('L2 MEMORY.md');
+    expect(onboardingMessages[0].content).toContain(`this workspace's L2 only`);
     expect(onboardingMessages[0].content).not.toMatch(/redirect them to your DM/i);
     expect(onboardingMessages[0].content).not.toMatch(/do NOT modify your global system_prompt\.md/i);
 
@@ -184,9 +189,12 @@ describe('workspace metadata and membership routes', () => {
     const onboarding = afterCreate.messages.find(
       (m: any) => m.metadata?.subtype === 'onboarding',
     );
-    // The label rides in a code span, so the only mention left in the open text
-    // is the recipient's own handle — the one this body means to address.
-    expect(extractMentions(stripCodeSpans(onboarding.content))).toEqual(['alice']);
+    // The label rides in a code span, so the only participant this body
+    // addresses is the recipient — named by a canonical reference, which is the
+    // only form that delivers. The hostile label's own `@alice` is display text.
+    expect(extractMessageReferences(onboarding.content)).toEqual([
+      { kind: 'agent', handle: 'alice' },
+    ]);
     expect(stripCodeSpans(onboarding.content)).not.toContain('#general');
     expect(stripCodeSpans(onboarding.content)).not.toContain('**bold**');
     // Sigil placement: `#` belongs to channels, so the label is never prefixed.
@@ -203,9 +211,9 @@ describe('workspace metadata and membership routes', () => {
     const rename = afterRename.messages.find(
       (m: any) => m.metadata?.subtype === 'rename',
     );
-    // Both the old and the new label are quoted, so the announcement carries no
-    // mention and no reference at all.
-    expect(extractMentions(stripCodeSpans(rename.content))).toEqual([]);
+    // Both the old and the new label are quoted, so the announcement addresses
+    // nobody and carries no reference at all.
+    expect(extractMessageReferences(rename.content)).toEqual([]);
     expect(stripCodeSpans(rename.content)).not.toContain('#general');
     // The structured metadata the renderer draws stays the raw label.
     expect(rename.metadata.old_name).toBe(hostile);
@@ -296,7 +304,7 @@ describe('workspace metadata and membership routes', () => {
       const memberRemovedMessage = events.find(e => e.kind === 'message');
       expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
         from_kind: 'system',
-        content: '@local-test removed @carol from this conversation.',
+        content: '<silverhand://human/local-test> removed <silverhand://agent/carol> from this conversation.',
         metadata: {
           subtype: 'conversation_member_removed',
           actor_kind: 'user',
@@ -664,7 +672,7 @@ describe('workspace metadata and membership routes', () => {
     const memberRemovedMessage = conversationEvents.find(e => e.kind === 'message');
     expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
-      content: '@local-test removed @teammate-test from this conversation.',
+      content: '<silverhand://human/local-test> removed <silverhand://human/teammate-test> from this conversation.',
       metadata: {
         subtype: 'conversation_member_removed',
         actor_kind: 'user',

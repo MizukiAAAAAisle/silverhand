@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import type {
   AttachmentRefInput,
   AttachmentSnapshot,
@@ -134,6 +135,19 @@ export class ConversationMessageService {
       );
     }
 
+    // #task:2000 (Cindy round-2 MUST FIX 1) — ONE derivation of "who does this
+    // message address", at the send's authoritative boundary, handed to every
+    // in-send consumer (thread auto-follow inside the transaction, the
+    // `mention_self` notification and the cross-channel CC after commit). Each
+    // of them takes it as a REQUIRED argument, so a fourth consumer cannot
+    // quietly add a fourth parse of the same body.
+    //
+    // Derived from `input.content` rather than the inserted row because the
+    // insert copies it verbatim (`insertMessageWithFreshnessIfApplicable`) —
+    // identical bytes, and it keeps a pathological 64KiB Markdown parse OUT of
+    // the write transaction instead of holding the write lock across it.
+    const references = extractMessageReferences(input.content);
+
     let txResult: SendMessageTxResult;
     try {
       txResult = this.uow.atomically((tx): SendMessageTxResult => {
@@ -198,6 +212,7 @@ export class ConversationMessageService {
                 threadRootId,
                 message,
                 actor: input.actor,
+                references,
               })
             : null;
         // S1 (#task:1276) P1+P2: a thread reply changes the root's authoritative
@@ -380,6 +395,7 @@ export class ConversationMessageService {
     this.delivery.notifyViewerMentionBestEffort(
       txResult.targetConversation,
       txResult.message,
+      references,
     );
     this.delivery.publishUnreadUpdated(txResult.targetConversation.id);
 
@@ -411,7 +427,11 @@ export class ConversationMessageService {
         ? input.actor.agentId
         : null;
     if (policy.ccMentions) {
-      void this.delivery.ccMentionsBestEffort(txResult.sourceConversation, txResult.message);
+      void this.delivery.ccMentionsBestEffort(
+        txResult.sourceConversation,
+        txResult.message,
+        references,
+      );
     }
 
     // Thread reply: follower-gated delivery (§6). Recipients were narrowed

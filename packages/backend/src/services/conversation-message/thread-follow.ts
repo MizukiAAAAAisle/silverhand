@@ -10,8 +10,11 @@
 // `MessageTxScope`; the callback-free voluntary surface uses the narrow
 // read / direct-write ports. It never opens a transaction of its own except
 // through the injected UnitOfWork.
-import { extractMentions } from '@silverhand/shared';
-import type { MessageDto, ThreadFollowerSource } from '@silverhand/shared';
+import type {
+  MessageDto,
+  Reference,
+  ThreadFollowerSource,
+} from '@silverhand/shared';
 import type {
   MessageTxScope,
   MessageUnitOfWork,
@@ -204,6 +207,10 @@ export class ThreadFollowManager {
       threadRootId: string;
       message: MessageDto;
       actor: SendMessageActor;
+      /** The send boundary's single derivation of what this message
+       *  addresses (#task:2000, Cindy round-2 MUST FIX 1). Required, not
+       *  re-derived here: one send = one parse. */
+      references: readonly Reference[];
     },
   ): ThreadDeliveryPlan {
     const { conversationId, threadRootId, message } = params;
@@ -227,19 +234,27 @@ export class ThreadFollowManager {
       );
     }
 
-    // @mentioned channel members → follower. Mention no longer changes
+    // Referenced channel members → follower. Mention no longer changes
     // delivery kind because current thread messages already turn every
     // visible follower agent; it still creates a follower row for the mention.
     // Non-members are never followed via mention (§4.1: follow is not a
     // membership backdoor); their visibility is filtered at delivery anyway.
+    //
+    // #task:2000: the reference contract decides who is addressed, and the
+    // reference's KIND decides which namespace answers for it. The old
+    // agent-then-user fallback existed because a bare `@handle` carried no kind
+    // and a handle is unique across both tables; a typed pointer states which
+    // one it means, so `silverhand://human/x` must not follow an agent `x`.
     let userMemberIds: Set<string> | null = null;
-    for (const handle of new Set(extractMentions(message.content))) {
-      const agent = tx.agents.getByName(handle);
-      if (agent && tx.conversations.getAgent(conversationId, agent.id)) {
-        this.followAgent(tx, conversationId, threadRootId, agent.id, 'mention', currentSeq);
+    for (const ref of params.references) {
+      if (ref.kind === 'agent') {
+        const agent = tx.agents.getByName(ref.handle);
+        if (agent && tx.conversations.getAgent(conversationId, agent.id)) {
+          this.followAgent(tx, conversationId, threadRootId, agent.id, 'mention', currentSeq);
+        }
         continue;
       }
-      const user = tx.users.getByName(handle);
+      const user = tx.users.getByName(ref.handle);
       if (user) {
         userMemberIds ??= this.conversationUserMemberIds(tx, conversationId);
         if (userMemberIds.has(user.id)) {

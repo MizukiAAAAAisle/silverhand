@@ -4,9 +4,20 @@ import {
   HandleSchema,
   ParticipantNameSchema,
   WorkspaceNameSchema,
-  extractMentions,
+  formatReferenceToken,
   suggestParticipantNameFromEmail,
 } from '../src/index.js';
+import { extractMessageReferences } from '../src/reference-markdown.js';
+
+/** Every stored name must be ADDRESSABLE: spelled as a canonical reference in
+ *  prose, it must resolve back to itself. A name the grammar admits but no
+ *  message can address is a participant nobody can reach (#task:2000). */
+function addressable(name: string): boolean {
+  const refs = extractMessageReferences(
+    `hello ${formatReferenceToken({ kind: 'agent', handle: name })}`,
+  );
+  return refs.length === 1 && refs[0]!.handle === name;
+}
 
 describe('participant name grammar (#task:1826)', () => {
   it('requires stored participant names to start with a letter', () => {
@@ -26,10 +37,10 @@ describe('participant name grammar (#task:1826)', () => {
     expect(HandleSchema.safeParse('@2b').success).toBe(false);
   });
 
-  it('makes every accepted participant example mentionable in message text', () => {
+  it('makes every accepted participant example addressable in message text', () => {
     for (const name of ['alice', 'Agent_2', 'x-y']) {
       expect(ParticipantNameSchema.safeParse(name).success).toBe(true);
-      expect(extractMentions(`hello @${name}`)).toEqual([name]);
+      expect(addressable(name), name).toBe(true);
     }
   });
 });
@@ -77,7 +88,7 @@ describe('email → handle suggestion (#task:1830)', () => {
       ).toBe(true);
       expect(suggested.length, label).toBeLessThanOrEqual(ENTITY_NAME_MAX_LENGTH);
       // A prefill that is not addressable would be worse than none.
-      expect(extractMentions(`hi @${suggested}`)).toEqual([suggested]);
+      expect(addressable(suggested), label).toBe(true);
     }
   });
 

@@ -1,8 +1,9 @@
-import { extractMentions, inlineCode, systemSubtype } from '@silverhand/shared';
+import { formatReferenceToken, inlineCode, systemSubtype } from '@silverhand/shared';
 import type {
   ConversationDto,
   DmChannelDto,
   MessageDto,
+  Reference,
   WorkspaceDto,
 } from '@silverhand/shared';
 import type { AgentRuntimeHost } from '../runtime/agent-runtime-host.js';
@@ -99,6 +100,12 @@ export interface MentionCcOpts {
   sourceConversation: ConversationDto;
   /** Source workspace for context surfacing. */
   sourceWorkspace: WorkspaceDto;
+  /** What the message addresses, derived ONCE at the send boundary
+   *  (#task:2000, Cindy round-2 MUST FIX 1). Required rather than re-derived
+   *  from `message.content` here: a second parse of the same immutable body
+   *  would pay the same cost twice and split the definition across two call
+   *  sites. */
+  references: readonly Reference[];
   agents: MentionCcAgentReadPort;
   conversations: MentionCcConversationPort;
   /**
@@ -123,7 +130,7 @@ const EXCERPT_LIMIT = 160;
 
 /**
  * Fan a user-authored message out to the DM channels of any
- * @-mentioned agents that aren't members of the source conversation.
+ * referenced agents that aren't members of the source conversation.
  *
  * Side effects per delivered mention:
  *  - Lazily creates a `Mentions` DM channel for the recipient
@@ -152,7 +159,12 @@ const EXCERPT_LIMIT = 160;
  * doesn't fail the user's message send.
  */
 export async function ccMentionsFromUserMessage(opts: MentionCcOpts): Promise<void> {
-  const handles = extractMentions(opts.message.content);
+  // #task:2000: only canonical agent references CC. A `silverhand://human/x`
+  // reference addresses a person, and a person has no DM channel to fan out to;
+  // the plain `@handle` alias addresses nobody at all.
+  const handles = opts.references
+    .filter(ref => ref.kind === 'agent')
+    .map(ref => ref.handle);
   if (handles.length === 0) return;
 
   // Pre-resolve conversation membership so we don't query per-handle.
@@ -451,10 +463,15 @@ function renderMentionWrap(agent: { name: string }, opts: MentionCcOpts): string
   // Both interpolated values are free text: the workspace name is a label
   // (#task:1827, no `#` sigil — that spells a channel reference) and a channel
   // title has always been freeform. Since this body reaches the agent verbatim
-  // on stdin, each goes in a code span so a name like `@alice` cannot read as a
-  // mention, and one containing backticks cannot fabricate Markdown structure.
+  // on stdin, each goes in a code span so a label cannot fabricate Markdown
+  // structure or a reference destination out of the label.
+  //
+  // The recipient is named with a canonical reference (#task:2000): this body is
+  // server-authored, so it models the one form the prompt teaches instead of the
+  // legacy alias. The quoted original below is a blockquote, which is precisely
+  // why re-stating its references cannot re-deliver them.
   return [
-    `The user @-mentioned you (@${agent.name}) in ${inlineCode(opts.sourceWorkspace.name)} · ${inlineCode(opts.sourceConversation.title)}.`,
+    `The user mentioned you (${formatReferenceToken({ kind: 'agent', handle: agent.name })}) in ${inlineCode(opts.sourceWorkspace.name)} · ${inlineCode(opts.sourceConversation.title)}.`,
     `You're not a member of that channel — you can't see or reply there directly.`,
     ``,
     `Original message:`,

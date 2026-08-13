@@ -1,4 +1,9 @@
-import { type AgentDto, inlineCode, systemSubtype } from '@silverhand/shared';
+import {
+  type AgentDto,
+  formatReferenceToken,
+  inlineCode,
+  systemSubtype,
+} from '@silverhand/shared';
 import type { BackendContext } from '../context.js';
 import type { UserPrincipal } from '../auth/principal.js';
 import type { AgentRepo } from '../repos/agent-repo.js';
@@ -214,12 +219,17 @@ function onboardingBody(
   return [
     // The workspace name is a free-text label (#task:1827) and this body goes
     // to an agent verbatim on stdin: no `#` sigil (it would spell a channel
-    // reference), and a code span so a label like `@alice` or `` `x` `` cannot
-    // read as a mention or fabricate Markdown structure.
-    `You (@${recipient.name}) just joined workspace ${inlineCode(workspaceName)}.`,
+    // reference), and a code span so a label cannot fabricate Markdown
+    // structure or a reference destination.
+    //
+    // Participants are named with canonical references (#task:2000). This is the
+    // first message an agent ever reads, and the roster below is the list it
+    // will address peers from, so the token it can copy is the token that
+    // actually delivers — the plain `@name` alias renders but addresses nobody.
+    `You (${formatReferenceToken({ kind: 'agent', handle: recipient.name })}) just joined workspace ${inlineCode(workspaceName)}.`,
     others.length === 0
       ? `You're the only agent here right now.`
-      : `Other agents in this workspace:\n${others.map(m => `- @${m.name} (${m.runtime})`).join('\n')}`,
+      : `Other agents in this workspace:\n${others.map(m => `- ${formatReferenceToken({ kind: 'agent', handle: m.name })} (${m.runtime})`).join('\n')}`,
     ``,
     `Your role contract is auto-loaded above (sourced from L1 system_prompt.md, shared across every workspace), and this workspace's MEMORY.md is auto-loaded as Active Workspace Memory.`,
     `Send one short greeting introducing yourself by your global role. Write global identity / role / working-style guidance to L1 system_prompt.md. Use this workspace's L2 only for durable, workspace-specific knowledge absent from the codebase, task board, and channel/thread history. Do not mention internal file paths to the user unless they ask.`,

@@ -37,8 +37,22 @@ import { apiPaths } from './api/paths.js';
  * exists to reject; only an explicit plan-B bridge (adapter + §11 exit
  * conditions) may hold a minimum back, and it must change the lockstep test
  * in the same commit. See docs/desktop-server-api-epoch.md §3–4.
+ *
+ * Epoch 3 (#task:2000): the addressing contract. Who a message addresses is now
+ * a canonical `<silverhand://<kind>/<name>>` autolink in prose; the plain `@name`
+ * form still RENDERS as a legacy display chip and addresses nobody — render and
+ * addressing are two independent axes. No DTO field changed — the break is
+ * BEHAVIORAL and mutually silent, which is why it needs admission rather than a
+ * parse. An old renderer's composer writes `@name` and this server notifies no
+ * one; this renderer's composer writes the canonical token and an old server
+ * scans for `@name` and notifies no one. Neither side errors, and the message
+ * itself is delivered as always: what is lost is the DIRECTED half — the mention
+ * fails to reach its subject. There is no DTO to fail on, so
+ * the epoch is the only place this can be caught. Precondition checked per §3,
+ * not assumed: epoch 2 is on published upstream `main`, so a released pair at 2
+ * can exist and this change may not join that generation.
  */
-export const DESKTOP_SERVER_API_EPOCH = 2;
+export const DESKTOP_SERVER_API_EPOCH = 3;
 
 /**
  * #task:1761 (Cindy round-2 P1) — the ADMISSION header. Dedicated and
@@ -79,8 +93,11 @@ export function parseDesktopApiEpochHeader(
  * whose DTO contract no longer exists would fail deep in a parse instead of at
  * admission. Missing/invalid epochs now fail closed with HTTP 426; the
  * distribution counters stay for observability only.
+ *
+ * Raised to 3 by #task:2000 with the rest of the triple: a pre-3 desktop writes
+ * mentions this server does not deliver, and no request it sends would fail.
  */
-export const MINIMUM_CLIENT_API_EPOCH = 2;
+export const MINIMUM_CLIENT_API_EPOCH = 3;
 
 /**
  * Lowest server epoch this desktop build accepts. Symmetric to
@@ -88,8 +105,12 @@ export const MINIMUM_CLIENT_API_EPOCH = 2;
  * build reads the post-removal DTOs, so a server that predates the removal (or
  * predates the `desktop_api` advertisement in `/api/server/info`, classified as
  * epoch 0) is refused by the startup gate rather than decoded.
+ *
+ * Raised to 3 by #task:2000 with the rest of the triple: a pre-3 server does not
+ * deliver the mentions this desktop's composer writes, and would report success
+ * on every one of them.
  */
-export const MINIMUM_SERVER_API_EPOCH = 2;
+export const MINIMUM_SERVER_API_EPOCH = 3;
 
 /** Advertised by `/api/server/info` under the `desktop_api` key. */
 export const DesktopApiAdvertisementSchema = z.object({

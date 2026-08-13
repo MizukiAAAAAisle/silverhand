@@ -246,7 +246,7 @@ describe('POST /api/conversations/:id/members', () => {
     const memberAddedMessage = conversationEvents.find(e => e.kind === 'message');
     expect((memberAddedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
-      content: '@local-test added @bob to this conversation.',
+      content: '<silverhand://human/local-test> added <silverhand://agent/bob> to this conversation.',
       metadata: {
         subtype: 'conversation_member_added',
         actor_kind: 'user',
@@ -333,7 +333,7 @@ describe('POST /api/conversations/:id/members', () => {
     const memberAddedMessage = conversationEvents.find(e => e.kind === 'message');
     expect((memberAddedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
-      content: '@local-test added @teammate-test to this conversation.',
+      content: '<silverhand://human/local-test> added <silverhand://human/teammate-test> to this conversation.',
       metadata: {
         subtype: 'conversation_member_added',
         actor_kind: 'user',
@@ -734,7 +734,7 @@ describe('POST /api/conversations/:id/members', () => {
     const memberAddedMessage = conversationEvents.find(e => e.kind === 'message');
     expect((memberAddedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
-      content: '@alice added @bob to this conversation.',
+      content: '<silverhand://agent/alice> added <silverhand://agent/bob> to this conversation.',
       metadata: {
         subtype: 'conversation_member_added',
         actor_kind: 'agent',
@@ -883,7 +883,7 @@ describe('DELETE /api/conversations/:id/members/agents/:agentId', () => {
     const memberRemovedMessage = conversationEvents.find(e => e.kind === 'message');
     expect((memberRemovedMessage?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
-      content: '@local-test removed @bob from this conversation.',
+      content: '<silverhand://human/local-test> removed <silverhand://agent/bob> from this conversation.',
       metadata: {
         subtype: 'conversation_member_removed',
         actor_kind: 'user',

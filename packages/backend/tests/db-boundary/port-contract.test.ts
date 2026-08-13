@@ -600,7 +600,7 @@ describe('db-boundary: port/concrete boundary', () => {
       repoDependencyViolations([probe], () =>
         [
           "import type { MessageUnitOfWork } from './conversation-message/ports.js';",
-          "import { extractMentions } from '@silverhand/shared';",
+          "import { parseReference } from '@silverhand/shared';",
           "import type { BackendLogger } from '../context.js';",
         ].join('\n'),
       ),

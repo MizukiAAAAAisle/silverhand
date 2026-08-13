@@ -190,8 +190,43 @@ import {
 // children, reopening the deleted home after ack. Exact hello-version matching
 // must therefore reject mixed generations before any command runs.
 // `OUTBOUND_PROTOCOL_VERSION` bumps alongside (9→10). No shim.
+//
+// v12 (#task:2000): the ADDRESSING contract changes, with byte-identical
+// framing — the same shape as v10, and for the same reason. Who a message
+// addresses is now decided by a canonical `<silverhand://<kind>/<name>>`
+// autolink; the plain `@name` form still RENDERS as a legacy display chip and
+// addresses nobody — render and addressing are two independent axes. The daemon is
+// a participant in that contract, not a bystander: it composes the platform
+// prompt itself (`supervisor` → `buildSystemPromptFor`, from the
+// `@silverhand/shared` copy bundled into the published daemon), so its
+// generation decides which addressing form every agent it spawns is TAUGHT.
+// A mixed pair fails silently in both directions: an old daemon teaches `@name`
+// to agents whose messages a new backend reads as addressing no one, and a new
+// daemon teaches the canonical token to a backend that only scans for `@name`.
+// Neither side errors, and a main-line message still reaches every member: what
+// is lost is the author's TARGETING — no notification, no auto-follow (so a
+// thread reply may not even reach the person it names), no CC, and a batch framed
+// as undirected (references-less user text is "for everyone"), so a message
+// written AT someone degrades into a broadcast. That is the least debuggable
+// failure this product has. Exact hello-version matching turns it into a loud
+// refusal before any agent is spawned.
+// `OUTBOUND_PROTOCOL_VERSION` bumps alongside (10→11). No shim — a prompt is
+// composed fresh at every spawn, so admission is the whole migration.
+//
+// Generation check (the "is v11 already in the field?" precondition, borrowed
+// from the desktop-epoch runbook §3): v11 is NOT on npm — `@silverhand-ai/
+// daemon@latest` is 0.1.9 and advertises 10 — but it IS in the field as a
+// locally packaged daemon, and unlike a single-tree desktop build a daemon is an
+// independently-lived artifact: it keeps running across backend rebuilds and is
+// upgraded by its own install step. So v11 counts as released here and this
+// change may not join it.
+//
+// Disjoint from the desktop API epoch (`desktop-server-api-epoch.ts`), which
+// bumps in the same commit: that gate guards `/api/*` (renderer ↔ server) and
+// exempts `/internal/*`, so it never classifies a daemon — and this constant
+// never classifies a renderer. Two boundaries, two admission facts.
 
-export const HOST_PROTOCOL_VERSION = 11;
+export const HOST_PROTOCOL_VERSION = 12;
 
 // ── capability tokens ────────────────────────────────────────────────
 //

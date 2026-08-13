@@ -6,6 +6,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { AtSign, Check, Copy, Hash } from 'lucide-react';
 import { rehypeHighlightTerm } from './rehypeHighlightTerm';
 import type { AgentDto, UserDto } from '@silverhand/shared';
+import { isAutolink } from '@silverhand/shared/reference-markdown';
 import {
   exceedsRenderBudget,
   markdownByteLength,
@@ -20,6 +21,12 @@ import {
   type ConversationReference,
 } from './ConversationRef';
 import { TaskRef, TaskRefStaticChip, type StaticTaskRefSummary } from './TaskRef';
+import {
+  classifyReferenceHref,
+  isPluginLink,
+  isReferenceScheme,
+  PLUGIN_LINK_PROP,
+} from './reference-href';
 
 interface MarkdownProps {
   content: string;
@@ -120,11 +127,20 @@ const BARE_TASK_PREFIX = 'silverhand-task-bare:';
  * as text. Links and code blocks are explicitly overridden so we never
  * navigate the renderer window or hand untrusted text to the shell.
  *
- * Mentions: `remarkMentions` rewrites `@handle` text spans into mdast
- * link nodes with a `silverhand-mention:` URL scheme. The `a` override
- * below recognizes that scheme and renders `<Mention>` (with popover)
- * instead of a normal link, so the agent map only needs to be threaded
- * one place.
+ * Mentions: a message names a participant with a canonical reference
+ * (`<silverhand://agent/Alice>`, #task:2000) — a real Markdown autolink, so it
+ * arrives here as a `link` node and is recognized by `reference-href.ts`. The
+ * plain `@handle` form is a permanent DISPLAY alias: `remarkMentions` rewrites
+ * those text spans into link nodes carrying the internal `silverhand-mention:`
+ * scheme. Both arms render the same `<Mention>` chip, so the agent map only
+ * needs to be threaded one place, and neither decides who the message addresses
+ * — that is read server-side from the canonical form alone, and it drives
+ * notification / unread, thread follow + mention CC, and an agent's stdin
+ * framing. On the MAIN LINE it does not decide recipients at all: a channel
+ * message fans out to members and may auto-start them whatever the body says.
+ * In a THREAD it can: `applyThreadFollowEffects` inserts a follower row for a
+ * referenced channel member and the same transaction then reads the updated
+ * follower set to plan this reply (@Cindy, 2026-08-13).
  */
 function MarkdownInner({
   content,
@@ -188,21 +204,50 @@ function MarkdownInner({
       <ReactMarkdown
         remarkPlugins={plugins}
         rehypePlugins={rehypePlugins}
-        // Whitelist our internal mention scheme — react-markdown's
-        // default sanitizer drops unknown URL schemes (turning `href`
-        // into an empty string), which would cause the `a` override
-        // below to miss the prefix check and render an inert link.
-        urlTransform={url =>
+        // Whitelist our internal schemes — react-markdown's default
+        // sanitizer drops unknown URL schemes (turning `href` into an
+        // empty string), which would cause the `a` override below to
+        // miss the prefix check and render an inert link.
+        //
+        // `silverhand://` (the canonical reference form, #task:2000) is
+        // admitted at SCHEME level and case-insensitively, which is wider
+        // than what draws a chip on purpose: provenance (`remarkRefs`
+        // stamps the bare autolinks) and the strict parser then decide
+        // chip vs. inert text, so everything the two of them reject must
+        // still reach an arm that refuses to make it clickable.
+        // Sanitizing it to `''` here would instead route it to the
+        // plain-link fallthrough, whose click handler hands the href to the
+        // OS.
+        //
+        // Restricted to `href` so the scheme reaches exactly the one
+        // override that consumes it: `![x](silverhand://agent/Alice)` has
+        // no arm, so its `src` keeps going through the default sanitizer.
+        urlTransform={(url, key) =>
           url.startsWith(MENTION_PREFIX) ||
           url.startsWith(CHANNEL_PREFIX) ||
           url.startsWith(CONVERSATION_PREFIX) ||
           url.startsWith(TASK_PREFIX) ||
-          url.startsWith(BARE_TASK_PREFIX)
+          url.startsWith(BARE_TASK_PREFIX) ||
+          (key === 'href' && isReferenceScheme(url))
             ? url
             : defaultUrlTransform(url)
         }
         components={{
-          a: ({ href, children, ...rest }) => {
+          a: ({ href, children, node, ...rest }) => {
+            // An internal chip scheme has exactly one producer — `remarkRefs`,
+            // below — so a link that carries one WITHOUT its provenance flag was
+            // hand-written in the body: `[anything](silverhand-mention:Alice)`
+            // would otherwise draw Alice's chip over the author's own text, the
+            // same spoof ruling C removed from the reference family. Inert text,
+            // and above all never the plain-link arm, which would hand an
+            // internal scheme to the OS opener.
+            if (
+              typeof href === 'string' &&
+              isInternalChipScheme(href) &&
+              !isPluginLink(node)
+            ) {
+              return <span className="text-text-muted">{children}</span>;
+            }
             // Export / screenshot path: every reachable href shape
             // collapses to a styled span. Internal-scheme chips keep
             // their accent class so visual fidelity is preserved, but
@@ -218,17 +263,42 @@ function MarkdownInner({
                   return (
                     <StaticMentionRef
                       name={name}
-                      label={
-                        mentionAgent?.display_name?.trim() ||
-                        mentionAgent?.name ||
-                        mentionHuman?.display_name?.trim() ||
-                        mentionHuman?.name ||
-                        null
-                      }
+                      label={mentionDisplayLabel(mentionAgent, mentionHuman)}
                       resolved={!!mentionAgent || !!mentionHuman}
                       humanId={mentionHuman?.id}
                     />
                   );
+                }
+                // Canonical reference (#task:2000): the same chip as the alias
+                // above, resolved within the kind the destination names — an
+                // `agent/` reference must not resolve against the human map, or
+                // the export would show a chip for a principal the author did
+                // not address. Only a bare autolink gets here as `reference`
+                // (`remarkRefs` stamps those); every other spelling of the scheme
+                // falls to the inert arm below, because the chip replaces the
+                // label and would drop text the author wrote from the export
+                // while the raw body keeps it.
+                const staticRef = classifyReferenceHref(href, node);
+                if (staticRef.arm === 'reference') {
+                  const { kind, handle } = staticRef.reference;
+                  const refAgent =
+                    kind === 'agent' ? agentsByName?.get(handle) : undefined;
+                  const refHuman =
+                    kind === 'human' ? humansByName?.get(handle) : undefined;
+                  return (
+                    <StaticMentionRef
+                      name={handle}
+                      label={mentionDisplayLabel(refAgent, refHuman)}
+                      resolved={!!refAgent || !!refHuman}
+                      humanId={refHuman?.id}
+                    />
+                  );
+                }
+                if (staticRef.arm !== 'other') {
+                  // Either malformed, or written in a spelling display refuses.
+                  // Both show the authored text and nothing else — never a
+                  // fall-through to the link arm.
+                  return <span className="text-text-muted">{children}</span>;
                 }
                 if (href.startsWith(CHANNEL_PREFIX)) {
                   const name = href.slice(CHANNEL_PREFIX.length);
@@ -305,6 +375,43 @@ function MarkdownInner({
                   conversationId={conversationId ?? null}
                 />
               );
+            }
+            // Canonical reference (#task:2000). Same chip as the alias arm
+            // above — a reader must not have to know which spelling the author
+            // used — but resolved only within the kind the destination names,
+            // and only for a bare autolink: chipping
+            // `[Alice](silverhand://human/shiki)` would replace the author's
+            // label with a different principal's chip, and chipping any
+            // labelled form would show as addressed something the addressing
+            // side does not record as a reference.
+            const liveRef = classifyReferenceHref(href, node);
+            if (liveRef.arm === 'reference') {
+              const { kind, handle } = liveRef.reference;
+              const refAgent =
+                kind === 'agent' ? agentsByName?.get(handle) : undefined;
+              const refHuman =
+                kind === 'human' ? humansByName?.get(handle) : undefined;
+              const refAvatarObjectUrl =
+                agentAvatarUrls && refAgent
+                  ? agentAvatarUrls.get(refAgent.id) ?? null
+                  : undefined;
+              return (
+                <Mention
+                  name={handle}
+                  agent={refAgent}
+                  agentAvatarObjectUrl={refAvatarObjectUrl}
+                  human={refHuman}
+                  conversationId={conversationId ?? null}
+                />
+              );
+            }
+            if (liveRef.arm !== 'other') {
+              // Our scheme, but either a malformed destination or a spelling
+              // display refuses: show the authored text and nothing else.
+              // Falling through to the plain-link arm would hand an internal
+              // scheme to `openExternal` on click, and drawing a chip would
+              // claim an addressee this body never names to the addressing side.
+              return <span className="text-text-muted">{children}</span>;
             }
             if (typeof href === 'string' && href.startsWith(CHANNEL_PREFIX)) {
               const name = href.slice(CHANNEL_PREFIX.length);
@@ -452,6 +559,24 @@ function MarkdownInner({
 
 export const Markdown = memo(MarkdownInner);
 
+/** The label a mention chip shows: `display_name` when the principal has one,
+ *  else the handle (shiki's ruling — a chip always reads as the person, not the
+ *  address). Shared by both spellings so an alias and a canonical reference to
+ *  the same principal are indistinguishable on screen. Kind scoping happens at
+ *  the call site; at most one of the two is ever present. */
+function mentionDisplayLabel(
+  agent: AgentDto | undefined,
+  human: UserDto | undefined,
+): string | null {
+  return (
+    agent?.display_name?.trim() ||
+    agent?.name ||
+    human?.display_name?.trim() ||
+    human?.name ||
+    null
+  );
+}
+
 function StaticMentionRef({
   name,
   label,
@@ -566,10 +691,30 @@ function conversationIcon(
 // literal `@x` inside `\`@bob\`` doesn't fire). Heading text is
 // already extracted into `heading` nodes by the time we run, so a
 // markdown `#` line never reaches us.
+//
+// It also does the one thing only a remark pass CAN do for canonical references
+// (#task:2001): decide whether a `silverhand://` link was written as a bare
+// autolink. That question is answered by slicing the source, and this is the last
+// point where the source is in hand — the `a` override downstream sees a hast
+// property. Hence the second parameter, and hence `markReferenceAutolink`
+// stamping the destinations it admits.
 function remarkRefs() {
-  return (tree: unknown): void => {
-    walk(tree as MdastNode);
+  return (tree: unknown, file: { toString(): string }): void => {
+    walk(tree as MdastNode, file.toString());
   };
+}
+
+/** Every internal scheme the `a` override draws a chip for. The override
+ *  requires {@link isPluginLink} provenance before it consumes any of them,
+ *  because this pass is their only legitimate producer. */
+function isInternalChipScheme(href: string): boolean {
+  return (
+    href.startsWith(MENTION_PREFIX) ||
+    href.startsWith(CHANNEL_PREFIX) ||
+    href.startsWith(CONVERSATION_PREFIX) ||
+    href.startsWith(TASK_PREFIX) ||
+    href.startsWith(BARE_TASK_PREFIX)
+  );
 }
 
 interface MdastNode {
@@ -577,13 +722,46 @@ interface MdastNode {
   value?: string;
   url?: string;
   children?: MdastNode[];
+  data?: { hProperties?: Record<string, unknown> };
+  position?: {
+    start: { offset?: number | undefined };
+    end: { offset?: number | undefined };
+  };
 }
 
-function walk(node: MdastNode): void {
+/** A link node this pass vouches for: either one it built out of prose, or a
+ *  reference it admitted. The flag rides in mdast metadata, which no message
+ *  body can write — see {@link PLUGIN_LINK_PROP}. */
+function stampPluginLink(node: MdastNode): MdastNode {
+  node.data = {
+    ...node.data,
+    hProperties: { ...node.data?.hProperties, [PLUGIN_LINK_PROP]: true },
+  };
+  return node;
+}
+
+/** A chip link built from prose: internal scheme, literal authored text as the
+ *  visible child, provenance stamped. */
+function pluginLink(url: string, text: string): MdastNode {
+  return stampPluginLink({
+    // mdast `link` uses `url`, not `href`. mdast-util-to-hast maps
+    // it to the `href` attribute on the rendered `<a>`.
+    type: 'link',
+    url,
+    children: [{ type: 'text', value: text }],
+  });
+}
+
+function walk(node: MdastNode, source: string): void {
   if (!node.children || node.children.length === 0) return;
   const next: MdastNode[] = [];
   for (const child of node.children) {
-    if (child.type === 'inlineCode' || child.type === 'code' || child.type === 'link') {
+    if (child.type === 'link') {
+      markReferenceAutolink(child, source);
+      next.push(child);
+      continue;
+    }
+    if (child.type === 'inlineCode' || child.type === 'code') {
       next.push(child);
       continue;
     }
@@ -595,10 +773,34 @@ function walk(node: MdastNode): void {
       pushSplit(child.value, next);
       continue;
     }
-    walk(child);
+    walk(child, source);
     next.push(child);
   }
   node.children = next;
+}
+
+/**
+ * Stamp provenance on a reference destination when — and only when — it was
+ * written as a bare autolink.
+ *
+ * The syntax predicate is shared's {@link isAutolink}, the SAME function the
+ * addressing side (`extractMessageReferences`) calls, so "was this written as
+ * `<dest>`?" has one answer in this product rather than two implementations that
+ * can drift (@Cindy, #task:2001).
+ * What is deliberately NOT shared is position policy: the extractor refuses code
+ * spans and blockquotes, while a quoted message must keep looking like the
+ * message, so this pass stamps references wherever prose can appear. `code` /
+ * `inlineCode` cannot contain a `link` node at all, so nothing extra is needed to
+ * keep a quoted example from chipping.
+ *
+ * A destination we do NOT stamp keeps its authored href and therefore lands on
+ * the inert arm — visible text, no chip, not clickable. The flag lives in mdast
+ * metadata rather than in the href precisely so that an author cannot write it.
+ */
+function markReferenceAutolink(node: MdastNode, source: string): void {
+  if (typeof node.url !== 'string' || !isReferenceScheme(node.url)) return;
+  if (!isAutolink(node, source)) return;
+  stampPluginLink(node);
 }
 
 // Leading-boundary validation is handled in `canStartRef`. It keeps
@@ -655,46 +857,33 @@ function pushSplit(text: string, out: MdastNode[]): void {
     const refEnd = m.index + m[0].length;
     const conversationId = m[1];
     if (conversationId) {
-      out.push({
-        type: 'link',
-        // mdast `link` uses `url`, not `href`. mdast-util-to-hast maps
-        // it to the `href` attribute on the rendered `<a>`.
-        url: `${CONVERSATION_PREFIX}${conversationId}`,
-        children: [{ type: 'text', value: `#conv:${conversationId}` }],
-      });
+      out.push(
+        pluginLink(
+          `${CONVERSATION_PREFIX}${conversationId}`,
+          `#conv:${conversationId}`,
+        ),
+      );
       last = refEnd;
       lastRefEnd = refEnd;
       continue;
     }
     const taskNumber = m[2];
     if (taskNumber) {
-      out.push({
-        type: 'link',
-        url: `${TASK_PREFIX}${taskNumber}`,
-        children: [{ type: 'text', value: `#task:${taskNumber}` }],
-      });
+      out.push(pluginLink(`${TASK_PREFIX}${taskNumber}`, `#task:${taskNumber}`));
       last = refEnd;
       lastRefEnd = refEnd;
       continue;
     }
     const mentionName = m[3];
     if (mentionName) {
-      out.push({
-        type: 'link',
-        url: `${MENTION_PREFIX}${mentionName}`,
-        children: [{ type: 'text', value: `@${mentionName}` }],
-      });
+      out.push(pluginLink(`${MENTION_PREFIX}${mentionName}`, `@${mentionName}`));
       last = refEnd;
       lastRefEnd = refEnd;
       continue;
     }
     const channelName = m[4];
     if (channelName) {
-      out.push({
-        type: 'link',
-        url: `${CHANNEL_PREFIX}${channelName}`,
-        children: [{ type: 'text', value: `#${channelName}` }],
-      });
+      out.push(pluginLink(`${CHANNEL_PREFIX}${channelName}`, `#${channelName}`));
       last = refEnd;
       lastRefEnd = refEnd;
       continue;
@@ -703,11 +892,9 @@ function pushSplit(text: string, out: MdastNode[]): void {
     // `#<n>` so the demote-to-text fallback (unresolved / no context)
     // reproduces the original prose verbatim.
     const bareTaskNumber = m[5]!;
-    out.push({
-      type: 'link',
-      url: `${BARE_TASK_PREFIX}${bareTaskNumber}`,
-      children: [{ type: 'text', value: `#${bareTaskNumber}` }],
-    });
+    out.push(
+      pluginLink(`${BARE_TASK_PREFIX}${bareTaskNumber}`, `#${bareTaskNumber}`),
+    );
     last = refEnd;
     lastRefEnd = refEnd;
   }

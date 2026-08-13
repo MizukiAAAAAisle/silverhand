@@ -35,6 +35,10 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 const VIEWER = 'local';
 const VIEWER_HANDLE = 'local-test';
+/** How a message ADDRESSES the viewer (#task:2000): a canonical reference in
+ *  prose. The plain `@handle` alias would render as a chip and notify nobody,
+ *  so it cannot stand in for a mention in these fixtures. */
+const VIEWER_REF = `<silverhand://human/${VIEWER_HANDLE}>`;
 
 async function makeAgent(t: TestApp, name: string): Promise<string> {
   const created = (await (
@@ -320,7 +324,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
 
     await sendAsAgent(t, channelId, aliceId, 'one');
     await sendAsAgent(t, channelId, aliceId, 'two');
-    await sendAsAgent(t, channelId, aliceId, `three @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `three ${VIEWER_REF}`);
 
     // 3, not 4: the positional term already includes the mention, so the directed
     // term is restricted to the conversations the positional term skipped.
@@ -334,7 +338,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
 
     await sendAsAgent(t, channelId, aliceId, 'one');
     await sendAsAgent(t, channelId, aliceId, 'two');
-    await sendAsAgent(t, channelId, aliceId, `look @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `look ${VIEWER_REF}`);
 
     expect(await agreedBadge(t, workspaceId)).toBe(1);
   });
@@ -345,7 +349,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
     await setChannelTier(t, channelId, 'mute');
 
     await sendAsAgent(t, channelId, aliceId, 'one');
-    await sendAsAgent(t, channelId, aliceId, `look @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `look ${VIEWER_REF}`);
 
     // The tier that silences the CHANNEL never silences the PERSON addressing
     // you — that residue is the whole reason `mute` is a loudness level of one
@@ -362,7 +366,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
     await sendAsAgent(t, channelId, aliceId, 'loud one');
     await sendAsAgent(t, channelId, aliceId, 'loud two');
     await sendAsAgent(t, second, aliceId, 'quiet plain');
-    await sendAsAgent(t, second, aliceId, `quiet @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, second, aliceId, `quiet ${VIEWER_REF}`);
 
     // 2 positional (loud channel) + 1 directed (quiet channel) = 3.
     expect(await agreedBadge(t, workspaceId)).toBe(3);
@@ -374,7 +378,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
 
     // Mainline root, then the @me lands as a THREAD reply under it.
     const rootId = await sendAsAgent(t, channelId, aliceId, 'root');
-    await sendAsThreadReply(t, channelId, aliceId, rootId, `over here @${VIEWER_HANDLE}`);
+    await sendAsThreadReply(t, channelId, aliceId, rootId, `over here ${VIEWER_REF}`);
 
     // The directed claim exists…
     expect(
@@ -412,7 +416,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
     const { workspaceId, channelId, aliceId } = await createWorkspaceChannel(t);
 
     await sendAsAgent(t, channelId, aliceId, 'plain');
-    await sendAsAgent(t, channelId, aliceId, `hey @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `hey ${VIEWER_REF}`);
     expect(await agreedBadge(t, workspaceId)).toBe(2);
 
     const archived = await http(t).patch(`/api/channels/${channelId}/archive`, {
@@ -433,7 +437,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
 
     await sendAsAgent(t, channelId, aliceId, 'loud one');
     await sendAsAgent(t, channelId, aliceId, 'loud two');
-    await sendAsAgent(t, channelId, aliceId, `loud @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `loud ${VIEWER_REF}`);
     await sendAsAgent(t, second, aliceId, 'quiet plain');
     expect(await agreedBadge(t, workspaceId)).toBe(3);
 
@@ -490,7 +494,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
     await setChannelTier(t, channelId, 'mentions');
     await sendAsAgent(t, channelId, aliceId, 'plain one');
     await sendAsAgent(t, channelId, aliceId, 'plain two');
-    await sendAsAgent(t, channelId, aliceId, `hey @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `hey ${VIEWER_REF}`);
     // Favorites holds CONVERSATIONS (#task:1888) — star the channel itself.
     expect((await http(t).post(`/api/channels/${channelId}/star`)).status).toBe(200);
 
@@ -547,7 +551,7 @@ describe('tiered attention badge (#task:1870 B)', () => {
     // A muted workspace that is still LOUD (a directed claim pierces mute, §5.1)
     // appears in both places at once — the two facts are independent.
     await setChannelTier(t, channelId, 'mute');
-    await sendAsAgent(t, channelId, aliceId, `hey @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `hey ${VIEWER_REF}`);
     await setWorkspaceMuted(t, workspaceId, true);
     const both = await badgeRollup(t);
     expect(both.by_workspace[workspaceId]).toBe(1);
@@ -603,7 +607,7 @@ describe('tiered badge update sources (#task:1870 B)', () => {
     await setChannelTier(t, channelId, 'mentions');
 
     const frames = await captureViewerFrames(t, async app => {
-      await sendAsAgent(app, channelId, aliceId, `ping @${VIEWER_HANDLE}`);
+      await sendAsAgent(app, channelId, aliceId, `ping ${VIEWER_REF}`);
     });
 
     const badges = frames.filter(f => f.kind === 'attention_badge_updated');
@@ -663,7 +667,7 @@ describe('tiered badge update sources (#task:1870 B)', () => {
     t = buildTestApp();
     const { workspaceId, channelId, aliceId } = await createWorkspaceChannel(t);
     await setChannelTier(t, channelId, 'mute');
-    await sendAsAgent(t, channelId, aliceId, `ping @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `ping ${VIEWER_REF}`);
     expect(await agreedBadge(t, workspaceId)).toBe(1);
 
     const notifId = (
@@ -694,7 +698,7 @@ describe('tiered badge update sources (#task:1870 B)', () => {
     t = buildTestApp();
     const { workspaceId, channelId, aliceId } = await createWorkspaceChannel(t);
     await setChannelTier(t, channelId, 'mentions');
-    await sendAsAgent(t, channelId, aliceId, `ping @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `ping ${VIEWER_REF}`);
     expect(await agreedBadge(t, workspaceId)).toBe(1);
 
     const frames = await captureViewerFrames(t, async app => {
@@ -715,7 +719,7 @@ describe('tiered badge update sources (#task:1870 B)', () => {
     const { workspaceId, channelId, aliceId } = await createWorkspaceChannel(t);
     // Loud channel: the mention is already inside the positional term, so
     // clearing the directed row leaves the badge where it was.
-    await sendAsAgent(t, channelId, aliceId, `ping @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, channelId, aliceId, `ping ${VIEWER_REF}`);
     expect(await agreedBadge(t, workspaceId)).toBe(1);
 
     const frames = await captureViewerFrames(t, async app => {
@@ -754,7 +758,7 @@ describe('the effective directed claim: ONE definition, three faces (§7/§8)', 
       t,
       second,
       aliceId,
-      `muted @${VIEWER_HANDLE}`,
+      `muted ${VIEWER_REF}`,
     );
     expect(await agreedBadge(t, workspaceId)).toBe(1);
 
@@ -793,7 +797,7 @@ describe('the effective directed claim: ONE definition, three faces (§7/§8)', 
       t,
       second,
       aliceId,
-      `muted @${VIEWER_HANDLE}`,
+      `muted ${VIEWER_REF}`,
     );
     expect(await agreedBadge(t, workspaceId)).toBe(1);
     expect(
@@ -845,7 +849,7 @@ describe('membership: the badge’s fourth dependency (§8/§10)', () => {
 
     await sendAsAgent(t, channelId, aliceId, 'home one');
     await sendAsAgent(t, second, aliceId, 'public one');
-    await sendAsAgent(t, second, aliceId, `public @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, second, aliceId, `public ${VIEWER_REF}`);
     expect(await agreedBadge(t, workspaceId)).toBe(3);
 
     const viewerFrames: { kind: string; payload: any }[] = [];
@@ -892,7 +896,7 @@ describe('membership: the badge’s fourth dependency (§8/§10)', () => {
     );
     await setChannelTier(t, second, 'mute');
     await sendAsAgent(t, channelId, aliceId, 'home one');
-    await sendAsAgent(t, second, aliceId, `muted @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, second, aliceId, `muted ${VIEWER_REF}`);
     // 1 positional (home) + 1 directed residue (muted room).
     expect(await agreedBadge(t, workspaceId)).toBe(2);
 
@@ -921,7 +925,7 @@ describe('membership: the badge’s fourth dependency (§8/§10)', () => {
 
     // The edge IS the variable for anything the baseline did not cover: a fresh
     // mention after the re-join contributes again, with no badge frame involved.
-    await sendAsAgent(t, second, aliceId, `muted again @${VIEWER_HANDLE}`);
+    await sendAsAgent(t, second, aliceId, `muted again ${VIEWER_REF}`);
     expect(await agreedBadge(t, workspaceId)).toBe(2);
   });
 });

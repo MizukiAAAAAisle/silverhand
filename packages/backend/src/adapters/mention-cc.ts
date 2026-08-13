@@ -61,7 +61,7 @@ export function createMentionCcAdapter(deps: {
  */
 export type MentionCcComposition = Omit<
   MentionCcOpts,
-  'message' | 'sourceConversation' | 'sourceWorkspace'
+  'message' | 'sourceConversation' | 'sourceWorkspace' | 'references'
 >;
 
 export function createMentionCcComposition(deps: {

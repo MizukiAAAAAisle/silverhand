@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { decodeTransportEpoch, decodeTransportSeq } from '@silverhand/shared';
+import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
@@ -119,6 +120,9 @@ async function runMentionCc(t: ReturnType<typeof bootstrap>, message: MessageDto
     message,
     sourceConversation: t.sourceChannel,
     sourceWorkspace: t.sourceWorkspace,
+    // The send boundary derives this once and hands it across the port
+    // (#task:2000); this harness stands in for that caller.
+    references: extractMessageReferences(message.content),
   });
 }
 
@@ -133,7 +137,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'hey @alice take a look',
+        content: 'hey <silverhand://agent/alice> take a look',
       });
 
       await runMentionCc(t, userMsg);
@@ -182,7 +186,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: null,
-        content: 'hey @alice legacy null author',
+        content: 'hey <silverhand://agent/alice> legacy null author',
       });
 
       await runMentionCc(t, userMsg);
@@ -215,7 +219,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: null,
-        content: 'hey @alice no resolvable human',
+        content: 'hey <silverhand://agent/alice> no resolvable human',
       });
 
       await runMentionCc(t, userMsg);
@@ -255,7 +259,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: null,
-        content: 'hey @alice ambiguous human',
+        content: 'hey <silverhand://agent/alice> ambiguous human',
       });
 
       await runMentionCc(t, userMsg);
@@ -284,7 +288,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'first @alice',
+        content: 'first <silverhand://agent/alice>',
       });
       await runMentionCc(t, m1);
       // Second mention — addUser must be idempotent.
@@ -292,7 +296,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'second @alice',
+        content: 'second <silverhand://agent/alice>',
       });
       await runMentionCc(t, m2);
 
@@ -327,7 +331,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'first @alice',
+        content: 'first <silverhand://agent/alice>',
       });
       await runMentionCc(t, m1);
 
@@ -351,7 +355,7 @@ describe('ccMentionsFromUserMessage — agent-home DM admission / ACL repair', (
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'second @alice after ACL removal',
+        content: 'second <silverhand://agent/alice> after ACL removal',
       });
       await runMentionCc(t, m2);
 
@@ -382,7 +386,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'please review this @alice',
+        content: 'please review this <silverhand://agent/alice>',
       });
 
       await runMentionCc(t, userMsg);
@@ -460,7 +464,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'first @alice',
+        content: 'first <silverhand://agent/alice>',
       });
       await runMentionCc(t, first);
       const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
@@ -472,7 +476,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'second @alice',
+        content: 'second <silverhand://agent/alice>',
       });
       await runMentionCc(t, second);
 
@@ -499,7 +503,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'first @alice',
+        content: 'first <silverhand://agent/alice>',
       });
       await runMentionCc(t, first);
       const mentionsDm = t.conversations.findDmChannelForAgent(t.alice.id, {
@@ -520,7 +524,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'second @alice',
+        content: 'second <silverhand://agent/alice>',
       });
       await runMentionCc(t, second);
 
@@ -542,7 +546,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'please review even if delivery fails @alice',
+        content: 'please review even if delivery fails <silverhand://agent/alice>',
       });
 
       await runMentionCc(t, userMsg);
@@ -590,7 +594,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'hey @ghost',
+        content: 'hey <silverhand://agent/ghost>',
       });
 
       await runMentionCc(t, userMsg);
@@ -617,7 +621,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'hey @alice',
+        content: 'hey <silverhand://agent/alice>',
       });
 
       await runMentionCc(t, userMsg);
@@ -651,7 +655,7 @@ describe('ccMentionsFromUserMessage — realtime events and skip logging', () =>
         conversationId: t.sourceChannel.id,
         fromKind: 'user',
         fromUserId: 'teammate',
-        content: 'hey @bob',
+        content: 'hey <silverhand://agent/bob>',
       });
 
       await runMentionCc(t, userMsg);
@@ -814,6 +818,7 @@ describe('ccMentionsFromUserMessage — the placement is one unit, and effects f
       message,
       sourceConversation: t.sourceChannel,
       sourceWorkspace: t.sourceWorkspace,
+      references: extractMessageReferences(message.content),
     });
   }
 
@@ -872,7 +877,7 @@ describe('ccMentionsFromUserMessage — the placement is one unit, and effects f
           conversationId: t.sourceChannel.id,
           fromKind: 'user',
           fromUserId: 'teammate',
-          content: 'hey @alice take a look',
+          content: 'hey <silverhand://agent/alice> take a look',
         });
 
         await runWithRosterFault(t, userMsg, failOn);

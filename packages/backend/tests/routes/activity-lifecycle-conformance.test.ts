@@ -126,7 +126,7 @@ const MENTION_SOURCE: SourceCase = {
   sourceId: 'directed_notification',
   orphanable: true,
   async seed(t, { channelId, senderId }) {
-    const msgId = await sendAsAgent(t, channelId, senderId, 'ping @local-test please');
+    const msgId = await sendAsAgent(t, channelId, senderId, 'ping <silverhand://human/local-test> please');
     return item => item.kind === 'mention' && item.message_id === msgId;
   },
 };

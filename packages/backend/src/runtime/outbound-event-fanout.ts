@@ -60,6 +60,7 @@ import {
   formatInboxBatch,
   sendMessageToolName,
 } from './stdin-format.js';
+import { createReferenceMemo } from './reference-memo.js';
 import {
   buildRuntimeStartOptions,
 } from './runtime-start-options.js';
@@ -212,6 +213,14 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
   private readonly perimeter: RuntimeEventPerimeterPort;
   /** D4.c C7 — bounded-wait registry for `clearSession`. */
   private readonly clearSessions: ClearSessionWaiterRegistry;
+  /**
+   * #task:2000 (option B) — the addressing set of a message, derived once and
+   * reused across every recipient its batch is framed for. Instance-scoped
+   * because all three delivery paths (live, replay, ready-for-drain) reach
+   * `pendingBatch` on this one object; sound because `messages.content` never
+   * changes. See `reference-memo.ts` for the bound and that invariant.
+   */
+  private readonly references = createReferenceMemo();
 
   constructor(private readonly opts: OutboundRuntimeEventFanoutOptions) {
     this.inbox = opts.persistence.inbox;
@@ -1813,6 +1822,7 @@ export class OutboundRuntimeEventFanout implements HostWsEventSink {
         this.defaultUserHandle(conversationId),
         agent.name,
         sendMessageToolName(),
+        message => this.references.referencesOf(message),
       ),
       agentRuntime: agent.runtime,
       driver,

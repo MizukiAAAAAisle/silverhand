@@ -13,6 +13,7 @@
     "./db/migrations": "./src/db/migrations.ts",
     "./db/schema": "./src/db/schema.ts",
     "./cli-command-manifest": "./src/cli-command-manifest.ts",
+    "./reference-markdown": "./src/reference-markdown.ts",
     "./driver": "./src/driver/index.ts",
     "./app-data-layout": "./src/app-data-layout.ts"
   },
@@ -23,9 +24,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "mdast-util-from-markdown": "^2.0.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/mdast": "^4.0.4",
     "@types/node": "^22.7.5",
     "typescript": "^5.6.3",
     "vitest": "^4.1.10"

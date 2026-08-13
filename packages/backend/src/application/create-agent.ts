@@ -2,6 +2,7 @@ import {
   type AgentDto,
   type AgentRow,
   type CreateAgentInput,
+  formatReferenceToken,
   runtimeDefaultModel,
   systemSubtype,
 } from '@silverhand/shared';
@@ -255,7 +256,9 @@ function mapDaemonWireErrorToFailureCode(
 
 const ONBOARDING_DM_CONTENT = (agentName: string): string =>
   [
-    `You (@${agentName}) are now in your personal DM with the user.`,
+    // Canonical reference, not the plain `@name` alias (#task:2000): a
+    // server-authored body models the one form that both renders and delivers.
+    `You (${formatReferenceToken({ kind: 'agent', handle: agentName })}) are now in your personal DM with the user.`,
     `Your role contract lives at L1 \`system_prompt.md\`, this computer's authority on who you are; it applies in every workspace on this computer, and edits take effect on the agent's next spawn. This DM also has its own L2 \`MEMORY.md\` / \`notes/\` for memory that stays here.`,
     `Send one short greeting: say hi by name, state your current global role briefly (or say it is not defined yet), and ask what role the user would like you to play. Write global identity / role / working-style guidance to L1 \`system_prompt.md\`. Use this DM's L2 only for durable, DM-specific knowledge absent from the codebase, task board, and channel/thread history. Do not mention internal file paths to the user unless they ask.`,
   ].join('\n');

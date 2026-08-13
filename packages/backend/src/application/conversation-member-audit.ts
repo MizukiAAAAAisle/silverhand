@@ -13,7 +13,7 @@
  * `conversationMemberAddedActorSnapshot` deliberately stays behind: resolving a
  * principal into a snapshot is a directory read, not language.
  */
-import { systemSubtype } from '@silverhand/shared';
+import { formatReferenceToken, systemSubtype } from '@silverhand/shared';
 
 export type ConversationMemberAddedActorSnapshot = {
   kind: 'user' | 'agent' | 'system';
@@ -64,12 +64,27 @@ export function conversationMemberAddedContent(input: {
   return `${conversationMemberAddedLabel(input.actor)} added ${conversationMemberAddedLabel(input.member)} to this conversation.`;
 }
 
+/**
+ * How this sentence names a participant: a canonical reference (#task:2000), not
+ * the plain `@name` alias.
+ *
+ * This is a behavior-PRESERVING choice, not decoration. "X added you to this
+ * conversation" is how a human learns they were added — it reaches them as a
+ * `mention_self` notification because the sentence names them — and only the
+ * canonical form still delivers. The actor's snapshot spells its human kind
+ * `user` while a member's spells it `human`; the reference vocabulary is
+ * `human`, so the mapping happens here rather than leaking a third spelling.
+ */
 export function conversationMemberAddedLabel(
   participant:
     | ConversationMemberAddedActorSnapshot
     | ConversationMemberAddedMemberSnapshot,
 ): string {
-  return participant.kind === 'system' ? 'system' : `@${participant.name}`;
+  if (participant.kind === 'system') return 'system';
+  return formatReferenceToken({
+    kind: participant.kind === 'agent' ? 'agent' : 'human',
+    handle: participant.name,
+  });
 }
 
 export function conversationMemberAddedMetadata(input: {

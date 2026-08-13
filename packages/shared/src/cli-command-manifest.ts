@@ -41,7 +41,9 @@ export const SILVERHAND_COMMAND_DOMAINS = [
         noun: 'message',
         summary: 'Send messages, read history, search visible text.',
         guidance:
-          'Chat references: @<handle> names a participant; #<channel> or ' +
+          'Chat references: <silverhand://agent/<name>> or ' +
+          '<silverhand://human/<name>> addresses a participant (bare @<name> is ' +
+          'display only); #<channel> or ' +
           '#conv:<id> names a place; #task:<n> names a task. Use these sigils ' +
           'only in message text, never as CLI argument values or inside code. ' +
           'Wrap URLs next to non-ASCII punctuation in <...> or Markdown link syntax.',

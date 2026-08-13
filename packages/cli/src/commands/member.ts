@@ -38,7 +38,7 @@ this command from inside that thread.
 Flags:
   --handle    Required. Agent or human handle, with or without the
               leading \`@\` (\`alice\` and \`@alice\` are both accepted).
-              The same handle namespace as \`@\`-mentions in chat.
+              The same handle namespace chat references use.
 
 stdout: ConversationMembersResponse JSON with the updated members
 list (kind/name/display_name etc. for every current member).

@@ -194,7 +194,7 @@ describe('workspace self-leave (#task:1930)', () => {
     const message = roomEvents.find(e => e.kind === 'message');
     expect((message?.payload as any)?.message).toMatchObject({
       from_kind: 'system',
-      content: '@local-test left this conversation.',
+      content: '<silverhand://human/local-test> left this conversation.',
       metadata: {
         subtype: 'conversation_member_removed',
         actor_kind: 'user',

@@ -12,11 +12,11 @@
 // (`MentionCcPort`, `ConversationUnreadPublishPort`) — neither of which is
 // reachable from `MessageTxScope`, which is what makes "a transaction callback
 // structurally cannot publish" true.
-import { extractMentions } from '@silverhand/shared';
 import type {
   ConversationAgentDto,
   ConversationDto,
   MessageDto,
+  Reference,
 } from '@silverhand/shared';
 import type { BackendLogger } from '../../context.js';
 import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
@@ -70,12 +70,35 @@ export class MessageDeliveryCoordinator {
     this.unreadPublish.publishUnreadUpdatedToConversationViewers(conversationId);
   }
 
+  /**
+   * Insert a `mention_self` notification for every human member this message
+   * addresses. `mention_self` is the canonical directed "@me" source the
+   * Attention / Activity read surfaces count, so what counts as "addressed"
+   * here is the reference contract and nothing looser: a canonical reference
+   * destination naming a HUMAN, in prose position (#task:2000).
+   *
+   * `kind` is checked, not merely carried: a handle is globally unique across
+   * users and agents, so `silverhand://agent/shiki` could be resolved to the
+   * human `shiki` by ignoring the kind. It isn't — a typed pointer that names
+   * the wrong kind is a wrong address, and answering it anyway would make the
+   * kind decorative.
+   *
+   * `references` is the send boundary's single derivation for THIS message
+   * (Cindy round-2 MUST FIX 1). It is a required argument rather than a
+   * re-parse so that "one parse per send" is a signature, not a convention:
+   * every in-send consumer of the addressing contract is handed the same set.
+   */
   notifyViewerMentionBestEffort(
     conversation: ConversationDto,
     message: MessageDto,
+    references: readonly Reference[],
   ): void {
     try {
-      const mentionedHandles = new Set(extractMentions(message.content));
+      const mentionedHandles = new Set(
+        references
+          .filter(ref => ref.kind === 'human')
+          .map(ref => ref.handle),
+      );
       if (mentionedHandles.size === 0) return;
 
       for (const viewerUserId of this.read.viewerUserIds(conversation.id)) {
@@ -273,6 +296,7 @@ export class MessageDeliveryCoordinator {
   async ccMentionsBestEffort(
     sourceConversation: ConversationDto,
     message: MessageDto,
+    references: readonly Reference[],
   ): Promise<void> {
     const sourceWorkspace = this.read.getWorkspace(sourceConversation.workspace_id);
     if (!sourceWorkspace) return;
@@ -281,6 +305,7 @@ export class MessageDeliveryCoordinator {
         message,
         sourceConversation,
         sourceWorkspace,
+        references,
       });
     } catch (err) {
       this.logger.warn(

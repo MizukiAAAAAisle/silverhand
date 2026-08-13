@@ -3,13 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { StaticRouter } from 'react-router-dom/server';
 import { describe, expect, it } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { TaskSummaryDto, UserDto } from '@silverhand/shared';
+import type { AgentDto, TaskSummaryDto, UserDto } from '@silverhand/shared';
 import { decodeMessageSeq } from '@silverhand/shared';
 import { Markdown } from './Markdown';
 import { MESSAGE_RENDER_BUDGET_BYTES } from './markdown-render-budget';
 import { SystemMessage } from './SystemMessage';
 import type { ChannelReference } from './ChannelRef';
 import type { ConversationReference } from './ConversationRef';
+import { PLUGIN_LINK_PROP } from './reference-href';
 import { TaskRefContextProvider } from '@/features/tasks/TaskRefContext';
 import { taskByNumberKey } from '@/features/tasks/useTaskByNumber';
 import { setCurrentUserId } from '@/lib/current-user';
@@ -1077,6 +1078,275 @@ describe('Markdown human mentions', () => {
     expect(html).not.toContain('data-mention-kind="human"');
     expect(html).not.toContain('data-mention-id="user-shiki"');
   });
+});
+
+/**
+ * #task:2001 — the canonical reference arm. A mechanical fence, not a painting
+ * test: the `a` override's LAST arm renders a real `<a>` whose click handler
+ * calls `window.silverhand.openExternal(href)`, so it is the only arm that can
+ * produce an `<a>` element. Asserting no `<a>` for a rejected destination
+ * therefore proves the destination never reached the OS opener — the one failure
+ * this design must not have, and one that would otherwise only show up as a
+ * browser window opening on a user's machine.
+ *
+ * Every case runs in BOTH branches. `interactive: false` is the export /
+ * screenshot path with its own independent copy of the arm chain, and a fence
+ * that only covered the live path would let the export path regress silently.
+ *
+ * These render a real body rather than calling the arm with an href, because
+ * under ruling C (shiki, 2026-08-13) the SPELLING is what decides: `remarkRefs`
+ * stamps provenance on bare autolinks and only stamped destinations chip.
+ * `reference-href.test.ts` covers the arm's own table; the stamping half, and the
+ * fact that a body cannot forge the stamp, can only be observed from source.
+ */
+describe('Markdown canonical references (#task:2000)', () => {
+  const REF_AGENT: AgentDto = {
+    id: 'agent-alice',
+    name: 'Alice',
+    display_name: 'Alice L',
+    runtime: 'claude',
+    avatar_url: null,
+    created_at: 1,
+    updated_at: 1,
+  } as AgentDto;
+
+  const REF_HUMAN: UserDto = {
+    id: 'user-shiki',
+    name: 'shiki',
+    display_name: 'Shiki',
+    avatar_url: null,
+    created_at: 1,
+    updated_at: 1,
+  };
+
+  function renderRef(content: string, interactive: boolean): string {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return renderToStaticMarkup(
+      React.createElement(
+        QueryClientProvider,
+        { client: qc },
+        React.createElement(
+          StaticRouter,
+          { location: '/' },
+          React.createElement(Markdown, {
+            content,
+            interactive,
+            agentsByName: new Map([[REF_AGENT.name, REF_AGENT]]),
+            humansByName: new Map([[REF_HUMAN.name, REF_HUMAN]]),
+          }),
+        ),
+      ),
+    );
+  }
+
+  for (const interactive of [true, false]) {
+    const branch = interactive ? 'live' : 'export';
+
+    it(`resolves an agent reference autolink to an agent chip (${branch})`, () => {
+      const html = renderRef('cc <silverhand://agent/Alice> please', interactive);
+
+      expect(html).toContain('data-mention-kind="agent"');
+      expect(html).toContain('Alice L');
+      // The destination is consumed, never emitted.
+      expect(html).not.toContain('silverhand://');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`resolves a human reference autolink to a human chip (${branch})`, () => {
+      const html = renderRef('cc <silverhand://human/shiki> please', interactive);
+
+      expect(html).toContain('data-mention-kind="human"');
+      expect(html).toContain('data-mention-id="user-shiki"');
+      expect(html).not.toContain('silverhand://');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`does not resolve a reference across kinds (${branch})`, () => {
+      // `Alice` is an agent here. An `human/Alice` reference names a human by
+      // that name, and there is none — so it stays an unresolved chip and must
+      // not borrow the agent's identity.
+      const html = renderRef('cc <silverhand://human/Alice>', interactive);
+
+      expect(html).not.toContain('data-mention-id="agent-alice"');
+      expect(html).not.toContain('silverhand://');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`renders a reference to a non-member as an unresolved chip (${branch})`, () => {
+      const html = renderRef('cc <silverhand://agent/Nobody>', interactive);
+
+      expect(html).toContain('Nobody');
+      expect(html).not.toContain('silverhand://');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`keeps every malformed destination unclickable (${branch})`, () => {
+      // Each of these is our scheme (so the sanitizer let it through) but not a
+      // reference (so the strict parser refuses it). The arm must show the
+      // authored text and stop there.
+      for (const href of [
+        'silverhand://',
+        'silverhand://agent',
+        'silverhand://agent/',
+        'silverhand://team/Alice',
+        'silverhand://agent/Alice/extra',
+        'silverhand://agent/Alice?x=1',
+        'silverhand://app',
+        'SILVERHAND://agent/Alice',
+      ]) {
+        const html = renderRef(`see <${href}> here`, interactive);
+        expect(html, href).not.toContain('<a ');
+        expect(html, href).not.toContain('data-mention-kind=');
+      }
+    });
+
+    it(`ignores a label-carrying link to the reference scheme (${branch})`, () => {
+      // The addressing side refuses these because the label can name a different
+      // identity than the destination. Display refuses them too, for a reason of
+      // its own: the chip REPLACES the label, so chipping this would drop "Alice"
+      // from the rendered message while the raw body — CLI history, export, agent
+      // stdin — still shows it. Same body, two readings.
+      const html = renderRef(
+        '[Alice](silverhand://human/shiki) wrote it',
+        interactive,
+      );
+
+      expect(html).toContain('Alice');
+      expect(html).not.toContain('data-mention-kind=');
+      expect(html).not.toContain('silverhand://');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`does not chip a labelled link even when the label IS its destination (${branch})`, () => {
+      // Ruling C (shiki, 2026-08-13). Display admits exactly what the addressing
+      // side admits — bare autolinks — so this spelling, which yields no
+      // reference, must not look addressed. It renders as its own authored text
+      // and nothing else.
+      const html = renderRef(
+        '[silverhand://agent/Alice](silverhand://agent/Alice)',
+        interactive,
+      );
+
+      expect(html).not.toContain('data-mention-kind=');
+      // The authored text survives, and stays unclickable: an internal scheme
+      // must never reach `openExternal`.
+      expect(html).toContain('silverhand://agent/Alice');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`chips a reference inside a blockquote, which the extractor refuses (${branch})`, () => {
+      // The two axes share a SYNTAX test, not a position policy: quoting a
+      // message must keep looking like the message, so the chip stays; nobody is
+      // addressed by it, which the addressing side decides and is not visible
+      // here.
+      const html = renderRef('> cc <silverhand://agent/Alice>', interactive);
+
+      expect(html).toContain('data-mention-kind="agent"');
+      expect(html).not.toContain('<a ');
+    });
+
+    it(`does not chip a reference written inside a code span (${branch})`, () => {
+      // Documentation and agent prose quote the syntax constantly; a chip there
+      // would make the example unreadable.
+      const html = renderRef('write `<silverhand://agent/Alice>`', interactive);
+
+      expect(html).toContain('silverhand://agent/Alice');
+      expect(html).not.toContain('data-mention-kind=');
+      expect(html).not.toContain('<a ');
+    });
+  }
+
+  it('leaves an external link clickable on the live path', () => {
+    // The scheme admission added for references must not narrow what the
+    // default sanitizer already allowed.
+    const html = renderRef('see <https://example.com/x> here', true);
+
+    expect(html).toContain('<a ');
+    expect(html).toContain('href="https://example.com/x"');
+  });
+
+  it('still strips the href from an external link on the export path', () => {
+    const html = renderRef('see <https://example.com/x> here', false);
+
+    expect(html).not.toContain('<a ');
+    expect(html).toContain('https://example.com/x');
+  });
+
+  it('keeps the plain @handle alias rendering as a chip', () => {
+    // Both spellings draw the same chip (shiki, 2026-08-13): the alias is a
+    // permanent display affordance and addresses nobody — it yields no canonical
+    // reference, so no notification, no follow / CC, no directed framing.
+    const html = renderRef('cc @Alice and <silverhand://agent/Alice>', true);
+
+    expect(html.match(/data-mention-kind="agent"/g)).toHaveLength(2);
+  });
+
+  it('never leaks the provenance flag into the DOM, on either arm', () => {
+    // Provenance is mdast metadata that exists only between the remark pass and
+    // the `a` override. Every arm that consumes it renders its own markup, so the
+    // flag must not survive into the document — and neither must react-markdown's
+    // `node` prop, which the override now destructures instead of spreading onto
+    // the plain-link `<a>`.
+    for (const body of [
+      'cc <silverhand://agent/Alice>',
+      'cc <silverhand://agent/Nobody>',
+      'cc <silverhand://team/Alice>',
+      '[Alice](silverhand://human/shiki)',
+      'cc @Alice and #task:12 and #conv:AbC123_-xyZ789qR',
+      'see <https://example.com/x>',
+    ]) {
+      for (const interactive of [true, false]) {
+        const html = renderRef(body, interactive);
+        expect(html, body).not.toContain(PLUGIN_LINK_PROP);
+        expect(html, body).not.toContain(' node=');
+      }
+    }
+  });
+
+  for (const interactive of [true, false]) {
+    const branch = interactive ? 'live' : 'export';
+
+    it(`refuses a hand-written internal chip scheme (${branch})`, () => {
+      // A message body is attacker input, so provenance cannot be a string in the
+      // href (@Cindy, #task:2001). Each of these is spelled exactly as the remark
+      // pass spells the destinations it produces, and each would draw a chip over
+      // text the author wrote — Alice's chip on the word "anything" — if the arm
+      // trusted the prefix alone. They render as their own text instead, and
+      // never as a link: the plain-link arm hands its href to the OS opener.
+      for (const body of [
+        '[anything](silverhand-mention:Alice)',
+        '<silverhand-mention:Alice>',
+        '[Bob](silverhand-task:12)',
+        '[Bob](silverhand-conversation:AbC123_-xyZ789qR)',
+        '[Bob](silverhand-channel:general)',
+      ]) {
+        const html = renderRef(body, interactive);
+        expect(html, body).not.toContain('data-mention-kind=');
+        expect(html, body).not.toContain('<a ');
+        // The authored text stays visible (an autolink's text IS its
+        // destination), but never as a destination: no arm turns it into an
+        // href, so nothing can be handed to the OS opener.
+        expect(html, body).not.toContain('href="silverhand');
+      }
+    });
+
+    it(`refuses a hand-written destination that mimics the old marker (${branch})`, () => {
+      // The first implementation of ruling C carried provenance as an internal
+      // `silverhand-ref:` scheme wrapped around the destination, which any author
+      // could type. It is not a scheme this renderer knows any more, so the
+      // sanitizer empties the href and no arm claims it: no chip either way.
+      for (const body of [
+        '[anything](silverhand-ref:silverhand://agent/Alice)',
+        '<silverhand-ref:silverhand://agent/Alice>',
+      ]) {
+        const html = renderRef(body, interactive);
+        expect(html, body).not.toContain('data-mention-kind=');
+        expect(html, body).not.toContain('href="silverhand');
+      }
+    });
+  }
 });
 
 describe('Markdown conversation refs', () => {

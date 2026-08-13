@@ -147,7 +147,7 @@ describe('channel human-member removal (#task:1688)', () => {
       m => (m.metadata as any)?.subtype === 'conversation_member_removed',
     );
     expect(removed).toHaveLength(1);
-    expect(removed[0]!.content).toContain('@bob');
+    expect(removed[0]!.content).toContain('<silverhand://human/bob-test>');
     expect(removed[0]!.metadata as any).toMatchObject({
       member_kind: 'human',
       member_id: 'bob',

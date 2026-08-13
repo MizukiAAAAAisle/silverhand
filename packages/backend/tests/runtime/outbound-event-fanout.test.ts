@@ -40,6 +40,20 @@ import type {
   HostWsServerController,
 } from '../../src/ws/host-ws-server.js';
 import { openTestDb } from '../utils/db.js';
+import { extractMessageReferences } from '@silverhand/shared/reference-markdown';
+
+// #task:2000 (option B) — wraps the REAL parser so the count assertion below is
+// about how often the wake path derives a message's addressing set, while every
+// other test in this file keeps production behaviour.
+vi.mock('@silverhand/shared/reference-markdown', async importOriginal => {
+  const actual = await importOriginal<
+    typeof import('@silverhand/shared/reference-markdown')
+  >();
+  return {
+    ...actual,
+    extractMessageReferences: vi.fn(actual.extractMessageReferences),
+  };
+});
 
 describe('OutboundRuntimeEventFanout', () => {
   it('keeps outbound event projection in lockstep with EventFrameSchema', () => {
@@ -487,6 +501,60 @@ describe('OutboundRuntimeEventFanout', () => {
         delivery_ids: [delivery.inboxId],
       });
       expect(fix.inbox.listPending(fix.channelId, fix.agentId)).toEqual([]);
+    } finally {
+      fix.cleanup();
+    }
+  });
+
+  // #task:2000 (shiki's ruling: option B). The batch text is per-recipient — the
+  // two agents below get DIFFERENT delivery instructions out of the same body —
+  // but "who does this address" is a property of the body alone. Before the memo
+  // it was re-derived for every recipient, so one message to N agents paid N
+  // Markdown parses. This pins the seam where that happens: real fanout, real
+  // formatter, real parser, counted.
+  it('derives a body addressing set ONCE however many recipients its batch is framed for', async () => {
+    const fix = makeFixture();
+    try {
+      const secondAgent = new AgentRepo(fix.db).create(
+        { name: 'agent-2', runtime: 'claude', host_id: fix.hostId },
+        fix.hostId,
+        fix.viewerUserId,
+      );
+      new ConversationRepo(fix.db).addAgent(fix.channelId, secondAgent.id);
+      fix.transport.snapshot = { runtimes: [] };
+      fix.fanout.onEvent(fix.hostId, readyEvent(), 'conn-1');
+      await waitFor(() =>
+        fix.transport.calls.some(call => call.kind === 'runtime_status'),
+      );
+
+      // Addresses the SECOND agent only, so the per-recipient framing is
+      // observable: the other agent must be told this is someone else's message.
+      const content = 'over to you <silverhand://agent/agent-2>';
+      const msg = fix.messages.insertForConversation({
+        conversationId: fix.channelId,
+        fromKind: 'user',
+        content,
+      });
+      fix.inbox.ensureDelivery(fix.channelId, fix.agentId, msg.id);
+      fix.inbox.ensureDelivery(fix.channelId, secondAgent.id, msg.id);
+
+      vi.mocked(extractMessageReferences).mockClear();
+      fix.transport.setNextDeliverDisposition('admitted');
+      await fix.fanout.deliverMessage(fix.channelId, fix.agentId, msg.id);
+      fix.transport.setNextDeliverDisposition('admitted');
+      await fix.fanout.deliverMessage(fix.channelId, secondAgent.id, msg.id);
+
+      const texts = fix.transport
+        .deliverCalls()
+        .map(call => call.params.text as string);
+      expect(texts).toHaveLength(2);
+      // Framed independently for each recipient — same body, opposite verdicts.
+      expect(texts[0]).toContain('appears addressed to another agent');
+      expect(texts[1]).toContain(
+        'Respond as appropriate — call `silverhand message send` with a brief reply',
+      );
+      // ...and the verdicts came from ONE parse of that body.
+      expect(vi.mocked(extractMessageReferences).mock.calls).toEqual([[content]]);
     } finally {
       fix.cleanup();
     }

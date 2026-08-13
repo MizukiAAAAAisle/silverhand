@@ -12,10 +12,12 @@ import { ParticipantNameSchema } from './api/name.js';
  * triggers), so resolvers never disambiguate by kind, they only decide which
  * kinds they are willing to answer for.
  *
- * SCOPE — message-text mention parsing still lives in `api/message.ts`
- * (`MENTION_RE`), because an embedded token additionally needs a leading
- * boundary that rejects emails and paths. It shares the participant-name
- * character grammar; it does not define which stored names are legal.
+ * SCOPE — this is an ARGUMENT grammar, not a message-text one. Who a message
+ * addresses is decided by `reference.ts` + `reference-markdown.ts` from a
+ * canonical `<silverhand://<kind>/<name>>` autolink, and the display-only
+ * `@name` alias is `PLAIN_MENTION_PATTERN` in `api/message.ts`. All three share
+ * `PARTICIPANT_HANDLE_PATTERN`'s character grammar; none of them defines which
+ * stored names are legal.
  *
  * Grammar and normalization DO belong together here, because they are two
  * halves of one rule for these inputs: the `@` is display sugar that every

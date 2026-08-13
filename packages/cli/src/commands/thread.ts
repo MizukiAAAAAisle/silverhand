@@ -17,7 +17,7 @@ itself or any reply in it; the server normalizes to the canonical root.
 Following is a delivery SUBSCRIPTION, not a permission: it presupposes
 you can already see the parent channel, and it makes future replies in
 that cluster land in your inbox (and backfills the cluster's prior
-replies once, now). Use it to watch a thread you were neither @mentioned
+replies once, now). Use it to watch a thread you were neither referenced
 in nor replied to — those make you a follower automatically.
 
 Flags:
@@ -48,7 +48,7 @@ Stop following a reply cluster (the thread under a message). Identified
 by the cluster root or any reply in it (normalized server-side).
 
 Unfollow is idempotent and only stops delivery — it is not a block: a
-later @mention or reply in the cluster re-follows you automatically.
+later reference or reply in the cluster re-follows you automatically.
 
 Flags:
   --root <message_id>  Required. The cluster root, or any reply in it.

@@ -11,6 +11,7 @@ import {
   hasMessagePayload,
 } from './_zod-helpers.js';
 import { AttachmentLabelSchema, AttachmentSnapshotSchema } from './attachment.js';
+import { PARTICIPANT_HANDLE_PATTERN } from './name.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
 import { LinkedTaskDtoSchema } from './task.js';
 import {
@@ -598,27 +599,25 @@ export const SavedMessagesQueryInputSchema = z.object({
 export type SavedMessagesQueryInput = z.infer<typeof SavedMessagesQueryInputSchema>;
 
 //
-// Single source of truth for what "@name" means in a message body.
-// Mirrors the renderer-side regex in `Markdown.tsx` and the
-// composer-side detector — the boundary check rejects emails (`me@x`)
-// and paths (`a/@b`), and the alpha-first requirement rejects issue
-// refs like `@123`. The inner name grammar mirrors
-// `ParticipantNameSchema`; this parser additionally owns only the boundary
-// needed to survive prose. `HandleSchema` wraps the same stored-name grammar
-// for command/lookup input, where one leading display `@` is tolerated.
-const MENTION_RE = /(?<![\w/])@([a-zA-Z][a-zA-Z0-9_-]*)/g;
-
-/** Returns the unique set of @-names referenced in `text`, in
- *  first-occurrence order. */
-export function extractMentions(text: string): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const m of text.matchAll(MENTION_RE)) {
-    const name = m[1]!;
-    if (!seen.has(name)) {
-      seen.add(name);
-      out.push(name);
-    }
-  }
-  return out;
-}
+// The plain `@name` form: a DISPLAY alias, not an address.
+//
+// #task:2000 split the two axes. Delivery — who a message addresses — is
+// decided exclusively by canonical reference destinations
+// (`reference.ts` + `reference-markdown.ts`); this lexical form never
+// participates in it, in any position. What survives here is the grammar the
+// renderer uses to draw a chip for a bare `@name`, and the composer uses to
+// offer rewriting one into a canonical reference before send.
+//
+// It is a PERMANENT alias, not a migration bridge: a message body is immutable
+// after insert (no write path anywhere sets `content`), so history will never
+// become canonical, and dropping the alias would mean silently degrading every
+// message ever written.
+//
+// The boundary check rejects emails (`me@x`) and paths (`a/@b`), and the
+// alpha-first requirement rejects issue refs like `@123`. The inner name
+// grammar is `PARTICIPANT_HANDLE_PATTERN`, shared with the stored schema and
+// with the handle segment of a reference destination; this pattern adds only
+// the boundary needed to survive prose. Exported as a SOURCE fragment (one
+// capture group, no flags) so each consumer owns its own regex object and no
+// caller can inherit another's `lastIndex`.
+export const PLAIN_MENTION_PATTERN = `(?<![\\w/])@(${PARTICIPANT_HANDLE_PATTERN})`;

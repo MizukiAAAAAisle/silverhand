@@ -10,8 +10,17 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { Hash, Paperclip, X } from 'lucide-react';
-import type { AgentDto, ChannelConversationDto } from '@silverhand/shared';
+import type {
+  AgentDto,
+  ChannelConversationDto,
+  ReferenceKind,
+} from '@silverhand/shared';
 import { isGenericMimeHint, mimeFromFilename } from '@silverhand/shared';
+import {
+  findShorthandCandidates,
+  rewriteShorthandReferences,
+  type ShorthandResolver,
+} from '@silverhand/shared/reference-markdown';
 import {
   MAX_ATTACHMENTS,
   shouldInterceptOversizedPaste,
@@ -313,6 +322,14 @@ export function Composer({
   const memberLists = useWorkspaceMemberLists(workspaceId);
   const agents = memberLists.data?.agents ?? EMPTY_AGENTS;
   const workspaceHumans = memberLists.data?.humans ?? EMPTY_HUMANS;
+  // The empty arrays above are "roster UNKNOWN", not "workspace with nobody in
+  // it" — a distinction the picker can ignore (an empty menu reads the same
+  // either way) but the send path cannot: an unresolvable handle is stored as
+  // authored and addresses no one, so treating the cold window as an empty
+  // roster sends a body that silently addresses nobody (#task:2001 review). One
+  // successful fetch is enough; a stale-but-real roster is authoritative, and
+  // react-query keeps `data` in place across background refetches.
+  const workspaceRosterKnown = memberLists.data !== undefined;
   const conversationMembers = useConversationMembers(conversationId);
   // #task:876 (2026-06-03): the viewer's own row in the mention picker
   // is noise — you can't @-mention yourself meaningfully. Resolve the
@@ -356,6 +373,13 @@ export function Composer({
   );
   const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
   const humanAvatarUrls = useUserAvatarObjectUrls(mentionHumans);
+  // Send-time shorthand → canonical reference (#task:2001). Built from the same
+  // workspace member arrays the picker uses, so a handle is rewritable exactly
+  // when it names someone the picker would have offered.
+  const resolveShorthand = useMemo(
+    () => buildShorthandResolver(agents, workspaceHumans),
+    [agents, workspaceHumans],
+  );
   // `#` autocomplete uses the same workspace resolved above — channel
   // references in chat resolve per-workspace (see Markdown.tsx
   // CHANNEL_PREFIX → ChannelRef), so suggesting channels from another
@@ -499,6 +523,10 @@ export function Composer({
     const sentAttachmentIds = ready.map(item => item.id);
     const submittedSnapshot: ComposerDraftSnapshot = {
       conversationId: draftKey,
+      // The SHORTHAND, not the rewritten body: a failed send restores the draft,
+      // and the author must get back the bytes they typed. Restoring the
+      // canonical form would silently rewrite their draft on the first network
+      // hiccup, and re-sending it is a no-op (already canonical) anyway.
       text: content,
       caret: content.length,
       pending: submittedPending,
@@ -516,35 +544,80 @@ export function Composer({
     setDraftState('');
     setCaretState(0);
     setPendingState([]);
-    void send
-      .mutateAsync({ content, attachments: ready })
-      .then(() => {
-        const submitting = submittingSnapshotRef.current;
-        if (submitting?.editGeneration !== editGeneration) return;
-        clearComposerDraft(draftKey, { sentAttachmentIds });
-        submittingSnapshotRef.current = null;
-      })
-      .catch(() => {
-        const submitting = submittingSnapshotRef.current;
-        if (submitting?.editGeneration !== editGeneration) return;
-        submittingSnapshotRef.current = null;
-        if (mountedRef.current) {
-          draftRef.current = submittedSnapshot.text;
-          caretRef.current = submittedSnapshot.caret;
-          pendingRef.current = submittedSnapshot.pending;
-          setDraftState(submittedSnapshot.text);
-          setCaretState(submittedSnapshot.caret);
-          setPendingState(submittedSnapshot.pending);
+    /** Put the author's own bytes back in the composer. Generation-guarded, so
+     *  it is a no-op once the user has started the next message — and idempotent,
+     *  because it clears the ref it tests. */
+    const restoreDraft = (): void => {
+      const submitting = submittingSnapshotRef.current;
+      if (submitting?.editGeneration !== editGeneration) return;
+      submittingSnapshotRef.current = null;
+      if (mountedRef.current) {
+        draftRef.current = submittedSnapshot.text;
+        caretRef.current = submittedSnapshot.caret;
+        pendingRef.current = submittedSnapshot.pending;
+        setDraftState(submittedSnapshot.text);
+        setCaretState(submittedSnapshot.caret);
+        setPendingState(submittedSnapshot.pending);
+      }
+      patchComposerDraftText(
+        draftKey,
+        submittedSnapshot.text,
+        submittedSnapshot.caret,
+      );
+      for (const item of submittedSnapshot.pending) {
+        upsertComposerDraftAttachment(draftKey, item);
+      }
+    };
+    const dispatch = (storedContent: string): void => {
+      void send
+        .mutateAsync({ content: storedContent, attachments: ready })
+        .then(() => {
+          const submitting = submittingSnapshotRef.current;
+          if (submitting?.editGeneration !== editGeneration) return;
+          clearComposerDraft(draftKey, { sentAttachmentIds });
+          submittingSnapshotRef.current = null;
+        })
+        .catch(restoreDraft);
+    };
+    // Authoring bytes and stored bytes differ here, on purpose (#task:2001,
+    // shiki's ruling): the textarea keeps showing `@Alice` because that is what
+    // the author typed, while the body that ships spells every resolvable
+    // shorthand as `<silverhand://agent/Alice>` — the only form that addresses
+    // anyone.
+    // The rewrite is prose-position-aware, so a handle inside a code span, a
+    // quote, or a link label is stored exactly as written.
+    if (canResolveShorthandNow(content, workspaceRosterKnown)) {
+      dispatch(rewriteShorthandReferences(content, resolveShorthand));
+      return;
+    }
+    // The roster has not landed and this body names someone, so spelling it as a
+    // canonical reference is part of sending it (#task:2001 review). Sending now
+    // would ship a body that addresses nobody with no signal anywhere, so wait
+    // for the authoritative member set instead — and if it cannot be had, hand
+    // the draft back exactly as a failed send does rather than store a
+    // half-truth.
+    if (!workspaceId) {
+      restoreDraft();
+      return;
+    }
+    void memberLists
+      .refetch()
+      .then(result => {
+        const roster = result.data;
+        if (!roster) {
+          restoreDraft();
+          return;
         }
-        patchComposerDraftText(
-          draftKey,
-          submittedSnapshot.text,
-          submittedSnapshot.caret,
+        dispatch(
+          rewriteShorthandReferences(
+            content,
+            buildShorthandResolver(roster.agents, roster.humans),
+          ),
         );
-        for (const item of submittedSnapshot.pending) {
-          upsertComposerDraftAttachment(draftKey, item);
-        }
-      });
+      })
+      // Only reachable if the query layer itself rejects; without it the draft
+      // the user typed would be gone for good.
+      .catch(restoreDraft);
   }
 
   function addFiles(files: FileList | File[]): void {
@@ -1017,16 +1090,17 @@ const HANDLE_CHAR = /[\p{L}\p{N}\p{M}_-]/u;
 // `TOKEN_TAIL_CHAR` — "does the char BEFORE the sigil extend some other
 // token", i.e. is this `@` the tail of an email / a `page#anchor` rather
 // than a fresh mention. This one must stay ASCII (`\w`, no `u` flag)
-// because it mirrors the two parsers that decide what a mention actually
-// MEANS: `extractMentions` in `packages/shared/src/api/message.ts`
-// (`(?<![\w/])@…`, the notification/attention authority) and
-// `canStartRef` in `Markdown.tsx` (`!/[\w]/.test(prev)`, the render
-// authority). Both treat a preceding CJK char as a boundary and DO
-// produce a mention there — so a Unicode class here made the picker
-// strictly stricter than the product: in prose without spaces
-// (`谢谢@alice`) the menu refused to open even though the sent message
-// would have mentioned Alice correctly. Keep this class equal to the
-// parsers' `\w`; widening it silently drops mentions the backend honors.
+// because it mirrors the two parsers that decide what a bare `@handle`
+// BECOMES: `PLAIN_MENTION_PATTERN` in `packages/shared/src/api/message.ts`
+// (`(?<![\w/])@…`, which the send-time rewrite uses to pick the runs it
+// turns into canonical references — #task:2001) and `canStartRef` in
+// `Markdown.tsx` (`!/[\w]/.test(prev)`, the render authority). Both treat a
+// preceding CJK char as a boundary and DO produce a mention there — so a
+// Unicode class here made the picker strictly stricter than the product: in
+// prose without spaces (`谢谢@alice`) the menu refused to open even though
+// the sent message would have referenced Alice correctly. Keep this class
+// equal to the parsers' `\w`; widening it silently hides candidates whose
+// handles the rewrite would still convert.
 const TOKEN_TAIL_CHAR = /\w/;
 
 /**
@@ -1041,7 +1115,7 @@ const TOKEN_TAIL_CHAR = /\w/;
  * trigger must not be the tail of another token — ASCII word char or
  * `/` — so `me@example.com` and `path/@thing` stay quiet while CJK
  * prose (`谢谢@alice`) opens the menu with no space needed. Mirrors
- * `canStartRef` in `Markdown.tsx` and `extractMentions` in
+ * `canStartRef` in `Markdown.tsx` and `PLAIN_MENTION_PATTERN` in
  * `packages/shared/src/api/message.ts`; see `TOKEN_TAIL_CHAR`.
  *
  * Exported for unit tests (pure function; no DOM).
@@ -1086,6 +1160,81 @@ export type PickerItem =
 export interface PickerResult {
   items: PickerItem[];
   hiddenCount: number;
+}
+
+/**
+ * Which bare handles the send-time shorthand rewrite may turn into canonical
+ * references, and with which kind (#task:2001). Pure, and exported for the
+ * fence, because two BEHAVIOURS live here and both fail silently:
+ *
+ *  - **Membership is the admission test.** Only this workspace's members
+ *    resolve, so `@someone-elsewhere` is left as authored — a chip that
+ *    addresses nobody, which is the truth. Same candidate boundary as the
+ *    picker (#task:1720). The arrays must therefore be AUTHORITATIVE: `null`
+ *    from this resolver means "nobody here by that name", and a still-loading
+ *    member query would make it mean "I don't know yet" instead — see
+ *    {@link canResolveShorthandNow}, which is what keeps the two apart.
+ *  - **Agent wins a handle collision**, matching the renderer's alias arm
+ *    (`agentsByName` is consulted before `humansByName`). If the two
+ *    disagreed, a colliding handle would draw an agent's chip while the stored
+ *    reference names a human — the exact chip-says-one-thing /
+ *    addressing-says-another split the reference grammar exists to remove.
+ *
+ * The viewer is deliberately NOT filtered out, unlike {@link buildMentionHumans}:
+ * the picker hides your own row because self-mentioning is noise, but a handle
+ * you typed anyway must still become a reference so the stored body says who you
+ * named. Suppressing your own notification is the server's job and it already
+ * does it.
+ */
+export function buildShorthandResolver(
+  agents: AgentDto[],
+  humans: WorkspaceHumanMember[],
+): ShorthandResolver {
+  const kinds = new Map<string, ReferenceKind>();
+  for (const human of humans) kinds.set(human.name, 'human');
+  // Second, so a collision resolves to the agent.
+  for (const agent of agents) kinds.set(agent.name, 'agent');
+  return handle => kinds.get(handle) ?? null;
+}
+
+/**
+ * Whether this body can be spelled as canonical references with the roster we
+ * currently hold — i.e. whether `submit()` may go straight to the network
+ * (#task:2001 review, @Cindy).
+ *
+ * The bug this closes: an unloaded member query is not an empty workspace. With
+ * `rosterKnown` false every handle resolves to `null`, every shorthand is left as
+ * authored, and the send SUCCEEDS — screen says `@Alice`, stored body says
+ * `@Alice`, and the message names nobody. What that costs depends on where it was
+ * sent (@Cindy, 2026-08-13):
+ *  - **main line**: still delivered to every channel member, idle agents still
+ *    auto-start, but the targeting is gone — no notification or unread for a
+ *    human, no mention CC, and a recipient agent reads the batch as
+ *    undirected/broadcast rather than aimed at it. Nothing looks wrong, which is
+ *    exactly why nothing else can catch it.
+ *  - **thread reply**: worse — delivery is follower-gated, and a reference is
+ *    what would have added the named member to the follower set this reply is
+ *    planned against, so the intended recipient may not receive the reply at all.
+ * The window is small (cold start, deep link, HMR, a restored draft sent before
+ * the roster lands) but every path into it ends in a message that looks addressed
+ * on screen while addressing nobody, and there is no later surface that could
+ * notice: the server never rewrites a body, so the composer is the only place
+ * this can be caught.
+ *
+ * `findShorthandCandidates` rather than a substring test, on purpose: `@` is an
+ * ordinary character in an email address, a code span, or a quote of someone
+ * else's words, and none of those could have addressed anyone. Stalling a send
+ * over them would trade a rare silent miss for a common visible stall. The
+ * position predicate is the same one the rewrite uses, so the two cannot drift.
+ *
+ * Ordered so the normal path never pays: a known roster returns true before the
+ * body is parsed, leaving exactly one Markdown parse per send.
+ */
+export function canResolveShorthandNow(
+  content: string,
+  rosterKnown: boolean,
+): boolean {
+  return rosterKnown || findShorthandCandidates(content).length === 0;
 }
 
 /**
