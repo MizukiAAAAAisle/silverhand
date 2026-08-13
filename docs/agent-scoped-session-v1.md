@@ -273,13 +273,13 @@ conversation 的 placement 派生**（`--board` 不存在）。
 
 | placement | board | 说明 |
 |---|---|---|
-| `workspace` | `WorkspaceBoard(workspace_id)` | 含现有 14 行 legacy home 会话 —— **原地不动** |
+| `workspace` | `WorkspaceBoard(workspace_id)` | 含 `agent_home`（现有 14 行会话 **原地不动**，新建的 home 同样走这一支，§9.2） |
 | `direct_pair` | `DirectPairBoard(pair_key)` | 每条私线一个编号空间，与 placement 同构；agent↔agent 与 human↔human 都只有一个解 |
 | `agent_inbox` | **无 board** | Mentions 是通知读面，不是工作面 ⇒ 向 inbox 建 task 一律拒（trigger），不是「静默落到某处」 |
 
-**零搬迁在 B 下同样成立**（这是我原先反对 B 的唯一理由，已被「legacy 保持 legacy、新概念只承接新行」消解）：
-legacy `agent_home` 仍是 WorkspaceBoard，14 条会话与 39 条 task **零搬迁零重编号**；
-DirectPairBoard 只承接新建的 DirectPair 会话。
+**零搬迁在 B 下同样成立**（这是我原先反对 B 的唯一理由，已被「旧行保持旧形态、新概念只承接新行」消解）：
+`agent_home` 永久属于 `workspace` placement ⇒ 它就是 WorkspaceBoard，现有 14 条会话与 39 条 task
+**零搬迁零重编号**；DirectPairBoard 只承接新建的 DirectPair 会话。
 
 编号落位（**一个 namespace 列 + 一条 UNIQUE**，不是每支一套）：
 
@@ -543,15 +543,22 @@ L1」—— 那只是把同一个能力从 prompt 挪到 frame，`workspace memo
 `{label, memoryPath}[]`、`sessionContext` 再带单一 `conversationId` / `workspaceName` / `workspacePath`。
 一进程服务 N 会话时「哪个 workspace 的 L2」根本无解 —— 这不是取值困难，而是这个概念在 agent scope 下不成立。
 
-目标（`RuntimeScope` 派生的两种注入形态，各自封闭）：
+目标（`RuntimeScope` 派生的两种注入形态，各自封闭；**两列互不影响** —— #2005 只授权改 agent-scoped 那一列）：
 
 | 注入项 | conversation-scoped | agent-scoped |
 | --- | --- | --- |
-| L1 role prompt（`system_prompt.md`） | 注入 | 注入 |
-| **L1 memory**：agent home 的 `MEMORY.md` + `notes/` catalog | 注入 | **注入（唯一的持久记忆）** |
-| workspace L2 `MEMORY.md` / notes catalog 正文 | 注入（不变） | **不存在** |
+| L1 role prompt（`system_prompt.md`） | 注入（不变） | 注入 |
+| **该 workspace 的 L2**：`memoryDirFor(workspace)` 下的 `MEMORY.md` + `notes/` catalog | 注入（**逐字节不变**） | **不存在** |
+| **agent-global `MEMORY.md` + catalog**（新增载体，`<agent home>`） | **不注入** —— 现状没有这一项，本 doc 也不新增 | **注入（唯一的持久记忆）** |
 | `workspaceMemoryIndex`（`{label, memoryPath}[]`） | 注入（不变） | **空集，且 frame / header / 任何读面都不给 L2 路径** |
 | `sessionContext.workspaceName` / `workspacePath` | 注入（不变） | **不注入**（cwd = §7.3 的 agent home，与任何 workspace 无关） |
+
+第三行是 @Cindy 第六轮 finding 1 收正的：我上一版把「L1 memory 两列都注入」与「conversation-scoped 逐字节
+不变」同时写下，二者不能同真 —— 现行 `currentMemoryDir = memoryDirFor(options.workspace)` 只读**当前
+workspace** 的 `MEMORY.md` / `notes/`，regular workspace 里的 conversation-scoped runtime 从来拿不到
+agent-home 的 MEMORY。**agent-global L1 memory 是 agent-scoped 专属的新载体**（`agent_home` workspace 的 L2
+恰好也落在 `<agent home>` 目录下，那是路径巧合，不是同一个概念）；#2005 的原话只授权「agent-scoped 只有
+L1 / 要一个 L1 `MEMORY.md`」，没有授权改 conversation-scoped 的记忆层 ⇒ 不改。
 
 推论，必须一起写下来：
 
@@ -560,12 +567,13 @@ L1」—— 那只是把同一个能力从 prompt 挪到 frame，`workspace memo
   target 的读面，见 §7.2.2）。这与「L2 只放代码/docs/任务板都没有的东西」本来就一致：把 N 个 workspace 的 L2
   同时塞给一个 runtime，只会制造跨 workspace 的串味。
 - **不给「按需读」留后门**：没有 `memoryPath`、没有 workspace memory index、header 不带 workspace 路径。
-  agent 要在某个仓库里干活时，路径来自任务/消息正文或 `workspace list` 这类普通读面（那是工作区发现，
-  不是记忆注入）—— 差别是：**它永远不会被当成「我该维护的记忆」**。
+  agent 要在某个仓库里干活时，路径来自任务/消息正文或 `workspace list`（它已给 `agent_dir` 绝对路径与
+  unavailable 判据 ⇒ 那是**工作区发现**，不是记忆注入，@Cindy 第六轮确认）—— 差别是：
+  **它永远不会被当成「我该维护的记忆」**。
 - **渲染必须是幂等纯函数**：形态只由 `RuntimeScope` 决定，不能出现「首次 spawn 不注入、respawn / compaction
   后又注入」的相位差 —— 那是最难发现的一类漂移。
-- conversation-scoped 路径**逐字节不变**。这不是过渡期让步：两种 scope 都是永久一等模型（§8 术语），
-  conversation-scoped 的 L2 是它的正确形态。
+- conversation-scoped 的注入路径**逐字节不变，一项都不加**（尤其不加 agent-global memory）。这不是过渡期
+  让步：两种 scope 都是永久一等模型（§8 术语），当前 workspace 的 L2 就是 conversation-scoped 的正确形态。
 
 落位：契约在 **P2**（与 `session_scope` / RuntimeScope 分派同票，因为都由 scope 派生），端到端在 **P5**。
 
@@ -620,7 +628,9 @@ P5 端到端 slice ← 全部
   两套 pidfile 不互相 reconcile 掉；**agent-scoped 的 spawn prompt 不含任何 workspace L2 正文，
   也不含任何 L2 路径 / workspace memory index / `workspacePath`（`workspaceMemoryIndex` 为空集），
   且 respawn / context reset 后重新渲染仍不含**（幂等，不是「第一次不注入」）；
-  **agent-scoped 的 delivery frame / header 同样不携带 L2 路径**；**conversation-scoped 的 prompt 逐字节不变**。
+  **agent-scoped 的 delivery frame / header 同样不携带 L2 路径**；
+  **conversation-scoped 的 prompt 逐字节不变 —— 既不减该 workspace 的 L2，也不加 agent-global memory**
+  （两项都算不通过：这一列本票不改，§7.5）。
 - **P3** 并发同 pair 只一行；`UPDATE` endpoints / `pair_key` 被 DB 拒；endpoint kind/id 不合法被拒；
   DM 成员变更 API **不存在**；`participantsOf` 是唯一 ACL 解析入口（静态闸）。
 - **P4** 任何持久字段或跨 principal 读面出现字面 `dm:@…` 即不通过；**B 中引用 A-only 成员：B 的 follower/
@@ -644,8 +654,11 @@ P5 端到端 slice ← 全部
 
 有利条件：`session_scope` 不可变 ⇒ **无 scope 转换器、无 per-item 迁移状态机**；两类靠 placement + slot 键
 天然并存，现有 agent 永久 conversation-scoped。**两种 scope 都是永久的一等模型**（@shiki 2026-08-14 02:41）⇒
-「legacy」这个词在本 doc 里**只指现网的数据形态**（`kind` 生成列、`agent_home` 行、14 条固定 roster 会话），
-**从不指 conversation scope 本身**；也因此不允许任何一票以「conversation-scoped 将来会消失」为前提。
+「legacy」这个词在本 doc 里**只指两样东西**：①**旧数据行形态** —— 14 条固定 roster 的 home 会话与它们那 39 条
+已编号 task（永不搬迁、永不重编号）；②**临时 bridge** —— `kind` 生成列（有可观测删除条件）。
+它**从不指 conversation scope**，**也不指 `agent_home` 本身**（@Cindy 第六轮 finding 2：既然新的
+conversation-scoped Agent 继续建 home，`agent_home` 就是**永久共存的 placement 家族**，不是待清理形态，§9.2）。
+因此不允许任何一票以「conversation-scoped 会消失」或「`agent_home` 会消失」为前提。
 
 ---
 
@@ -701,13 +714,15 @@ epoch」。residual（写在 P2 / P5）：**agent-scoped agent 没有 home 行**
 | 用 `ALTER TABLE ADD COLUMN … GENERATED … VIRTUAL` 迁移 `kind` | 同名普通列已存在：SQLite 没有 alter-column-to-generated、`ADD COLUMN` 撞名、`DROP COLUMN` 被引用它的 `visibility` CHECK 挡住。正解是 `conversations` table rebuild（v64 已有同一 idiom），生成列只是终态 |
 | rebuild 时只断言「新列已存在」 | rebuild 的失效方式是**静默丢约束/丢索引**（`DROP TABLE` 连带丢索引、FK 在迁移中是关的）⇒ 必须断言 schema fingerprint 全量、数据逐行、`foreign_key_check` 为空 |
 | 把 conversation scope 当成 rollout 临时态 / 待收敛的兼容分支 | @shiki 2026-08-14 02:41 明确它是永久并存的一等模型 ⇒ 任何以「它将来会消失」为前提的清理票都是假承诺（P6 上一版就踩到）。反过来也不许把 agent-scoped 实现成「conversation-scoped + nullable conversationId」 |
-| 把现有 `agent_home` 搬迁成新形态的 board（重编号 / 换键） | 与「DirectPair 只承接新行」不同构；旧 home 还挂着 cwd / L2 / vendor session，降级即一次全量迁移。正解是 `board_key` 让 legacy 原地成为 WorkspaceBoard |
+| 把现有 `agent_home` 搬迁成新形态的 board（重编号 / 换键） | 与「DirectPair 只承接新行」不同构；旧 home 还挂着 cwd / L2 / vendor session，降级即一次全量迁移。正解是 `board_key` 让 `agent_home` 原地成为 WorkspaceBoard（它是永久家族，不是待迁形态） |
 | principal token = 扁平 `(agent_id, generation)` | conversation-scoped 同一 agent 有 N 个 slot、generation 可同值 ⇒ 指不出 slot，且 A 的 runtime 能凭 live membership 操作 B，破坏现有隔离。正解是判别联合 + 两种 target policy |
 | 「服务端从 delivery frame 自动记录 command origin」 | Agent token + `--target` 的请求到达时 server 无从关联投递；「取最近一条消息」是猜 ⇒ 虚构 authority。要么不承诺，要么显式可校验的 `origin_message_id` |
 | Mention CC 只靠 source replay（无写入时 dedupe） | source 行只证明输入存在，不证明副本已写 ⇒ 崩溃重放重复投递 |
 | 为 CC 幂等新建 outbox / per-item 状态机 | 同 tx 原子写入已经没有「commit 后还要决定一次」的窗口；新表只是多一份可漂移状态 |
 | `task list` 等集合读面沿用 ambient workspace 默认 | agent-scoped 没有「当前 workspace」⇒ 静默收窄，agent 看不到自己有权的 task 且无红灯。正解：默认并集 + 每行自带坐标，收窄靠显式 flag |
 | agent-scoped 仍能拿到某个 workspace 的 L2（注入正文**或**只给路径 / memory index） | 一进程服务 N 会话时「哪个 workspace」无解；给路径只是把同一个能力从 prompt 挪到 frame，仍会出现「首次 spawn 与 respawn 形态不同」的相位漂移与跨 workspace 串味。正解：agent-scoped **没有 workspace L2 这个概念**，只有 L1；项目事实从仓库 / docs / 任务板 / 频道历史现取 |
+| 顺手给 conversation-scoped 也注入 agent-global `MEMORY.md` | 现状 `memoryDirFor(options.workspace)` 只读当前 workspace 的 L2 ⇒ 加这一项就与「conversation-scoped 逐字节不变」直接冲突，而 #2005 只授权改 agent-scoped 那一列。两条不能同真时，改的是**方案**不是 falsifier |
+| 把 `agent_home` 或 conversation scope 归入「legacy」 | 新的 conversation-scoped Agent 继续创建 home ⇒ 它是永久共存的 placement 家族。「legacy」只指旧的 14 条固定 roster 会话 + 那 39 条 task 行，以及临时的 `kind` bridge |
 | 把 `agents`/`users` 整体改软删当 P0-e 前置件 | 牵动全部 FK cascade、handle 唯一性、登录/list、`created_by`、teardown；本 feature 只需要 endpoint 侧身份存活 |
 | Board 当 ACL 单位 | WorkspaceBoard 聚合该 workspace 全部会话的 task（含成员集合不同的会话）⇒ 取 board 判权即越权；board 形态本身还会演进（A→B 就换过一次）。ACL 必须逐 task 由 `conversation_id` 判 |
 | 局部 `task_number` 当跨 conversation identity | agent-scoped 无 ambient board ⇒ `task detail <n>` 不可解析；identity 必须是全局 `tasks.id` |
