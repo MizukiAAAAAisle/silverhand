@@ -20,6 +20,7 @@ import { ConversationRepo } from './conversation-repo.js';
 import { createEndpointPrincipalPresence } from './endpoint-principal-presence.js';
 import { MessageRepo } from './message-repo.js';
 import { NotificationRepo } from './notification-repo.js';
+import { RuntimeSlotRepo, runtimeSlotScopeFor } from './runtime-slot-repo.js';
 import { ThreadFollowerRepo } from './thread-follower-repo.js';
 import { UserRepo } from './user-repo.js';
 import { WorkspaceRepo } from './workspace-repo.js';
@@ -99,6 +100,10 @@ export function createSqliteConversationPersistence(
   const notifications = new NotificationRepo(db);
   const inboxes = new ConversationInboxRepo(db);
   const threadFollowers = new ThreadFollowerRepo(db);
+  // The RUNTIME SEAT face (P0-d): the auto-start pre-filter's status source.
+  // Composed here rather than reached through membership on purpose — a DM
+  // participant has a seat and no roster row.
+  const runtimeSlots = new RuntimeSlotRepo(db);
   const attachments = new AttachmentRepo(db);
   // The workspace NAME NAMESPACE. Composed here as well as inside
   // `ConversationRepo` (which allocates at channel birth): both hold the same
@@ -329,10 +334,9 @@ export function createSqliteConversationPersistence(
     // cannot restate half of the rule.
     isUserParticipant: (conversationId, userId) =>
       conversations.isUserParticipant(conversationId, userId),
-    // The roster-seat question, now used ONLY by thread-follower eligibility —
-    // see the port doc for why that one stays roster-shaped until P4-5.
-    getAgent: (conversationId, agentId) =>
-      conversations.getAgent(conversationId, agentId),
+    // The roster-seat question is GONE from this scope (#task:2021 P4-5): the
+    // only consumer left was thread-follower eligibility, which now asks
+    // participation like every other gate on the send path.
     // Projection point: the write gate's `direct_pair` narrowing reads the
     // placement arc's columns and nothing else. Listed field by field rather
     // than returned bare — `ConversationIdentity` is a structural supertype of
@@ -352,8 +356,11 @@ export function createSqliteConversationPersistence(
       };
     },
     endpointPrincipalExists: endpointPresence,
-    listAgents: id => conversations.listAgents(id),
-    listUserMemberIds: id => conversations.listUserMembers(id).map(u => u.id),
+    // Recipient / follower-gate enumeration: the placement authority read in its
+    // correlated form, conjoined with a live principal row. NOT `listAgents` /
+    // `listUserMembers` — those answer the workspace arm only, so a rosterless
+    // placement enumerated to nobody (#task:2021 P4-5).
+    listParticipantAgentIds: id => conversations.listParticipantAgentIds(id),
     // Projection point: the inbox arc's only fact the CC write may see is the
     // id (its `workspace_id` is NULL by construction and its roster is empty).
     agentInbox: agentId => {
@@ -423,8 +430,8 @@ export function createSqliteConversationPersistence(
     },
     threadFollowers: {
       upsert: args => threadFollowers.upsert(args),
-      listFollowerAgentsVisible: rootId =>
-        threadFollowers.listFollowerAgentsVisible(rootId),
+      listFollowerAgentIdsParticipating: rootId =>
+        threadFollowers.listFollowerAgentIdsParticipating(rootId),
     },
     // Projection point: the physical attachment row never leaves persistence —
     // the pure resolver takes the minimal channel/label facts only.
@@ -489,8 +496,8 @@ export function createSqliteConversationPersistence(
       messages.getInConversation(conversationId, messageId),
     isFollower: (rootId, principalKind, principalId) =>
       threadFollowers.isFollower(rootId, principalKind, principalId),
-    listFollowerAgentsVisible: rootId =>
-      threadFollowers.listFollowerAgentsVisible(rootId),
+    listFollowerAgentIdsParticipating: rootId =>
+      threadFollowers.listFollowerAgentIdsParticipating(rootId),
   };
 
   const threadFollowDirectWrite: ThreadFollowDirectWritePort = {
@@ -505,6 +512,17 @@ export function createSqliteConversationPersistence(
     getAgent: id => agents.get(id),
     getUser: id => toPrincipalNameSnapshot(users.get(id)),
     viewerUserIds: id => conversationViewerUserIds(conversations, id),
+    // The SEAT's status, resolved through the seat's own scope rule — the
+    // auto-start pre-filter's only honest source once recipients are principal
+    // ids (#task:2021 P4-5). A missing agent row answers `null` (startable) and
+    // the wake then fails best-effort on its own, which is the same outcome as
+    // any other race with a deletion.
+    runtimeSeatStatus: (conversationId, agentId) => {
+      const agent = agents.get(agentId);
+      if (!agent) return null;
+      const slot = runtimeSlots.get(runtimeSlotScopeFor(agent, conversationId));
+      return slot?.observed_status ?? null;
+    },
   };
 
   const deliveryWrite: DeliveryWritePort = {

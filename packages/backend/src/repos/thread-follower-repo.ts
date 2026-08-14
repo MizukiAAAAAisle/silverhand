@@ -1,24 +1,17 @@
 import type { Database as Db } from 'better-sqlite3';
 import type {
-  ConversationAgentDto,
-  ConversationAgentRow,
-  ConversationAgentStatus,
   ThreadFollowerRow,
   ThreadFollowerSource,
 } from '@silverhand/shared';
-
-type FollowerAgentProjectionRow = ConversationAgentRow & {
-  cli_session_id: string | null;
-  pid: number | null;
-  status: ConversationAgentStatus;
-};
+import { agentParticipatesCorrelated } from './conversation-placement-sql.js';
 
 /**
  * Thread followers are a delivery/notification subscription, NOT a
- * permission. `follower ⊆ parent channel member` is enforced at
- * query time (see {@link ThreadFollowerRepo.listFollowerAgentsVisible}),
- * never as a table invariant — the follower table is not authoritative,
- * channel membership is. See docs/thread-reply-cluster-v1.md §4.1/§5/§9.
+ * permission. `follower ⊆ live participant of the parent conversation` is
+ * enforced at query time (see
+ * {@link ThreadFollowerRepo.listFollowerAgentIdsParticipating}), never as a table
+ * invariant — the follower table is not authoritative, the PLACEMENT is
+ * (agent-scoped-session-v1 §4.2). See docs/thread-reply-cluster-v1.md §4.1/§5/§9.
  *
  * A thread is identified by its root message id; replies carry
  * `messages.thread_root_id = <root id>` (the root itself has NULL).
@@ -115,42 +108,42 @@ export class ThreadFollowerRepo {
   }
 
   /**
-   * Agent followers that are CURRENTLY channel members. The inner join on
-   * `conversation_agents` is the visibility filter (invariant 7): a
-   * principal whose follower row lingers after it lost channel membership
-   * is excluded, so delivery never reaches a non-member. Shape mirrors
-   * {@link import('./conversation-repo.js').ConversationRepo.listAgents}
-   * so the send path's delivery/auto-start planning can consume followers
-   * and plain channel members uniformly.
+   * Agent followers that are CURRENT PARTICIPANTS of the thread's conversation —
+   * the delivery/notification read of the follower table (invariant 7): a
+   * principal whose follower row lingers after it lost participation is excluded,
+   * so a revoked seat cannot keep receiving replies on the strength of an old
+   * follower row.
+   *
+   * The gate is `agentParticipatesCorrelated`, the ONE placement authority read in
+   * its correlated form — not the `JOIN conversation_agents` this replaced
+   * (#task:2021 P4-5). The roster join answered only the workspace arm, so on a
+   * `direct_pair` / `agent_inbox` thread it returned ZERO followers and a reply
+   * delivered to nobody; and because both principal kinds now ask the same
+   * authority (an agent through this correlated form, a human through the point
+   * form in `followUser`), "follower ⊆ live participant" is one sentence about
+   * placement rather than two roster-shaped approximations.
+   *
+   * `JOIN agents a` is the LIVENESS conjunct and is load-bearing for the same
+   * reason as in `listParticipantAgentIds`: participation survives an endpoint
+   * tombstone on purpose, delivery must not.
+   *
+   * IDS ONLY. Every caller (the send's delivery plan, the thread-follower read
+   * surface) read `agent_id` and nothing else; the seat columns this used to
+   * project do not exist for a rosterless participant.
    */
-  listFollowerAgentsVisible(threadRootId: string): ConversationAgentDto[] {
+  listFollowerAgentIdsParticipating(threadRootId: string): string[] {
     return this.db
-      .prepare<[string], FollowerAgentProjectionRow>(
-        `SELECT ca.conversation_id,
-                ca.agent_id,
-                ca.joined_at,
-                s.cli_session_id,
-                s.observed_pid AS pid,
-                s.observed_status AS status
+      .prepare<[string], { agent_id: string }>(
+        `SELECT tf.principal_id AS agent_id
            FROM thread_followers tf
-           JOIN conversation_agents ca
-             ON ca.conversation_id = tf.conversation_id
-            AND ca.agent_id = tf.principal_id
-           JOIN agents a ON a.id = ca.agent_id
-           JOIN agent_runtime_slots s
-             ON s.agent_id = ca.agent_id
-            AND (
-              (a.session_scope = 'conversation'
-               AND s.conversation_id = ca.conversation_id)
-              OR
-              (a.session_scope = 'agent'
-               AND s.conversation_id IS NULL)
-            )
+           JOIN conversations c ON c.id = tf.conversation_id
+           JOIN agents a ON a.id = tf.principal_id
           WHERE tf.thread_root_id = ?
             AND tf.principal_kind = 'agent'
-          ORDER BY ca.joined_at ASC`,
+            AND ${agentParticipatesCorrelated('c', 'a.id')}
+          ORDER BY tf.followed_at ASC`,
       )
       .all(threadRootId)
-      .map(r => ({ ...r }));
+      .map(r => r.agent_id);
   }
 }

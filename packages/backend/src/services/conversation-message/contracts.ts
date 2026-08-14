@@ -9,7 +9,6 @@ import type {
   AgentRunTerminalReason,
   AgentSendStaleResolutionReason,
   AttachmentRefInput,
-  ConversationAgentDto,
   ConversationDto,
   LegacySendMessageTarget,
   MessageDto,
@@ -306,24 +305,47 @@ export interface ConversationMessageServiceOptions {
 }
 
 /**
+ * A DELIVERY RECIPIENT of a message: the minimal principal identity, and
+ * deliberately nothing more (#task:2021 P4-5, @Cindy boundary 1).
+ *
+ * It replaced `ConversationAgentDto` on every recipient-shaped signature of the
+ * send path. That DTO is a MEMBERSHIP FACT — `joined_at` plus the runtime seat's
+ * projected columns — and a `direct_pair` endpoint or an inbox owner has no
+ * membership row at all, so widening the fan-out to reach them while keeping the
+ * DTO would have meant fabricating a row for a placement that has none: a
+ * membership assertion invented by the delivery path, then free to be filtered or
+ * joined on downstream.
+ *
+ * A named object rather than a bare `string[]`: an id list of one principal kind
+ * is assignable to an id list of any other, and this set is agents only.
+ *
+ * Not a participation claim either — it is the OUTPUT of one. The set is
+ * enumerated inside the send transaction from the placement authority conjoined
+ * with a live `agents` row, and sender exclusion stays at the plan boundary where
+ * the plan can be read.
+ */
+export interface MessageRecipient {
+  agentId: string;
+}
+
+/**
  * Per-recipient plan for delivering a thread reply (§6 reply-cluster).
  * Current thread messages align with main-line channel delivery: follower
- * agents that are visible in the channel receive a `turn`, excluding the
- * sender. `observe` is reserved for non-waking context paths such as
- * backfill/pull history.
+ * agents that are live participants receive a `turn`, excluding the sender.
+ * `observe` is reserved for non-waking context paths such as backfill/pull
+ * history.
  */
 export type ThreadDeliveryKind = 'turn' | 'observe';
 
-export interface ThreadDeliveryRecipient {
-  agentId: string;
+export interface ThreadDeliveryRecipient extends MessageRecipient {
   kind: ThreadDeliveryKind;
 }
 
 export interface ThreadDeliveryPlan {
   threadRootId: string;
-  /** Follower agents that are current channel members, EXCLUDING the
-   *  reply sender. Computed inside the send transaction after auto-follow
-   *  upserts so newly-followed agents are included. */
+  /** Follower agents that are CURRENT LIVE PARTICIPANTS of the conversation,
+   *  EXCLUDING the reply sender. Computed inside the send transaction after
+   *  auto-follow upserts so newly-followed agents are included. */
   recipients: ThreadDeliveryRecipient[];
 }
 
@@ -331,7 +353,11 @@ export interface SendMessageTxResult {
   sourceConversation: ConversationDto;
   targetConversation: ConversationDto;
   message: MessageDto;
-  recipients: ConversationAgentDto[];
+  /** MAIN-LINE recipients: the target conversation's live agent participants,
+   *  enumerated in this transaction. Empty for a thread reply, which delivers
+   *  through `threadDelivery` instead. References NEVER change this set — the
+   *  main line is a full fan-out (#task:2000 layer ①). */
+  recipients: MessageRecipient[];
   /** What the in-transaction mention CC wrote, for the post-commit half to
    *  finish (wake / WS frames / skip log). Null when the actor's policy carries
    *  no CC (`POLICIES.agent`), which is NOT the same as an empty report: an

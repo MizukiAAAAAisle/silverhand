@@ -674,20 +674,93 @@ describe('mention CC v71 — the write half on states a user send cannot produce
     }
   });
 
-  it('refuses a workspace-less source: a human is never a participant of one (§4.2)', () => {
+  it('skips a workspace-less source instead of throwing: the copy has no coordinate, the send is still valid', () => {
     const t = bootstrap();
     try {
       const message = authoredMessage(t, `${canonical('cc-outsider')} from an inbox`);
-      // The insider's own inbox as the SOURCE. The invariant is that no
-      // user-authored message can originate there; if that ever becomes false,
-      // this must be redesigned rather than defaulted to some workspace.
-      expect(() =>
-        runWrite(t, {
-          message,
-          sourceConversation: t.conversations.get(t.insiderInbox.id)!,
-        }),
-      ).toThrow(/has no workspace placement/);
+      // The insider's own inbox as the SOURCE — still a state a user send cannot
+      // produce, which is why it is called directly here. What changed in
+      // #task:2021 P4-5 is the ANSWER: this used to throw, and throwing from inside
+      // the send transaction rolls back a message the write gate had already
+      // admitted. A source with no workspace has no coordinate to name the copy
+      // after (the wrap text and the `mention_external` row are both keyed by it),
+      // so the CC is declined AS DATA and the send commits.
+      const report = runWrite(t, {
+        message,
+        sourceConversation: t.conversations.get(t.insiderInbox.id)!,
+      });
+
+      expect(report.copies).toEqual([]);
+      expect(report.skipped).toEqual([
+        { handle: 'cc-outsider', reason: 'source_not_workspace_placed' },
+      ]);
+      // A skip, not a partial write: no copy, no queued delivery, no notification.
       expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * The workspace-less source is REACHABLE (#task:2021: P4-4 opened the write gate
+ * for a DM's human endpoint, P4-5 makes such a send deliver). So the case above
+ * gets an integration twin: the exact human send that used to 500 AFTER passing
+ * every gate — a durable-looking failure on the human's screen for the crime of
+ * naming a third agent in a DM.
+ */
+describe('mention CC v71 — a DM source declines the CC without failing the send', () => {
+  it('commits the DM message, writes no copy, and reports the skip after commit', async () => {
+    const t = bootstrap();
+    try {
+      // The human endpoint of a DM with `insider`, built through the aggregate's
+      // only constructor.
+      const dm = t.conversations.getOrCreateDirectPair(
+        { kind: 'human', id: 'local' },
+        { kind: 'agent', id: t.insider.id },
+        1_700_000_000_000,
+      ).conversation.id;
+      expect(t.conversations.get(dm)!.workspace_id).toBeNull();
+
+      const result = await t.service.sendMessage({
+        conversationId: dm,
+        actor: { kind: 'user', userId: 'local' },
+        content: `${canonical('cc-outsider')} take a look`,
+      });
+      await waitFor(() => logEvents(t.logger.info).includes('mention_cc.skip'));
+
+      // The send is intact: one message in the DM, content unchanged.
+      expect(t.messages.listForConversation(dm).map(m => m.id)).toEqual([
+        result.committed.message.id,
+      ]);
+      expect(result.committed.message.content).toBe(
+        `${canonical('cc-outsider')} take a look`,
+      );
+      // …and the CC wrote nothing anywhere.
+      expect(t.messages.listForConversation(t.outsiderInbox.id)).toEqual([]);
+      expect(t.inboxes.listPending(t.outsiderInbox.id, t.outsider.id)).toEqual([]);
+      // No notification of ANY kind: not a mention CC (declined), and not an
+      // `agent_start_failed` either — the DM endpoint's wake is DEFERRED until
+      // #task:2019 gives a workspace-less placement a session cwd, and reporting a
+      // failed start for a message that arrived would be a false alarm on every DM.
+      expect(t.notifications.list({ userId: 'local' })).toEqual([]);
+      expect(logEvents(t.logger.warn)).toContain('delivery.wake_deferred');
+      // The decision is REPORTED, not silent: an operator asking "why did my
+      // mention not arrive" has the reason and the handle.
+      expect(
+        logCalls(t.logger.info)
+          .filter(fields => fields.event === 'mention_cc.skip')
+          .map(fields => ({ handle: fields.handle, reason: fields.reason })),
+      ).toEqual([{ handle: 'cc-outsider', reason: 'source_not_workspace_placed' }]);
+      // The other endpoint still receives the message itself — the CC declining is
+      // not the delivery path (#task:2021 P4-5 layer ①).
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.insider.id && d.messageId === result.committed.message.id,
+        ),
+      );
     } finally {
       t.cleanup();
     }

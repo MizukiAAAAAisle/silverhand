@@ -256,10 +256,25 @@ export class ConversationMessageService {
               })
             : null,
           // Main-line recipients only; thread replies deliver via
-          // `threadDelivery` (follower-gated), not the channel-wide fan-out.
+          // `threadDelivery` (follower-gated), not the conversation-wide fan-out.
+          //
+          // The set is the target's LIVE AGENT PARTICIPANTS — the placement
+          // authority conjoined with a live `agents` row (#task:2021 P4-5), not
+          // the `conversation_agents` listing this replaced: a `direct_pair` /
+          // `agent_inbox` has no roster rows, so a committed DM message
+          // enumerated ZERO recipients and was delivered to nobody. Enumerated
+          // INSIDE this transaction, so the fan-out is the set that held when the
+          // gate said yes.
+          //
+          // `references` is deliberately not consulted here: the main line is a
+          // full fan-out and a reference never adds or removes a recipient of it
+          // (#task:2000 layer ①). The reply-cluster is the one layer where a
+          // reference can widen delivery, via a follower row.
           recipients:
             threadDelivery === null
-              ? tx.conversations.listAgents(targetConversation.id)
+              ? tx.conversations
+                  .listParticipantAgentIds(targetConversation.id)
+                  .map(agentId => ({ agentId }))
               : [],
           threadDelivery,
           skippedFreshnessReason,

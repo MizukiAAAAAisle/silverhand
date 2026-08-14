@@ -19,7 +19,6 @@
 // persistence capability at all and needs no port: this coordinator just drives
 // the in-transaction report through `dispatchMentionCcEffects`.
 import type {
-  ConversationAgentDto,
   ConversationDto,
   MessageDto,
   Reference,
@@ -29,6 +28,7 @@ import { dispatchMentionCcEffects } from '../../application/mention-cc.js';
 import type { MentionCcReport } from '../../application/mention-cc.js';
 import type { BackendLogger } from '../../context.js';
 import type { AgentRuntimeHost } from '../../runtime/agent-runtime-host.js';
+import { RuntimePlacementUnsupportedError } from '../../runtime/agent-runtime-host.js';
 import type { ScopeEventBus } from '../../ws/scope-event-bus.js';
 import type { ConversationUnreadPublishPort } from '../conversation/unread-publish-port.js';
 import type {
@@ -39,6 +39,7 @@ import {
   excerpt,
   nonEmptyName,
   describeStartFailure,
+  type MessageRecipient,
   type ThreadDeliveryPlan,
 } from './contracts.js';
 
@@ -186,24 +187,29 @@ export class MessageDeliveryCoordinator {
     return null;
   }
 
+  /** Main-line fan-out. `recipients` is the send transaction's enumeration of the
+   *  target's LIVE AGENT PARTICIPANTS — principal ids only (`MessageRecipient`),
+   *  never membership rows, because two of the three placements have none. Sender
+   *  exclusion happens HERE rather than in the enumeration, so the plan the log
+   *  records is the full set and the one omission is visible as a parameter. */
   async deliverBestEffort(
     conversationId: string,
     messageId: string,
-    recipients: readonly ConversationAgentDto[],
+    recipients: readonly MessageRecipient[],
     excludeAgentId: string | null,
   ): Promise<void> {
-    const selected = recipients.filter(ca => ca.agent_id !== excludeAgentId);
+    const selected = recipients.filter(r => r.agentId !== excludeAgentId);
     const failures: Array<{ agentId: string; err: unknown }> = [];
     await Promise.all(
-      selected.map(async ca => {
+      selected.map(async r => {
         try {
           await this.runtimeHost.deliverMessage(
             conversationId,
-            ca.agent_id,
+            r.agentId,
             messageId,
           );
         } catch (err) {
-          failures.push({ agentId: ca.agent_id, err });
+          failures.push({ agentId: r.agentId, err });
         }
       }),
     );
@@ -222,12 +228,43 @@ export class MessageDeliveryCoordinator {
     );
   }
 
+  /**
+   * Tell the HUMAN AUTHOR that a recipient's runtime could not be reached. Every
+   * post-commit delivery path funnels its per-recipient failures here, which is
+   * also why the ONE non-failure lives here rather than in each caller.
+   *
+   * A placement the runtime cannot serve YET is not a start failure
+   * ({@link RuntimePlacementUnsupportedError}): the message is committed and its
+   * durable inbox row is queued, and the agent reads it on its next spawn — the
+   * same rule the mention CC's wake already applies (`mention_cc.wake_deferred`).
+   * Reachable on EVERY human DM send since #task:2021 P4-5 made a `direct_pair`
+   * fan out to its agent endpoint, while the session cwd for a workspace-less
+   * placement lands in #task:2019. Notifying anyway would put a red
+   * "agent failed to start" on the author's screen for a message that arrived,
+   * every single time — a false alarm the human cannot act on, and one that would
+   * train them to ignore the real ones. It is LOGGED, not swallowed.
+   */
   notifyAgentStartFailureBestEffort(
     conversation: ConversationDto,
     message: MessageDto,
     agentId: string,
     err: unknown,
   ): void {
+    if (err instanceof RuntimePlacementUnsupportedError) {
+      this.logger.warn(
+        {
+          event: 'delivery.wake_deferred',
+          reason: 'runtime_placement_unsupported',
+          conversationId: conversation.id,
+          messageId: message.id,
+          agentId,
+        },
+        'conversation-message-service: message committed and queued, but this '
+          + 'placement has no runtime scope yet (#task:2019); the agent reads it '
+          + 'on its next spawn',
+      );
+      return;
+    }
     if (message.from_kind !== 'user' || !message.from_user_id) return;
     const agent = this.read.getAgent(agentId);
     const error = describeStartFailure(err);
@@ -349,26 +386,44 @@ export class MessageDeliveryCoordinator {
     }
   }
 
+  /**
+   * Wake the recipients that are not already running (§ auto-start).
+   *
+   * The "already running" fact comes from the agent's RUNTIME SEAT
+   * (`runtimeSeatStatus`), not from a membership row's projected `status` column:
+   * the recipient unit is a principal id now, and a `direct_pair` / `agent_inbox`
+   * participant has a seat but no membership row at all, so the old pre-filter
+   * could not have answered for one (#task:2021 P4-5). The RULE — which statuses
+   * count as running — stays here, where a test of the use case can see it; the
+   * port only reports the status.
+   *
+   * It remains a PRE-FILTER, not the authority: `AgentRuntimeHost.start` re-checks
+   * the live phase before spawning. What this avoids is asking the host to
+   * re-examine every already-busy recipient on every send.
+   */
   async startIdleRecipientsBestEffort(
     conversation: ConversationDto,
     message: MessageDto,
-    recipients: readonly ConversationAgentDto[],
+    recipients: readonly MessageRecipient[],
   ): Promise<void> {
     await Promise.all(
       recipients
-        .filter(ca => ca.status !== 'active' && ca.status !== 'starting')
-        .map(async ca => {
+        .filter(r => {
+          const status = this.read.runtimeSeatStatus(conversation.id, r.agentId);
+          return status !== 'active' && status !== 'starting';
+        })
+        .map(async r => {
           try {
-            await this.runtimeHost.start(conversation.id, ca.agent_id);
+            await this.runtimeHost.start(conversation.id, r.agentId);
           } catch (err) {
             this.notifyAgentStartFailureBestEffort(
               conversation,
               message,
-              ca.agent_id,
+              r.agentId,
               err,
             );
             this.logger.warn(
-              { conversationId: conversation.id, agentId: ca.agent_id, err },
+              { conversationId: conversation.id, agentId: r.agentId, err },
               'conversation-message-service: auto-start on message send failed',
             );
           }

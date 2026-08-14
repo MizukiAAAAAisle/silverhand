@@ -123,7 +123,24 @@ export type MentionCcSkipReason =
   /** The source message carries no author id (legacy rows only). Option A has no
    *  viewer without one, and a guessed viewer would send someone else's mention
    *  notification to whoever happens to be the sole human. */
-  | 'unresolved_author';
+  | 'unresolved_author'
+  /**
+   * The SOURCE conversation is not workspace-placed — a `direct_pair` (a DM).
+   * Reachable since P4-4 opened the write gate for the human endpoint of a DM,
+   * and #task:2021 P4-5 makes such a send actually deliver.
+   *
+   * A SKIP rather than the `throw` this used to be: the copy's wrap text and its
+   * `mention_external` row are both keyed by the source WORKSPACE (name in the
+   * body, id in the notification), so a DM source has no coordinate to write one
+   * with — and throwing rolled the human's committed-and-gated DM send back with a
+   * 500 for the crime of naming a third agent in it. Skipping is not "silently
+   * dropping a mention": the reference still addresses whoever it addresses IN the
+   * DM, and this decision is reported in the CC report and logged after commit.
+   *
+   * DM-sourced CC — a workspace-less wrap plus a notification whose coordinate is
+   * the DM — is a product change with its own read surfaces, filed separately.
+   */
+  | 'source_not_workspace_placed';
 
 export interface MentionCcSkip {
   handle: string;
@@ -170,12 +187,13 @@ export function writeMentionCcCopies(
 
   const sourceWorkspaceId = input.sourceConversation.workspace_id;
   if (sourceWorkspaceId === null) {
-    // Not `requireWorkspacePlacement`'s job to explain this one: the failure is
-    // about WHO can send, not about a surface that lacks a coordinate.
-    throw new Error(
-      `mention cc: source conversation ${input.sourceConversation.id} has no `
-        + 'workspace placement, so its message cannot be user-authored (§4.2)',
-    );
+    // A DM source: no workspace coordinate to name the copy after. Reported per
+    // handle so the post-commit log says which mentions were not copied — see
+    // `source_not_workspace_placed`.
+    for (const handle of handles) {
+      report.skipped.push({ handle, reason: 'source_not_workspace_placed' });
+    }
+    return report;
   }
   const sourceWorkspaceName = tx.workspaces.nameOf(sourceWorkspaceId);
   if (sourceWorkspaceName === null) {
@@ -185,9 +203,6 @@ export function writeMentionCcCopies(
     );
   }
 
-  const sourceMembers = new Set(
-    tx.conversations.listAgents(input.sourceConversation.id).map(ca => ca.agent_id),
-  );
   const copiedTo = new Set<string>();
 
   for (const handle of handles) {
@@ -196,7 +211,12 @@ export function writeMentionCcCopies(
       report.skipped.push({ handle, reason: 'unknown_handle' });
       continue;
     }
-    if (sourceMembers.has(agent.id)) {
+    // PARTICIPATION, not a roster listing (#task:2021 P4-5): the question is
+    // "did this agent already receive the original", which is exactly who the
+    // placement says participates. Identical for the workspace arm — its
+    // participants ARE its roster rows — and it is the only form that stays true
+    // if a non-workspace source ever gains a CC.
+    if (tx.conversations.isAgentParticipant(input.sourceConversation.id, agent.id)) {
       report.skipped.push({ handle, reason: 'already_member', agentId: agent.id });
       continue;
     }

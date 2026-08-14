@@ -1998,17 +1998,13 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       // "bob". The plan must follow the tx scope — reading it through a
       // captured factory repo would compute the plan on another connection's
       // snapshot under a pooled engine (R1).
-      const carolMembership = t.conversations.getAgent(t.channel.id, carol.id);
-      const bobMembership = t.conversations.getAgent(t.channel.id, t.bob.id);
-      expect(carolMembership).not.toBeNull();
-      expect(bobMembership).not.toBeNull();
       const outsideRead = vi
-        .spyOn(t.persistence.threadFollow.read, 'listFollowerAgentsVisible')
-        .mockReturnValue([bobMembership!]);
+        .spyOn(t.persistence.threadFollow.read, 'listFollowerAgentIdsParticipating')
+        .mockReturnValue([t.bob.id]);
       t.txWrap.current = tx =>
         overrideScope(tx, {
           threadFollowers: overrideScope(tx.threadFollowers, {
-            listFollowerAgentsVisible: () => [carolMembership!],
+            listFollowerAgentIdsParticipating: () => [carol.id],
           }),
         });
 
@@ -2080,7 +2076,7 @@ describe('ConversationMessageService persistence boundary (#task:1981)', () => {
       expect(touched).toContain('messages.getInConversation');
       expect(touched).toContain('messages.insertForConversation');
       expect(touched).toContain('threadFollowers.upsert');
-      expect(touched).toContain('threadFollowers.listFollowerAgentsVisible');
+      expect(touched).toContain('threadFollowers.listFollowerAgentIdsParticipating');
     } finally {
       t.cleanup();
     }
@@ -2268,11 +2264,18 @@ describe('ConversationMessageService.sendMessage — the write gate', () => {
       // because the placement has none — if this list ever becomes non-empty the
       // test stops proving anything.
       expect(t.conversations.listAgents(dm)).toEqual([]);
-      // KNOWN GAP, pinned deliberately (P4-5, the recipient boundary): main-line
-      // recipients are still the roster, so a DM delivers to nobody. The write
-      // gate is fixed; who receives is a separate slice with its own review, and
-      // this expectation is the reminder that it is still open.
-      expect(t.fake.delivered).toEqual([]);
+      // …and it is delivered to the OTHER ENDPOINT anyway (#task:2021 P4-5): the
+      // recipient set is the placement's participants, not the roster the line
+      // above proves is empty. This pinned the opposite until P4-5 — "a DM delivers
+      // to nobody" — which was a committed message with no reader.
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === stored[0]!.id,
+        ),
+      );
+      // The SENDER is excluded at the plan boundary, so a send does not wake the
+      // session that made it.
+      expect(t.fake.delivered.some(d => d.agentId === t.alice.id)).toBe(false);
       // The unread read model is keyed by (human viewer, WORKSPACE), so this
       // placement has no frame to emit — and emitting one anyway means the
       // publisher THREW post-commit, which reported a durable message as a failed
@@ -2610,6 +2613,227 @@ describe('ConversationMessageService.sendMessage — the write gate, human arm',
         code: 'user_not_participant_of_conversation',
       });
       expect(t.messages.listForConversation(inbox.id)).toHaveLength(0);
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+/**
+ * THE RECIPIENT BOUNDARY (#task:2021 P4-5).
+ *
+ * Who RECEIVES a committed message, as opposed to who may send one. Three
+ * separate claims, and each one has a way of going wrong that the other two stay
+ * green for:
+ *
+ *  1. PARTICIPATION, NOT THE ROSTER. Main-line recipients are the target's
+ *     placement participants, so a DM fans out to its endpoints — pinned on the
+ *     DM itself in the write-gate block above, because that is where "the send is
+ *     admitted" and "the message reaches someone" have to be one fact.
+ *  2. FOLLOWER ⊆ LIVE PARTICIPANT, ON EVERY PATH. A reference is the ONE way a
+ *     recipient set can widen (#task:2000 layer ②), and it may only widen it
+ *     WITHIN the conversation. Both directions are here: a foreign principal is
+ *     not admitted, a local one is — and the second is what keeps the first from
+ *     passing by way of a follower path that stopped working at all.
+ *  3. REFERENCES NEVER TOUCH THE MAIN LINE (layer ①). The counter-example is
+ *     explicit rather than implied, because "reference ⇒ recipient" is exactly the
+ *     shortcut this boundary invites.
+ *
+ * The falsifier's coordinates are the load-bearing part (@Cindy P4-5 boundary 4):
+ * the claim is that the FOREIGN principal gets nothing WHILE the conversation's
+ * own recipients still receive. Asserting "nothing was delivered" instead would
+ * be satisfied by a total fan-out shutdown — the failure this slice exists to
+ * repair — and would report it as a pass.
+ */
+describe('ConversationMessageService.sendMessage — the recipient boundary (P4-5)', () => {
+  /** A second channel in the same workspace whose only agent participant is a
+   *  newly created `carol`. Same workspace on purpose: the falsifier is about the
+   *  CONVERSATION boundary, and a foreign workspace would let a coarser gate pass
+   *  it. */
+  function withForeignChannel(t: ReturnType<typeof bootstrap>) {
+    const carol = t.agents.create(
+      { name: 'carol', runtime: 'claude' },
+      t.localHostId,
+      'local',
+    );
+    t.workspaces.insertMembership(t.workspace.id, carol.id);
+    const other = t.conversations.insertChannel({
+      name: 'ch-2',
+      workspaceId: t.workspace.id,
+      title: 'elsewhere',
+    });
+    t.conversations.addAgent(other.id, carol.id);
+    // The precondition the whole case rests on: carol participates THERE and not
+    // HERE. Asserted rather than assumed — if a future fixture change added her to
+    // the source channel, every expectation below would still pass and mean
+    // nothing.
+    expect(t.conversations.isAgentParticipant(other.id, carol.id)).toBe(true);
+    expect(t.conversations.isAgentParticipant(t.channel.id, carol.id)).toBe(false);
+    return { carol, other };
+  }
+
+  it('does not admit a referenced agent from ANOTHER conversation, while this conversation’s own recipients still receive', async () => {
+    const t = bootstrap();
+    try {
+      const { carol } = withForeignChannel(t);
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/carol> look at this',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      // HALF ONE — the foreign principal gets NOTHING: no follower row (so no
+      // future reply reaches her either) and no delivery of this one. A reference
+      // is an address, not an invitation.
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => f.principal_id),
+      ).not.toContain(carol.id);
+      expect(t.fake.delivered.some(d => d.agentId === carol.id)).toBe(false);
+      // …and nothing was queued for her in either conversation, which is where a
+      // "harmless" backfill would have landed.
+      expect(t.conversationInboxes.listPending(t.channel.id, carol.id)).toEqual([]);
+
+      // HALF TWO — and the reply is NOT lost: bob, the root author, is a follower
+      // and a participant, so he receives it. Without this the assertions above
+      // would also hold if the send delivered to nobody at all.
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.bob.id && d.messageId === reply.committed.message.id,
+        ),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('DOES admit a referenced agent that participates here — the reverse control', async () => {
+    const t = bootstrap();
+    try {
+      // Same shape as the case above, with the ONE coordinate flipped: the
+      // referenced agent is a participant of THIS conversation. Only a rule that
+      // reads participation can tell these two sends apart; a rule that reads a
+      // roster gets the same answer for both only because this channel happens to
+      // have one.
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      const reply = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'user', userId: 'local' },
+        content: '<silverhand://agent/alice> look at this',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      expect(
+        t.threadFollowers.listFollowers(root.id).find(f => f.principal_id === t.alice.id)
+          ?.source,
+      ).toBe('mention');
+      await waitFor(() =>
+        t.fake.delivered.some(
+          d => d.agentId === t.alice.id && d.messageId === reply.committed.message.id,
+        ),
+      );
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('stops delivering on a surviving follower row once participation is revoked', async () => {
+    const t = bootstrap();
+    try {
+      // bob becomes a follower the ordinary way (he authored the root), THEN loses
+      // his seat. The follower row outlives the removal — nothing deletes it — so
+      // the delivery read is the only thing standing between an ex-participant and
+      // the rest of the thread (@Cindy P4-5 boundary 3).
+      const root = t.messages.insertForConversation({
+        conversationId: t.channel.id,
+        fromKind: 'agent',
+        fromAgentId: t.bob.id,
+        content: 'root',
+      });
+      await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'first reply',
+        target: { kind: 'thread', message_id: root.id },
+      });
+      await waitFor(() => t.fake.delivered.some(d => d.agentId === t.bob.id));
+
+      t.conversations.removeAgent(t.channel.id, t.bob.id);
+      expect(
+        t.threadFollowers.listFollowers(root.id).map(f => f.principal_id),
+      ).toContain(t.bob.id);
+      const deliveredBefore = t.fake.delivered.length;
+
+      const after = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'second reply',
+        target: { kind: 'thread', message_id: root.id },
+      });
+
+      // Nothing more was delivered at all: bob was the only other follower, and a
+      // stale follower row must not keep a removed agent in the thread.
+      expect(t.fake.delivered.slice(deliveredBefore)).toEqual([]);
+      expect(
+        t.conversationInboxes
+          .listPending(t.channel.id, t.bob.id)
+          .map(i => i.message.id),
+      ).not.toContain(after.committed.message.id);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  it('gives a MAIN-LINE send the same recipients whether or not it references anyone (layer ①)', async () => {
+    const t = bootstrap();
+    try {
+      const { carol } = withForeignChannel(t);
+      // Two main-line sends from the same actor into the same channel, differing
+      // ONLY in whether the body addresses anyone — including an agent who is not
+      // here at all. The main line is a full fan-out over participants, so the
+      // reference must be inert on this path.
+      const plain = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: 'no addresses here',
+      });
+      const referencing = await t.service.sendMessage({
+        conversationId: t.channel.id,
+        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        content: '<silverhand://agent/carol> and <silverhand://agent/bob> both',
+      });
+      await waitFor(() =>
+        t.fake.delivered.some(d => d.messageId === referencing.committed.message.id),
+      );
+
+      const recipientsOf = (messageId: string): string[] =>
+        t.fake.delivered
+          .filter(d => d.messageId === messageId)
+          .map(d => d.agentId)
+          .sort();
+      // bob, and only bob: the sender is excluded at the plan boundary and carol
+      // is not a participant. Identical for both messages — that equality IS the
+      // claim, so a future "referenced agents also receive" would break it.
+      expect(recipientsOf(plain.committed.message.id)).toEqual([t.bob.id]);
+      expect(recipientsOf(referencing.committed.message.id)).toEqual([t.bob.id]);
+      expect(t.fake.delivered.some(d => d.agentId === carol.id)).toBe(false);
+      // The reference was really PARSED — otherwise this test would pass on a
+      // build where addressing did not work at all.
+      expect(vi.mocked(extractMessageReferences)).toHaveBeenCalledWith(
+        '<silverhand://agent/carol> and <silverhand://agent/bob> both',
+      );
     } finally {
       t.cleanup();
     }

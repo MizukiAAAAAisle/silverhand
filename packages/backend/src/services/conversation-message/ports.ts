@@ -25,7 +25,7 @@
 import type {
   AgentDto,
   AttachmentSnapshot,
-  ConversationAgentDto,
+  ConversationAgentStatus,
   ConversationDto,
   ConversationEndpointIdentity,
   ConversationEndpointRef,
@@ -129,7 +129,21 @@ export interface MessageTxMessagesPort {
 
 export interface MessageTxConversationsPort {
   get(conversationId: string): ConversationDto | null;
-  listAgents(conversationId: string): ConversationAgentDto[];
+  /**
+   * THE main-line recipient enumeration: the ids of this conversation's LIVE
+   * AGENT PARTICIPANTS (#task:2021 P4-5).
+   *
+   * Two conjuncts, from the one placement authority: participation by placement
+   * (§4.2) AND a live `agents` row. Participation alone is the wrong set for
+   * delivery — it ignores an endpoint tombstone on purpose so a survivor can still
+   * READ its DM — and the roster listing this replaced (`listAgents`) was the wrong
+   * set in the other direction: rosterless placements enumerated to nothing, so a
+   * DM message reached no recipient at all.
+   *
+   * Ids only; see `MessageRecipient` for why the membership DTO is not the
+   * recipient unit.
+   */
+  listParticipantAgentIds(conversationId: string): string[];
   /**
    * PARTICIPATION — is this agent one of the conversation's participants, judged
    * by its PLACEMENT (agent-scoped-session-v1 §4.2)? THE write gate's membership
@@ -161,20 +175,6 @@ export interface MessageTxConversationsPort {
    */
   isUserParticipant(conversationId: string, userId: string): boolean;
   /**
-   * Is there a ROSTER SEAT for this agent? A different question from
-   * `isAgentParticipant`, kept only for thread-follower eligibility
-   * (`follower ⊆ member`), which is still stated in roster terms.
-   *
-   * That is a KNOWN GAP, not a policy: on a `direct_pair` / `agent_inbox` thread
-   * there is no roster row, so no follower is ever registered and a reply
-   * delivers to nobody. Correcting it means making follower eligibility conjoin
-   * the outbound target's live PARTICIPATION, which is #task:2021's P4-5 slice
-   * (the recipient boundary) — a behavior change with its own review, so this
-   * port keeps the roster question until then rather than having the write gate's
-   * fix quietly redefine who receives a thread reply.
-   */
-  getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
-  /**
    * The endpoint columns the write gate's `direct_pair` narrowing reads — the
    * projected input of shared's `directPairIsReadOnlyForSurvivor`, which is the
    * one definition of "a DM whose other side is gone is read-only". `null` when
@@ -189,10 +189,7 @@ export interface MessageTxConversationsPort {
    *  `repos/endpoint-principal-presence.ts` for why it is kind-directed and why
    *  both faces share one dispatch. */
   endpointPrincipalExists(endpoint: ConversationEndpointIdentity): boolean;
-  /** Ids of the human members of a conversation — the mention-follow
-   *  membership filter. Ids only: the callers never read another column. */
-  listUserMemberIds(conversationId: string): string[];
-  /**
+    /**
    * The mentioned agent's INBOX placement (v71, §4.2) — the destination of the
    * mention CC copy, which is written in the source message's own transaction.
    *
@@ -265,15 +262,18 @@ export interface ThreadFollowerUpsertArgs {
   source: ThreadFollowerSource;
 }
 
-/** Follower writes/reads available inside a transaction. `listFollowerAgentsVisible`
- *  is here because the send path's follower-gated delivery plan is computed at
- *  the END of the same transaction that inserts the follower rows — reading it
- *  through a captured factory repo would compute the plan against a different
- *  connection's snapshot. `remove` / `isFollower` are deliberately absent:
- *  no transaction callback calls them (R3). */
+/** Follower writes/reads available inside a transaction.
+ *  `listFollowerAgentIdsParticipating` is here because the send path's
+ *  follower-gated delivery plan is computed at the END of the same transaction
+ *  that inserts the follower rows — reading it through a captured factory repo
+ *  would compute the plan against a different connection's snapshot.
+ *  `remove` / `isFollower` are deliberately absent: no transaction callback calls
+ *  them (R3). */
 export interface MessageTxThreadFollowersPort {
   upsert(args: ThreadFollowerUpsertArgs): { inserted: boolean };
-  listFollowerAgentsVisible(threadRootId: string): ConversationAgentDto[];
+  /** Follower agents that are CURRENT LIVE PARTICIPANTS, as ids — the delivery
+   *  gate, not a roster projection (#task:2021 P4-5). */
+  listFollowerAgentIdsParticipating(threadRootId: string): string[];
 }
 
 /** Attachment ownership/labelling facts needed to stamp snapshots on a
@@ -352,7 +352,10 @@ export interface ThreadFollowReadPort {
     principalKind: 'human' | 'agent',
     principalId: string,
   ): boolean;
-  listFollowerAgentsVisible(threadRootId: string): ConversationAgentDto[];
+  /** Follower agents that are CURRENT LIVE PARTICIPANTS, as ids — the same read
+   *  the in-transaction plan uses, for the read surface that lists a thread's
+   *  follower agents. */
+  listFollowerAgentIdsParticipating(threadRootId: string): string[];
 }
 
 /** Self-atomic single-statement follower writes (idempotent by construction),
@@ -378,6 +381,24 @@ export interface DeliveryReadPort {
   getMessageById(messageId: string): MessageDto | null;
   getAgent(agentId: string): AgentDto | null;
   getUser(userId: string): PrincipalNameSnapshot | null;
+  /**
+   * The agent's CURRENT RUNTIME SEAT STATUS for this conversation — the idle
+   * auto-start decision's input (#task:2021 P4-5).
+   *
+   * The seat, not the roster row: `conversation_agents.status` (as projected onto
+   * the membership DTO) exists only for a workspace placement, so the pre-filter
+   * this replaced could not answer the question for a DM participant at all — and
+   * the recipient unit no longer carries a status column to read. The adapter
+   * resolves WHICH seat through `runtimeSlotScopeFor`, because an agent-scoped
+   * session has one seat serving every conversation.
+   *
+   * `null` = no seat row for that scope, which the caller treats as startable —
+   * "which statuses count as running" is a domain rule and stays with the caller.
+   */
+  runtimeSeatStatus(
+    conversationId: string,
+    agentId: string,
+  ): ConversationAgentStatus | null;
   /** Human viewers of a conversation (workspace-scoped resolution lives in
    *  the adapter). */
   viewerUserIds(conversationId: string): string[];

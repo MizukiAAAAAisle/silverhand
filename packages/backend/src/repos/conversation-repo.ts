@@ -2,6 +2,7 @@ import type { Database as Db } from 'better-sqlite3';
 import { randomBytes } from 'node:crypto';
 import {
   agentParticipates,
+  agentParticipatesCorrelated,
   userParticipates,
   WORKSPACE_PLACED,
 } from './conversation-placement-sql.js';
@@ -1241,6 +1242,44 @@ export class ConversationRepo {
       )
       .get(conversationId, ...params);
     return row !== undefined;
+  }
+
+  /**
+   * The conversation's AGENT PARTICIPANTS, as ids and nothing else — the
+   * recipient enumeration of the send path (#task:2021 P4-5).
+   *
+   * Why not {@link listAgents}: that returns `conversation_agents` rows, so on a
+   * `direct_pair` or an `agent_inbox` — rosterless by construction (§4.2) — it
+   * returns the empty set, and a message committed into a DM was delivered to
+   * NOBODY. The participants are named by the placement, so the enumeration has
+   * to be the placement predicate itself
+   * (`agentParticipatesCorrelated`, the one authority read in its correlated
+   * form) rather than a second query with an arm per placement.
+   *
+   * TWO CONJUNCTS, and the second is not decoration (@Cindy P4-5 boundary 2):
+   * participation deliberately ignores `endpoint_*_deleted_at` so a survivor
+   * keeps reading its own DM, while a DELIVERY target must also be a LIVE
+   * principal — `JOIN agents a` is that conjunct, and it is what keeps a deleted
+   * endpoint out of the fan-out without weakening participation for the reader.
+   *
+   * IDS ONLY, deliberately. The callers (delivery, auto-start) need a principal
+   * identity; the membership DTO they used to take carries `joined_at` plus the
+   * runtime seat columns, which a DM participant does not have at all — and
+   * fabricating a row for one would put a membership fact into a placement that
+   * has none.
+   */
+  listParticipantAgentIds(conversationId: string): string[] {
+    return this.db
+      .prepare<[string], { agent_id: string }>(
+        `SELECT a.id AS agent_id
+           FROM conversations c
+           JOIN agents a
+             ON ${agentParticipatesCorrelated('c', 'a.id')}
+          WHERE c.id = ?
+          ORDER BY a.created_at ASC, a.id ASC`,
+      )
+      .all(conversationId)
+      .map(r => r.agent_id);
   }
 
   // ── Human (user) membership — `conversation_users` (v25) ─────────

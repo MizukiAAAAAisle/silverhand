@@ -62,17 +62,41 @@ export interface PlacementSqlFragment {
  * or not, in any arm — fails the gate, and weakening the `AND` to an `OR` fails it
  * too.
  *
- * Binds ONE parameter (the agent id). Callers must keep it in the fragment's own
- * position; {@link agentParticipates} returns its parameters as a list for exactly
- * that reason.
+ * The agent side is an EXPRESSION, not a hard-coded `?` (#task:2021 P4-5). The
+ * point form binds `'?'` here and the correlated form passes a COLUMN of the
+ * enclosing query (`a.id`), so enumerating a conversation's participants is the
+ * same predicate as asking about one of them instead of a per-arm re-derivation
+ * in the repo. When it is `'?'` the fragment binds ONE parameter and callers must
+ * keep it in the fragment's own position; {@link agentParticipates} returns its
+ * parameters as a list for exactly that reason.
  */
-function workspaceAgentRosterEdge(conversationAlias: string): string {
+function workspaceAgentRosterEdge(
+  conversationAlias: string,
+  agentIdExpr: string,
+): string {
   return `(${conversationAlias}.placement_kind = 'workspace'
             AND EXISTS (
               SELECT 1 FROM conversation_agents ca_p
                WHERE ca_p.conversation_id = ${conversationAlias}.id
-                 AND ca_p.agent_id = ?
+                 AND ca_p.agent_id = ${agentIdExpr}
             ))`;
+}
+
+/** The three placement arms of agent participation, over an agent-side
+ *  EXPRESSION. Both public faces below are this text; see
+ *  {@link agentParticipates} for what each arm means and why. */
+function agentParticipatesSql(
+  conversationAlias: string,
+  agentIdExpr: string,
+): string {
+  return `(${workspaceAgentRosterEdge(conversationAlias, agentIdExpr)}
+           OR (${conversationAlias}.placement_kind = 'direct_pair'
+               AND ((${conversationAlias}.endpoint_a_kind = 'agent'
+                     AND ${conversationAlias}.endpoint_a_id = ${agentIdExpr})
+                 OR (${conversationAlias}.endpoint_b_kind = 'agent'
+                     AND ${conversationAlias}.endpoint_b_id = ${agentIdExpr})))
+           OR (${conversationAlias}.placement_kind = 'agent_inbox'
+               AND ${conversationAlias}.inbox_agent_id = ${agentIdExpr}))`;
 }
 
 /**
@@ -113,16 +137,41 @@ export function agentParticipates(
   agentId: string,
 ): PlacementSqlFragment {
   return {
-    sql: `(${workspaceAgentRosterEdge(conversationAlias)}
-           OR (${conversationAlias}.placement_kind = 'direct_pair'
-               AND ((${conversationAlias}.endpoint_a_kind = 'agent'
-                     AND ${conversationAlias}.endpoint_a_id = ?)
-                 OR (${conversationAlias}.endpoint_b_kind = 'agent'
-                     AND ${conversationAlias}.endpoint_b_id = ?)))
-           OR (${conversationAlias}.placement_kind = 'agent_inbox'
-               AND ${conversationAlias}.inbox_agent_id = ?))`,
+    sql: agentParticipatesSql(conversationAlias, '?'),
     params: [agentId, agentId, agentId, agentId],
   };
+}
+
+/**
+ * The SAME predicate as {@link agentParticipates}, with the agent side supplied
+ * as an EXPRESSION of the enclosing query — a column, e.g. `a.id` from a
+ * `JOIN agents a` — so a query can ENUMERATE a conversation's agent participants
+ * instead of asking about one known id (#task:2021 P4-5, the recipient boundary).
+ *
+ * Enumeration needs the predicate for the same reason the point check does: the
+ * participants of a `direct_pair` / `agent_inbox` are its endpoint / inbox
+ * columns, so a fan-out built on `JOIN conversation_agents` returns ZERO
+ * recipients there — which is the whole "a DM delivers to nobody" defect. Doing
+ * it as a second, arm-per-arm query in the repo would be a second authority; this
+ * is the first one, read differently.
+ *
+ * Returns a bare string, NOT a {@link PlacementSqlFragment}: with the agent side
+ * correlated there is nothing to bind, and a fragment shape would invite a caller
+ * to splice an empty `params` list into a position where the point form binds
+ * four. Passing `'?'` here would compile and then bind nothing — use
+ * {@link agentParticipates} for that.
+ *
+ * LIVENESS IS NOT PART OF IT. Participation deliberately ignores
+ * `endpoint_*_deleted_at` (a survivor keeps reading its own DM), so a caller that
+ * enumerates DELIVERY targets must conjoin a live principal row itself — which
+ * `JOIN agents a` already does when the correlated column comes from that join
+ * (@Cindy P4-5 boundary 2).
+ */
+export function agentParticipatesCorrelated(
+  conversationAlias: string,
+  agentIdExpr: string,
+): string {
+  return agentParticipatesSql(conversationAlias, agentIdExpr);
 }
 
 /**
@@ -139,8 +188,14 @@ export function agentParticipates(
  * and a SQL face that kept only the seat would admit a person who had been
  * removed from the workspace but whose channel row outlived the removal.
  *
- * Binds TWO parameters (the user id, twice) — see {@link PlacementSqlFragment}
- * for why the caller never counts them itself.
+ * NO EXPRESSION PARAMETER, unlike {@link workspaceAgentRosterEdge}, and the
+ * asymmetry is caller-driven rather than an oversight: only AGENTS are ever
+ * enumerated. Runtime delivery targets are agents by definition, so a
+ * conversation's agent participants are read as a set, while the human rule is
+ * only ever asked about ONE person (the write gate's actor, a thread-follower
+ * candidate). A parameter whose every call site passes `'?'` is a seam with one
+ * legal value — the shape @Cindy's B8 objects to — so this face binds the user id
+ * directly and gains an expression the day a second reading actually exists.
  */
 function workspaceHumanRosterEdge(conversationAlias: string): string {
   return `(${conversationAlias}.placement_kind = 'workspace'

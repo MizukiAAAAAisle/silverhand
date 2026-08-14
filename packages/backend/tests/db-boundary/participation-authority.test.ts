@@ -46,6 +46,11 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+  agentParticipates,
+  agentParticipatesCorrelated,
+  userParticipates,
+} from '../../src/repos/conversation-placement-sql.js';
 import { REPO_ROOT } from './sources.js';
 
 const PLACEMENT_RULE = 'packages/shared/src/conversation-placement.ts';
@@ -171,6 +176,19 @@ function importsOf(src: string): Array<{ specifier: string; typeOnly: boolean }>
  * pretending it was: it COUNTS mentions and requires every one of them to be
  * inside one byte-pinned fragment, which needs no parser to check.
  */
+/** One predicate builder's own text: its declaration through the first
+ *  line-initial `}`. Used where the claim is about ONE predicate's ARM LIST rather
+ *  than about the whole file — the arms of both kinds now live in sibling builders,
+ *  so a file-wide scan cannot tell "the human face has no inbox arm" from "some
+ *  function in this file mentions inboxes". Returns `''` when the builder is absent,
+ *  which the call sites assert against separately. */
+function armTextOf(code: string, fn: string): string {
+  const from = code.indexOf(`function ${fn}(`);
+  if (from === -1) return '';
+  const end = code.indexOf('\n}', from);
+  return end === -1 ? code.slice(from) : code.slice(from, end);
+}
+
 function rosterMentions(src: string): Array<{ table: string; at: number }> {
   const found: Array<{ table: string; at: number }> = [];
   for (const table of ['conversation_agents', 'conversation_users', 'workspace_users']) {
@@ -196,12 +214,26 @@ function squash(sql: string): string {
  * interpolate the SAME alias into the placement predicate and into its correlated
  * subqueries, so a copy that gated on one alias while joining another cannot
  * match.
+ *
+ * The AGENT pin's principal side is an interpolation too (`${agentIdExpr}`), and
+ * since #task:2021 P4-5 that is load-bearing rather than incidental: the agent
+ * predicate serves two readings of one text — a point check that binds `'?'` and a
+ * correlated enumeration that passes a column of the enclosing query — so a pin
+ * holding a literal `?` would match only the point form and go BLIND to a
+ * correlated second roster read, which is the exact escape this gate counts.
+ * Pinned at the parameter, both readings are the same one fragment.
+ *
+ * The HUMAN pin keeps its literal `?`, because the human rule has ONE reading:
+ * only agents are enumerated (a runtime delivery target is an agent), so nothing
+ * asks for the human participants of a conversation as a set. If that changes, the
+ * fix is to parameterize the human face and this pin with it — not to widen the
+ * pin in advance, which would make it match a form no production caller uses.
  */
 const PINNED_AGENT_ROSTER_FRAGMENT = `(\${conversationAlias}.placement_kind = 'workspace'
             AND EXISTS (
               SELECT 1 FROM conversation_agents ca_p
                WHERE ca_p.conversation_id = \${conversationAlias}.id
-                 AND ca_p.agent_id = ?
+                 AND ca_p.agent_id = \${agentIdExpr}
             ))`;
 
 /**
@@ -315,15 +347,67 @@ describe('db-boundary: participation authority', () => {
     expect(code).toContain(`placement_kind = 'direct_pair'`);
     expect(code).toContain(`placement_kind = 'agent_inbox'`);
     // Both predicate builders delegate rather than inlining, which is what keeps
-    // the per-kind count meaningful as arms are added.
-    expect(code).toContain('workspaceAgentRosterEdge(conversationAlias)');
+    // the per-kind count meaningful as arms are added. The PRINCIPAL side travels
+    // through as the expression the caller gave: a builder that dropped it and
+    // hard-coded `?` would still read as a delegation while making the correlated
+    // form bind a placeholder nobody supplies a parameter for.
+    expect(code).toContain('workspaceAgentRosterEdge(conversationAlias, agentIdExpr)');
     expect(code).toContain('workspaceHumanRosterEdge(conversationAlias)');
+    // …and the agent face's two PUBLIC readings are two calls on ONE arm text, not
+    // two copies of it: the point form is the only place `'?'` is introduced, and
+    // the correlated form forwards its caller's expression untouched (P4-5).
+    expect(code).toContain(`agentParticipatesSql(conversationAlias, '?')`);
+    expect(code).toContain('agentParticipatesSql(conversationAlias, agentIdExpr)');
+
     // The human face's MISSING arm is a rule, not an omission: a human is never a
-    // participant of an inbox. Pinned as the absence of an inbox arm anywhere in
-    // the human predicate's own text — the agent face's `agent_inbox` arm above
-    // must not be mistaken for coverage of both kinds.
-    const humanPredicate = code.slice(code.indexOf('export function userParticipates'));
-    expect(humanPredicate).not.toContain('agent_inbox');
+    // participant of an inbox. Pinned over the ARM TEXT — the builder that lists
+    // them — rather than over the exported entry point: since P4-5 the arms live in
+    // the shared `…ParticipatesSql` builder and each public face is one call to it,
+    // so slicing from `export function userParticipates` now covers code with no
+    // arms in it at all and would pass vacuously.
+    const humanArms = armTextOf(code, 'userParticipates');
+    expect(humanArms).not.toBe('');
+    expect(humanArms).not.toContain('agent_inbox');
+    // Both directions, so neither assertion can be satisfied by an empty slice: the
+    // human arms carry the DM one, and the agent arms are where `agent_inbox` lives.
+    expect(humanArms).toContain(`placement_kind = 'direct_pair'`);
+    expect(armTextOf(code, 'agentParticipatesSql')).toContain(
+      `placement_kind = 'agent_inbox'`,
+    );
+  });
+
+  /**
+   * The parameter-count half of the same refactor. The text gates above cannot see
+   * it: the point form interpolates ONE placeholder per arm occurrence, and how
+   * many that is depends on the arms — so its `params` list is a hand-written count
+   * that an added arm silently invalidates, shifting every later parameter of every
+   * caller's query (the failure {@link PlacementSqlFragment} exists to prevent).
+   * Checked over VALUES because it is a value fact, and cheaply: the module is pure
+   * SQL text with no driver.
+   */
+  it('the point form binds exactly as many parameters as it has placeholders, and the correlated form binds none', () => {
+    const placeholders = (sql: string): number => sql.split('?').length - 1;
+    for (const [name, fragment] of [
+      ['agentParticipates', agentParticipates('c', 'agent-1')],
+      ['userParticipates', userParticipates('c', 'user-1')],
+    ] as const) {
+      expect(placeholders(fragment.sql), `${name} placeholder/param mismatch`).toBe(
+        fragment.params.length,
+      );
+      // …and every bound value is the SAME principal id, which is what makes the
+      // count the only thing that can go wrong here.
+      expect(new Set(fragment.params).size).toBe(1);
+    }
+    // The correlated form introduces no placeholder at all — a caller splices it
+    // into a JOIN and binds nothing, so a stray `?` would consume some other
+    // clause's parameter.
+    expect(placeholders(agentParticipatesCorrelated('c', 'a.id'))).toBe(0);
+    // Same text, read two ways: the correlated form given the point form's own
+    // expression IS the point form's SQL, character for character. This is the
+    // assertion that makes "one authority, two readings" a fact rather than a
+    // comment — two hand-maintained copies of the arms would drift and this would
+    // report it.
+    expect(agentParticipatesCorrelated('c', '?')).toBe(agentParticipates('c', 'x').sql);
   });
 
   it('the SQL face has no dependencies, so no roster edge can arrive from outside it', () => {
