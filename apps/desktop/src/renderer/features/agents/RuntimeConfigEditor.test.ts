@@ -19,6 +19,7 @@ const baseAgent: AgentDto = {
   name: 'alice',
   display_name: 'Alice',
   runtime: 'codex',
+  session_scope: 'conversation',
   model: 'gpt-5-codex',
   reasoning_effort: 'high',
   fast_mode: true,

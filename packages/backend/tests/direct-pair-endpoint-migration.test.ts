@@ -113,6 +113,11 @@ type Row = Record<string, unknown>;
  * migration to have found). Both principal kinds exist twice over, because every
  * endpoint probe below needs a live id of each kind AND a live id of the OTHER
  * kind to point the wrong `_kind` at.
+ *
+ * `conversation_agents` is seeded as PURE MEMBERSHIP: v70 moved the runtime
+ * columns out to `agent_runtime_slots`, and each roster row below therefore also
+ * mints a slot through that migration's trigger — which is what the rebuild's
+ * `foreign_key_check` has to stay empty across.
  */
 function seedV72(db: Database.Database): void {
   db.exec(`
@@ -149,8 +154,8 @@ function seedV72(db: Database.Database): void {
       VALUES ('m_chan_1', 'c_chan', 'user', 'u1', 'hello', 1, 120),
              ('m_chan_2', 'c_chan', 'agent', NULL, 'hi', 2, 121),
              ('m_dm_1', 'c_dm', 'agent', NULL, 'note', 1, 220);
-    INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-      VALUES ('c_chan', 'a1', 'idle', 122), ('c_dm', 'a1', 'idle', 221);
+    INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+      VALUES ('c_chan', 'a1', 122), ('c_dm', 'a1', 221);
     INSERT INTO conversation_users (conversation_id, user_id, joined_at)
       VALUES ('c_chan', 'u1', 123);
     INSERT INTO conversation_names

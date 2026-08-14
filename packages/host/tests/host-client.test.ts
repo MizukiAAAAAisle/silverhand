@@ -364,6 +364,7 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     await client.connect();
     const promise = client.runtimeStart({
+      runtime_generation: 1,
       conversation_id: 'conv1',
       agent_id: 'agent1',
       options: testStartOptions(),
@@ -392,7 +393,9 @@ describe('HostClient — runtime_* typed helpers (PR-2 step 1)', () => {
     const client = new HostClient({ transportFactory: () => transport, rng: FIXED_RNG });
     await client.connect();
     const promise = client.runtimeDeliver({
+      runtime_generation: 1,
       conversation_id: 'conv1',
+      target: { conversation_id: 'conv1', workspace: null },
       agent_id: 'agent1',
       delivery_ids: [101, 102],
       kind: 'message',
@@ -467,8 +470,14 @@ describe('HostClient — subscribe (unsolicited events)', () => {
     });
     const stateFrame = (status: 'idle' | 'thinking'): import('../src/protocol.js').EventFrame => ({
       event: 'runtime_state',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       state: {
         runId: 'run-1',
         agentId: 'a1',

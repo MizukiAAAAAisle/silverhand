@@ -25,6 +25,7 @@
 import type { z } from 'zod';
 import {
   EventFrameSchema,
+  HOST_PROTOCOL_VERSION,
   intentSchemas,
   LooseResponseFrameSchema,
   RequestFrameSchema,
@@ -92,7 +93,88 @@ const RUNTIME_START_OPTIONS = testStartOptions({
 //    Lets us keep the registry source readable while ensuring every
 //    fixture is real JSON the schemas can parse. We DO NOT use this
 //    for round-trip canonicalisation — the test consumes `frame` as-is.
-const enc = (o: unknown): string => JSON.stringify(o);
+const enc = (o: unknown): string => JSON.stringify(normalizeRuntimeScopeFixture(o));
+
+function normalizeRuntimeScopeFixture(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return value;
+  }
+  const frame = value as Record<string, unknown>;
+  if (
+    typeof frame.event === 'string'
+    && frame.event.startsWith('runtime_')
+    && typeof frame.conversation_id === 'string'
+    && typeof frame.agent_id === 'string'
+    && frame.runtime_scope === undefined
+  ) {
+    return {
+      ...frame,
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: frame.conversation_id,
+        agent_id: frame.agent_id,
+      },
+    };
+  }
+  if (
+    (frame.intent === 'runtime_stop' || frame.intent === 'runtime_clear_session')
+    && frame.params !== null
+    && typeof frame.params === 'object'
+    && !Array.isArray(frame.params)
+  ) {
+    const params = frame.params as Record<string, unknown>;
+    if (
+      typeof params.conversation_id === 'string'
+      && typeof params.agent_id === 'string'
+      && params.runtime_scope === undefined
+    ) {
+      const { conversation_id, agent_id, ...rest } = params;
+      return {
+        ...frame,
+        params: {
+          ...rest,
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id,
+            agent_id,
+          },
+        },
+      };
+    }
+  }
+  if (
+    frame.result !== null
+    && typeof frame.result === 'object'
+    && !Array.isArray(frame.result)
+  ) {
+    const result = frame.result as Record<string, unknown>;
+    if (Array.isArray(result.runtimes)) {
+      return {
+        ...frame,
+        result: {
+          ...result,
+          runtimes: result.runtimes.map(runtime => {
+            if (runtime === null || typeof runtime !== 'object' || Array.isArray(runtime)) {
+              return runtime;
+            }
+            const row = runtime as Record<string, unknown>;
+            return row.runtime_scope !== undefined
+              ? row
+              : {
+                  ...row,
+                  runtime_scope: {
+                    kind: 'conversation',
+                    conversation_id: row.conversation_id,
+                    agent_id: row.agent_id,
+                  },
+                };
+          }),
+        },
+      };
+    }
+  }
+  return frame;
+}
 
 // ── Request fixtures ───────────────────────────────────────────────
 //    One per intent, plus discriminated-union arms where the request
@@ -170,7 +252,7 @@ const REQUESTS: WireFixture[] = [
     frame: enc({
       id: 'req-start-1',
       intent: 'runtime_start',
-      params: { conversation_id: C, agent_id: A, options: RUNTIME_START_OPTIONS },
+      params: { runtime_generation: 1, conversation_id: C, agent_id: A, options: RUNTIME_START_OPTIONS },
     }),
     kind: { kind: 'request', intent: 'runtime_start' },
   },
@@ -180,7 +262,12 @@ const REQUESTS: WireFixture[] = [
     frame: enc({
       id: 'req-stop-hard',
       intent: 'runtime_stop',
-      params: { conversation_id: C, agent_id: A, mode: 'hard' },
+      params: {
+        conversation_id: C,
+        agent_id: A,
+        runtime_generation: 1,
+        mode: 'hard',
+      },
     }),
     kind: { kind: 'request', intent: 'runtime_stop' },
   },
@@ -192,7 +279,9 @@ const REQUESTS: WireFixture[] = [
       id: 'req-deliver-1',
       intent: 'runtime_deliver',
       params: {
+        runtime_generation: 1,
         conversation_id: C,
+        target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: DELIVERY_IDS,
         kind: 'message',
@@ -210,11 +299,58 @@ const REQUESTS: WireFixture[] = [
       id: 'req-deliver-2',
       intent: 'runtime_deliver',
       params: {
+        runtime_generation: 1,
         conversation_id: C,
+        target: { conversation_id: C, workspace: null },
         agent_id: A,
         delivery_ids: [201],
         kind: 'schedule_fire',
         text: 'scheduled delivery',
+        spawn_options: RUNTIME_START_OPTIONS,
+      },
+    }),
+    kind: { kind: 'request', intent: 'runtime_deliver' },
+  },
+  {
+    name: 'request/runtime_deliver-message-structured-presentation',
+    description:
+      '#task:2015 response-loss retry metadata — per-id custody plus composable presentation fragments preserve the submitted batch as one agent-visible turn.',
+    frame: enc({
+      id: 'req-deliver-structured-1',
+      intent: 'runtime_deliver',
+      params: {
+        runtime_generation: 1,
+        conversation_id: C,
+        target: { conversation_id: C, workspace: null },
+        agent_id: A,
+        delivery_ids: [200, 201],
+        delivered_up_to_seq: 201,
+        deliveries: [
+          {
+            delivery_id: 200,
+            message_id: 'msg-200',
+            seq: 200,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+            presentation: {
+              body: '[msg_id=msg-200 sender=system type=system target=channel time=2026-08-14T13:00:00+08:00]\nfirst',
+              instruction: 'system',
+            },
+          },
+          {
+            delivery_id: 201,
+            message_id: 'msg-201',
+            seq: 201,
+            thread_root_id: null,
+            delivery_kind: 'turn',
+            presentation: {
+              body: '[msg_id=msg-201 sender=system type=system target=channel time=2026-08-14T13:00:01+08:00]\nsecond',
+              instruction: 'system',
+            },
+          },
+        ],
+        kind: 'message',
+        text: 'canonical two-message presentation',
         spawn_options: RUNTIME_START_OPTIONS,
       },
     }),
@@ -243,7 +379,7 @@ const REQUESTS: WireFixture[] = [
     frame: enc({
       id: 'req-clear',
       intent: 'runtime_clear_session',
-      params: { conversation_id: C, agent_id: A },
+      params: { conversation_id: C, agent_id: A, runtime_generation: 1 },
     }),
     kind: { kind: 'request', intent: 'runtime_clear_session' },
   },
@@ -265,21 +401,33 @@ const REQUESTS: WireFixture[] = [
   },
   {
     name: 'request/runtime_output_pause',
-    description: 'Pause droppable runtime_output stream for a (conv, agent).',
+    description: 'Pause droppable runtime_output stream for a semantic runtime scope.',
     frame: enc({
       id: 'req-pause',
       intent: 'runtime_output_pause',
-      params: { conversation_id: C, agent_id: A },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: C,
+          agent_id: A,
+        },
+      },
     }),
     kind: { kind: 'request', intent: 'runtime_output_pause' },
   },
   {
     name: 'request/runtime_output_resume',
-    description: 'Resume droppable runtime_output stream for a (conv, agent).',
+    description: 'Resume droppable runtime_output stream for a semantic runtime scope.',
     frame: enc({
       id: 'req-resume',
       intent: 'runtime_output_resume',
-      params: { conversation_id: C, agent_id: A },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: C,
+          agent_id: A,
+        },
+      },
     }),
     kind: { kind: 'request', intent: 'runtime_output_resume' },
   },
@@ -541,11 +689,11 @@ const RESPONSES_SUCCESS: WireFixture[] = [
   {
     name: 'response/hello',
     description:
-      'v12 hello result — protocol_version + daemon identity + capabilities.',
+      'v14 hello result — protocol_version + daemon identity + capabilities.',
     frame: enc({
       id: 'req-hello',
       result: {
-        protocol_version: 12,
+        protocol_version: HOST_PROTOCOL_VERSION,
         daemon_version: '0.1.0',
         daemon_id: 'local',
         instance_id: 'inst-fixture',
@@ -903,6 +1051,7 @@ const RESPONSES_SUCCESS: WireFixture[] = [
           {
             conversation_id: C,
             agent_id: A,
+            runtime_generation: 1,
             pid: PID,
             phase: 'ready',
             run_state: {
@@ -2140,7 +2289,7 @@ const EVENTS: WireFixture[] = [
       'Daemon socket bound — handshake mirror. Carries the same identity fields as hello result plus socket_path / daemon_pid / started_at.',
     frame: enc({
       event: 'ready',
-      protocol_version: 12,
+      protocol_version: HOST_PROTOCOL_VERSION,
       daemon_version: '0.1.0',
       daemon_id: 'local',
       instance_id: 'inst-fixture',
@@ -2163,6 +2312,7 @@ const EVENTS: WireFixture[] = [
     description:
       'Driver emitted a run-state transition; daemon broadcasts to backend.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_state',
       conversation_id: C,
       agent_id: A,
@@ -2209,6 +2359,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_exit-clean',
     description: 'Child exited intentionally with code 0.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: C,
       agent_id: A,
@@ -2222,6 +2373,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_exit-crash',
     description: 'Child died unintentionally; exit code unknown (signal kill).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: C,
       agent_id: A,
@@ -2236,6 +2388,7 @@ const EVENTS: WireFixture[] = [
     description:
       'Driver signalled readiness to receive deferred deliveries (claude post-system_init, codex post-thread_started).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_ready_for_drain',
       conversation_id: C,
       agent_id: A,
@@ -2246,8 +2399,9 @@ const EVENTS: WireFixture[] = [
   {
     name: 'event/runtime_delivery_consumed',
     description:
-      '#task:1417 Stage 2 — unified delivery ack: daemon wrote a runtime_deliver batch to stdin (init-proven for requires_first_message). Backend markDelivered. Sole mover of delivered_at.',
+      '#task:1417 Stage 2 — unified delivery ack: daemon wrote a runtime_deliver batch to stdin (init-proven for requires_first_message). Backend settles the exact generation/origin/lease. Sole mover of delivered_at.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_consumed',
       conversation_id: C,
       agent_id: A,
@@ -2261,6 +2415,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery rollback: child exited before the runtime_deliver batch drained. Backend rolls rows back to pending.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
@@ -2275,6 +2430,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery rollback: init watchdog fired before the driver proved the turn landed (mirrors the legacy startup_delivery init_watchdog arm; kept so consumers see every reason variant).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
@@ -2289,6 +2445,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery rollback: stdin write failed mid-batch.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
@@ -2303,6 +2460,7 @@ const EVENTS: WireFixture[] = [
     description:
       '#task:1417 Stage 2 — unified delivery fatal: driver refused the encoded payload after claiming ready (programming error).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_delivery_failed',
       conversation_id: C,
       agent_id: A,
@@ -2317,6 +2475,7 @@ const EVENTS: WireFixture[] = [
     description:
       'Tier 1 watchdog: silence between bytes for too long. Retrying.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: C,
       agent_id: A,
@@ -2335,6 +2494,7 @@ const EVENTS: WireFixture[] = [
     description:
       'Tier 2 watchdog: hit the pre-protocol cap before driver said hello. Retrying.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: C,
       agent_id: A,
@@ -2353,6 +2513,7 @@ const EVENTS: WireFixture[] = [
     description:
       'Tier 3 watchdog: post-protocol stall on the final attempt. retrying:false + cooldown_until carried inline (Cindy 4CJATqU0DdbsGVXW).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: C,
       agent_id: A,
@@ -2371,6 +2532,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_init_retrying',
     description: 'Daemon scheduled a respawn; carries delay + next attempt.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_init_retrying',
       conversation_id: C,
       agent_id: A,
@@ -2385,6 +2547,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_init_cooldown',
     description: 'Retry budget exhausted; cooldown engaged with epoch deadline.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_init_cooldown',
       conversation_id: C,
       agent_id: A,
@@ -2446,6 +2609,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-session_init',
     description: 'ParsedEvent fanout — driver session_init recognized.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2458,6 +2622,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-thinking',
     description: 'ParsedEvent fanout — driver thinking text.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2470,6 +2635,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-text',
     description: 'ParsedEvent fanout — assistant text chunk.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2483,6 +2649,7 @@ const EVENTS: WireFixture[] = [
     description:
       'ParsedEvent fanout — tool_call with required-but-opaque input ({} is the common case).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2500,6 +2667,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-tool_output',
     description: 'ParsedEvent fanout — tool_output (name + tool_call_id optional).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2512,6 +2680,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-turn_end',
     description: 'ParsedEvent fanout — driver turn_end.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2524,6 +2693,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-compaction_started',
     description: 'ParsedEvent fanout — compaction_started signal (no payload).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2536,6 +2706,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-compaction_finished',
     description: 'ParsedEvent fanout — compaction_finished signal (no payload).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2549,6 +2720,7 @@ const EVENTS: WireFixture[] = [
     description:
       'ParsedEvent fanout — per-payload input lifecycle echoed by the runtime (#task:1557).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2562,6 +2734,7 @@ const EVENTS: WireFixture[] = [
     description:
       'ParsedEvent fanout — normalized provider/API response notice (#task:1582): driver-recognized status + message only, never raw payloads.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2578,6 +2751,7 @@ const EVENTS: WireFixture[] = [
     name: 'event/runtime_parsed_event-error',
     description: 'ParsedEvent fanout — driver-side error with optional code/fatal.',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,
@@ -2591,6 +2765,7 @@ const EVENTS: WireFixture[] = [
     description:
       'ParsedEvent fanout — unrecognized line; raw bytes preserved here only (NEVER on _dropped).',
     frame: enc({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: C,
       agent_id: A,

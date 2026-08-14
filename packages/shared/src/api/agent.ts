@@ -2,6 +2,7 @@
 // Bounded context: agent. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import {
+  AgentSessionScopeSchema,
   AgentMaterializationStatusSchema,
   ConversationAgentStatusSchema,
   ConversationKindSchema,
@@ -27,6 +28,8 @@ export const AgentDtoSchema = z.object({
   fast_mode: FastModeSchema.nullable(),
   host_id: z.string(),
   description: z.string().nullable(),
+  /** Immutable runtime-session identity selected when the Agent is created. */
+  session_scope: AgentSessionScopeSchema,
   /** v26: id of the user who created this agent. The renderer uses it
    *  to decide whether to surface profile-edit affordances (Edit
    *  button, avatar upload). Backend `canEditAgent` is the source of
@@ -78,6 +81,8 @@ export const CreateAgentInputSchema = z
     fast_mode: FastModeSchema.optional(),
     host_id: z.string().optional(), // defaults to the current user's owned local host
     description: z.string().optional(),
+    /** Defaults to the established one-runtime-per-conversation model. */
+    session_scope: AgentSessionScopeSchema.optional(),
   })
   // reasoning_effort is a bounded opaque token (see ReasoningEffortTokenSchema):
   // the schema accepts ANY structurally-valid token, and the SOLE legality gate
@@ -339,14 +344,27 @@ export type AgentWorkspaceFileRead = z.infer<
   typeof AgentWorkspaceFileReadSchema
 >;
 
-// GET /api/agents/:id/runtime-state — every (conversation, agent) pair
-// involving this agent, with workspace/channel names denormalized so
-// the UI can render the "where it runs" table without N+1 queries.
+// GET /api/agents/:id/runtime-state — every RUNTIME SEAT this agent holds, with
+// workspace/channel names denormalized so the UI can render the "where it runs"
+// table without N+1 queries.
+//
+// The unit is the SEAT, not participation: this is where the agent RUNS, and
+// "who is in this conversation" is a different question with its own single
+// authority (`agentParticipates`, agent-scoped-session-v1 §4.2). A conversation
+// the agent participates in without a seat is absent by that definition, not by
+// a filter.
+//
+// The workspace coordinate is therefore NULLABLE, because a seat's conversation
+// need not be workspace-placed: `direct_pair` and `agent_inbox` carry no
+// `workspace_id` (§4.1). Before v69 this face resolved the coordinate through an
+// INNER JOIN, which would have dropped such a seat ENTIRELY — and this is a
+// control-plane payload (the Stop control reads it), so a dropped row is a
+// runtime the user can see running and cannot stop.
 export const AgentRuntimeConversationSchema = z.object({
   conversation_id: z.string(),
-  workspace_id: z.string(),
-  workspace_name: z.string(),
-  workspace_kind: WorkspaceKindSchema,
+  workspace_id: z.string().nullable(),
+  workspace_name: z.string().nullable(),
+  workspace_kind: WorkspaceKindSchema.nullable(),
   conversation_kind: ConversationKindSchema,
   channel_id: z.string(),
   channel_title: z.string(),

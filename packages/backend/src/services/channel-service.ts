@@ -642,14 +642,21 @@ export class ChannelService {
     // Archiving a channel terminates its agent runtime: an agent still working
     // in an archived channel is doing meaningless work. Stop is best-effort and
     // async (the host may be offline), so "archived ⇒ no runtime" is an eventual
-    // state, not an instant invariant — which is exactly why the runtime-state
-    // *control-plane* callers (Stop-all, delete-agent purge) keep the COMPLETE
-    // conversation view (`listRuntimeConversations` without `excludeArchived`):
+    // state, not an instant invariant — which is exactly why the control-plane
+    // callers (Stop-all, delete-agent purge) read the unfiltered SEAT face
+    // (`RuntimeSlotRepo.listSeats`, no archive scope and no placement scope):
     // a straggler runtime left here must still be reachable to stop/purge. Only
     // the display roster excludes archived (see agent-repo). (#task:1398)
     if (input.archived) {
       this.runtimeHost.resolveConversationRuns(updated.id, 'conversation_closed');
       for (const ca of this.channels.listAgents(updated.id)) {
+        // A ConversationSlot is owned by this conversation edge; closing the
+        // conversation terminates that process. An AgentSlot is owned by the
+        // Agent aggregate and may still be serving other target conversations,
+        // so archiving one target must not kill the shared process.
+        if (this.agents.get(ca.agent_id)?.session_scope !== 'conversation') {
+          continue;
+        }
         void this.runtimeHost.stop(updated.id, ca.agent_id).catch(err =>
           this.logger.warn(
             { channelId: updated.id, agentId: ca.agent_id, err },

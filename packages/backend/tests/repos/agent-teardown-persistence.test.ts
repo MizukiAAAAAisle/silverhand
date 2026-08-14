@@ -40,6 +40,7 @@ import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { ScheduleRepo } from '../../src/repos/schedule-repo.js';
@@ -90,7 +91,19 @@ function bootstrap() {
     capabilities.seedDefaults(workspace.id, agent.id);
     conversations.addAgent(channel.id, agent.id);
   }
-  conversations.updateAgentRuntime(channel.id, subject.id, { status: 'active' });
+  const runtimeSlots = new RuntimeSlotRepo(db);
+  runtimeSlots.updateCurrentConversationProjection(channel.id, subject.id, {
+    status: 'active',
+  });
+  runtimeSlots.claimGeneration({
+    scope: {
+      kind: 'conversation',
+      conversationId: channel.id,
+      agentId: subject.id,
+    },
+    daemonInstanceId: 'daemon-agent-teardown',
+    status: 'active',
+  });
 
   // History authored by the subject, with a pending delivery for it.
   const authored = messages.insertForConversation({
@@ -417,14 +430,62 @@ describe('AgentTeardownUnitOfWork (SQLite adapter) — FK cascade contract', () 
     // capture that only carried `active` rows would hide that decision from the
     // layer that owns it.
     expect([...capture.runtimeSessions].sort((a, b) =>
-      a.conversationId.localeCompare(b.conversationId),
+      (a.conversationId ?? '').localeCompare(b.conversationId ?? ''),
     )).toEqual(
       [
-        { conversationId: t.channelId, status: 'active' },
-        { conversationId: t.dmChannelId, status: 'idle' },
+        {
+          runtimeScope: {
+            kind: 'conversation',
+            conversationId: t.channelId,
+            agentId: t.subjectId,
+          },
+          conversationId: t.channelId,
+          status: 'active',
+          runtimeGeneration: 1,
+        },
+        {
+          runtimeScope: {
+            kind: 'conversation',
+            conversationId: t.dmChannelId,
+            agentId: t.subjectId,
+          },
+          conversationId: t.dmChannelId,
+          status: 'idle',
+          runtimeGeneration: 0,
+        },
       ].sort((a, b) => a.conversationId.localeCompare(b.conversationId)),
     );
     expect(capture.regularWorkspaceCount).toBe(1);
+  });
+
+  it('captures one AgentSlot by semantic scope even when no conversation roster row names the running child', () => {
+    const { db, localHostId } = openTestDb({ seedAllFixtureMemberships: false });
+    const agent = new AgentRepo(db).create(
+      {
+        name: 'agent-slot-teardown',
+        runtime: 'claude',
+        session_scope: 'agent',
+      },
+      localHostId,
+      'local',
+    );
+    const slots = new RuntimeSlotRepo(db);
+    slots.claimGeneration({
+      scope: { kind: 'agent', agentId: agent.id },
+      daemonInstanceId: 'daemon-agent-slot-teardown',
+      status: 'active',
+    });
+
+    expect(
+      createSqliteAgentTeardownPersistence(db).read.listRuntimeSessions(agent.id),
+    ).toEqual([
+      {
+        runtimeScope: { kind: 'agent', agentId: agent.id },
+        conversationId: null,
+        status: 'active',
+        runtimeGeneration: 1,
+      },
+    ]);
   });
 
   // The falsifier for THIS FILE: with enforcement off, the identical delete

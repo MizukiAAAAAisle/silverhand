@@ -46,33 +46,83 @@ export interface PlacementSqlFragment {
 }
 
 /**
+ * THE roster read of the placement layer, and the only one: an agent's
+ * `conversation_agents` edge, with the workspace predicate ANDed INSIDE the
+ * fragment so the gating cannot be separated from the read by an edit to a
+ * caller.
+ *
+ * Why a builder instead of an inline clause in each arm (@Cindy B2). "The roster
+ * is authoritative for the workspace arm only" is a claim about SQL NESTING, and
+ * nesting is not something a scan of nearby text can establish — a
+ * `(placement_kind = 'workspace' OR EXISTS (…roster…))` reads as gated to any
+ * proximity check and is wide open to the engine. Concentrating the read in one
+ * byte-pinned fragment makes the claim checkable by COUNTING: Gate 9 asserts that
+ * `conversation_agents` appears exactly once in this file and that the occurrence
+ * is inside this fragment's pinned text, so a second roster read anywhere — nested
+ * or not, in any arm — fails the gate, and weakening the `AND` to an `OR` fails it
+ * too.
+ *
+ * Binds ONE parameter (the agent id). Callers must keep it in the fragment's own
+ * position; {@link agentParticipates} returns its parameters as a list for exactly
+ * that reason.
+ */
+function workspaceAgentRosterEdge(conversationAlias: string): string {
+  return `(${conversationAlias}.placement_kind = 'workspace'
+            AND EXISTS (
+              SELECT 1 FROM conversation_agents ca_p
+               WHERE ca_p.conversation_id = ${conversationAlias}.id
+                 AND ca_p.agent_id = ?
+            ))`;
+}
+
+/**
  * SQL predicate: `agentId` PARTICIPATES in this conversation (§4.2) — the SQL
- * face of the same rule `canViewConversation` applies in code:
+ * face of the same rule `permissions.ts`'s `participates` applies in code, with
+ * one arm per placement because the placement IS the rule:
  *
- *   - a `conversation_agents` roster edge (every workspace placement), OR
- *   - the conversation IS this agent's inbox (`placement_kind='agent_inbox'`
- *     AND `inbox_agent_id = agentId`). The inbox has NO roster row by design —
- *     the placement IS the membership — so a query whose bottom guard is a bare
- *     `JOIN conversation_agents` returns ZERO rows for it, which is not "the
- *     agent may not read its inbox" but "this query cannot express who its
- *     participant is".
+ *   - `workspace` — a `conversation_agents` roster edge, via
+ *     {@link workspaceAgentRosterEdge}. The roster is the authority for THIS ARM
+ *     ONLY: a stray roster row on a DM or an inbox must be INERT, and an ungated
+ *     EXISTS would make it authoritative in every SQL face (delivery, the agent
+ *     activity roster, the runtime control planes, P2's target gate) while the code
+ *     face correctly ignored it. Same rule, two faces, so they must not disagree.
+ *   - `direct_pair` — an `agent` ENDPOINT naming this agent. There is no roster
+ *     row and never will be: the two endpoints ARE the participants. Deletion of
+ *     the OTHER endpoint does not remove the survivor from its own DM — that
+ *     closes the WRITE gate, not participation — so this arm deliberately ignores
+ *     `endpoint_*_deleted_at`.
+ *   - `agent_inbox` — the conversation IS this agent's inbox. Also rosterless, so
+ *     a query whose bottom guard is a bare `JOIN conversation_agents` returns ZERO
+ *     rows for it, which is not "the agent may not read its inbox" but "this query
+ *     cannot express who its participant is".
  *
- * A HUMAN is never a participant of the inbox, so there is deliberately no
- * user-side counterpart: human read faces stay `conversation_users`-gated and
- * exclude the inbox by domain rule (see `workspacePlaced`).
+ * The RUNNING-IN narrowing that the code face applies to a session principal is
+ * deliberately absent: that asks "may THIS session act inside conversation X",
+ * while this predicate enumerates the conversations an agent belongs to. Every
+ * caller here is a set-shaped face (delivery fan-out, activity, runtime control
+ * planes, target gates).
+ *
+ * A HUMAN is never a participant of an inbox, and no live face enumerates a
+ * person's `direct_pair` rows yet (the human DM read surfaces land with
+ * #task:2022), so there is deliberately no user-side counterpart here: human
+ * faces stay `conversation_users`-gated for the workspace arm, and the human ACL
+ * reaches `direct_pair` through the code face (`resolveParticipation`), which
+ * needs no SQL. The predicate this file would hold is a one-liner; writing it
+ * before a caller exists would make it an unverified contract.
  */
 export function agentParticipates(
   conversationAlias: string,
   agentId: string,
 ): PlacementSqlFragment {
   return {
-    sql: `(EXISTS (
-             SELECT 1 FROM conversation_agents ca_p
-              WHERE ca_p.conversation_id = ${conversationAlias}.id
-                AND ca_p.agent_id = ?
-           )
+    sql: `(${workspaceAgentRosterEdge(conversationAlias)}
+           OR (${conversationAlias}.placement_kind = 'direct_pair'
+               AND ((${conversationAlias}.endpoint_a_kind = 'agent'
+                     AND ${conversationAlias}.endpoint_a_id = ?)
+                 OR (${conversationAlias}.endpoint_b_kind = 'agent'
+                     AND ${conversationAlias}.endpoint_b_id = ?)))
            OR (${conversationAlias}.placement_kind = 'agent_inbox'
                AND ${conversationAlias}.inbox_agent_id = ?))`,
-    params: [agentId, agentId],
+    params: [agentId, agentId, agentId, agentId],
   };
 }

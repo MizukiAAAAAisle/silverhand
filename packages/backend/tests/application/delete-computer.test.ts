@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { createSqliteAgentTeardownPersistence } from '../../src/repos/agent-teardown-persistence.js';
@@ -110,7 +111,19 @@ async function setup(t: TestApp): Promise<Fixture> {
   conversations.addAgent(channel.id, agent.id);
   // A LIVE run, so the post-commit runtime stop has something to dispatch:
   // only `starting` / `active` captured sessions are stopped.
-  conversations.updateAgentRuntime(channel.id, agent.id, { status: 'active' });
+  const runtimeSlots = new RuntimeSlotRepo(t.ctx.db);
+  runtimeSlots.updateCurrentConversationProjection(channel.id, agent.id, {
+    status: 'active',
+  });
+  runtimeSlots.claimGeneration({
+    scope: {
+      kind: 'conversation',
+      conversationId: channel.id,
+      agentId: agent.id,
+    },
+    daemonInstanceId: 'daemon-delete-computer',
+    status: 'active',
+  });
 
   // The agent's own home + DM: this is what the cascade destroys, and the only
   // place it can capture blob refs from (the in-scope capture walks the owned
@@ -356,7 +369,17 @@ describe('deleteComputer destruction boundaries', () => {
     // workspace-cascade half, so an agent live in several conversations is
     // stopped once PER PAIR and never twice for the same one.
     expect(t.fake.stops).toEqual([
-      { conversationId: f.channelId, agentId: f.agentId, hostId: f.hostId },
+      {
+        conversationId: f.channelId,
+        agentId: f.agentId,
+        hostId: f.hostId,
+        runtimeGeneration: 1,
+        runtimeScope: {
+          kind: 'conversation',
+          conversationId: f.channelId,
+          agentId: f.agentId,
+        },
+      },
     ]);
   });
 

@@ -28,6 +28,7 @@ export * from './platform-prompt.js';
 export * from './proxy-env.js';
 export * from './reference.js';
 export * from './runtime-catalog.js';
+export * from './runtime-delivery-presentation.js';
 export * from './seq.js';
 export * from './server-connection-profile.js';
 export * from './server-url.js';

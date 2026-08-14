@@ -26,6 +26,7 @@ import {
   encodeUserPrincipalHeader,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
+import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 const OWNER = 'teammate';
@@ -39,10 +40,11 @@ async function makeAgent(
   t: TestApp,
   name: string,
   headers?: Record<string, string>,
+  sessionScope: 'conversation' | 'agent' = 'conversation',
 ): Promise<string> {
   const res = await http(t).post(
     '/api/agents',
-    { name, runtime: 'claude' },
+    { name, runtime: 'claude', session_scope: sessionScope },
     headers ? { headers } : undefined,
   );
   expect(res.status).toBe(201);
@@ -140,6 +142,31 @@ describe('#task:1683 — DELETE /api/workspaces/:id/members/:agentId', () => {
 
     expect(res.status).toBe(204);
     expect(workspaceAgentIds(t, ws)).toEqual([]);
+  });
+
+  it('removes an AgentSlot target without stopping the aggregate-owned runtime', async () => {
+    t = buildTestApp({ seedAllFixtureMemberships: false });
+    const ws = await invitedMemberWorkspace(t, 'remove-agent-slot-target');
+    const mine = await makeAgent(
+      t,
+      'remove-agent-slot-target-agent',
+      undefined,
+      'agent',
+    );
+    await enroll(t, ws, mine);
+    const channel = new ConversationRepo(t.ctx.db).insertChannel({
+      workspaceId: ws,
+      name: 'agent-slot-target',
+      title: 'AgentSlot target',
+    });
+    new ConversationRepo(t.ctx.db).addAgent(channel.id, mine);
+
+    const res = await http(t).del(`/api/workspaces/${ws}/members/${mine}`);
+
+    expect(res.status).toBe(204);
+    expect(workspaceAgentIds(t, ws)).toEqual([]);
+    expect(channelAgentIds(t, channel.id)).toEqual([]);
+    expect(t.fake.stops).toEqual([]);
   });
 
   it("refuses a plain member removing someone else's agent, leaving the row", async () => {

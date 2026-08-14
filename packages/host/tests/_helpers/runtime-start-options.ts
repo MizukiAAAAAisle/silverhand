@@ -2,7 +2,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RuntimeKind } from '@silverhand/shared';
 import { agentHomeWorkspaceId } from '@silverhand/shared';
-import type { StartOptions } from '../../src/protocol.js';
+import type {
+  AgentStartOptions,
+  ConversationStartOptions,
+  StartOptions,
+} from '../../src/protocol.js';
 import type { RuntimeStartResolveDeps } from '../../src/daemon/runtime-start-resolve.js';
 
 /**
@@ -11,7 +15,7 @@ import type { RuntimeStartResolveDeps } from '../../src/daemon/runtime-start-res
  * agent id + workspace id, so a test pairs these options with matching deps
  * (`testRuntimeStartResolveDeps`, keyed on the explicit agents root).
  */
-export function testStartOptions(overrides: {
+interface TestStartOptionsOverrides {
   conversationId?: string;
   agentId?: string;
   agentName?: string;
@@ -19,22 +23,64 @@ export function testStartOptions(overrides: {
   model?: string | null;
   cliSessionId?: string | null;
   workspaceKind?: 'regular' | 'agent_home';
-} = {}): StartOptions {
+  sessionScope?: 'conversation' | 'agent';
+}
+
+export function testStartOptions(
+  overrides: TestStartOptionsOverrides & { sessionScope: 'agent' },
+): AgentStartOptions;
+export function testStartOptions(
+  overrides?: TestStartOptionsOverrides & { sessionScope?: 'conversation' },
+): ConversationStartOptions;
+export function testStartOptions(
+  overrides: TestStartOptionsOverrides = {},
+): StartOptions {
   const agentId = overrides.agentId ?? 'a1';
   const agentName = overrides.agentName ?? 'tester';
   const conversationId = overrides.conversationId ?? 'c1';
   const runtime = overrides.runtime ?? 'claude';
   const workspaceKind = overrides.workspaceKind ?? 'regular';
+  const sessionScope = overrides.sessionScope ?? 'conversation';
   // An `agent_home` ref must carry THIS agent's own home workspace id (the
   // daemon resolver validates id == agentHomeWorkspaceId(agentId)); a regular
   // workspace uses an arbitrary id.
   const workspaceId =
     workspaceKind === 'agent_home' ? agentHomeWorkspaceId(agentId) : 'ws1';
 
-  return {
+  const common = {
     agent: {
       id: agentId,
       name: agentName,
+    },
+    driver: {
+      kind: runtime,
+      cli_session_id: overrides.cliSessionId ?? null,
+      model: overrides.model ?? null,
+      reasoning_effort: null,
+      fast_mode: null,
+    },
+    env_policy: {
+      silverhand: {
+        auth_token: 'test-agent-token',
+      },
+      silverhand_cli: {
+        command: 'silverhand',
+        args: [],
+      },
+    },
+  };
+  if (sessionScope === 'agent') {
+    return {
+      ...common,
+      runtime_scope: { kind: 'agent', agent_id: agentId },
+    };
+  }
+  return {
+    ...common,
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversationId,
+      agent_id: agentId,
     },
     workspace: {
       id: workspaceId,
@@ -62,22 +108,6 @@ export function testStartOptions(overrides: {
           runtime,
         },
       ],
-    },
-    driver: {
-      kind: runtime,
-      cli_session_id: overrides.cliSessionId ?? null,
-      model: overrides.model ?? null,
-      reasoning_effort: null,
-      fast_mode: null,
-    },
-    env_policy: {
-      silverhand: {
-        auth_token: 'test-agent-token',
-      },
-      silverhand_cli: {
-        command: 'silverhand',
-        args: [],
-      },
     },
   };
 }

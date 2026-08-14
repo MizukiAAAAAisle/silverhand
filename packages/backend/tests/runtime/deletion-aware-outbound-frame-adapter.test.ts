@@ -69,7 +69,15 @@ describe('DeletionAwareOutboundFrameAdapter', () => {
     await adapter.sendCommand(
       'host-1',
       'runtime_stop',
-      { conversation_id: 'conversation-1', agent_id: 'agent-1', mode: 'hard' },
+      {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'conversation-1',
+          agent_id: 'agent-1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
+      },
     );
     await adapter.sendCommand('host-1', 'agent_profile_mcp_read', {
       agent_id: 'agent-1',

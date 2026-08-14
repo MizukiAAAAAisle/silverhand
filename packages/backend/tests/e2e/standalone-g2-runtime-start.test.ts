@@ -13,10 +13,10 @@
  * resulting `session_init` parsed event makes it all the way back
  * to **backend-observable state**:
  *
- *   1. `conversation_agents.cli_session_id` = the sessionId the
+ *   1. `agent_runtime_slots.cli_session_id` = the sessionId the
  *      driver parsed out of the child's stdout (DB write via
  *      `StatusProjector.sessionInit`).
- *   2. `conversation_agents.status` = `'active'` (same projection).
+ *   2. `agent_runtime_slots.observed_status` = `'active'` (same projection).
  *   3. The wrapped sink captured a `runtime_parsed_event` frame
  *      whose `parsed.kind === 'session_init'` and whose
  *      `parsed.sessionId` matches the same value — i.e. the
@@ -132,7 +132,7 @@ describe('Standalone G2 — runtime_start dispatch + session_init projection', (
     }
   });
 
-  it('runtimeHost.start triggers daemon spawn → session_init flows back through the real fanout → cli_session_id lands in conversation_agents', async () => {
+  it('runtimeHost.start triggers daemon spawn → session_init flows back through the real fanout → cli_session_id lands in the runtime slot', async () => {
     harness = await bootG2Harness();
     const { db } = harness.backend.context;
 
@@ -200,8 +200,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     ).run(conversationId, harness.userId, now);
     db.prepare(
       `INSERT INTO conversation_agents
-        (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-        VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+        (conversation_id, agent_id, joined_at)
+       VALUES (?, ?, ?)`,
     ).run(conversationId, agentId, now);
 
     // Seed a single inbox row so `startDeliveryBacked` has work to
@@ -293,8 +293,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
         () => {
           const row = db
             .prepare<[string, string], { status: string; cli_session_id: string | null }>(
-              `SELECT status, cli_session_id
-                 FROM conversation_agents
+              `SELECT observed_status AS status, cli_session_id
+                 FROM agent_runtime_slots
                 WHERE conversation_id = ? AND agent_id = ?`,
             )
             .get(conversationId, agentId);
@@ -302,7 +302,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
           if (row.cli_session_id !== expectedSessionId) return null;
           return row;
         },
-        { timeoutMs: 10_000, label: 'conversation_agents.cli_session_id projection' },
+        { timeoutMs: 10_000, label: 'runtime-slot cli_session_id projection' },
       );
       expect(sessionRow.status).toBe('active');
       expect(sessionRow.cli_session_id).toBe(expectedSessionId);

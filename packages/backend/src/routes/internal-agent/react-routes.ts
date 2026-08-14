@@ -18,10 +18,10 @@ import {
 import { reactionResultResponse } from '../responses.js';
 import {
   AgentReactMessageInputSchema,
-  internalPaths,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 import { requireAgentConversationCapability } from './capability-scope.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 export function registerReactRoutes(
   app: Hono<AppEnv>,
@@ -64,10 +64,10 @@ export function registerReactRoutes(
     return reactionResultResponse(c, result);
   };
 
-  app.post(internalPaths.agentReactMessage(':cid', ':aid'), c =>
+  app.post(internalAgentRoutePaths.reactMessage, c =>
     handleAgentReact(c, 'add'),
   );
-  app.delete(internalPaths.agentReactMessage(':cid', ':aid'), c =>
+  app.delete(internalAgentRoutePaths.reactMessage, c =>
     handleAgentReact(c, 'remove'),
   );
 }

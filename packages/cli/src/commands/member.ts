@@ -10,7 +10,7 @@
  * The agent contract (per `docs/architecture-principles.md` §0/§9):
  * agents talk to silverhand via this CLI, NOT by calling internal
  * routes directly with curl. The internal route this command backs
- * (`POST /internal/conversations/:cid/agents/:aid/members`) accepts
+ * (`POST /internal/agents/:aid/conversations/:cid/members`) accepts
  * only `{ handle }` for that reason.
  */
 import { CliError } from '../errors.js';

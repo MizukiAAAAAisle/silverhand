@@ -2,9 +2,11 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  SILVERHAND_CONVERSATION_ID_ENV,
   SILVERHAND_DAEMON_SOCKET_ENV,
   SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV,
 } from '@silverhand/shared';
+import type { RuntimeScope } from '../protocol.js';
 import {
   summarizeSilverhandEnvPresence,
   type SilverhandEnvPresenceSummary,
@@ -17,7 +19,7 @@ export interface SilverhandCliLauncher {
 }
 
 export interface SpawnPrepInput {
-  conversationId: string;
+  runtimeScope: RuntimeScope;
   agentId: string;
   systemPromptText: string;
   silverhandCli: SilverhandCliLauncher;
@@ -46,15 +48,23 @@ export interface SpawnPrepHandle {
 export async function prepareSpawnFiles(
   input: SpawnPrepInput,
 ): Promise<SpawnPrepHandle> {
-  const parentDir = join(tmpdir(), 'silverhand', input.conversationId, input.agentId);
+  const scopeDir = input.runtimeScope.kind === 'agent'
+    ? join('agent', input.agentId)
+    : join(input.runtimeScope.conversation_id, input.agentId);
+  const parentDir = join(tmpdir(), 'silverhand', scopeDir);
   await mkdir(parentDir, { recursive: true });
   const dir = await mkdtemp(join(parentDir, 'spawn-'));
 
   const systemPromptPath = join(dir, 'system-prompt.md');
-  const lastDeliveredSeqPath = join(dir, 'last-delivered-seq');
+  const lastDeliveredSeqPath = join(
+    dir,
+    input.runtimeScope.kind === 'agent'
+      ? 'last-delivered-seq.json'
+      : 'last-delivered-seq',
+  );
   const binDir = join(dir, 'bin');
   const silverhandShimPath = join(binDir, 'silverhand');
-  const shimEnv = {
+  const shimEnv: Record<string, string> = {
     ...(input.silverhandCli.env ?? {}),
     ...input.silverhandEnv,
     ...(input.daemonSocketPath
@@ -62,7 +72,19 @@ export async function prepareSpawnFiles(
       : {}),
     [SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV]: lastDeliveredSeqPath,
   };
-  const shim = renderSilverhandShim(input.silverhandCli, shimEnv);
+  // A configured launcher may carry a legacy ambient conversation env of its
+  // own. AgentSlot must delete it from the generated shim just as the child
+  // process env does; omission from `silverhandEnv` is not sufficient.
+  if (input.runtimeScope.kind === 'agent') {
+    delete shimEnv[SILVERHAND_CONVERSATION_ID_ENV];
+  }
+  const shim = renderSilverhandShim(
+    input.silverhandCli,
+    shimEnv,
+    input.runtimeScope.kind === 'agent'
+      ? [SILVERHAND_CONVERSATION_ID_ENV]
+      : [],
+  );
 
   await Promise.all([
     mkdir(binDir, { recursive: true }),
@@ -75,7 +97,9 @@ export async function prepareSpawnFiles(
     systemPromptPath,
     lastDeliveredSeqPath,
     binDir,
-    silverhandShimEnvPresence: summarizeSilverhandEnvPresence(shimEnv),
+    silverhandShimEnvPresence: summarizeSilverhandEnvPresence(shimEnv, {
+      conversationIdRequired: input.runtimeScope.kind === 'conversation',
+    }),
     dir,
     cleanup: async () => {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -86,9 +110,13 @@ export async function prepareSpawnFiles(
 function renderSilverhandShim(
   launcher: SilverhandCliLauncher,
   env: Record<string, string>,
+  unsetKeys: readonly string[],
 ): string {
   const envAssignments = Object.entries(env)
     .map(([key, value]) => `export ${shellName(key)}=${shellString(value)}`)
+    .join('\n');
+  const envUnsets = unsetKeys
+    .map(key => `unset ${shellName(key)}`)
     .join('\n');
   const command = [launcher.command, ...launcher.args]
     .map(part => shellString(part))
@@ -96,6 +124,7 @@ function renderSilverhandShim(
   return [
     '#!/bin/sh',
     'set -eu',
+    envUnsets,
     envAssignments,
     `exec ${command} "$@"`,
     '',

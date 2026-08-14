@@ -78,7 +78,8 @@ const ALL_EVENT_NAMES: readonly string[] = (() => {
   // AnyFrameSchema is a union of [Request, Response, Event]; navigate to
   // the EventFrameSchema discriminator option list.
   const eventUnion = evt._def.options[2];
-  const opts = eventUnion._def.options as ReadonlyArray<{
+  const discriminatedEventUnion = eventUnion.innerType?.() ?? eventUnion;
+  const opts = discriminatedEventUnion._def.options as ReadonlyArray<{
     shape: { event: { value: string } };
   }>;
   return opts.map((o) => o.shape.event.value);

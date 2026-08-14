@@ -24,7 +24,6 @@
 import { Hono, type Context } from 'hono';
 import {
   apiPaths,
-  internalPaths,
   AddWorkspaceMemberInputSchema,
   UpdateWorkspaceHumanMemberRoleInputSchema,
   AddConversationMemberInputSchema,
@@ -78,6 +77,7 @@ import type { MembershipPersistence } from '../application/membership-ports.js';
 import { type PostCommitEffect, runPostCommitEffects } from '../application/post-commit.js';
 import { publishViewerWorkspacesChanged } from '../application/viewer-workspaces.js';
 import { conversationMemberResultResponse } from './responses.js';
+import { internalAgentRoutePaths } from './internal-agent/paths.js';
 
 /**
  * Every membership sub-app now reaches persistence through the membership ports
@@ -466,9 +466,14 @@ export function createWorkspaceMembershipApp(
     const result = await removeWorkspaceMember(
       {
         persistence: deps.membershipPersistence,
-        // Agents run a process per conversation: stopped before the commit on a
-        // hint and again after it on the authoritative set (see the use case).
-        stopRuntime: (conversationId, id) => ctx.runtimeHost.stop(conversationId, id),
+        // ConversationSlot is owned by this membership edge. AgentSlot is
+        // owned by the Agent aggregate and survives losing one workspace.
+        ...(agent.session_scope === 'conversation'
+          ? {
+              stopRuntime: (conversationId: string, id: string) =>
+                ctx.runtimeHost.stop(conversationId, id),
+            }
+          : {}),
         logger: ctx.logger,
       },
       {
@@ -932,7 +937,7 @@ export function createInternalMembershipApp(
     requireAgentCapability,
   } = deps;
 
-  app.post(internalPaths.agentAddConversationMember(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.members, async c => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = AddConversationMemberByHandleInputSchema.safeParse(body);
     if (!parsed.success) {

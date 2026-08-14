@@ -15,6 +15,11 @@ const DAEMON_B = 'pid:222@2000';
 const CONV = 'conv-1';
 const AGENT_X = 'agent-x';
 const AGENT_Y = 'agent-y';
+const SCOPE_X = {
+  kind: 'conversation' as const,
+  conversation_id: CONV,
+  agent_id: AGENT_X,
+};
 
 function dto(
   conversation: string,
@@ -22,8 +27,14 @@ function dto(
   patch: Partial<RuntimeStateDto> = {},
 ): RuntimeStateDto {
   return {
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversation,
+      agent_id: agent,
+    },
     conversation_id: conversation,
     agent_id: agent,
+    runtime_generation: 1,
     pid: 9001,
     phase: 'ready',
     run_state: null,
@@ -97,8 +108,10 @@ describe('RunStateCache: applyRuntimeState (state event)', () => {
     // Daemon ships a state that explicitly omits compactionStale.
     cache.applyRuntimeState(
       DAEMON_A,
+      SCOPE_X,
       CONV,
       AGENT_X,
+      1,
       runState({ status: 'tool_running', detail: 'bash' }),
       1700000002000,
     );
@@ -114,7 +127,7 @@ describe('RunStateCache: applyRuntimeState (state event)', () => {
 
   it('creates a skeleton entry when no prior hydrate exists, defaulting phase=ready', () => {
     const cache = new RunStateCache();
-    cache.applyRuntimeState(DAEMON_A, CONV, AGENT_X, runState());
+    cache.applyRuntimeState(DAEMON_A, SCOPE_X, CONV, AGENT_X, 1, runState());
     const entry = cache.get(CONV, AGENT_X)!;
     expect(entry.phase).toBe('ready');
     expect(entry.pid).toBeNull();
@@ -127,8 +140,10 @@ describe('RunStateCache: applyRuntimeState (state event)', () => {
     // Event from a DIFFERENT daemon must be ignored.
     cache.applyRuntimeState(
       DAEMON_B,
+      SCOPE_X,
       CONV,
       AGENT_X,
+      1,
       runState({ status: 'failed', terminalReason: 'crashed' }),
     );
     const entry = cache.get(CONV, AGENT_X)!;
@@ -141,8 +156,8 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
   it('applyPhase merges only the phase field on existing entries', () => {
     const cache = new RunStateCache();
     cache.applyRuntimeStatus(DAEMON_A, [dto(CONV, AGENT_X)]);
-    cache.applyRuntimeState(DAEMON_A, CONV, AGENT_X, runState());
-    cache.applyPhase(DAEMON_A, CONV, AGENT_X, 'draining', 1700000003000);
+    cache.applyRuntimeState(DAEMON_A, SCOPE_X, CONV, AGENT_X, 1, runState());
+    cache.applyPhase(DAEMON_A, SCOPE_X, CONV, AGENT_X, 1, 'draining', 1700000003000);
     const entry = cache.get(CONV, AGENT_X)!;
     expect(entry.phase).toBe('draining');
     expect(entry.runState?.runId).toBe('run-1');
@@ -151,7 +166,7 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
 
   it('applyPhase creates a skeleton when no prior entry exists', () => {
     const cache = new RunStateCache();
-    cache.applyPhase(DAEMON_A, CONV, AGENT_X, 'spawning');
+    cache.applyPhase(DAEMON_A, SCOPE_X, CONV, AGENT_X, 1, 'spawning');
     const entry = cache.get(CONV, AGENT_X)!;
     expect(entry.phase).toBe('spawning');
     expect(entry.runState).toBeNull();
@@ -163,18 +178,20 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
     cache.applyRuntimeStatus(DAEMON_A, [dto(CONV, AGENT_X)]);
     cache.applyRuntimeState(
       DAEMON_A,
+      SCOPE_X,
       CONV,
       AGENT_X,
+      1,
       runState({ status: 'failed', terminalReason: 'crashed' }),
     );
-    const next = cache.applyRuntimeExit(DAEMON_A, CONV, AGENT_X)!;
+    const next = cache.applyRuntimeExit(DAEMON_A, SCOPE_X, CONV, AGENT_X, 1)!;
     expect(next.phase).toBe('exited');
     expect(next.runState?.terminalReason).toBe('crashed');
   });
 
   it('applyRuntimeExit creates a skeleton entry when none existed', () => {
     const cache = new RunStateCache();
-    const next = cache.applyRuntimeExit(DAEMON_A, CONV, AGENT_X)!;
+    const next = cache.applyRuntimeExit(DAEMON_A, SCOPE_X, CONV, AGENT_X, 1)!;
     expect(next.phase).toBe('exited');
     expect(next.runState).toBeNull();
   });
@@ -182,9 +199,9 @@ describe('RunStateCache: applyPhase + applyRuntimeExit', () => {
   it('drops phase/exit events from a mismatched daemon key', () => {
     const cache = new RunStateCache();
     cache.applyRuntimeStatus(DAEMON_A, [dto(CONV, AGENT_X)]);
-    cache.applyPhase(DAEMON_B, CONV, AGENT_X, 'draining');
+    cache.applyPhase(DAEMON_B, SCOPE_X, CONV, AGENT_X, 1, 'draining');
     expect(cache.get(CONV, AGENT_X)!.phase).toBe('ready');
-    expect(cache.applyRuntimeExit(DAEMON_B, CONV, AGENT_X)).toBeNull();
+    expect(cache.applyRuntimeExit(DAEMON_B, SCOPE_X, CONV, AGENT_X, 1)).toBeNull();
   });
 });
 
@@ -343,6 +360,13 @@ describe('RunStateCache: resolveConversationRuns', () => {
       dto(CONV, AGENT_Y, {
         run_state: runState({ runId: 'r-y', agentId: AGENT_Y }),
       }),
+      dto(CONV, 'agent-global', {
+        runtime_scope: { kind: 'agent', agent_id: 'agent-global' },
+        run_state: runState({
+          runId: 'r-agent-slot',
+          agentId: 'agent-global',
+        }),
+      }),
       dto('conv-other', AGENT_X, {
         run_state: runState({ runId: 'r-other', conversationId: 'conv-other' }),
       }),
@@ -362,6 +386,12 @@ describe('RunStateCache: resolveConversationRuns', () => {
     // Resolved entries had their runState cleared but entry preserved.
     expect(cache.get(CONV, AGENT_X)?.runState).toBeNull();
     expect(cache.get(CONV, AGENT_Y)?.runState).toBeNull();
+    // Conversation archive/delete owns only ConversationSlot lifecycle. An
+    // AgentSlot whose current presentation focus happens to be this target
+    // stays live.
+    expect(cache.get(CONV, 'agent-global')?.runState?.runId).toBe(
+      'r-agent-slot',
+    );
   });
 
   it('returns [] when conversation has no active runs', () => {

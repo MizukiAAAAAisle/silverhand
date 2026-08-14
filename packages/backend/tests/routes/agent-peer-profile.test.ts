@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
 
 /**
@@ -71,7 +76,7 @@ async function setDescription(
       {
         method: 'POST',
         headers: {
-          authorization: `Bearer ${t.ctx.agentTokens.issue(channelId, agentId)}`,
+          authorization: `Bearer ${issueTestConversationRuntimeToken(t, channelId, agentId)}`,
         },
         body: form,
       },
@@ -220,7 +225,7 @@ describe('agent peer profile read (internal route)', () => {
         {
           method: 'GET',
           headers: {
-            authorization: `Bearer ${t!.ctx.agentTokens.issue(team.channelId, bob)}`,
+            authorization: `Bearer ${issueTestConversationRuntimeToken(t!, team.channelId, bob)}`,
           },
         },
       ),

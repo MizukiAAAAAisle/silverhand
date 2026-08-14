@@ -34,6 +34,7 @@ import { SearchQueryInputSchema } from '@silverhand/shared';
 import type { ConversationDto } from '@silverhand/shared';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
 import { SavedMessageRepo } from '../../src/repos/saved-message-repo.js';
 import { SearchRepo } from '../../src/repos/search-repo.js';
@@ -196,16 +197,45 @@ describe('agent inbox — workspace-scoped read faces exclude it by decision', (
     expect(found.total).toBe(2);
   });
 
-  it('is not a roster seat, so the runtime conversation list does not carry it', () => {
+  it('is not a roster seat, so the roster face has nothing to project for it', () => {
+    const t = bootstrap();
+    // The differential's third part: the row the roster face omits is
+    // nonetheless the agent's own, which is why omitting it is scoping and not a
+    // lost row. What it does NOT mean is that the inbox has no runtime seat —
+    // that is the block below, and the two must not be conflated.
+    expect(t.conversations.isAgentParticipant(t.inbox.id, t.alpha.id)).toBe(true);
+    expect(t.conversations.getAgent(t.inbox.id, t.alpha.id)).toBeNull();
+  });
+});
+
+/**
+ * The counterweight to the block above: not every face that could omit the inbox
+ * SHOULD. The runtime faces are keyed by AGENT, not by workspace, and v75 made a
+ * seat follow PARTICIPATION rather than the roster — so the inbox belongs in
+ * them. A session can run there (#task:2019), and a running session no control
+ * plane can see is the defect the placement/seat split exists to prevent.
+ */
+describe('agent inbox — the runtime faces DO carry it (a seat is not a roster row)', () => {
+  it('has a seat with no roster row, and shows up in the runtime conversation list', () => {
     const t = bootstrap();
     const seats = new AgentRepo(t.db).listRuntimeConversations(t.alpha.id);
     expect(seats.map(s => s.conversation_id).sort()).toEqual(
-      [t.general.id, t.dm.id].sort(),
+      [t.general.id, t.dm.id, t.inbox.id].sort(),
     );
-    // The differential's third part: the row this list omits is nonetheless the
-    // agent's own, which is why omitting it is scoping and not a lost row.
-    expect(t.conversations.isAgentParticipant(t.inbox.id, t.alpha.id)).toBe(true);
+    // The two units side by side on the same row: a SEAT exists for the inbox,
+    // while MEMBERSHIP does not. Deriving either from the other is what made a
+    // DM session unstoppable before v75.
+    expect(
+      new RuntimeSlotRepo(t.db).get({
+        kind: 'conversation',
+        conversationId: t.inbox.id,
+        agentId: t.alpha.id,
+      }),
+    ).toMatchObject({ observed_status: 'idle', generation: 0 });
     expect(t.conversations.getAgent(t.inbox.id, t.alpha.id)).toBeNull();
+    // The control: the workspace channel has both, so the inbox's missing roster
+    // row is a property of its placement and not of this fixture.
+    expect(t.conversations.getAgent(t.general.id, t.alpha.id)).not.toBeNull();
   });
 });
 
@@ -218,8 +248,9 @@ describe('agent inbox — its one participant CAN read it', () => {
     // answers from `conversation_agents`.
     expect(t.conversations.isAgentParticipant(t.general.id, t.alpha.id)).toBe(true);
     expect(t.conversations.isAgentParticipant(t.general.id, t.beta.id)).toBe(false);
-    // And the runtime-seat question is still a different question: the inbox has
-    // no seat columns (`pid` / `status` / `cli_session_id`) to report.
+    // And MEMBERSHIP is still a different question from participation: the roster
+    // face has no inbox row to project at all. Its runtime seat is a third unit
+    // again, asserted in the runtime block above.
     expect(t.conversations.getAgent(t.general.id, t.alpha.id)).not.toBeNull();
     expect(t.conversations.getAgent(t.inbox.id, t.alpha.id)).toBeNull();
   });

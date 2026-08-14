@@ -78,6 +78,11 @@ function asSocket(s: FakeSocket): Socket {
 function outputFrame(chunkSize: number, conv = 'c1', agent = 'a1'): EventFrame {
   return {
     event: 'runtime_output',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conv,
+      agent_id: agent,
+    },
     conversation_id: conv,
     agent_id: agent,
     stream: 'stdout',
@@ -93,8 +98,14 @@ describe('OutputBackpressure — non-droppable events', () => {
     sock.writableNeedDrain = true;
     const r = bp.emit(asSocket(sock), {
       event: 'runtime_state',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       state: {
         runId: 'r1',
         agentId: 'a1',
@@ -118,22 +129,40 @@ describe('OutputBackpressure — non-droppable events', () => {
     const events: EventFrame[] = [
       {
         event: 'runtime_exit',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         code: 0,
         intentional: true,
         ts: 0,
       },
       {
         event: 'runtime_ready_for_drain',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         ts: 0,
       },
       {
         event: 'runtime_delivery_consumed',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         delivery_ids: [1],
         ts: 0,
       },

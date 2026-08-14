@@ -23,7 +23,7 @@ import {
   HOST_PROTOCOL_VERSION,
   KNOWN_CAPABILITIES_V1,
   type EventFrame,
-  type RuntimeStatusResult,
+  type RuntimeStatusResult as WireRuntimeStatusResult,
 } from '@silverhand/host';
 import type { AgentRunState } from '@silverhand/shared';
 import { RunStateCache } from '../../src/runtime/run-state-cache.js';
@@ -39,9 +39,33 @@ import {
 } from '../../src/runtime/event-handler.js';
 import type { RuntimeStatusProjector } from '../../src/runtime/status-projector.js';
 
+type LegacyRuntimeStatusResult = {
+  runtimes: Array<
+    Omit<WireRuntimeStatusResult['runtimes'][number], 'runtime_scope'> & {
+      runtime_scope?: WireRuntimeStatusResult['runtimes'][number]['runtime_scope'];
+    }
+  >;
+};
+type RuntimeStatusResult = LegacyRuntimeStatusResult;
+
+function normalizeStatusSnapshot(
+  snapshot: RuntimeStatusResult,
+): WireRuntimeStatusResult {
+  return {
+    runtimes: snapshot.runtimes.map(runtime => ({
+      ...runtime,
+      runtime_scope: runtime.runtime_scope ?? {
+        kind: 'conversation',
+        conversation_id: runtime.conversation_id,
+        agent_id: runtime.agent_id,
+      },
+    })),
+  };
+}
+
 function makeFakeClient(): {
   client: RuntimeEventSource;
-  emit: (frame: EventFrame) => void;
+  emit: (frame: Record<string, unknown>) => void;
   triggerReconnect: () => void;
 } {
   const eventHandlers = new Set<(frame: EventFrame) => void>();
@@ -59,7 +83,37 @@ function makeFakeClient(): {
   return {
     client: fake,
     emit(frame) {
-      for (const h of eventHandlers) h(frame);
+      const scopedFrame =
+        'conversation_id' in frame
+        && typeof frame.conversation_id === 'string'
+        && 'agent_id' in frame
+        && typeof frame.agent_id === 'string'
+        && !('runtime_scope' in frame)
+          ? {
+              ...frame,
+              runtime_scope: {
+                kind: 'conversation',
+                conversation_id: frame.conversation_id,
+                agent_id: frame.agent_id,
+              },
+            }
+          : frame;
+      const generationBoundEvents = new Set([
+        'runtime_state',
+        'runtime_exit',
+        'runtime_ready_for_drain',
+        'runtime_init_timeout',
+        'runtime_init_retrying',
+        'runtime_init_cooldown',
+        'runtime_parsed_event',
+        'runtime_delivery_consumed',
+        'runtime_delivery_failed',
+      ]);
+      const boundFrame = generationBoundEvents.has(String(scopedFrame.event))
+        && !('runtime_generation' in scopedFrame)
+        ? { ...scopedFrame, runtime_generation: 1 } as unknown as EventFrame
+        : scopedFrame as EventFrame;
+      for (const h of eventHandlers) h(boundFrame);
     },
     triggerReconnect() {
       for (const h of reconnectHandlers) h();
@@ -75,7 +129,7 @@ function makeBridge(snapshot: RuntimeStatusResult): {
   const bridge = {
     runtimeStatus: async () => {
       count += 1;
-      return snapshot;
+      return normalizeStatusSnapshot(snapshot);
     },
   } as unknown as RuntimeStatusBridge;
   return { bridge, statusCalls: () => count };
@@ -108,11 +162,11 @@ function makeInboxAck(): {
   const delivered: number[][] = [];
   const undelivered: Array<{ ids: number[]; reason: string }> = [];
   const sink: InboxAckSink = {
-    markDelivered(ids) {
-      delivered.push([...ids]);
+    markDelivered(settlement) {
+      delivered.push([...settlement.deliveryIds]);
     },
-    markUndelivered(ids, reason) {
-      undelivered.push({ ids: [...ids], reason });
+    markUndelivered(settlement, reason) {
+      undelivered.push({ ids: [...settlement.deliveryIds], reason });
     },
   };
   return { sink, delivered, undelivered };
@@ -123,7 +177,7 @@ function makeInboxAck(): {
  * that the EventHandler used to emit inline (pre-B1) so the existing
  * 38 SSE-shape tests keep passing without rewriting every fixture.
  * Production wires `DbRuntimeStatusProjector` which ALSO writes
- * `conversation_agents`; tests that need to assert the DB side use the
+ * `agent_runtime_slots`; tests that need to assert the DB side use the
  * production class directly (see status-projector.test.ts).
  */
 function makeForwardingProjector(publisher: EventPublisher): RuntimeStatusProjector {
@@ -160,6 +214,7 @@ function makeForwardingProjector(publisher: EventPublisher): RuntimeStatusProjec
           run_state: runState,
         },
       });
+      return null;
     },
     initRetrying({ conversationId, agentId, retryAttempt, maxRetries, timeoutReason }) {
       publisher.publish(conversationId, {
@@ -198,6 +253,8 @@ function makeForwardingProjector(publisher: EventPublisher): RuntimeStatusProjec
 function makeHandler(deps: Omit<RuntimeEventHandlerDeps, 'statusProjector'>): RuntimeEventHandler {
   return new RuntimeEventHandler({
     ...deps,
+    daemonInstanceId: deps.daemonInstanceId ?? (() => 'daemon-test'),
+    deliveryOwner: deps.deliveryOwner ?? (() => 'connection-test'),
     statusProjector: makeForwardingProjector(deps.events),
   });
 }
@@ -220,9 +277,15 @@ function readyFrame(daemonPid: number, startedAt: number): EventFrame {
 function runStateFrame(conversationId: string, agentId: string, state: AgentRunState, ts = 1700000000000): EventFrame {
   return {
     event: 'runtime_state',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversationId,
+      agent_id: agentId,
+    },
     conversation_id: conversationId,
     agent_id: agentId,
     state,
+    runtime_generation: 1,
     ts,
   };
 }
@@ -236,10 +299,16 @@ function exitFrame(
 ): EventFrame {
   return {
     event: 'runtime_exit',
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: conversationId,
+      agent_id: agentId,
+    },
     conversation_id: conversationId,
     agent_id: agentId,
     code,
     intentional,
+    runtime_generation: 1,
     ts,
   };
 }
@@ -263,6 +332,7 @@ describe('RuntimeEventHandler.start — hydrate on initial subscribe', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: RUN_STATE,
@@ -319,6 +389,7 @@ describe('RuntimeEventHandler — hydrate on reconnect', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -327,7 +398,7 @@ describe('RuntimeEventHandler — hydrate on reconnect', () => {
       ],
     };
     const bridge = {
-      runtimeStatus: async () => snapshot,
+      runtimeStatus: async () => normalizeStatusSnapshot(snapshot),
     } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
@@ -359,6 +430,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -367,7 +439,7 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
       ],
     };
     const bridge = {
-      runtimeStatus: async () => snapshot,
+      runtimeStatus: async () => normalizeStatusSnapshot(snapshot),
     } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
     const { sink } = makeInboxAck();
@@ -401,18 +473,19 @@ describe('RuntimeEventHandler — daemon pid change (daemon swap)', () => {
         statusCalls += 1;
         // First call (initial) — we want exactly 1; second call only
         // happens if we mistakenly hydrate on the duplicate ready.
-        return {
+        return normalizeStatusSnapshot({
           runtimes: [
             {
               conversation_id: 'c1',
               agent_id: 'a1',
+              runtime_generation: 1,
               pid: 1234,
               phase: 'ready',
               run_state: null,
               started_at: 1700000000000,
             },
           ],
-        } as RuntimeStatusResult;
+        });
       },
     } as unknown as RuntimeStatusBridge;
     const { publisher } = makePublisher();
@@ -510,6 +583,7 @@ describe('RuntimeEventHandler — event routing', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -548,6 +622,7 @@ describe('RuntimeEventHandler — event routing', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -587,6 +662,7 @@ describe('RuntimeEventHandler — event routing', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -620,6 +696,7 @@ describe('RuntimeEventHandler — event routing', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -698,6 +775,7 @@ describe('RuntimeEventHandler — event routing', () => {
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -710,6 +788,7 @@ describe('RuntimeEventHandler — event routing', () => {
       ts: 1700000001000,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_retrying',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -719,6 +798,7 @@ describe('RuntimeEventHandler — event routing', () => {
       ts: 1700000001100,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_cooldown',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -760,6 +840,7 @@ describe('RuntimeEventHandler — event routing', () => {
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_retrying',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -789,6 +870,7 @@ describe('RuntimeEventHandler — event routing', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -808,6 +890,7 @@ describe('RuntimeEventHandler — event routing', () => {
     await handler.start();
     // Stash a reason …
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -824,6 +907,7 @@ describe('RuntimeEventHandler — event routing', () => {
     // A subsequent unrelated retry on the SAME key must NOT inherit
     // the stale reason.
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_retrying',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -846,6 +930,7 @@ describe('RuntimeEventHandler — event routing', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -865,6 +950,7 @@ describe('RuntimeEventHandler — event routing', () => {
     await handler.start();
     // Stash a timeout reason …
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -880,6 +966,7 @@ describe('RuntimeEventHandler — event routing', () => {
     emit(runStateFrame('c1', 'a1', RUN_STATE));
     // A later, unrelated retry must NOT inherit the stale reason.
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_retrying',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -903,6 +990,7 @@ describe('RuntimeEventHandler — event routing', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'startup_pending',
           run_state: null,
@@ -925,6 +1013,7 @@ describe('RuntimeEventHandler — event routing', () => {
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_ready_for_drain',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -960,6 +1049,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -978,6 +1068,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1003,6 +1094,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1044,6 +1136,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     await handler.start();
     for (const state of ['queued', 'started', 'completed'] as const) {
       emit({
+        runtime_generation: 1,
         event: 'runtime_parsed_event',
         conversation_id: 'c1',
         agent_id: 'a1',
@@ -1073,6 +1166,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1112,6 +1206,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1153,6 +1248,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1210,6 +1306,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     await handler.start();
 
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1217,6 +1314,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       ts: 1700000001000,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1233,6 +1331,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     ]);
 
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1241,6 +1340,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     });
     expect(recordCalls).toEqual([]);
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1249,6 +1349,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     });
 
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1296,6 +1397,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1345,6 +1447,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     await handler.start();
 
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1369,6 +1472,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1417,6 +1521,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     await handler.start();
 
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1424,6 +1529,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       ts: 1700000001000,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1431,6 +1537,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       ts: 1700000002000,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1462,6 +1569,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1516,6 +1624,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     await handler.start();
 
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1523,6 +1632,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       ts: 1700000001000,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1530,6 +1640,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
       ts: 1700000001001,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1552,6 +1663,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1571,6 +1683,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
     await handler.start();
     const huge = 'x'.repeat(2000); // exceeds 500-char cap
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1599,6 +1712,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1651,6 +1765,7 @@ describe('RuntimeEventHandler — runtime_parsed_event → agent_event projectio
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: runState,
@@ -1729,7 +1844,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
 
   function setup(opts: { withCallbacks?: boolean } = {}): {
     cache: RunStateCache;
-    emit: (frame: EventFrame) => void;
+    emit: (frame: Record<string, unknown>) => void;
     handler: RuntimeEventHandler;
     parsedCalls: Array<{ conv: string; agent: string; event: unknown }>;
     exitCalls: Array<{
@@ -1752,6 +1867,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -1804,6 +1920,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     await handler.start();
     const hugeInput = 'x'.repeat(2000); // would be truncated by the sanitizer
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1829,6 +1946,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls, publishedAgentStatus } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1842,6 +1960,11 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       conv: 'c1',
       agent: 'a1',
       meta: {
+        scope: {
+          kind: 'conversation',
+          conversationId: 'c1',
+          agentId: 'a1',
+        },
         intentional: true,
         code: 0,
         initTimedOut: false,
@@ -1854,6 +1977,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_cooldown',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1862,6 +1986,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002500,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1877,6 +2002,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1889,6 +2015,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002400,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1903,6 +2030,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, initTimeoutCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1915,6 +2043,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002400,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_cooldown',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1932,6 +2061,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1944,6 +2074,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002400,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1958,6 +2089,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1970,6 +2102,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002400,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1985,6 +2118,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -1995,6 +2129,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002400,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2010,6 +2145,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     await handler.start();
     // Init failure on c1/a1.
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_cooldown',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2019,6 +2155,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     });
     // Exit on c2/a2 must NOT inherit c1/a1's flag.
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c2',
       agent_id: 'a2',
@@ -2038,6 +2175,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: null,
@@ -2066,6 +2204,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2085,6 +2224,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2092,6 +2232,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000001000,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2110,6 +2251,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_timeout',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2126,6 +2268,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     // state must NOT strip the flag.
     emit(runStateFrame('c1', 'a1', { ...RUN_STATE, status: 'failed', terminalReason: 'timeout' }, 1700000002400));
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2140,6 +2283,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2152,6 +2296,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     });
     emit(runStateFrame('c1', 'a1', { ...RUN_STATE, status: 'failed', terminalReason: 'crashed' }, 1700000002400));
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2166,6 +2311,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2179,6 +2325,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     // Non-terminal state (no terminalReason) — agent recovered.
     emit(runStateFrame('c1', 'a1', RUN_STATE, 1700000002400));
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2196,6 +2343,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, exitCalls, publishedAgentStatus } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2207,6 +2355,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
       ts: 1700000002300,
     });
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2225,6 +2374,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, publishedAgentStatus } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_init_cooldown',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2236,6 +2386,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     // status mapping; clear out anything published so far.
     const baseline = publishedAgentStatus().length;
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2255,6 +2406,7 @@ describe('RuntimeEventHandler — coordinator forwarding hooks (sub-2b-i)', () =
     const { handler, emit, publishedAgentStatus } = setup();
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_exit',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2288,12 +2440,88 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
     const projector: RuntimeStatusProjector = {
       sessionInit: input => calls.push({ kind: 'sessionInit', input: { ...input } }),
       runtimeReady: input => calls.push({ kind: 'runtimeReady', input: { ...input } }),
-      runtimeExit: input => calls.push({ kind: 'runtimeExit', input: { ...input } }),
+      runtimeExit: input => {
+        calls.push({ kind: 'runtimeExit', input: { ...input } });
+        return null;
+      },
       initRetrying: input => calls.push({ kind: 'initRetrying', input: { ...input } }),
       initCooldown: input => calls.push({ kind: 'initCooldown', input: { ...input } }),
     };
     return { projector, calls };
   }
+
+  it('drops a stale generation before projection, SSE, or coordinator callbacks', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher, published } = makePublisher();
+    const { sink } = makeInboxAck();
+    const { projector, calls } = makeRecordingProjector();
+    const parsedCalls: unknown[] = [];
+    const handler = new RuntimeEventHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+      statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
+      acceptRuntimeCustody: () => false,
+      onParsedEvent: (...input) => parsedCalls.push(input),
+    });
+    await handler.start();
+    emit({
+      event: 'runtime_parsed_event',
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      runtime_generation: 1,
+      parsed: { kind: 'session_init', sessionId: 'late-session' },
+      ts: 1700000001000,
+    });
+    expect(calls).toEqual([]);
+    expect(published).toEqual([]);
+    expect(parsedCalls).toEqual([]);
+  });
+
+  it('rejects an origin outside a ConversationSlot scope before delivery ack side effects', async () => {
+    const cache = new RunStateCache();
+    const { client, emit } = makeFakeClient();
+    const { bridge } = makeBridge({ runtimes: [] });
+    const { publisher } = makePublisher();
+    const { sink, delivered } = makeInboxAck();
+    const handler = makeHandler({
+      client,
+      bridge,
+      cache,
+      events: publisher,
+      inboxAck: sink,
+    });
+    await handler.start();
+
+    emit({
+      event: 'runtime_delivery_consumed',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
+      conversation_id: 'c2',
+      agent_id: 'a1',
+      delivery_ids: [41],
+      ts: 1700000001000,
+    });
+    expect(delivered).toEqual([]);
+
+    emit({
+      event: 'runtime_delivery_consumed',
+      runtime_scope: { kind: 'agent', agent_id: 'a1' },
+      conversation_id: 'c2',
+      agent_id: 'a1',
+      delivery_ids: [42],
+      ts: 1700000001001,
+    });
+    expect(delivered).toEqual([[42]]);
+  });
 
   it('runtime_parsed_event(session_init) → projector.sessionInit with cliSessionId', async () => {
     const cache = new RunStateCache();
@@ -2309,6 +2537,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
     emit({
@@ -2316,15 +2545,22 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       conversation_id: 'c1',
       agent_id: 'a1',
       parsed: { kind: 'session_init', sessionId: 'sess-routed-9999' },
+      runtime_generation: 1,
       ts: 1700000001000,
     });
     expect(calls).toEqual([
       {
         kind: 'sessionInit',
         input: {
+          scope: {
+            kind: 'conversation',
+            conversationId: 'c1',
+            agentId: 'a1',
+          },
           conversationId: 'c1',
           agentId: 'a1',
           cliSessionId: 'sess-routed-9999',
+          custody: { generation: 1, daemonInstanceId: 'daemon-test' },
         },
       },
     ]);
@@ -2344,9 +2580,11 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
     emit({
+      runtime_generation: 1,
       event: 'runtime_parsed_event',
       conversation_id: 'c1',
       agent_id: 'a1',
@@ -2370,20 +2608,28 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
     emit({
       event: 'runtime_ready_for_drain',
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       ts: 1700000001000,
     });
     expect(calls).toEqual([
       {
         kind: 'runtimeReady',
         input: {
+          scope: {
+            kind: 'conversation',
+            conversationId: 'c1',
+            agentId: 'a1',
+          },
           conversationId: 'c1',
           agentId: 'a1',
+          custody: { generation: 1, daemonInstanceId: 'daemon-test' },
         },
       },
     ]);
@@ -2397,6 +2643,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
         {
           conversation_id: 'c1',
           agent_id: 'a1',
+          runtime_generation: 1,
           pid: 1234,
           phase: 'ready',
           run_state: RUN_STATE,
@@ -2414,6 +2661,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
     emit(exitFrame('c1', 'a1', false, 137));
@@ -2447,6 +2695,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
 
@@ -2460,6 +2709,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
         code: 'session_archived',
         fatal: true,
       },
+      runtime_generation: 1,
       ts: 1700000001000,
     });
     emit(exitFrame('c1', 'a1', false, 1, 1700000001100));
@@ -2486,6 +2736,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
 
@@ -2499,6 +2750,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
         code: 'provider_error',
         fatal: true,
       },
+      runtime_generation: 1,
       ts: 1700000001000,
     });
     emit(exitFrame('c1', 'a1', false, 1, 1700000001100));
@@ -2525,6 +2777,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
     // Seed lastTimeoutReason via the prior init_timeout event.
@@ -2538,6 +2791,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       retrying: true,
       retry_attempt: 1,
       max_retries: 3,
+      runtime_generation: 1,
       ts: 1700000001000,
     });
     emit({
@@ -2547,16 +2801,23 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       retry_attempt: 2,
       max_retries: 3,
       delay_ms: 1000,
+      runtime_generation: 1,
       ts: 1700000002000,
     });
     const retryCall = calls.find(c => c.kind === 'initRetrying');
     expect(retryCall).toBeDefined();
     expect(retryCall!.input).toEqual({
+      scope: {
+        kind: 'conversation',
+        conversationId: 'c1',
+        agentId: 'a1',
+      },
       conversationId: 'c1',
       agentId: 'a1',
       retryAttempt: 2,
       maxRetries: 3,
       timeoutReason: 'silence',
+      custody: { generation: 1, daemonInstanceId: 'daemon-test' },
     });
   });
 
@@ -2574,6 +2835,7 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       events: publisher,
       inboxAck: sink,
       statusProjector: projector,
+      daemonInstanceId: () => 'daemon-test',
     });
     await handler.start();
     emit({
@@ -2582,16 +2844,23 @@ describe('RuntimeEventHandler — projector routing (B1)', () => {
       agent_id: 'a1',
       cooldown_until: 1700000999000,
       attempts_exhausted: 3,
+      runtime_generation: 1,
       ts: 1700000001000,
     });
     expect(calls).toEqual([
       {
         kind: 'initCooldown',
         input: {
+          scope: {
+            kind: 'conversation',
+            conversationId: 'c1',
+            agentId: 'a1',
+          },
           conversationId: 'c1',
           agentId: 'a1',
           cooldownUntil: 1700000999000,
           attemptsExhausted: 3,
+          custody: { generation: 1, daemonInstanceId: 'daemon-test' },
         },
       },
     ]);
@@ -2608,18 +2877,19 @@ describe('hydrate retry — #task:1588 P1-3 (bounded same-generation recovery)',
       runtimeStatus: async () => {
         count += 1;
         if (count <= failures) throw new Error(`hydrate boom #${count}`);
-        return {
+        return normalizeStatusSnapshot({
           runtimes: [
             {
               conversation_id: 'c1',
               agent_id: 'a1',
+              runtime_generation: 1,
               pid: 42,
               phase: 'ready',
               run_state: null,
               started_at: 1700000000000,
             },
           ],
-        };
+        });
       },
     } as unknown as RuntimeStatusBridge;
     return { bridge, statusCalls: () => count };

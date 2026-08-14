@@ -1,6 +1,6 @@
 /**
  * `RuntimeStatusProjector` — sink for the runtime status events
- * that mutate `conversation_agents.{status,pid,cli_session_id}` AND
+ * that mutate the scoped runtime-slot projection AND
  * publish the matching `agent_status` SSE.
  *
  * ## Why a sink (Cindy `usjxj8AxX4AvJ5E-` B1 refinement)
@@ -30,7 +30,7 @@
  * ## Idempotence
  *
  * All methods are idempotent at the DB layer (re-applying the
- * same `updateAgentRuntime` call is a no-op write) and at the SSE
+ * same runtime-slot projection is a no-op write) and at the SSE
  * layer (a re-broadcast of an identical `agent_status` payload is a
  * benign duplicate for the renderer). `session_init` in particular
  * fires at the start of every claude turn (`system.init` is per-turn,
@@ -41,8 +41,18 @@
  * (B3), not by this sink.
  */
 import type { AgentRunState } from '@silverhand/shared';
-import type { ConversationRepo } from '../repos/conversation-repo.js';
+import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { EventPublisher } from './event-handler.js';
+import {
+  runtimePrincipalForScope,
+  type RuntimePrincipal,
+  type RuntimePrincipalScope,
+} from '../auth/runtime-principal.js';
+
+export interface RuntimeProjectionCustody {
+  generation: number;
+  daemonInstanceId: string;
+}
 
 export type InitTimeoutReason =
   | 'silence'
@@ -50,17 +60,22 @@ export type InitTimeoutReason =
   | 'post_protocol';
 
 export interface SessionInitProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   cliSessionId: string;
+  custody: RuntimeProjectionCustody;
 }
 
 export interface RuntimeReadyProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
+  custody: RuntimeProjectionCustody;
 }
 
 export interface RuntimeExitProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   intentional: boolean;
@@ -69,40 +84,45 @@ export interface RuntimeExitProjection {
   fatalError: boolean;
   clearCliSessionId?: boolean;
   runState: AgentRunState | null;
+  custody: RuntimeProjectionCustody;
 }
 
 export interface InitRetryingProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   retryAttempt: number;
   maxRetries: number;
   timeoutReason: InitTimeoutReason | undefined;
+  custody: RuntimeProjectionCustody;
 }
 
 export interface InitCooldownProjection {
+  scope: RuntimePrincipalScope;
   conversationId: string;
   agentId: string;
   cooldownUntil: number;
   attemptsExhausted: number;
+  custody: RuntimeProjectionCustody;
 }
 
 export interface RuntimeStatusProjector {
   sessionInit(input: SessionInitProjection): void;
   runtimeReady(input: RuntimeReadyProjection): void;
-  runtimeExit(input: RuntimeExitProjection): void;
+  runtimeExit(input: RuntimeExitProjection): RuntimePrincipal | null;
   initRetrying(input: InitRetryingProjection): void;
   initCooldown(input: InitCooldownProjection): void;
 }
 
 /**
- * Production projector: writes `conversation_agents` via
- * `ConversationRepo` AND publishes `agent_status` SSE via the shared
+ * Production projector: writes `agent_runtime_slots` via
+ * `RuntimeSlotRepo` AND publishes `agent_status` SSE via the shared
  * `EventPublisher`. Status mapping (idle/crashed/active/starting) lives
  * here so EventHandler's branches don't carry status logic.
  */
 export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
   constructor(
-    private readonly conversations: ConversationRepo,
+    private readonly runtimeSlots: RuntimeSlotRepo,
     private readonly events: EventPublisher,
   ) {}
 
@@ -115,14 +135,19 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * dedup of the non-idempotent steps (B3).
    */
   sessionInit({
+    scope,
     conversationId,
     agentId,
     cliSessionId,
+    custody,
   }: SessionInitProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
-      status: 'active',
-      cliSessionId,
+    const updated = this.runtimeSlots.compareAndSetProjection({
+      scope,
+      expectedGeneration: custody.generation,
+      expectedDaemonInstanceId: custody.daemonInstanceId,
+      patch: { status: 'active', cliSessionId },
     });
+    if (!updated) return;
     this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
@@ -142,10 +167,14 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * This deliberately preserves `cli_session_id`; `sessionInit()` will
    * fill/refresh it once the driver emits a real session id.
    */
-  runtimeReady({ conversationId, agentId }: RuntimeReadyProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
-      status: 'active',
+  runtimeReady({ scope, conversationId, agentId, custody }: RuntimeReadyProjection): void {
+    const updated = this.runtimeSlots.compareAndSetProjection({
+      scope,
+      expectedGeneration: custody.generation,
+      expectedDaemonInstanceId: custody.daemonInstanceId,
+      patch: { status: 'active' },
     });
+    if (!updated) return;
     this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
@@ -176,6 +205,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * start fail against the same invalid lower-level session.
    */
   runtimeExit({
+    scope,
     conversationId,
     agentId,
     intentional,
@@ -184,18 +214,22 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
     fatalError,
     clearCliSessionId,
     runState,
-  }: RuntimeExitProjection): void {
+    custody,
+  }: RuntimeExitProjection): RuntimePrincipal | null {
     const status: 'idle' | 'crashed' =
       initTimedOut || fatalError
         ? 'crashed'
         : intentional || code === 0
           ? 'idle'
           : 'crashed';
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
+    const finalized = this.runtimeSlots.finalizeGeneration({
+      scope,
+      expectedGeneration: custody.generation,
+      expectedDaemonInstanceId: custody.daemonInstanceId,
       status,
-      pid: null,
-      ...(clearCliSessionId ? { cliSessionId: null } : {}),
+      ...(clearCliSessionId ? { clearCliSessionId: true } : {}),
     });
+    if (!finalized) return null;
     this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
@@ -206,6 +240,11 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
         run_state: runState,
         ...(clearCliSessionId ? { cli_session_id: null } : {}),
       },
+    });
+    return runtimePrincipalForScope({
+      scope,
+      generation: custody.generation,
+      daemonInstanceId: custody.daemonInstanceId,
     });
   }
 
@@ -219,16 +258,21 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * regressing to the pre-retry view.
    */
   initRetrying({
+    scope,
     conversationId,
     agentId,
     retryAttempt,
     maxRetries,
     timeoutReason,
+    custody,
   }: InitRetryingProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
-      status: 'starting',
-      pid: null,
+    const updated = this.runtimeSlots.compareAndSetProjection({
+      scope,
+      expectedGeneration: custody.generation,
+      expectedDaemonInstanceId: custody.daemonInstanceId,
+      patch: { status: 'starting', pid: null },
     });
+    if (!updated) return;
     this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
@@ -251,15 +295,20 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
    * restart until cooldown lapses.
    */
   initCooldown({
+    scope,
     conversationId,
     agentId,
     cooldownUntil,
     attemptsExhausted,
+    custody,
   }: InitCooldownProjection): void {
-    this.conversations.updateAgentRuntime(conversationId, agentId, {
-      status: 'crashed',
-      pid: null,
+    const updated = this.runtimeSlots.compareAndSetProjection({
+      scope,
+      expectedGeneration: custody.generation,
+      expectedDaemonInstanceId: custody.daemonInstanceId,
+      patch: { status: 'crashed', pid: null },
     });
+    if (!updated) return;
     this.events.publishSide(conversationId, {
       kind: 'agent_status',
       payload: {
@@ -278,7 +327,7 @@ export class DbRuntimeStatusProjector implements RuntimeStatusProjector {
 export const NOOP_STATUS_PROJECTOR: RuntimeStatusProjector = {
   sessionInit: () => {},
   runtimeReady: () => {},
-  runtimeExit: () => {},
+  runtimeExit: () => null,
   initRetrying: () => {},
   initCooldown: () => {},
 };

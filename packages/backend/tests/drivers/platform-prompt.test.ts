@@ -22,14 +22,26 @@ import {
 function buildPlatformPrompt(
   input: Omit<
     PlatformPromptInput,
-    'memoryNotesCatalog' | 'roleSystemPromptPath'
+    'memoryNotesCatalog' | 'roleSystemPromptPath' | 'sessionContext'
   > & {
     memoryNotesCatalog?: MemoryNotesCatalog;
     roleSystemPromptPath?: string;
+    sessionContext:
+      | PlatformPromptInput['sessionContext']
+      | (Omit<
+          Extract<PlatformPromptInput['sessionContext'], { kind: 'conversation' }>,
+          'kind'
+        > & { kind?: never });
   },
 ): string {
+  const sessionContext = (
+    'kind' in input.sessionContext
+      ? input.sessionContext
+      : { ...input.sessionContext, kind: 'conversation' as const }
+  ) as PlatformPromptInput['sessionContext'];
   return buildPlatformPromptImpl({
     ...input,
+    sessionContext,
     roleSystemPromptPath:
       input.roleSystemPromptPath ??
       `/host/computers/computer-1/agents/${input.agentId}/system_prompt.md`,
@@ -82,6 +94,53 @@ describe('buildPlatformPrompt', () => {
       '- Channel: "member activity" (`conv-channel-1`)',
     );
     expect(regular).not.toContain('Parent channel conversation id');
+  });
+
+  it('renders AgentSlot context without any ambient workspace projection', () => {
+    const text = prompt({
+      activeProfileDir: '.',
+      currentMemory: { kind: 'present', body: '# Agent-global memory' },
+      workspaceMemoryIndex: [
+        {
+          label: 'secret workspace',
+          memoryPath: '/private/workspaces/secret/MEMORY.md',
+        },
+      ],
+      sessionContext: {
+        kind: 'agent',
+        computerId: 'computer-1',
+      },
+    });
+
+    expect(text).toContain('Runtime scope: agent');
+    expect(text).toContain('## Agent-Global Memory');
+    expect(text).toContain('# Agent-global memory');
+    expect(text).toContain('AgentSlot has no ambient conversation');
+    expect(text).not.toContain('## Workspace & Memory');
+    expect(text).not.toContain('## Workspace Memory Index');
+    expect(text).not.toContain('secret workspace');
+    expect(text).not.toContain('/private/workspaces/secret');
+    expect(text).not.toContain('Channel members:');
+  });
+
+  it('renders a workspace-less ConversationSlot without inventing workspace L2', () => {
+    const text = prompt({
+      currentMemory: { kind: 'missing' },
+      workspaceMemoryIndex: [],
+      sessionContext: {
+        kind: 'conversation',
+        conversationId: 'inbox-conversation',
+        computerId: 'computer-1',
+        sessionTitle: 'Agent inbox',
+        members: [],
+      },
+    });
+
+    expect(text).toContain('Runtime scope: workspace-less conversation');
+    expect(text).toContain('`inbox-conversation`');
+    expect(text).toContain('## Conversation Context');
+    expect(text).not.toContain('## Workspace Memory Index');
+    expect(text).not.toContain('Workspace:');
   });
 
   it('places This Context before the Operating Contract', () => {

@@ -660,7 +660,7 @@ describe('ConversationMessageService.sendMessage', () => {
   it('embeds valid attachment snapshots and does not auto-start active recipients', async () => {
     const t = bootstrap();
     try {
-      t.db.prepare(`UPDATE conversation_agents SET status = 'active' WHERE conversation_id = ?`)
+      t.db.prepare(`UPDATE agent_runtime_slots SET observed_status = 'active' WHERE conversation_id = ?`)
         .run(t.channel.id);
       const attachment = t.attachments.insert({
         channelId: t.channel.id,

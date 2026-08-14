@@ -41,9 +41,17 @@ import { buildTestApp, http, type TestApp } from '../utils/app.js';
 
 // ── shared fixture helpers (mirror the route-suite setup) ───────────────
 
-async function makeAgent(t: TestApp, name: string): Promise<string> {
+async function makeAgent(
+  t: TestApp,
+  name: string,
+  sessionScope: 'agent' | 'conversation' = 'conversation',
+): Promise<string> {
   const created = (await (
-    await http(t).post('/api/agents', { name, runtime: 'claude' })
+    await http(t).post('/api/agents', {
+      name,
+      runtime: 'claude',
+      session_scope: sessionScope,
+    })
   ).json()) as any;
   t.fake.starts = [];
   t.fake.delivered = [];
@@ -928,6 +936,25 @@ describe('membership removal + authority revalidation inside the lock (#task:198
   afterEach(() => {
     t?.cleanup();
     t = null;
+  });
+
+  it('removing one conversation target does not stop an AgentSlot shared by other targets', async () => {
+    t = buildTestApp();
+    const agent = await makeAgent(t, 'agent-slot-member', 'agent');
+    const ws = await createRegularWorkspace(t, 'agent-slot-removal-ws', [agent]);
+    const channelId = await createChannel(t, ws, 'room', [agent]);
+    const deps = conversationDeps(t);
+    t.fake.stops = [];
+
+    const result = await removeConversationMember(deps, {
+      conversationId: channelId,
+      agentId: agent,
+      principal: LOCAL_USER,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(deps.conversations.getAgent(channelId, agent)).toBeNull();
+    expect(t.fake.stops).toEqual([]);
   });
 
   it('refuses a leave that strands a private channel: the other human leaves in the seam', async () => {

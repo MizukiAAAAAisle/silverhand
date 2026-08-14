@@ -3,6 +3,7 @@ import type { AgentDto } from '@silverhand/shared';
 import type {
   AgentTeardownCapture,
   AgentDeletionAttempt,
+  AgentRuntimeSessionFacts,
   AgentTeardownFacts,
   AgentTeardownKey,
   AgentTeardownPersistence,
@@ -18,6 +19,7 @@ import { WorkspaceRepo } from './workspace-repo.js';
 import { ConversationRepo } from './conversation-repo.js';
 import { AttachmentRepo, rowToStoredRef } from './attachment-repo.js';
 import { HostRepo } from './host-repo.js';
+import { RuntimeSlotRepo } from './runtime-slot-repo.js';
 
 /** The ONE agent projection both axes and the pre-flight read share. Physical
  *  rows and DTOs stop here (R4): a column added to `agents` cannot reach a
@@ -41,6 +43,32 @@ interface TeardownRepos {
   conversations: ConversationRepo;
   attachments: AttachmentRepo;
   hosts: HostRepo;
+  runtimeSlots: RuntimeSlotRepo;
+}
+
+/**
+ * The agent's live children, as SEATS — one entry per `agent_runtime_slots` row
+ * and nothing else.
+ *
+ * ONE READ, no branch on `session_scope`: the slot table already answers both
+ * scopes, because an agent-scoped agent HAS exactly one row (NULL conversation)
+ * and a conversation-scoped one has one row per participation. Branching here is
+ * what produced the two defects this replaced — the conversation arm walked the
+ * ROSTER (so a DM session was captured by nobody and the post-commit stop walked
+ * past a live process), and the generation was re-read per row, which is a second
+ * read that can disagree with the status it is paired with.
+ */
+function runtimeSessionsForAgent(
+  repos: TeardownRepos,
+  agentId: string,
+): AgentRuntimeSessionFacts[] {
+  return repos.runtimeSlots.listSeats(agentId).map(seat => ({
+    runtimeScope: seat.scope,
+    conversationId:
+      seat.scope.kind === 'conversation' ? seat.scope.conversationId : null,
+    status: seat.status,
+    runtimeGeneration: seat.generation,
+  }));
 }
 
 /**
@@ -61,12 +89,7 @@ function agentTeardownFace(
     capture(): AgentTeardownCapture {
       // RAW statuses — the "which of these is still running" rule is the use
       // case's (see the port doc); filtering here would hide it from its tests.
-      const runtimeSessions = agents
-        .listRuntimeConversations(agentId)
-        .map(session => ({
-          conversationId: session.conversation_id,
-          status: session.status,
-        }));
+      const runtimeSessions = runtimeSessionsForAgent(repos, agentId);
       // The agent's own home is the ONLY discovery path for its DM blobs: the
       // `attachments` rows hang off those channels and cascade away with the
       // home, so a post-commit sweep could not find them again.
@@ -122,6 +145,7 @@ export function createSqliteAgentTeardownPersistence(
     conversations: new ConversationRepo(db),
     attachments: new AttachmentRepo(db),
     hosts: new HostRepo(db),
+    runtimeSlots: new RuntimeSlotRepo(db),
   };
 
   const assertRoot = (): void => {
@@ -142,10 +166,7 @@ export function createSqliteAgentTeardownPersistence(
       return deletionMarkerRead.isDeletionPending(agentId);
     },
     listRuntimeSessions(agentId: string) {
-      return repos.agents.listRuntimeConversations(agentId).map(session => ({
-        conversationId: session.conversation_id,
-        status: session.status,
-      }));
+      return runtimeSessionsForAgent(repos, agentId);
     },
     readComputerFacts(hostId: string): ComputerTeardownFacts | null {
       const row = repos.hosts.get(hostId);

@@ -16,6 +16,7 @@ function makeAgent(overrides: Partial<AgentDto> = {}): AgentDto {
     name: 'alice',
     display_name: 'Alice',
     runtime: 'claude',
+    session_scope: 'conversation',
     description: 'Helpful assistant',
     model: null,
     reasoning_effort: null,
@@ -126,5 +127,15 @@ describe('AgentProfileCard creator/read-only render branches', () => {
     expect(html).not.toContain('role="combobox"');
     expect(html).not.toContain('<datalist');
     expect(html).toContain('aria-label="Edit runtime configuration"');
+  });
+
+  it('shows immutable session scope as profile metadata', () => {
+    const conversationHtml = render(makeAgent({ session_scope: 'conversation' }), 'u-creator');
+    const agentHtml = render(makeAgent({ session_scope: 'agent' }), 'u-creator');
+    expect(conversationHtml).toContain('Session scope');
+    expect(conversationHtml).toContain('Conversation');
+    expect(agentHtml).toContain('Session scope');
+    expect(agentHtml).toContain('Agent');
+    expect(agentHtml).not.toContain('Edit session scope');
   });
 });

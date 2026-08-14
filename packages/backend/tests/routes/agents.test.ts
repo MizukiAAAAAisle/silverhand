@@ -6,9 +6,9 @@ import {
 } from '@silverhand/shared';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
-import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { ConversationInboxRepo } from '../../src/repos/conversation-inbox-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { switchAgentRuntime } from '../../src/application/switch-agent-runtime.js';
 import {
   HostWsCommandResponseError,
@@ -1282,8 +1282,8 @@ describe('PUT /api/agents/:id/runtime', () => {
     const agentId: string = created.agent.id;
     const conversationId: string = created.dm_channel_id;
     t.ctx.db.prepare(
-      `UPDATE conversation_agents
-          SET status = 'active', cli_session_id = 'claude-session'
+      `UPDATE agent_runtime_slots
+          SET observed_status = 'active', cli_session_id = 'claude-session'
         WHERE conversation_id = ? AND agent_id = ?`,
     ).run(conversationId, agentId);
     const changed: string[] = [];
@@ -1383,7 +1383,7 @@ describe('PUT /api/agents/:id/runtime', () => {
     ).json() as any;
     const agentId: string = created.agent.id;
     t.ctx.db.prepare(
-      `UPDATE conversation_agents SET status = 'active'
+      `UPDATE agent_runtime_slots SET observed_status = 'active'
         WHERE conversation_id = ? AND agent_id = ?`,
     ).run(created.dm_channel_id, agentId);
     t.fake.clearError = new Error('clear failed');
@@ -1415,7 +1415,7 @@ describe('PUT /api/agents/:id/runtime', () => {
       {
         ctx: t.ctx,
         agents,
-        conversations: new ConversationRepo(t.ctx.db),
+        runtimeSlots: new RuntimeSlotRepo(t.ctx.db),
         conversationInboxes: inboxes,
       },
       {
@@ -1517,7 +1517,7 @@ describe('PUT /api/agents/:id/runtime', () => {
       await http(t).post('/api/agents', { name: 'partial-switch', runtime: 'claude' })
     ).json() as any;
     t.ctx.db.prepare(
-      `UPDATE conversation_agents SET status = 'active'
+      `UPDATE agent_runtime_slots SET observed_status = 'active'
         WHERE conversation_id = ? AND agent_id = ?`,
     ).run(created.dm_channel_id, created.agent.id);
     t.fake.startError = new Error('restart unavailable');
@@ -1619,7 +1619,7 @@ describe('POST /api/agents/:id/stop', () => {
       .all(created.agent.id) as { id: string }[];
     t.ctx.db
       .prepare(
-        `UPDATE conversation_agents SET status = 'active'
+        `UPDATE agent_runtime_slots SET observed_status = 'active'
          WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run(dmConversations[0]!.id, created.agent.id);
@@ -1642,6 +1642,36 @@ describe('POST /api/agents/:id/stop', () => {
     const body = await res.json() as any;
     expect(body.stopped).toBe(0);
     expect(t.fake.stops).toHaveLength(0);
+  });
+
+  it('hard-stops one AgentSlot exactly once, independent of target count', async () => {
+    t = buildTestApp();
+    const created = (await (
+      await http(t).post('/api/agents', {
+        name: 'agent-slot-stop',
+        runtime: 'claude',
+        session_scope: 'agent',
+      })
+    ).json()) as any;
+    expect(
+      new RuntimeSlotRepo(t.ctx.db).updateCurrentProjection(
+        { kind: 'agent', agentId: created.agent.id },
+        { status: 'active', pid: 123 },
+      ),
+    ).not.toBeNull();
+
+    t.fake.stops = [];
+    const res = await http(t).post(`/api/agents/${created.agent.id}/stop`);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ stopped: 1 });
+    expect(t.fake.stops).toEqual([
+      {
+        conversationId: null,
+        agentId: created.agent.id,
+        runtimeScope: { kind: 'agent', agentId: created.agent.id },
+      },
+    ]);
   });
 
   it('keeps stop owner-only even when the agent is workspace-visible', async () => {
@@ -1714,7 +1744,7 @@ describe('DELETE /api/agents/:id (full flow)', () => {
       .all(created.agent.id) as { id: string }[];
     t.ctx.db
       .prepare(
-        `UPDATE conversation_agents SET status = 'active'
+        `UPDATE agent_runtime_slots SET observed_status = 'active'
          WHERE conversation_id = ? AND agent_id = ?`,
       )
       .run(dmConversations[0]!.id, created.agent.id);

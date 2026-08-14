@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { X_SILVERHAND_PRINCIPAL_HEADER } from '@silverhand/shared';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  X_SILVERHAND_PRINCIPAL_HEADER,
+  internalPaths,
+  legacyInternalPaths,
+} from '@silverhand/shared';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 
 async function setupSession(
   t: TestApp,
@@ -66,10 +75,43 @@ describe('Internal route auth', () => {
     expect(r.status).toBe(401);
   });
 
+  it('records a legacy-family attempt before an unknown bearer is rejected', async () => {
+    const info: unknown[] = [];
+    t = buildTestApp({
+      logger: {
+        info: obj => info.push(obj),
+        warn: () => {},
+        error: () => {},
+      },
+    });
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
+    const response = await http(t).post(
+      legacyInternalPaths.agentSendConversationMessage(
+        conversationId,
+        agentIds.alice!,
+      ),
+      { content: 'expired caller still counts' },
+      {
+        headers: {
+          ...authHeaders('unknown-after-backend-restart'),
+          'x-agent-hub-caller': 'old-runtime-test',
+        },
+      },
+    );
+    expect(response.status).toBe(401);
+    expect(info).toContainEqual(expect.objectContaining({
+      action: 'legacy_internal_agent_route',
+      caller: 'old-runtime-test',
+      routeFamily: 'legacy',
+      conversationId,
+      agentId: agentIds.alice,
+    }));
+  });
+
   it('accepts a token scoped to the URL conversation and agent', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
-    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'hi' },
@@ -78,10 +120,67 @@ describe('Internal route auth', () => {
     expect(r.status).toBe(200);
   });
 
+  it('canonical and legacy families share status, body, and handler side effects', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
+    const agentId = agentIds.alice!;
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
+    const headers = authHeaders(token);
+
+    const canonical = await http(t).get(
+      internalPaths.agentListConversationTasks(conversationId, agentId),
+      { headers },
+    );
+    const legacy = await http(t).get(
+      legacyInternalPaths.agentListConversationTasks(conversationId, agentId),
+      { headers },
+    );
+    expect(canonical.status).toBe(200);
+    expect(legacy.status).toBe(canonical.status);
+    expect(await legacy.json()).toEqual(await canonical.json());
+    expect(canonical.headers.get('Deprecation')).toBeNull();
+    expect(legacy.headers.get('Deprecation')).toBe('true');
+  });
+
+  it('canonical family requires an explicit target conversation coordinate', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
+    const agentId = agentIds.alice!;
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
+    const response = await http(t).post(
+      `/internal/agents/${agentId}/send-message`,
+      { content: 'missing target' },
+      { headers: authHeaders(token) },
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it('collapses unknown and unauthorized canonical targets to the same response', async () => {
+    t = buildTestApp();
+    const { conversationId, channelId, agentIds } = await setupSession(t, ['alice']);
+    const agentId = agentIds.alice!;
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
+    const unauthorized = t.persistence.repos.conversations.insertChannel({
+      workspaceId: channelId,
+      name: 'known-but-unauthorized',
+      title: 'known but unauthorized',
+    });
+    const request = (targetConversationId: string) => http(t!).post(
+      internalPaths.agentSendConversationMessage(targetConversationId, agentId),
+      { content: 'probe' },
+      { headers: authHeaders(token) },
+    );
+    const known = await request(unauthorized.id);
+    const unknown = await request('no-such-conversation');
+    expect(known.status).toBe(401);
+    expect(unknown.status).toBe(known.status);
+    expect(await unknown.json()).toEqual(await known.json());
+  });
+
   it('rejects a token scoped to a different agent URL (401)', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t, ['alice', 'bob']);
-    const aliceToken = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const aliceToken = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.bob}/send-message`,
       { content: 'hi' },
@@ -110,6 +209,24 @@ describe('Internal route auth', () => {
       expect(body.error).toBe('principal header is not allowed on internal routes');
     },
   );
+
+  it('rejects a forged principal header on the canonical family', async () => {
+    t = buildTestApp();
+    const { conversationId, agentIds } = await setupSession(t, ['alice']);
+    const agentId = agentIds.alice!;
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentId);
+    const response = await http(t).post(
+      internalPaths.agentSendConversationMessage(conversationId, agentId),
+      { content: 'forged' },
+      {
+        headers: {
+          ...authHeaders(token),
+          [X_SILVERHAND_PRINCIPAL_HEADER]: 'agent:forged',
+        },
+      },
+    );
+    expect(response.status).toBe(400);
+  });
 });
 
 describe('POST /internal/.../send-message', () => {
@@ -325,7 +442,7 @@ describe('POST /internal/.../create-channel', () => {
       },
       { headers: authHeaders(t.authToken) },
     );
-    expect(r.status).toBe(404);
+    expect(r.status).toBe(401);
   });
 });
 
@@ -339,7 +456,7 @@ describe('agent send-message — content byte cap', () => {
   it('rejects content over 64KiB (UTF-8 bytes) with 413 content_too_large', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
-    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const r = await http(t).post(
       `/internal/conversations/${conversationId}/agents/${agentIds.alice}/send-message`,
       { content: 'a'.repeat(64 * 1024 + 1) },
@@ -362,7 +479,7 @@ describe('agent send-message — pre-parse body bound', () => {
   it('rejects an oversized declared body (explicit Content-Length) before the handler', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
-    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     // Build the body by hand with an explicit Content-Length so this
     // exercises the limiter's header fast-path, not the streaming
     // counter (the in-memory Request the json helper builds carries no
@@ -389,7 +506,7 @@ describe('agent send-message — pre-parse body bound', () => {
   it('rejects an oversized chunked body without Content-Length before the handler', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
-    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const payload = Buffer.from(
       JSON.stringify({ content: 'a'.repeat(2 * 1024 * 1024) }),
       'utf8',
@@ -428,7 +545,7 @@ describe('agent send-message — signal-only stale contract (#task:1561)', () =>
   it('the 409 carries NO bodies — only stream/range/count signal metadata', async () => {
     t = buildTestApp();
     const { conversationId, agentIds } = await setupSession(t);
-    const token = t.ctx.agentTokens.issue(conversationId, agentIds.alice!);
+    const token = issueTestConversationRuntimeToken(t, conversationId, agentIds.alice!);
     const first = await (await http(t).post(
       `/api/channels/${conversationId}/messages`,
       { content: 'observed boundary' },

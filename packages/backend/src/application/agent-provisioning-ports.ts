@@ -123,7 +123,10 @@ export interface AgentProvisioningAgentsTxPort {
 
 /** Outcome of the provisioning's conditional transition. */
 export type AgentProvisioningFlipOutcome =
-  | { status: 'transitioned'; row: { id: string; name: string } }
+  | {
+      status: 'transitioned';
+      row: { id: string; name: string; sessionScope: 'agent' | 'conversation' };
+    }
   | { status: 'lost' };
 
 /** The workspace face: the agent-home row and the owner-human stamping. */

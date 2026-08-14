@@ -31,6 +31,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { composeRuntimeDeliveryPresentation } from '@silverhand/shared';
 
 import { Supervisor } from '../src/daemon/supervisor/index.js';
 import type { DeliveryOwnerContext } from '../src/daemon/supervisor-contract.js';
@@ -38,7 +39,11 @@ import { CodexDriver } from '../src/drivers/codex.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
 import { QoderDriver } from '../src/drivers/qoder.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
-import type { EventFrame, RuntimeStartResult } from '../src/protocol.js';
+import type {
+  EventFrame,
+  RuntimeStartResult,
+  StartOptions,
+} from '../src/protocol.js';
 import { runtimePidFilePath } from '../src/daemon/runtime-pidfiles.js';
 import {
   testStartOptions,
@@ -156,6 +161,10 @@ function encodeStreamJsonUser(text: string): string {
   });
 }
 
+function testDeliveryPresentation(body: string) {
+  return { body, instruction: 'other' as const };
+}
+
 function makeFakeDriver(extraArgs: string[] = []): Driver {
   return {
     kind: 'claude',
@@ -238,6 +247,7 @@ function makeSupervisor(opts: {
 const baseStartParams = {
   conversation_id: 'c1',
   agent_id: 'a1',
+  runtime_generation: 1,
   options: testStartOptions({
     conversationId: 'c1',
     agentId: 'a1',
@@ -338,7 +348,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       });
     } finally {
       await supervisor
-        .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
         .catch(() => {});
     }
   });
@@ -368,7 +378,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       expect(existsSync(join(bundleDir, 'MEMORY.md'))).toBe(false);
     } finally {
       await supervisor
-        .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
         .catch(() => {});
       rmSync(agentsRoot, { recursive: true, force: true });
     }
@@ -407,7 +417,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       expect(err.code).toBe('workspace_bundle_missing');
       expect(err.message).not.toContain(bundleDir);
       expect(err.message).not.toContain(agentsRoot);
-      expect(err.message).toContain(baseStartParams.options.workspace.id);
+      expect(err.message).toContain(baseStartParams.options.workspace!.id);
       expect(spawnCalled).toBe(false);
     } finally {
       rmSync(agentsRoot, { recursive: true, force: true });
@@ -466,7 +476,11 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       started_at: res.started_at,
     });
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('hydrates prompt/spawn/env on daemon side from typed runtime_start options and drains the deliver SPAWN batch', async () => {
@@ -531,7 +545,9 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
 
     try {
       const res = await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         spawn_options: testStartOptions({
           conversationId: 'c1',
@@ -565,8 +581,96 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
             e.delivery_ids[0] === 11,
         ),
       ).toBe(true);
-      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+      await supervisor.stop({
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
+      });
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('AgentSlot spawn → clear/reset → respawn preserves one L1 cwd/prompt and never exports an ambient conversation env', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'silverhand-agent-slot-respawn-'));
+    const agentHomeRootDir = join(dir, 'agents');
+    const agentHome = join(agentHomeRootDir, 'a1');
+    mkdirSync(agentHome, { recursive: true });
+    writeFileSync(join(agentHome, 'system_prompt.md'), 'AGENT_SLOT_ROLE', 'utf8');
+    writeFileSync(join(agentHome, 'MEMORY.md'), 'AGENT_SLOT_MEMORY', 'utf8');
+    const spawnContexts: DriverSpawnContext[] = [];
+    const promptTexts: string[] = [];
+    const childEnvs: Array<NodeJS.ProcessEnv> = [];
+    const { supervisor, events } = makeSupervisor({
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir }),
+      onSpawnCtx: ctx => {
+        spawnContexts.push(ctx);
+        promptTexts.push(readFileSync(ctx.systemPromptPath, 'utf8'));
+      },
+      spawnFn: (bin, args, options) => {
+        childEnvs.push(options.env ?? {});
+        return spawn(execPath, [bin, ...args.slice(1)], options);
+      },
+    });
+    const options = testStartOptions({
+      agentId: 'a1',
+      sessionScope: 'agent',
+    });
+    const deliver = (conversationId: string, generation: number, deliveryId: number) =>
+      supervisor.deliver({
+        runtime_generation: generation,
+        conversation_id: conversationId,
+        target: { conversation_id: conversationId, workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [deliveryId],
+        kind: 'message',
+        text: `delivery ${deliveryId}`,
+        spawn_options: options,
+      }, { owner: `owner-${generation}` });
+
+    try {
+      expect(await deliver('c1', 1, 11)).toMatchObject({
+        disposition: 'spawning',
+      });
+      await waitForDeliveryConsumed(events, 11);
+      await expect(supervisor.clearSession({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        runtime_generation: 1,
+      })).resolves.toEqual({ cleared: true });
+
+      expect(await deliver('c2', 2, 22)).toMatchObject({
+        disposition: 'spawning',
+      });
+      await waitForDeliveryConsumed(events, 22);
+
+      expect(spawnContexts).toHaveLength(2);
+      expect(spawnContexts.map(ctx => ctx.workspacePath)).toEqual([
+        agentHome,
+        agentHome,
+      ]);
+      expect(promptTexts).toHaveLength(2);
+      for (const prompt of promptTexts) {
+        expect(prompt).toContain('AGENT_SLOT_ROLE');
+        expect(prompt).toContain('AGENT_SLOT_MEMORY');
+        expect(prompt).toContain('Runtime scope: agent');
+        expect(prompt).not.toContain('## Workspace & Memory');
+        expect(prompt).not.toContain('Workspace Memory Index');
+      }
+      expect(childEnvs).toHaveLength(2);
+      for (const env of childEnvs) {
+        expect(env['SILVERHAND_AGENT_ID']).toBe('a1');
+        expect(env).not.toHaveProperty('SILVERHAND_CONVERSATION_ID');
+      }
+    } finally {
+      await supervisor.stop({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        runtime_generation: 2,
+        mode: 'hard',
+      }).catch(() => {});
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -587,25 +691,32 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       const filePath = runtimePidFilePath(
         runtimePidRootDir,
         daemonInstanceId,
-        'c1',
-        'a1',
+        {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
       );
       expect(existsSync(filePath)).toBe(true);
       const record = JSON.parse(readFileSync(filePath, 'utf8'));
       expect(record).toMatchObject({
         pid: res.pid,
         started_at: res.started_at,
-        conv: 'c1',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
         agent: 'a1',
         runtime: 'claude',
         cmd: FIXTURE,
       });
 
-      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
       expect(existsSync(filePath)).toBe(false);
     } finally {
       await supervisor
-        ?.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        ?.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
         .catch(() => {});
       rmSync(dir, { recursive: true, force: true });
     }
@@ -619,13 +730,31 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     assertStarted(second);
     expect(second.pid).toBe(first.pid);
     expect(second.started_at).toBe(first.started_at);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
+  });
+
+  it('rejects a runtime_start custody generation that differs from the live handle', async () => {
+    const { supervisor } = makeSupervisor();
+    await supervisor.start({ ...baseStartParams, runtime_generation: 4 });
+    await expect(
+      supervisor.start({ ...baseStartParams, runtime_generation: 5 }),
+    ).rejects.toThrow(/runtime generation mismatch/);
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 4,
+      mode: 'hard',
+    });
   });
 
   it('start throws on malformed direct-call options', async () => {
     const { supervisor } = makeSupervisor();
     await expect(
       supervisor.start({
+        runtime_generation: 1,
         conversation_id: 'c1',
         agent_id: 'a1',
         options: {} as never,
@@ -663,7 +792,7 @@ describe('Supervisor 3a — output pump', () => {
           e.chunk.includes('large-tool-output-stays-local'),
       ),
     ).toBe(false);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('emits runtime_output for stdout chunks the child writes', async () => {
@@ -679,7 +808,7 @@ describe('Supervisor 3a — output pump', () => {
           e.chunk.includes('hello-from-stdout'),
       ),
     );
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('emits runtime_output for stderr chunks separately from stdout', async () => {
@@ -695,7 +824,7 @@ describe('Supervisor 3a — output pump', () => {
           e.chunk.includes('oh-no-an-error'),
       ),
     );
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('pauseOutput silently drops chunks; resumeOutput restores pumping', async () => {
@@ -711,8 +840,11 @@ describe('Supervisor 3a — output pump', () => {
     );
 
     const pauseRes = supervisor.pauseOutput({
-      conversation_id: 'c1',
-      agent_id: 'a1',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
     });
     expect(pauseRes.paused).toBe(true);
     expect(events.some(e => e.event === 'runtime_output_paused')).toBe(true);
@@ -721,26 +853,47 @@ describe('Supervisor 3a — output pump', () => {
     const ackCountBefore = events.filter(
       e => e.event === 'runtime_output_paused',
     ).length;
-    supervisor.pauseOutput({ conversation_id: 'c1', agent_id: 'a1' });
+    supervisor.pauseOutput({
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
+    });
     const ackCountAfter = events.filter(
       e => e.event === 'runtime_output_paused',
     ).length;
     expect(ackCountAfter).toBe(ackCountBefore);
 
     const resumeRes = supervisor.resumeOutput({
-      conversation_id: 'c1',
-      agent_id: 'a1',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
     });
     expect(resumeRes.resumed).toBe(true);
     expect(events.some(e => e.event === 'runtime_output_resumed')).toBe(true);
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('pauseOutput / resumeOutput on unknown (conv, agent) return paused:false / resumed:false without emitting acks', async () => {
     const { supervisor, events } = makeSupervisor();
-    const p = supervisor.pauseOutput({ conversation_id: 'cX', agent_id: 'aX' });
-    const r = supervisor.resumeOutput({ conversation_id: 'cX', agent_id: 'aX' });
+    const p = supervisor.pauseOutput({
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'cX',
+        agent_id: 'aX',
+      },
+    });
+    const r = supervisor.resumeOutput({
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'cX',
+        agent_id: 'aX',
+      },
+    });
     expect(p.paused).toBe(false);
     expect(r.resumed).toBe(false);
     expect(
@@ -760,9 +913,8 @@ describe('Supervisor 3a — hard stop / exit', () => {
     await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
 
     const stopRes = await supervisor.stop({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'hard',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1, mode: 'hard',
     });
     expect(stopRes).toMatchObject({ mode: 'hard', stopped: true });
     // exit_code may be null on Linux where SIGTERM-killed children
@@ -800,9 +952,8 @@ describe('Supervisor 3a — hard stop / exit', () => {
   it('hard stop on a never-started runtime returns stopped:false + exit_code:null', async () => {
     const { supervisor } = makeSupervisor();
     const res = await supervisor.stop({
-      conversation_id: 'cX',
-      agent_id: 'aX',
-      mode: 'hard',
+      runtime_scope: { kind: 'conversation', conversation_id: 'cX', agent_id: 'aX' },
+      runtime_generation: 1, mode: 'hard',
     });
     expect(res).toEqual({ mode: 'hard', stopped: false, exit_code: null });
   });
@@ -824,9 +975,8 @@ describe('Supervisor 3a — hard stop / exit', () => {
 
     const t0 = Date.now();
     const stopRes = await supervisor.stop({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'hard',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1, mode: 'hard',
     });
     const elapsed = Date.now() - t0;
 
@@ -879,9 +1029,8 @@ describe('Supervisor 3a — hard stop / exit', () => {
 
     const t0 = Date.now();
     const stopRes = await supervisor.stop({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'hard',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1, mode: 'hard',
     });
     const elapsed = Date.now() - t0;
 
@@ -1085,6 +1234,10 @@ describe('Supervisor 3a — stopAll / closeActivityLog', () => {
       ...baseStartParams,
       conversation_id: 'c2',
       agent_id: 'a2',
+      options: testStartOptions({
+        conversationId: 'c2',
+        agentId: 'a2',
+      }),
     });
     await waitFor(
       () =>
@@ -1106,6 +1259,169 @@ describe('Supervisor 3a — stopAll / closeActivityLog', () => {
 });
 
 describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
+  it('AgentSlot reuses one child across conversation targets and acks each origin independently', async () => {
+    let spawnCount = 0;
+    let lastDeliveredSeqPath: string | undefined;
+    const freshnessLogs: Array<Record<string, unknown>> = [];
+    const logger = {
+      ...silentLogger(),
+      warn(fields: unknown) {
+        if (fields && typeof fields === 'object') {
+          freshnessLogs.push(fields as Record<string, unknown>);
+        }
+      },
+    };
+    const { supervisor, events } = makeSupervisor({
+      driverArgs: ['--echo-stdin'],
+      logger,
+      spawnFn: (bin, args, options) => {
+        spawnCount += 1;
+        lastDeliveredSeqPath = options.env?.['SILVERHAND_LAST_DELIVERED_SEQ_FILE'];
+        return spawn(execPath, [bin, ...args.slice(1)], options);
+      },
+    });
+    const agentOptions = testStartOptions({
+      agentId: 'a1',
+      sessionScope: 'agent',
+    });
+    const deliver = (
+      conversationId: string,
+      deliveryId: number,
+      seq: number,
+      body: string,
+    ) => {
+      const presentation = testDeliveryPresentation(body);
+      return supervisor.deliver({
+        runtime_generation: 1,
+        conversation_id: conversationId,
+        target: { conversation_id: conversationId, workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [deliveryId],
+        delivered_up_to_seq: seq,
+        deliveries: [{
+          delivery_id: deliveryId,
+          message_id: `message-${deliveryId}`,
+          seq,
+          thread_root_id: null,
+          delivery_kind: 'turn',
+          presentation,
+        }],
+        kind: 'message',
+        text: composeRuntimeDeliveryPresentation(
+          [presentation],
+          'silverhand message send',
+        ),
+        spawn_options: agentOptions,
+      }, { owner: 'agent-slot-owner' });
+    };
+
+    try {
+      expect(await deliver('c1', 101, 100, 'first target')).toMatchObject({
+        disposition: 'spawning',
+      });
+      await waitForDeliveryConsumed(events, 101);
+      expect(await deliver('c2', 202, 1, 'second target')).toMatchObject({
+        disposition: 'admitted',
+      });
+      await waitForDeliveryConsumed(events, 202);
+      await waitFor(() =>
+        events.some(
+          event => event.event === 'runtime_output'
+            && event.chunk.includes('target=#conv:c2'),
+        ),
+      );
+
+      expect(supervisor.pauseOutput({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+      })).toEqual({ paused: true });
+      expect(supervisor.resumeOutput({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+      })).toEqual({ resumed: true });
+      expect(events.filter(
+        (event): event is Extract<
+          EventFrame,
+          { event: 'runtime_output_paused' | 'runtime_output_resumed' }
+        > => event.event === 'runtime_output_paused'
+          || event.event === 'runtime_output_resumed',
+      ).map(event => ({
+        event: event.event,
+        scope: event.runtime_scope,
+        focusedConversationId: event.conversation_id,
+      }))).toEqual([
+        {
+          event: 'runtime_output_paused',
+          scope: { kind: 'agent', agent_id: 'a1' },
+          focusedConversationId: 'c2',
+        },
+        {
+          event: 'runtime_output_resumed',
+          scope: { kind: 'agent', agent_id: 'a1' },
+          focusedConversationId: 'c2',
+        },
+      ]);
+
+      expect(spawnCount).toBe(1);
+      const rows = supervisor.status({ agent_id: 'a1' }).runtimes;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        conversation_id: 'c2',
+        runtime_generation: 1,
+      });
+      const consumed = events.filter(
+        (event): event is Extract<EventFrame, { event: 'runtime_delivery_consumed' }> =>
+          event.event === 'runtime_delivery_consumed',
+      );
+      expect(consumed.map(event => ({
+        conversationId: event.conversation_id,
+        deliveryIds: event.delivery_ids,
+        scope: event.runtime_scope,
+      }))).toEqual([
+        {
+          conversationId: 'c1',
+          deliveryIds: [101],
+          scope: { kind: 'agent', agent_id: 'a1' },
+        },
+        {
+          conversationId: 'c2',
+          deliveryIds: [202],
+          scope: { kind: 'agent', agent_id: 'a1' },
+        },
+      ]);
+      const output = events
+        .filter(
+          (event): event is Extract<EventFrame, { event: 'runtime_output' }> =>
+            event.event === 'runtime_output',
+        )
+        .map(event => event.chunk)
+        .join('');
+      expect(output).toContain('target=#conv:c1');
+      expect(output).toContain('target=#conv:c2');
+      expect(output).toContain(join(SUPERVISOR_AGENTS_ROOT, 'a1'));
+      expect(lastDeliveredSeqPath).toBeDefined();
+      const ledger = JSON.parse(readFileSync(lastDeliveredSeqPath!, 'utf8')) as {
+        streams: Array<{ conversation_id: string; stream_key: string; seq: number }>;
+      };
+      expect(ledger.streams.map(({ conversation_id, seq }) => ({
+        conversationId: conversation_id,
+        seq,
+      }))).toEqual([
+        { conversationId: 'c1', seq: 100 },
+      ]);
+      expect(freshnessLogs).toContainEqual(expect.objectContaining({
+        action: 'freshness_pending_admission_queued',
+        conversationId: 'c2',
+        pending_admission_seq: 1,
+      }));
+    } finally {
+      await supervisor.stop({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        runtime_generation: 1,
+        mode: 'hard',
+      }).catch(() => {});
+    }
+  });
+
   it('deliver on a live runtime writes the encoded payload to stdin and returns admitted, settling onto runtime_delivery_consumed', async () => {
     // 3b lifts the 3a stub: the WRITE arm now writes the opaque
     // payload to the child's stdin (+ '\n') and returns admitted on
@@ -1122,7 +1438,9 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       ),
     );
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42, 43],
       kind: 'message',
@@ -1148,7 +1466,7 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
           e.delivery_ids[1] === 43,
       ),
     );
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('deliver on a dead runtime respawns-with-batch (SPAWN arm) rather than refusing not_running', async () => {
@@ -1158,7 +1476,9 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
     // delivery and returns `spawning`.
     const { supervisor } = makeSupervisor();
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'cX',
+      target: { conversation_id: 'cX', workspace: null },
       agent_id: 'aX',
       delivery_ids: [1],
       kind: 'message',
@@ -1171,23 +1491,53 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       }),
     }, { owner: 'test-owner' });
     expect(res.disposition).toBe('spawning');
-    await supervisor.stop({ conversation_id: 'cX', agent_id: 'aX', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'cX', agent_id: 'aX' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
 describe('Supervisor 3b — clearSession behavior', () => {
+  it('late generation-N stop and clear cannot change a live generation N+1 handle', async () => {
+    const { supervisor } = makeSupervisor();
+    await supervisor.start(baseStartParams);
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
+    await supervisor.start({ ...baseStartParams, runtime_generation: 2 });
+
+    await expect(supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    })).resolves.toEqual({ mode: 'hard', stopped: false, exit_code: null });
+    await expect(supervisor.clearSession({
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1,
+    })).resolves.toEqual({ cleared: false });
+    expect(supervisor.status({}).runtimes).toMatchObject([
+      { runtime_generation: 2 },
+    ]);
+
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 2,
+      mode: 'hard',
+    });
+  });
+
   it('clearSession on unknown returns cleared:false; on live hard-stops the runtime and returns cleared:true (resume-state clear remains a 3b/backend concern)', async () => {
     const { supervisor, events } = makeSupervisor();
     const miss = await supervisor.clearSession({
-      conversation_id: 'cX',
-      agent_id: 'aX',
+      runtime_scope: { kind: 'conversation', conversation_id: 'cX', agent_id: 'aX' },
+      runtime_generation: 1,
     });
     expect(miss).toEqual({ cleared: false });
 
     await supervisor.start(baseStartParams);
     const hit = await supervisor.clearSession({
-      conversation_id: 'c1',
-      agent_id: 'a1',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1,
     });
     expect(hit).toEqual({ cleared: true });
     expect(events.some(e => e.event === 'runtime_exit')).toBe(true);
@@ -1311,7 +1661,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
         e => e.event === 'runtime_output' && e.chunk.includes('READY'),
       ),
     ).toBe(true);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('correlates runtime lifecycle frames to the minted payload uuid end-to-end (#task:1557)', async () => {
@@ -1340,7 +1690,9 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     // Delivery #1: the supervisor mints a uuid for the lifecycle-capable
     // driver and hands it to the encoder.
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [21],
       kind: 'message',
@@ -1360,7 +1712,9 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'completed' },
     ]);
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [22],
       kind: 'message',
@@ -1387,7 +1741,9 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'started' },
     ]);
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [23],
       kind: 'message',
@@ -1421,7 +1777,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     expect(
       logs.filter(l => l['action'] === 'freshness_observed_seq_advanced').length,
     ).toBe(1);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('parsed events drive AgentRunState transitions (thinking → tool_running → thinking → idle)', async () => {
@@ -1519,7 +1875,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
         lastIdle.state.terminalReason,
     ).toBe('turn_ended');
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('non-fatal parsed errors surface as thinking activity instead of leaving the UI idle', async () => {
@@ -1551,7 +1907,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       ),
     );
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('a parsed event whose encoded frame exceeds MAX_FRAME_BYTES is downgraded to runtime_parsed_event_dropped (no payload leaked)', async () => {
@@ -1595,7 +1951,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     );
     expect(fullToolCallEvents).toHaveLength(0);
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('frame-too-large does not block run-state derivation (run-state still updates from the parsed event)', async () => {
@@ -1624,7 +1980,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
         e.state.detail === 'BigTool',
     );
     expect(toolRunning).toBeDefined();
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('session_init flips initObserved and caches cli_session_id on the handle (visible via status())', async () => {
@@ -1651,7 +2007,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
         e.parsed.kind === 'session_init',
     );
     expect(sessionInit).toBeDefined();
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -1664,7 +2020,9 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
       driverArgs: ['--echo-stdin'],
     });
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [101, 102],
       kind: 'message',
@@ -1695,7 +2053,7 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
     ).length;
     expect(readyCount).toBe(1);
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('SPAWN batch gate is cleared even if the child exits before the supervisor writes the batch (no startup_pending leak)', async () => {
@@ -1713,7 +2071,9 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
     });
     await supervisor
       .deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [201],
         kind: 'message',
@@ -1734,7 +2094,9 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
     // invariant Cindy `wuiwdLKrLFyGip_s` locked is the gate cleared,
     // NOT a particular post-clear outcome).
     const deliverRes = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [202],
       kind: 'message',
@@ -1757,7 +2119,7 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
     }
 
     await supervisor
-      .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+      .stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
       .catch(() => {});
   });
 });
@@ -1820,7 +2182,9 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
     });
 
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [501, 502],
       kind: 'message',
@@ -1853,7 +2217,9 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
     // parked write settles. (Stage 2 refused `startup_pending` here and made
     // the backend re-drive; Stage 3 keeps it, which is strictly better.)
     const deliverMid = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [777],
       kind: 'message',
@@ -1929,7 +2295,9 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
 
     // Deliver after everything settled now succeeds (WRITE arm → admitted).
     const deliverAfter = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [999],
       kind: 'message',
@@ -2002,7 +2370,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
       expect(terminal.state.runId).toBe(firstThinking.runId);
     }
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('hard stop mid-tool_running emits terminal {status:failed, terminalReason:stopped} reusing the active runId', async () => {
@@ -2045,9 +2413,8 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     expect(inflightRunId).toBeTruthy();
 
     await supervisor.stop({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'hard',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1, mode: 'hard',
     });
 
     // Find the FIRST terminal `runtime_state` (resolveRun emits one
@@ -2101,7 +2468,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     expect(snap.runtimes).toHaveLength(1);
     expect(snap.runtimes[0]?.run_state).toBeNull();
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -2197,7 +2564,7 @@ describe('Supervisor 3c-b — driver.bindIO', () => {
     expect(calls).toHaveLength(1);
     expect(typeof calls[0]!.writeLine).toBe('function');
     expect(calls[0]!.ctx.agentName).toBe('tester');
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('bindIO.writeLine writes the payload + "\\n" to child stdin', async () => {
@@ -2232,7 +2599,7 @@ describe('Supervisor 3c-b — driver.bindIO', () => {
       ),
       2_000,
     );
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('bindIO.writeLine throws synchronously when the driver line already ends with "\\n" (Cindy `-pdNvRYOWip5e9yA` guard, `HyC05fC-FEs94uoZ` sync follow-up)', async () => {
@@ -2253,7 +2620,7 @@ describe('Supervisor 3c-b — driver.bindIO', () => {
     // driver's bound callsite instead, where the driver author sees
     // it during local testing.
     expect(() => writeLine!('already-terminated\n')).toThrow(/must not end with/);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -2365,7 +2732,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // Wait past every watchdog window; no timeout should ever fire.
     await wait(1_200);
     expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('a parsed session_init event clears the watchdog and the retry bucket', async () => {
@@ -2390,7 +2757,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     await supervisor.start(baseStartParams);
     await wait(1_200);
     expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('deferred-init: requires_first_message + no startup batch → no watchdog at spawn; deliver arms it', async () => {
@@ -2410,7 +2777,9 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // Now deliver — that arms the watchdog. echo-runtime won't emit
     // session_init, so a silence/pre-cap timeout follows.
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -2459,7 +2828,9 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     });
 
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [901],
       kind: 'message',
@@ -2567,7 +2938,7 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
       expect(firstTimeout.cooldown_until).toBeUndefined();
     }
     // Stop any pending retry process.
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('second timeout (attempt=1) emits retrying=false; no runtime_init_retrying follows', async () => {
@@ -2659,7 +3030,7 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
     const second = await supervisor.start(baseStartParams);
     assertStarted(second);
     expect(second.pid).toBeGreaterThan(0);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('successful session_init clears the retry bucket (subsequent timeout sees a fresh failures counter)', async () => {
@@ -2688,7 +3059,7 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
     await supervisor.start(baseStartParams);
     // Give session_init a chance to land + clear bucket.
     await wait(150);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
     // Now force the second spawn to fail.
     succeed = false;
     await supervisor.start(baseStartParams);
@@ -2811,7 +3182,7 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
     // Not gated — a oneShot's clean exit left the failure counter clean.
     const second = await supervisor.start(baseStartParams);
     expect(second.started).toBe(true);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('a oneShot runtime that exits ABNORMALLY (non-zero) pre-init IS counted (oneShot excuses success, not a kill)', async () => {
@@ -2929,9 +3300,8 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     await supervisor.start(baseStartParams);
     // Trigger hard stop BEFORE the silence window elapses.
     const stopPromise = supervisor.stop({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'hard',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1, mode: 'hard',
     });
     // Wait well past the original 80ms silence window to prove the
     // timer was actually cleared, not just delayed.
@@ -2999,7 +3369,9 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // because --ignore-sigterm swallows SIGTERM; SIGKILL won't land
     // for another 800ms).
     const deliverRes = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [11],
       kind: 'message',
@@ -3057,7 +3429,9 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     );
     // Deliver inside the draining window must refuse.
     const midDeliver = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
@@ -3124,13 +3498,13 @@ describe('Supervisor 3c-b — lifecycle lock', () => {
     assertStarted(a);
     assertStarted(b);
     expect(a.pid).toBe(b.pid);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('concurrent start+stop on the same key serializes (stop sees the live handle)', async () => {
     const { supervisor } = make3cSupervisor();
     const startP = supervisor.start(baseStartParams);
-    const stopP = supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    const stopP = supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
     const [s, st] = await Promise.all([startP, stopP]);
     assertStarted(s);
     expect(st).toMatchObject({ mode: 'hard', stopped: true });
@@ -3139,7 +3513,11 @@ describe('Supervisor 3c-b — lifecycle lock', () => {
   it('stopAll fans out per-key in parallel (two different keys both stop)', async () => {
     const { supervisor } = make3cSupervisor();
     await supervisor.start({ ...baseStartParams, conversation_id: 'c1' });
-    await supervisor.start({ ...baseStartParams, conversation_id: 'c2' });
+    await supervisor.start({
+      ...baseStartParams,
+      conversation_id: 'c2',
+      options: testStartOptions({ conversationId: 'c2', agentId: 'a1' }),
+    });
     const res = await supervisor.stopAll({});
     expect(res.stopped_count).toBe(2);
     const snap = supervisor.status({});
@@ -3181,7 +3559,7 @@ describe('Supervisor 3c-b — compaction watchdog', () => {
       expect(last.state.compacting).toBe(true);
       expect(last.state.compactionStale).toBe(true);
     }
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('compaction_stale does NOT kill the child (status() still shows the live pid)', async () => {
@@ -3206,7 +3584,7 @@ describe('Supervisor 3c-b — compaction watchdog', () => {
     const snap = supervisor.status({ conversation_id: 'c1', agent_id: 'a1' });
     expect(snap.runtimes[0]?.pid).toBe(res.pid);
     expect(snap.runtimes[0]?.phase).toBe('ready');
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('compaction_finished cancels the watchdog (no stale event fires)', async () => {
@@ -3228,7 +3606,7 @@ describe('Supervisor 3c-b — compaction watchdog', () => {
     // have cleared the watchdog so no stale fires.
     await wait(400);
     expect(events.find(e => e.event === 'runtime_compaction_stale')).toBeUndefined();
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -3313,7 +3691,9 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
     expect(events.some(e => e.event === 'runtime_ready_for_drain')).toBe(false);
 
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [201, 202],
       kind: 'message',
@@ -3330,7 +3710,7 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
       e => e.event === 'runtime_output' && e.chunk.includes('STDIN:'),
     );
     expect(echoed).toBe(false);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('deliver post-ready: encodeStdinMessage returns null → admitted then async runtime_delivery_failed reason:driver_refused (fail loud)', async () => {
@@ -3370,7 +3750,9 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
     );
 
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [301],
       kind: 'message',
@@ -3386,7 +3768,7 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
           e.reason === 'driver_refused',
       ),
     );
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -3427,7 +3809,7 @@ describe('Supervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (C
     // driver-arg fixture instead: --emit-line THREAD_STARTED makes
     // the fixture write that line on stdout shortly after READY.
     // (Switch driverArgs by rebuilding the driver inline.)
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
 
     // ── second supervisor with the same driver but the fixture
     //    configured to actually emit the THREAD_STARTED line.
@@ -3450,7 +3832,7 @@ describe('Supervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (C
     expect(
       second.events.filter(e => e.event === 'runtime_ready_for_drain').length,
     ).toBe(1);
-    await second.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await second.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -3473,7 +3855,9 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
     };
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [701, 702],
       kind: 'message',
@@ -3508,13 +3892,14 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
       events.filter(e => e.event === 'runtime_ready_for_drain').length,
     ).toBe(1);
     // The stdin write actually happened (echo confirms).
-    expect(
-      events.some(
+    await waitFor(
+      () => events.some(
         e => e.event === 'runtime_output' && e.chunk.includes('STDIN:{"type":"user"'),
       ),
-    ).toBe(true);
+      2_000,
+    );
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -3555,7 +3940,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [12],
         kind: 'message',
@@ -3591,9 +3978,8 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -3623,7 +4009,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       setNextParse(parsedEvents);
       tick += 1;
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [tick], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [tick], kind: 'message',
         text: `tick-${tick}`, spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, tick);
@@ -3633,7 +4021,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await waitForRuntimeReady(events);
       // M1 (seq 10) admitted → observed 10, turn active.
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [10], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [10], kind: 'message',
         text: 'M1', delivered_up_to_seq: 10, spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, 10);
@@ -3681,7 +4071,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       // proof a new model generation started.
       setNextParse([{ kind: 'turn_end' }]);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [12], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [12], kind: 'message',
         text: 'gap', delivered_up_to_seq: 12, spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, 12);
@@ -3694,7 +4086,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await deliverTick([{ kind: 'thinking', text: 'new action' }]);
       await waitFor(() => advancedTo(12));
     } finally {
-      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
         .catch(() => undefined);
     }
   });
@@ -3762,7 +4154,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await waitForRuntimeReady(events);
       // M1 (seq 10) admitted at boundary → observed MAIN=10, turn active.
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [10], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [10], kind: 'message',
         text: 'M1', delivered_up_to_seq: 10, spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, 10);
@@ -3772,7 +4166,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       // contract) produces NO parsed event at all — coverage stays parked
       // in pendingAdmission (#1471), observed stays 10.
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [11], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [11], kind: 'message',
         text: 'M2', delivered_up_to_seq: 11, spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, 11);
@@ -3798,7 +4194,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
         { kind: 'input_lifecycle', commandUuid: uuidM2!, state: 'started' },
       ]);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [12], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [12], kind: 'message',
         text: 'tick', spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, 12);
@@ -3806,7 +4204,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
         { kind: 'input_lifecycle', commandUuid: uuidM2!, state: 'completed' },
       ]);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [13], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [13], kind: 'message',
         text: 'tick2', spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitForDeliveryConsumed(events, 13);
@@ -3823,7 +4223,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(informed['stale_resolution_reason']).toBe('revised');
     } finally {
       vi.unstubAllGlobals();
-      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
         .catch(() => undefined);
     }
   });
@@ -3859,7 +4259,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [11], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [11], kind: 'message',
         text: 'seed observed at 11', delivered_up_to_seq: 11,
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
@@ -3887,7 +4289,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       // must converge THROUGH the prerequisite to the own seq 15 — not
       // stall at 14 with head=15 forever.
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [14], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [14], kind: 'message',
         text: 'gap batch 12..14', delivered_up_to_seq: 14,
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
@@ -3898,7 +4302,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       // fixture's stdin echo without touching observed themselves.
       setNextParse([{ kind: 'turn_end' }]);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [90], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [90], kind: 'message',
         text: 'tick1', spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitFor(() =>
@@ -3908,7 +4314,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       );
       setNextParse([{ kind: 'thinking', text: 'new turn' }]);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [91], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [91], kind: 'message',
         text: 'tick2', spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitFor(() =>
@@ -3924,7 +4332,7 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       expect(postedBodies[postedBodies.length - 1]?.['seen_up_to_seq']).toBe(15);
     } finally {
       vi.unstubAllGlobals();
-      await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
         .catch(() => undefined);
     }
   });
@@ -3966,7 +4374,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [12],
         kind: 'message',
@@ -3999,9 +4409,8 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -4063,7 +4472,9 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [12],
         kind: 'message',
@@ -4103,9 +4514,8 @@ describe('Supervisor — daemon-owned freshness boundary', () => {
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -4234,7 +4644,9 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       // consumeStartupDelivery admits M1 immediately into observed
       // (MAIN=10) and the admit flips inputTurnActive=true.
       const spawnResult = await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [10],
         kind: 'message',
@@ -4252,7 +4664,9 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       // pendingAdmissionSeqByStream; observed stays at 10 until the next
       // parsed turn-start.
       const midTurnDeliver = await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [11],
         kind: 'message',
@@ -4324,9 +4738,8 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -4450,7 +4863,9 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     try {
       // ── M1: SPAWN arm — startup admit, observed=10, inputTurnActive=true.
       const spawnResult = await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [10],
         kind: 'message',
@@ -4479,7 +4894,9 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       // is the invariant under test in step 5.
       driver.parseLine = () => [];
       const midToolCallDeliver = await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [11],
         kind: 'message',
@@ -4568,9 +4985,8 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -4707,7 +5123,9 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     try {
       // ── Setup identical to the countgame1 gated test, up to M2 deferred.
       const spawnResult = await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [10],
         kind: 'message',
@@ -4742,7 +5160,9 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
       driver.parseLine = () => [];
       stub.parkWrites = true;
       const midToolCallDeliver = await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [11],
         kind: 'message',
@@ -4794,9 +5214,8 @@ describe('Supervisor — mid-turn delivery admission gate (#task:1471)', () => {
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -4825,7 +5244,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [52, 53],
         kind: 'message',
@@ -4838,6 +5259,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 52,
             thread_root_id: 'mRoot',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
           {
             delivery_id: 53,
@@ -4845,6 +5267,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 53,
             thread_root_id: 'mRoot',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -4868,9 +5291,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -4896,7 +5318,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     try {
       await supervisor.start(baseStartParams);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [53],
         kind: 'message',
@@ -4909,6 +5333,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 53,
             thread_root_id: 'mRoot',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -4932,9 +5357,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -4983,9 +5407,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5019,7 +5442,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [50, 51],
         kind: 'message',
@@ -5032,6 +5457,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 50,
             thread_root_id: null,
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
           {
             delivery_id: 51,
@@ -5039,6 +5465,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 51,
             thread_root_id: 'mRoot',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5059,9 +5486,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       expect(postedBodies[0]?.['seen_up_to_seq']).toBe(50);
 
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
       postedBodies.length = 0;
 
@@ -5073,7 +5499,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
           ).length >= 2,
       );
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [52],
         kind: 'message',
@@ -5086,6 +5514,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 52,
             thread_root_id: 'mRoot',
             delivery_kind: 'observe',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5104,9 +5533,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5128,7 +5556,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [80, 81, 82],
         kind: 'message',
@@ -5141,6 +5571,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 80,
             thread_root_id: null,
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
           {
             delivery_id: 81,
@@ -5148,6 +5579,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 81,
             thread_root_id: 'rootA',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
           {
             delivery_id: 82,
@@ -5155,6 +5587,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 82,
             thread_root_id: 'rootB',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5179,9 +5612,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5229,7 +5661,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // and teaches the daemon that a reply to mRoot opens thread:mRoot.
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [50],
         kind: 'message',
@@ -5242,6 +5676,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 50,
             thread_root_id: null,
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5291,9 +5726,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5349,7 +5783,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.start(baseStartParams);
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [507],
         kind: 'message',
@@ -5362,6 +5798,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 507,
             thread_root_id: 'mRoot',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5397,9 +5834,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5454,9 +5890,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5548,7 +5983,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // stalled at 41 with head 42 and every later send in this cluster 409'd
       // against the sender's own message, forever.
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [41],
         kind: 'message',
@@ -5561,6 +5998,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 41,
             thread_root_id: 'mGhost',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5603,9 +6041,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5669,7 +6106,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       expect(postedBodies[0]).not.toHaveProperty('stream_key');
 
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [9],
         kind: 'message',
@@ -5682,6 +6121,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 9,
             thread_root_id: null,
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5700,9 +6140,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5756,7 +6195,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // A main-line delivery makes the turn active without touching the
       // cluster under test, so the cluster's own evidence lands mid-turn.
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [5],
         kind: 'message',
@@ -5769,6 +6210,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 5,
             thread_root_id: null,
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5788,7 +6230,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // merge prerequisite: a pending seq is not yet precedent context for
       // anything the model does in this turn (Cindy).
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [41],
         kind: 'message',
@@ -5801,6 +6245,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 41,
             thread_root_id: 'mGhost',
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -5828,7 +6273,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // preset parse events without touching observed themselves.
       setNextParse([{ kind: 'turn_end' }]);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [90], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [90], kind: 'message',
         text: 'tick1', spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitFor(() =>
@@ -5838,7 +6285,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       );
       setNextParse([{ kind: 'thinking', text: 'new turn' }]);
       await supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [91], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [91], kind: 'message',
         text: 'tick2', spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
       await waitFor(() =>
@@ -5860,9 +6309,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -5964,9 +6412,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       } finally {
         vi.unstubAllGlobals();
         await supervisor.stop({
-          conversation_id: 'c1',
-          agent_id: 'a1',
-          mode: 'hard',
+          runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+          runtime_generation: 1, mode: 'hard',
         }).catch(() => undefined);
       }
     });
@@ -6025,9 +6472,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -6075,9 +6521,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -6100,7 +6545,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       // A main-line delivery advances observed[main] = 50.
       await waitForRuntimeReady(events);
       await supervisor.deliver({
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [50],
         kind: 'message',
@@ -6113,6 +6560,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
             seq: 50,
             thread_root_id: null,
             delivery_kind: 'turn',
+            presentation: testDeliveryPresentation('delivery-text'),
           },
         ],
         spawn_options: baseStartParams.options,
@@ -6140,9 +6588,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
     } finally {
       vi.unstubAllGlobals();
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -6153,7 +6600,9 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       await supervisor.start(baseStartParams);
       await expect(
         supervisor.deliver({
+          runtime_generation: 1,
           conversation_id: 'c1',
+          target: { conversation_id: 'c1', workspace: null },
           agent_id: 'a1',
           delivery_ids: [1, 2],
           kind: 'message',
@@ -6166,6 +6615,7 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
               seq: 1,
               thread_root_id: null,
               delivery_kind: 'turn',
+              presentation: testDeliveryPresentation('delivery-text'),
             },
           ],
           spawn_options: baseStartParams.options,
@@ -6173,9 +6623,8 @@ describe('Supervisor — per-stream observed boundary (reply-cluster §6.4)', ()
       ).rejects.toThrow(/delivery metadata mismatch/);
     } finally {
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       }).catch(() => undefined);
     }
   });
@@ -6187,7 +6636,9 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       driverArgs: ['--echo-stdin'],
     });
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [7, 8],
       kind: 'message',
@@ -6218,7 +6669,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       ),
     );
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('WRITE arm: ready handle → encodes+writes stdin, returns admitted, settles onto runtime_delivery_consumed', async () => {
@@ -6233,7 +6684,9 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       ),
     );
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [42],
       kind: 'message',
@@ -6260,7 +6713,169 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       ),
     );
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+  });
+
+  it('response-loss ownership union: expanded, subset, and deferred-overlap retries release each id exactly once in FIFO order', async () => {
+    class ControlledWriteChild extends EventEmitter {
+      readonly pid = 42_042;
+      readonly stdout = new EventEmitter();
+      readonly stderr = new EventEmitter();
+      readonly writes: string[] = [];
+      readonly writeCallbacks: Array<(err?: Error | null) => void> = [];
+      readonly stdin = {
+        write: (line: string, cb?: (err?: Error | null) => void): boolean => {
+          this.writes.push(line);
+          if (cb) this.writeCallbacks.push(cb);
+          return true;
+        },
+        end: () => {},
+        destroyed: false,
+        once: () => {},
+      };
+      kill(_sig?: NodeJS.Signals | number): boolean {
+        setImmediate(() => this.emit('exit', 0, null));
+        return true;
+      }
+    }
+    const child = new ControlledWriteChild();
+    const { supervisor, events } = makeSupervisor({
+      spawnFn: () => child as unknown as ChildProcess,
+    });
+    try {
+      await supervisor.start(baseStartParams);
+      await waitFor(() =>
+        supervisor.status({
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        }).runtimes[0]?.phase === 'ready',
+      );
+      const batch = (ids: number[]) => {
+        const presentations = ids.map(id => ({
+          body: `msg-${id}`,
+          instruction: 'other' as const,
+        }));
+        return {
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: ids,
+        kind: 'message' as const,
+        text: composeRuntimeDeliveryPresentation(
+          presentations,
+          'silverhand message send',
+        ),
+        delivered_up_to_seq: Math.max(...ids),
+        deliveries: ids.map((id, index) => ({
+          delivery_id: id,
+          message_id: `m${id}`,
+          seq: id,
+          thread_root_id: null,
+          delivery_kind: 'turn' as const,
+          presentation: presentations[index]!,
+        })),
+        spawn_options: baseStartParams.options,
+        };
+      };
+      const writtenText = (index: number): string =>
+        (JSON.parse(child.writes[index]!) as {
+          message: { content: string };
+        }).message.content;
+
+      // [42] is already admitted and writing when its response disappears.
+      expect(await supervisor.deliver(batch([42]), { owner: 'conn-1' })).toMatchObject({
+        disposition: 'admitted',
+      });
+      expect(child.writes).toHaveLength(1);
+
+      // Backend-style retry expands to [42,43]. 42 remains in the release
+      // slot; only novel 43 enters the FIFO, but the disposition says daemon
+      // custody covers the whole submitted batch.
+      expect(await supervisor.deliver(batch([42, 43]), { owner: 'conn-2' })).toMatchObject({
+        disposition: 'deferred',
+      });
+      expect(child.writes).toHaveLength(1);
+
+      child.writeCallbacks.shift()?.();
+      await waitForDeliveryConsumed(events, 42);
+      await waitFor(() => child.writes.length === 2);
+      expect(writtenText(0)).toBe(batch([42]).text);
+      expect(writtenText(1)).toBe(batch([43]).text);
+      expect(writtenText(1).match(/You have one message waiting/g)).toHaveLength(1);
+      expect(writtenText(1).match(/Respond as appropriate\./g)).toHaveLength(1);
+      child.writeCallbacks.shift()?.();
+      await waitForDeliveryConsumed(events, 43);
+      expect(
+        events.filter(
+          event =>
+            event.event === 'runtime_delivery_consumed'
+            && event.delivery_ids.includes(42),
+        ),
+      ).toHaveLength(1);
+      expect(
+        events.filter(
+          event =>
+            event.event === 'runtime_delivery_consumed'
+            && event.delivery_ids.includes(43),
+        ),
+      ).toHaveLength(1);
+
+      // A retry that is a strict SUBSET of the release slot takes no novel
+      // custody and therefore cannot create another write.
+      expect(await supervisor.deliver(batch([50, 51]), { owner: 'conn-2' })).toMatchObject({
+        disposition: 'admitted',
+      });
+      expect(child.writes).toHaveLength(3);
+      expect(await supervisor.deliver(batch([50]), { owner: 'conn-3' })).toMatchObject({
+        disposition: 'admitted',
+      });
+      expect(child.writes).toHaveLength(3);
+      child.writeCallbacks.shift()?.();
+      await waitForDeliveryConsumed(events, 50);
+      expect(
+        events.filter(
+          event => event.event === 'runtime_delivery_consumed'
+            && (event.delivery_ids.includes(50) || event.delivery_ids.includes(51)),
+        ),
+      ).toHaveLength(1);
+
+      // Cross-deferred partial overlap: 60 holds the release slot, 61 is
+      // already FIFO-owned, and retry [61,62] appends only novel 62. Release
+      // order stays 60 → 61 → 62 and every id is consumed once.
+      expect(await supervisor.deliver(batch([60]), { owner: 'conn-3' })).toMatchObject({
+        disposition: 'admitted',
+      });
+      expect(await supervisor.deliver(batch([61]), { owner: 'conn-3' })).toMatchObject({
+        disposition: 'deferred',
+      });
+      expect(await supervisor.deliver(batch([61, 62]), { owner: 'conn-4' })).toMatchObject({
+        disposition: 'deferred',
+      });
+      child.writeCallbacks.shift()?.();
+      await waitForDeliveryConsumed(events, 60);
+      await waitFor(() => child.writes.length === 5);
+      child.writeCallbacks.shift()?.();
+      await waitForDeliveryConsumed(events, 61);
+      await waitFor(() => child.writes.length === 6);
+      child.writeCallbacks.shift()?.();
+      await waitForDeliveryConsumed(events, 62);
+      expect(child.writes.slice(3).map(write =>
+        [60, 61, 62].find(id => write.includes(`msg-${id}`))
+      )).toEqual([60, 61, 62]);
+      for (const id of [60, 61, 62]) {
+        expect(events.filter(event =>
+          event.event === 'runtime_delivery_consumed'
+          && event.delivery_ids.includes(id)
+        )).toHaveLength(1);
+      }
+    } finally {
+      await supervisor.stop({
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1,
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
   });
 
   it('REFUSE arm: startup batch still in flight → refused startup_pending, no ready_for_drain (step-0 mutex)', async () => {
@@ -6296,7 +6911,9 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     // stub keeps consumeStartupDelivery from settling, so
     // `startupDelivery !== null` stays true.
     await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1, 2],
       kind: 'message',
@@ -6304,7 +6921,9 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [99],
       kind: 'message',
@@ -6314,7 +6933,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     expect(res).toEqual({ disposition: 'refused', reason: 'startup_pending' });
     expect(events.some(e => e.event === 'runtime_ready_for_drain')).toBe(false);
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('REFUSE arm: handle stuck draining (SIGKILL-timeout safety net) → refused draining', async () => {
@@ -6358,14 +6977,15 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     // Let the optimistic setImmediate flip the handle to `ready`.
     await wait(5);
     const stopRes = await supervisor.stop({
-      conversation_id: 'c1',
-      agent_id: 'a1',
-      mode: 'hard',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+      runtime_generation: 1, mode: 'hard',
     });
     // Safety net resolved without a real exit — handle stays draining.
     expect(stopRes).toEqual({ mode: 'hard', stopped: false, exit_code: null });
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [5],
       kind: 'message',
@@ -6412,7 +7032,9 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     );
 
     const res = await supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [77],
       kind: 'message',
@@ -6438,7 +7060,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       ),
     ).toBe(false);
 
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -6501,7 +7123,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     mode: 'gated' | 'direct',
     profile?: Driver['releaseProfile'],
     logger?: DaemonLogger,
-    opts: { reservationStallWarnMs?: number; parkFirstWrite?: boolean } = {},
+    opts: {
+      reservationStallWarnMs?: number;
+      parkFirstWrite?: boolean;
+      startOptions?: StartOptions;
+    } = {},
   ) {
     // Fresh stub per spawn: a respawn on the SAME emitter would leave the
     // dead handle's stdout listener attached and double-consume nextParse.
@@ -6554,12 +7180,14 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     const deliver = (ids: number[], owner = 'owner-A') =>
       supervisor.deliver(
         {
+          runtime_generation: 1,
           conversation_id: 'c1',
+          target: { conversation_id: 'c1', workspace: null },
           agent_id: 'a1',
           delivery_ids: ids,
           kind: 'message',
           text: `msg-${ids.join('_')}`,
-          spawn_options: baseStartParams.options,
+          spawn_options: opts.startOptions ?? baseStartParams.options,
         },
         { owner },
       );
@@ -6581,6 +7209,442 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     };
   }
 
+  it.each(['direct', 'gated'] as const)(
+    '%s: a structured multi-id deferred batch preserves one canonical payload and one atomic consumed group',
+    async mode => {
+      const h = makeDriven(mode);
+      const presentations = [
+        { body: '[msg_id=mA sender=system type=system target=channel time=2026-01-01T00:00:00+00:00]\nA', instruction: 'system' as const },
+        { body: '[msg_id=mB sender=system type=system target=channel time=2026-01-01T00:00:01+00:00]\nB', instruction: 'system' as const },
+      ];
+      const canonical = composeRuntimeDeliveryPresentation(
+        presentations,
+        'silverhand message send',
+      );
+      const structured = (ids: readonly number[]) => ({
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [...ids],
+        delivered_up_to_seq: Math.max(...ids),
+        kind: 'message' as const,
+        text: canonical,
+        deliveries: ids.map((id, index) => ({
+          delivery_id: id,
+          message_id: index === 0 ? 'mA' : 'mB',
+          seq: id,
+          thread_root_id: null,
+          delivery_kind: 'turn' as const,
+          presentation: presentations[index]!,
+        })),
+        spawn_options: baseStartParams.options,
+      });
+      const decoded = (line: string): string =>
+        (JSON.parse(line) as { message: { content: string } }).message.content;
+
+      try {
+        const boot = await h.deliver([1]);
+        expect(boot.disposition).toBe('spawning');
+        if (mode === 'gated') {
+          h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+        }
+        await waitForDeliveryConsumed(h.events, 1);
+        if (mode === 'gated') {
+          h.drive([{ kind: 'turn_end' }]);
+          await waitFor(() =>
+            h.events.some(event =>
+              event.event === 'runtime_parsed_event'
+              && event.parsed.kind === 'turn_end'
+            )
+          );
+        }
+
+        // Immediate admission establishes the model-visible baseline.
+        const beforeImmediate = h.stub.written.length;
+        expect((await h.supervisor.deliver(
+          structured([72, 73]),
+          { owner: 'structured-owner' },
+        )).disposition).toBe('admitted');
+        await waitFor(() => h.stub.written.length === beforeImmediate + 1);
+        expect(decoded(h.stub.written.at(-1)!)).toBe(canonical);
+        await waitForDeliveryConsumed(h.events, 72);
+        const immediateSettlements = h.events.filter(event =>
+          event.event === 'runtime_delivery_consumed'
+          && event.delivery_ids.some(id => id === 72 || id === 73)
+        );
+        expect(immediateSettlements).toHaveLength(1);
+        expect(immediateSettlements[0]).toMatchObject({
+          delivery_ids: [72, 73],
+        });
+
+        let beforeDeferred: number;
+        if (mode === 'direct') {
+          h.stub.parkWrites = true;
+          expect((await h.deliver([9])).disposition).toBe('admitted');
+          beforeDeferred = h.stub.written.length;
+        } else {
+          h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
+          await waitFor(() =>
+            h.events.some(event =>
+              event.event === 'runtime_parsed_event'
+              && event.parsed.kind === 'tool_call'
+            )
+          );
+          beforeDeferred = h.stub.written.length;
+        }
+
+        expect((await h.supervisor.deliver(
+          structured([70, 71]),
+          { owner: 'structured-owner' },
+        )).disposition).toBe('deferred');
+        expect(h.stub.written).toHaveLength(beforeDeferred);
+
+        if (mode === 'direct') {
+          h.stub.parkWrites = false;
+          h.stub.resolveParkedWrite();
+          await waitForDeliveryConsumed(h.events, 9);
+        } else {
+          h.drive([{ kind: 'turn_end' }]);
+        }
+        await waitFor(() => h.stub.written.length === beforeDeferred + 1);
+        expect(decoded(h.stub.written.at(-1)!)).toBe(canonical);
+        await waitForDeliveryConsumed(h.events, 70);
+        const deferredSettlements = h.events.filter(event =>
+          event.event === 'runtime_delivery_consumed'
+          && event.delivery_ids.some(id => id === 70 || id === 71)
+        );
+        expect(deferredSettlements).toHaveLength(1);
+        expect(deferredSettlements[0]).toMatchObject({
+          delivery_ids: [70, 71],
+        });
+
+      } finally {
+        await h.supervisor.stop({
+          runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+          runtime_generation: 1,
+          mode: 'hard',
+        }).catch(() => undefined);
+      }
+    },
+  );
+
+  it('opaque strict-subset retry fails before owner mutation; original-owner cleanup is total and leaves no orphan', async () => {
+    const h = makeDriven('direct');
+    try {
+      expect((await h.deliver([1])).disposition).toBe('spawning');
+      await waitForDeliveryConsumed(h.events, 1);
+
+      h.stub.parkWrites = true;
+      expect((await h.deliver([90], 'owner-1')).disposition).toBe('admitted');
+      expect((await h.deliver([100, 101], 'owner-1')).disposition).toBe('deferred');
+      const writesBeforeRetry = h.stub.written.length;
+
+      await expect(h.deliver([100], 'owner-2')).rejects.toThrow(
+        /cannot rebind a strict subset of an opaque presentation group/,
+      );
+      expect(h.stub.written).toHaveLength(writesBeforeRetry);
+
+      // Because the rejected retry changed no per-id owner, cleanup of the
+      // original owner removes the complete opaque group without splitting.
+      expect(() => h.supervisor.cleanupDeferredForOwner('owner-1')).not.toThrow();
+      h.stub.parkWrites = false;
+      h.stub.resolveParkedWrite();
+      await waitForDeliveryConsumed(h.events, 90);
+      await wait(30);
+      expect(h.stub.written).toHaveLength(writesBeforeRetry);
+      expect(h.consumedFor(100)).toHaveLength(0);
+      expect(h.consumedFor(101)).toHaveLength(0);
+
+      // The ids are not orphaned in daemon custody: the new owner can submit
+      // the original atomic group and it is admitted exactly once.
+      expect((await h.deliver([100, 101], 'owner-2')).disposition).toBe('admitted');
+      await waitForDeliveryConsumed(h.events, 100);
+      expect(h.consumedFor(100)).toHaveLength(1);
+      expect(h.consumedFor(101)).toHaveLength(1);
+    } finally {
+      await h.supervisor.stop({
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1,
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('AgentSlot structured owner cleanup preserves the explicit target and absolute workdir on the surviving subset', async () => {
+    const startOptions = testStartOptions({
+      agentId: 'a1',
+      sessionScope: 'agent',
+    });
+    const h = makeDriven('gated', undefined, undefined, { startOptions });
+    const presentations = [10, 11].map(id => ({
+      body: `msg-${id}`,
+      instruction: 'other' as const,
+    }));
+    const batch = (ids: readonly number[]) => ({
+      runtime_generation: 1,
+      conversation_id: 'c1',
+      target: {
+        conversation_id: 'c1',
+        workspace: { id: 'ws1', name: 'test-workspace', kind: 'regular' as const },
+      },
+      agent_id: 'a1',
+      delivery_ids: [...ids],
+      delivered_up_to_seq: Math.max(...ids),
+      kind: 'message' as const,
+      text: composeRuntimeDeliveryPresentation(
+        ids.map(id => presentations[id === 10 ? 0 : 1]!),
+        'silverhand message send',
+      ),
+      deliveries: ids.map(id => ({
+        delivery_id: id,
+        message_id: `m${id}`,
+        seq: id,
+        thread_root_id: null,
+        delivery_kind: 'turn' as const,
+        presentation: presentations[id === 10 ? 0 : 1]!,
+      })),
+      spawn_options: startOptions,
+    });
+    const decoded = (line: string): string =>
+      (JSON.parse(line) as { message: { content: string } }).message.content;
+    try {
+      expect((await h.deliver([1], 'owner-A')).disposition).toBe('spawning');
+      h.drive([{ kind: 'session_init', sessionId: 's1' }]);
+      await waitForDeliveryConsumed(h.events, 1);
+      h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
+      await waitFor(() => h.events.some(event =>
+        event.event === 'runtime_parsed_event'
+        && event.parsed.kind === 'tool_call'
+      ));
+
+      expect((await h.supervisor.deliver(
+        batch([10, 11]),
+        { owner: 'owner-A' },
+      )).disposition).toBe('deferred');
+      expect((await h.supervisor.deliver(
+        batch([10]),
+        { owner: 'owner-B' },
+      )).disposition).toBe('deferred');
+      h.supervisor.cleanupDeferredForOwner('owner-A');
+
+      const before = h.stub.written.length;
+      h.drive([{ kind: 'turn_end' }]);
+      await waitFor(() => h.stub.written.length === before + 1);
+      const text = decoded(h.stub.written.at(-1)!);
+      expect(text).toContain('[runtime_scope=agent target=#conv:c1 workdir=');
+      expect(text).toContain(
+        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
+      );
+      expect(text).toContain('msg-10');
+      expect(text).not.toContain('msg-11');
+      await waitForDeliveryConsumed(h.events, 10);
+      expect(h.consumedFor(11)).toHaveLength(0);
+    } finally {
+      await h.supervisor.stop({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        runtime_generation: 1,
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('AgentSlot keeps one process while each origin gets its own absolute action workdir', async () => {
+    ensureSupervisorBundle('a1', 'ws2');
+    const startOptions = testStartOptions({
+      agentId: 'a1',
+      sessionScope: 'agent',
+    });
+    const h = makeDriven('direct', undefined, undefined, { startOptions });
+    const decoded = (line: string): string =>
+      (JSON.parse(line) as { message: { content: string } }).message.content;
+    const deliver = (
+      conversationId: string,
+      workspace: { id: string; name: string; kind: 'regular' } | null,
+      id: number,
+    ) => h.supervisor.deliver({
+      runtime_generation: 1,
+      conversation_id: conversationId,
+      target: { conversation_id: conversationId, workspace },
+      agent_id: 'a1',
+      delivery_ids: [id],
+      kind: 'message',
+      text: `origin-${conversationId}`,
+      spawn_options: startOptions,
+    }, { owner: 'owner-A' });
+    try {
+      const fromA = await deliver(
+        'c1',
+        { id: 'ws1', name: 'one', kind: 'regular' },
+        1,
+      );
+      expect(fromA.disposition).toBe('spawning');
+      if (fromA.disposition === 'refused') throw new Error('A was refused');
+      await waitForDeliveryConsumed(h.events, 1);
+      h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
+      await waitFor(() => h.events.some(event =>
+        event.event === 'runtime_state'
+        && event.conversation_id === 'c1'
+        && event.state.conversationId === 'c1'
+      ));
+      const focusBoundary = h.events.length;
+      const fromB = await deliver(
+        'c2',
+        { id: 'ws2', name: 'two', kind: 'regular' },
+        2,
+      );
+      expect(fromB.disposition).toBe('admitted');
+      if (fromB.disposition === 'refused') throw new Error('B was refused');
+      await waitForDeliveryConsumed(h.events, 2);
+      h.drive([{ kind: 'text', text: 'visible from B' }, { kind: 'turn_end' }]);
+      await waitFor(() => h.events.slice(focusBoundary).some(event =>
+        event.event === 'runtime_state'
+        && event.state.status === 'idle'
+        && event.state.terminalReason === 'turn_ended'
+      ));
+      const bStates = h.events.slice(focusBoundary).filter(
+        (event): event is Extract<EventFrame, { event: 'runtime_state' }> =>
+          event.event === 'runtime_state',
+      );
+      expect(bStates.length).toBeGreaterThan(0);
+      for (const frame of bStates) {
+        expect(frame.conversation_id).toBe('c2');
+        expect(frame.state.conversationId).toBe('c2');
+      }
+      const fromInbox = await deliver('c3', null, 3);
+      expect(fromInbox.disposition).toBe('admitted');
+      if (fromInbox.disposition === 'refused') throw new Error('inbox was refused');
+      await waitForDeliveryConsumed(h.events, 3);
+
+      expect(fromA.pid).toBe(fromB.pid);
+      expect(fromB.pid).toBe(fromInbox.pid);
+      expect(h.supervisor.status({}).runtimes).toHaveLength(1);
+      const visible = h.stub.written.map(decoded);
+      expect(visible[0]).toContain(
+        `target=#conv:c1 workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'))}`,
+      );
+      expect(visible[1]).toContain(
+        `target=#conv:c2 workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws2'))}`,
+      );
+      expect(visible[2]).toContain(
+        `target=#conv:c3 workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1', 'conversations', 'c3'))}`,
+      );
+      for (const text of visible) {
+        expect(text).not.toContain(
+          `workdir=${JSON.stringify(join(SUPERVISOR_AGENTS_ROOT, 'a1'))}]`,
+        );
+      }
+    } finally {
+      await h.supervisor.stop({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        runtime_generation: 1,
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
+  it('AgentSlot keeps stale custody independent for every origin conversation', async () => {
+    const startOptions = testStartOptions({
+      agentId: 'a1',
+      sessionScope: 'agent',
+    });
+    const h = makeDriven('direct', undefined, undefined, { startOptions });
+    const posted = new Map<string, Record<string, unknown>[]>();
+    const responses = new Map<string, 'stale' | 'ok'>([
+      ['c1', 'stale'],
+      ['c2', 'stale'],
+    ]);
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const conversationId = url.includes('/conversations/c2/') ? 'c2' : 'c1';
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const bodies = posted.get(conversationId) ?? [];
+      bodies.push(body);
+      posted.set(conversationId, bodies);
+      if (url.endsWith('/stale-message-resolution')) {
+        return new Response(JSON.stringify({ resolved: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      if (responses.get(conversationId) === 'stale') {
+        return new Response(JSON.stringify({
+          error: {
+            code: 'conflict',
+            message: 'message stale',
+            details: {
+              subkind: 'message_stale',
+              conversation_id: conversationId,
+              stale_event_id: `stale-${conversationId}`,
+              stream_key: 'main',
+              seen_up_to_seq: 1,
+              current_seq: 2,
+            },
+          },
+        }), {
+          status: 409,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        message_id: `sent-${conversationId}`,
+        message_seq: 3,
+        thread_root_id: null,
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }));
+    const send = (conversationId: string, content: string) =>
+      h.supervisor.agentMessageSend({
+        conversation_id: conversationId,
+        agent_id: 'a1',
+        content,
+      });
+    const receive = (conversationId: string) =>
+      h.supervisor.agentStaleReceive(
+        { conversation_id: conversationId, agent_id: 'a1', wait_ms: 0 },
+        { owner: `control:${conversationId}`, supportsResponseHandoff: true },
+      );
+    try {
+      expect((await h.deliver([1])).disposition).toBe('spawning');
+      await waitForDeliveryConsumed(h.events, 1);
+
+      expect(await send('c1', 'arm A')).toMatchObject({ ok: false, status: 409 });
+      expect(await send('c2', 'arm B')).toMatchObject({ ok: false, status: 409 });
+      expect((await receive('c1')).outcome).toBe('timeout');
+      expect((await receive('c2')).outcome).toBe('timeout');
+
+      expect(await h.supervisor.agentStaleResolve({
+        conversation_id: 'c2',
+        agent_id: 'a1',
+        resolution_reason: 'obsolete',
+      })).toEqual({ ok: true, resolved: true });
+      expect(await send('c1', 'A survives B resolve')).toMatchObject({
+        ok: false,
+        status: 409,
+      });
+      expect(posted.get('c1')?.at(-1)?.['stale_event_id']).toBe('stale-c1');
+
+      // Re-arm B, then let A succeed. Success for A must not clear B.
+      expect(await send('c2', 're-arm B')).toMatchObject({ ok: false, status: 409 });
+      responses.set('c1', 'ok');
+      expect(await send('c1', 'commit A')).toMatchObject({ ok: true });
+      expect(await send('c2', 'B survives A success')).toMatchObject({
+        ok: false,
+        status: 409,
+      });
+      expect(posted.get('c2')?.at(-1)?.['stale_event_id']).toBe('stale-c2');
+    } finally {
+      vi.unstubAllGlobals();
+      await h.supervisor.stop({
+        runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        runtime_generation: 1,
+        mode: 'hard',
+      }).catch(() => undefined);
+    }
+  });
+
   it('one Supervisor-owned fence blocks late start, deliver, and internal retry respawn', async () => {
     const { supervisor } = makeSupervisor();
     const coordinator = supervisor.agentHomeMutationCoordinator();
@@ -6596,7 +7660,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await expect(
       supervisor.deliver(
         {
+          runtime_generation: 1,
           conversation_id: 'c1',
+          target: { conversation_id: 'c1', workspace: null },
           agent_id: 'a1',
           delivery_ids: [1],
           kind: 'message',
@@ -6662,7 +7728,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     expect(combined[0]!.event === 'runtime_delivery_consumed' &&
       [...combined[0]!.delivery_ids].sort()).toEqual([2, 3]);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('P-A falsifier (#task:1558): N mid-turn inputs to a next-turn-batch runtime form exactly ONE follow-up batch, even with the transport-safe boundary open', async () => {
@@ -6714,7 +7780,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 5);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('reservation stall falsifier (#task:1563 §3.4/§8, Cindy P1-1): ONE deferred entry with NO further inflow gets exactly one timeout-driven warn — zero writes; late turn_end flushes and the re-arm resets the latch', async () => {
@@ -6780,7 +7846,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await waitFor(() => stallLogs().length === 2);
     expect(h.consumedFor(5)).toHaveLength(0);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('startup double-write falsifier (#task:1563 Cindy P1-2): session_init parsed inside the startup write await window must not re-enter the consume — stdin written ONCE, consumed ONCE', async () => {
@@ -6816,7 +7882,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     expect(h.consumedFor(1)).toHaveLength(1);
     expect(h.stub.written).toHaveLength(1);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('crash/restart convergence (#task:1563 §8): reservation + deferred queue die with the runtime — per-entry child_exit settle, never consumed; respawn-with-batch admits and re-arms the reservation', async () => {
@@ -6880,7 +7946,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 4);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it.each([
@@ -6952,7 +8018,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
     const deliverSeq = (id: number, seq: number) =>
       h.supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [id], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [id], kind: 'message',
         text: `m${id}`, delivered_up_to_seq: seq,
         spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
@@ -7016,7 +8084,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 4);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it("B' (#task:1558): tool-boundary-steer writes immediately mid-turn (compaction is the only hold) and started(uuid) promotes observed", async () => {
@@ -7036,7 +8104,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
     // Spawn with seq so the turn becomes active (admission with seq).
     const spawn0 = await h.supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [1],
       kind: 'message',
@@ -7057,7 +8127,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       ),
     );
     const d2 = await h.supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [2],
       kind: 'message',
@@ -7101,7 +8173,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       ),
     );
     const d3 = await h.supervisor.deliver({
+      runtime_generation: 1,
       conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null },
       agent_id: 'a1',
       delivery_ids: [3],
       kind: 'message',
@@ -7113,7 +8187,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.drive([{ kind: 'compaction_finished' }]);
     await waitForDeliveryConsumed(h.events, 3);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('P1-1 falsifier (#1558 final gate): a turn_end crossing the write await window must not be overwritten back into reserved', async () => {
@@ -7160,7 +8234,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     });
     const drive = (events: ParsedEvent[]) => { nextParse = events; stub.stdout.emit('data', 'line\n'); };
     const deliver = (ids: number[]) => supervisor.deliver({
-      conversation_id: 'c1', agent_id: 'a1', delivery_ids: ids, kind: 'message',
+      runtime_generation: 1,
+      conversation_id: 'c1',
+      target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: ids, kind: 'message',
       text: `m-${ids.join('_')}`, spawn_options: baseStartParams.options,
     }, { owner: 'test-owner' });
 
@@ -7186,7 +8262,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     const d2 = await deliver([2]);
     expect(d2.disposition).toBe('admitted');
     await waitForDeliveryConsumed(spy.events, 2);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('P1-2 falsifier (#1558 final gate): a drain-all flush takes a bounded prefix and leaves the ordered remainder for the next boundary', async () => {
@@ -7229,7 +8305,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       secondBatch[0]!.event === 'runtime_delivery_consumed' &&
         [...secondBatch[0]!.delivery_ids].sort((a, b) => a - b),
     ).toEqual([120, 121, 122]);
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('P1-3 falsifier (#1558 final gate): an unknown releaseProfile fails closed on live input — deliver rejects, zero consumed', async () => {
@@ -7250,7 +8326,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     expect(h.consumedFor(2)).toHaveLength(0);
 
     (h.driver as { releaseProfile: string }).releaseProfile = 'native-steer';
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
       .catch(() => undefined);
   });
 
@@ -7263,7 +8339,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
     const deliverText = (id: number, text: string) =>
       h.supervisor.deliver({
-        conversation_id: 'c1', agent_id: 'a1', delivery_ids: [id], kind: 'message',
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null }, agent_id: 'a1', delivery_ids: [id], kind: 'message',
         text, spawn_options: baseStartParams.options,
       }, { owner: 'test-owner' });
 
@@ -7301,7 +8379,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     // turn_end #3 → the single oversized 206 drains ALONE (at-least-one).
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 206);
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('direct: a write-in-flight deferral flushes FIFO one-at-a-time, never combined', async () => {
@@ -7336,7 +8414,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       ),
     ).toBe(false);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('owner-scoped cleanup discards only the dropped connection’s deferred entries', async () => {
@@ -7372,7 +8450,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await waitForDeliveryConsumed(h.events, 20);
     expect(h.consumedFor(10)).toHaveLength(0);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('child exit fails queued deferred entries as child_exit (no orphan, no ack)', async () => {
@@ -7438,7 +8516,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await waitForDeliveryConsumed(h.events, 42);
     expect(h.consumedFor(42)).toHaveLength(1);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('same-owner re-submit of a queued id-set is idempotent (no double-queue, one consumed)', async () => {
@@ -7464,7 +8542,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     // Exactly one consumed carrying [7] — dedup held.
     expect(h.consumedFor(7)).toHaveLength(1);
 
-    await h.supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -7485,21 +8563,26 @@ describe('Supervisor #task:1486 — reasoning-effort is forwarded, not product-g
       model,
     });
     options.driver.reasoning_effort = effort;
-    return { conversation_id: 'c1', agent_id: 'a1', options };
+    return {
+      conversation_id: 'c1',
+      agent_id: 'a1',
+      runtime_generation: 1,
+      options,
+    };
   }
 
   it('baseline High spawns for any model (no host probe)', async () => {
     const { supervisor } = makeSupervisor();
     const res = await supervisor.start(codexStart('my-proxy-model', 'high'));
     assertStarted(res);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('Ultra on gpt-5.6-sol spawns (product table allows it upstream)', async () => {
     const { supervisor } = makeSupervisor();
     const res = await supervisor.start(codexStart('gpt-5.6-sol', 'ultra'));
     assertStarted(res);
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 
   it('forwards a product-invalid effort through runtime_start to CodexDriver argv verbatim (open-token contract)', async () => {
@@ -7523,7 +8606,7 @@ describe('Supervisor #task:1486 — reasoning-effort is forwarded, not product-g
     // The real CodexDriver renders the forwarded token verbatim into argv.
     const argv = new CodexDriver().buildArgs(captured!);
     expect(argv[argv.indexOf('-c') + 1]).toBe('model_reasoning_effort="giga"');
-    await supervisor.stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' });
+    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
   });
 });
 
@@ -7606,7 +8689,9 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     const deliverSeq = (id: number, seq: number, owner = 'owner-A') =>
       supervisor.deliver(
         {
+          runtime_generation: 1,
           conversation_id: 'c1',
+          target: { conversation_id: 'c1', workspace: null },
           agent_id: 'a1',
           delivery_ids: [id],
           kind: 'message',
@@ -7619,6 +8704,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
               seq,
               thread_root_id: null,
               delivery_kind: 'turn' as const,
+              presentation: testDeliveryPresentation(`msg-${id}`),
             },
           ],
           spawn_options: baseStartParams.options,
@@ -7691,7 +8777,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     };
     const stop = () =>
       supervisor
-        .stop({ conversation_id: 'c1', agent_id: 'a1', mode: 'hard' })
+        .stop({ runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
         .catch(() => undefined);
     return {
       get stub() {
@@ -8295,6 +9381,66 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     }
   });
 
+  it('response-loss ownership union: reservation partial overlap rebinds held id and queues only novel FIFO remainder', async () => {
+    const h = makePullHarness();
+    h.stubBackendWithCas(2);
+    try {
+      await h.boot();
+      const writesAfterBoot = h.stub.written.length;
+      expect((await send(h.supervisor, 'draft')).ok).toBe(false);
+      expect((await h.deliverSeq(2, 2, 'owner-A')).disposition).toBe('deferred');
+      const { result, settle } = await h.pull(1_000);
+      expect(result.outcome).toBe('batch_covered');
+
+      h.supervisor.cleanupDeferredForOwner('owner-A');
+      const presentations = [2, 3].map(id => ({
+        body: `msg-${id}`,
+        instruction: 'other' as const,
+      }));
+      const retry = await h.supervisor.deliver({
+        runtime_generation: 1,
+        conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [2, 3],
+        delivered_up_to_seq: 3,
+        kind: 'message',
+        text: composeRuntimeDeliveryPresentation(
+          presentations,
+          'silverhand message send',
+        ),
+        deliveries: [2, 3].map((id, index) => ({
+          delivery_id: id,
+          message_id: `m${id}`,
+          seq: id,
+          thread_root_id: null,
+          delivery_kind: 'turn' as const,
+          presentation: presentations[index]!,
+        })),
+        spawn_options: baseStartParams.options,
+      }, { owner: 'owner-B' });
+      expect(retry.disposition).toBe('deferred');
+
+      // Reservation handoff owns/consumes 2 exactly once and never writes it.
+      settle!(true);
+      await waitForDeliveryConsumed(h.events, 2);
+      expect(h.consumedFor(2)).toHaveLength(1);
+      expect(h.stub.written.filter(write => write.includes('msg-2'))).toHaveLength(0);
+
+      // Novel 3 remains behind the reservation, then releases once at the
+      // next proven boundary. FIFO is reservation 2 → deferred 3.
+      h.drive([{ kind: 'turn_end' }]);
+      await waitForDeliveryConsumed(h.events, 3);
+      expect(h.consumedFor(3)).toHaveLength(1);
+      expect(h.stub.written.length).toBe(writesAfterBoot + 1);
+      expect(h.stub.written.filter(write => write.includes('msg-3'))).toHaveLength(1);
+      expect(h.stub.written.filter(write => write.includes('msg-2'))).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+      await h.stop();
+    }
+  });
+
   it('P1-1 restore variant: after an owner rebind, a pre-proof failure restores the prefix under the NEW owner and it releases exactly once via stdin', async () => {
     const h = makePullHarness();
     h.stubBackendWithCas(2);
@@ -8553,9 +9699,8 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(spawnedArgs.flat()).not.toContain('--version');
     } finally {
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       });
     }
   });
@@ -8592,9 +9737,8 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(boundVersions).toEqual([null]);
     } finally {
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       });
     }
   });
@@ -8636,6 +9780,7 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
     const qoderStartParams = {
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       options: testStartOptions({
         conversationId: 'c1',
         agentId: 'a1',
@@ -8650,9 +9795,8 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(instances[0]!.releaseProfile).toBe('next-turn-batch');
 
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       });
       generation = 1;
       expect((await supervisor.start(qoderStartParams)).started).toBe(true);
@@ -8663,9 +9807,8 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(instances[0]!.releaseProfile).toBe('next-turn-batch');
     } finally {
       await supervisor.stop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
+        runtime_generation: 1, mode: 'hard',
       });
     }
   });

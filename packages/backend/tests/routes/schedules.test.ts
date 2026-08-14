@@ -446,7 +446,7 @@ describe('Internal routes — agent schedules', () => {
       message: 'x',
       spec: { kind: 'once', delay_seconds: 60 },
     });
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(401);
   });
 
   it('rejects an agent that is not a member of the principal conversation (403)', async () => {
@@ -465,7 +465,7 @@ describe('Internal routes — agent schedules', () => {
       message: 'x',
       spec: { kind: 'once', delay_seconds: 60 },
     });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it('rejects unauthenticated requests (401)', async () => {

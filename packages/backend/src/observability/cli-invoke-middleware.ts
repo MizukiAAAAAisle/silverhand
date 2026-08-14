@@ -2,8 +2,9 @@
  * Hono middleware that emits one structured log line per
  * `silverhand <noun> <verb>` CLI invocation.
  *
- * Mounted on `/internal/conversations/:cid/agents/:aid/*` (the family
- * of agent-principal routes). For every request:
+ * Mounted on both the canonical
+ * `/internal/agents/:aid/conversations/:cid/*` family and its observable
+ * legacy bridge. For every request:
  *   - on entry: capture `{conversationId, agentId, noun, verb, request_id, query_keys}`
  *   - on exit:  add `{http_status, duration_ms, status, error_code?,
  *               stale_resolution_reason?}`
@@ -24,7 +25,8 @@ import type { Context, MiddlewareHandler } from 'hono';
 import type { BackendContext } from '../context.js';
 import { lookupCliRoute } from './cli-route-map.js';
 
-const INTERNAL_PREFIX = '/internal/conversations/';
+const LEGACY_INTERNAL_PREFIX = '/internal/conversations/';
+const CANONICAL_INTERNAL_PREFIX = '/internal/agents/';
 
 /** Suffix the cli-trace endpoint uses; excluded from invoke logging. */
 export const CLI_TRACE_SUFFIX = 'cli-trace';
@@ -138,14 +140,19 @@ export function createCliInvokeMiddleware(ctx: BackendContext): MiddlewareHandle
   };
 }
 
-/** `/internal/conversations/<cid>/agents/<aid>/<suffix...>` → suffix. */
+/** Either internal-agent path family → handler suffix. */
 function extractAgentRouteSuffix(path: string): string | null {
-  if (!path.startsWith(INTERNAL_PREFIX)) return null;
-  const rest = path.slice(INTERNAL_PREFIX.length);
-  // rest = `<cid>/agents/<aid>/<suffix>`
-  const parts = rest.split('/');
-  if (parts.length < 4 || parts[1] !== 'agents') return null;
-  return parts.slice(3).join('/') || null;
+  if (path.startsWith(LEGACY_INTERNAL_PREFIX)) {
+    const parts = path.slice(LEGACY_INTERNAL_PREFIX.length).split('/');
+    if (parts.length < 4 || parts[1] !== 'agents') return null;
+    return parts.slice(3).join('/') || null;
+  }
+  if (path.startsWith(CANONICAL_INTERNAL_PREFIX)) {
+    const parts = path.slice(CANONICAL_INTERNAL_PREFIX.length).split('/');
+    if (parts.length < 4 || parts[1] !== 'conversations') return null;
+    return parts.slice(3).join('/') || null;
+  }
+  return null;
 }
 
 /** Set of query-string keys observed on the request — never values. */

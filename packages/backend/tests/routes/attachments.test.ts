@@ -13,7 +13,12 @@ import { formatAttachmentSuffix } from '../../src/runtime/stdin-format.js';
 import { AttachmentRepo } from '../../src/repos/attachment-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
 import { MessageRepo } from '../../src/repos/message-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 async function createWorkspaceChannel(t: TestApp, members: string[] = ['alice']) {
@@ -49,7 +54,7 @@ function internalAuthHeaders(
   conversationId: string,
   agentId: string,
 ): Record<string, string> {
-  return authHeaders(t.ctx.agentTokens.issue(conversationId, agentId));
+  return authHeaders(issueTestConversationRuntimeToken(t, conversationId, agentId));
 }
 
 /** Direct multipart upload — bypasses the JSON-shaped `http().post`
@@ -891,7 +896,7 @@ describe('Internal agent attachment routes', () => {
       PNG_BYTES,
       internalAuthHeaders(t, a.channelId, b.agentIds.bob!),
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 
   it('agent send-message embeds attachment snapshots when channel ownership matches', async () => {
@@ -1008,7 +1013,7 @@ describe('Internal agent attachment routes', () => {
       { content: 'forged' },
       { headers: internalAuthHeaders(t, a.channelId, b.agentIds.bob!) },
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 });
 
@@ -1458,7 +1463,7 @@ describe('Attachment content update (PATCH)', () => {
       NEXT_PNG,
       internalAuthHeaders(t, a.channelId, b.agentIds.bob!),
     );
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(401);
   });
 });
 

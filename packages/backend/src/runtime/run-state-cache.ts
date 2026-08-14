@@ -15,7 +15,7 @@
  * keeps them apart so each layer can be tested with a fake of its
  * single dependency.
  *
- * ## What the cache stores per (conversationId, agentId)
+ * ## What the cache stores per semantic RuntimeScope
  *
  *   - `phase` — daemon-side lifecycle (idle/spawning/startup_pending/
  *     ready/draining/exited). Only daemon knows this authoritatively;
@@ -51,7 +51,7 @@
  * separately to the daemon." Keeping the cache pure also makes its
  * tests trivial (no async, no mocks, no event-loop coordination).
  */
-import type { RuntimeStateDto } from '@silverhand/host';
+import type { RuntimeScope, RuntimeStateDto } from '@silverhand/host';
 import type {
   AgentRunState,
   AgentRunStatus,
@@ -83,14 +83,17 @@ function terminalStatusForReason(
 export type RuntimePhase = RuntimeStateDto['phase'];
 
 /**
- * One cache entry per (conversationId, agentId). Fields are a strict
+ * One cache entry per AgentSlot or ConversationSlot. Fields are a strict
  * subset of `RuntimeStateDto` plus a cache-local `updatedAt` for
  * ordering. We do NOT inline conversation/agent into the entry to
  * minimize allocations — they're already encoded in the map key.
  */
 export interface CachedRuntimeEntry {
+  runtimeScope: RuntimeScope;
   conversationId: string;
   agentId: string;
+  /** Exact runtime-slot generation represented by this entry. */
+  runtimeGeneration: number;
   phase: RuntimePhase;
   pid: number | null;
   startedAt: number | null;
@@ -102,8 +105,14 @@ export interface CachedRuntimeEntry {
   updatedAt: number;
 }
 
-function key(conversationId: string, agentId: string): string {
-  return `${conversationId}|${agentId}`;
+function scopeKey(scope: RuntimeScope): string {
+  return scope.kind === 'agent'
+    ? `agent|${scope.agent_id}`
+    : `conversation|${scope.conversation_id}|${scope.agent_id}`;
+}
+
+function conversationScope(conversationId: string, agentId: string): RuntimeScope {
+  return { kind: 'conversation', conversation_id: conversationId, agent_id: agentId };
 }
 
 export class RunStateCache {
@@ -142,11 +151,13 @@ export class RunStateCache {
     }
     const seen = new Set<string>();
     for (const dto of dtos) {
-      const k = key(dto.conversation_id, dto.agent_id);
+      const k = scopeKey(dto.runtime_scope);
       seen.add(k);
       this.entries.set(k, {
+        runtimeScope: dto.runtime_scope,
         conversationId: dto.conversation_id,
         agentId: dto.agent_id,
+        runtimeGeneration: dto.runtime_generation,
         phase: dto.phase,
         pid: dto.pid,
         startedAt: dto.started_at,
@@ -169,7 +180,7 @@ export class RunStateCache {
    * patch would risk dropping a field the daemon meant to clear (e.g.
    * `compactionStale` reset after `compaction_finished`).
    *
-   * If we have no entry yet for this (conv, agent) — i.e. the
+   * If we have no entry yet for this semantic runtime scope — i.e. the
    * `runtime_state` event arrived before any `runtime_status` hydrate
    * — we create one with `phase='ready'` as a best-effort default,
    * since daemon only emits `runtime_state` for runtimes past spawn.
@@ -181,17 +192,21 @@ export class RunStateCache {
    */
   applyRuntimeState(
     daemonInstanceKey: string,
+    runtimeScope: RuntimeScope,
     conversationId: string,
     agentId: string,
+    runtimeGeneration: number,
     state: AgentRunState,
     now: number = Date.now(),
   ): void {
     if (!this.acceptDaemonKey(daemonInstanceKey)) return;
-    const k = key(conversationId, agentId);
+    const k = scopeKey(runtimeScope);
     const prev = this.entries.get(k);
     this.entries.set(k, {
+      runtimeScope,
       conversationId,
       agentId,
+      runtimeGeneration,
       phase: prev?.phase ?? 'ready',
       pid: prev?.pid ?? null,
       startedAt: prev?.startedAt ?? null,
@@ -215,21 +230,25 @@ export class RunStateCache {
    */
   applyPhase(
     daemonInstanceKey: string,
+    runtimeScope: RuntimeScope,
     conversationId: string,
     agentId: string,
+    runtimeGeneration: number,
     phase: RuntimePhase,
     now: number = Date.now(),
   ): void {
     if (!this.acceptDaemonKey(daemonInstanceKey)) return;
-    const k = key(conversationId, agentId);
+    const k = scopeKey(runtimeScope);
     const prev = this.entries.get(k);
     if (!prev) {
       // No prior entry: create a skeleton so consumers can at least
       // see "this runtime exists and is in this phase." The runState
       // stays null until the daemon emits one.
       this.entries.set(k, {
+        runtimeScope,
         conversationId,
         agentId,
+        runtimeGeneration,
         phase,
         pid: null,
         startedAt: null,
@@ -239,7 +258,13 @@ export class RunStateCache {
       });
       return;
     }
-    this.entries.set(k, { ...prev, phase, daemonInstanceKey, updatedAt: now });
+    this.entries.set(k, {
+      ...prev,
+      runtimeGeneration,
+      phase,
+      daemonInstanceKey,
+      updatedAt: now,
+    });
   }
 
   /**
@@ -255,18 +280,28 @@ export class RunStateCache {
    */
   applyRuntimeExit(
     daemonInstanceKey: string,
+    runtimeScope: RuntimeScope,
     conversationId: string,
     agentId: string,
+    runtimeGeneration: number,
     now: number = Date.now(),
   ): CachedRuntimeEntry | null {
     if (!this.acceptDaemonKey(daemonInstanceKey)) return null;
-    const k = key(conversationId, agentId);
+    const k = scopeKey(runtimeScope);
     const prev = this.entries.get(k);
     const next: CachedRuntimeEntry = prev
-      ? { ...prev, phase: 'exited', daemonInstanceKey, updatedAt: now }
+      ? {
+          ...prev,
+          runtimeGeneration,
+          phase: 'exited',
+          daemonInstanceKey,
+          updatedAt: now,
+        }
       : {
+          runtimeScope,
           conversationId,
           agentId,
+          runtimeGeneration,
           phase: 'exited',
           pid: null,
           startedAt: null,
@@ -288,6 +323,7 @@ export class RunStateCache {
    */
   applyParsedEventDropped(
     daemonInstanceKey: string,
+    runtimeScope: RuntimeScope,
     conversationId: string,
     agentId: string,
     meta: {
@@ -298,7 +334,7 @@ export class RunStateCache {
     },
   ): AgentRunState | null {
     if (!this.acceptDaemonKey(daemonInstanceKey)) return null;
-    const k = key(conversationId, agentId);
+    const k = scopeKey(runtimeScope);
     const prev = this.entries.get(k);
     if (!prev?.runState) return null;
     const nextState: AgentRunState = {
@@ -323,10 +359,11 @@ export class RunStateCache {
    *
    * Distinct from `applyRuntimeExit` which preserves the entry with
    * `phase='exited'`; clear-session is the "we're done with this
-   * (conv, agent) entirely" signal.
+   * semantic slot entirely" signal.
    */
   clear(conversationId: string, agentId: string): void {
-    this.entries.delete(key(conversationId, agentId));
+    this.entries.delete(scopeKey(conversationScope(conversationId, agentId)));
+    this.entries.delete(scopeKey({ kind: 'agent', agent_id: agentId }));
   }
 
   /**
@@ -344,7 +381,8 @@ export class RunStateCache {
     conversationId: string,
     agentId: string,
   ): CachedRuntimeEntry | undefined {
-    return this.entries.get(key(conversationId, agentId));
+    return this.entries.get(scopeKey(conversationScope(conversationId, agentId)))
+      ?? this.entries.get(scopeKey({ kind: 'agent', agent_id: agentId }));
   }
 
   list(): CachedRuntimeEntry[] {
@@ -396,7 +434,8 @@ export class RunStateCache {
     expectedRunId?: string,
     now: number = Date.now(),
   ): AgentRunState | null {
-    const k = key(conversationId, agentId);
+    const k = this.entryKeyForTarget(conversationId, agentId);
+    if (!k) return null;
     const prev = this.entries.get(k);
     if (!prev?.runState) return null;
     if (expectedRunId !== undefined && prev.runState.runId !== expectedRunId) {
@@ -422,6 +461,13 @@ export class RunStateCache {
     return terminal;
   }
 
+  private entryKeyForTarget(conversationId: string, agentId: string): string | null {
+    const conversationKey = scopeKey(conversationScope(conversationId, agentId));
+    if (this.entries.has(conversationKey)) return conversationKey;
+    const agentKey = scopeKey({ kind: 'agent', agent_id: agentId });
+    return this.entries.has(agentKey) ? agentKey : null;
+  }
+
   /**
    * Bulk-resolve every (conv, *) entry's active run. Returns the list
    * of terminal snapshots so the caller can publish each on the SSE
@@ -439,6 +485,13 @@ export class RunStateCache {
   ): AgentRunState[] {
     const resolved: AgentRunState[] = [];
     for (const entry of this.entries.values()) {
+      // This is a conversation-OWNED lifecycle operation (archive/delete),
+      // not a focus projection. An AgentSlot may currently be presenting a
+      // run in this conversation while its lifecycle remains agent-owned; the
+      // target closing must neither terminalize nor clear that aggregate run.
+      // Single-turn completion still uses resolveRun(), whose target lookup is
+      // intentionally allowed to resolve the current AgentSlot focus.
+      if (entry.runtimeScope.kind !== 'conversation') continue;
       if (entry.conversationId !== conversationId) continue;
       const terminal = this.resolveRun(
         conversationId,

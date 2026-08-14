@@ -7,6 +7,7 @@ import type {
   AgentTeardownCapture,
   AgentTeardownFacts,
   AgentTeardownPersistence,
+  AgentRuntimeSessionFacts,
 } from './agent-teardown-ports.js';
 import { teardownFactsToHostAgentResource } from '../read-model/host-resources.js';
 import {
@@ -324,14 +325,16 @@ export async function deleteComputer(
   // authority — relocation-v1 §7-4 removed the workspace-cascade half, so there
   // is no second source to union with.
   const stopped = new Set<string>();
-  const stopKey = (conversationId: string, agentId: string): string =>
-    `${conversationId}\u0000${agentId}`;
+  const stopKey = (live: AgentRuntimeSessionFacts): string =>
+    live.runtimeScope.kind === 'agent'
+      ? `agent\u0000${live.runtimeScope.agentId}`
+      : `conversation\u0000${live.runtimeScope.conversationId}\u0000${live.runtimeScope.agentId}`;
   let purgeAttempts = 0;
   let purgeFailures = 0;
   for (const entry of capture.agentTeardowns) {
     for (const live of entry.capture.runtimeSessions.filter(isRunningSession)) {
-      if (stopped.has(stopKey(live.conversationId, entry.agent.id))) continue;
-      stopped.add(stopKey(live.conversationId, entry.agent.id));
+      if (stopped.has(stopKey(live))) continue;
+      stopped.add(stopKey(live));
       // `{ hostId }` is the captured routing authority: the dispatcher would
       // otherwise re-read `agents`/`hosts`, which this cascade has just
       // deleted, and the stop would degrade to a warning while the daemon's
@@ -339,6 +342,8 @@ export async function deleteComputer(
       await ctx.runtimeHost
         .stop(live.conversationId, entry.agent.id, {
           hostId: entry.agent.hostId,
+          runtimeGeneration: live.runtimeGeneration,
+          runtimeScope: live.runtimeScope,
         })
         .catch(err =>
           ctx.logger.warn(

@@ -185,6 +185,8 @@ export interface RuntimeDelivery {
   seq: number;
   thread_root_id: string | null;
   delivery_kind: 'turn' | 'observe';
+  /** Presentation fragment used to rebuild only a novel retry remainder. */
+  presentation: import('@silverhand/shared').RuntimeDeliveryPresentation;
 }
 
 export interface LiveDeliveryRequest {

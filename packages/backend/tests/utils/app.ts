@@ -59,6 +59,7 @@ import type {
   StopOptions,
 } from '../../src/runtime/agent-runtime-host.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
+import { conversationRuntimePrincipal } from '../../src/auth/runtime-principal.js';
 import {
   DEFAULT_AUTH_SESSION_TTL_MS,
   type AuthRuntimeConfig,
@@ -115,11 +116,13 @@ import { sweepStoredBlobs } from '../../src/application/delete-agent.js';
 export class FakeConversationManager implements AgentRuntimeHost {
   starts: Array<{ conversationId: string; agentId: string }> = [];
   stops: Array<{
-    conversationId: string;
+    conversationId: string | null;
     agentId: string;
     /** Routing the caller supplied instead of letting the dispatcher re-read
      *  `agents`/`hosts` — load-bearing for post-delete teardown (#task:1616). */
     hostId?: string;
+    runtimeGeneration?: number;
+    runtimeScope?: StopOptions['runtimeScope'];
   }> = [];
   clearedSessions: Array<{
     conversationId: string;
@@ -193,7 +196,7 @@ export class FakeConversationManager implements AgentRuntimeHost {
     this.starts.push({ conversationId, agentId });
   }
   async stop(
-    conversationId: string,
+    conversationId: string | null,
     agentId: string,
     opts?: StopOptions,
   ): Promise<void> {
@@ -201,6 +204,12 @@ export class FakeConversationManager implements AgentRuntimeHost {
       conversationId,
       agentId,
       ...(opts?.hostId !== undefined ? { hostId: opts.hostId } : {}),
+      ...(opts?.runtimeGeneration !== undefined
+        ? { runtimeGeneration: opts.runtimeGeneration }
+        : {}),
+      ...(opts?.runtimeScope !== undefined
+        ? { runtimeScope: opts.runtimeScope }
+        : {}),
     });
     if (this.stopError) throw this.stopError;
   }
@@ -877,6 +886,7 @@ const TEST_FIXTURE_USER_IDS = [
 ];
 
 export interface BuildTestAppOptions {
+  logger?: BackendLogger;
   authConfig?: Partial<AuthRuntimeConfig>;
   ownedLocalHostUserIds?: string[];
   deploymentMode?: BackendDeploymentMode;
@@ -1053,8 +1063,12 @@ export function buildTestApp(options: BuildTestAppOptions = {}): TestApp {
     bindAddressScope: options.bindAddressScope ?? 'loopback',
     authConfig,
     embeddedBootstrap: createDisabledEmbeddedBootstrapState(joinPath(tmp.silverhandDir, 'embedded-bootstrap')),
-    logger: silentLogger,
-    loggers: { system: silentLogger, agent: silentLogger, cli: silentLogger },
+    logger: options.logger ?? silentLogger,
+    loggers: {
+      system: options.logger ?? silentLogger,
+      agent: silentLogger,
+      cli: silentLogger,
+    },
     logControl: createLogLevelControl('warn'),
     blobStorage,
     attachmentService,
@@ -1345,9 +1359,17 @@ function patchInternalAuthHeader(
   path: string,
   headers: Record<string, string>,
 ): void {
-  const match = path.match(
+  const legacy = path.match(
     /^\/internal\/conversations\/([^/?#]+)\/agents\/([^/?#]+)(?:[/?#]|$)/,
   );
+  const canonical = path.match(
+    /^\/internal\/agents\/([^/?#]+)\/conversations\/([^/?#]+)(?:[/?#]|$)/,
+  );
+  const match = legacy
+    ? { conversationId: legacy[1], agentId: legacy[2] }
+    : canonical
+      ? { conversationId: canonical[2], agentId: canonical[1] }
+      : null;
   if (!match) return;
   const current = headers.authorization ?? headers.Authorization;
   const publicBearer = `Bearer ${target.authToken}`;
@@ -1356,11 +1378,38 @@ function patchInternalAuthHeader(
   // the default/public bearer to a valid per-agent token; explicit wrong
   // tokens remain wrong so auth tests still exercise rejection.
   if (current && current !== publicBearer) return;
-  const [, conversationId, agentId] = match as [string, string, string];
-  headers.authorization = `Bearer ${target.ctx.agentTokens.issue(
-    decodeURIComponent(conversationId),
-    decodeURIComponent(agentId),
+  headers.authorization = `Bearer ${issueTestConversationRuntimeToken(
+    target,
+    decodeURIComponent(match.conversationId!),
+    decodeURIComponent(match.agentId!),
   )}`;
+}
+
+/** Test-only bearer mint. Production tokens are issued by the runtime-start saga. */
+export function issueTestConversationRuntimeToken(
+  target: TestApp,
+  conversationId: string,
+  agentId: string,
+  daemonInstanceId = 'test-daemon',
+): string {
+  let slot = target.persistence.repos.runtimeSlots.getConversation(
+    conversationId,
+    agentId,
+  );
+  if (slot && slot.claimed_by_daemon_instance_id === null) {
+    slot = target.persistence.repos.runtimeSlots.claimGeneration({
+      scope: { kind: 'conversation', conversationId, agentId },
+      daemonInstanceId,
+    });
+  }
+  const generation = slot?.generation ?? 0;
+  const claimedDaemon = slot?.claimed_by_daemon_instance_id ?? daemonInstanceId;
+  return target.ctx.agentTokens.issue(conversationRuntimePrincipal({
+    conversationId,
+    agentId,
+    generation,
+    daemonInstanceId: claimedDaemon,
+  }));
 }
 
 function ensurePublicSessionHeader(

@@ -184,8 +184,14 @@ describe('EmbeddedUnixOutboundFrameAdapter reconnect', () => {
       daemon.respondResult(cmd.id, 'runtime_status', {
         runtimes: [
           {
+            runtime_scope: {
+              kind: 'conversation',
+              conversation_id: 'c1',
+              agent_id: 'a1',
+            },
             conversation_id: 'c1',
             agent_id: 'a1',
+            runtime_generation: 1,
             pid: null,
             phase: 'idle',
             run_state: null,

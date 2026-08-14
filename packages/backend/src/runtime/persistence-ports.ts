@@ -39,6 +39,10 @@ import type {
   MessageDto,
   WorkspaceDto,
 } from '@silverhand/shared';
+import type {
+  RuntimePrincipal,
+  RuntimePrincipalScope,
+} from '../auth/runtime-principal.js';
 
 /**
  * Per-delivery semantics as the runtime consumes them. Mirrors the persisted
@@ -107,6 +111,9 @@ export interface RuntimeInboxCustodyPort {
   ): RuntimeInboxDeliveryRecord;
   /** Undelivered, unclaimed, unfailed rows in enqueue order. */
   listPending(conversationId: string, agentId: string): RuntimeInboxDelivery[];
+  /** Pending origin conversations for a live AgentSlot, ordered by their
+   * first durable inbox row. ConversationSlot callers never need this fold. */
+  listPendingConversationIdsForAgent(agentId: string): string[];
   /** Atomically lease every currently-claimable row to `inFlightOwner`.
    *  Concurrent claimants cannot both win a row. */
   claimPending(
@@ -123,7 +130,18 @@ export interface RuntimeInboxCustodyPort {
     agentId: string,
     inFlightOwner: string,
   ): number;
-  markDelivered(inboxIds: readonly number[]): void;
+  settleDelivered(input: {
+    conversationId: string;
+    agentId: string;
+    inFlightOwner: string;
+    inboxIds: readonly number[];
+  }): boolean;
+  settleUndelivered(input: {
+    conversationId: string;
+    agentId: string;
+    inFlightOwner: string;
+    inboxIds: readonly number[];
+  }): boolean;
   /** Return rows leased to THIS owner to pending custody. */
   rollbackInFlight(inboxIds: readonly number[], inFlightOwner: string): void;
   /** Return rows to pending custody regardless of which owner holds them —
@@ -149,6 +167,10 @@ export interface RuntimeAgentReadPort {
 
 export interface RuntimeConversationReadPort {
   get(conversationId: string): ConversationDto | null;
+  /** Placement-aware participant authority. Runtime policy must not infer
+   * participation from roster projection rows: AgentInbox deliberately has
+   * no `conversation_agents` row and DirectPair will add another arm. */
+  isAgentParticipant(conversationId: string, agentId: string): boolean;
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
   listAgents(conversationId: string): ConversationAgentDto[];
   /** The sole human member, or `null` when the answer is not unique. Used only
@@ -183,11 +205,31 @@ export interface RuntimeHostReadPort {
   routingView(hostId: string): RuntimeHostRoutingView | null;
 }
 
+export interface RuntimeCustodyPort {
+  cliSessionId(scope: RuntimePrincipalScope): string | null;
+  current(scope: RuntimePrincipalScope): RuntimePrincipal | null;
+  claim(input: {
+    scope: RuntimePrincipalScope;
+    daemonInstanceId: string;
+  }): RuntimePrincipal | null;
+  finalize(input: {
+    scope: RuntimePrincipalScope;
+    generation: number;
+    daemonInstanceId: string;
+    status: 'idle' | 'crashed';
+  }): RuntimePrincipal | null;
+}
+
 /** A runtime the DB still claims is live. Projection of the
  *  `conversation_agents ⋈ agents` reconcile query. */
 export interface DbLiveRuntime {
-  conversationId: string;
+  scope: RuntimePrincipalScope;
+  /** Last presentation target when known. AgentSlot custody itself has no
+   * ambient conversation, so this is never part of identity. */
+  focusConversationId: string | null;
   agentId: string;
+  generation: number;
+  daemonInstanceId: string | null;
   status: 'active' | 'starting';
   pid: number | null;
 }
@@ -203,10 +245,7 @@ export interface RuntimeHydrateReconcilePort {
   listDbLiveRuntimesForHost(hostId: string): DbLiveRuntime[];
   /** `status='crashed', pid=null` — the constant is in the name. `null` when
    *  the membership row is gone, which the caller skips. */
-  markCrashed(
-    conversationId: string,
-    agentId: string,
-  ): ConversationAgentDto | null;
+  markCrashed(runtime: DbLiveRuntime): boolean;
 }
 
 /** The roster a spawn's platform prompt is built from. */
@@ -220,14 +259,14 @@ export interface RuntimeMemberRosterPort {
  * these two — nothing else in the clear-session flow is durable.
  */
 export interface RuntimeSessionTxScope {
-  /** `cli_session_id=null`. `null` when the agent is no longer a member of the
-   *  conversation, which the caller turns into a throw — so a membership
-   *  removal racing the clear aborts the whole pair rather than committing
-   *  half of it. */
-  clearCliSession(
-    conversationId: string,
-    agentId: string,
-  ): ConversationAgentDto | null;
+  /** `cli_session_id=null` on the semantic runtime slot. Membership is a
+   * separate placement-aware precondition; the slot is the only runtime
+   * projection authority and AgentSlot has no roster row to return. */
+  clearCliSession(input: {
+    scope: RuntimePrincipalScope;
+    targetConversationId: string;
+    agentId: string;
+  }): Pick<ConversationAgentDto, 'status' | 'pid' | 'cli_session_id'> | null;
   /** `from_kind='system'`, decided by the method rather than per call site. */
   insertSystemMessage(input: {
     conversationId: string;
@@ -243,9 +282,9 @@ export interface RuntimeSessionTxScope {
  * This UoW claims ATOMICITY ONLY — no isolation level, because the flow has no
  * read-then-write invariant to protect: the pre-state it decides on
  * (`cli_session_id`, cache liveness) is read BEFORE the callback and only
- * chooses the audit text, and the membership precondition is enforced by
- * `clearCliSession`'s own UPDATE (zero rows changed ⇒ `null` ⇒ the caller
- * throws) rather than by a prior read.
+ * chooses the audit text. The placement-aware participation precondition is
+ * re-read by `clearCliSession` inside this same transaction; a racing removal
+ * yields `null` and the caller aborts the audit + slot write together.
  *
  * SQLite: a plain deferred `db.transaction(...)()` — the write lock is taken at
  * the first statement, and both statements are writes, so the pair cannot
@@ -270,6 +309,7 @@ export interface RuntimeFanoutPersistence {
   workspaces: RuntimeWorkspaceReadPort;
   users: RuntimeUserReadPort;
   hosts: RuntimeHostReadPort;
+  runtimeCustody: RuntimeCustodyPort;
   hydrateReconcile: RuntimeHydrateReconcilePort;
   session: RuntimeSessionUnitOfWork;
 }

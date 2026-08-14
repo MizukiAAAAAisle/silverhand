@@ -42,6 +42,7 @@ import type { AgentRepo } from '../repos/agent-repo.js';
 import type { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import type { ConversationRepo } from '../repos/conversation-repo.js';
 import type { MessageRepo } from '../repos/message-repo.js';
+import type { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import type { UserRepo } from '../repos/user-repo.js';
 import {
   type WorkspaceRepo,
@@ -82,6 +83,7 @@ export interface AgentsRouteDeps {
   conversations: ConversationRepo;
   messages: MessageRepo;
   conversationInboxes: ConversationInboxRepo;
+  runtimeSlots: RuntimeSlotRepo;
   users: UserRepo;
   /** #task:1990 — the L3a dependent-row transaction scope (wired at
    *  composition root; the use case never receives `BackendContext`). */
@@ -239,6 +241,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     conversations,
     messages,
     conversationInboxes,
+    runtimeSlots,
     users,
     agentProvisioning,
     agentTeardown,
@@ -561,7 +564,7 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     }
     try {
       const result = await switchAgentRuntime(
-        { ctx, agents, conversations, conversationInboxes },
+        { ctx, agents, runtimeSlots, conversationInboxes },
         {
           agentId: id,
           actorUserId: resolveViewerUserId(c),
@@ -894,7 +897,11 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     //  - `visible_conversation_agents` = DISPLAY roster (excludes archived),
     //    read only by the Activity pane. Filtering the *whole* response would
     //    gate the Stop control on display scope — a fail-closed leak.
-    // Stop-all (below) and delete-agent purge also use the complete view.
+    // Both arrays are SEATS with display coordinates attached, so a seat whose
+    // conversation carries no workspace (a DM, an inbox) is present here with
+    // null workspace fields rather than dropped. Stop-all (below) and the
+    // delete-agent purge take the coordinate-free `runtimeSlots.listSeats`
+    // instead — they act on the session, not on where it is displayed.
     return c.json({
       conversation_agents: agents.listRuntimeConversations(agent.id),
       visible_conversation_agents: agents.listRuntimeConversations(agent.id, {
@@ -975,9 +982,9 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     }
   });
 
-  // POST /stop — hard-stop every running conversation_agent for this
-  // agent. Returns the count we actually attempted to stop. No-op
-  // (200 with stopped: 0) when nothing is running.
+  // POST /stop — hard-stop every running semantic slot for this agent:
+  // one aggregate-owned AgentSlot, or each live ConversationSlot. Returns the
+  // count actually stopped. No-op (200 with stopped: 0) when none is live.
   app.post('/api/agents/:id/stop', async c => {
     const id = c.req.param('id');
     const agent = agents.get(id);
@@ -1010,27 +1017,48 @@ export function createAgentsApp(deps: AgentsRouteDeps): Hono<AppEnv> {
     //     stays a 200 because the bulk endpoint historically reports
     //     a count, not all-or-nothing; the unsuccessful conversations
     //     stay in `status='active'` and the user can retry.
-    const live = agents
-      .listRuntimeConversations(id)
-      .filter(s => s.status === 'starting' || s.status === 'active');
-    if (live.length === 0) {
+    // ONE read for both scopes: the slot table already discriminates them
+    // (`conversation_id IS NULL` is the AgentSlot), so the seat face answers
+    // "what is running for this agent" without the caller re-deriving the scope
+    // from `agents.session_scope` — and without a roster or a workspace join,
+    // which is what let a DM session keep running with nothing able to stop it.
+    const stops = runtimeSlots
+      .listSeats(id)
+      .filter(seat => seat.status === 'starting' || seat.status === 'active')
+      .map(seat => ({
+        // The coordinate comes OUT of the seat's identity; an AgentSlot has
+        // none, and `stop` takes `null` for exactly that case.
+        conversationId:
+          seat.scope.kind === 'conversation' ? seat.scope.conversationId : null,
+        scope: seat.scope,
+      }));
+    if (stops.length === 0) {
       return c.json({ stopped: 0 });
     }
     const settled = await Promise.allSettled(
-      live.map(s => ctx.runtimeHost.stop(s.conversation_id, id)),
+      // The scope comes from the SLOT being stopped, not from the agent's
+      // configured `session_scope`: the row is what is actually running, and
+      // asking the agent again would re-derive a fact the read already carried.
+      stops.map(stop =>
+        ctx.runtimeHost.stop(
+          stop.conversationId,
+          id,
+          stop.scope.kind === 'agent' ? { runtimeScope: stop.scope } : undefined,
+        ),
+      ),
     );
-    const failures: { conversationId: string; err: unknown }[] = [];
+    const failures: { conversationId: string | null; err: unknown }[] = [];
     let successCount = 0;
     settled.forEach((r, idx) => {
       if (r.status === 'fulfilled') {
         successCount += 1;
       } else {
         failures.push({
-          conversationId: live[idx]!.conversation_id,
+          conversationId: stops[idx]!.conversationId,
           err: r.reason,
         });
         ctx.logger.warn(
-          { conversationId: live[idx]!.conversation_id, agentId: id, err: r.reason },
+          { conversationId: stops[idx]!.conversationId, agentId: id, err: r.reason },
           'agent bulk stop: conversation stop failed',
         );
       }

@@ -62,6 +62,7 @@ import type {
   RuntimeOutputResumeResult,
   RuntimeStartParams,
   RuntimeStartResult,
+  RuntimeScope,
   RuntimeStateDto,
   RuntimeStatusParams,
   RuntimeStatusResult,
@@ -81,8 +82,10 @@ export type FakeSupervisorPhase =
   | 'exited';
 
 interface FakeRuntime {
+  runtime_scope: RuntimeScope;
   conversation_id: string;
   agent_id: string;
+  runtime_generation: number;
   pid: number;
   phase: FakeSupervisorPhase;
   started_at: number;
@@ -123,7 +126,27 @@ const DEFAULT_SCHEDULE = (cb: () => void): void => {
 };
 
 function key(conv: string, agent: string): string {
-  return `${conv}\x00${agent}`;
+  return scopeKey({ kind: 'conversation', conversation_id: conv, agent_id: agent });
+}
+
+function scopeKey(scope: RuntimeScope): string {
+  return scope.kind === 'agent'
+    ? `agent\x00${scope.agent_id}`
+    : `conversation\x00${scope.conversation_id}\x00${scope.agent_id}`;
+}
+
+type LegacyRuntimeCommand = {
+  conversation_id: string;
+  agent_id: string;
+  runtime_generation: number;
+};
+
+function commandScope(
+  params: { runtime_scope: RuntimeScope } | LegacyRuntimeCommand,
+): RuntimeScope {
+  return 'runtime_scope' in params
+    ? params.runtime_scope
+    : { kind: 'conversation', conversation_id: params.conversation_id, agent_id: params.agent_id };
 }
 
 export class FakeSupervisor {
@@ -185,7 +208,7 @@ export class FakeSupervisor {
   // ── runtime_start ──────────────────────────────────────────────
 
   start(params: RuntimeStartParams): RuntimeStartResult {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = scopeKey(params.options.runtime_scope);
     // Idempotent on (conv, agent) — second start while running is a
     // no-op that returns the existing pid + started_at, matching CM
     // today. #task:1417 Stage 2c: `runtime_start` is pure lifecycle —
@@ -193,6 +216,9 @@ export class FakeSupervisor {
     // `startup_delivery_accepted`), and there is no startup batch here.
     const existing = this.runtimes.get(k);
     if (existing && existing.phase !== 'exited') {
+      if (existing.runtime_generation !== params.runtime_generation) {
+        throw new Error('runtime generation mismatch');
+      }
       return {
         started: true,
         pid: existing.pid,
@@ -202,8 +228,10 @@ export class FakeSupervisor {
     const pid = this.nextPid++;
     const startedAt = this.now();
     const rt: FakeRuntime = {
+      runtime_scope: params.options.runtime_scope,
       conversation_id: params.conversation_id,
       agent_id: params.agent_id,
+      runtime_generation: params.runtime_generation,
       pid,
       phase: 'spawning',
       started_at: startedAt,
@@ -233,12 +261,15 @@ export class FakeSupervisor {
 
   // ── runtime_stop ───────────────────────────────────────────────
 
-  stop(params: RuntimeStopParams): RuntimeStopResult {
-    const k = key(params.conversation_id, params.agent_id);
+  stop(params: RuntimeStopParams | (LegacyRuntimeCommand & { mode: 'hard' })): RuntimeStopResult {
+    const k = scopeKey(commandScope(params));
     const rt = this.runtimes.get(k);
 
     // Hard stop = SIGTERM/SIGKILL cascade.
     if (!rt || rt.phase === 'exited') {
+      return { mode: 'hard', stopped: false, exit_code: null };
+    }
+    if (rt.runtime_generation !== params.runtime_generation) {
       return { mode: 'hard', stopped: false, exit_code: null };
     }
     rt.phase = 'draining';
@@ -258,7 +289,7 @@ export class FakeSupervisor {
   // ack rides the async unified event.
 
   deliver(params: RuntimeDeliverParams, _ctx?: DeliveryOwnerContext): RuntimeDeliverResult {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = scopeKey(params.spawn_options.runtime_scope);
     const rt = this.runtimes.get(k);
 
     // SPAWN arm — no live runtime.
@@ -266,8 +297,10 @@ export class FakeSupervisor {
       const pid = this.nextPid++;
       const startedAt = this.now();
       const next: FakeRuntime = {
+        runtime_scope: params.spawn_options.runtime_scope,
         conversation_id: params.conversation_id,
         agent_id: params.agent_id,
+        runtime_generation: params.runtime_generation,
         pid,
         phase: 'startup_pending',
         started_at: startedAt,
@@ -287,6 +320,9 @@ export class FakeSupervisor {
     if (rt.phase === 'spawning' || rt.phase === 'startup_pending') {
       return { disposition: 'refused', reason: 'startup_pending' };
     }
+    if (rt.runtime_generation !== params.runtime_generation) {
+      throw new Error('runtime generation mismatch');
+    }
 
     // WRITE arm — phase === 'ready'. Custody transferred; consumed ack
     // fires async.
@@ -294,8 +330,10 @@ export class FakeSupervisor {
       if (rt.phase !== 'ready') return;
       this.emit({
         event: 'runtime_delivery_consumed',
+        runtime_scope: rt.runtime_scope,
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         delivery_ids: [...params.delivery_ids],
         ts: this.now(),
       });
@@ -320,8 +358,10 @@ export class FakeSupervisor {
       }
       if (params.agent_id && params.agent_id !== rt.agent_id) continue;
       out.push({
+        runtime_scope: rt.runtime_scope,
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         pid: rt.phase === 'exited' ? null : rt.pid,
         phase: rt.phase,
         run_state: null,
@@ -333,10 +373,13 @@ export class FakeSupervisor {
 
   // ── runtime_clear_session ──────────────────────────────────────
 
-  clearSession(params: RuntimeClearSessionParams): RuntimeClearSessionResult {
-    const k = key(params.conversation_id, params.agent_id);
+  clearSession(params: RuntimeClearSessionParams | LegacyRuntimeCommand): RuntimeClearSessionResult {
+    const k = scopeKey(commandScope(params));
     const rt = this.runtimes.get(k);
     if (!rt || rt.phase === 'exited') return { cleared: false };
+    if (rt.runtime_generation !== params.runtime_generation) {
+      return { cleared: false };
+    }
     rt.phase = 'draining';
     // Phase change → emit runtime_state so backend snapshot reconcile
     // sees the draining intermediate (Cindy `9rxtrdT2NXfX2zEs`
@@ -395,13 +438,14 @@ export class FakeSupervisor {
   //  - resume() is the mirror.
 
   pauseOutput(params: RuntimeOutputPauseParams): RuntimeOutputPauseResult {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = scopeKey(params.runtime_scope);
     const rt = this.runtimes.get(k);
     if (!rt || rt.phase === 'exited') return { paused: false };
     if (rt.output_paused) return { paused: true };
     rt.output_paused = true;
     this.emit({
       event: 'runtime_output_paused',
+      runtime_scope: rt.runtime_scope,
       conversation_id: rt.conversation_id,
       agent_id: rt.agent_id,
     });
@@ -409,13 +453,14 @@ export class FakeSupervisor {
   }
 
   resumeOutput(params: RuntimeOutputResumeParams): RuntimeOutputResumeResult {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = scopeKey(params.runtime_scope);
     const rt = this.runtimes.get(k);
     if (!rt || rt.phase === 'exited') return { resumed: false };
     if (!rt.output_paused) return { resumed: true };
     rt.output_paused = false;
     this.emit({
       event: 'runtime_output_resumed',
+      runtime_scope: rt.runtime_scope,
       conversation_id: rt.conversation_id,
       agent_id: rt.agent_id,
     });
@@ -447,16 +492,20 @@ export class FakeSupervisor {
         this.emitState(rt, /* terminalReason */ 'crashed');
         this.emit({
           event: 'runtime_delivery_failed',
+          runtime_scope: rt.runtime_scope,
           conversation_id: rt.conversation_id,
           agent_id: rt.agent_id,
+          runtime_generation: rt.runtime_generation,
           delivery_ids: deliveryIds,
           reason: 'init_watchdog',
           ts: this.now(),
         });
         this.emit({
           event: 'runtime_exit',
+          runtime_scope: rt.runtime_scope,
           conversation_id: rt.conversation_id,
           agent_id: rt.agent_id,
+          runtime_generation: rt.runtime_generation,
           code: 1,
           intentional: false,
           ts: this.now(),
@@ -468,15 +517,19 @@ export class FakeSupervisor {
       this.emitState(rt);
       this.emit({
         event: 'runtime_delivery_consumed',
+        runtime_scope: rt.runtime_scope,
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         delivery_ids: deliveryIds,
         ts: this.now(),
       });
       this.emit({
         event: 'runtime_ready_for_drain',
+        runtime_scope: rt.runtime_scope,
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         ts: this.now(),
       });
     });
@@ -491,8 +544,10 @@ export class FakeSupervisor {
       this.emitState(rt);
       this.emit({
         event: 'runtime_ready_for_drain',
+        runtime_scope: rt.runtime_scope,
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         ts: this.now(),
       });
     });
@@ -509,8 +564,10 @@ export class FakeSupervisor {
       this.emitState(rt, intentional ? 'stopped' : 'crashed');
       this.emit({
         event: 'runtime_exit',
+        runtime_scope: rt.runtime_scope,
         conversation_id: rt.conversation_id,
         agent_id: rt.agent_id,
+        runtime_generation: rt.runtime_generation,
         code,
         intentional,
         ts: this.now(),
@@ -551,8 +608,10 @@ export class FakeSupervisor {
     const ts = this.now();
     this.emit({
       event: 'runtime_state',
+      runtime_scope: rt.runtime_scope,
       conversation_id: rt.conversation_id,
       agent_id: rt.agent_id,
+      runtime_generation: rt.runtime_generation,
       state: {
         runId: `fake-${rt.pid}-${rt.started_at}`,
         agentId: rt.agent_id,

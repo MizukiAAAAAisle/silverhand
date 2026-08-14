@@ -34,13 +34,13 @@ import {
   AgentCreateChannelInputSchema,
   AgentFollowThreadInputSchema,
   AgentListChannelsQuerySchema,
-  internalPaths,
   type AgentListWorkspacesDto,
   type AgentListedWorkspace,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
 import { requireAgentConversationCapability } from './capability-scope.js';
 import { resolveAgentQueryWorkspaceId } from './workspace-scope.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 /**
  * Build the cross-workspace `list_workspaces` payload for the calling
@@ -168,7 +168,7 @@ export function registerConversationRoutes(
 ): void {
   const { ctx, agentReads, conversations } = deps;
 
-  app.post(internalPaths.agentCreateChannel(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.createChannel, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -224,7 +224,7 @@ export function registerConversationRoutes(
     }
   });
 
-  app.post(internalPaths.agentFollowThread(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.followThread, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -261,7 +261,7 @@ export function registerConversationRoutes(
     }
   });
 
-  app.post(internalPaths.agentUnfollowThread(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.unfollowThread, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -295,7 +295,7 @@ export function registerConversationRoutes(
     }
   });
 
-  app.get(internalPaths.agentListWorkspaces(':cid', ':aid'), async c => {
+  app.get(internalAgentRoutePaths.listWorkspaces, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -329,7 +329,7 @@ export function registerConversationRoutes(
     return c.json(outcome.dto);
   });
 
-  app.get(internalPaths.agentListChannels(':cid', ':aid'), c => {
+  app.get(internalAgentRoutePaths.listChannels, c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {

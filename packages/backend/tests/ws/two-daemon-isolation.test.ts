@@ -81,12 +81,15 @@ import type { BackendLogger } from '../../src/context.js';
 import { HostTokenService } from '../../src/auth/host-token.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../src/auth/agent-token-store.js';
+import { conversationRuntimePrincipal } from '../../src/auth/runtime-principal.js';
 import type { EventPublisher } from '../../src/runtime/event-handler.js';
 import { createRuntimeFanoutDbDeps } from '../../src/adapters/runtime-fanout.js';
 import { OutboundRuntimeEventFanout } from '../../src/runtime/outbound-event-fanout.js';
+import { makeDaemonInstanceKey } from '../../src/runtime/daemon-instance-key.js';
 import {
   HOST_WS_PATH,
   installHostWebSocketServer,
@@ -104,6 +107,7 @@ interface TwoDaemonFixture {
   httpServer: HttpServer;
   controller: HostWsServerController;
   fanout: OutboundRuntimeEventFanout;
+  agentTokens: AgentTokenStore;
   events: Array<{ conv: string; kind: string; payload: unknown }>;
   warns: Array<{ obj: unknown; msg: string | undefined }>;
   hostX: HostInfo;
@@ -206,13 +210,14 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     res.end();
   });
   let controller: HostWsServerController | null = null;
+  const agentTokens = new AgentTokenStore();
   const fanout = new OutboundRuntimeEventFanout({
     ...createRuntimeFanoutDbDeps({ db, events: publisher, logger }),
     events: publisher,
     transport: () => controller,
     logger,
     silverhandCli: { command: 'silverhand', args: [] },
-    agentTokens: new AgentTokenStore(),
+    agentTokens,
     activityLog: null,
   });
   controller = installHostWebSocketServer(httpServer, t.ctx, {
@@ -231,6 +236,7 @@ async function makeTwoDaemonFixture(): Promise<TwoDaemonFixture> {
     httpServer,
     controller: controller!,
     fanout,
+    agentTokens,
     events,
     warns,
     hostX: {
@@ -310,6 +316,21 @@ async function attachAndRecord(
   const rec = await connectAndRecord(fixtureUrl(fix), host.hostToken);
   rec.ws.send(encodeOutboundFrame(readyEvent(daemonPid)));
   await waitFor(() => fix.controller.connectionIdForHost(host.id) !== null);
+  const claim = new RuntimeSlotRepo(fix.t.ctx.db).claimGeneration({
+    scope: {
+      kind: 'conversation',
+      conversationId: host.channelId,
+      agentId: host.agentId,
+    },
+    daemonInstanceId: makeDaemonInstanceKey(daemonPid, 1700000000000),
+  });
+  if (!claim) throw new Error('failed to claim runtime fixture');
+  fix.agentTokens.issue(conversationRuntimePrincipal({
+    conversationId: host.channelId,
+    agentId: host.agentId,
+    generation: claim.generation,
+    daemonInstanceId: makeDaemonInstanceKey(daemonPid, 1700000000000),
+  }));
   return rec;
 }
 
@@ -345,9 +366,11 @@ function legitimateParsedEvent(
   sessionId: string,
 ): OutboundDaemonToServerEventFrame {
   return {
+    runtime_generation: 1,
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',
+    runtime_scope: { kind: 'conversation', conversation_id: conversationId, agent_id: agentId },
     conversation_id: conversationId,
     agent_id: agentId,
     parsed: { kind: 'session_init', sessionId },
@@ -619,8 +642,14 @@ describe('D4.c C6 — two-daemon isolation e2e', () => {
         result: {
           runtimes: [
             {
+              runtime_scope: {
+                kind: 'conversation',
+                conversation_id: fix.hostX.channelId,
+                agent_id: fix.hostX.agentId,
+              },
               conversation_id: fix.hostX.channelId,
               agent_id: fix.hostX.agentId,
+              runtime_generation: 1,
               pid: 123,
               phase: 'ready',
               run_state: {

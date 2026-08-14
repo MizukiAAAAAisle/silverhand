@@ -43,6 +43,7 @@ import { ConversationInboxRepo } from '../repos/conversation-inbox-repo.js';
 import { ConversationRepo } from '../repos/conversation-repo.js';
 import { HostRepo } from '../repos/host-repo.js';
 import { MessageRepo } from '../repos/message-repo.js';
+import { RuntimeSlotRepo } from '../repos/runtime-slot-repo.js';
 import { UserRepo } from '../repos/user-repo.js';
 import { WorkspaceRepo } from '../repos/workspace-repo.js';
 import { MembershipService } from '../services/membership-service.js';
@@ -63,6 +64,31 @@ import type {
 import { singleConversationViewerUserId } from '../viewer-scope.js';
 import type { BackendLogger } from '../context.js';
 import type { EventPublisher } from '../runtime/event-handler.js';
+import {
+  agentRuntimePrincipal,
+  conversationRuntimePrincipal,
+  type RuntimePrincipal,
+  type RuntimePrincipalScope,
+} from '../auth/runtime-principal.js';
+
+function principalForScope(input: {
+  scope: RuntimePrincipalScope;
+  generation: number;
+  daemonInstanceId: string;
+}): RuntimePrincipal {
+  return input.scope.kind === 'agent'
+    ? agentRuntimePrincipal({
+        agentId: input.scope.agentId,
+        generation: input.generation,
+        daemonInstanceId: input.daemonInstanceId,
+      })
+    : conversationRuntimePrincipal({
+        conversationId: input.scope.conversationId,
+        agentId: input.scope.agentId,
+        generation: input.generation,
+        daemonInstanceId: input.daemonInstanceId,
+      });
+}
 
 /**
  * Everything `OutboundRuntimeEventFanout` needs that is DB-backed. Spread into
@@ -122,6 +148,7 @@ export function createRuntimeFanoutDbDeps(deps: {
   const hosts = new HostRepo(deps.db);
   const inbox = new ConversationInboxRepo(deps.db);
   const messages = new MessageRepo(deps.db);
+  const runtimeSlots = new RuntimeSlotRepo(deps.db);
   const users = new UserRepo(deps.db);
   const workspaces = new WorkspaceRepo(deps.db);
 
@@ -131,6 +158,8 @@ export function createRuntimeFanoutDbDeps(deps: {
         inbox.ensureDelivery(conversationId, agentId, messageId),
       listPending: (conversationId, agentId) =>
         inbox.listPending(conversationId, agentId).map(toRuntimeInboxDelivery),
+      listPendingConversationIdsForAgent: agentId =>
+        inbox.listPendingConversationIdsForAgent(agentId),
       claimPending: (conversationId, agentId, inFlightOwner) =>
         inbox
           .claimPending(conversationId, agentId, inFlightOwner)
@@ -142,9 +171,8 @@ export function createRuntimeFanoutDbDeps(deps: {
         inbox.hasUndeliveredForPair(conversationId, agentId),
       countInFlightForPairOwner: (conversationId, agentId, inFlightOwner) =>
         inbox.countInFlightForPairOwner(conversationId, agentId, inFlightOwner),
-      markDelivered: inboxIds => {
-        inbox.markDelivered([...inboxIds]);
-      },
+      settleDelivered: input => inbox.settleDelivered(input),
+      settleUndelivered: input => inbox.settleUndelivered(input),
       rollbackInFlight: (inboxIds, inFlightOwner) => {
         inbox.rollbackInFlight(inboxIds, inFlightOwner);
       },
@@ -167,6 +195,8 @@ export function createRuntimeFanoutDbDeps(deps: {
     },
     conversations: {
       get: conversationId => conversations.get(conversationId),
+      isAgentParticipant: (conversationId, agentId) =>
+        conversations.isAgentParticipant(conversationId, agentId),
       getAgent: (conversationId, agentId) =>
         conversations.getAgent(conversationId, agentId),
       listAgents: conversationId => conversations.listAgents(conversationId),
@@ -192,19 +222,78 @@ export function createRuntimeFanoutDbDeps(deps: {
         return view;
       },
     },
+    runtimeCustody: {
+      cliSessionId: scope => runtimeSlots.get(scope)?.cli_session_id ?? null,
+      current: scope => {
+        const row = runtimeSlots.get(scope);
+        if (!row || !row.claimed_by_daemon_instance_id) return null;
+        return principalForScope({
+          scope,
+          generation: row.generation,
+          daemonInstanceId: row.claimed_by_daemon_instance_id,
+        });
+      },
+      claim: ({ scope, daemonInstanceId }) => {
+        const row = runtimeSlots.claimGeneration({
+          scope,
+          daemonInstanceId,
+        });
+        return row
+          ? principalForScope({
+              scope,
+              generation: row.generation,
+              daemonInstanceId,
+            })
+          : null;
+      },
+      finalize: input => {
+        const row = runtimeSlots.finalizeGeneration({
+          scope: input.scope,
+          expectedGeneration: input.generation,
+          expectedDaemonInstanceId: input.daemonInstanceId,
+          status: input.status,
+        });
+        return row
+          ? principalForScope({
+              scope: input.scope,
+              generation: row.generation,
+              daemonInstanceId: input.daemonInstanceId,
+            })
+          : null;
+      },
+    },
     hydrateReconcile: {
       listDbLiveRuntimesForHost: hostId =>
-        conversations.listLiveRuntimesForHost(hostId).map<DbLiveRuntime>(row => ({
-          conversationId: row.conversation_id,
+        runtimeSlots.listLiveSlotsForHost(hostId).map<DbLiveRuntime>(row => ({
+          scope: row.conversation_id === null
+            ? { kind: 'agent', agentId: row.agent_id }
+            : {
+                kind: 'conversation',
+                conversationId: row.conversation_id,
+                agentId: row.agent_id,
+              },
+          focusConversationId: row.conversation_id,
           agentId: row.agent_id,
-          status: row.status,
-          pid: row.pid,
+          generation: row.generation,
+          daemonInstanceId: row.claimed_by_daemon_instance_id,
+          status: row.observed_status as 'active' | 'starting',
+          pid: row.observed_pid,
         })),
-      markCrashed: (conversationId, agentId) =>
-        conversations.updateAgentRuntime(conversationId, agentId, {
-          status: 'crashed',
-          pid: null,
-        }),
+      markCrashed: runtime => {
+        const scope = runtime.scope;
+        const updated = runtime.daemonInstanceId
+          ? runtimeSlots.finalizeGeneration({
+              scope,
+              expectedGeneration: runtime.generation,
+              expectedDaemonInstanceId: runtime.daemonInstanceId,
+              status: 'crashed',
+            })
+          : runtimeSlots.updateCurrentProjection(scope, {
+              status: 'crashed',
+              pid: null,
+            });
+        return updated !== null;
+      },
     },
     session: {
       // Plain deferred transaction: both statements are writes, so the write
@@ -215,10 +304,20 @@ export function createRuntimeFanoutDbDeps(deps: {
       atomically: fn =>
         deps.db.transaction(() =>
           fn({
-            clearCliSession: (conversationId, agentId) =>
-              conversations.updateAgentRuntime(conversationId, agentId, {
-                cliSessionId: null,
-              }),
+            clearCliSession: input => {
+              if (!conversations.isAgentParticipant(
+                input.targetConversationId,
+                input.agentId,
+              )) return null;
+              const slot = runtimeSlots.clearCliSession(input.scope);
+              return slot
+                ? {
+                    status: slot.observed_status,
+                    pid: slot.observed_pid,
+                    cli_session_id: slot.cli_session_id,
+                  }
+                : null;
+            },
             insertSystemMessage: input =>
               messages.insertForConversation({
                 conversationId: input.conversationId,
@@ -248,7 +347,7 @@ export function createRuntimeFanoutDbDeps(deps: {
     }),
     // DB-backed but stateless — the whole runtime-event → status mapping lives
     // in the projector, so ONE instance serves every host the fanout tracks.
-    statusProjector: new DbRuntimeStatusProjector(conversations, deps.events),
+    statusProjector: new DbRuntimeStatusProjector(runtimeSlots, deps.events),
     conversationActivity: conversationEvents,
   };
 }

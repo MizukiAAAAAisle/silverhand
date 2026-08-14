@@ -31,6 +31,7 @@ import { MessageRepo } from '../../src/repos/message-repo.js';
 import { UserRepo } from '../../src/repos/user-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { RuntimeHostPlacementResolver } from '../../src/runtime/host-placement.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { ScopeEventBus } from '../../src/ws/scope-event-bus.js';
 import {
   FakeConversationManager,
@@ -345,5 +346,70 @@ describe('createAgent provisioning failure (application integration)', () => {
     expect(runtimeHost.delivered).toHaveLength(0);
     expect(runtimeHost.starts).toHaveLength(0);
     expect(fakeHostWs.calls.some(c => c.kind === 'agent_materialize')).toBe(true);
+  });
+
+  it('AgentSlot materializes only L1: no home/DM/onboarding graph and one agent-scoped runtime slot', async () => {
+    const { db, deps, runtimeHost, fakeHostWs } = buildDeps();
+    const idempotencyKey = freshKey();
+    const result = await createAgent(deps, {
+      input: {
+        name: 'app-provision-agent-slot',
+        runtime: 'claude',
+        session_scope: 'agent',
+      },
+      idempotencyKey,
+      retry: false,
+      creatorUserId: 'local',
+    });
+
+    expect(result.kind).toBe('created');
+    if (result.kind !== 'created') return;
+    const agentId = result.payload.agent.id;
+    expect(result.payload).toMatchObject({
+      agent: { session_scope: 'agent' },
+      agentHomeWorkspaceId: null,
+      dmChannelId: null,
+      onboardingMessageId: null,
+    });
+    expect(
+      db.prepare<[string], { c: number }>(
+        'SELECT COUNT(*) AS c FROM workspaces WHERE owner_agent_id = ?',
+      ).get(agentId)!.c,
+    ).toBe(0);
+    expect(
+      db.prepare<[string], { c: number }>(
+        'SELECT COUNT(*) AS c FROM conversation_agents WHERE agent_id = ?',
+      ).get(agentId)!.c,
+    ).toBe(0);
+    const slots = new RuntimeSlotRepo(db);
+    expect(slots.getAgent(agentId)).toMatchObject({
+      agent_id: agentId,
+      conversation_id: null,
+      generation: 0,
+    });
+    expect(result.effects).toHaveLength(1);
+    expect(runtimeHost.delivered).toHaveLength(0);
+    expect(runtimeHost.starts).toHaveLength(0);
+    expect(fakeHostWs.calls.some(c => c.kind === 'agent_materialize')).toBe(true);
+
+    const echo = await createAgent(deps, {
+      input: {
+        name: 'app-provision-agent-slot',
+        runtime: 'claude',
+        session_scope: 'agent',
+      },
+      idempotencyKey,
+      retry: false,
+      creatorUserId: 'local',
+    });
+    expect(echo).toMatchObject({
+      kind: 'echo',
+      payload: {
+        agent: { id: agentId, session_scope: 'agent' },
+        agentHomeWorkspaceId: null,
+        dmChannelId: null,
+        onboardingMessageId: null,
+      },
+    });
   });
 });

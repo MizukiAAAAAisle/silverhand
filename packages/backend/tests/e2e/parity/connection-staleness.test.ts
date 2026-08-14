@@ -43,12 +43,15 @@ import type { BackendLogger } from '../../../src/context.js';
 import { HostTokenService } from '../../../src/auth/host-token.js';
 import { AgentRepo } from '../../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../../src/repos/host-repo.js';
 import { WorkspaceRepo } from '../../../src/repos/workspace-repo.js';
 import { AgentTokenStore } from '../../../src/auth/agent-token-store.js';
+import { conversationRuntimePrincipal } from '../../../src/auth/runtime-principal.js';
 import type { EventPublisher } from '../../../src/runtime/event-handler.js';
 import { createRuntimeFanoutDbDeps } from '../../../src/adapters/runtime-fanout.js';
 import { OutboundRuntimeEventFanout } from '../../../src/runtime/outbound-event-fanout.js';
+import { makeDaemonInstanceKey } from '../../../src/runtime/daemon-instance-key.js';
 import {
   HOST_WS_PATH,
   installHostWebSocketServer,
@@ -90,13 +93,16 @@ function sessionInitEvent(
   conversationId: string,
   agentId: string,
   sessionId: string,
+  runtimeGeneration: number,
 ): OutboundDaemonToServerEventFrame {
   return {
     direction: 'daemon_to_server',
     type: 'event',
     kind: 'runtime_parsed_event',
+    runtime_scope: { kind: 'conversation', conversation_id: conversationId, agent_id: agentId },
     conversation_id: conversationId,
     agent_id: agentId,
+    runtime_generation: runtimeGeneration,
     parsed: { kind: 'session_init', sessionId },
     ts: 1700000000000,
   };
@@ -114,6 +120,7 @@ interface StandaloneStalenessFixture {
   conversationId: string;
   agentId: string;
   cliSessionId: () => string | null;
+  claimRuntime: (daemonPid: number) => number;
   cleanup: () => Promise<void>;
 }
 
@@ -151,13 +158,14 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     res.end();
   });
   let controller: HostWsServerController | null = null;
+  const agentTokens = new AgentTokenStore();
   const fanout = new OutboundRuntimeEventFanout({
     ...createRuntimeFanoutDbDeps({ db, events: publisher, logger }),
     events: publisher,
     transport: () => controller,
     logger,
     silverhandCli: { command: 'silverhand', args: [] },
-    agentTokens: new AgentTokenStore(),
+    agentTokens,
     activityLog: null,
   });
   controller = installHostWebSocketServer(httpServer, t.ctx, {
@@ -178,11 +186,29 @@ async function makeStandaloneStalenessFixture(): Promise<StandaloneStalenessFixt
     hostToken,
     conversationId: channel.id,
     agentId: agent.id,
+    claimRuntime: daemonPid => {
+      const claimed = new RuntimeSlotRepo(db).claimGeneration({
+        scope: {
+          kind: 'conversation',
+          conversationId: channel.id,
+          agentId: agent.id,
+        },
+        daemonInstanceId: makeDaemonInstanceKey(daemonPid, 1700000000000),
+      });
+      if (!claimed) throw new Error('runtime claim failed');
+      agentTokens.issue(conversationRuntimePrincipal({
+        conversationId: channel.id,
+        agentId: agent.id,
+        generation: claimed.generation,
+        daemonInstanceId: makeDaemonInstanceKey(daemonPid, 1700000000000),
+      }));
+      return claimed.generation;
+    },
     cliSessionId: () =>
       (
         db
           .prepare(
-            `SELECT cli_session_id FROM conversation_agents
+            `SELECT cli_session_id FROM agent_runtime_slots
               WHERE conversation_id = ? AND agent_id = ?`,
           )
           .get(channel.id, agent.id) as { cli_session_id: string | null } | undefined
@@ -246,8 +272,14 @@ describe('D5.a-4 — standalone connection staleness (real WS replacement)', () 
     expect(fix.controller.connectionIdForHost(fix.hostId)).toBe(c1);
 
     // The incumbent connection still handles live events.
+    const generation = fix.claimRuntime(101);
     d1.ws.send(
-      encodeOutboundFrame(sessionInitEvent(fix.conversationId, fix.agentId, 'LIVE-from-incumbent')),
+      encodeOutboundFrame(sessionInitEvent(
+        fix.conversationId,
+        fix.agentId,
+        'LIVE-from-incumbent',
+        generation,
+      )),
     );
     await waitFor(() => (fix!.cliSessionId() === 'LIVE-from-incumbent' ? true : null), {
       label: 'live-connection session_init projected',

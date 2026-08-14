@@ -43,7 +43,14 @@ export interface StrictFlagOptions {
  * so agents (and the platform prompt) can rely on `--json` without each
  * command having to redeclare it.
  */
-export const GLOBAL_NOOP_FLAGS: ReadonlySet<string> = new Set(['json']);
+export const GLOBAL_NOOP_FLAGS: ReadonlySet<string> = new Set([
+  'json',
+  // AgentSlot runtimes have no ambient conversation. Every invocation supplies
+  // its canonical ROUTE coordinate explicitly; command-local
+  // `--conversation-id` remains a separate request range/destination axis.
+  // ConversationSlot callers omit this and retain the injected route.
+  'route-conversation-id',
+]);
 
 /** Throw `CliError` with code `validation_error` if any observed flag
  *  is incompatible with the command:

@@ -18,9 +18,9 @@ import {
   ScheduleCancelInputSchema,
   ScheduleCreateInputSchema,
   ScheduleListInputSchema,
-  internalPaths,
 } from '@silverhand/shared';
 import type { InternalRouteDeps } from './deps.js';
+import { internalAgentRoutePaths } from './paths.js';
 
 export function registerScheduleRoutes(
   app: Hono<AppEnv>,
@@ -28,7 +28,7 @@ export function registerScheduleRoutes(
 ): void {
   const { ctx } = deps;
 
-  app.post(internalPaths.agentScheduleCreate(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.schedules, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -57,7 +57,7 @@ export function registerScheduleRoutes(
     }
   });
 
-  app.post(internalPaths.agentScheduleList(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.scheduleList, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {
@@ -80,7 +80,7 @@ export function registerScheduleRoutes(
     return c.json({ schedules });
   });
 
-  app.post(internalPaths.agentScheduleCancel(':cid', ':aid'), async c => {
+  app.post(internalAgentRoutePaths.scheduleCancel, async c => {
     const cid = c.req.param('cid');
     const aid = c.req.param('aid');
     if (!cid || !aid) {

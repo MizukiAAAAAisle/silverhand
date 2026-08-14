@@ -40,6 +40,13 @@ export interface ConversationDeliveryRecord {
   deliveredAt: number | null;
 }
 
+export interface ConversationInboxSettlement {
+  conversationId: string;
+  agentId: string;
+  inFlightOwner: string;
+  inboxIds: readonly number[];
+}
+
 export class ConversationInboxRepo {
   constructor(private readonly db: Db) {}
 
@@ -95,20 +102,90 @@ export class ConversationInboxRepo {
     }));
   }
 
-  markDelivered(inboxIds: number[]): void {
-    if (inboxIds.length === 0) return;
+  /** Every origin conversation with pending custody for one AgentSlot.
+   * Ordered by first inbox id so reconnect replay preserves global arrival
+   * order across targets without treating Board/workspace as authority. */
+  listPendingConversationIdsForAgent(agentId: string): string[] {
+    return this.db
+      .prepare<[string], { conversation_id: string }>(
+        `SELECT conversation_id
+           FROM conversation_inboxes
+          WHERE agent_id = ?
+            AND delivered_at IS NULL
+            AND failed_at IS NULL
+            AND in_flight_owner IS NULL
+          GROUP BY conversation_id
+          ORDER BY MIN(id) ASC`,
+      )
+      .all(agentId)
+      .map(row => row.conversation_id);
+  }
+
+  settleDelivered(settlement: ConversationInboxSettlement): boolean {
+    return this.settle(settlement, 'delivered');
+  }
+
+  settleUndelivered(settlement: ConversationInboxSettlement): boolean {
+    return this.settle(settlement, 'pending');
+  }
+
+  private settle(
+    settlement: ConversationInboxSettlement,
+    disposition: 'delivered' | 'pending',
+  ): boolean {
+    const inboxIds = [...settlement.inboxIds];
+    if (inboxIds.length === 0 || new Set(inboxIds).size !== inboxIds.length) {
+      return false;
+    }
     const now = Date.now();
-    const stmt = this.db.prepare(
-      `UPDATE conversation_inboxes
-          SET delivered_at = ?,
-              in_flight_owner = NULL,
-              in_flight_at = NULL
-        WHERE id = ?`,
+    const owns = this.db.prepare(
+      `SELECT 1
+         FROM conversation_inboxes
+        WHERE id = ?
+          AND conversation_id = ?
+          AND agent_id = ?
+          AND in_flight_owner = ?
+          AND delivered_at IS NULL
+          AND failed_at IS NULL`,
     );
-    const tx = this.db.transaction((ids: number[]) => {
-      for (const id of ids) stmt.run(now, id);
+    const delivered = this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET delivered_at = ?, in_flight_owner = NULL, in_flight_at = NULL
+        WHERE id = ? AND conversation_id = ? AND agent_id = ?
+          AND in_flight_owner = ? AND delivered_at IS NULL AND failed_at IS NULL`,
+    );
+    const pending = this.db.prepare(
+      `UPDATE conversation_inboxes
+          SET in_flight_owner = NULL, in_flight_at = NULL
+        WHERE id = ? AND conversation_id = ? AND agent_id = ?
+          AND in_flight_owner = ? AND delivered_at IS NULL AND failed_at IS NULL`,
+    );
+    const tx = this.db.transaction(() => {
+      for (const id of inboxIds) {
+        if (!owns.get(
+          id,
+          settlement.conversationId,
+          settlement.agentId,
+          settlement.inFlightOwner,
+        )) return false;
+      }
+      for (const id of inboxIds) {
+        const args = [
+          id,
+          settlement.conversationId,
+          settlement.agentId,
+          settlement.inFlightOwner,
+        ] as const;
+        const changes = disposition === 'delivered'
+          ? delivered.run(now, ...args).changes
+          : pending.run(...args).changes;
+        if (changes !== 1) {
+          throw new Error('conversation inbox settlement lost custody inside transaction');
+        }
+      }
+      return true;
     });
-    tx(inboxIds);
+    return tx.exclusive();
   }
 
   claimPending(

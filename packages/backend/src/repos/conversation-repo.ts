@@ -6,12 +6,18 @@ import {
   CURRENT_NAME_UNALIASED,
 } from './conversation-name-sql.js';
 import { ConversationNameRepo } from './conversation-name-repo.js';
-import { AGENT_INBOX_TITLE, requireWorkspacePlacement } from '@silverhand/shared';
+import {
+  AGENT_INBOX_TITLE,
+  canonicalEndpointOrder,
+  requireWorkspacePlacement,
+} from '@silverhand/shared';
 import type {
   ChannelConversationDto,
   ConversationAgentDto,
   ConversationAgentRow,
+  ConversationAgentStatus,
   ConversationDto,
+  ConversationEndpointIdentity,
   ConversationPlacementKind,
   ConversationRosterPolicy,
   ConversationRow,
@@ -23,9 +29,71 @@ import type {
   WorkspaceChannelListItem,
 } from '@silverhand/shared';
 
+type ConversationAgentProjectionRow = ConversationAgentRow & {
+  cli_session_id: string | null;
+  pid: number | null;
+  status: ConversationAgentStatus;
+};
+
+/**
+ * Membership stays on `conversation_agents`; runtime fields are joined from
+ * the slot selected by the Agent's immutable session_scope. This is a read
+ * projection only — no runtime writer may target the membership table.
+ *
+ * The join is LEFT, and that is load-bearing rather than defensive. v75 made the
+ * seat belong to PARTICIPATION (placement-derived) instead of to the roster, so
+ * the two tables no longer imply each other in either direction: a rosterless
+ * placement has seats with no roster row, and a roster row injected on such a
+ * placement — an INERT row by design, since the endpoints/inbox column decide
+ * participation there — has no seat. Under an INNER JOIN that inert row
+ * DISAPPEARED from the membership face, which made `addAgent` throw
+ * "insert failed" on a row it had just written and made `getAgent` deny a row
+ * that exists. Membership is not derived from runtime; a seatless member is a
+ * member with no process, which is precisely what `idle` means (and the value a
+ * freshly created seat carries anyway).
+ *
+ * The target form splits this DTO instead of coalescing — membership rows have no
+ * process fields at all, and the runtime face is `agent_runtime_slots` — but the
+ * three fields are on the wire (`/runtime-state`, the Stop gate), so that split
+ * belongs to the read-surface ticket (#task:2022) with the renderer half.
+ */
+const CONVERSATION_AGENT_PROJECTION_SQL = `
+  SELECT ca.conversation_id,
+         ca.agent_id,
+         ca.joined_at,
+         s.cli_session_id,
+         s.observed_pid AS pid,
+         COALESCE(s.observed_status, 'idle') AS status
+    FROM conversation_agents ca
+    JOIN agents a ON a.id = ca.agent_id
+    LEFT JOIN agent_runtime_slots s
+      ON s.agent_id = ca.agent_id
+     AND (
+       (a.session_scope = 'conversation'
+        AND s.conversation_id = ca.conversation_id)
+       OR
+       (a.session_scope = 'agent'
+        AND s.conversation_id IS NULL)
+     )`;
+
 function newId(): string {
   return randomBytes(12).toString('base64url');
 }
+
+/**
+ * What a `direct_pair` row stores in `title`: NOTHING.
+ *
+ * `title` is the workspace arm's display state. A DM has no single label — it is
+ * "the other principal" and therefore per-viewer — so the DirectPair aggregate
+ * DERIVES its label from its endpoints at read time (#task:2022) instead of
+ * freezing one at creation, which would then be wrong the moment a handle
+ * changed. The empty string says "no stored title" honestly; a plausible-looking
+ * placeholder ('Direct message', a handle) would ship a stale label to whatever
+ * generic surface rendered it first.
+ *
+ * Exported so a test can assert the absence rather than pin a literal twice.
+ */
+export const DIRECT_PAIR_STORED_TITLE = '';
 
 /**
  * The MINIMAL conversation projection: the id that names a conversation and the
@@ -57,6 +125,12 @@ export interface ConversationIdentity {
   visibility: ConversationVisibility;
   archived_at: number | null;
   placement_kind: ConversationPlacementKind;
+  /** Whether the participant set can be CHANGED at all, which is a different
+   *  question from who is in it — and the one `kind` cannot answer, being a
+   *  generated projection of this column plus history. Carried on identity
+   *  because the ACL asks it (`canAddConversationMember`, @Cindy M1 on
+   *  #task:2020) before it asks anything about the caller. */
+  roster_policy: ConversationRosterPolicy;
   workspace_id: string | null;
   inbox_agent_id: string | null;
   endpoint_a_kind: ConversationRow['endpoint_a_kind'];
@@ -65,6 +139,12 @@ export interface ConversationIdentity {
   endpoint_b_id: string | null;
   endpoint_a_deleted_at: number | null;
   endpoint_b_deleted_at: number | null;
+  /** The `direct_pair` identity scalar, DB-derived from the four endpoint
+   *  coordinates (v74). Carried on identity because it IS the aggregate's name
+   *  outside this table — P0-f keys the task board on `'pair:' || pair_key` — so
+   *  the consumer reads it instead of re-deriving the byte format. `null` for
+   *  every other placement. */
+  pair_key: string | null;
 }
 
 /**
@@ -108,13 +188,15 @@ export const WORKSPACE_CONVERSATION_REFS_FOR_USER_SQL = `SELECT c.id AS id, c.wo
 // becomes a DTO — the type drops it too, but stripping kills the runtime leak.
 //
 // `placement_kind` / `roster_policy` (v69, agent-scoped-session-v1 §4.1),
-// `inbox_agent_id` (v71) and the six `endpoint_*` columns (v73) are stripped for
+// `inbox_agent_id` (v71), the six `endpoint_*` columns (v73) and the derived
+// `pair_key` (v74) are stripped for
 // a different reason: they are the new AUTHORITATIVE axes, but the wire contract
 // for this release still speaks only the derived `kind` (plus the now-nullable
 // `workspace_id`). Exposing them here would ship an unversioned DTO change from a
 // migration-only ticket (#task:2012 / #task:2017); the placement-aware wire shape
-// lands with the placements themselves — for `direct_pair`, with P3, which is
-// also where deciding how a tombstoned endpoint RENDERS belongs. A spread does
+// lands with the placements themselves — for `direct_pair`, with the DirectPair
+// board / DM read surfaces (#task:2022), which is also where deciding how a
+// tombstoned endpoint RENDERS belongs. A spread does
 // NOT get excess-property-checked, so — exactly like `pinned_at` — only the
 // explicit strip prevents a silent runtime leak.
 // Consumers that legitimately need placement ask `getIdentity` for it.
@@ -130,6 +212,7 @@ function stripInternalColumns(row: ConversationRow): Omit<
   | 'endpoint_b_id'
   | 'endpoint_a_deleted_at'
   | 'endpoint_b_deleted_at'
+  | 'pair_key'
 > {
   const {
     pinned_at: _pinnedAt,
@@ -142,6 +225,7 @@ function stripInternalColumns(row: ConversationRow): Omit<
     endpoint_b_id: _endpointBId,
     endpoint_a_deleted_at: _endpointADeletedAt,
     endpoint_b_deleted_at: _endpointBDeletedAt,
+    pair_key: _pairKey,
     ...rest
   } = row;
   return rest;
@@ -150,7 +234,9 @@ function stripInternalColumns(row: ConversationRow): Omit<
 /** Row → {@link ConversationIdentity}: the ONE projection, so a second identity
  *  read cannot quietly omit a placement column (a missing `endpoint_*` would
  *  read as "no endpoints", which on the write gate fails OPEN). Every field is
- *  a column of `conversations`; queries feeding this must select all of them. */
+ *  a column of `conversations`; queries feeding this must select all of them —
+ *  which is why they all interpolate {@link IDENTITY_COLUMNS} rather than each
+ *  listing the set again. */
 function rowToIdentity(row: ConversationRow): ConversationIdentity {
   return {
     id: row.id,
@@ -158,6 +244,7 @@ function rowToIdentity(row: ConversationRow): ConversationIdentity {
     visibility: row.visibility,
     archived_at: row.archived_at,
     placement_kind: row.placement_kind,
+    roster_policy: row.roster_policy,
     workspace_id: row.workspace_id,
     inbox_agent_id: row.inbox_agent_id,
     endpoint_a_kind: row.endpoint_a_kind,
@@ -166,8 +253,19 @@ function rowToIdentity(row: ConversationRow): ConversationIdentity {
     endpoint_b_id: row.endpoint_b_id,
     endpoint_a_deleted_at: row.endpoint_a_deleted_at,
     endpoint_b_deleted_at: row.endpoint_b_deleted_at,
+    pair_key: row.pair_key,
   };
 }
+
+/** The column list every {@link rowToIdentity} feeder selects, spelled once. Not
+ *  `SELECT *`: identity reads are placement decisions, and `*` would make the
+ *  projection depend on whichever columns the table happens to have. */
+const IDENTITY_COLUMNS = `id, kind, visibility, archived_at,
+       placement_kind, roster_policy, workspace_id, inbox_agent_id,
+       endpoint_a_kind, endpoint_a_id,
+       endpoint_b_kind, endpoint_b_id,
+       endpoint_a_deleted_at, endpoint_b_deleted_at,
+       pair_key`;
 
 function rowToDto(row: ConversationRow): ConversationDto {
   return { ...stripInternalColumns(row) };
@@ -262,11 +360,7 @@ export class ConversationRepo {
   getIdentity(id: string): ConversationIdentity | null {
     const row = this.db
       .prepare<[string], ConversationRow>(
-        `SELECT id, kind, visibility, archived_at,
-                placement_kind, workspace_id, inbox_agent_id,
-                endpoint_a_kind, endpoint_a_id,
-                endpoint_b_kind, endpoint_b_id,
-                endpoint_a_deleted_at, endpoint_b_deleted_at
+        `SELECT ${IDENTITY_COLUMNS}
            FROM conversations WHERE id = ?`,
       )
       .get(id);
@@ -291,16 +385,118 @@ export class ConversationRepo {
   getAgentInbox(agentId: string): ConversationIdentity | null {
     const row = this.db
       .prepare<[string], ConversationRow>(
-        `SELECT id, kind, visibility, archived_at,
-                placement_kind, workspace_id, inbox_agent_id,
-                endpoint_a_kind, endpoint_a_id,
-                endpoint_b_kind, endpoint_b_id,
-                endpoint_a_deleted_at, endpoint_b_deleted_at
+        `SELECT ${IDENTITY_COLUMNS}
            FROM conversations
           WHERE inbox_agent_id = ? AND placement_kind = 'agent_inbox'`,
       )
       .get(agentId);
     return row ? rowToIdentity(row) : null;
+  }
+
+  /**
+   * The ONE conversation two principals share as a `direct_pair` (§4.1), or
+   * `null`. Keyed on the four endpoint COORDINATES, in whichever order the caller
+   * holds them — {@link canonicalEndpointOrder} normalizes, so `(x, y)` and
+   * `(y, x)` are the same aggregate and not two rows racing for one DM.
+   *
+   * Keyed on the coordinates rather than on the derived `pair_key` on purpose:
+   * that key's byte format is defined by the v74 migration and must not be
+   * re-implemented here, so the lookup that a caller reaches for is the one whose
+   * inputs it already has. `idx_conversations_direct_pair_endpoints` (partial
+   * UNIQUE) makes "at most one" a schema fact, so this returns a row and not a
+   * list.
+   *
+   * Tombstones are NOT filtered: a DM whose other endpoint's principal is gone is
+   * still the DM those two shared, which is the entire reason an endpoint is a
+   * historical coordinate. Read-only-ness is the WRITE gate's answer
+   * (`canPostToConversation`), derived from these same columns.
+   */
+  findDirectPair(
+    x: ConversationEndpointIdentity,
+    y: ConversationEndpointIdentity,
+  ): ConversationIdentity | null {
+    const [a, b] = canonicalEndpointOrder(x, y);
+    const row = this.db
+      .prepare<[string, string, string, string], ConversationRow>(
+        `SELECT ${IDENTITY_COLUMNS}
+           FROM conversations
+          WHERE placement_kind = 'direct_pair'
+            AND endpoint_a_kind = ? AND endpoint_a_id = ?
+            AND endpoint_b_kind = ? AND endpoint_b_id = ?`,
+      )
+      .get(a.kind, a.id, b.kind, b.id);
+    return row ? rowToIdentity(row) : null;
+  }
+
+  /**
+   * GET-OR-CREATE the `direct_pair` conversation for two principals — the
+   * DirectPair aggregate's only constructor (§4.1/§4.2).
+   *
+   * ONE aggregate serves `human`↔`agent`, `agent`↔`agent` and `human`↔`human`:
+   * the endpoints are typed coordinates, so a DM between two agents is not a
+   * special mechanism, it is the same row with a different pair of kinds. Nothing
+   * here branches on kind, and that is the point.
+   *
+   * CONCURRENCY IS THE DB'S JOB. Two callers racing for the same pair both
+   * INSERT; the partial UNIQUE index elects one and `ON CONFLICT … DO NOTHING`
+   * turns the loser into a no-op, which then reads the winner's row. So there is
+   * no read-then-write window to lose, no retry loop, and no application-side
+   * lock — the same shape as the inbox's `idx_conversations_inbox_agent`, and the
+   * reason the retired `getOrCreateMentionsConversation` (keyed on a title, not a
+   * constraint) could produce two rows.
+   *
+   * FAIL-CLOSED CREATION comes from the schema, not from a check here: v73's
+   * birth trigger ABORTS unless each endpoint names a live principal of its own
+   * kind, so a typo'd id or an id from the wrong namespace is a thrown error and
+   * never a DM with nobody in it. Re-validating in TypeScript would add a second
+   * authority that could disagree; the only rule this method owns is the one the
+   * DB cannot state — a self-pair, rejected by {@link canonicalEndpointOrder} for
+   * the caller's benefit.
+   *
+   * `created` distinguishes "this call opened the line" from "it already existed"
+   * for callers that must post a first message or emit an event exactly once. It
+   * is derived from the INSERT's own row count, so it is accurate under the race
+   * above: the loser reports `false`.
+   */
+  getOrCreateDirectPair(
+    x: ConversationEndpointIdentity,
+    y: ConversationEndpointIdentity,
+    now: number,
+  ): { conversation: ConversationIdentity; created: boolean } {
+    const [a, b] = canonicalEndpointOrder(x, y);
+    const result = this.db
+      .prepare(
+        `INSERT INTO conversations
+           (id, workspace_id, inbox_agent_id, placement_kind, roster_policy,
+            endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id,
+            title, status, visibility, created_at, updated_at)
+         VALUES (?, NULL, NULL, 'direct_pair', 'fixed', ?, ?, ?, ?,
+                 ?, 'idle', 'private', ?, ?)
+         ON CONFLICT (endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id)
+           WHERE placement_kind = 'direct_pair'
+           DO NOTHING`,
+      )
+      .run(
+        newId(),
+        a.kind,
+        a.id,
+        b.kind,
+        b.id,
+        DIRECT_PAIR_STORED_TITLE,
+        now,
+        now,
+      );
+    const conversation = this.findDirectPair(a, b);
+    if (!conversation) {
+      // Unreachable: the INSERT either wrote this row or conflicted with it, and
+      // both cases leave it present in this transaction. Loud rather than a
+      // non-null assertion, because the only way here is a schema that no longer
+      // means what the statement above assumes.
+      throw new Error(
+        'direct_pair conversation is absent immediately after get-or-create',
+      );
+    }
+    return { conversation, created: result.changes === 1 };
   }
 
   getChannel(id: string): ChannelConversationDto | null {
@@ -944,14 +1140,14 @@ export class ConversationRepo {
     this.db
       .prepare(
         `INSERT OR IGNORE INTO conversation_agents
-         (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-         VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+         (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(conversationId, agentId, now);
     const row = this.db
-      .prepare<[string, string], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE conversation_id = ? AND agent_id = ?`,
+      .prepare<[string, string], ConversationAgentProjectionRow>(
+        `${CONVERSATION_AGENT_PROJECTION_SQL}
+         WHERE ca.conversation_id = ? AND ca.agent_id = ?`,
       )
       .get(conversationId, agentId);
     if (!row) throw new Error('conversation_agents insert failed');
@@ -960,45 +1156,13 @@ export class ConversationRepo {
 
   listAgents(conversationId: string): ConversationAgentDto[] {
     return this.db
-      .prepare<[string], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE conversation_id = ?
-         ORDER BY joined_at ASC`,
+      .prepare<[string], ConversationAgentProjectionRow>(
+        `${CONVERSATION_AGENT_PROJECTION_SQL}
+         WHERE ca.conversation_id = ?
+         ORDER BY ca.joined_at ASC`,
       )
       .all(conversationId)
       .map(r => ({ ...r }));
-  }
-
-  /**
-   * Every (conversation, agent) pair the DB still claims is RUNNING on the
-   * given computer. The host is not on `conversation_agents`, so the agent
-   * aggregate carries it — hence the join. Used by the post-hydrate reconcile
-   * pass, which compares this against the daemon's authoritative snapshot and
-   * projects a terminal state for whatever the snapshot omitted.
-   */
-  listLiveRuntimesForHost(hostId: string): Array<{
-    conversation_id: string;
-    agent_id: string;
-    status: 'active' | 'starting';
-    pid: number | null;
-  }> {
-    return this.db
-      .prepare<
-        [string],
-        {
-          conversation_id: string;
-          agent_id: string;
-          status: 'active' | 'starting';
-          pid: number | null;
-        }
-      >(
-        `SELECT ca.conversation_id, ca.agent_id, ca.status, ca.pid
-           FROM conversation_agents ca
-           JOIN agents a ON a.id = ca.agent_id
-          WHERE a.host_id = ?
-            AND ca.status IN ('active', 'starting')`,
-      )
-      .all(hostId);
   }
 
   removeAgent(conversationId: string, agentId: string): void {
@@ -1010,45 +1174,11 @@ export class ConversationRepo {
       .run(conversationId, agentId);
   }
 
-  updateAgentRuntime(
-    conversationId: string,
-    agentId: string,
-    fields: {
-      status?: 'starting' | 'active' | 'idle' | 'crashed';
-      pid?: number | null;
-      cliSessionId?: string | null;
-    },
-  ): ConversationAgentDto | null {
-    const sets: string[] = [];
-    const values: (string | number | null)[] = [];
-    if (fields.status !== undefined) {
-      sets.push('status = ?');
-      values.push(fields.status);
-    }
-    if (fields.pid !== undefined) {
-      sets.push('pid = ?');
-      values.push(fields.pid);
-    }
-    if (fields.cliSessionId !== undefined) {
-      sets.push('cli_session_id = ?');
-      values.push(fields.cliSessionId);
-    }
-    if (sets.length === 0) return this.getAgent(conversationId, agentId);
-    values.push(conversationId, agentId);
-    this.db
-      .prepare(
-        `UPDATE conversation_agents SET ${sets.join(', ')}
-         WHERE conversation_id = ? AND agent_id = ?`,
-      )
-      .run(...values);
-    return this.getAgent(conversationId, agentId);
-  }
-
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null {
     const row = this.db
-      .prepare<[string, string], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE conversation_id = ? AND agent_id = ?`,
+      .prepare<[string, string], ConversationAgentProjectionRow>(
+        `${CONVERSATION_AGENT_PROJECTION_SQL}
+         WHERE ca.conversation_id = ? AND ca.agent_id = ?`,
       )
       .get(conversationId, agentId);
     return row ? { ...row } : null;
@@ -1059,12 +1189,18 @@ export class ConversationRepo {
    * which is NOT the same question as {@link getAgent}, "is there a roster row?".
    *
    * For the workspace arm the two coincide: participants ARE the
-   * `conversation_agents` rows. For `agent_inbox` there is deliberately no roster
-   * row (§4.2, Cindy `SEfG0TUfDkOaB9xn`): the placement itself names the single
-   * participant via `inbox_agent_id`, so a caller asking about MEMBERSHIP must
-   * ask this, while a caller that needs the runtime seat's columns
+   * `conversation_agents` rows. For `agent_inbox` and `direct_pair` there is
+   * deliberately no roster row (§4.2, Cindy `SEfG0TUfDkOaB9xn`): the placement
+   * itself names the participants — `inbox_agent_id` for the one, the two typed
+   * endpoints for the other — so a caller asking about MEMBERSHIP must ask this,
+   * while a caller that needs the runtime seat's columns
    * (`pid` / `status` / `cli_session_id`) must keep using `getAgent` — those
-   * facts exist only for a roster row and an inbox has none.
+   * facts exist only for a roster row and neither placement has one.
+   *
+   * The rosterless arms make this predicate STRICTLY WIDER than `getAgent`, which
+   * is what P2's runtime target gate and the delivery faces need in order to
+   * reach a DM at all; and the workspace arm is now placement-gated, so a roster
+   * row that somehow exists on a non-workspace placement is inert here too.
    *
    * The predicate is the boolean form of `agentParticipates`, the same SQL the
    * embedded read faces splice in, so there is ONE definition of participation
@@ -1153,16 +1289,6 @@ export class ConversationRepo {
          WHERE conversation_id = ? AND user_id = ?`,
       )
       .run(conversationId, userId);
-  }
-
-  listLiveStatusAgents(): ConversationAgentDto[] {
-    return this.db
-      .prepare<[], ConversationAgentRow>(
-        `SELECT * FROM conversation_agents
-         WHERE status IN ('starting', 'active')`,
-      )
-      .all()
-      .map(r => ({ ...r }));
   }
 
   /**

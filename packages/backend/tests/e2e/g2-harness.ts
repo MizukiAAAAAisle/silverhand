@@ -338,8 +338,9 @@ async function bootHarnessDaemon(configPath: string): Promise<{
   client: OutboundDaemonClient;
   stop: (reason?: string) => void;
 }> {
+  const daemonStartedAt = Date.now();
   const helloResult = createDaemonHelloResult(
-    `__g2_harness__-${process.pid}-${Date.now()}`,
+    `__g2_harness__-${process.pid}-${daemonStartedAt}`,
   );
   const clientOpts: OutboundDaemonClientOptions = {
     configPath,
@@ -356,7 +357,10 @@ async function bootHarnessDaemon(configPath: string): Promise<{
       ...helloResult,
       socket_path: '__g2_harness_no_ipc__',
       daemon_pid: process.pid,
-      started_at: Date.now(),
+      // A reconnect is a new socket, not a new daemon generation. Production
+      // captures this once in runDaemon(); keep the G2 harness equally stable
+      // or custody claims become stale merely because the backend restarted.
+      started_at: daemonStartedAt,
     }),
     // Very fast config-poll for tests; production default is much
     // larger to avoid spinning on disk.
@@ -428,6 +432,13 @@ export interface DaemonWithSupervisorOptions {
    *  resolved binary via the same node interpreter (`execPath`) so
    *  `.cjs` fixtures don't need `chmod +x`. */
   spawnFn?: SupervisorOptions['spawnFn'];
+  /**
+   * Launcher embedded in the generated per-runtime `silverhand` shim.
+   * Defaults to `true` for G2 tests that do not execute the CLI. A test
+   * proving spawned-child auth may point this at the repository CLI so the
+   * child itself crosses the canonical HTTP route with its injected bearer.
+   */
+  localSilverhandCliLauncher?: SupervisorOptions['localSilverhandCliLauncher'];
   /**
    * The EXACT agents root the daemon resolves every agent L1/L2
    * coordinate under. Defaults to a dir inside the harness's own
@@ -531,7 +542,8 @@ export async function bootDaemonWithSupervisor(
         runtimeStartResolveDeps,
         controlPlaneServerUrl,
         agentHomeMutationCoordinator,
-        localSilverhandCliLauncher: { command: 'true', args: [] },
+        localSilverhandCliLauncher:
+          opts.localSilverhandCliLauncher ?? { command: 'true', args: [] },
         // Tight watchdogs so a misbehaving fixture surfaces fast
         // rather than hanging at the production-default 5min cap.
         initLivenessSilenceMs: 10_000,

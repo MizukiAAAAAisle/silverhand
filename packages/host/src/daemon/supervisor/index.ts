@@ -16,6 +16,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import {
   AUTH_TOKEN_HEADER,
   buildSystemPromptFor,
+  composeRuntimeDeliveryPresentation,
   type AgentActivitySnippetKind,
   type AgentRunState,
   decodeObservedSeq,
@@ -27,6 +28,7 @@ import {
   SILVERHAND_AUTH_TOKEN_ENV,
   SILVERHAND_CONVERSATION_ID_ENV,
   SILVERHAND_SERVER_URL_ENV,
+  type RuntimeDeliveryPresentation,
 } from '@silverhand/shared';
 
 import { getDriver as getDefaultDriver, type Driver } from '../../drivers/index.js';
@@ -58,6 +60,7 @@ import {
   type RuntimeCloseActivityLogResult,
   type RuntimeOutputPauseParams,
   type RuntimeDeliverParams,
+  type RuntimeScope,
   type RuntimeDeliverResult,
   type RuntimeOutputPauseResult,
   type RuntimeOutputResumeParams,
@@ -76,10 +79,12 @@ import {
 import type { DaemonLogger } from '../logger.js';
 import { buildPromptContextFromRuntimeStartOptions } from '../prompt-context.js';
 import type {
-  ResolvedWorkspaceRef,
+  ResolvedStartOptions,
   RuntimeStartResolveDeps,
 } from '../runtime-start-resolve.js';
 import {
+  isResolvedAgentStartOptions,
+  resolveRuntimeActionWorkdir,
   resolveRuntimeStartPaths,
   RuntimeStartResolveError,
 } from '../runtime-start-resolve.js';
@@ -320,7 +325,42 @@ export interface SupervisorOptions {
  *  matches `FakeSupervisor` so log diffs across the two
  *  implementations stay clean. */
 function key(conversationId: string, agentId: string): string {
-  return `${conversationId}\x00${agentId}`;
+  return runtimeScopeKey({ kind: 'conversation', conversation_id: conversationId, agent_id: agentId });
+}
+
+function runtimeScopeKey(scope: RuntimeScope): string {
+  return scope.kind === 'agent'
+    ? `agent\x00${scope.agent_id}`
+    : `conversation\x00${scope.conversation_id}\x00${scope.agent_id}`;
+}
+
+function runtimeActionText(
+  scope: RuntimeScope,
+  cwd: string,
+  conversationId: string,
+  text: string,
+): string {
+  if (scope.kind === 'conversation') return text;
+  return (
+    `[runtime_scope=agent target=#conv:${conversationId} `
+    + `workdir=${JSON.stringify(cwd)}]\n\n${text}`
+  );
+}
+
+/** Delivery admission is the focus boundary for an AgentSlot. Keep the
+ * handle's outer origin and an already-materialized AgentRunState coordinate
+ * atomic so no frame can route to B while carrying A in its payload. */
+function bindRuntimeFocus(handle: RuntimeHandle, conversationId: string): void {
+  handle.conversationId = conversationId;
+  if (
+    handle.runState
+    && handle.runState.conversationId !== conversationId
+  ) {
+    handle.runState = {
+      ...handle.runState,
+      conversationId,
+    };
+  }
 }
 
 /** Safe-boundary predicate for the daemon mid-turn queue (#task:1417
@@ -419,13 +459,6 @@ function strategyBoundaryOpen(handle: RuntimeHandle): boolean {
   }
 }
 
-/** Idempotency key for a deferred batch: the delivery-id SET (order-
- *  independent). Mirrors the coordinator's `dedupKey` so a re-submit of the
- *  same batch cannot double-queue (§11.4). */
-function deferredDedupKey(ids: readonly number[]): string {
-  return [...ids].sort((a, b) => a - b).join(',');
-}
-
 /** Conservative per-entry byte budget for the combined payload's wrapping
  *  overhead: `combineGatedBatch`'s '\n\n---\n\n' separators plus the
  *  header/footer instruction lines and JSON string escaping headroom.
@@ -449,7 +482,9 @@ const NEXT_TURN_RESERVATION_STALL_WARN_MS = 120 * 1000;
 function spliceBoundedDeferredPrefix(queue: DeferredEntry[]): DeferredEntry[] {
   let take = 0;
   let bytes = 0;
+  const conversationId = queue[0]?.conversationId;
   for (const entry of queue) {
+    if (take > 0 && entry.conversationId !== conversationId) break;
     const entryBytes =
       Buffer.byteLength(entry.text, 'utf8') +
       DEFERRED_BATCH_PER_ENTRY_OVERHEAD_BYTES;
@@ -477,6 +512,10 @@ function combineDeferredBatch(
   batch: readonly DeferredEntry[],
   gated: boolean,
 ): StartupDeliveryState {
+  const conversationId = batch[0]?.conversationId;
+  if (!conversationId || batch.some(entry => entry.conversationId !== conversationId)) {
+    throw new Error('cannot combine delivery presentation across conversation targets');
+  }
   const deliveryIds = batch.flatMap(e => [...e.deliveryIds]);
   const texts = batch.map(e => e.text);
   // `batch` is non-empty by contract (flushDeferred only calls this after
@@ -496,6 +535,8 @@ function combineDeferredBatch(
     .filter((s): s is number => s !== undefined);
   const deliveredUpToSeq = seqs.length > 0 ? Math.max(...seqs) : undefined;
   return {
+    conversationId,
+    actionWorkdir: batch[0]!.actionWorkdir,
     deliveryIds,
     ...(deliveredUpToSeq !== undefined ? { deliveredUpToSeq } : {}),
     ...(deliveries ? { deliveries } : {}),
@@ -550,6 +591,8 @@ const DEFAULT_REPLY_TARGET_INFERENCE_ENABLED = false;
  */
 type StartUnlockedParams = RuntimeStartParams & {
   startup_delivery?: {
+    conversation_id: string;
+    action_workdir: string;
     delivery_ids: number[];
     delivered_up_to_seq?: number;
     deliveries?: RuntimeDelivery[];
@@ -638,7 +681,9 @@ function parseObjectJson(text: string): Record<string, unknown> | null {
   }
 }
 
-function extractStaleConflict(bodyText: string): PendingStaleEvent | null {
+function extractStaleConflict(
+  bodyText: string,
+): Omit<PendingStaleEvent, 'conversationId'> | null {
   const parsed = parseObjectJson(bodyText);
   const error = parsed?.['error'];
   if (!error || typeof error !== 'object' || Array.isArray(error)) return null;
@@ -736,7 +781,7 @@ export class Supervisor implements SupervisorContract {
   private readonly agentHomeCoordinator: AgentHomeMutationCoordinator;
 
   // ── 3c-b state ─────────────────────────────────────────────────
-  /** Sticky per-(conv, agent) init failure counter + cooldown clock.
+  /** Sticky per-RuntimeScope init failure counter + cooldown clock.
    *  Survives across watchdog-triggered respawns within the same
    *  incident window. Cleared by a successful `session_init`. */
   private readonly initRetryStates = new Map<string, InitRetryState>();
@@ -763,7 +808,7 @@ export class Supervisor implements SupervisorContract {
     string,
     Set<PullReservation>
   >();
-  /** Per-(conv, agent) lifecycle serialization (Cindy plan v2 issue
+  /** Per-RuntimeScope lifecycle serialization (Cindy plan v2 issue
    *  #6 + tightening `ixAq6GPTn4fVSpCF`). Each entry is the tail
    *  promise for the *most recent* lifecycle operation on that key;
    *  new ops queue behind it. delivery intentionally DOES NOT
@@ -858,6 +903,7 @@ export class Supervisor implements SupervisorContract {
     streamKey: string,
     seq: number | undefined,
     source: string,
+    conversationId: string = handle.conversationId,
   ): void {
     const nextSeq = safeSeq(seq);
     if (nextSeq === null) return;
@@ -865,18 +911,19 @@ export class Supervisor implements SupervisorContract {
     // send commit): a raw backend seq becomes this stream's ObservedSeq cursor
     // via a validated decode — never a bare cast.
     const observed = decodeObservedSeq(nextSeq);
-    const prev = handle.observedSeqByStream.get(streamKey);
+    const storageKey = this.streamStorageKey(handle, conversationId, streamKey);
+    const prev = handle.observedSeqByStream.get(storageKey);
     // Monotonic advance WITHOUT flattening absence: `prev === undefined`
     // ("never observed") is a distinct state from `prev = 0`, so we branch on
     // it explicitly rather than `?? 0`. A first observation of a stream is a
     // real advance worth logging.
     if (prev !== undefined && prev >= observed) return;
-    handle.observedSeqByStream.set(streamKey, observed);
+    handle.observedSeqByStream.set(storageKey, observed);
     this.logger.info(
       {
         kind: 'process',
         action: 'freshness_observed_seq_advanced',
-        conversationId: handle.conversationId,
+        conversationId,
         agent_id: handle.agentId,
         source,
         stream_key: streamKey,
@@ -885,7 +932,7 @@ export class Supervisor implements SupervisorContract {
       },
       'runtime freshness observed seq advanced',
     );
-    this.drainSkippedCasMerges(handle, streamKey);
+    this.drainSkippedCasMerges(handle, storageKey);
     // A stale-receive waiter (#task:1614) may now prove `already_admitted`.
     this.wakePullWaiter(handle);
   }
@@ -955,8 +1002,9 @@ export class Supervisor implements SupervisorContract {
     streamKey: string,
     seq: number | undefined,
     source: string,
+    conversationId: string = handle.conversationId,
   ): void {
-    this.recordObservedStream(handle, streamKey, seq, source);
+    this.recordObservedStream(handle, streamKey, seq, source, conversationId);
     // A send/arrival is turn activity; only mark the turn when we had a
     // real seq to record (preserve the prior early-return semantics).
     if (safeSeq(seq) !== null) handle.inputTurnActive = true;
@@ -967,19 +1015,21 @@ export class Supervisor implements SupervisorContract {
     streamKey: string,
     seq: number | undefined,
     source: string,
+    conversationId: string = handle.conversationId,
   ): void {
     const nextSeq = safeSeq(seq);
     if (nextSeq === null) return;
     const pending = decodeObservedSeq(nextSeq);
-    const prev = handle.pendingAdmissionSeqByStream.get(streamKey);
+    const storageKey = this.streamStorageKey(handle, conversationId, streamKey);
+    const prev = handle.pendingAdmissionSeqByStream.get(storageKey);
     // Same present/absent discipline as `recordObservedStream`.
     if (prev !== undefined && prev >= pending) return;
-    handle.pendingAdmissionSeqByStream.set(streamKey, pending);
+    handle.pendingAdmissionSeqByStream.set(storageKey, pending);
     this.logger.warn(
       {
         kind: 'process',
         action: 'freshness_pending_admission_queued',
-        conversationId: handle.conversationId,
+        conversationId,
         agent_id: handle.agentId,
         source,
         stream_key: streamKey,
@@ -997,8 +1047,23 @@ export class Supervisor implements SupervisorContract {
     if (handle.pendingAdmissionSeqByStream.size > 0) {
       const pending = [...handle.pendingAdmissionSeqByStream.entries()];
       handle.pendingAdmissionSeqByStream.clear();
-      for (const [streamKey, seq] of pending) {
-        this.advanceObservedStream(handle, streamKey, seq, source);
+      for (const [storageKey, seq] of pending) {
+        const separator = handle.runtimeScope.kind === 'agent'
+          ? storageKey.indexOf('\u0000')
+          : -1;
+        const conversationId = separator >= 0
+          ? storageKey.slice(0, separator)
+          : handle.conversationId;
+        const streamKey = separator >= 0
+          ? storageKey.slice(separator + 1)
+          : storageKey;
+        this.recordObservedStream(
+          handle,
+          streamKey,
+          seq,
+          source,
+          conversationId,
+        );
       }
     }
     // Legacy comparator upkeep: dormant while the inference gate is off, since
@@ -1007,6 +1072,16 @@ export class Supervisor implements SupervisorContract {
       handle.defaultReplyTarget = handle.pendingDefaultReplyTarget;
       handle.pendingDefaultReplyTarget = undefined;
     }
+  }
+
+  private streamStorageKey(
+    handle: RuntimeHandle,
+    conversationId: string,
+    streamKey: string,
+  ): string {
+    return handle.runtimeScope.kind === 'agent'
+      ? `${conversationId}\u0000${streamKey}`
+      : streamKey;
   }
 
   /** Record where a future `--reply-to <messageId>` should land, keeping
@@ -1251,7 +1326,11 @@ export class Supervisor implements SupervisorContract {
     conversationId: string,
     agentId: string,
   ): RuntimeHandle {
-    const handle = this.handles.get(key(conversationId, agentId));
+    const handle =
+      this.handles.get(key(conversationId, agentId))
+      ?? this.handles.get(
+        runtimeScopeKey({ kind: 'agent', agent_id: agentId }),
+      );
     if (!handle || handle.phase === 'exited') {
       throw new Error(
         `agent side-effect requested for non-running runtime ${conversationId}/${agentId}`,
@@ -1305,7 +1384,8 @@ export class Supervisor implements SupervisorContract {
     while (handle.pullReservation !== null) {
       await handle.pullReservation.settled;
     }
-    const pendingStale = handle.pendingStaleEvent;
+    const pendingStale =
+      handle.pendingStaleEvents.get(params.conversation_id) ?? null;
     // Resolve which per-stream observed boundary this send is anchored to
     // (reply-cluster §6.4):
     //  - explicit target        → explicit stream (`channel` or
@@ -1341,17 +1421,30 @@ export class Supervisor implements SupervisorContract {
     const observedCanonicalRootStreamKey = threadTargetMessageId
       ? replyTargetStreamKey(threadTargetMessageId, null)
       : undefined;
+    const observedCanonicalRootStorageKey =
+      observedCanonicalRootStreamKey === undefined
+        ? undefined
+        : this.streamStorageKey(
+            handle,
+            params.conversation_id,
+            observedCanonicalRootStreamKey,
+          );
     const observedRootTargetStreamKey =
       observedCanonicalRootStreamKey !== undefined
-      && handle.observedSeqByStream.has(observedCanonicalRootStreamKey)
+      && observedCanonicalRootStorageKey !== undefined
+      && handle.observedSeqByStream.has(observedCanonicalRootStorageKey)
         ? observedCanonicalRootStreamKey
         : undefined;
     const targetStreamKey = threadTargetMessageId
       ? cachedTargetStreamKey ?? observedRootTargetStreamKey
       : MAIN_STREAM_KEY;
     const targetKnown = targetStreamKey !== undefined;
+    const targetStorageKey = targetStreamKey === undefined
+      ? undefined
+      : this.streamStorageKey(handle, params.conversation_id, targetStreamKey);
     const targetObserved =
-      targetKnown && handle.observedSeqByStream.has(targetStreamKey);
+      targetStorageKey !== undefined
+      && handle.observedSeqByStream.has(targetStorageKey);
     // Thread targets become "known" through a root/message mapping even when
     // the agent observed an empty cluster, so `seen=0` is load-bearing there.
     // Main has no such mapping step: absence means the agent has never seen
@@ -1371,11 +1464,11 @@ export class Supervisor implements SupervisorContract {
       && effectiveTarget.kind === 'thread'
       && effectiveTarget.source === 'pending_default'
         ? Math.max(
-            handle.observedSeqByStream.get(targetStreamKey) ?? 0,
-            handle.pendingAdmissionSeqByStream.get(targetStreamKey) ?? 0,
+            handle.observedSeqByStream.get(targetStorageKey!) ?? 0,
+            handle.pendingAdmissionSeqByStream.get(targetStorageKey!) ?? 0,
           )
         : useFreshnessBoundary
-          ? (handle.observedSeqByStream.get(targetStreamKey) ?? 0)
+          ? (handle.observedSeqByStream.get(targetStorageKey!) ?? 0)
           : undefined;
     if (threadTargetMessageId && !targetKnown) {
       this.logger.info(
@@ -1435,9 +1528,12 @@ export class Supervisor implements SupervisorContract {
         // normal delivery face (steer = this turn, next-turn-batch = next
         // boundary); admission evidence advances the cursor, and only then
         // does a retry pass the CAS.
-        handle.pendingStaleEvent = stale;
+        handle.pendingStaleEvents.set(params.conversation_id, {
+          ...stale,
+          conversationId: params.conversation_id,
+        });
       } else if (pendingStale) {
-        handle.pendingStaleEvent = null;
+        handle.pendingStaleEvents.delete(params.conversation_id);
       }
       return { ok: false, status: res.status, body_text: bodyText };
     }
@@ -1513,6 +1609,7 @@ export class Supervisor implements SupervisorContract {
         targetStreamKey,
         messageSeq,
         'message_send_commit',
+        params.conversation_id,
       );
     } else if (typeof messageSeq === 'number') {
       const mergeStreamKey = targetStreamKey ?? resolvedThreadStreamKey;
@@ -1522,19 +1619,24 @@ export class Supervisor implements SupervisorContract {
         typeof headBefore === 'number' &&
         Number.isSafeInteger(headBefore)
       ) {
+        const mergeStorageKey = this.streamStorageKey(
+          handle,
+          params.conversation_id,
+          mergeStreamKey,
+        );
         const entries =
-          handle.pendingSkippedCasMergeByStream.get(mergeStreamKey) ?? [];
+          handle.pendingSkippedCasMergeByStream.get(mergeStorageKey) ?? [];
         entries.push({ prereq: headBefore, ownSeq: messageSeq });
         // Bounded: chained skipped-CAS sends beyond the cap drop the OLDEST
         // entry — degradation is the pre-fix behavior for that seq
         // (recoverable via any later message), never unbounded growth.
         while (entries.length > 32) entries.shift();
-        handle.pendingSkippedCasMergeByStream.set(mergeStreamKey, entries);
+        handle.pendingSkippedCasMergeByStream.set(mergeStorageKey, entries);
         // No gap at all (or already caught up): merge immediately.
-        this.drainSkippedCasMerges(handle, mergeStreamKey);
+        this.drainSkippedCasMerges(handle, mergeStorageKey);
       }
     }
-    handle.pendingStaleEvent = null;
+    handle.pendingStaleEvents.delete(params.conversation_id);
     return {
       ok: true,
       message_id: messageId,
@@ -1550,7 +1652,8 @@ export class Supervisor implements SupervisorContract {
       params.conversation_id,
       params.agent_id,
     );
-    const pendingStale = handle.pendingStaleEvent;
+    const pendingStale =
+      handle.pendingStaleEvents.get(params.conversation_id) ?? null;
     const staleEventId = params.stale_event_id ?? pendingStale?.id;
     if (!staleEventId) {
       return { ok: true, resolved: false, reason: 'no_pending_stale_event' };
@@ -1574,7 +1677,7 @@ export class Supervisor implements SupervisorContract {
       };
     }
     if (!params.stale_event_id || pendingStale?.id === params.stale_event_id) {
-      handle.pendingStaleEvent = null;
+      handle.pendingStaleEvents.delete(params.conversation_id);
     }
     return { ok: true, resolved: true };
   }
@@ -1600,6 +1703,7 @@ export class Supervisor implements SupervisorContract {
       streamKey,
       params.observed_seq,
       'pull_history_observed',
+      params.conversation_id,
     );
     for (const messageId of params.reply_target_messages) {
       this.rememberReplyTargetStream(handle, messageId, streamKey);
@@ -1634,7 +1738,8 @@ export class Supervisor implements SupervisorContract {
       params.conversation_id,
       params.agent_id,
     );
-    const boundStale = handle.pendingStaleEvent;
+    const boundStale =
+      handle.pendingStaleEvents.get(params.conversation_id) ?? null;
     if (!boundStale) {
       return { ok: true, outcome: 'no_pending_stale' };
     }
@@ -1643,7 +1748,7 @@ export class Supervisor implements SupervisorContract {
       params.wait_ms ?? STALE_RECEIVE_DEFAULT_WAIT_MS,
       STALE_RECEIVE_MAX_WAIT_MS,
     );
-    const k = key(params.conversation_id, params.agent_id);
+    const k = runtimeScopeKey(handle.runtimeScope);
     // Unique CALL identity (review P1-3): waiter registration/cleanup is
     // keyed by this token, so a rejected concurrent call's cleanup can
     // never clear a waiter it does not own.
@@ -1673,6 +1778,7 @@ export class Supervisor implements SupervisorContract {
           this.evaluateStaleReceiveLocked(
             k,
             handle,
+            params.conversation_id,
             staleEventId,
             waiterToken,
             pullCall,
@@ -1731,6 +1837,7 @@ export class Supervisor implements SupervisorContract {
   private evaluateStaleReceiveLocked(
     k: string,
     handle: RuntimeHandle,
+    conversationId: string,
     staleEventId: string,
     waiterToken: number,
     pullCall: { cancelled: boolean },
@@ -1748,7 +1855,7 @@ export class Supervisor implements SupervisorContract {
         'runtime handle exited or was replaced while the pull was waiting',
       );
     }
-    const stale = live.pendingStaleEvent;
+    const stale = live.pendingStaleEvents.get(conversationId);
     if (!stale) {
       // Resolved while we waited (e.g. a parallel send succeeded).
       return { kind: 'result', result: { ok: true, outcome: 'no_pending_stale' } };
@@ -1775,8 +1882,11 @@ export class Supervisor implements SupervisorContract {
       );
     }
     const streamKey = stale.streamKey;
+    const streamStorageKey = streamKey === null
+      ? null
+      : this.streamStorageKey(live, stale.conversationId, streamKey);
     if (streamKey !== null) {
-      const observed = live.observedSeqByStream.get(streamKey);
+      const observed = live.observedSeqByStream.get(streamStorageKey!);
       if (observed !== undefined && observed >= stale.currentSeq) {
         return {
           kind: 'result',
@@ -1828,7 +1938,7 @@ export class Supervisor implements SupervisorContract {
       };
       const coveredPairs = coveredSeqPairsForBatch(combined);
       const coveredSeq =
-        streamKey === null
+        streamKey === null || combined.conversationId !== stale.conversationId
           ? undefined
           : coveredPairs.find(([s]) => s === streamKey)?.[1];
       const covered =
@@ -1860,9 +1970,12 @@ export class Supervisor implements SupervisorContract {
       };
     }
     if (streamKey !== null) {
-      const pendingAdmission = live.pendingAdmissionSeqByStream.get(streamKey);
+      const pendingAdmission = live.pendingAdmissionSeqByStream.get(
+        streamStorageKey!,
+      );
       const inFlightCovers =
         live.startupDelivery !== null &&
+        live.startupDelivery.conversationId === stale.conversationId &&
         (coveredSeqPairsForBatch(live.startupDelivery).find(
           ([s]) => s === streamKey,
         )?.[1] ?? 0) >= stale.currentSeq;
@@ -1933,6 +2046,7 @@ export class Supervisor implements SupervisorContract {
           handle.phase !== 'exited' &&
           handle.phase !== 'draining';
         if (handoffOk) {
+          bindRuntimeFocus(handle, reservation.combined.conversationId);
           this.emitStartupDeliveryConsumed(handle, reservation.combined.deliveryIds);
           // Constructive admission of content into the CURRENT context —
           // NOT the start of a new turn. `advanceObservedStream` (inside
@@ -1979,6 +2093,7 @@ export class Supervisor implements SupervisorContract {
           );
         } else {
           for (const entry of reservation.batch) {
+            bindRuntimeFocus(handle, entry.conversationId);
             this.emitStartupDeliveryFailed(handle, entry.deliveryIds, 'child_exit');
           }
           this.logger.warn(
@@ -2034,10 +2149,10 @@ export class Supervisor implements SupervisorContract {
   // ── runtime_start ──────────────────────────────────────────────
 
   /**
-   * Public start entry — funnels every (conv, agent) start through
+   * Public start entry — funnels every semantic RuntimeScope start through
    * the lifecycle lock, then the cooldown gate, then the actual
    * spawn path. Cindy plan v2:
-   *   - Lock granularity: per-(conv, agent), not global. Different
+   *   - Lock granularity: per RuntimeScope, not global. Different
    *     keys spawn in parallel; same key serializes start↔stop↔
    *     clearSession↔internal-retry-respawn.
    *   - Cooldown gate scope: ONLY for fresh user-initiated starts
@@ -2060,7 +2175,7 @@ export class Supervisor implements SupervisorContract {
     params: RuntimeStartParams,
     initAttempt: number,
   ): Promise<RuntimeStartResult> {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = runtimeScopeKey(params.options.runtime_scope);
     return this.withLifecycleLock(k, () => this.startUnlocked(params, initAttempt));
   }
 
@@ -2069,9 +2184,9 @@ export class Supervisor implements SupervisorContract {
     initAttempt: number,
   ): Promise<RuntimeStartResult> {
     this.assertAgentHomeOpen(params.agent_id);
-    const k = key(params.conversation_id, params.agent_id);
+    const k = runtimeScopeKey(params.options.runtime_scope);
 
-    // Idempotent on (conv, agent) — second start while running
+    // Idempotent on RuntimeScope — second start while running
     // returns the existing pid + started_at, matching CM today.
     // A dead handle (phase === 'exited') is treated as gone; we
     // re-spawn. The repeat call's `startup_delivery` (if any) is
@@ -2088,6 +2203,11 @@ export class Supervisor implements SupervisorContract {
     // `deliver()`'s SPAWN arm.
     const existing = this.handles.get(k);
     if (existing && existing.phase !== 'exited') {
+      if (existing.runtimeGeneration !== params.runtime_generation) {
+        throw new Error(
+          `runtime generation mismatch for ${params.conversation_id}/${params.agent_id}`,
+        );
+      }
       return {
         started: true,
         pid: existing.pid,
@@ -2142,7 +2262,7 @@ export class Supervisor implements SupervisorContract {
     // shiki 2026-08-04: the session cwd is the ONLY hard-ensured runtime base.
     // Create + require a usable working dir before forking; L1/L2 CONTENT is
     // best-effort and never blocks the spawn.
-    await ensureRuntimeStartWorkspaceCwd(resolvedOptions.workspace, this.logger);
+    await ensureRuntimeScopeCwd(resolvedOptions, this.logger);
 
     const driver = this.driverFor(runtimeKind);
     const resolved = await this.resolveRuntime(runtimeKind, driver.binary);
@@ -2179,7 +2299,7 @@ export class Supervisor implements SupervisorContract {
       );
     }
     const spawnPrep = await prepareSpawnFiles({
-      conversationId: params.conversation_id,
+      runtimeScope: startOptions.runtime_scope,
       agentId: params.agent_id,
       systemPromptText,
       silverhandCli: chooseSilverhandCliLauncher({
@@ -2187,7 +2307,9 @@ export class Supervisor implements SupervisorContract {
         localLauncher: this.localSilverhandCliLauncher,
       }),
       silverhandEnv: {
-        [SILVERHAND_CONVERSATION_ID_ENV]: params.conversation_id,
+        ...(startOptions.runtime_scope.kind === 'conversation'
+          ? { [SILVERHAND_CONVERSATION_ID_ENV]: params.conversation_id }
+          : {}),
         [SILVERHAND_AGENT_ID_ENV]: params.agent_id,
         [SILVERHAND_SERVER_URL_ENV]: controlPlaneServerUrl,
         [SILVERHAND_AUTH_TOKEN_ENV]:
@@ -2199,13 +2321,20 @@ export class Supervisor implements SupervisorContract {
     const spawnCtx = {
       agentId: params.agent_id,
       agentName: startOptions.agent.name,
-      workspacePath: resolvedOptions.workspace.path,
+      workspacePath: resolvedOptions.cwd,
       cliSessionId: startOptions.driver.cli_session_id,
       model: startOptions.driver.model,
       reasoningEffort: startOptions.driver.reasoning_effort,
       fastMode: startOptions.driver.fast_mode,
       systemPromptPath: spawnPrep.systemPromptPath,
-      initialPrompt: driver.oneShot ? params.startup_delivery?.text ?? '' : '',
+      initialPrompt: driver.oneShot && params.startup_delivery
+        ? runtimeActionText(
+            startOptions.runtime_scope,
+            params.startup_delivery.action_workdir,
+            params.startup_delivery.conversation_id,
+            params.startup_delivery.text,
+          )
+        : '',
     };
 
     const args = driver.buildArgs(spawnCtx);
@@ -2241,11 +2370,19 @@ export class Supervisor implements SupervisorContract {
       // env is re-applied below because those four keys are the child CLI's
       // integrity boundary and must not be shadowed by any additive layer.
       ...(mcpSpawn.env ?? {}),
-      [SILVERHAND_CONVERSATION_ID_ENV]: daemonEnv[SILVERHAND_CONVERSATION_ID_ENV],
+      ...(startOptions.runtime_scope.kind === 'conversation'
+        ? {
+            [SILVERHAND_CONVERSATION_ID_ENV]:
+              daemonEnv[SILVERHAND_CONVERSATION_ID_ENV],
+          }
+        : {}),
       [SILVERHAND_AGENT_ID_ENV]: daemonEnv[SILVERHAND_AGENT_ID_ENV],
       [SILVERHAND_SERVER_URL_ENV]: daemonEnv[SILVERHAND_SERVER_URL_ENV],
       [SILVERHAND_AUTH_TOKEN_ENV]: daemonEnv[SILVERHAND_AUTH_TOKEN_ENV],
     };
+    if (startOptions.runtime_scope.kind === 'agent') {
+      delete env[SILVERHAND_CONVERSATION_ID_ENV];
+    }
     const startedAt = this.now();
 
     // #task:1420 — pre-spawn diagnostics. Log-only: capture exactly what env
@@ -2270,7 +2407,10 @@ export class Supervisor implements SupervisorContract {
         path_summary: summarizeSpawnPath(env.PATH),
         env_summary: summarizeSpawnEnv(env),
         silverhand_env_presence: {
-          child: summarizeSilverhandEnvPresence(env),
+          child: summarizeSilverhandEnvPresence(env, {
+            conversationIdRequired:
+              startOptions.runtime_scope.kind === 'conversation',
+          }),
           shim: spawnPrep.silverhandShimEnvPresence,
         },
       },
@@ -2320,8 +2460,7 @@ export class Supervisor implements SupervisorContract {
     }
     try {
       this.writeRuntimePidfile({
-        conversationId: params.conversation_id,
-        agentId: params.agent_id,
+        runtimeScope: params.options.runtime_scope,
         pid,
         startedAt,
         runtime: runtimeKind,
@@ -2353,16 +2492,26 @@ export class Supervisor implements SupervisorContract {
     }
     const startupBatch = params.startup_delivery && !driver.oneShot
       ? {
+          conversationId: params.startup_delivery.conversation_id,
+          actionWorkdir: params.startup_delivery.action_workdir,
           deliveryIds: [...params.startup_delivery.delivery_ids],
           deliveredUpToSeq: params.startup_delivery.delivered_up_to_seq,
           deliveries: params.startup_delivery.deliveries,
-          text: params.startup_delivery.text,
+          text: runtimeActionText(
+            params.options.runtime_scope,
+            params.startup_delivery.action_workdir,
+            params.startup_delivery.conversation_id,
+            params.startup_delivery.text,
+          ),
         }
       : null;
 
     const handle: RuntimeHandle = {
+      runtimeScope: params.options.runtime_scope,
+      cwd: resolvedOptions.cwd,
       conversationId: params.conversation_id,
       agentId: params.agent_id,
+      runtimeGeneration: params.runtime_generation,
       pid,
       startedAt,
       driver,
@@ -2380,7 +2529,10 @@ export class Supervisor implements SupervisorContract {
       reservationStallWarned: false,
       reservationStallTimer: null,
       turnEndCount: 0,
-      pendingStaleEvent: null,
+      pendingStaleEvents: new Map(),
+      ensuredActionWorkdirs: new Set(
+        params.startup_delivery ? [params.startup_delivery.action_workdir] : [],
+      ),
       inputPayloadUuids: new Map(),
       phase: startupBatch ? 'startup_pending' : 'spawning',
       outputPaused: false,
@@ -2410,6 +2562,7 @@ export class Supervisor implements SupervisorContract {
       spawnParams: {
         conversation_id: params.conversation_id,
         agent_id: params.agent_id,
+        runtime_generation: params.runtime_generation,
         options: params.options,
       },
       initWatchdogArmed: false,
@@ -2602,6 +2755,9 @@ export class Supervisor implements SupervisorContract {
     handle: RuntimeHandle,
     batch: StartupDeliveryState,
   ): Promise<void> {
+    // AgentSlot identity is conversation-free; presentation, ack and stream
+    // freshness remain bound to the batch's origin target.
+    bindRuntimeFocus(handle, batch.conversationId);
     const deliveryIds = batch.deliveryIds;
 
     if (handle.phase === 'exited' || handle.phase === 'draining') {
@@ -2826,8 +2982,10 @@ export class Supervisor implements SupervisorContract {
   ): void {
     this.emit({
       event: 'runtime_delivery_consumed',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       delivery_ids: [...deliveryIds],
       ts: this.now(),
     });
@@ -2844,8 +3002,10 @@ export class Supervisor implements SupervisorContract {
   ): void {
     this.emit({
       event: 'runtime_delivery_failed',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       delivery_ids: [...deliveryIds],
       reason,
       ts: this.now(),
@@ -2860,6 +3020,7 @@ export class Supervisor implements SupervisorContract {
     const doomed = handle.deferredQueue;
     handle.deferredQueue = [];
     for (const entry of doomed) {
+      bindRuntimeFocus(handle, entry.conversationId);
       this.emitStartupDeliveryFailed(handle, entry.deliveryIds, 'child_exit');
     }
   }
@@ -2898,19 +3059,26 @@ export class Supervisor implements SupervisorContract {
     handle.readyForDrainEmitted = true;
     this.emit({
       event: 'runtime_ready_for_drain',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       ts: this.now(),
     });
   }
 
   // ── runtime_stop ───────────────────────────────────────────────
 
-  async stop(params: RuntimeStopParams): Promise<RuntimeStopResult> {
-    const k = key(params.conversation_id, params.agent_id);
+  async stop(
+    params: RuntimeStopParams,
+  ): Promise<RuntimeStopResult> {
+    const k = runtimeScopeKey(params.runtime_scope);
     return this.withLifecycleLock(k, async () => {
       const handle = this.handles.get(k);
       if (!handle || handle.phase === 'exited') {
+        return { mode: 'hard', stopped: false, exit_code: null };
+      }
+      if (handle.runtimeGeneration !== params.runtime_generation) {
         return { mode: 'hard', stopped: false, exit_code: null };
       }
       return this.hardStopHandle(handle);
@@ -3079,7 +3247,7 @@ export class Supervisor implements SupervisorContract {
     params: RuntimeDeliverParams,
     ctx: DeliveryOwnerContext,
   ): Promise<RuntimeDeliverResult> {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = runtimeScopeKey(params.spawn_options.runtime_scope);
     return this.withLifecycleLock(k, async () => {
       this.assertAgentHomeOpen(params.agent_id);
       // Fail loud on a drifted batch before any custody decision — the
@@ -3091,8 +3259,25 @@ export class Supervisor implements SupervisorContract {
         params.deliveries,
         'runtime_deliver',
       );
-
-      const handle = this.handles.get(k);
+      const actionWorkdir = resolveRuntimeActionWorkdir(
+        params.agent_id,
+        params.target,
+        this.runtimeStartResolveDeps,
+      );
+      let handle = this.handles.get(k);
+      if (!handle?.ensuredActionWorkdirs.has(actionWorkdir)) {
+        await ensureRuntimeActionWorkdir(
+          actionWorkdir,
+          params.target,
+          params.spawn_options.runtime_scope,
+          this.logger,
+        );
+        // Child events are allowed to advance a handle while filesystem I/O
+        // yields. Re-read before the custody decision; the lifecycle lock
+        // still excludes competing commands.
+        handle = this.handles.get(k);
+        handle?.ensuredActionWorkdirs.add(actionWorkdir);
+      }
 
       // ── SPAWN arm: no live handle ──────────────────────────────
       if (!handle || handle.phase === 'exited') {
@@ -3100,8 +3285,11 @@ export class Supervisor implements SupervisorContract {
           {
             conversation_id: params.conversation_id,
             agent_id: params.agent_id,
+            runtime_generation: params.runtime_generation,
             options: params.spawn_options,
             startup_delivery: {
+              conversation_id: params.conversation_id,
+              action_workdir: actionWorkdir,
               delivery_ids: [...params.delivery_ids],
               ...(params.delivered_up_to_seq !== undefined
                 ? { delivered_up_to_seq: params.delivered_up_to_seq }
@@ -3125,6 +3313,52 @@ export class Supervisor implements SupervisorContract {
           disposition: 'refused',
           reason: 'cooldown',
           cooldown_until: result.cooldown_until,
+        };
+      }
+
+      if (handle.runtimeGeneration !== params.runtime_generation) {
+        throw new Error(
+          `runtime generation mismatch for ${params.conversation_id}/${params.agent_id}`,
+        );
+      }
+
+      // Response-loss retries may EXPAND or shrink their batch while daemon
+      // custody is already spread across startup release, stale-pull
+      // reservation, and the deferred FIFO. Partition by individual delivery
+      // id across that complete ownership union. Held ids are rebound to the
+      // current connection owner in place; only novel ids enter the FIFO.
+      // Any non-refused disposition below means daemon custody covers the
+      // caller's whole batch, so backend keeps every row in-flight.
+      const ownership = this.partitionDeliveryOwnership(
+        handle,
+        params,
+        actionWorkdir,
+        ctx.owner,
+      );
+      if (ownership.heldCount > 0) {
+        if (ownership.novel.length > 0) {
+          handle.deferredQueue.push(...ownership.novel);
+          this.wakePullWaiter(handle);
+          this.scheduleReservationStallCheck(handle);
+        }
+        if (handle.phase === 'spawning' || handle.phase === 'startup_pending') {
+          return {
+            disposition: 'spawning',
+            pid: handle.pid,
+            started_at: handle.startedAt,
+          };
+        }
+        if (ownership.novel.length > 0 || !ownership.heldInStartup) {
+          return {
+            disposition: 'deferred',
+            pid: handle.pid,
+            started_at: handle.startedAt,
+          };
+        }
+        return {
+          disposition: 'admitted',
+          pid: handle.pid,
+          started_at: handle.startedAt,
         };
       }
 
@@ -3183,7 +3417,7 @@ export class Supervisor implements SupervisorContract {
         handle.pullReservation !== null ||
         (gated && !boundaryOpen)
       ) {
-        this.enqueueDeferred(handle, params, ctx.owner);
+        this.enqueueDeferred(handle, params, actionWorkdir, ctx.owner);
         this.scheduleReservationStallCheck(handle);
         return {
           disposition: 'deferred',
@@ -3198,12 +3432,19 @@ export class Supervisor implements SupervisorContract {
       // consumed/failed emit). Custody transfers the instant the batch
       // sits on the handle; the async ack settles `delivered_at`.
       handle.startupDelivery = {
+        conversationId: params.conversation_id,
+        actionWorkdir,
         deliveryIds: [...params.delivery_ids],
         ...(params.delivered_up_to_seq !== undefined
           ? { deliveredUpToSeq: params.delivered_up_to_seq }
           : {}),
         ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-        text: params.text,
+        text: runtimeActionText(
+          handle.runtimeScope,
+          actionWorkdir,
+          params.conversation_id,
+          params.text,
+        ),
       };
       void this.consumeStartupDelivery(handle);
       return {
@@ -3261,11 +3502,17 @@ export class Supervisor implements SupervisorContract {
         );
       }
       if (handle.deferredQueue.length === 0) continue;
-      const before = handle.deferredQueue.length;
-      handle.deferredQueue = handle.deferredQueue.filter(
-        entry => entry.owner !== owner,
-      );
-      discarded += before - handle.deferredQueue.length;
+      const retained: DeferredEntry[] = [];
+      for (const entry of handle.deferredQueue) {
+        const remainingIds = entry.deliveryIds.filter(
+          id => entry.owners.get(id) !== owner,
+        );
+        discarded += entry.deliveryIds.length - remainingIds.length;
+        if (remainingIds.length > 0) {
+          retained.push(this.subsetDeferredEntry(handle, entry, remainingIds));
+        }
+      }
+      handle.deferredQueue = retained;
     }
     if (discarded > 0) {
       this.logger.info(
@@ -3298,7 +3545,7 @@ export class Supervisor implements SupervisorContract {
       handle.reservationStallTimer = null;
       // Re-check LIVE state: the handle may have been replaced, the
       // reservation released, or the queue drained since scheduling.
-      const live = this.handles.get(key(handle.conversationId, handle.agentId));
+      const live = this.handles.get(runtimeScopeKey(handle.runtimeScope));
       if (live !== handle) return;
       if (!handle.nextTurnReserved || handle.reservationStallWarned) return;
       if (handle.deferredQueue.length === 0) return;
@@ -3332,107 +3579,262 @@ export class Supervisor implements SupervisorContract {
     }
   }
 
-  /** Idempotent enqueue into the daemon mid-turn queue. Dedups by the
-   *  delivery-id set so a re-submit of the same batch does not double-queue
-   *  (§11.4), mirroring the backend coordinator's `dedupKey`. Owner-aware
-   *  (Cindy P1): a same-id-set re-submit under a DIFFERENT owner is a
-   *  reconnect/reclaim race — the backend rolled the row off the old
-   *  connection and re-drove it under the new one, and that re-drive can
-   *  reach the daemon BEFORE the old connection's cleanup. Rebind the queued
-   *  entry to the CURRENT owner (which matches the DB's latest in-flight
-   *  owner) so the old owner's cleanup can no longer discard custody the DB
-   *  now attributes to the new connection; otherwise the entry is dropped
-   *  and the row orphaned in-flight with no daemon custody. */
+  /** Enqueue one submitted presentation/ack group. Custody inside it is per id. */
   private enqueueDeferred(
     handle: RuntimeHandle,
     params: RuntimeDeliverParams,
+    actionWorkdir: string,
     owner: string,
   ): void {
-    const dedupKey = deferredDedupKey(params.delivery_ids);
-    // P1-1 (#task:1614): the reservation is part of daemon custody for
-    // dedup purposes. A re-submit of a RESERVED id-set (old owner's
-    // connection dropped → backend rolled the rows back → re-drove them
-    // under a new connection) must not enqueue a second copy: the pull
-    // may still hand the SAME bodies to the agent as a tool result, and
-    // a queued copy would additionally release them via stdin at the
-    // next boundary — double exposure. Rebind the reservation entry's
-    // owner in place (mirroring the queue rebind below) so a pre-proof
-    // restore lands in the queue under the DB's current in-flight owner.
-    const reservation = handle.pullReservation;
-    if (reservation) {
-      const reservedIdx = reservation.batch.findIndex(
-        entry => deferredDedupKey(entry.deliveryIds) === dedupKey,
-      );
-      if (reservedIdx !== -1) {
-        const reserved = reservation.batch[reservedIdx]!;
-        if (reserved.owner !== owner) {
-          reservation.batch[reservedIdx] = {
-            deliveryIds: [...params.delivery_ids],
-            ...(params.delivered_up_to_seq !== undefined
-              ? { deliveredUpToSeq: params.delivered_up_to_seq }
-              : {}),
-            ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-            text: params.text,
-            owner,
-          };
-          this.logger.info(
-            {
-              kind: 'process',
-              action: 'stale_receive_reservation_rebind',
-              conversation_id: handle.conversationId,
-              agent_id: handle.agentId,
-              from_owner: reserved.owner,
-              to_owner: owner,
-            },
-            'rebound reserved (pull-in-flight) delivery to current owner (reconnect/reclaim race)',
-          );
-        }
-        return;
+    handle.deferredQueue.push(
+      this.deferredEntryFromParams(
+        handle,
+        params,
+        params.delivery_ids,
+        actionWorkdir,
+        owner,
+      ),
+    );
+    // A stale-receive waiter (#task:1614) may now have a takeable prefix.
+    this.wakePullWaiter(handle);
+  }
+
+  /** Full daemon custody union, partitioned by individual delivery id. */
+  private partitionDeliveryOwnership(
+    handle: RuntimeHandle,
+    params: RuntimeDeliverParams,
+    actionWorkdir: string,
+    owner: string,
+  ): {
+    heldCount: number;
+    heldInStartup: boolean;
+    novel: DeferredEntry[];
+  } {
+    const incoming = new Set(params.delivery_ids);
+    const held = new Set<number>();
+    let heldInStartup = false;
+    for (const id of handle.startupDelivery?.deliveryIds ?? []) {
+      held.add(id);
+      if (incoming.has(id)) heldInStartup = true;
+    }
+    for (const entry of handle.pullReservation?.batch ?? []) {
+      for (const id of entry.deliveryIds) held.add(id);
+    }
+    for (const entry of handle.deferredQueue) {
+      for (const id of entry.deliveryIds) held.add(id);
+    }
+
+    if (!params.deliveries) {
+      const novelIds = params.delivery_ids.filter(id => !held.has(id));
+      if (novelIds.length > 0 && novelIds.length !== params.delivery_ids.length) {
+        throw new Error(
+          'runtime_deliver partial ownership overlap requires per-delivery payload metadata',
+        );
+      }
+    } else {
+      const novelIds = params.delivery_ids.filter(id => !held.has(id));
+      if (novelIds.length > 0 && novelIds.length !== params.delivery_ids.length) {
+        const novel = new Set(novelIds);
+        this.requireDeliveryPresentations(
+          params.deliveries.filter(delivery => novel.has(delivery.delivery_id)),
+        );
       }
     }
-    const existingIdx = handle.deferredQueue.findIndex(
-      entry => deferredDedupKey(entry.deliveryIds) === dedupKey,
-    );
-    if (existingIdx !== -1) {
-      const existing = handle.deferredQueue[existingIdx]!;
-      if (existing.owner !== owner) {
-        // Rebind in place (preserving FIFO position for direct mode) with
-        // the current owner and the latest payload. DeferredEntry is
-        // readonly, so replace the element rather than mutate it.
-        handle.deferredQueue[existingIdx] = {
-          deliveryIds: [...params.delivery_ids],
-          ...(params.delivered_up_to_seq !== undefined
-            ? { deliveredUpToSeq: params.delivered_up_to_seq }
-            : {}),
-          ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-          text: params.text,
-          owner,
-        };
+
+    const assertOpaqueRebindSafe = (entries: readonly DeferredEntry[]): void => {
+      for (const entry of entries) {
+        if (entry.deliveries) continue;
+        const reboundIds = entry.deliveryIds.filter(
+          id => incoming.has(id) && entry.owners.get(id) !== owner,
+        );
+        if (
+          reboundIds.length > 0
+          && reboundIds.length < entry.deliveryIds.length
+        ) {
+          throw new Error(
+            'runtime_deliver cannot rebind a strict subset of an opaque presentation group',
+          );
+        }
+      }
+    };
+    // Validate the complete mutable custody surface before the first owner
+    // change. An opaque group can move only as a whole; otherwise a later
+    // disconnect cleanup would need presentation metadata it never received.
+    if (handle.pullReservation) {
+      assertOpaqueRebindSafe(handle.pullReservation.batch);
+    }
+    assertOpaqueRebindSafe(handle.deferredQueue);
+
+    const rebind = (
+      entries: DeferredEntry[],
+      action: 'stale_receive_reservation_rebind' | 'deferred_owner_rebind',
+    ): void => {
+      for (let index = 0; index < entries.length; index += 1) {
+        const entry = entries[index]!;
+        const owners = new Map(entry.owners);
+        const rebound: Array<{ id: number; from: string }> = [];
+        for (const id of entry.deliveryIds) {
+          const from = owners.get(id);
+          if (!incoming.has(id) || from === undefined || from === owner) continue;
+          owners.set(id, owner);
+          rebound.push({ id, from });
+        }
+        if (rebound.length === 0) continue;
+        entries[index] = { ...entry, owners };
         this.logger.info(
           {
             kind: 'process',
-            action: 'deferred_owner_rebind',
+            action,
             conversation_id: handle.conversationId,
             agent_id: handle.agentId,
-            from_owner: existing.owner,
+            delivery_ids: rebound.map(item => item.id),
+            from_owners: [...new Set(rebound.map(item => item.from))],
             to_owner: owner,
           },
-          'rebound deferred delivery to current owner (reconnect/reclaim race)',
+          'rebound daemon-held delivery ids to current owner',
         );
       }
-      return;
+    };
+    if (handle.pullReservation) {
+      rebind(
+        handle.pullReservation.batch,
+        'stale_receive_reservation_rebind',
+      );
     }
-    handle.deferredQueue.push({
-      deliveryIds: [...params.delivery_ids],
-      ...(params.delivered_up_to_seq !== undefined
-        ? { deliveredUpToSeq: params.delivered_up_to_seq }
-        : {}),
-      ...(params.deliveries ? { deliveries: params.deliveries } : {}),
-      text: params.text,
-      owner,
+    rebind(handle.deferredQueue, 'deferred_owner_rebind');
+
+    const novelIds = params.delivery_ids.filter(id => !held.has(id));
+    const novel = novelIds.length > 0
+      ? [this.deferredEntryFromParams(
+          handle,
+          params,
+          novelIds,
+          actionWorkdir,
+          owner,
+        )]
+      : [];
+    let heldCount = 0;
+    for (const id of incoming) {
+      if (held.has(id)) heldCount += 1;
+    }
+    return { heldCount, heldInStartup, novel };
+  }
+
+  /** Build one presentation/ack group for all or a selected novel subset. */
+  private deferredEntryFromParams(
+    handle: RuntimeHandle,
+    params: RuntimeDeliverParams,
+    deliveryIds: readonly number[],
+    actionWorkdir: string,
+    owner: string,
+  ): DeferredEntry {
+    const isWholeBatch =
+      deliveryIds.length === params.delivery_ids.length
+      && deliveryIds.every((id, index) => id === params.delivery_ids[index]);
+    if (!params.deliveries) {
+      if (!isWholeBatch) {
+        throw new Error(
+          'runtime_deliver partial ownership overlap requires per-delivery presentation metadata',
+        );
+      }
+      return {
+        conversationId: params.conversation_id,
+        actionWorkdir,
+        deliveryIds: [...deliveryIds],
+        ...(params.delivered_up_to_seq !== undefined
+          ? { deliveredUpToSeq: params.delivered_up_to_seq }
+          : {}),
+        text: runtimeActionText(
+          handle.runtimeScope,
+          actionWorkdir,
+          params.conversation_id,
+          params.text,
+        ),
+        owners: new Map(deliveryIds.map(id => [id, owner])),
+      };
+    }
+    const byId = new Map(
+      params.deliveries.map(delivery => [delivery.delivery_id, delivery]),
+    );
+    const deliveries = deliveryIds.map(id => {
+      const delivery = byId.get(id);
+      if (!delivery) {
+        throw new Error(`runtime_deliver missing payload for delivery_id=${id}`);
+      }
+      return delivery;
     });
-    // A stale-receive waiter (#task:1614) may now have a takeable prefix.
-    this.wakePullWaiter(handle);
+    const deliveredUpToSeq = deliveries.length > 0
+      ? Math.max(...deliveries.map(delivery => delivery.seq))
+      : params.delivered_up_to_seq;
+    return {
+      conversationId: params.conversation_id,
+      actionWorkdir,
+      deliveryIds: [...deliveryIds],
+      ...(deliveredUpToSeq !== undefined ? { deliveredUpToSeq } : {}),
+      ...(params.deliveries ? { deliveries } : {}),
+      text: runtimeActionText(
+        handle.runtimeScope,
+        actionWorkdir,
+        params.conversation_id,
+        isWholeBatch
+          ? params.text
+          : composeRuntimeDeliveryPresentation(
+              this.requireDeliveryPresentations(deliveries),
+              SEND_MESSAGE_TOOL,
+            ),
+      ),
+      owners: new Map(deliveryIds.map(id => [id, owner])),
+    };
+  }
+
+  /** Filter a queued presentation group after owner cleanup, preserving one group. */
+  private subsetDeferredEntry(
+    handle: RuntimeHandle,
+    entry: DeferredEntry,
+    deliveryIds: readonly number[],
+  ): DeferredEntry {
+    if (deliveryIds.length === entry.deliveryIds.length) return entry;
+    if (!entry.deliveries) {
+      throw new Error(
+        'cannot split opaque deferred presentation group during owner cleanup',
+      );
+    }
+    const selected = new Set(deliveryIds);
+    const deliveries = entry.deliveries.filter(delivery =>
+      selected.has(delivery.delivery_id)
+    );
+    return {
+      conversationId: entry.conversationId,
+      actionWorkdir: entry.actionWorkdir,
+      deliveryIds: [...deliveryIds],
+      deliveredUpToSeq: Math.max(...deliveries.map(delivery => delivery.seq)),
+      deliveries,
+      text: runtimeActionText(
+        handle.runtimeScope,
+        entry.actionWorkdir,
+        entry.conversationId,
+        composeRuntimeDeliveryPresentation(
+          this.requireDeliveryPresentations(deliveries),
+          SEND_MESSAGE_TOOL,
+        ),
+      ),
+      owners: new Map(
+        deliveryIds.map(id => [id, entry.owners.get(id)!]),
+      ),
+    };
+  }
+
+  private requireDeliveryPresentations(
+    deliveries: readonly RuntimeDelivery[],
+  ): RuntimeDeliveryPresentation[] {
+    return deliveries.map(delivery => {
+      if (!delivery.presentation) {
+        throw new Error(
+          `runtime_deliver partial ownership overlap requires presentation metadata for delivery_id=${delivery.delivery_id}`,
+        );
+      }
+      return delivery.presentation;
+    });
   }
 
   /**
@@ -3464,7 +3866,7 @@ export class Supervisor implements SupervisorContract {
    * byte-for-byte identical.
    */
   private async flushDeferred(handle: RuntimeHandle): Promise<void> {
-    const k = key(handle.conversationId, handle.agentId);
+    const k = runtimeScopeKey(handle.runtimeScope);
     await this.withLifecycleLock(k, async () => {
       const live = this.handles.get(k);
       // Handle may have been replaced (respawn) or torn down since the
@@ -3528,9 +3930,35 @@ export class Supervisor implements SupervisorContract {
       return;
     }
     try {
+      if (handle.runtimeScope.kind === 'conversation') {
+        // Compatibility is byte-level: ConversationSlot keeps the historical
+        // scalar sidecar. Only AgentSlot needs a target-partitioned ledger.
+        await writeFile(
+          handle.lastDeliveredSeqPath,
+          `${deliveredUpToSeq}\n`,
+          'utf-8',
+        );
+        return;
+      }
+      const streams = [...handle.observedSeqByStream.entries()]
+        .map(([storageKey, seq]) => {
+          const separator = storageKey.indexOf('\u0000');
+          if (separator < 1) {
+            throw new Error(`invalid AgentSlot stream ledger key: ${storageKey}`);
+          }
+          return {
+            conversation_id: storageKey.slice(0, separator),
+            stream_key: storageKey.slice(separator + 1),
+            seq,
+          };
+        })
+        .sort((a, b) =>
+          a.conversation_id.localeCompare(b.conversation_id)
+          || a.stream_key.localeCompare(b.stream_key)
+        );
       await writeFile(
         handle.lastDeliveredSeqPath,
-        `${deliveredUpToSeq}\n`,
+        `${JSON.stringify({ version: 1, streams })}\n`,
         'utf-8',
       );
     } catch (err) {
@@ -3563,8 +3991,10 @@ export class Supervisor implements SupervisorContract {
       }
       if (params.agent_id && params.agent_id !== handle.agentId) continue;
       out.push({
+        runtime_scope: handle.runtimeScope,
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
+        runtime_generation: handle.runtimeGeneration,
         pid: handle.phase === 'exited' ? null : handle.pid,
         phase: handle.phase,
         run_state: handle.runState,
@@ -3590,15 +4020,18 @@ export class Supervisor implements SupervisorContract {
     // explicit resume-state path on the host side (driver-mediated
     // `claude --resume` invalidation) and tighten this contract.
     //
-    // 3c-b: runs under the per-(conv, agent) lifecycle lock so a
+    // 3c-b: runs under the per-RuntimeScope lifecycle lock so a
     // concurrent start / hardStop trigger serializes behind it. The
     // wrapped block does ALL the handle bookkeeping (read + hard
     // stop) inside the critical section so a race with start cannot
     // observe `clearSession` mid-stop.
-    const k = key(params.conversation_id, params.agent_id);
+    const k = runtimeScopeKey(params.runtime_scope);
     return this.withLifecycleLock(k, async () => {
       const handle = this.handles.get(k);
       if (!handle || handle.phase === 'exited') return { cleared: false };
+      if (handle.runtimeGeneration !== params.runtime_generation) {
+        return { cleared: false };
+      }
       await this.hardStopHandle(handle);
       return { cleared: true };
     });
@@ -3608,7 +4041,7 @@ export class Supervisor implements SupervisorContract {
 
   async stopAll(_params: RuntimeStopAllParams): Promise<RuntimeStopAllResult> {
     // 3c-b (Cindy tightening `ixAq6GPTn4fVSpCF`): fan out one
-    // lifecycle-lock acquisition per (conv, agent) and wait on all
+    // lifecycle-lock acquisition per RuntimeScope and wait on all
     // of them in parallel. Different keys spawn / stop independently,
     // so the natural shape is `Promise.all` over per-key entries —
     // a single global lock would queue every stop behind every other,
@@ -3743,13 +4176,14 @@ export class Supervisor implements SupervisorContract {
   // ── runtime_output_pause / runtime_output_resume ───────────────
 
   pauseOutput(params: RuntimeOutputPauseParams): RuntimeOutputPauseResult {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = runtimeScopeKey(params.runtime_scope);
     const handle = this.handles.get(k);
     if (!handle || handle.phase === 'exited') return { paused: false };
     if (handle.outputPaused) return { paused: true };
     handle.outputPaused = true;
     this.emit({
       event: 'runtime_output_paused',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
     });
@@ -3757,13 +4191,14 @@ export class Supervisor implements SupervisorContract {
   }
 
   resumeOutput(params: RuntimeOutputResumeParams): RuntimeOutputResumeResult {
-    const k = key(params.conversation_id, params.agent_id);
+    const k = runtimeScopeKey(params.runtime_scope);
     const handle = this.handles.get(k);
     if (!handle || handle.phase === 'exited') return { resumed: false };
     if (!handle.outputPaused) return { resumed: true };
     handle.outputPaused = false;
     this.emit({
       event: 'runtime_output_resumed',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
     });
@@ -3843,6 +4278,7 @@ export class Supervisor implements SupervisorContract {
     if (this.emitRawRuntimeOutput && !handle.outputPaused) {
       this.emit({
         event: 'runtime_output',
+        runtime_scope: handle.runtimeScope,
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
         stream,
@@ -3987,8 +4423,10 @@ export class Supervisor implements SupervisorContract {
   private emitParsedEvent(handle: RuntimeHandle, parsed: ParsedEvent): void {
     const candidate: EventFrame = {
       event: 'runtime_parsed_event',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       parsed,
       ts: this.now(),
     };
@@ -4021,6 +4459,7 @@ export class Supervisor implements SupervisorContract {
     // — the dropped frame itself is tiny so it always fits.
     const probe = JSON.stringify({
       event: 'runtime_parsed_event',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
       parsed,
@@ -4029,6 +4468,7 @@ export class Supervisor implements SupervisorContract {
     const encodedBytes = Buffer.byteLength(probe, 'utf-8') + 1; // + '\n'
     this.emit({
       event: 'runtime_parsed_event_dropped',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
       parsed_kind: parsed.kind,
@@ -4061,11 +4501,11 @@ export class Supervisor implements SupervisorContract {
         handle.initObserved = true;
         handle.cliSessionId = parsed.sessionId;
         // 3c-b: stop every init watchdog timer now that init has
-        // landed AND clear the (conv, agent) retry/cooldown bucket.
+        // landed AND clear the RuntimeScope retry/cooldown bucket.
         // The cooldown counter is sticky across attempts within an
         // incident window; a successful init is the explicit reset.
         this.clearInitWatchdog(handle);
-        this.clearInitRetryState(handle.conversationId, handle.agentId);
+        this.clearInitRetryState(handle.runtimeScope);
         this.logger.info(
           {
             kind: 'process',
@@ -4535,8 +4975,10 @@ export class Supervisor implements SupervisorContract {
         };
     this.emit({
       event: 'runtime_state',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       state: base,
       ts,
     });
@@ -4589,8 +5031,7 @@ export class Supervisor implements SupervisorContract {
   }
 
   private writeRuntimePidfile(params: {
-    conversationId: string;
-    agentId: string;
+    runtimeScope: RuntimeScope;
     pid: number;
     startedAt: number;
     runtime: RuntimeKind;
@@ -4610,8 +5051,7 @@ export class Supervisor implements SupervisorContract {
       unlinkRuntimePidfile({
         rootDir: this.runtimePidRootDir,
         daemonInstanceId: this.daemonInstanceId,
-        conversationId: handle.conversationId,
-        agentId: handle.agentId,
+        runtimeScope: handle.runtimeScope,
       });
     } catch (err) {
       this.logger.warn(
@@ -4671,7 +5111,7 @@ export class Supervisor implements SupervisorContract {
 
     const intentional = handle.intentionalExit;
     const ts = this.now();
-    const k = key(handle.conversationId, handle.agentId);
+    const k = runtimeScopeKey(handle.runtimeScope);
 
     // #task:1460: fold a pre-init failure into the SAME sticky
     // init-failure counter the watchdog uses, so a runtime that dies
@@ -4767,8 +5207,10 @@ export class Supervisor implements SupervisorContract {
       const newAttempt = handle.initAttempt + 1;
       this.emit({
         event: 'runtime_init_retrying',
+        runtime_scope: handle.runtimeScope,
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
+        runtime_generation: handle.runtimeGeneration,
         retry_attempt: newAttempt,
         max_retries: this.initMaxRetries,
         delay_ms: 0,
@@ -4780,8 +5222,10 @@ export class Supervisor implements SupervisorContract {
       this.resolveRun(handle, 'timeout');
       this.emit({
         event: 'runtime_exit',
+        runtime_scope: handle.runtimeScope,
         conversation_id: handle.conversationId,
         agent_id: handle.agentId,
+        runtime_generation: handle.runtimeGeneration,
         code,
         intentional: false,
         ts,
@@ -4808,8 +5252,10 @@ export class Supervisor implements SupervisorContract {
       if (state && state.cooldownUntil > this.now()) {
         this.emit({
           event: 'runtime_init_cooldown',
+          runtime_scope: handle.runtimeScope,
           conversation_id: handle.conversationId,
           agent_id: handle.agentId,
+          runtime_generation: handle.runtimeGeneration,
           cooldown_until: state.cooldownUntil,
           attempts_exhausted: state.failures,
           ts: this.now(),
@@ -4851,8 +5297,10 @@ export class Supervisor implements SupervisorContract {
     this.resolveRun(handle, reason);
     this.emit({
       event: 'runtime_exit',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       code,
       intentional,
       ts,
@@ -4898,8 +5346,10 @@ export class Supervisor implements SupervisorContract {
         };
     this.emit({
       event: 'runtime_state',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       state: base,
       ts,
     });
@@ -5062,7 +5512,7 @@ export class Supervisor implements SupervisorContract {
     reason: InitTimeoutReason,
     timeoutMs: number,
   ): void {
-    const k = key(handle.conversationId, handle.agentId);
+    const k = runtimeScopeKey(handle.runtimeScope);
     if (!this.handles.has(k) || handle.initObserved || handle.initTimedOut) return;
 
     this.clearInitWatchdog(handle);
@@ -5110,8 +5560,10 @@ export class Supervisor implements SupervisorContract {
     );
     this.emit({
       event: 'runtime_init_timeout',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
+      runtime_generation: handle.runtimeGeneration,
       timeout_reason: reason,
       elapsed_ms: elapsedMs,
       timeout_ms: timeoutMs,
@@ -5142,7 +5594,7 @@ export class Supervisor implements SupervisorContract {
     }, this.sigtermToSigkillMs).unref();
   }
 
-  /** Bump the sticky per-(conv, agent) init-failure counter and engage
+  /** Bump the sticky per-RuntimeScope init-failure counter and engage
    *  the cooldown clock when the threshold is crossed. PURE accounting —
    *  it deliberately does NOT decide daemon-internal retry; that is the
    *  watchdog's concern (`failInitWatchdog`), layered on top of this
@@ -5154,7 +5606,7 @@ export class Supervisor implements SupervisorContract {
     failures: number;
     cooldownUntilOnEvent: number | null;
   } {
-    const k = key(handle.conversationId, handle.agentId);
+    const k = runtimeScopeKey(handle.runtimeScope);
     const now = this.now();
     const state = this.initRetryStates.get(k) ?? { failures: 0, cooldownUntil: 0 };
     state.failures += 1;
@@ -5173,11 +5625,11 @@ export class Supervisor implements SupervisorContract {
    *  `session_init` AND when start_unlocked observes a no-op
    *  idempotent return — neither of those cases should keep an old
    *  incident window alive. */
-  private clearInitRetryState(conversationId: string, agentId: string): void {
-    this.initRetryStates.delete(key(conversationId, agentId));
+  private clearInitRetryState(scope: RuntimeScope): void {
+    this.initRetryStates.delete(runtimeScopeKey(scope));
   }
 
-  /** Is the (conv, agent) currently inside an active cooldown window? */
+  /** Is the RuntimeScope currently inside an active cooldown window? */
   private isInitCoolingDown(k: string): boolean {
     const state = this.initRetryStates.get(k);
     return !!state && state.cooldownUntil > this.now();
@@ -5186,7 +5638,7 @@ export class Supervisor implements SupervisorContract {
   /**
    * Daemon-internal retry respawn. Called from the child-exit handler
    * when `initRetryPlanned` was true. Goes through `startWithLock` so
-   * the per-(conv, agent) lifecycle lock serializes the respawn
+   * the per-RuntimeScope lifecycle lock serializes the respawn
    * against any concurrent user-initiated start / stop / clearSession.
    * Errors are logged but not propagated — the retry already emitted
    * `runtime_init_retrying`; a failed respawn surfaces as the next
@@ -5197,10 +5649,7 @@ export class Supervisor implements SupervisorContract {
     newAttempt: number,
   ): Promise<void> {
     if (this.agentHomeCoordinator.isFenced(originalParams.agent_id)) {
-      this.clearInitRetryState(
-        originalParams.conversation_id,
-        originalParams.agent_id,
-      );
+      this.clearInitRetryState(originalParams.options.runtime_scope);
       this.logger.info(
         {
           kind: 'process',
@@ -5236,12 +5685,12 @@ export class Supervisor implements SupervisorContract {
   }
 
   /**
-   * Per-(conv, agent) lifecycle serialization. Cindy plan v2 issue
+   * Per-RuntimeScope lifecycle serialization. Cindy plan v2 issue
    * #6 + tightening `ixAq6GPTn4fVSpCF`:
    *
    *   - Covers ONLY lifecycle mutations: start, hard stop, clearSession,
    *     internal retry respawn. delivery/output-pause go around.
-   *   - Per-key, not global — different (conv, agent) ops parallelize.
+   *   - Per-key, not global — different RuntimeScope operations parallelize.
    *   - Survives previous-op failure: a rejected predecessor must not
    *     wedge the queue. We swallow the previous tail's rejection at
    *     the await site.
@@ -5324,6 +5773,7 @@ export class Supervisor implements SupervisorContract {
     );
     this.emit({
       event: 'runtime_compaction_stale',
+      runtime_scope: handle.runtimeScope,
       conversation_id: handle.conversationId,
       agent_id: handle.agentId,
       elapsed_ms: elapsedMs,
@@ -5367,10 +5817,58 @@ function driverReadyToEncode(driver: Driver): boolean {
   return driver.readyToEncode?.() ?? true;
 }
 
-async function ensureRuntimeStartWorkspaceCwd(
-  workspace: ResolvedWorkspaceRef,
+async function ensureRuntimeActionWorkdir(
+  workdir: string,
+  target: RuntimeDeliverParams['target'],
+  runtimeScope: RuntimeScope,
   logger: DaemonLogger,
 ): Promise<void> {
+  try {
+    await mkdir(workdir, { recursive: true });
+  } catch (err) {
+    logger.warn(
+      {
+        kind: 'process',
+        action: 'runtime_action_workdir_unusable',
+        runtime_scope: runtimeScope,
+        target,
+        resolved_path: workdir,
+        reason: 'mkdir_failed',
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      'runtime delivery action workdir could not be created',
+    );
+    throw new RuntimeStartResolveError(
+      'workspace_bundle_missing',
+      `runtime delivery target ${target.conversation_id} has no usable action workdir on this computer`,
+    );
+  }
+  if (await bundleCwdUsable(workdir)) return;
+  logger.warn(
+    {
+      kind: 'process',
+      action: 'runtime_action_workdir_unusable',
+      runtime_scope: runtimeScope,
+      target,
+      resolved_path: workdir,
+      reason: 'not_enterable',
+    },
+    'runtime delivery action workdir is not enterable',
+  );
+  throw new RuntimeStartResolveError(
+    'workspace_bundle_missing',
+    `runtime delivery target ${target.conversation_id} has no usable action workdir on this computer`,
+  );
+}
+
+async function ensureRuntimeScopeCwd(
+  options: ResolvedStartOptions,
+  logger: DaemonLogger,
+): Promise<void> {
+  const workspace = isResolvedAgentStartOptions(options)
+    ? null
+    : options.workspace;
+  const cwd = options.cwd;
   // shiki + Cindy 2026-08-04: the session cwd is the ONLY hard-ensured runtime
   // base; L1/L2 CONTENT is best-effort and never gates a spawn. This creates
   // the deterministic cwd (`mkdir -p`) and requires it to be a usable working
@@ -5390,10 +5888,15 @@ async function ensureRuntimeStartWorkspaceCwd(
         kind: 'process',
         action: 'runtime_start_workspace_cwd_unusable',
         reason,
-        workspace_id: workspace.id,
-        workspace_kind: workspace.kind,
-        workspace_name: workspace.name,
-        resolved_path: workspace.path,
+        runtime_scope: options.runtime_scope,
+        ...(workspace
+          ? {
+              workspace_id: workspace.id,
+              workspace_kind: workspace.kind,
+              workspace_name: workspace.name,
+            }
+          : {}),
+        resolved_path: cwd,
         ...(detail !== undefined ? { detail } : {}),
       },
       'runtime_start: session cwd could not be ensured as a usable working directory',
@@ -5402,14 +5905,17 @@ async function ensureRuntimeStartWorkspaceCwd(
   const cwdUnusable = () =>
     new RuntimeStartResolveError(
       'workspace_bundle_missing',
-      `runtime_start: session cwd for ${workspace.kind} workspace ` +
-        `${workspace.id} could not be created or entered on this computer`,
+      workspace
+        ? `runtime_start: session cwd for ${workspace.kind} workspace ` +
+          `${workspace.id} could not be created or entered on this computer`
+        : `runtime_start: agent-scoped session cwd for ${options.agent.id} ` +
+          'could not be created or entered on this computer',
     );
   // Best-effort create — idempotent when the dir (or a parent chain) already
   // exists. A conflicting non-directory file at the path throws EEXIST/ENOTDIR
   // and is caught below as a hard admission failure.
   try {
-    await mkdir(workspace.path, { recursive: true });
+    await mkdir(cwd, { recursive: true });
   } catch (err) {
     logUnusable('mkdir_failed', err instanceof Error ? err.message : String(err));
     throw cwdUnusable();
@@ -5417,7 +5923,7 @@ async function ensureRuntimeStartWorkspaceCwd(
   // Cwd-usability uses the SAME predicate as `list_workspaces.agent_dir`
   // (`bundleCwdUsable`: an existing directory this process can enter/traverse),
   // so list never reports a dir usable that this spawn would then choke on.
-  if (await bundleCwdUsable(workspace.path)) return;
+  if (await bundleCwdUsable(cwd)) return;
   logUnusable('not_enterable');
   throw cwdUnusable();
 }

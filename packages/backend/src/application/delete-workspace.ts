@@ -142,7 +142,9 @@ export function collectWorkspaceTeardownPlan(
     conversations.listAgents(conversationId).flatMap(ca => {
       const agent = deps.agents.get(ca.agent_id);
       // No agent row means nothing to route to; the run cannot exist either.
-      return agent
+      // AgentSlot is owned by the Agent aggregate, not by any workspace whose
+      // conversation happens to be its current delivery target.
+      return agent?.session_scope === 'conversation'
         ? [{ conversationId, agentId: ca.agent_id, hostId: agent.host_id }]
         : [];
     }),

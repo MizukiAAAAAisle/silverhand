@@ -6,7 +6,12 @@ import {
   internalPaths,
   X_SILVERHAND_PRINCIPAL_HEADER,
 } from '@silverhand/shared';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 import { CURRENT_DESKTOP_EPOCH_HEADERS } from '../utils/desktop-client-epoch.js';
 
 /**
@@ -316,7 +321,7 @@ describe('Internal agent avatar routes', () => {
       })
     ).json() as any;
     const channelId = ws.onboarding_channel_id as string;
-    const token = t!.ctx.agentTokens.issue(channelId, agentId);
+    const token = issueTestConversationRuntimeToken(t!, channelId, agentId);
     return { agentId, channelId, token };
   }
 

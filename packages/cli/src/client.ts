@@ -1,11 +1,11 @@
 /**
- * Thin HTTP client to the Silverhand backend's `/internal/conversations/
- * :cid/agents/:aid/...` route family.
+ * Thin HTTP client to the Silverhand backend's canonical
+ * `/internal/agents/:aid/conversations/:cid/...` route family.
  *
  * All failures funnel through `errors.mapHttpError` so the agent sees
  * stable codes instead of raw HTTP. Bearer auth uses the
- * `SILVERHAND_AUTH_TOKEN` value loaded from env; the per-(cid, aid)
- * binding is enforced server-side.
+ * `SILVERHAND_AUTH_TOKEN` value loaded from env; the complete runtime
+ * principal and its live target policy are enforced server-side.
  */
 import {
   AUTH_TOKEN_HEADER,
@@ -174,7 +174,7 @@ export class BackendClient {
    * member set, so the CLI never needs to enumerate users / workspace
    * members.
    *
-   * The internal route (`POST /internal/conversations/:cid/agents/:aid/members`)
+   * The internal route (`POST /internal/agents/:aid/conversations/:cid/members`)
    * accepts ONLY `{ handle }` — agents cannot supply `{kind,id}` because
    * resolving an id would require the agent to enumerate the workspace
    * roster first, which contradicts the bounded read surface invariant.

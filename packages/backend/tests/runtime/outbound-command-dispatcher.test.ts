@@ -25,9 +25,12 @@ describe('OutboundRuntimeCommandDispatcher', () => {
     // so `runtimeStop` is the representative per-agent command here.)
     await expect(
       dispatcher.runtimeStop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1, mode: 'hard',
       }),
     ).resolves.toEqual({ mode: 'hard', stopped: true, exit_code: 0 });
 
@@ -37,9 +40,12 @@ describe('OutboundRuntimeCommandDispatcher', () => {
         hostId: 'host-1',
         kind: 'runtime_stop',
         params: {
-          conversation_id: 'c1',
-          agent_id: 'a1',
-          mode: 'hard',
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'c1',
+            agent_id: 'a1',
+          },
+          runtime_generation: 1, mode: 'hard',
         },
       },
     ]);
@@ -58,9 +64,12 @@ describe('OutboundRuntimeCommandDispatcher', () => {
 
     await expect(
       dispatcher.runtimeStop({
-        conversation_id: 'c1',
-        agent_id: 'a1',
-        mode: 'hard',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1, mode: 'hard',
       }),
     ).rejects.toMatchObject({ code: 'host_revoked' });
     expect(transport.calls).toEqual([]);

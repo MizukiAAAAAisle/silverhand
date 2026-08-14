@@ -112,8 +112,14 @@ describe('outbound daemon websocket client', () => {
     await waitFor(() => !client.state().connected);
     expect(client.sendEvent({
       event: 'runtime_state',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       state: {
         runId: 'r1',
         agentId: 'a1',
@@ -590,6 +596,11 @@ describe('outbound daemon websocket client', () => {
 
     const result = client.sendEvent({
       event: 'runtime_output',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
       stream: 'stdout',
@@ -627,8 +638,14 @@ describe('outbound daemon websocket client', () => {
 
     const result = client.sendEvent({
       event: 'runtime_state',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
+      runtime_generation: 1,
       state: {
         runId: 'r1',
         agentId: 'a1',

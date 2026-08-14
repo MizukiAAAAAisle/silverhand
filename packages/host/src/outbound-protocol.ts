@@ -70,6 +70,7 @@ import {
   RuntimeStartParamsSchema,
   RuntimeStartResultSchema,
   RuntimeStartErrorCodeSchema,
+  RuntimeScopeSchema,
   RuntimeStatusParamsSchema,
   RuntimeStatusResultSchema,
   RuntimeStopAllParamsSchema,
@@ -233,7 +234,19 @@ const FrameIdSchema = z.string().min(1);
 // auto-follow (so a thread reply can miss the person it names), no CC, and
 // undirected framing — with no error on either side.
 // Bumps alongside HOST_PROTOCOL_VERSION (11→12). No shim.
-export const OUTBOUND_PROTOCOL_VERSION = 11;
+//
+// v12 (#task:2015): server commands carry the claimed runtime generation and
+// status-mutating daemon events echo it back. Without the field the backend
+// cannot bind projection/finalize to one custody token, so old outbound peers
+// are rejected at ready admission rather than bridged.
+// v13 (#task:2015 review): runtime_status rows and destructive stop/clear
+// commands are generation-bound. Older peers must fail at attach.
+// v14 (#task:2019): every runtime command/snapshot/event carries the same
+// discriminated RuntimeScope that owns session identity and custody.
+// v15 (#task:2019 review): delivery consumed/failed settlements are generation-
+// bound too. Without it, a delayed N ack can settle a durable inbox row that
+// the backend already reclaimed for N+1.
+export const OUTBOUND_PROTOCOL_VERSION = 15;
 
 // ── server → daemon command catalogue ──────────────────────────────
 
@@ -726,8 +739,10 @@ export const OutboundRuntimeStateEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_state'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     state: AgentRunStateSchema,
     ts: z.number().int(),
   })
@@ -738,6 +753,7 @@ export const OutboundRuntimeOutputEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_output'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     stream: z.enum(['stdout', 'stderr']),
@@ -751,8 +767,10 @@ export const OutboundRuntimeExitEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_exit'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     code: z.number().int().nullable(),
     intentional: z.boolean(),
     ts: z.number().int(),
@@ -764,8 +782,10 @@ export const OutboundRuntimeReadyForDrainEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_ready_for_drain'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     ts: z.number().int(),
   })
   .strict();
@@ -775,8 +795,10 @@ export const OutboundRuntimeDeliveryConsumedEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_delivery_consumed'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     delivery_ids: z.array(z.number().int()).min(1),
     ts: z.number().int(),
   })
@@ -787,8 +809,10 @@ export const OutboundRuntimeDeliveryFailedEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_delivery_failed'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     delivery_ids: z.array(z.number().int()).min(1),
     reason: z.enum([
       'child_exit',
@@ -805,8 +829,10 @@ export const OutboundRuntimeInitTimeoutEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_init_timeout'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     timeout_reason: z.enum(['silence', 'pre_protocol_cap', 'post_protocol']),
     elapsed_ms: z.number().int().nonnegative(),
     timeout_ms: z.number().int().nonnegative(),
@@ -823,8 +849,10 @@ export const OutboundRuntimeInitRetryingEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_init_retrying'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     retry_attempt: z.number().int().positive(),
     max_retries: z.number().int().nonnegative(),
     delay_ms: z.number().int().nonnegative(),
@@ -837,8 +865,10 @@ export const OutboundRuntimeInitCooldownEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_init_cooldown'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     cooldown_until: z.number().int().positive(),
     attempts_exhausted: z.number().int().nonnegative(),
     ts: z.number().int(),
@@ -850,6 +880,7 @@ export const OutboundRuntimeCompactionStaleEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_compaction_stale'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     elapsed_ms: z.number().int().nonnegative(),
@@ -862,6 +893,7 @@ export const OutboundRuntimeOutputDroppedEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_output_dropped'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     dropped_count: z.number().int().nonnegative(),
@@ -875,6 +907,7 @@ export const OutboundRuntimeOutputPausedEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_output_paused'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
   })
@@ -885,6 +918,7 @@ export const OutboundRuntimeOutputResumedEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_output_resumed'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
   })
@@ -895,8 +929,10 @@ export const OutboundRuntimeParsedEventFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_parsed_event'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     parsed: ParsedEventSchema,
     ts: z.number().int(),
   })
@@ -907,6 +943,7 @@ export const OutboundRuntimeParsedEventDroppedFrameSchema = z
     direction: z.literal('daemon_to_server'),
     type: z.literal('event'),
     kind: z.literal('runtime_parsed_event_dropped'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     parsed_kind: ParsedEventKindSchema,

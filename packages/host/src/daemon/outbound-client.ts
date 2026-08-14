@@ -74,6 +74,13 @@ export interface OutboundDaemonClientOptions {
    * pending and a reconnect replay re-drives them, duplicate-free.
    */
   cleanupDeferredForOwner?: OwnerCleanup;
+  /**
+   * Called after a polled config has passed schema + URL validation and
+   * becomes this client's desired authority. Lets the owning supervisor keep
+   * generation-spawned CLI coordinates aligned with the same config that the
+   * websocket actually reconnects against.
+   */
+  onConfigLoaded?: (config: DaemonHostConfig) => void;
   writeHostConfig?: HostConfigWriter;
   random?: () => number;
   now?: () => number;
@@ -296,6 +303,7 @@ export class OutboundDaemonClient {
     }
 
     this.desiredConfig = { raw: next.config, key, wsUrl };
+    this.opts.onConfigLoaded?.(next.config);
     this.terminalCloseConfigKey = null;
     this.reconnectAttempt = 0;
     this.opts.logger.info(

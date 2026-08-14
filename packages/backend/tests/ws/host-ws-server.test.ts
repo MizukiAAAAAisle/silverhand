@@ -497,6 +497,7 @@ describe('host outbound WebSocket server', () => {
         direction: 'daemon_to_server',
         type: 'event',
         kind: 'runtime_output_paused',
+        runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
         conversation_id: 'c1',
         agent_id: 'a1',
       }),
@@ -823,6 +824,7 @@ describe('host outbound WebSocket server', () => {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_output_paused',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
       conversation_id: 'c1',
       agent_id: 'a1',
     }));
@@ -933,6 +935,7 @@ describe('host outbound WebSocket server', () => {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_output_paused',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
       conversation_id: 'c1',
       agent_id: 'a1',
     }));
@@ -995,6 +998,7 @@ describe('host outbound WebSocket server', () => {
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_output_paused',
+      runtime_scope: { kind: 'conversation', conversation_id: 'c1', agent_id: 'a1' },
       conversation_id: 'c1',
       agent_id: 'a1',
     }));
@@ -1753,20 +1757,31 @@ function commandCases(hostId: string): CommandCase[] {
       params: {
         conversation_id: 'c1',
         agent_id: 'a1',
+        runtime_generation: 1,
         options: runtimeStartOptions(),
       },
       result: { started: true, pid: 123, started_at: 1700000000000 },
     },
     {
       kind: 'runtime_stop',
-      params: { conversation_id: 'c1', agent_id: 'a1', mode: 'hard' },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
+      },
       result: { mode: 'hard', stopped: true, exit_code: 0 },
     },
     {
       kind: 'runtime_deliver',
       params: {
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
+        runtime_generation: 1,
         delivery_ids: [1],
         kind: 'message',
         text: 'hello',
@@ -1781,7 +1796,14 @@ function commandCases(hostId: string): CommandCase[] {
     },
     {
       kind: 'runtime_clear_session',
-      params: { conversation_id: 'c1', agent_id: 'a1' },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+      },
       result: { cleared: true },
     },
     {
@@ -1796,12 +1818,24 @@ function commandCases(hostId: string): CommandCase[] {
     },
     {
       kind: 'runtime_output_pause',
-      params: { conversation_id: 'c1', agent_id: 'a1' },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
+      },
       result: { paused: true },
     },
     {
       kind: 'runtime_output_resume',
-      params: { conversation_id: 'c1', agent_id: 'a1' },
+      params: {
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'c1',
+          agent_id: 'a1',
+        },
+      },
       result: { resumed: true },
     },
     {
@@ -1827,6 +1861,11 @@ function runtimeStartOptions(): unknown {
     agent: {
       id: 'a1',
       name: 'alice',
+    },
+    runtime_scope: {
+      kind: 'conversation',
+      conversation_id: 'c1',
+      agent_id: 'a1',
     },
     workspace: {
       id: 'w1',
@@ -1896,8 +1935,14 @@ function runtimeStatusResponse(id: string, agentId: string): string {
     result: {
       runtimes: [
         {
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'c1',
+            agent_id: agentId,
+          },
           conversation_id: 'c1',
           agent_id: agentId,
+          runtime_generation: 1,
           pid: null,
           phase: 'idle',
           run_state: null,

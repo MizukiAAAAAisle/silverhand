@@ -432,7 +432,9 @@ export const authPaths = {
   logout: '/auth/logout',
 } as const;
 
-export const internalPaths = {
+/** Temporary path builders for the observable legacy bridge. New callers use
+ * `internalPaths` below; this object exists only until bridge telemetry is zero. */
+export const legacyInternalPaths = {
   /** Agent posts a chat message; backend writes + distributes. */
   agentSendConversationMessage: (cid: string, aid: string) =>
     `/internal/conversations/${cid}/agents/${aid}/send-message`,
@@ -601,3 +603,24 @@ export const internalPaths = {
     `/internal/conversations/${cid}/agents/${aid}/peer-profile`,
 
 } as const;
+
+function canonicalizeInternalAgentPath(path: string): string {
+  const match = path.match(
+    /^\/internal\/conversations\/([^/]+)\/agents\/([^/]+)(\/.*)?$/,
+  );
+  if (!match) throw new Error(`invalid legacy internal-agent path: ${path}`);
+  return `/internal/agents/${match[2]}/conversations/${match[1]}${match[3] ?? ''}`;
+}
+
+/** Canonical internal-agent route family. It is generated from the legacy
+ * builders while the bridge exists so every operation has exactly one suffix
+ * inventory and the two families cannot drift. */
+export const internalPaths = Object.fromEntries(
+  Object.entries(legacyInternalPaths).map(([name, build]) => {
+    const buildLegacyPath = build as (...args: string[]) => string;
+    return [
+      name,
+      (...args: string[]) => canonicalizeInternalAgentPath(buildLegacyPath(...args)),
+    ];
+  }),
+) as unknown as typeof legacyInternalPaths;

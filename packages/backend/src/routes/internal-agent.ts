@@ -13,6 +13,7 @@ import {
   installInternalPrincipalMiddleware,
   type AppEnv,
 } from '../auth/principal.js';
+import { RuntimePrincipalVerifier } from '../auth/runtime-principal-verifier.js';
 import type {
   BackendContext,
 } from '../context.js';
@@ -52,6 +53,7 @@ export function createInternalRouter(
   persistence: BackendPersistence,
 ): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  const routes = new Hono<AppEnv>();
   const { agents, conversations, messages, reactions, workspaces, users } =
     persistence.repos;
   const membership = new MembershipService({ agents, users, conversations });
@@ -65,30 +67,34 @@ export function createInternalRouter(
     workspaces,
   };
 
+  // Observe every attempt before authentication. Otherwise expired/unknown
+  // legacy bearers disappear into a false zero and the bridge can never have a
+  // sound deletion gate. This logs only route coordinates + declared caller;
+  // authorization remains exclusively in RuntimePrincipalVerifier below.
   app.use('/internal/conversations/:cid/agents/:aid/*', async (c, next) => {
-    const header = c.req.header('authorization') ?? '';
-    const token = header.replace(/^Bearer\s+/i, '').trim();
-    const cid = c.req.param('cid');
-    const aid = c.req.param('aid');
-    const verified = ctx.agentTokens.verify(token, cid, aid);
-    if (!verified.ok) {
-      ctx.logger.warn(
-        {
-          path: c.req.path,
-          hasHeader: !!header,
-          tokenLen: token.length,
-          reason: verified.reason,
-          conversationId: cid,
-          agentId: aid,
-          caller: c.req.header('x-agent-hub-caller') ?? 'unknown',
-        },
-        'internal: unauthorized request',
-      );
-      return c.json({ error: 'unauthorized' }, 401);
-    }
+    ctx.logger.info(
+      {
+        action: 'legacy_internal_agent_route',
+        conversationId: c.req.param('cid'),
+        agentId: c.req.param('aid'),
+        path: c.req.path,
+        caller: c.req.header('x-agent-hub-caller') ?? 'unknown',
+        routeFamily: 'legacy',
+      },
+      'legacy internal-agent route bridge used',
+    );
+    c.header('Deprecation', 'true');
     await next();
   });
-  installInternalPrincipalMiddleware(app, { agents, conversations });
+
+  installInternalPrincipalMiddleware(
+    app,
+    new RuntimePrincipalVerifier(
+      ctx.agentTokens,
+      persistence.repos.runtimeSlots,
+      conversations,
+    ),
+  );
 
   // CLI invocation logging — must run after auth so we only emit lines
   // for verified principals, but before route handlers so handler
@@ -97,15 +103,19 @@ export function createInternalRouter(
     '/internal/conversations/:cid/agents/:aid/*',
     createCliInvokeMiddleware(ctx),
   );
+  app.use(
+    '/internal/agents/:aid/conversations/:cid/*',
+    createCliInvokeMiddleware(ctx),
+  );
 
   // Observability-only pre-flight failure trace — registered first so it keeps
   // its original position ahead of the membership mount.
-  registerDiagnosticsRoutes(app, deps);
+  registerDiagnosticsRoutes(routes, deps);
 
   // ── canonical conversation-scoped MCP routes ───────────────────
   // Internal membership routes are wrapped by the param-scoped agent-token auth
   // + getAgentPrincipal middleware installed above.
-  app.route(
+  routes.route(
     '/',
     createInternalMembershipApp({
       ctx,
@@ -126,14 +136,19 @@ export function createInternalRouter(
   // Agent data-plane facets. Each `register*` only adds routes; the middleware
   // above still applies (Hono matches by registration order, and these facets
   // have distinct non-overlapping suffixes).
-  registerMessageRoutes(app, deps);
-  registerReactRoutes(app, deps);
-  registerConversationRoutes(app, deps);
-  registerTaskRoutes(app, deps);
-  registerFileRoutes(app, deps);
-  registerProfileRoutes(app, deps);
-  registerProfileMcpRoutes(app, deps);
-  registerScheduleRoutes(app, deps);
+  registerMessageRoutes(routes, deps);
+  registerReactRoutes(routes, deps);
+  registerConversationRoutes(routes, deps);
+  registerTaskRoutes(routes, deps);
+  registerFileRoutes(routes, deps);
+  registerProfileRoutes(routes, deps);
+  registerProfileMcpRoutes(routes, deps);
+  registerScheduleRoutes(routes, deps);
+
+  // One handler graph, two mounts. Canonical is the long-term authority;
+  // legacy only adapts its path coordinate into the same `:cid` target.
+  app.route('/internal/agents/:aid/conversations/:cid', routes);
+  app.route('/internal/conversations/:cid/agents/:aid', routes);
 
   return app;
 }

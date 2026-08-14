@@ -66,6 +66,7 @@ export function createSqliteAuthorizationReads(
         id: row.id,
         workspace_id: row.workspace_id,
         placement_kind: row.placement_kind,
+        roster_policy: row.roster_policy,
         inbox_agent_id: row.inbox_agent_id,
         kind: row.kind,
         visibility: row.visibility,

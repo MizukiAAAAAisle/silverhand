@@ -6,6 +6,7 @@ import {
 } from '../../src/application/delete-agent.js';
 import { AgentRepo } from '../../src/repos/agent-repo.js';
 import { ConversationRepo } from '../../src/repos/conversation-repo.js';
+import { RuntimeSlotRepo } from '../../src/repos/runtime-slot-repo.js';
 import { HostRepo } from '../../src/repos/host-repo.js';
 import { createSqliteAgentTeardownPersistence } from '../../src/repos/agent-teardown-persistence.js';
 import { HostWsCommandResponseError } from '../../src/ws/host-ws-server.js';
@@ -60,7 +61,11 @@ function purgeCallCount(t: TestApp): number {
  */
 function runtimeStops(
   t: TestApp,
-): Array<{ conversationId: string; agentId: string; hostId?: string }> {
+): Array<{
+  conversationId: string | null;
+  agentId: string;
+  hostId?: string;
+}> {
   return t.fake.stops;
 }
 
@@ -507,7 +512,7 @@ describe('deleteAgent use case', () => {
       t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
         // The pre-flight read saw `idle` and stopped nothing; the daemon spawns
         // a child for this pair while the purge is in flight.
-        conversations.updateAgentRuntime(channelId, agentId, {
+        new RuntimeSlotRepo(t!.ctx.db).updateCurrentConversationProjection(channelId, agentId, {
           status: 'active',
         });
         return { ok: true as const, purged_count: 1, quiesced_count: 1 };
@@ -533,14 +538,15 @@ describe('deleteAgent use case', () => {
         'restarted',
       );
       const conversations = new ConversationRepo(t.ctx.db);
-      conversations.updateAgentRuntime(channelId, agentId, { status: 'active' });
+      const runtimeSlots = new RuntimeSlotRepo(t.ctx.db);
+      runtimeSlots.updateCurrentConversationProjection(channelId, agentId, { status: 'active' });
       t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
         // The acked child exits, and the daemon spawns a NEW one for the same
         // pair. Nothing in the row distinguishes the two generations, so the
         // pre-commit ack must not be allowed to cover this child.
-        conversations.updateAgentRuntime(channelId, agentId, { status: 'idle' });
-        conversations.updateAgentRuntime(channelId, agentId, { pid: 4242 });
-        conversations.updateAgentRuntime(channelId, agentId, {
+        runtimeSlots.updateCurrentConversationProjection(channelId, agentId, { status: 'idle' });
+        runtimeSlots.updateCurrentConversationProjection(channelId, agentId, { pid: 4242 });
+        runtimeSlots.updateCurrentConversationProjection(channelId, agentId, {
           status: 'active',
         });
         return { ok: true as const, purged_count: 1, quiesced_count: 1 };
@@ -562,7 +568,7 @@ describe('deleteAgent use case', () => {
       const conversations = new ConversationRepo(t.ctx.db);
       const changed = captureAgentChanged(t);
       t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
-        conversations.updateAgentRuntime(channelId, agentId, {
+        new RuntimeSlotRepo(t!.ctx.db).updateCurrentConversationProjection(channelId, agentId, {
           status: 'active',
         });
         throw new HostWsCommandResponseError(
@@ -593,7 +599,7 @@ describe('deleteAgent use case', () => {
       const changed = captureAgentChanged(t);
       t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
         movePlacement(t!, agentId);
-        conversations.updateAgentRuntime(channelId, agentId, {
+        new RuntimeSlotRepo(t!.ctx.db).updateCurrentConversationProjection(channelId, agentId, {
           status: 'active',
         });
         return { ok: true as const, purged_count: 1, quiesced_count: 1 };
@@ -643,7 +649,7 @@ describe('deleteAgent use case', () => {
       const agents = new AgentRepo(t.ctx.db);
       const infoSpy = vi.spyOn(t.ctx.logger, 'info');
       t.fakeHostWs!.agentFilesPurgeAckOverride = () => {
-        conversations.updateAgentRuntime(channelId, agentId, {
+        new RuntimeSlotRepo(t!.ctx.db).updateCurrentConversationProjection(channelId, agentId, {
           status: 'active',
         });
         agents.update(agentId, { display_name: 'renamed-in-window' });

@@ -69,6 +69,7 @@ import {
   ParsedEventKindSchema,
   ParsedEventSchema,
   ReasoningEffortTokenSchema,
+  RUNTIME_DELIVERY_INSTRUCTION_SIGNALS,
   RuntimeCatalogResponseSchema,
   RuntimeKindSchema,
   SendMessageTargetSchema,
@@ -221,12 +222,31 @@ import {
 // upgraded by its own install step. So v11 counts as released here and this
 // change may not join it.
 //
+// v13 (#task:2015): runtime start/deliver and every status-mutating runtime
+// event carry the backend-claimed custody generation. A pre-v13 daemon cannot
+// prove that an event belongs to the live slot generation, so exact hello
+// admission rejects it before any runtime is started. The outbound epoch bumps
+// 11→12 for the same generation field.
+//
 // Disjoint from the desktop API epoch (`desktop-server-api-epoch.ts`), which
-// bumps in the same commit: that gate guards `/api/*` (renderer ↔ server) and
-// exempts `/internal/*`, so it never classifies a daemon — and this constant
-// never classifies a renderer. Two boundaries, two admission facts.
+// does not bump here: that gate guards `/api/*` (renderer ↔ server) and exempts
+// `/internal/*`, so it never classifies a daemon — and this constant never
+// classifies a renderer. Two boundaries, two admission facts.
 
-export const HOST_PROTOCOL_VERSION = 12;
+// v14 (#task:2015 review): every runtime snapshot and destructive runtime
+// command carries the generation it describes. This closes cross-generation
+// races and therefore has no compatibility shim.
+//
+// v15 (#task:2019): runtime identity is an explicit discriminated scope on
+// start/deliver/status/events/stop/clear. A pre-v15 peer can only address a
+// nullable conversation tuple and would alias agent-scoped custody, so there is
+// deliberately no mixed-epoch bridge.
+//
+// v16 (#task:2019 review): delivery consumed/failed settlements also echo the
+// generation whose daemon custody performed the write. Inbox rows can be
+// rolled back and reclaimed by a successor generation, so delivery id alone is
+// not a sufficient settlement token.
+export const HOST_PROTOCOL_VERSION = 16;
 
 // ── capability tokens ────────────────────────────────────────────────
 //
@@ -789,6 +809,28 @@ export type AgentStaleReceiveErrorCode = z.infer<
 export const RuntimeMessageTextSchema = z.string().min(1);
 export type RuntimeMessageText = z.infer<typeof RuntimeMessageTextSchema>;
 
+/**
+ * Stable runtime identity. This value is carried end-to-end instead of being
+ * reconstructed from a nullable conversation coordinate: it is the one input
+ * that selects the supervisor key, cwd, pidfile namespace and prompt shape.
+ */
+export const RuntimeScopeSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('agent'),
+      agent_id: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('conversation'),
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+    })
+    .strict(),
+]);
+export type RuntimeScope = z.infer<typeof RuntimeScopeSchema>;
+
 const SilverhandCliLauncherSchema = z
   .object({
     command: z.string().min(1),
@@ -802,7 +844,7 @@ const SilverhandCliLauncherSchema = z
   })
   .strict();
 
-const RuntimeStartWorkspaceRefSchema = z
+export const RuntimeStartWorkspaceRefSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
@@ -817,6 +859,20 @@ const RuntimeStartWorkspaceRefSchema = z
     // `resolveAgentDir(agentId)`. No path field travels on this wire.
   })
   .strict();
+export type RuntimeStartWorkspaceRef = z.infer<
+  typeof RuntimeStartWorkspaceRefSchema
+>;
+
+/** Semantic origin coordinate for one delivery action. It deliberately carries
+ * no host path: the daemon resolves the absolute workdir for the target using
+ * the same path authority as runtime start. */
+export const RuntimeActionTargetSchema = z
+  .object({
+    conversation_id: z.string().min(1),
+    workspace: RuntimeStartWorkspaceRefSchema.nullable(),
+  })
+  .strict();
+export type RuntimeActionTarget = z.infer<typeof RuntimeActionTargetSchema>;
 
 const RuntimeStartAgentRefSchema = z
   .object({
@@ -926,20 +982,58 @@ function rejectForbiddenRuntimeStartOptionKeys(
  * coordinate for `regular`, `resolveAgentDir` for `agent_home`). Server-derived execution artifacts
  * and prompt bytes were never allowed and remain forbidden below.
  */
-export const StartOptionsSchema = z
-  .object({
+const RuntimeStartCommonShape = {
     agent: RuntimeStartAgentRefSchema,
-    workspace: RuntimeStartWorkspaceRefSchema,
-    workspace_memory_index: z.array(RuntimeStartWorkspaceRefSchema),
-    session: RuntimeStartSessionSchema,
     driver: RuntimeStartDriverOptionsSchema,
     env_policy: RuntimeStartEnvPolicySchema,
+} as const;
+
+const ConversationStartOptionsSchema = z
+  .object({
+    ...RuntimeStartCommonShape,
+    runtime_scope: z
+      .object({
+        kind: z.literal('conversation'),
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+      })
+      .strict(),
+    // Workspace-less placements keep their own conversation-scoped runtime
+    // coordinate under the agent home. `null` is a first-class placement arm,
+    // never a sentinel for AgentSlot (the discriminated runtime_scope above is
+    // the sole identity authority).
+    workspace: RuntimeStartWorkspaceRefSchema.nullable(),
+    workspace_memory_index: z.array(RuntimeStartWorkspaceRefSchema),
+    session: RuntimeStartSessionSchema,
   })
-  .strict()
+  .strict();
+
+const AgentStartOptionsSchema = z
+  .object({
+    ...RuntimeStartCommonShape,
+    runtime_scope: z
+      .object({
+        kind: z.literal('agent'),
+        agent_id: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const StartOptionsSchema = z
+  .union([ConversationStartOptionsSchema, AgentStartOptionsSchema])
   .superRefine((val, ctx) =>
     rejectForbiddenRuntimeStartOptionKeys(val, ctx),
   );
 export type StartOptions = z.infer<typeof StartOptionsSchema>;
+export type ConversationStartOptions = Extract<
+  StartOptions,
+  { runtime_scope: { kind: 'conversation' } }
+>;
+export type AgentStartOptions = Extract<
+  StartOptions,
+  { runtime_scope: { kind: 'agent' } }
+>;
 
 /**
  * Where a supervised runtime is in its lifecycle (§3.2.1 startup/live
@@ -986,8 +1080,11 @@ export function isHostActiveRuntimePhase(phase: string): boolean {
  *  reports it via `runtime_status`. Mirrors the run-state DTO that
  *  backend already publishes to renderers. */
 export const RuntimeStateDtoSchema = z.object({
+  runtime_scope: RuntimeScopeSchema,
   conversation_id: z.string().min(1),
   agent_id: z.string().min(1),
+  /** Exact supervised generation represented by this snapshot row. */
+  runtime_generation: z.number().int().positive(),
   pid: z.number().int().nullable(),
   /** Daemon's view of where this runtime is in its lifecycle. The
    *  enum mirrors the §3.2.1 startup/live exclusivity state machine
@@ -1026,6 +1123,13 @@ export const RuntimeDeliverySchema = z
     seq: z.number().int().nonnegative(),
     thread_root_id: z.string().min(1).nullable(),
     delivery_kind: z.enum(['turn', 'observe']),
+    /** Presentation fragment for canonical novel-remainder reconstruction. */
+    presentation: z
+      .object({
+        body: RuntimeMessageTextSchema,
+        instruction: z.enum(RUNTIME_DELIVERY_INSTRUCTION_SIGNALS),
+      })
+      .strict(),
   })
   .strict();
 export type RuntimeDelivery = z.infer<typeof RuntimeDeliverySchema>;
@@ -1034,9 +1138,30 @@ export const RuntimeStartParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     options: StartOptionsSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    const scope = value.options.runtime_scope;
+    if (scope.agent_id !== value.agent_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['options', 'runtime_scope', 'agent_id'],
+        message: 'runtime scope agent must match runtime_start.agent_id',
+      });
+    }
+    if (
+      scope.kind === 'conversation'
+      && scope.conversation_id !== value.conversation_id
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['options', 'runtime_scope', 'conversation_id'],
+        message: 'conversation runtime scope must match runtime_start target',
+      });
+    }
+  });
 export type RuntimeStartParams = z.infer<typeof RuntimeStartParamsSchema>;
 
 export const RuntimeStartResultSchema = z
@@ -1097,8 +1222,8 @@ export type RuntimeStartResult = z.infer<typeof RuntimeStartResultSchema>;
  */
 export const RuntimeStopParamsSchema = z
   .object({
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
+    runtime_scope: RuntimeScopeSchema,
+    runtime_generation: z.number().int().positive(),
     mode: z.literal('hard'),
   })
   .strict();
@@ -1141,9 +1266,11 @@ export const RuntimeDeliverParamsSchema = z
   .object({
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
+    target: RuntimeActionTargetSchema,
     delivery_ids: z.array(z.number().int()).min(1),
     delivered_up_to_seq: z.number().int().nonnegative().optional(),
-    deliveries: z.array(RuntimeDeliverySchema).optional(),
+    deliveries: z.array(RuntimeDeliverySchema).min(1).optional(),
     /** Distinguishes a normal message from a schedule fire, exactly as
      *  the retired `runtime_wake` did — the daemon's driver needs it to
      *  frame the payload. Spawn-time startup delivery had no `kind`
@@ -1158,7 +1285,34 @@ export const RuntimeDeliverParamsSchema = z
      *  StartOptions the retired `runtime_start` carried. */
     spawn_options: StartOptionsSchema,
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.target.conversation_id !== value.conversation_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['target', 'conversation_id'],
+        message: 'runtime action target must match runtime_deliver conversation',
+      });
+    }
+    if (value.spawn_options.runtime_scope.agent_id !== value.agent_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['spawn_options', 'runtime_scope', 'agent_id'],
+        message: 'runtime scope agent must match runtime_deliver.agent_id',
+      });
+    }
+    const scope = value.spawn_options.runtime_scope;
+    if (
+      scope.kind === 'conversation'
+      && scope.conversation_id !== value.conversation_id
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['spawn_options', 'runtime_scope', 'conversation_id'],
+        message: 'conversation runtime scope must match runtime_deliver target',
+      });
+    }
+  });
 export type RuntimeDeliverParams = z.infer<typeof RuntimeDeliverParamsSchema>;
 
 /**
@@ -1293,8 +1447,10 @@ export type RuntimeDeliverResult = z.infer<typeof RuntimeDeliverResultSchema>;
 export const RuntimeDeliveryConsumedEventSchema = z
   .object({
     event: z.literal('runtime_delivery_consumed'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     delivery_ids: z.array(z.number().int()).min(1),
     ts: z.number().int(),
   })
@@ -1316,8 +1472,10 @@ export type RuntimeDeliveryFailedReason = z.infer<
 export const RuntimeDeliveryFailedEventSchema = z
   .object({
     event: z.literal('runtime_delivery_failed'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     delivery_ids: z.array(z.number().int()).min(1),
     reason: RuntimeDeliveryFailedReasonSchema,
     ts: z.number().int(),
@@ -1348,8 +1506,8 @@ export type RuntimeStatusResult = z.infer<typeof RuntimeStatusResultSchema>;
 
 export const RuntimeClearSessionParamsSchema = z
   .object({
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
+    runtime_scope: RuntimeScopeSchema,
+    runtime_generation: z.number().int().positive(),
   })
   .strict();
 export type RuntimeClearSessionParams = z.infer<
@@ -1389,8 +1547,7 @@ export type RuntimeCloseActivityLogResult = z.infer<
 
 export const RuntimeOutputPauseParamsSchema = z
   .object({
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
+    runtime_scope: RuntimeScopeSchema,
   })
   .strict();
 export type RuntimeOutputPauseParams = z.infer<
@@ -2821,13 +2978,16 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   // ── runtime_* events ────────────────────────────────────────────
   z.object({
     event: z.literal('runtime_state'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     state: AgentRunStateSchema,
     ts: z.number().int(),
   }),
   z.object({
     event: z.literal('runtime_output'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     stream: z.enum(['stdout', 'stderr']),
@@ -2839,16 +2999,20 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   }),
   z.object({
     event: z.literal('runtime_exit'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     code: z.number().int().nullable(),
     intentional: z.boolean(),
     ts: z.number().int(),
   }),
   z.object({
     event: z.literal('runtime_ready_for_drain'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     ts: z.number().int(),
   }),
   // ── unified delivery ack events (Stage 2, #task:1417) ───────────
@@ -2886,8 +3050,10 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   // gives up and the child process is gone.
   z.object({
     event: z.literal('runtime_init_timeout'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     /** Which watchdog tier tripped (mirrors CM's three-tier
      *  PR-A watchdog: silence between bytes / pre-protocol cap /
      *  post-protocol stall). Names match CM's `InitTimeoutReason` so
@@ -2923,8 +3089,10 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   }).strict(),
   z.object({
     event: z.literal('runtime_init_retrying'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     /** The attempt number about to start (= the previous timeout's
      *  retry_attempt + 1). */
     retry_attempt: z.number().int().positive(),
@@ -2935,8 +3103,10 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   }).strict(),
   z.object({
     event: z.literal('runtime_init_cooldown'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
+    runtime_generation: z.number().int().positive(),
     /** Wall-clock epoch ms after which backend / user may attempt a
      *  fresh start. Daemon will NOT auto-retry past this point. */
     cooldown_until: z.number().int().positive(),
@@ -2963,6 +3133,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   // strict() variant.
   z.object({
     event: z.literal('runtime_compaction_stale'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     /** Ms elapsed since `compaction_started` was observed, at the
@@ -2972,6 +3143,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   }).strict(),
   z.object({
     event: z.literal('runtime_output_dropped'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
     dropped_count: z.number().int().nonnegative(),
@@ -2980,11 +3152,13 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   }),
   z.object({
     event: z.literal('runtime_output_paused'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
   }),
   z.object({
     event: z.literal('runtime_output_resumed'),
+    runtime_scope: RuntimeScopeSchema,
     conversation_id: z.string().min(1),
     agent_id: z.string().min(1),
   }),
@@ -3012,8 +3186,10 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   z
     .object({
       event: z.literal('runtime_parsed_event'),
+      runtime_scope: RuntimeScopeSchema,
       conversation_id: z.string().min(1),
       agent_id: z.string().min(1),
+      runtime_generation: z.number().int().positive(),
       parsed: ParsedEventSchema,
       ts: z.number().int(),
     })
@@ -3038,6 +3214,7 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
   z
     .object({
       event: z.literal('runtime_parsed_event_dropped'),
+      runtime_scope: RuntimeScopeSchema,
       conversation_id: z.string().min(1),
       agent_id: z.string().min(1),
       parsed_kind: ParsedEventKindSchema,
@@ -3046,7 +3223,18 @@ export const EventFrameSchema = z.discriminatedUnion('event', [
       ts: z.number().int(),
     })
     .strict(),
-]);
+]).superRefine((frame, ctx) => {
+  if (
+    frame.event === 'runtime_state'
+    && frame.state.conversationId !== frame.conversation_id
+  ) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['state', 'conversationId'],
+      message: 'runtime_state outer conversation must match state.conversationId',
+    });
+  }
+});
 export type EventFrame = z.infer<typeof EventFrameSchema>;
 
 /**

@@ -2,7 +2,7 @@
 //
 // A workspace is a property of ONE placement arm, not of every conversation:
 // `placement_kind='workspace'` rows carry `workspace_id`, `agent_inbox` rows
-// carry `inbox_agent_id`, and `direct_pair` (P3) will carry its endpoints. That
+// carry `inbox_agent_id`, and `direct_pair` rows carry their two endpoints. That
 // is why `workspace_id` is nullable on the row AND on the wire.
 //
 // Nullable coordinates spread through call sites in two very different ways,
@@ -142,4 +142,208 @@ export function directPairEndpointsOf(
     { kind: aKind, id: aId, deletedAt: conversation.endpoint_a_deleted_at },
     { kind: bKind, id: bId, deletedAt: conversation.endpoint_b_deleted_at },
   ];
+}
+
+/** A principal named as a `direct_pair` endpoint, WITHOUT the liveness column:
+ *  the get-or-create input, and the unit the canonical order is defined on. */
+export interface ConversationEndpointIdentity {
+  kind: ConversationEndpointKind;
+  id: string;
+}
+
+/**
+ * Compare two strings the way SQLite's BINARY collation does: by UTF-8 bytes.
+ *
+ * Needed because JS `<` compares UTF-16 CODE UNITS, and that is a different
+ * order: a lone U+FFFF sorts ABOVE an astral character in UTF-16 (an astral
+ * character leads with a surrogate, 0xD800–0xDBFF) and BELOW it in UTF-8. Any
+ * comparator used to normalize endpoints must agree with the DB's, because v73's
+ * `CHECK ((endpoint_a_kind, endpoint_a_id) < (endpoint_b_kind, endpoint_b_id))`
+ * is the thing that accepts or rejects the result — a comparator that disagreed
+ * would leave a LEGAL pair of principals with no DM at all, which is worse than
+ * a wrong sort: it is a total function that isn't.
+ *
+ * Comparing CODE POINTS is exactly comparing UTF-8 bytes: UTF-8 is order
+ * preserving, so `codePoint(x) < codePoint(y)` iff `utf8(x) < utf8(y)`
+ * lexicographically. That equivalence is what makes this a proof rather than a
+ * table of cases, and it is the same unit the v74 `pair_key` expression counts
+ * with (SQLite `length()` counts code points).
+ *
+ * A LONE SURROGATE is refused instead of compared. It is the one input where the
+ * equivalence breaks: no UTF-8 encoding of it exists, so `better-sqlite3` would
+ * store a replacement character and the id in the row would no longer be the id
+ * the caller passed — the coordinate itself would be wrong, not just its order.
+ * Fail loudly at the boundary where the caller is still visible.
+ *
+ * VALIDATION IS TOTAL AND PRECEDES COMPARISON — @Cindy B1.1. Refusal is a
+ * property of the INPUT, so it cannot be discovered along the way the answer is:
+ * a check that rides on the comparison loop only sees the common prefix and stops
+ * at the first difference, which leaves `'a'` vs `'a\ud800'` (surrogate past the
+ * prefix) and `'a\ud800'` vs `'b'` (surrogate past the first difference) accepted
+ * — and an accepted lone surrogate is not a mis-ordering, it is a coordinate the
+ * driver rewrites into a DIFFERENT existing principal's id.
+ */
+export function compareEndpointText(x: string, y: string): number {
+  return compareCodePoints(scalarCodePointsOf(x), scalarCodePointsOf(y));
+}
+
+/**
+ * Every code point of `text`, refusing a lone surrogate ANYWHERE in it.
+ *
+ * Iterating a string yields code points, so a lone surrogate arrives as its own
+ * one-unit element (an astral character never does — it arrives whole), which is
+ * why the range test is a test of the element rather than of a UTF-16 unit.
+ */
+function scalarCodePointsOf(text: string): readonly number[] {
+  const points: number[] = [];
+  for (const char of text) {
+    const point = char.codePointAt(0) ?? 0;
+    if (point >= 0xd800 && point <= 0xdfff) throw new Error(LONE_SURROGATE_MESSAGE);
+    points.push(point);
+  }
+  return points;
+}
+
+/** Lexicographic order on already-validated code points. */
+function compareCodePoints(xs: readonly number[], ys: readonly number[]): number {
+  const shared = Math.min(xs.length, ys.length);
+  for (let i = 0; i < shared; i += 1) {
+    const a = xs[i] ?? 0;
+    const b = ys[i] ?? 0;
+    if (a !== b) return a < b ? -1 : 1;
+  }
+  // A prefix sorts before what extends it, in both orders, so the tail needs no
+  // inspection beyond its length.
+  if (xs.length === ys.length) return 0;
+  return xs.length < ys.length ? -1 : 1;
+}
+
+const LONE_SURROGATE_MESSAGE =
+  'direct_pair endpoint ids must be valid Unicode: a lone surrogate has no UTF-8 encoding, so the id the DB stores would differ from the id given here';
+
+/**
+ * The two endpoints in the order the DB stores them (v73's
+ * `CHECK ((endpoint_a_kind, endpoint_a_id) < (endpoint_b_kind, endpoint_b_id))`),
+ * so a caller may pass the pair in whichever order the product surface produced
+ * it and still address the ONE row that pair has.
+ *
+ * Ordering is the reason `direct_pair` needs no "who initiated" column: a DM is
+ * an unordered pair of principals, and normalizing at the boundary is what makes
+ * `(a, b)` and `(b, a)` the same aggregate id rather than two rows racing for one
+ * conversation.
+ *
+ * TOTAL over the schema's endpoint domain, which is the load-bearing property and
+ * not merely a nicety: this function decides the order the CHECK then judges, so
+ * a disagreement with SQLite's BINARY collation would not be a cosmetic sort
+ * difference — it would mean two perfectly legal principals can NEVER have a DM,
+ * every attempt aborting on a constraint. That is why the comparison runs through
+ * {@link compareEndpointText} (UTF-8 / code-point order) instead of JS `<`, whose
+ * UTF-16 order disagrees around astral characters. `kind` is an ASCII enum, so the
+ * two orders coincide there; it uses the same comparator anyway rather than
+ * relying on that coincidence.
+ *
+ * A SELF-PAIR is rejected here rather than left to that CHECK, because this is
+ * where the caller's intent is still visible: "a DM with myself" is a product
+ * question (§4.1 leaves it out), not a constraint violation to report as one.
+ *
+ * BOTH IDS ARE VALIDATED EVEN WHEN ONLY THE KINDS DECIDE THE ORDER. The kind
+ * comparison settles every human↔agent pair on its own, so leaving id validation
+ * to the id comparison would skip it in the MOST common case — the encoding of an
+ * id is a property of the id, not of whether this function happened to look at it
+ * (@Cindy B1.1). Validation is therefore hoisted above the decision.
+ */
+export function canonicalEndpointOrder(
+  x: ConversationEndpointIdentity,
+  y: ConversationEndpointIdentity,
+): readonly [ConversationEndpointIdentity, ConversationEndpointIdentity] {
+  if (x.kind === y.kind && x.id === y.id) {
+    throw new Error(
+      'direct_pair endpoints must name two different principals: a self-pair has no second participant',
+    );
+  }
+  const xKind = scalarCodePointsOf(x.kind);
+  const yKind = scalarCodePointsOf(y.kind);
+  const xId = scalarCodePointsOf(x.id);
+  const yId = scalarCodePointsOf(y.id);
+  const byKind = compareCodePoints(xKind, yKind);
+  const order = byKind !== 0 ? byKind : compareCodePoints(xId, yId);
+  return order < 0 ? [x, y] : [y, x];
+}
+
+/** The columns {@link resolveParticipation} reads: the placement arc in full. */
+export interface ConversationParticipationRef extends ConversationEndpointRef {
+  id: string;
+  workspace_id: string | null;
+  inbox_agent_id: string | null;
+}
+
+/**
+ * A candidate participant reduced to what a PLACEMENT rule can answer without a
+ * lookup. Deliberately not the backend's `Principal`: `system` is a delivery
+ * principal admitted before participation is asked, so it has no arm here, and
+ * keeping this type structural is what lets the rule live in this module (see
+ * {@link resolveParticipation}).
+ */
+export type ConversationActor =
+  | { readonly kind: 'human'; readonly userId: string }
+  | {
+      readonly kind: 'agent';
+      readonly agentId: string;
+      /** The conversation this session is ACTING INSIDE, or `null` when the
+       *  caller is not a session. Naming an agent is never enough: a session in
+       *  channel A does not reach into a DM or an inbox by reference. */
+      readonly runningInConversationId: string | null;
+    };
+
+/**
+ * Is `actor` a participant of `conversation`, when that is decidable FROM THE
+ * ROW? `null` means "not decidable here": the workspace arm derives its
+ * participants from workspace membership plus the roster tables, which is a
+ * query, so it stays with the caller that holds the read port.
+ *
+ * THE ONE PLACE the placement→participants rule is written (§4.2). Every
+ * permission entry point resolves through it, so "who is in this conversation"
+ * has a single answer per placement instead of one per call site:
+ *
+ *   - `agent_inbox` — exactly ONE participant, the agent named by
+ *     `inbox_agent_id`, running in it. A HUMAN is never one, not even the person
+ *     who created the agent: `agents.created_by_user_id` is MANAGEMENT authority
+ *     (rename, capabilities, delete), not a message ACL, so the inbox is absent
+ *     from human read surfaces by DOMAIN RULE and not because a JOIN dropped it.
+ *   - `direct_pair` — exactly TWO, and they ARE the endpoints: an `agent`
+ *     endpoint admits that agent under the same running-in rule, a `human`
+ *     endpoint admits that user. Deletion of the OTHER side changes nothing here
+ *     — reading one's own history is the whole reason an endpoint is a historical
+ *     coordinate rather than a foreign key. What it changes is the WRITE gate,
+ *     which is a different question asked of the same endpoints.
+ *
+ * THIS MODULE CANNOT READ THE ROSTER, and that is the load-bearing part rather
+ * than a happy accident: it has no dependency but a type import, so the arms that
+ * must not consult `conversation_users` / `conversation_agents` are structurally
+ * unable to. A roster row on a non-workspace row is therefore INERT — not
+ * "ignored by a check that a future reader could helpfully extend". Pinned by
+ * `tests/db-boundary/participation-authority.test.ts`.
+ */
+export function resolveParticipation(
+  conversation: ConversationParticipationRef,
+  actor: ConversationActor,
+): boolean | null {
+  const endpoints = directPairEndpointsOf(conversation);
+  if (endpoints !== null) {
+    return endpoints.some(endpoint =>
+      endpoint.kind === 'agent'
+        ? actor.kind === 'agent' &&
+          actor.agentId === endpoint.id &&
+          actor.runningInConversationId === conversation.id
+        : actor.kind === 'human' && actor.userId === endpoint.id,
+    );
+  }
+  if (conversation.placement_kind === 'agent_inbox') {
+    return (
+      actor.kind === 'agent' &&
+      conversation.inbox_agent_id === actor.agentId &&
+      actor.runningInConversationId === conversation.id
+    );
+  }
+  return null;
 }

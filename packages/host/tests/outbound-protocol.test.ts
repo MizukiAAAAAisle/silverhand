@@ -100,7 +100,9 @@ describe('outbound protocol — command catalogue', () => {
       id: 'cmd-1',
       kind: 'runtime_deliver',
       params: {
+        runtime_generation: 1,
         conversation_id: 'c1',
+        target: { conversation_id: 'c1', workspace: null },
         agent_id: 'a1',
         delivery_ids: [1, 2],
         kind: 'message',
@@ -380,7 +382,7 @@ describe('outbound protocol — daemon event catalogue', () => {
   });
 
   it('keeps outbound event names in lockstep with the daemon event surface', () => {
-    const daemonEventNames = EventFrameSchema.options
+    const daemonEventNames = EventFrameSchema.innerType().options
       .map(option => option.shape.event.value)
       .sort();
 
@@ -407,9 +409,15 @@ describe('outbound protocol — daemon event catalogue', () => {
 
   it('parses runtime events with kind as the event discriminator', () => {
     const parsed = OutboundDaemonToServerEventFrameSchema.safeParse({
+      runtime_generation: 1,
       direction: 'daemon_to_server',
       type: 'event',
       kind: 'runtime_state',
+      runtime_scope: {
+        kind: 'conversation',
+        conversation_id: 'c1',
+        agent_id: 'a1',
+      },
       conversation_id: 'c1',
       agent_id: 'a1',
       state: RUN_STATE,
@@ -424,6 +432,7 @@ describe('outbound protocol — frame envelope', () => {
   it('uses direction/type/kind to reject wrong-way frames', () => {
     expect(
       OutboundFrameSchema.safeParse({
+        runtime_generation: 1,
         direction: 'server_to_daemon',
         type: 'event',
         kind: 'runtime_state',

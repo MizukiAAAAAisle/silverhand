@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { internalPaths } from '@silverhand/shared';
 import { AgentCapabilityRepo } from '../../src/repos/agent-capability-repo.js';
-import { buildTestApp, http, type TestApp } from '../utils/app.js';
+import {
+  buildTestApp,
+  http,
+  issueTestConversationRuntimeToken,
+  type TestApp,
+} from '../utils/app.js';
 
 /**
  * P3 (#task:969) auth-boundary proof for the membership Hono sub-app mount.
@@ -121,7 +126,7 @@ describe('P3 membership sub-app mount — auth-boundary inheritance', () => {
     // to (channelA, alice): the param-scoped middleware verifies the token
     // against the path's :cid/:aid, which only works if those params resolve
     // through the mount.
-    const foreignToken = t.ctx.agentTokens.issue(channelB, alice);
+    const foreignToken = issueTestConversationRuntimeToken(t, channelB, alice);
     const res = await http(t).post(
       internalPaths.agentAddConversationMember(channelA, alice),
       { handle: '@bob' },

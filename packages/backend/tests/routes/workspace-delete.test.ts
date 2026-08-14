@@ -12,9 +12,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   X_SILVERHAND_PRINCIPAL_HEADER,
   encodeUserPrincipalHeader,
+  type AgentRunState,
+  type AgentRunTerminalReason,
 } from '@silverhand/shared';
+import type { RuntimeScope } from '@silverhand/host';
 import { buildTestApp, http, type TestApp } from '../utils/app.js';
 import { WorkspaceRepo } from '../../src/repos/workspace-repo.js';
+import { RunStateCache } from '../../src/runtime/run-state-cache.js';
 
 describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () => {
   let t: TestApp | null = null;
@@ -121,8 +125,8 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       .run(agentId, 'cascade-agent', hostId, now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(channelId, agentId, now);
     const msg = (await (
@@ -143,9 +147,9 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     );
     const realStop = t.fake.stop.bind(t.fake);
     vi.spyOn(t.fake, 'stop').mockImplementation(
-      async (cid: string, aid: string) => {
+      async (cid, aid, opts) => {
         timeline.push(`stop:${cid}:${aid}`);
-        return realStop(cid, aid);
+        return realStop(cid, aid, opts);
       },
     );
     const realDelete = WorkspaceRepo.prototype.delete;
@@ -200,6 +204,106 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
     expect(wuRow).toBeUndefined();
   });
 
+  it('does not stop an AgentSlot when deleting one workspace delivery target', async () => {
+    t = buildTestApp();
+    const ws = (await (
+      await http(t).post('/api/workspaces', { name: 'agent-slot-target', member_agent_ids: [] })
+    ).json()) as any;
+    const channelId = ws.onboarding_channel_id as string;
+    const agentId = `agent-slot-workspace-delete-${Date.now()}`;
+    const conversationAgentId = `conversation-slot-workspace-delete-${Date.now()}`;
+    const now = Date.now();
+    const insertAgent = t.ctx.db.prepare(
+      `INSERT INTO agents
+        (id, name, runtime, host_id, session_scope, created_by_user_id, created_at, updated_at)
+       VALUES (?, ?, 'claude', ?, ?, 'local', ?, ?)`,
+    );
+    insertAgent.run(
+      agentId,
+      'agent-slot-workspace-delete',
+      t.ctx.coLocatedHostId!,
+      'agent',
+      now,
+      now,
+    );
+    insertAgent.run(
+      conversationAgentId,
+      'conversation-slot-workspace-delete',
+      t.ctx.coLocatedHostId!,
+      'conversation',
+      now,
+      now,
+    );
+    const addMember = t.ctx.db.prepare(
+      `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+       VALUES (?, ?, ?)`,
+    );
+    addMember.run(channelId, agentId, now);
+    addMember.run(channelId, conversationAgentId, now);
+
+    const cache = new RunStateCache();
+    const terminalPublications: AgentRunState[] = [];
+    const seed = (
+      runtimeScope: RuntimeScope,
+      seededAgentId: string,
+      runId: string,
+    ) => {
+      cache.applyRuntimeState(
+        'daemon:workspace-delete-test',
+        runtimeScope,
+        channelId,
+        seededAgentId,
+        1,
+        {
+          runId,
+          agentId: seededAgentId,
+          conversationId: channelId,
+          status: 'thinking',
+          startedAt: now,
+          updatedAt: now,
+          lastActivityAt: now,
+        },
+        now,
+      );
+    };
+    seed({ kind: 'agent', agent_id: agentId }, agentId, 'agent-slot-run');
+    seed(
+      {
+        kind: 'conversation',
+        conversation_id: channelId,
+        agent_id: conversationAgentId,
+      },
+      conversationAgentId,
+      'conversation-slot-run',
+    );
+    vi.spyOn(t.fake, 'resolveConversationRuns').mockImplementation(
+      (conversationId, reason: AgentRunTerminalReason = 'conversation_closed') => {
+        t!.fake.resolvedConversations.push({ conversationId, reason });
+        terminalPublications.push(
+          ...cache.resolveConversationRuns(conversationId, reason),
+        );
+      },
+    );
+    const stop = vi.spyOn(t.fake, 'stop');
+
+    const res = await http(t).del(`/api/workspaces/${ws.workspace.id}`);
+    expect(res.status).toBe(204);
+    expect(stop).not.toHaveBeenCalledWith(channelId, agentId, expect.anything());
+    expect(stop).not.toHaveBeenCalledWith(channelId, agentId);
+    expect(t.fake.stops).toContainEqual({
+      conversationId: channelId,
+      agentId: conversationAgentId,
+      hostId: t.ctx.coLocatedHostId!,
+    });
+    expect(cache.get(channelId, agentId)?.runState?.runId).toBe(
+      'agent-slot-run',
+    );
+    expect(cache.get(channelId, conversationAgentId)?.runState).toBeNull();
+    expect(terminalPublications.map(state => state.runId)).toEqual([
+      'conversation-slot-run',
+    ]);
+  });
+
   it('runtime stop failure is best-effort and does not block workspace delete', async () => {
     t = buildTestApp();
     const ws = (await (
@@ -218,8 +322,8 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       .run(agentId, 'stop-failure-agent', hostId, now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(channelId, agentId, now);
 
@@ -288,8 +392,8 @@ describe('DELETE /api/workspaces/:id — cascade characterization (P13a)', () =>
       .run(guestAgentId, 'guest-agent', guestHostId, now, now);
     t.ctx.db
       .prepare(
-        `INSERT INTO conversation_agents (conversation_id, agent_id, status, joined_at)
-         VALUES (?, ?, 'idle', ?)`,
+        `INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
+         VALUES (?, ?, ?)`,
       )
       .run(channelId, guestAgentId, now);
 

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { composeRuntimeDeliveryPresentation } from '@silverhand/shared';
 import {
-  formatDeliveryInstruction,
+  formatInboxBatch,
+  formatInboxBatchPresentation,
   formatStdinMessageHeader,
   type MessageLite,
 } from '../../src/runtime/stdin-format.js';
@@ -13,55 +15,91 @@ const TOOL = 'silverhand message send';
 // independent of each other.
 const REFERENCES = () => createReferenceMemo().referencesOf;
 
-describe('formatDeliveryInstruction system-message subtypes', () => {
-  it('keeps ordinary system-only messages informational', () => {
-    expect(
-      formatDeliveryInstruction(
-        [systemMessage({ subtype: 'rename' })],
-        'Cindy',
-        TOOL,
-        REFERENCES(),
-      ),
-    ).toBe(
-      'Respond as appropriate. System messages do not require a reply unless they explicitly ask for one.',
-    );
-  });
-
-  it('does not treat retired thread_summary as actionable in reply-cluster mode', () => {
-    expect(
-      formatDeliveryInstruction(
-        [systemMessage({ subtype: 'thread_summary' })],
-        'Cindy',
-        TOOL,
-        REFERENCES(),
-      ),
-    ).toBe(
-      'Respond as appropriate. System messages do not require a reply unless they explicitly ask for one.',
-    );
-  });
-
-  it('keeps user-message precedence over system subtypes', () => {
-    const instruction = formatDeliveryInstruction(
-      [
-        systemMessage({ subtype: 'thread_summary' }),
+describe('runtime delivery presentation single authority', () => {
+  const cases: Array<{ name: string; messages: MessageLite[] }> = [
+    { name: 'system only', messages: [systemMessage()] },
+    {
+      name: 'undirected user',
+      messages: [
         {
-          id: 'm-user',
+          id: 'm-user-all',
+          thread_root_id: null,
           from_kind: 'user',
           from_agent_id: null,
           from_user_id: 'u1',
-          content: 'Please handle this',
+          content: 'hello everyone',
           created_at: 1,
-          thread_root_id: null,
         },
       ],
-      'Cindy',
-      TOOL,
-      REFERENCES(),
-    );
+    },
+    {
+      name: 'user addressed elsewhere',
+      messages: [
+        {
+          id: 'm-user-other',
+          thread_root_id: null,
+          from_kind: 'user',
+          from_agent_id: null,
+          from_user_id: 'u1',
+          content: '@Alice please handle',
+          created_at: 2,
+        },
+      ],
+    },
+    {
+      name: 'agent mention',
+      messages: [
+        {
+          id: 'm-agent-mention',
+          thread_root_id: null,
+          from_kind: 'agent',
+          from_agent_id: 'a1',
+          from_user_id: null,
+          content: '@Cindy review this',
+          created_at: 3,
+        },
+      ],
+    },
+    {
+      name: 'mixed precedence',
+      messages: [
+        systemMessage({ id: 'm-system-mixed' }),
+        {
+          id: 'm-user-recipient',
+          thread_root_id: null,
+          from_kind: 'user',
+          from_agent_id: null,
+          from_user_id: 'u1',
+          content: '@Cindy continue',
+          created_at: 4,
+        },
+      ],
+    },
+  ];
 
-    expect(instruction).toContain('Respond as appropriate');
-    expect(instruction).not.toContain('closed-thread summary');
-  });
+  for (const testCase of cases) {
+    it(`${testCase.name}: shared composer is byte-identical to formatInboxBatch`, () => {
+      const items = testCase.messages.map(message => ({
+        message: { ...message, metadata: message.metadata ?? null },
+      }));
+      const args = [
+        items,
+        agentName,
+        agentComputer,
+        userName,
+        undefined,
+        'Cindy',
+        TOOL,
+        REFERENCES(),
+      ] as const;
+      const historical = formatInboxBatch(...args);
+      const structured = formatInboxBatchPresentation(...args);
+      expect(structured.text).toBe(historical);
+      expect(
+        composeRuntimeDeliveryPresentation(structured.presentations, TOOL),
+      ).toBe(historical);
+    });
+  }
 });
 
 describe('formatStdinMessageHeader reply-cluster metadata', () => {

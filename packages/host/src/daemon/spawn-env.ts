@@ -51,9 +51,11 @@ export function buildDaemonSpawnEnv(
       'runtime_start: no silverhand server URL supplied by server and no daemon-local control-plane URL is attached',
     );
   }
-  return {
+  const result: NodeJS.ProcessEnv = {
     ...env,
-    [SILVERHAND_CONVERSATION_ID_ENV]: input.conversationId,
+    ...(options.runtime_scope.kind === 'conversation'
+      ? { [SILVERHAND_CONVERSATION_ID_ENV]: input.conversationId }
+      : {}),
     [SILVERHAND_AGENT_ID_ENV]: input.agentId,
     [SILVERHAND_SERVER_URL_ENV]: silverhandServerUrl,
     [SILVERHAND_AUTH_TOKEN_ENV]: options.env_policy.silverhand.auth_token,
@@ -65,4 +67,11 @@ export function buildDaemonSpawnEnv(
       : {}),
     PATH: currentPath ? `${input.binDir}${delimiter}${currentPath}` : input.binDir,
   };
+  // Omission from the additive layer is insufficient: the daemon itself may
+  // have been launched from a ConversationSlot and process.env would leak that
+  // ambient target into a later AgentSlot child. RuntimeScope owns this key.
+  if (options.runtime_scope.kind === 'agent') {
+    delete result[SILVERHAND_CONVERSATION_ID_ENV];
+  }
+  return result;
 }

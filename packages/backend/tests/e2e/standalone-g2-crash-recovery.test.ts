@@ -196,8 +196,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
     ).run(conversationId, harness.userId, now);
     db.prepare(
       `INSERT INTO conversation_agents
-        (conversation_id, agent_id, cli_session_id, pid, status, joined_at)
-        VALUES (?, ?, NULL, NULL, 'idle', ?)`,
+        (conversation_id, agent_id, joined_at)
+       VALUES (?, ?, ?)`,
     ).run(conversationId, agentId, now);
 
     const messageId = 'msg-g2-b5';
@@ -247,7 +247,7 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
         () => {
           const row = db
             .prepare<[string, string], { cli_session_id: string | null }>(
-              `SELECT cli_session_id FROM conversation_agents
+              `SELECT cli_session_id FROM agent_runtime_slots
                 WHERE conversation_id = ? AND agent_id = ?`,
             )
             .get(conversationId, agentId);
@@ -286,8 +286,8 @@ title, status, spawned_by_agent_id, closed_at, close_summary,
                 cli_session_id: string | null;
               }
             >(
-              `SELECT status, pid, cli_session_id
-                 FROM conversation_agents
+              `SELECT observed_status AS status, observed_pid AS pid, cli_session_id
+                 FROM agent_runtime_slots
                 WHERE conversation_id = ? AND agent_id = ?`,
             )
             .get(conversationId, agentId);

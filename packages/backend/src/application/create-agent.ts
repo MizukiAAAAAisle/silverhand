@@ -91,9 +91,9 @@ export type CreateAgentCommand = {
 /** The fresh-L4 4-field payload returned on `created` / echoed on `echo`. */
 export type CreateAgentSuccess = {
   agent: AgentDto;
-  agentHomeWorkspaceId: string;
-  dmChannelId: string;
-  onboardingMessageId: string;
+  agentHomeWorkspaceId: string | null;
+  dmChannelId: string | null;
+  onboardingMessageId: string | null;
 };
 
 /**
@@ -144,6 +144,7 @@ const METADATA_SNAPSHOT_FIELDS = [
   'description',
   'template_choice',
   'host_id',
+  'session_scope',
 ] as const;
 type MetadataSnapshotField = (typeof METADATA_SNAPSHOT_FIELDS)[number];
 
@@ -154,6 +155,7 @@ interface MetadataSnapshot {
   description: string | null;
   template_choice: string;
   host_id: string;
+  session_scope: 'agent' | 'conversation';
 }
 
 function agentMetadataSnapshot(row: AgentRow): MetadataSnapshot {
@@ -165,6 +167,7 @@ function agentMetadataSnapshot(row: AgentRow): MetadataSnapshot {
     // D2 ships 'default' only; agent row has no column yet.
     template_choice: 'default',
     host_id: row.host_id,
+    session_scope: row.session_scope,
   };
 }
 
@@ -179,6 +182,7 @@ function requestMetadataSnapshot(
     description: input.description ?? null,
     template_choice: 'default',
     host_id: effectiveHostId,
+    session_scope: input.session_scope ?? 'conversation',
   };
 }
 
@@ -296,11 +300,14 @@ function insertProvisioningDependents(
   deps: Pick<CreateAgentDeps, 'agentProvisioning'>,
   agentRow: AgentRow,
   creatorUserId: string,
-): {
-  home: { id: string };
-  dm: { id: string };
-  onboardingMsg: { id: string };
-} {
+):
+  | { kind: 'agent' }
+  | {
+      kind: 'conversation';
+      home: { id: string };
+      dm: { id: string };
+      onboardingMsg: { id: string };
+    } {
   return deps.agentProvisioning.uow.atomically(tx => {
     // Conditional transition FIRST (pending-only): the UPDATE only matches a
     // row that still has eligibility. `lost` means another transition already
@@ -309,6 +316,7 @@ function insertProvisioningDependents(
     const outcome = tx.agents.flipToActiveAndGet(agentRow.id);
     if (outcome.status === 'lost') throw new ProvisioningEligibilityLostError();
     const flipped = outcome.row;
+    if (flipped.sessionScope === 'agent') return { kind: 'agent' };
     const home = tx.workspaces.insertAgentHome({
       agent: flipped,
     });
@@ -339,7 +347,7 @@ function insertProvisioningDependents(
       content: ONBOARDING_DM_CONTENT(agentRow.name),
       metadata: { subtype: systemSubtype('onboarding') },
     });
-    return { home, dm, onboardingMsg };
+    return { kind: 'conversation', home, dm, onboardingMsg };
   });
 }
 
@@ -524,11 +532,37 @@ function buildPostCommitEffects(
   ];
 }
 
+function postCommitEffectsForInserted(
+  deps: CreateAgentDeps,
+  agentId: string,
+  inserted: ReturnType<typeof insertProvisioningDependents>,
+): PostCommitEffect[] {
+  if (inserted.kind === 'agent') {
+    return [() => {
+      deps.events.publishToScope('app', 'agent_changed', { agent_id: agentId });
+    }];
+  }
+  return buildPostCommitEffects(
+    deps,
+    inserted.dm.id,
+    agentId,
+    inserted.onboardingMsg.id,
+  );
+}
+
 function successFromInserted(
   deps: CreateAgentDeps,
   agentId: string,
   inserted: ReturnType<typeof insertProvisioningDependents>,
 ): CreateAgentSuccess {
+  if (inserted.kind === 'agent') {
+    return {
+      agent: deps.agents.get(agentId)!,
+      agentHomeWorkspaceId: null,
+      dmChannelId: null,
+      onboardingMessageId: null,
+    };
+  }
   return {
     agent: deps.agents.get(agentId)!,
     agentHomeWorkspaceId: inserted.home.id,
@@ -569,6 +603,20 @@ function resolveIdempotentCreateOutcome(
 
   switch (existingRow.materialization_status) {
     case 'active': {
+      if (existingRow.session_scope === 'agent') {
+        return {
+          done: true,
+          result: {
+            kind: 'echo',
+            payload: {
+              agent: agents.get(existingRow.id)!,
+              agentHomeWorkspaceId: null,
+              dmChannelId: null,
+              onboardingMessageId: null,
+            },
+          },
+        };
+      }
       // 200 echo — re-derive the fresh-L4 4-field payload from the graph.
       const dm = conversations.findDmChannelForAgent(existingRow.id);
       if (!dm) {
@@ -726,11 +774,10 @@ export async function createAgent(
     return {
       kind: 'created',
       payload: successFromInserted(deps, dispatch.rowToRetry.id, retryResult.inserted),
-      effects: buildPostCommitEffects(
+      effects: postCommitEffectsForInserted(
         deps,
-        retryResult.inserted.dm.id,
         dispatch.rowToRetry.id,
-        retryResult.inserted.onboardingMsg.id,
+        retryResult.inserted,
       ),
     };
   }
@@ -824,11 +871,6 @@ export async function createAgent(
   return {
     kind: 'created',
     payload: successFromInserted(deps, reservedRow.id, freshResult.inserted),
-    effects: buildPostCommitEffects(
-      deps,
-      freshResult.inserted.dm.id,
-      reservedRow.id,
-      freshResult.inserted.onboardingMsg.id,
-    ),
+    effects: postCommitEffectsForInserted(deps, reservedRow.id, freshResult.inserted),
   };
 }

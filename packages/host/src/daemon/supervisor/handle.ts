@@ -16,7 +16,11 @@
 import type { ChildProcess } from 'node:child_process';
 import type { AgentRunState, ObservedSeq } from '@silverhand/shared';
 import type { Driver } from '../../drivers/index.js';
-import type { RuntimeDelivery, RuntimeStartParams } from '../../protocol.js';
+import type {
+  RuntimeDelivery,
+  RuntimeScope,
+  RuntimeStartParams,
+} from '../../protocol.js';
 
 /** Tier name for the 3-tier init watchdog. Matches CM's
  *  `InitTimeoutReason` so the wire `runtime_init_timeout.timeout_reason`
@@ -52,6 +56,11 @@ export type RuntimePhase =
  * between "consumed/failed event sent" and "pending cleared".
  */
 export interface StartupDeliveryState {
+  /** Origin target for presentation, ack and per-stream freshness. Not part
+   * of AgentSlot runtime identity. */
+  readonly conversationId: string;
+  /** Host-resolved absolute action directory for this origin target. */
+  readonly actionWorkdir: string;
   readonly deliveryIds: readonly number[];
   readonly deliveredUpToSeq?: number;
   /**
@@ -110,14 +119,14 @@ export interface StartupDeliveryState {
  * eligible to be reclaimed by an alternate consumer.
  */
 export interface DeferredEntry {
+  readonly conversationId: string;
+  readonly actionWorkdir: string;
   readonly deliveryIds: readonly number[];
   readonly deliveredUpToSeq?: number;
   readonly deliveries?: readonly RuntimeDelivery[];
   readonly text: string;
-  /** Delivery-owner token (§11.4.1) — the connection this batch arrived
-   *  on. Stamped by `deliver()` from the injected `DeliveryOwnerContext`;
-   *  the sole key for owner-scoped cleanup on that connection's drop. */
-  readonly owner: string;
+  /** Custody owner is per id, independent of this presentation/ack group. */
+  readonly owners: ReadonlyMap<number, string>;
 }
 
 export type ActivitySnippetKind = 'thinking' | 'text';
@@ -139,6 +148,8 @@ export const INPUT_PAYLOAD_UUID_CAP = 200;
 export interface PendingStaleEvent {
   id: string;
   currentSeq: number;
+  /** Target whose stream cursor the stale signal describes. */
+  conversationId: string;
   /** Stream the conflicted head lives in (`main` or `thread:<root>`),
    *  from the 409's `details.stream_key`. `null` when the backend did
    *  not surface one — coverage checks then fail CLOSED: a pull can
@@ -226,8 +237,15 @@ export type DefaultReplyTarget =
   | { readonly kind: 'ambiguous'; readonly streamKeys: readonly string[] };
 
 export interface RuntimeHandle {
-  readonly conversationId: string;
+  /** Stable session identity. Never reconstructed from the current target. */
+  readonly runtimeScope: RuntimeScope;
+  /** Stable runtime cwd selected by the same scope authority. */
+  readonly cwd: string;
+  /** Current/focus delivery target. Mutable only for agent-scoped sessions. */
+  conversationId: string;
   readonly agentId: string;
+  /** Backend-issued runtime custody generation for this exact child. */
+  readonly runtimeGeneration: number;
   /** OS process id. Stable for the lifetime of the handle; `null` is
    *  not legal — if we don't have a pid the handle never gets
    *  created. */
@@ -321,9 +339,13 @@ export interface RuntimeHandle {
    *  overwritten back into "reserved" and the queue held forever
    *  (#1558 final-gate P1-1). */
   turnEndCount: number;
-  /** Most recent stale-send event returned to this runtime. Consumed by
-   *  the next send or by `message stale-resolve`. */
-  pendingStaleEvent: PendingStaleEvent | null;
+  /** Pending stale-send events keyed by origin conversation. AgentSlot may
+   * hold several independently; ConversationSlot naturally has one key. */
+  pendingStaleEvents: Map<string, PendingStaleEvent>;
+  /** Absolute per-origin action directories whose existence was verified for
+   * this live aggregate. Avoids turning every delivery into an async fs gap;
+   * a new origin is still ensured before daemon custody mutates. */
+  ensuredActionWorkdirs: Set<string>;
   /** #task:1557 Phase 1 instrument: payload uuid → the delivery ids that
    *  payload carried, written at encode time and read/pruned when the
    *  runtime echoes `command_lifecycle` frames (claude). Observation
