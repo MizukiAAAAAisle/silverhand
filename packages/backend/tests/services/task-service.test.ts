@@ -119,7 +119,7 @@ function bootstrap(
 function createTask(t: ReturnType<typeof bootstrap>, agentId: string, title: string) {
   return t.service.createTasks({
     conversationId: t.channel.id,
-    actor: { kind: 'agent', agentId, conversationId: t.channel.id },
+    actor: { kind: 'agent', runtimeScope: 'conversation', agentId, conversationId: t.channel.id },
     tasks: [{ title }],
   });
 }
@@ -154,7 +154,7 @@ describe('TaskService.createTasks', () => {
 
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'first' }, { title: 'second' }],
       });
       unsubA();
@@ -192,7 +192,7 @@ describe('TaskService.createTasks', () => {
 
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'thread task' }],
         target: { kind: 'thread', message_id: reply.id },
       });
@@ -240,7 +240,7 @@ describe('TaskService.createTasks', () => {
 
       const missing = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'missing target' }],
         target: { kind: 'thread', message_id: 'missing-message' },
       });
@@ -248,7 +248,7 @@ describe('TaskService.createTasks', () => {
 
       const cross = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'cross target' }],
         target: { kind: 'thread', message_id: otherMsg.id },
       });
@@ -269,7 +269,7 @@ describe('TaskService.createTasks', () => {
       const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: outsider.id, conversationId: t.channel.id },
         tasks: [{ title: 'x' }],
       });
       expect(result).toEqual({ error: 'not_conversation_member' });
@@ -286,7 +286,7 @@ describe('TaskService.createTasks', () => {
         .run(Date.now(), t.channel.id);
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'x' }],
       });
       expect(result).toEqual({ error: 'conversation_closed' });
@@ -316,7 +316,7 @@ describe('TaskService.createTasks', () => {
         .run(Date.now(), t.channel.id);
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'x' }],
       });
       expect(result).toEqual({ error: 'conversation_archived' });
@@ -337,7 +337,7 @@ describe('TaskService.createTasks', () => {
     try {
       const result = await t.service.createTasks({
         conversationId: 'missing-conv',
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: 'missing-conv' },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: 'missing-conv' },
         tasks: [{ title: 'x' }],
       });
       expect(result).toEqual({ error: 'conversation_not_found' });
@@ -358,7 +358,7 @@ describe('TaskService.createTasks', () => {
 
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'x' }],
       });
       unsub();
@@ -379,7 +379,7 @@ describe('TaskService.claimTask — agent actor', () => {
       const created = await createTask(t, t.bob.id, 'task-1');
       const id = taskId(created);
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r).toMatchObject({ success: true, task_number: 1, id });
@@ -396,11 +396,11 @@ describe('TaskService.claimTask — agent actor', () => {
     try {
       await createTask(t, t.bob.id, 'task-1');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -416,7 +416,7 @@ describe('TaskService.claimTask — agent actor', () => {
     try {
       await createTask(t, t.bob.id, 'task-1');
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         assignee: { agentId: t.bob.id },
       });
@@ -438,14 +438,14 @@ describe('TaskService.claimTask — agent actor', () => {
       // create task in `other`
       const created = await t.service.createTasks({
         conversationId: other.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: other.id },
         tasks: [{ title: 'foreign' }],
       });
       const id = taskId(created);
       // alice claims from `channel`; since both convs share workspace,
       // the cross-channel lift gates this through (#task:530).
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(true);
@@ -466,7 +466,7 @@ describe('TaskService.claimTask — agent actor', () => {
       // mark done directly
       t.db.prepare(`UPDATE tasks SET status = 'done' WHERE id = ?`).run(id);
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -484,7 +484,7 @@ describe('TaskService.claimTask — agent actor', () => {
       // simulate a task in in_review (could happen if user assigned then agent moved)
       t.db.prepare(`UPDATE tasks SET status = 'in_review' WHERE id = ?`).run(id);
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(true);
@@ -508,7 +508,7 @@ describe('TaskService.claimTask — agent actor', () => {
       const unsub = t.events.subscribe(t.channel.id, e => seen.push(e.kind));
       try {
         const r = await t.service.claimTask({
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
         });
         expect(r.success).toBe(false);
@@ -555,7 +555,7 @@ describe('TaskService.claimTask — user actor', () => {
       const created = await createTask(t, t.alice.id, 'x');
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       await t.service.updateStatus({
@@ -637,7 +637,7 @@ describe('TaskService.claimTask — user actor', () => {
       const id = taskId(created);
       // bob claims first
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       // user reassigns to alice
@@ -681,11 +681,11 @@ describe('TaskService.unclaimTask', () => {
       const created = await createTask(t, t.alice.id, 'x');
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r).toEqual({ success: true });
@@ -702,11 +702,11 @@ describe('TaskService.unclaimTask', () => {
     try {
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -721,7 +721,7 @@ describe('TaskService.unclaimTask', () => {
     try {
       await createTask(t, t.alice.id, 'x');
       const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -742,16 +742,16 @@ describe('TaskService.unclaimTask', () => {
       // Alice creates AND claims in `other`.
       await t.service.createTasks({
         conversationId: other.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: other.id },
         tasks: [{ title: 'foreign' }],
       });
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: other.id },
         by: { taskNumber: 1 },
       });
       // Now unclaim from `channel` — cross-channel within workspace.
       const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(true);
@@ -773,7 +773,7 @@ describe('TaskService.unclaimTask', () => {
         // override then parks the task in the status under test (the assignee
         // survives a status write).
         await t.service.claimTask({
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
         });
         if (status !== 'in_progress') {
@@ -835,7 +835,7 @@ describe('TaskService.unclaimTask', () => {
         const created = await createTask(t, t.alice.id, 'x');
         const id = taskId(created);
         await t.service.claimTask({
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
         });
         await t.service.updateStatus({
@@ -873,11 +873,11 @@ describe('TaskService.updateStatus', () => {
     try {
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -893,11 +893,11 @@ describe('TaskService.updateStatus', () => {
       const created = await createTask(t, t.alice.id, 'x');
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const closed = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'closed',
       });
@@ -910,7 +910,7 @@ describe('TaskService.updateStatus', () => {
       expect(closedItem.closed_at).toEqual(expect.any(Number));
 
       const reopened = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'todo',
       });
@@ -928,11 +928,11 @@ describe('TaskService.updateStatus', () => {
     try {
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'todo',
       });
@@ -948,11 +948,11 @@ describe('TaskService.updateStatus', () => {
     try {
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -973,15 +973,15 @@ describe('TaskService.updateStatus', () => {
       t.conversations.addAgent(other.id, t.alice.id);
       await t.service.createTasks({
         conversationId: other.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: other.id },
         tasks: [{ title: 'foreign' }],
       });
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: other.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -1033,7 +1033,7 @@ describe('TaskService.updateStatus', () => {
     try {
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const order: string[] = [];
@@ -1043,7 +1043,7 @@ describe('TaskService.updateStatus', () => {
         if (e.kind === 'message') order.push('publish');
       });
       await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -1131,7 +1131,7 @@ describe('TaskService.list / getTaskDetail', () => {
       await createTask(t, t.alice.id, 'task1');
       await t.service.createTasks({
         conversationId: ch2.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: ch2.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: ch2.id },
         tasks: [{ title: 'task2' }],
       });
       const r = t.service.list({ actor: { kind: 'user', userId: 'local' } });
@@ -1147,7 +1147,7 @@ describe('TaskService.list / getTaskDetail', () => {
       await createTask(t, t.alice.id, 'visible');
       const hidden = await t.service.createTasks({
         conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'hidden' }],
       });
       const hiddenId = taskId(hidden);
@@ -1169,7 +1169,7 @@ describe('TaskService.list / getTaskDetail', () => {
     try {
       const hidden = await t.service.createTasks({
         conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'hidden' }],
       });
       const hiddenId = taskId(hidden);
@@ -1219,7 +1219,7 @@ describe('TaskService.list / getTaskDetail', () => {
       await createTask(t, t.alice.id, 'task1');
       await t.service.createTasks({
         conversationId: ch2.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: ch2.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: ch2.id },
         tasks: [{ title: 'task2' }],
       });
       const r = t.service.list({
@@ -1249,18 +1249,18 @@ describe('TaskService.list / getTaskDetail', () => {
       await createTask(t, t.alice.id, 'in-channel');
       await t.service.createTasks({
         conversationId: ch2.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: ch2.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: ch2.id },
         tasks: [{ title: 'in-ch2' }],
       });
       // Default (no workspaceId) → actor's current ws (t.channel.workspace_id).
       const defaultList = t.service.list({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
       });
       expect(defaultList.map(r => r.title)).toEqual(['in-channel']);
       // Explicit workspaceId → respected (route layer is responsible
       // for membership pre-check before calling the service).
       const explicit = t.service.list({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         workspaceId: ws2.id,
       });
       expect(explicit.map(r => r.title)).toEqual(['in-ch2']);
@@ -1280,11 +1280,11 @@ describe('TaskService.list / getTaskDetail', () => {
       await createTask(t, t.alice.id, 'main-task');
       await t.service.createTasks({
         conversationId: sibling.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: sibling.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: sibling.id },
         tasks: [{ title: 'sibling-task' }],
       });
       const r = t.service.list({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         conversationId: sibling.id,
       });
       expect(r.length).toBe(1);
@@ -1309,11 +1309,11 @@ describe('TaskService.list / getTaskDetail', () => {
       t.conversations.addAgent(ch2.id, t.alice.id);
       await t.service.createTasks({
         conversationId: ch2.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: ch2.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: ch2.id },
         tasks: [{ title: 'foreign' }],
       });
       const r = t.service.list({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         conversationId: ch2.id,
       });
       expect(r.length).toBe(0);
@@ -1337,12 +1337,13 @@ describe('TaskService.list / getTaskDetail', () => {
       t.conversations.addAgent(ch2.id, t.alice.id);
       const created = await t.service.createTasks({
         conversationId: ch2.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: ch2.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: ch2.id },
         tasks: [{ title: 'foreign' }],
       });
       const id = taskId(created);
       const r = t.service.getTaskDetail(id, {
         kind: 'agent',
+        runtimeScope: 'conversation',
         agentId: t.alice.id,
         conversationId: t.channel.id,
       });
@@ -1369,7 +1370,7 @@ describe('TaskService agent-actor validation', () => {
       });
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: other.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: other.id },
         tasks: [{ title: 'filed cross-channel' }],
       });
       expect('tasks' in result).toBe(true);
@@ -1386,7 +1387,7 @@ describe('TaskService agent-actor validation', () => {
     try {
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: 'no-such-agent', conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: 'no-such-agent', conversationId: t.channel.id },
         tasks: [{ title: 'x' }],
       });
       expect(result).toEqual({ error: 'agent_not_found' });
@@ -1400,7 +1401,7 @@ describe('TaskService agent-actor validation', () => {
     try {
       await createTask(t, t.alice.id, 't');
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: 'no-such-agent', conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: 'no-such-agent', conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -1416,7 +1417,7 @@ describe('TaskService agent-actor validation', () => {
       const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       await createTask(t, t.alice.id, 't');
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: outsider.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -1431,11 +1432,11 @@ describe('TaskService agent-actor validation', () => {
     try {
       await createTask(t, t.alice.id, 't');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: 'no-such-agent', conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: 'no-such-agent', conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -1451,11 +1452,11 @@ describe('TaskService agent-actor validation', () => {
       const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       await createTask(t, t.alice.id, 't');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: outsider.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -1470,11 +1471,11 @@ describe('TaskService agent-actor validation', () => {
     try {
       await createTask(t, t.alice.id, 't');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: 'no-such-agent', conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: 'no-such-agent', conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -1491,11 +1492,11 @@ describe('TaskService agent-actor validation', () => {
       const outsider = t.agents.create({ name: 'out', runtime: 'claude' }, t.localHostId, 'local');
       await createTask(t, t.alice.id, 't');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: outsider.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: outsider.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -1523,11 +1524,11 @@ describe('TaskService board-fanout event', () => {
       });
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -1611,7 +1612,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
     try {
       const result = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'task-create-meta' }],
       });
       if (!('tasks' in result)) throw new Error();
@@ -1641,7 +1642,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
     try {
       await createTask(t, t.bob.id, 'task-claim-meta');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const rows = fetchSystemMetadata(t, 'task_claim');
@@ -1682,7 +1683,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       });
 
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(true);
@@ -1732,7 +1733,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       const created = await createTask(t, t.bob.id, 'task-reassign-meta');
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       await t.service.updateStatus({
@@ -1767,7 +1768,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       const created = await createTask(t, t.bob.id, 'task-unassign-meta');
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       await t.service.updateStatus({
@@ -1809,7 +1810,7 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       // asserts on the claim + status events only.
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         tasks: [{ title: 'task inside thread' }],
         target: { kind: 'thread', message_id: root.id },
       });
@@ -1821,13 +1822,13 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
       });
 
       const claim = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(claim).toMatchObject({ success: true, id });
 
       const status = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -1865,11 +1866,11 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
     try {
       await createTask(t, t.alice.id, 'task-unclaim-meta');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       const rows = fetchSystemMetadata(t, 'task_unclaim');
@@ -1892,11 +1893,11 @@ describe('TaskService system message metadata enrichment (PR-2)', () => {
     try {
       await createTask(t, t.alice.id, 'task-status-meta');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -1981,13 +1982,13 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       // Bob creates a task in ws2.
       await t.service.createTasks({
         conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'ws2 work' }],
       });
       // Alice in ws1 tries to claim #1 without selector; her ws lookup
       // misses (no task #1 in ws1 yet).
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -2002,11 +2003,11 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     try {
       await t.service.createTasks({
         conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'ws2 work' }],
       });
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         workspaceSelector: { workspaceId: t.ws2.id },
       });
@@ -2022,13 +2023,18 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     try {
       await t.service.createTasks({
         conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'ws2 work' }],
       });
       // Add alice as ws2 member.
       t.workspaces.insertMembership(t.ws2.id, t.alice.id);
+      // #task:2018 B2: the write face is per-task ACL'd — board membership no
+      // longer suffices; the claimer must participate in the task's own
+      // conversation. Join it so this case keeps testing its original
+      // subject (selector + workspace membership + audit line).
+      t.conversations.addAgent(t.ws2Channel.id, t.alice.id);
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         workspaceSelector: { workspaceId: t.ws2.id },
       });
@@ -2048,7 +2054,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     const t = bootstrapTwoWorkspaces();
     try {
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         workspaceSelector: { workspaceId: 'no-such-ws' },
       });
@@ -2073,7 +2079,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         agent: { id: carolAgent.id, name: 'eng' },
       });
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         workspaceSelector: { workspaceName: 'eng' },
       });
@@ -2089,7 +2095,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     const t = bootstrapTwoWorkspaces();
     try {
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         workspaceSelector: { workspaceName: 'no-such-name' },
       });
@@ -2105,20 +2111,22 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     try {
       await t.service.createTasks({
         conversationId: t.ws2Channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.ws2Channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.ws2Channel.id },
         tasks: [{ title: 'ws2' }],
       });
       // Alice not yet member of platform → membership required.
       const r1 = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         workspaceSelector: { workspaceName: 'platform' },
       });
       expect(r1.code).toBe('workspace_membership_required');
       // Add alice → succeeds.
       t.workspaces.insertMembership(t.ws2.id, t.alice.id);
+      // #task:2018 B2: per-task ACL — join the task's conversation too.
+      t.conversations.addAgent(t.ws2Channel.id, t.alice.id);
       const r2 = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         workspaceSelector: { workspaceName: 'platform' },
       });
@@ -2159,7 +2167,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       });
       // alice advances → assignee path
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -2188,7 +2196,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       const unsub = t.events.subscribe(t.channel.id, e => seen.push(e.kind));
       try {
         const r = await t.service.updateStatus({
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
           status: 'done',
         });
@@ -2219,7 +2227,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
       const id = taskId(created);
       t.db.prepare(`UPDATE tasks SET status = 'in_progress' WHERE id = ?`).run(id);
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'done',
       });
@@ -2235,7 +2243,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     try {
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'self stale' }],
       });
       const id = taskId(created);
@@ -2247,7 +2255,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         )
         .run(id);
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'done',
       });
@@ -2262,7 +2270,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
     try {
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'alice created' }],
       });
       const id = taskId(created);
@@ -2273,7 +2281,7 @@ describe('#task:530 — workspace selector + cross-workspace permission', () => 
         )
         .run(t.bob.id, id);
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'done',
       });
@@ -2302,7 +2310,7 @@ describe('TaskService — write_tasks capability gate (graded-permissions cut 2)
       await createTask(t, t.bob.id, 'task-1');
       denyWriteTasks = true;
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -2320,12 +2328,12 @@ describe('TaskService — write_tasks capability gate (graded-permissions cut 2)
     try {
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       denyWriteTasks = true;
       const r = await t.service.unclaimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r.success).toBe(false);
@@ -2343,12 +2351,12 @@ describe('TaskService — write_tasks capability gate (graded-permissions cut 2)
     try {
       await createTask(t, t.alice.id, 'x');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       denyWriteTasks = true;
       const r = await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'in_review',
       });
@@ -2383,7 +2391,7 @@ describe('TaskService — claim capability gate (write_tasks)', () => {
       // route; this sets up a numbered task regardless of the checker.
       await createTask(t, t.bob.id, 'numbered');
       const r = await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       expect(r).toMatchObject({ success: true, task_number: 1 });
@@ -2406,7 +2414,7 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
       });
       const r = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'derived task', body: 'do the thing', sourceMessageId: src.id }],
         claim: true,
       });
@@ -2429,7 +2437,7 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
     try {
       const r = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'titled but bodyless' }],
       });
       const id = taskId(r);
@@ -2454,19 +2462,19 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
       });
       const first = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'first', sourceMessageId: src.id }],
       });
       if (!('tasks' in first)) throw new Error('first create failed');
       // Close the first task — a permanent 1:1 source does NOT release on close.
       await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: first.tasks[0]!.task_number },
         status: 'closed',
       });
       const second = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'second', sourceMessageId: src.id }],
       });
       expect('error' in second && second.error).toBe('source_conflict');
@@ -2493,7 +2501,7 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
         fromUserId: 'local',
         content: 'source',
       });
-      const actor = { kind: 'agent' as const, agentId: t.alice.id, conversationId: t.channel.id };
+      const actor = { kind: 'agent' as const, runtimeScope: 'conversation' as const, agentId: t.alice.id, conversationId: t.channel.id };
       const tasksBefore = t.service.list({ actor });
 
       const convKinds: string[] = [];
@@ -2529,7 +2537,7 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
     try {
       const r = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'x', sourceMessageId: 'no-such-message' }],
       });
       expect('error' in r && r.error).toBe('source_message_not_found');
@@ -2557,7 +2565,7 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
       });
       const r = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'x', sourceMessageId: siblingSrc.id }],
       });
       expect('error' in r && r.error).toBe('source_conversation_mismatch');
@@ -2582,20 +2590,20 @@ describe('TaskService.createTasks — source provenance + --claim', () => {
       });
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'derived', sourceMessageId: src.id }],
       });
       const id = taskId(created);
       // The source message is removed (the task keeps its immutable provenance id).
       t.db.prepare('DELETE FROM messages WHERE id = ?').run(src.id);
       const resolved = t.service.resolveAgentDetailWorkspace(
-        { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         undefined,
       );
       if ('code' in resolved) throw new Error('workspace resolve failed');
       const detail = t.service.getTaskDetail(
         id,
-        { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         resolved.workspaceId,
       );
       expect(detail?.source_message_id).toBe(src.id); // provenance identity kept
@@ -2614,7 +2622,7 @@ describe('TaskService.editTask', () => {
     try {
       await createTask(t, t.alice.id, 'old title');
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'new title',
         body: 'new content',
@@ -2636,11 +2644,11 @@ describe('TaskService.editTask', () => {
     try {
       await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'keep me', body: 'original body' }],
       });
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: null,
         body: '',
@@ -2671,14 +2679,14 @@ describe('TaskService.editTask', () => {
       // Task lives in otherWs (task_number 1 in that workspace).
       await t.service.createTasks({
         conversationId: otherChannel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: otherChannel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: otherChannel.id },
         tasks: [{ title: 'foreign task', body: 'foreign body' }],
       });
       // Edit it while ACTING from the main-workspace channel, pointing the
       // selector at the row's own workspace (otherWs) — the row's workspace
       // authorizes, not the actor's current conversation.
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'edited across workspaces',
         body: null,
@@ -2700,7 +2708,7 @@ describe('TaskService.editTask', () => {
     try {
       await createTask(t, t.alice.id, 'secret title');
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'x',
         body: null,
@@ -2730,11 +2738,11 @@ describe('TaskService.editTask', () => {
       t.conversations.addAgent(t.channel.id, carol.id);
       await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         tasks: [{ title: 'old title', body: SENTINEL }],
       });
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
 
@@ -2743,7 +2751,7 @@ describe('TaskService.editTask', () => {
       t.fake.delivered = []; // isolate the edit wake from create/claim deliveries
 
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'new title',
         body: null,
@@ -2796,11 +2804,11 @@ describe('TaskService.editTask', () => {
     try {
       await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         tasks: [{ title: 'same title', body: 'same body' }],
       });
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
 
@@ -2809,7 +2817,7 @@ describe('TaskService.editTask', () => {
       t.fake.delivered = [];
 
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'same title', // canonically identical to stored
         body: 'same body',
@@ -2836,13 +2844,13 @@ describe('TaskService.editTask', () => {
     try {
       await createTask(t, t.bob.id, 'old');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       t.fake.delivered = [];
 
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'bob edits his own task',
         body: null,
@@ -2863,18 +2871,18 @@ describe('TaskService.editTask', () => {
     try {
       await createTask(t, t.bob.id, 'old');
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       await t.service.updateStatus({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         status: 'closed',
       });
       t.fake.delivered = [];
 
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'edited after close',
         body: null,
@@ -2900,7 +2908,7 @@ describe('TaskService.editTask', () => {
       t.fake.delivered = [];
 
       const r = await t.service.editTask({
-        actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
         title: 'edited while unassigned',
         body: null,
@@ -2920,7 +2928,7 @@ describe('TaskService.editTask', () => {
       const created = await createTask(t, t.bob.id, 'old');
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
       t.fake.delivered = [];
@@ -2948,12 +2956,12 @@ describe('TaskService.editTask', () => {
     try {
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         tasks: [{ title: 'orig title', body: 'orig body' }],
       });
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
 
@@ -2974,7 +2982,7 @@ describe('TaskService.editTask', () => {
 
       await expect(
         t.service.editTask({
-          actor: { kind: 'agent', agentId: t.alice.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alice.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
           title: 'edited title',
           body: 'edited body',
@@ -3004,7 +3012,7 @@ describe('TaskService.editTask', () => {
     try {
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         tasks: [{ title: 'claim rollback' }],
       });
       const id = taskId(created);
@@ -3020,7 +3028,7 @@ describe('TaskService.editTask', () => {
 
       await expect(
         t.service.claimTask({
-          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
         }),
       ).rejects.toThrow('injected claim notice failure');
@@ -3046,12 +3054,12 @@ describe('TaskService.editTask', () => {
     try {
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         tasks: [{ title: 'unclaim rollback' }],
       });
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
 
@@ -3067,7 +3075,7 @@ describe('TaskService.editTask', () => {
 
       await expect(
         t.service.unclaimTask({
-          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
         }),
       ).rejects.toThrow('injected unclaim notice failure');
@@ -3093,12 +3101,12 @@ describe('TaskService.editTask', () => {
     try {
       const created = await t.service.createTasks({
         conversationId: t.channel.id,
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         tasks: [{ title: 'status rollback' }],
       });
       const id = taskId(created);
       await t.service.claimTask({
-        actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+        actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
         by: { taskNumber: 1 },
       });
 
@@ -3113,7 +3121,7 @@ describe('TaskService.editTask', () => {
 
       await expect(
         t.service.updateStatus({
-          actor: { kind: 'agent', agentId: t.bob.id, conversationId: t.channel.id },
+          actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.bob.id, conversationId: t.channel.id },
           by: { taskNumber: 1 },
           status: 'in_review',
         }),
@@ -3142,7 +3150,7 @@ describe('TaskService.editTask', () => {
       // time; the behavior below pins the create+rollback contract through the
       // OBSERVABLE read port — no native SQL in this test (native-SQL debt is
       // shrink-only).
-      const actor = { kind: 'agent' as const, agentId: t.bob.id, conversationId: t.channel.id };
+      const actor = { kind: 'agent' as const, runtimeScope: 'conversation' as const, agentId: t.bob.id, conversationId: t.channel.id };
       // Baseline: a committed task whose number anchors the later assertions
       // (so the numbering check is not vacuous — the failed batch + success
       // must not reuse or reorder below it).

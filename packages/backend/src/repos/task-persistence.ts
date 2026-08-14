@@ -34,6 +34,8 @@ export function taskConversationAccessPort(db: Db): TaskConversationAccessPort {
   return {
     get: id => conversations.get(id),
     getAgent: (conversationId, agentId) => conversations.getAgent(conversationId, agentId),
+    isAgentParticipant: (conversationId, agentId) =>
+      conversations.isAgentParticipant(conversationId, agentId),
     userCanAccessConversation: (userId, conversationId) =>
       prepareObserved<[string, string], { ok: 1 }>(
         db,

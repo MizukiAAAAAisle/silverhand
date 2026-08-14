@@ -1911,6 +1911,7 @@ describe('ingestConversationFrame — message-row patch seam matrix (#task:1270)
       workspace_name: 'WS',
       channel_id: 'c1',
       channel_name: 'general',
+      board: { kind: 'workspace', workspace_id: 'w1' },
       thread_root_id: null,
       conversation: { id: 'c1', title: 'general' },
       status: 'todo',

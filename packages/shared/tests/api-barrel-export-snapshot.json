@@ -285,6 +285,7 @@
   "TaskBoardCreatorFilterTypeSchema",
   "TaskBoardFacetsDtoSchema",
   "TaskBoardPersonOptionSchema",
+  "TaskBoardRefSchema",
   "TaskBodySchema",
   "TaskByNumberQuerySchema",
   "TaskChangedEventSchema",

@@ -91,6 +91,12 @@ export type ErrorSubkind =
    *  `Number.MAX_SAFE_INTEGER`) is refused for the same reason: it would
    *  otherwise be sent as a rounded, different number. */
   | 'invalid_task_number'
+  /** A flag that requires a value arrived value-less or empty — e.g. the
+   *  task `--id` global-identity selector spelled as a bare switch or fed an
+   *  unset shell variable. Refused pre-flight: sending it on would either be
+   *  a schema 400 or a plausible-looking lookup for a value the caller never
+   *  supplied. */
+  | 'missing_flag_value'
   /** A `message search` range selector was spelled but names no range:
    *  `--no-current-workspace` (presence IS the signal, so negating it says
    *  nothing) or an id selector whose value arrived empty (typically an

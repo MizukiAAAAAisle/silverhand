@@ -40,7 +40,10 @@ export class TaskAccessControl {
     if (!this.agents.get(actor.agentId)) {
       return failClaim({ code: 'agent_not_found', reason: 'agent not found' });
     }
-    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
+    // Placement-aware participation (the canonical port, NOT the roster-shaped
+    // getAgent): identical for workspace placements, and the agent's own inbox
+    // frame — which deliberately has no roster row — is a legal frame.
+    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
       return failClaim({
         code: 'not_conversation_member',
         reason: 'agent is not a member of this conversation',
@@ -55,7 +58,7 @@ export class TaskAccessControl {
     if (!this.agents.get(actor.agentId)) {
       return { success: false, code: 'agent_not_found', reason: 'agent not found' };
     }
-    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
+    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
       return {
         success: false,
         code: 'not_conversation_member',

@@ -133,6 +133,7 @@ function taskRow(id: string, channelId: string, workspaceId = WS): TaskSummaryDt
     workspace_name: 'Workspace',
     channel_id: channelId,
     channel_name: 'channel',
+    board: { kind: 'workspace', workspace_id: workspaceId },
     thread_root_id: null,
     conversation: { id: channelId, title: 'channel' },
     status: 'todo',

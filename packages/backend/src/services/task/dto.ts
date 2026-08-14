@@ -50,6 +50,11 @@ export function taskJoinedToSummary(row: TaskJoinedRow): TaskSummaryDto {
     workspace_name: row.workspace_name,
     channel_id: row.conversation_id,
     channel_name: row.channel_name,
+    // DERIVED board coordinate (agent-scoped-session-v1 §4.4): every stored
+    // task is workspace-placed today; P0-f (#task:2022) adds the
+    // DirectPairBoard arm HERE. Display/numbering namespace only — access
+    // policy never reads it (Board is not an ACL unit).
+    board: { kind: 'workspace', workspace_id: row.workspace_id },
     thread_root_id: row.thread_root_id,
     conversation: { id: row.conversation_id, title: row.conversation_title },
     status: row.status,

@@ -26,6 +26,7 @@ import type {
 import { TaskSourceConflictError } from './task/ports.js';
 import type { TaskBoardColumnRequest } from './task/board.js';
 import { TaskAccessControl } from './task/access.js';
+import { TaskAccessPolicy } from './task/access-policy.js';
 import { TaskBroadcaster, type TaskEventArgs, type TaskWorkflowKind } from './task/broadcaster.js';
 import type { TaskBoardPopulationFilters } from './task/board.js';
 import type { BackendLogger } from '../context.js';
@@ -160,8 +161,10 @@ export class TaskService {
   private readonly conversations: TaskConversationAccessPort;
   private readonly uow: TaskUnitOfWork;
   private readonly agents: TaskServiceOptions['agents'];
+  private readonly workspaces: TaskServiceOptions['workspaces'];
   private readonly canUseCapability: AgentCapabilityChecker;
   private readonly access: TaskAccessControl;
+  private readonly accessPolicy: TaskAccessPolicy;
   private readonly broadcaster: TaskBroadcaster;
 
   constructor(opts: TaskServiceOptions) {
@@ -170,12 +173,14 @@ export class TaskService {
     this.conversations = opts.conversations;
     this.uow = opts.uow;
     this.agents = opts.agents;
+    this.workspaces = opts.workspaces;
     this.canUseCapability = opts.canUseCapability;
     this.access = new TaskAccessControl({
       agents: opts.agents,
       conversations: opts.conversations,
       workspaces: opts.workspaces,
     });
+    this.accessPolicy = new TaskAccessPolicy(opts.conversations, opts.canUseCapability);
     this.broadcaster = new TaskBroadcaster({
       conversations: opts.conversations,
       runtimeHost: opts.runtimeHost,
@@ -187,6 +192,23 @@ export class TaskService {
   // ── Read ─────────────────────────────────────────────────────────
 
   list(filters: ListTasksFilters): TaskSummaryDto[] {
+    // §7.2.2 (P0-g): the agent-slot default read is the UNION of every board
+    // the actor can read — membership (listForAgent: regular member ∪ owned
+    // agent_home) ∧ per-board read_tasks (the checker carries the agent_home
+    // implicit-owner arm). An explicit workspace filter keeps the validated
+    // single-board lane (narrowing only); rows are per-task gated either way.
+    if (
+      filters.actor.kind === 'agent' &&
+      filters.actor.runtimeScope === 'agent' &&
+      filters.workspaceId === undefined
+    ) {
+      const actor = filters.actor;
+      const boards = this.workspaces
+        .listForAgent(actor.agentId)
+        .filter(ws => this.canUseCapability(actor, ws.id, 'read_tasks'))
+        .map(ws => ws.id);
+      return this.read.list({ ...filters, workspaceIds: boards });
+    }
     return this.read.list(filters);
   }
 
@@ -467,6 +489,15 @@ export class TaskService {
     assignee: { agentId: string } | undefined,
     workspaceSelector: WorkspaceSelector | undefined,
   ): Promise<ClaimResultEntry> {
+    // P0-g (#task:2018): a conversation-frame principal has NO by-id mutation
+    // surface — that lane belongs to the agent-slot principal (P1). The
+    // rejection is the UNIFORM indistinguishable envelope: unknown id,
+    // unauthorized id, and this closed surface all answer identically, so the
+    // selector never becomes an existence oracle. `id` echoes the caller's
+    // own input (batch correlation, no disclosure).
+    if ('taskId' in by && actor.runtimeScope !== 'agent') {
+      return failClaim({ code: 'task_not_found', reason: 'task not found', id: by.taskId });
+    }
     if (assignee && assignee.agentId !== actor.agentId) {
       return failClaim({
         code: 'not_self_assignment',
@@ -480,24 +511,44 @@ export class TaskService {
     const actorErr = this.access.validateAgentActorForClaim(actor);
     if (actorErr) return actorErr;
 
-    const resolved = this.access.resolveAgentTaskWorkspace(
-      actor,
-      sourceConv,
-      workspaceSelector,
-      args =>
-        failClaim({ code: args.code, reason: args.reason, workspaceCandidates: args.candidates }),
-    );
-    if ('failure' in resolved) return resolved.failure;
-    const taskWorkspaceId = resolved.workspace.id;
+    // The number arm's board coordinate (resolved + authorized pre-tx). The id
+    // arm carries NO coordinates out of its precheck — the transaction below
+    // re-resolves by the canonical id itself (B5): flattening the id into
+    // (workspace, number) here would let a precheck-to-tx race retarget the
+    // write onto a reallocated number.
+    let numberArmWorkspaceId: string | null = null;
+    if ('taskId' in by) {
+      // Agent-slot global-id arm (§4.5): resolve by identity, gate through the
+      // ONE TaskAccessPolicy (participation in the task's own conversation ∧
+      // write_tasks on its board). EVERY failure — unknown id, non-participant,
+      // missing capability — is the same envelope as above; post-gate workflow
+      // failures below stay typed (the caller is already authorized to see the
+      // task).
+      const row = this.read.fetchTaskById(by.taskId);
+      if (!row || !this.accessPolicy.canAgentSeeTask(actor, row, 'write_tasks')) {
+        return failClaim({ code: 'task_not_found', reason: 'task not found', id: by.taskId });
+      }
+    } else {
+      const resolved = this.access.resolveAgentTaskWorkspace(
+        actor,
+        sourceConv,
+        workspaceSelector,
+        args =>
+          failClaim({ code: args.code, reason: args.reason, workspaceCandidates: args.candidates }),
+      );
+      if ('failure' in resolved) return resolved.failure;
+      numberArmWorkspaceId = resolved.workspace.id;
 
-    // Claim is pure mutation (it never creates a task), so it needs
-    // `write_tasks` only. Typed denial, never downgraded to task_not_found.
-    if (!this.canUseCapability(actor, taskWorkspaceId, 'write_tasks')) {
-      return failClaim({
-        code: 'capability_denied',
-        capability: 'write_tasks',
-        reason: 'agent lacks the write_tasks capability in the target workspace',
-      });
+      // Claim is pure mutation (it never creates a task), so it needs
+      // `write_tasks` only. Typed denial, never downgraded to task_not_found —
+      // this addresses the board the CALLER itself named (§4.5 asymmetry).
+      if (!this.canUseCapability(actor, numberArmWorkspaceId, 'write_tasks')) {
+        return failClaim({
+          code: 'capability_denied',
+          capability: 'write_tasks',
+          reason: 'agent lacks the write_tasks capability in the target workspace',
+        });
+      }
     }
 
     // DB-backed event inputs, precomputed as PURE VALUES before the transaction
@@ -511,13 +562,34 @@ export class TaskService {
       | { success: true; args: PendingWorkflowEvent; sysMsg: MessageDto; conversationId: string };
 
     const txOut = this.uow.atomically((tx): ClaimTxOut => {
-      const row = tx.tasks.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
+      // B5: the write authority is the ORIGINAL selector. The id arm re-reads
+      // by canonical `tasks.id` inside the transaction — never a flattened
+      // (workspace, number) that a reallocated number could retarget.
+      const row = 'taskId' in by
+        ? tx.tasks.fetchTaskById(by.taskId)
+        : tx.tasks.fetchTaskByNumber(numberArmWorkspaceId!, by.taskNumber);
       if (!row) {
-        return { failure: failClaim({
-          code: 'task_not_found',
-          reason: 'task not found',
-          taskNumber: by.taskNumber,
-        }) };
+        return { failure: 'taskId' in by
+          ? failClaim({ code: 'task_not_found', reason: 'task not found', id: by.taskId })
+          : failClaim({
+              code: 'task_not_found',
+              reason: 'task not found',
+              taskNumber: by.taskNumber,
+            }) };
+      }
+      // Per-task ACL on the WRITE face (#task:2018 B2, §4.4): board
+      // coordinate + capability are not an ACL. Participation in the task's
+      // own conversation is judged BEFORE any workflow fact (status/assignee)
+      // can leak, and non-participation folds into the SAME envelope as a
+      // miss — a guessed number discloses nothing.
+      if (!tx.conversationAccess.isAgentParticipant(row.conversation_id, actor.agentId)) {
+        return { failure: 'taskId' in by
+          ? failClaim({ code: 'task_not_found', reason: 'task not found', id: by.taskId })
+          : failClaim({
+              code: 'task_not_found',
+              reason: 'task not found',
+              taskNumber: by.taskNumber,
+            }) };
       }
       if (row.status === 'done' || row.status === 'closed') {
         return { failure: failClaim({
@@ -583,7 +655,9 @@ export class TaskService {
       sourceConv,
       ownerConv,
       taskNumber: txOut.args.taskNumber,
-      taskWorkspaceId,
+      // The task's board coordinate, post-commit truth: its owner conversation's
+      // workspace (tasks are workspace-placed by construction — inbox refuses).
+      taskWorkspaceId: requireWorkspacePlacement(ownerConv),
     });
     this.broadcaster.publish({ ...txOut.args, conversation: ownerConv }, txOut.sysMsg);
 
@@ -676,6 +750,11 @@ export class TaskService {
     by: AgentTaskRef,
     workspaceSelector: WorkspaceSelector | undefined,
   ): Promise<TaskMutationResult> {
+    // P0-g (#task:2018): no by-id mutation surface for a conversation-frame
+    // principal — uniform indistinguishable rejection (see claimTaskAgent).
+    if ('taskId' in by && actor.runtimeScope !== 'agent') {
+      return { success: false, code: 'task_not_found', reason: 'task not found' };
+    }
     const sourceConv = this.conversations.get(actor.conversationId);
     if (!sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
@@ -683,21 +762,31 @@ export class TaskService {
     const actorErr = this.access.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
-    const resolved = this.access.resolveAgentTaskWorkspace(
-      actor,
-      sourceConv,
-      workspaceSelector,
-      args => mutationFailure(args),
-    );
-    if ('failure' in resolved) return resolved.failure;
-    const taskWorkspaceId = resolved.workspace.id;
+    let numberArmWorkspaceId: string | null = null;
+    if ('taskId' in by) {
+      // Agent-slot global-id arm (§4.5) — see claimTaskAgent. No coordinates
+      // leave this precheck (B5): the tx below re-reads by the canonical id.
+      const row = this.read.fetchTaskById(by.taskId);
+      if (!row || !this.accessPolicy.canAgentSeeTask(actor, row, 'write_tasks')) {
+        return { success: false, code: 'task_not_found', reason: 'task not found' };
+      }
+    } else {
+      const resolved = this.access.resolveAgentTaskWorkspace(
+        actor,
+        sourceConv,
+        workspaceSelector,
+        args => mutationFailure(args),
+      );
+      if ('failure' in resolved) return resolved.failure;
+      numberArmWorkspaceId = resolved.workspace.id;
 
-    if (!this.canUseCapability(actor, taskWorkspaceId, 'write_tasks')) {
-      return mutationFailure({
-        code: 'capability_denied',
-        capability: 'write_tasks',
-        reason: 'agent lacks the write_tasks capability in the target workspace',
-      });
+      if (!this.canUseCapability(actor, numberArmWorkspaceId, 'write_tasks')) {
+        return mutationFailure({
+          code: 'capability_denied',
+          capability: 'write_tasks',
+          reason: 'agent lacks the write_tasks capability in the target workspace',
+        });
+      }
     }
 
     const agentLabel = this.agentName(actor.agentId);
@@ -708,8 +797,16 @@ export class TaskService {
       | { success: true; args: PendingWorkflowEvent; sysMsg: MessageDto; conversationId: string };
 
     const txOut = this.uow.atomically((tx): UnclaimAgentTxOut => {
-      const row = tx.tasks.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
+      // B5: write authority = the ORIGINAL selector (id arm by canonical id).
+      const row = 'taskId' in by
+        ? tx.tasks.fetchTaskById(by.taskId)
+        : tx.tasks.fetchTaskByNumber(numberArmWorkspaceId!, by.taskNumber);
       if (!row) {
+        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
+      }
+      // Per-task ACL on the WRITE face (#task:2018 B2) — before the assignee
+      // check can leak workflow state; same envelope as a miss.
+      if (!tx.conversationAccess.isAgentParticipant(row.conversation_id, actor.agentId)) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
       if (row.assignee_agent_id !== actor.agentId) {
@@ -753,7 +850,9 @@ export class TaskService {
       sourceConv,
       ownerConv,
       taskNumber: txOut.args.taskNumber,
-      taskWorkspaceId,
+      // The task's board coordinate, post-commit truth: its owner conversation's
+      // workspace (tasks are workspace-placed by construction — inbox refuses).
+      taskWorkspaceId: requireWorkspacePlacement(ownerConv),
     });
     this.broadcaster.publish({ ...txOut.args, conversation: ownerConv }, txOut.sysMsg);
 
@@ -835,6 +934,11 @@ export class TaskService {
     status: TaskStatus,
     workspaceSelector: WorkspaceSelector | undefined,
   ): Promise<TaskMutationResult> {
+    // P0-g (#task:2018): no by-id mutation surface for a conversation-frame
+    // principal — uniform indistinguishable rejection (see claimTaskAgent).
+    if ('taskId' in by && actor.runtimeScope !== 'agent') {
+      return { success: false, code: 'task_not_found', reason: 'task not found' };
+    }
     const sourceConv = this.conversations.get(actor.conversationId);
     if (!sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
@@ -842,21 +946,31 @@ export class TaskService {
     const actorErr = this.access.validateAgentActorForMutation(actor);
     if (actorErr) return actorErr;
 
-    const resolved = this.access.resolveAgentTaskWorkspace(
-      actor,
-      sourceConv,
-      workspaceSelector,
-      args => mutationFailure(args),
-    );
-    if ('failure' in resolved) return resolved.failure;
-    const taskWorkspaceId = resolved.workspace.id;
+    let numberArmWorkspaceId: string | null = null;
+    if ('taskId' in by) {
+      // Agent-slot global-id arm (§4.5) — see claimTaskAgent. No coordinates
+      // leave this precheck (B5): the tx below re-reads by the canonical id.
+      const row = this.read.fetchTaskById(by.taskId);
+      if (!row || !this.accessPolicy.canAgentSeeTask(actor, row, 'write_tasks')) {
+        return { success: false, code: 'task_not_found', reason: 'task not found' };
+      }
+    } else {
+      const resolved = this.access.resolveAgentTaskWorkspace(
+        actor,
+        sourceConv,
+        workspaceSelector,
+        args => mutationFailure(args),
+      );
+      if ('failure' in resolved) return resolved.failure;
+      numberArmWorkspaceId = resolved.workspace.id;
 
-    if (!this.canUseCapability(actor, taskWorkspaceId, 'write_tasks')) {
-      return mutationFailure({
-        code: 'capability_denied',
-        capability: 'write_tasks',
-        reason: 'agent lacks the write_tasks capability in the target workspace',
-      });
+      if (!this.canUseCapability(actor, numberArmWorkspaceId, 'write_tasks')) {
+        return mutationFailure({
+          code: 'capability_denied',
+          capability: 'write_tasks',
+          reason: 'agent lacks the write_tasks capability in the target workspace',
+        });
+      }
     }
 
     const agentLabel = this.agentName(actor.agentId);
@@ -867,8 +981,16 @@ export class TaskService {
       | { success: true; args: PendingWorkflowEvent; sysMsg: MessageDto; conversationId: string };
 
     const txOut = this.uow.atomically((tx): StatusAgentTxOut => {
-      const row = tx.tasks.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
+      // B5: write authority = the ORIGINAL selector (id arm by canonical id).
+      const row = 'taskId' in by
+        ? tx.tasks.fetchTaskById(by.taskId)
+        : tx.tasks.fetchTaskByNumber(numberArmWorkspaceId!, by.taskNumber);
       if (!row) {
+        return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
+      }
+      // Per-task ACL on the WRITE face (#task:2018 B2) — before any
+      // assignee/creator fact can leak; same envelope as a miss.
+      if (!tx.conversationAccess.isAgentParticipant(row.conversation_id, actor.agentId)) {
         return { failure: { success: false, code: 'task_not_found', reason: 'task not found' } };
       }
       // Permission: assignee==self OR (unassigned AND creator==self AND
@@ -936,7 +1058,9 @@ export class TaskService {
       sourceConv,
       ownerConv,
       taskNumber: txOut.args.taskNumber,
-      taskWorkspaceId,
+      // The task's board coordinate, post-commit truth: its owner conversation's
+      // workspace (tasks are workspace-placed by construction — inbox refuses).
+      taskWorkspaceId: requireWorkspacePlacement(ownerConv),
       status,
     });
     this.broadcaster.publish({ ...txOut.args, conversation: ownerConv }, txOut.sysMsg);
@@ -1025,6 +1149,11 @@ export class TaskService {
     body: string | null,
     workspaceSelector: WorkspaceSelector | undefined,
   ): Promise<TaskEditResult> {
+    // P0-g (#task:2018): no by-id mutation surface for a conversation-frame
+    // principal — uniform indistinguishable rejection (see claimTaskAgent).
+    if ('taskId' in by && actor.runtimeScope !== 'agent') {
+      return { success: false, code: 'task_not_found', reason: 'task not found' };
+    }
     const sourceConv = this.conversations.get(actor.conversationId);
     if (!sourceConv) {
       return { success: false, code: 'conversation_not_found', reason: 'conversation not found' };
@@ -1032,12 +1161,28 @@ export class TaskService {
     if (!this.agents.get(actor.agentId)) {
       return { success: false, code: 'agent_not_found', reason: 'agent not found' };
     }
-    if (!this.conversations.getAgent(actor.conversationId, actor.agentId)) {
+    if (!this.conversations.isAgentParticipant(actor.conversationId, actor.agentId)) {
       return {
         success: false,
         code: 'not_conversation_member',
         reason: 'agent is not a member of this conversation',
       };
+    }
+
+    if ('taskId' in by) {
+      // Agent-slot global-id arm (§4.5). Edit is BOTH a mutation and a read
+      // (it returns the full detail), so the gate requires write_tasks AND
+      // read_tasks — either missing folds into the same envelope; naming the
+      // missing capability would disclose that the id exists.
+      const row = this.read.fetchTaskById(by.taskId);
+      if (
+        !row ||
+        !this.accessPolicy.canAgentSeeTask(actor, row, 'write_tasks') ||
+        !this.accessPolicy.canAgentSeeTask(actor, row, 'read_tasks')
+      ) {
+        return { success: false, code: 'task_not_found', reason: 'task not found' };
+      }
+      return this.applyTaskEdit(actor, by, title, body, row.workspace_id);
     }
 
     const resolved = this.access.resolveAgentTaskWorkspace(
@@ -1134,6 +1279,20 @@ export class TaskService {
           ? tx.tasks.fetchTaskById(by.taskId)
           : tx.tasks.fetchTaskByNumber(taskWorkspaceId, by.taskNumber);
       if (!row) {
+        return {
+          kind: 'failure',
+          failure: { success: false, code: 'task_not_found', reason: 'task not found' },
+        };
+      }
+      // Per-task ACL on the WRITE face (#task:2018 B2): an agent actor must
+      // participate in the task's own conversation — regardless of which
+      // selector arm got here (the by-id arm re-verifies its pre-tx policy,
+      // closing the TOCTOU window). Same envelope as a miss. The user lane
+      // keeps its own conversation-access gating at its entry points.
+      if (
+        actor.kind === 'agent' &&
+        !tx.conversationAccess.isAgentParticipant(row.conversation_id, actor.agentId)
+      ) {
         return {
           kind: 'failure',
           failure: { success: false, code: 'task_not_found', reason: 'task not found' },
@@ -1288,6 +1447,36 @@ export class TaskService {
     const row = this.read.fetchTaskByNumber(authorizedWorkspaceId, taskNumber);
     if (!row) return null;
     return this.read.fetchTaskDetail(row.id, actor, authorizedWorkspaceId);
+  }
+
+  /**
+   * Agent detail read by GLOBAL identity (`tasks.id`) — P0-g (#task:2018,
+   * agent-scoped-session-v1 §4.5).
+   *
+   * Scope-branched by the P1 principal projection:
+   *  - agent slot: the canonical id dereferences across EVERY board, gated by
+   *    the TaskAccessPolicy alone (participation in the task's own
+   *    conversation ∧ `read_tasks`, with the agent_home owner arm);
+   *  - conversation frame: the id dereferences ONLY inside the caller's
+   *    ambient WorkspaceBoard, so a conversation-scoped principal cannot pull
+   *    another workspace's content into its session by id.
+   *
+   * EVERY failure returns the same `null` — unknown id, foreign-board id,
+   * non-participant, and missing capability are indistinguishable by
+   * construction (§4.5: ACL before existence disclosure; a typed error here
+   * would be an id-probing oracle).
+   */
+  getTaskDetailByGlobalId(taskId: string, actor: AgentActor): TaskDetailDto | null {
+    const row = this.read.fetchTaskById(taskId);
+    if (!row) return null;
+    if (actor.runtimeScope !== 'agent') {
+      const sourceConv = this.conversations.get(actor.conversationId);
+      if (!sourceConv || row.workspace_id !== sourceConv.workspace_id) return null;
+    }
+    if (!this.accessPolicy.canAgentSeeTask(actor, row, 'read_tasks')) return null;
+    // The repo detail read re-applies the participation gate (same authority)
+    // and the board coordinate via `authorizedWorkspaceId`.
+    return this.read.fetchTaskDetail(row.id, actor, row.workspace_id);
   }
 
   /**

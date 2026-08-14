@@ -57,6 +57,7 @@ function row(over: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
     workspace_name: 'ws',
     channel_id: 'chan-1',
     channel_name: 'chan',
+    board: { kind: 'workspace', workspace_id: WS },
     thread_root_id: null,
     conversation: { id: 'chan-1', title: 'chan' },
     status: 'todo',

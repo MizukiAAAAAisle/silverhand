@@ -92,6 +92,18 @@ export const TaskCreatorDtoSchema = z.object({
 });
 export type TaskCreatorDto = z.infer<typeof TaskCreatorDtoSchema>;
 
+/** The task's BOARD coordinate — the numbering namespace `task_number` is
+ *  local to (agent-scoped-session-v1 §4.4/§4.5). A DERIVED discriminated
+ *  union, not a stored column: today every board is a WorkspaceBoard, and
+ *  P0-f (#task:2022) extends this union with the DirectPairBoard arm instead
+ *  of inventing a second coordinate field. Display/namespace ONLY — access
+ *  control never reads it (ACL derives per task from the task's own
+ *  conversation, §4.4: Board is not an ACL unit). */
+export const TaskBoardRefSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('workspace'), workspace_id: z.string() }),
+]);
+export type TaskBoardRef = z.infer<typeof TaskBoardRefSchema>;
+
 export const TaskSummaryDtoSchema = z.object({
   /** The task identity (`tasks.id`) — canonical key for REST paths, events,
    *  and mutations. */
@@ -101,6 +113,8 @@ export const TaskSummaryDtoSchema = z.object({
   workspace_name: z.string(),
   channel_id: z.string(),
   channel_name: z.string(),
+  /** The board this task is numbered on (derived; see TaskBoardRefSchema). */
+  board: TaskBoardRefSchema,
   /** Reply-cluster root message id when the task's conversational footprint
    *  (its lifecycle system events) sits inside a thread cluster. NULL =
    *  main-line task. */
@@ -579,17 +593,34 @@ export type HumanCreateTaskResult = z.infer<typeof HumanCreateTaskResultSchema>;
 // POST /internal/agent/:aid/tasks/claim — claim_tasks MCP tool
 export const ClaimTasksInputSchema = z
   .object({
-    task_numbers: z.array(z.number()).min(1),
+    /** Local-number batch: resolved on ONE explicit board (the workspace
+     *  selector below, or the caller's ambient workspace). */
+    task_numbers: z.array(z.number()).min(1).optional(),
+    /** Global-identity batch (`tasks.id`, agent-scoped-session-v1 §4.5).
+     *  EXACTLY ONE of `task_numbers` / `task_ids` per call — a mixed batch
+     *  would need a board coordinate for the numbers while the ids forbid
+     *  one, so the two selector families never share a call. */
+    task_ids: z.array(z.string().min(1)).min(1).optional(),
     /** Optional workspace selector for cross-workspace task ops. When
      *  omitted, the target task is resolved in the actor's current
      *  conversation's workspace (the legacy default). When provided,
      *  the actor must already be a member of the resolved workspace.
-     *  `workspace_id` and `workspace_name` are mutually exclusive. */
+     *  `workspace_id` and `workspace_name` are mutually exclusive.
+     *  Only legal with `task_numbers`: a global id already determines its
+     *  board, so a second coordinate could only be redundant or
+     *  contradictory. */
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_numbers !== undefined) !== (v.task_ids !== undefined), {
+    message: 'provide exactly one of task_numbers or task_ids',
+  })
+  .refine(v => !(v.task_ids && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_numbers; a task id already determines its board',
   });
 export type ClaimTasksInput = z.infer<typeof ClaimTasksInputSchema>;
 
@@ -645,20 +676,33 @@ export type ClaimTasksResult = z.infer<typeof ClaimTasksResultSchema>;
 // POST /internal/agent/:aid/tasks/unclaim
 export const UnclaimTaskInputSchema = z
   .object({
-    task_number: z.number().int().positive(),
+    task_number: z.number().int().positive().optional(),
+    /** Global-identity selector (`tasks.id`) — exactly one of `task_number` /
+     *  `task_id`. No workspace selector may accompany it (the id already
+     *  determines its board). */
+    task_id: z.string().min(1).optional(),
     /** Optional workspace selector — see ClaimTasksInputSchema. */
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+    message: 'provide exactly one of task_number or task_id',
+  })
+  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_number; a task id already determines its board',
   });
 export type UnclaimTaskInput = z.infer<typeof UnclaimTaskInputSchema>;
 
 // POST /internal/agent/:aid/tasks/update-status
 export const UpdateTaskStatusInputSchema = z
   .object({
-    task_number: z.number().int().positive(),
+    task_number: z.number().int().positive().optional(),
+    /** Global-identity selector — see UnclaimTaskInputSchema. */
+    task_id: z.string().min(1).optional(),
     status: TaskStatusSchema,
     /** Optional workspace selector — see ClaimTasksInputSchema. */
     workspace_id: z.string().optional(),
@@ -666,6 +710,13 @@ export const UpdateTaskStatusInputSchema = z
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+    message: 'provide exactly one of task_number or task_id',
+  })
+  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_number; a task id already determines its board',
   });
 export type UpdateTaskStatusInput = z.infer<typeof UpdateTaskStatusInputSchema>;
 
@@ -734,7 +785,9 @@ export type HumanClaimTaskInput = z.infer<typeof HumanClaimTaskInputSchema>;
 // POST /internal/agent/:aid/tasks/edit — agent CLI `task edit`
 export const EditTaskInputSchema = z
   .object({
-    task_number: z.number().int().positive(),
+    task_number: z.number().int().positive().optional(),
+    /** Global-identity selector — see UnclaimTaskInputSchema. */
+    task_id: z.string().min(1).optional(),
     title: TaskTitleSchema.optional(),
     body: TaskBodySchema.optional(),
     /** Optional workspace selector — see ClaimTasksInputSchema. */
@@ -746,6 +799,13 @@ export const EditTaskInputSchema = z
   })
   .refine(v => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
+  })
+  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+    message: 'provide exactly one of task_number or task_id',
+  })
+  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+    message:
+      'workspace selectors only apply to task_number; a task id already determines its board',
   });
 export type EditTaskInput = z.infer<typeof EditTaskInputSchema>;
 

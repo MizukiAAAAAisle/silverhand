@@ -283,11 +283,11 @@ describe('agent inbox — faces with no workspace answer refuse instead of guess
     // "No board" and "an empty board" are different answers, and only one is
     // true — so this must throw, not return [].
     expect(() =>
-      tasks.list({ actor: { kind: 'agent', agentId: t.alpha.id, conversationId: t.inbox.id } }),
+      tasks.list({ actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alpha.id, conversationId: t.inbox.id } }),
     ).toThrow(/workspace/i);
     // The same call from a workspace-placed conversation answers normally.
     expect(
-      tasks.list({ actor: { kind: 'agent', agentId: t.alpha.id, conversationId: t.general.id } }),
+      tasks.list({ actor: { kind: 'agent', runtimeScope: 'conversation', agentId: t.alpha.id, conversationId: t.general.id } }),
     ).toEqual([]);
   });
 

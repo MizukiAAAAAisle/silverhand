@@ -28,6 +28,7 @@ import {
   resolveEditor,
   type TaskJoinedRow,
 } from '../services/task/dto.js';
+import { agentParticipates } from './conversation-placement-sql.js';
 import type {
   ListTasksFilters,
   MessageRef,
@@ -81,21 +82,41 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
     const args: (string | number)[] = [];
 
     if (filters.actor.kind === 'agent') {
-      // The agent path defaults to the actor's current workspace. The route
-      // layer validates any explicit `filters.workspaceId` (from the agent's
-      // `--workspace-id` flag) exists AND that the agent is a member. Once
-      // validated, honor the explicit value so the agent can read a sister
-      // workspace's board.
-      const conv = this.conversations.get(filters.actor.conversationId);
-      if (!conv) return [];
-      // The DEFAULT board is the actor conversation's own workspace, so a
-      // placement without one has no default to fall back to (§4.2: the agent
-      // inbox has no board). Asserted rather than returned as an empty list — an
-      // empty board and "this conversation has no board" are different answers,
-      // and only one of them is true here.
-      const effectiveWs = filters.workspaceId ?? requireWorkspacePlacement(conv);
-      clauses.push('t.workspace_id = ?');
-      args.push(effectiveWs);
+      if (filters.workspaceIds !== undefined) {
+        // Union arm (§7.2.2, agent-slot): the service already computed the
+        // visible-board set (membership ∧ read_tasks per board). An empty set
+        // reads as zero rows — never a fallback to some ambient board.
+        if (filters.workspaceIds.length === 0) return [];
+        const placeholders = filters.workspaceIds.map(() => '?').join(',');
+        clauses.push(`t.workspace_id IN (${placeholders})`);
+        args.push(...filters.workspaceIds);
+      } else {
+        // The agent path defaults to the actor's current workspace. The route
+        // layer validates any explicit `filters.workspaceId` (from the agent's
+        // `--workspace-id` flag) exists AND that the agent is a member. Once
+        // validated, honor the explicit value so the agent can read a sister
+        // workspace's board.
+        const conv = this.conversations.get(filters.actor.conversationId);
+        if (!conv) return [];
+        // The DEFAULT board is the actor conversation's own workspace, so a
+        // placement without one has no default to fall back to (§4.2: the agent
+        // inbox has no board). Asserted rather than returned as an empty list — an
+        // empty board and "this conversation has no board" are different answers,
+        // and only one of them is true here.
+        const effectiveWs = filters.workspaceId ?? requireWorkspacePlacement(conv);
+        clauses.push('t.workspace_id = ?');
+        args.push(effectiveWs);
+      }
+      // Per-task ACL (agent-scoped-session-v1 §4.4, #task:2018): the board
+      // clause above is a COORDINATE, not an ACL — a WorkspaceBoard aggregates
+      // conversations with different member sets, so the row set must also be
+      // narrowed to conversations this agent PARTICIPATES in. Same authority
+      // as the point reads (`agentParticipates` is the SQL twin of
+      // `isAgentParticipant`); public discovery grants no task read, mirroring
+      // USER_VISIBLE_TASK_PREDICATE on the human arm below.
+      const participation = agentParticipates('conv', filters.actor.agentId);
+      clauses.push(participation.sql);
+      args.push(...participation.params);
     } else {
       // The human visibility gate is the SHARED constant (also interpolated by
       // every board read face) — "which tasks may this viewer see" has one
@@ -127,11 +148,19 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
       clauses.push('t.assignee_agent_id = ?');
       args.push(filters.assigneeAgentId);
     }
-    // Newest-first: task_number is a monotonic per-workspace sequence, so DESC
-    // surfaces the most recently created tasks first — the useful default for
-    // both the desktop kanban columns and the CLI `task list`.
+    // Ordering is PER ARM (#task:2018 B4). Single-board reads keep
+    // `task_number DESC` — within one board the number IS creation order, and
+    // that is the human board's pinned keyset shape. The cross-board UNION
+    // cannot use it ("newest" is a per-board notion: board A's stale #100
+    // would forever shadow board B's fresh #1 under a LIMIT), so it orders by
+    // the globally comparable creation instant. `id DESC` is a deterministic
+    // tiebreak in both arms, never a time axis.
+    const orderBy =
+      filters.actor.kind === 'agent' && filters.workspaceIds !== undefined
+        ? 'ORDER BY t.created_at DESC, t.id DESC'
+        : 'ORDER BY t.task_number DESC, t.id DESC';
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    let sql = `${SELECT_TASK_JOINED} ${where} ORDER BY t.task_number DESC`;
+    let sql = `${SELECT_TASK_JOINED} ${where} ${orderBy}`;
     if (filters.limit && filters.limit > 0) {
       sql += ' LIMIT ?';
       args.push(filters.limit);
@@ -172,6 +201,13 @@ export class SqliteTaskRepo implements TaskRepoReadPort, TaskRepoWritePort {
         const conv = this.conversations.get(actor.conversationId);
         if (!conv) return null;
         if (row.workspace_id !== conv.workspace_id) return null;
+      }
+      // Per-task ACL (agent-scoped-session-v1 §4.4, #task:2018): the workspace
+      // equality above is the BOARD COORDINATE check, not an ACL — the agent
+      // must also participate in the task's own conversation (placement-aware;
+      // public discovery grants no task read, mirroring the human arm below).
+      if (!this.conversations.isAgentParticipant(row.conversation_id, actor.agentId)) {
+        return null;
       }
     } else if (!this.conversations.userCanAccessConversation(actor.userId, row.conversation_id)) {
       return null;

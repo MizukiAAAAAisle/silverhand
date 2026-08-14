@@ -35,10 +35,24 @@ import type { TaskBoardColumnRequest, TaskBoardPopulationFilters } from './board
 /** The task actor faces. Structurally IDENTICAL to the request principals
  *  (`auth/principal.ts`) but defined HERE so this port module's relative
  *  import closure stays driver-free — `principal.ts` transitively types raw
- *  repos, and no port surface may reach a driver through any hop. */
+ *  repos, and no port surface may reach a driver through any hop.
+ *
+ *  `runtimeScope` is the task domain's REQUIRED projection of the P1
+ *  RuntimePrincipal kind (#task:2018 / #task:2015): 'agent' unlocks the
+ *  cross-board global-id lane and the union list (§4.5/§7.2.2);
+ *  'conversation' is the frozen conversation-frame contract. There is NO
+ *  default and NO optional form — an agent actor without a declared scope
+ *  cannot be constructed, so "the caller never said which principal kind"
+ *  is a compile error at the construction site (or a fail-loud boundary
+ *  rejection), never a silent reinterpretation inside the domain. */
 export type TaskActor =
   | { kind: 'user'; userId: string }
-  | { kind: 'agent'; agentId: string; conversationId: string };
+  | {
+      kind: 'agent';
+      agentId: string;
+      conversationId: string;
+      runtimeScope: 'conversation' | 'agent';
+    };
 export type UserActor = Extract<TaskActor, { kind: 'user' }>;
 export type AgentActor = Extract<TaskActor, { kind: 'agent' }>;
 
@@ -127,10 +141,15 @@ export interface TaskBoardReadModelPort {
 /** Named narrow conversation face the task domain needs — deliberately NOT the
  *  whole ConversationRepo. `userCanAccessConversation` is the human membership
  *  check; agent membership uses `getAgent`; the broadcaster's post-commit
- *  fanout uses `listAgents`/`listUsers`. */
+ *  fanout uses `listAgents`/`listUsers`. `isAgentParticipant` is the
+ *  placement-aware participation authority (§4.2: roster edge OR own inbox
+ *  placement) — the per-task ACL (§4.4: ACL derives from the task's own
+ *  conversation, never its board) reads THIS, not the roster-shaped
+ *  `getAgent`. */
 export interface TaskConversationAccessPort {
   get(conversationId: string): ConversationDto | null;
   getAgent(conversationId: string, agentId: string): ConversationAgentDto | null;
+  isAgentParticipant(conversationId: string, agentId: string): boolean;
   userCanAccessConversation(userId: string, conversationId: string): boolean;
   listAgents(conversationId: string): ConversationAgentDto[];
   listUsers(conversationId: string): ConversationUserMemberDto[];

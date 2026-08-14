@@ -182,6 +182,7 @@ function taskSummary(
     workspace_name: 'Workspace',
     channel_id: 'channel-1',
     channel_name: 'version3',
+    board: { kind: 'workspace', workspace_id: 'workspace-1' },
     thread_root_id: null,
     conversation: { id: 'channel-1', title: 'version3' },
     status: 'todo',

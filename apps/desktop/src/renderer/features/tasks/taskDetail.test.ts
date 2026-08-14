@@ -21,6 +21,7 @@ function summary(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
     workspace_name: 'ws',
     channel_id: 'anchor-chan',
     channel_name: 'chan',
+    board: { kind: 'workspace', workspace_id: 'ws1' },
     thread_root_id: null,
     conversation: { id: 'anchor-chan', title: 'chan' },
     status: 'todo',
